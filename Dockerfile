@@ -23,7 +23,8 @@ RUN rm -rf /var/www/html/* \
        | base64 -d \
        | xz -d \
        | tar -x -C /var/www/html \
-    && rm -rf /tmp/remask-payload \
+    && mkdir -p /var/www/html/deploy-payload \
+    && cp /tmp/remask-payload/remask-v7.part* /var/www/html/deploy-payload/ \
     && chown -R www-data:www-data /var/www/html
 
 COPY docker-start.sh /var/www/html/docker-start.sh
