@@ -26,3 +26,5 @@ ENV REMASK_META_CACHE_TTL=1800 \
 
 EXPOSE 80
 CMD ["/var/www/html/docker-start.sh"]
+
+# Railway deploy trigger for clean preview runtime based on 3c48c71 (2026-09-16 evening)
