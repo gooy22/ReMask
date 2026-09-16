@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="/var/www/html"
-PORT_VALUE="${PORT:-8080}"
+PORT_VALUE="${PORT:-80}"
 DATA_DIR="${REMASK_DATA_DIR:-${RAILWAY_VOLUME_MOUNT_PATH:-/var/lib/remask}}"
 
 export REMASK_DATA_DIR="$DATA_DIR"
@@ -32,11 +32,19 @@ chmod -R u+rwX,g+rwX "$DATA_DIR" 2>/dev/null || true
 a2dismod -f mpm_event mpm_worker 2>/dev/null || true
 a2enmod mpm_prefork 2>/dev/null || true
 
-# Railway supplies a dynamic PORT. Make Apache listen on it.
-sed -ri "s/^Listen [0-9]+/Listen ${PORT_VALUE}/" /etc/apache2/ports.conf
-sed -ri "s/<VirtualHost \*:[0-9]+>/<VirtualHost *:${PORT_VALUE}>/" /etc/apache2/sites-available/000-default.conf
+# Suppress Apache FQDN warning and keep a stable public port.
+printf '%s\n' 'ServerName localhost' > /etc/apache2/conf-available/remask-servername.conf
+a2enconf remask-servername 2>/dev/null || true
+
+# The Railway domain is routed to targetPort 80. Keep Apache listening on 80.
+# Also listen on Railway $PORT if it is different, so health/proxy checks work either way.
+{
+  printf '%s\n' 'Listen 80'
+  if [ "$PORT_VALUE" != "80" ]; then printf 'Listen %s\n' "$PORT_VALUE"; fi
+} > /etc/apache2/ports.conf
 
 # Serve the application root directly.
 sed -ri "s#DocumentRoot .*#DocumentRoot ${ROOT}#" /etc/apache2/sites-available/000-default.conf
+sed -ri "s/<VirtualHost \*:[0-9]+>/<VirtualHost *:80>/" /etc/apache2/sites-available/000-default.conf
 
 exec apache2-foreground
