@@ -10,16 +10,16 @@ RUN apt-get update \
 
 WORKDIR /var/www/html
 
-# The previous remask-preview-runtime.tar.gz blob is truncated/corrupt in GitHub.
-# Build from the stable split payload instead. Parts may be raw base64 chunks
-# or JSON wrappers with a content/data/chunk/b64 field.
-COPY remask-v7.part* /tmp/remask-parts/
+# The root remask-v7.part* payload is incomplete/corrupt.
+# Use the verified clean-preview payload from .deploy/clean-preview-valid.
+COPY .deploy/clean-preview-valid/runtime.b64.* /tmp/remask-parts/
 COPY remask-preview-latest.patch /tmp/remask-preview-latest.patch
 COPY docker-start.sh /tmp/docker-start.sh
 
 RUN set -eux; \
-    php -r '$out=""; $files=glob("/tmp/remask-parts/remask-v7.part*"); sort($files, SORT_NATURAL); foreach ($files as $file) { $raw=file_get_contents($file); $json=json_decode($raw, true); if (is_array($json)) { $found=false; foreach (["content","data","chunk","b64"] as $key) { if (isset($json[$key])) { $raw=$json[$key]; $found=true; break; } } if (!$found) { fwrite(STDERR, "skipping metadata-only part $file\n"); continue; } } $out .= preg_replace("/\\s+/", "", $raw); } if ($out === "") { fwrite(STDERR, "empty ReMask runtime payload\n"); exit(20); } file_put_contents("/tmp/remask-runtime.b64", $out);'; \
+    php -r '$out=""; $files=glob("/tmp/remask-parts/runtime.b64.*"); sort($files, SORT_NATURAL); foreach ($files as $file) { $out .= preg_replace("/\\s+/", "", file_get_contents($file)); } if ($out === "") { fwrite(STDERR, "empty ReMask runtime payload\n"); exit(20); } file_put_contents("/tmp/remask-runtime.b64", $out);'; \
     base64 -d /tmp/remask-runtime.b64 > /tmp/remask-runtime.archive; \
+    echo "84b51ad4c062e45a13fd61b1ca8c66d0d1896b2bab2ebf2513dfd782998fdd95  /tmp/remask-runtime.archive" | sha256sum -c -; \
     if xz -t /tmp/remask-runtime.archive; then tar -xJf /tmp/remask-runtime.archive -C /var/www/html; \
     elif gzip -t /tmp/remask-runtime.archive; then tar -xzf /tmp/remask-runtime.archive -C /var/www/html; \
     else echo "Unsupported or corrupt ReMask runtime archive" >&2; exit 21; fi; \
