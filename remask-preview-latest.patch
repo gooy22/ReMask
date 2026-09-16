@@ -1,0 +1,91 @@
+--- a/scripts/launch.js
++++ b/scripts/launch.js
+@@ -185,7 +185,7 @@
+ 
+ function bindingFor(accountId) {
+     const key = normalizeAccountIdClient(accountId);
+-    if (!state.targetBindings[key]) state.targetBindings[key] = {page_id: '', instagram_actor_id: '', pixel_id: '', custom_audiences: [], excluded_custom_audiences: [], existing_image_hash: '', existing_creative_id: ''};
++    if (!state.targetBindings[key]) state.targetBindings[key] = {page_id: '', instagram_actor_id: '', pixel_id: '', custom_audiences: [], excluded_custom_audiences: [], existing_image_hash: '', existing_creative_id: '', url_tags: ''};
+     return state.targetBindings[key];
+ }
+ 
+@@ -208,7 +208,7 @@
+     const targets = selectedTargets();
+     body.innerHTML = '';
+     if (!targets.length) {
+-        body.innerHTML = '<tr><td colspan="8" class="muted">No RK selected.</td></tr>';
++        body.innerHTML = '<tr><td colspan="9" class="muted">No RK selected.</td></tr>';
+         return;
+     }
+     const needsPixel = requiresPixelOptimization();
+@@ -331,6 +331,23 @@
+             mediaTd.appendChild(mediaSelect);
+         }
+ 
++        const trackingTd = document.createElement('td');
++        const trackingInput = document.createElement('input');
++        trackingInput.className = 'form-control';
++        trackingInput.style.minWidth = '230px';
++        trackingInput.placeholder = 'Use global URL tags';
++        trackingInput.value = binding.url_tags || '';
++        trackingInput.addEventListener('change', () => {
++            binding.url_tags = trackingInput.value.trim();
++            invalidateLaunchReview();
++            validateReady();
++        });
++        trackingTd.appendChild(trackingInput);
++        const trackingHint = document.createElement('div');
++        trackingHint.className = 'muted mt-1';
++        trackingHint.textContent = binding.url_tags ? 'Per-RK override' : 'Global tracking';
++        trackingTd.appendChild(trackingHint);
++
+         const statusReady = Boolean(binding.page_id) && (!needsPixel || Boolean(binding.pixel_id));
+         const ig = binding.instagram_actor_id ? ` / IG ${binding.instagram_actor_id}` : '';
+         tr.innerHTML = `<td>${escapeHtml(target.profile)}</td><td>${escapeHtml(target.business_id || '—')}</td><td>${escapeHtml(accountId)}</td>`;
+@@ -340,7 +357,7 @@
+         const statusTd = document.createElement('td');
+         statusTd.className = statusReady ? 'job-success' : 'job-failed';
+         statusTd.textContent = statusReady ? 'READY' : (pages.length ? (needsPixel && !pixels.length ? 'PIXEL REQUIRED' : 'SELECT ASSETS') : 'LOAD ASSETS');
+-        tr.appendChild(pageTd); tr.appendChild(pixelTd); tr.appendChild(audienceTd); tr.appendChild(mediaTd); tr.appendChild(statusTd);
++        tr.appendChild(pageTd); tr.appendChild(pixelTd); tr.appendChild(audienceTd); tr.appendChild(mediaTd); tr.appendChild(trackingTd); tr.appendChild(statusTd);
+         body.appendChild(tr);
+     }
+ }
+@@ -901,6 +918,7 @@
+             if (binding.instagram_actor_id) row.creative.instagram_actor_id = binding.instagram_actor_id;
+             if (binding.existing_creative_id) row.creative.existing_creative_id = binding.existing_creative_id;
+             else if (binding.existing_image_hash) row.creative.existing_image_hash = binding.existing_image_hash;
++            if (binding.url_tags) row.creative.url_tags = binding.url_tags;
+             const includeAudiences = (binding.custom_audiences || []).filter(Boolean);
+             const excludeAudiences = (binding.excluded_custom_audiences || []).filter(Boolean);
+             if (requiresPixelOptimization()) {
+--- a/launch.php
++++ b/launch.php
+@@ -90,7 +90,7 @@
+     <div id="targetBindingsCard" class="launch-card" style="display:none;">
+         <div class="d-flex justify-content-between align-items-center">
+             <div>
+-                <h5 class="mb-1">Per-RK bindings <small class="muted">FB account → BM → RK → Page / IG / Pixel / Audiences / Existing Media</small></h5>
++                <h5 class="mb-1">Per-RK bindings <small class="muted">FB account → BM → RK → Page / IG / Pixel / Audiences / Existing Media / Tracking</small></h5>
+                 <div class="muted">For mass Launch every RK keeps its own Facebook profile/token/proxy and its own account-specific Meta assets.</div>
+             </div>
+             <div><button id="loadTargetBindings" type="button" class="btn btn-secondary">LOAD / REFRESH BINDINGS</button> <button id="loadTargetAudiences" type="button" class="btn btn-outline-secondary">LOAD AUDIENCES</button> <button id="loadTargetMedia" type="button" class="btn btn-outline-secondary">LOAD EXISTING MEDIA</button></div>
+@@ -98,8 +98,8 @@
+         <div id="targetBindingsStatus" class="muted mt-2">Bindings have not been loaded yet.</div>
+         <div style="overflow:auto; max-height:430px;">
+             <table class="job-table">
+-                <thead><tr><th>FB account</th><th>BM</th><th>RK</th><th>Page / Instagram</th><th>Pixel</th><th>Custom Audiences</th><th>Existing Media</th><th>Status</th></tr></thead>
+-                <tbody id="targetBindingRows"><tr><td colspan="8" class="muted">Open Launch from Workspace with selected RK.</td></tr></tbody>
++                <thead><tr><th>FB account</th><th>BM</th><th>RK</th><th>Page / Instagram</th><th>Pixel</th><th>Custom Audiences</th><th>Existing Media</th><th>Tracking</th><th>Status</th></tr></thead>
++                <tbody id="targetBindingRows"><tr><td colspan="9" class="muted">Open Launch from Workspace with selected RK.</td></tr></tbody>
+             </table>
+         </div>
+     </div>
+--- /dev/null
++++ b/health/index.php
+@@ -0,0 +1,5 @@
++<?php
++// Extensionless health endpoint for Railway and other platforms that reject
++// dots in configured healthcheck paths. Keep the canonical implementation in
++// ../health.php so both /health and /health.php return the same payload.
++require dirname(__DIR__) . '/health.php';
