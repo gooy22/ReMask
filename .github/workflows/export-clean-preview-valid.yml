@@ -1,0 +1,59 @@
+name: Export validated clean-preview runtime
+
+on:
+  push:
+    paths:
+      - '.github/workflows/export-clean-preview-valid.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Assemble validated clean-preview runtime
+        run: |
+          set -euo pipefail
+          git fetch origin clean-preview:refs/remotes/origin/clean-preview
+          rm -rf .deploy/clean-preview-valid
+          mkdir -p .deploy/clean-preview-valid
+          : > /tmp/runtime.b64
+          for p in runtime.part00 runtime.part01 runtime.part02 runtime.part03 runtime.part04 runtime.part05; do
+            git show origin/clean-preview:preview/$p >> /tmp/runtime.b64
+          done
+          git show origin/clean-preview:preview/fix06.0 >> /tmp/runtime.b64
+          git show origin/clean-preview:preview/fix06.1 >> /tmp/runtime.b64
+          for p in runtime.part07 runtime.part08 runtime.part09 runtime.part10 runtime.part11 runtime.part12 runtime.part13 runtime.part14 runtime.part15 runtime.part16 runtime.part17 runtime.part18 runtime.part19 runtime.part20; do
+            git show origin/clean-preview:preview/$p >> /tmp/runtime.b64
+          done
+          base64 -d /tmp/runtime.b64 > /tmp/runtime.tar.xz
+          echo '84b51ad4c062e45a13fd61b1ca8c66d0d1896b2bab2ebf2513dfd782998fdd95  /tmp/runtime.tar.xz' | sha256sum -c -
+          xz -t /tmp/runtime.tar.xz
+          mkdir -p /tmp/runtime-check
+          tar -xJf /tmp/runtime.tar.xz -C /tmp/runtime-check
+          test -f /tmp/runtime-check/workspace.php
+          test -f /tmp/runtime-check/launch.php
+          split -b 16000 -d -a 2 /tmp/runtime.b64 .deploy/clean-preview-valid/runtime.b64.
+          {
+            echo 'source_branch=clean-preview'
+            echo 'source_commit=169b142d683b02495dfefa88fdf920f7be0f93bf'
+            echo 'runtime_sha256=84b51ad4c062e45a13fd61b1ca8c66d0d1896b2bab2ebf2513dfd782998fdd95'
+            echo "runtime_b64_bytes=$(wc -c < /tmp/runtime.b64)"
+            echo "runtime_bytes=$(wc -c < /tmp/runtime.tar.xz)"
+            echo "chunk_count=$(find .deploy/clean-preview-valid -name 'runtime.b64.*' | wc -l)"
+            for f in .deploy/clean-preview-valid/runtime.b64.*; do
+              printf '%s sha256=%s bytes=%s\n' "$f" "$(sha256sum "$f" | awk '{print $1}')" "$(wc -c < "$f")"
+            done
+          } > .deploy/clean-preview-valid/MANIFEST.txt
+      - name: Commit validated chunks
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .deploy/clean-preview-valid
+          git commit -m 'chore: export validated clean-preview runtime chunks'
+          git push origin HEAD:main
