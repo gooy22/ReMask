@@ -1,5 +1,7 @@
 FROM php:8.4-apache
 
+ENV DEBIAN_FRONTEND=noninteractive
+
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libcurl4-openssl-dev libpq-dev patch xz-utils ca-certificates \
     && docker-php-ext-install curl pdo_pgsql \
@@ -9,13 +11,14 @@ RUN apt-get update \
 WORKDIR /var/www/html
 
 # The previous remask-preview-runtime.tar.gz blob is truncated/corrupt in GitHub.
-# Build from the stable split payload instead, so a fresh Railway account can deploy cleanly.
+# Build from the stable split payload instead. Parts may be raw base64 chunks
+# or JSON wrappers with a content/data/chunk/b64 field.
 COPY remask-v7.part* /tmp/remask-parts/
 COPY remask-preview-latest.patch /tmp/remask-preview-latest.patch
 COPY docker-start.sh /tmp/docker-start.sh
 
 RUN set -eux; \
-    php -r '$out=""; foreach (glob("/tmp/remask-parts/remask-v7.part*") as $file) { $json=json_decode(file_get_contents($file), true); if (!isset($json["content"])) { fwrite(STDERR, "missing content in $file\n"); exit(20); } $out .= $json["content"]; } file_put_contents("/tmp/remask-runtime.b64", preg_replace("/\\s+/", "", $out));'; \
+    php -r '$out=""; $files=glob("/tmp/remask-parts/remask-v7.part*"); sort($files, SORT_NATURAL); foreach ($files as $file) { $raw=file_get_contents($file); $json=json_decode($raw, true); if (is_array($json)) { $found=false; foreach (["content","data","chunk","b64"] as $key) { if (isset($json[$key])) { $raw=$json[$key]; $found=true; break; } } if (!$found) { fwrite(STDERR, "skipping metadata-only part $file\n"); continue; } } $out .= preg_replace("/\\s+/", "", $raw); } if ($out === "") { fwrite(STDERR, "empty ReMask runtime payload\n"); exit(20); } file_put_contents("/tmp/remask-runtime.b64", $out);'; \
     base64 -d /tmp/remask-runtime.b64 > /tmp/remask-runtime.archive; \
     if xz -t /tmp/remask-runtime.archive; then tar -xJf /tmp/remask-runtime.archive -C /var/www/html; \
     elif gzip -t /tmp/remask-runtime.archive; then tar -xzf /tmp/remask-runtime.archive -C /var/www/html; \
