@@ -1,0 +1,66 @@
+name: Recover CLEAN2 payloads from git history
+
+on:
+  push:
+    paths:
+      - '.github/workflows/recover-clean2-history.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Fetch all refs and search blobs by SHA256
+        run: |
+          set -euo pipefail
+          git fetch --all --tags --prune
+          rm -rf .deploy/recovered-clean2
+          mkdir -p .deploy/recovered-clean2
+          cat > /tmp/targets.txt <<'EOF'
+          00 4cdf18804ff75d018904f9088d529aaea227a5da2e314b92db370d59e191ebd1
+          01 48505d46bfc174a669a6928e970e05f52e2dde31f752c9d7ee0a2d070e076e1e
+          02 ca2e6c35be6d560d6fd404e2f47a243688220f6f504c7f85c7ebba52a761a82e
+          03 4e11fe2727ec98f86693ccd73c8f91cb0dc9fd4c3a5867b98017134baae91b8a
+          04 357db468f173047805ea29aed403fdbe74277f6b1fe0a3cc28b1cfde20a5c406
+          05 d66d2f95b951b308ac419e3cb09be48f6989f4f4e0c1a2ec954a045dd9750f85
+          06 ef7462f0c147acb01e02e80ce54cdf68885fc20ba165ce908e73d562c4881a00
+          07 6439e3e5378c01e87ab503255432984aaf572e601a6db6e782614b2977ff7c93
+          EOF
+          git rev-list --objects --all | awk '{print $1}' | sort -u > /tmp/objects.txt
+          while read -r idx target; do
+            found=''
+            while read -r obj; do
+              type=$(git cat-file -t "$obj" 2>/dev/null || true)
+              [ "$type" = blob ] || continue
+              size=$(git cat-file -s "$obj")
+              case "$idx" in
+                00) [ "$size" -eq 10000 ] || continue ;;
+                01) [ "$size" -eq 9987 ] || continue ;;
+                02|03|04|05|06) [ "$size" -eq 12000 ] || continue ;;
+                07) [ "$size" -eq 12001 ] || continue ;;
+              esac
+              git cat-file blob "$obj" > /tmp/candidate
+              sha=$(sha256sum /tmp/candidate | awk '{print $1}')
+              if [ "$sha" = "$target" ]; then
+                cp /tmp/candidate ".deploy/recovered-clean2/CLEAN2_$idx"
+                echo "$idx $obj $size $sha" >> .deploy/recovered-clean2/MANIFEST.txt
+                found=1
+                break
+              fi
+            done < /tmp/objects.txt
+            if [ -z "$found" ]; then echo "$idx NOT_FOUND $target" >> .deploy/recovered-clean2/MANIFEST.txt; fi
+          done < /tmp/targets.txt
+      - name: Commit recovered payloads
+        run: |
+          set -euo pipefail
+          cat .deploy/recovered-clean2/MANIFEST.txt
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .deploy/recovered-clean2
+          git commit -m 'chore: recover historical CLEAN2 payloads by checksum' || exit 0
+          git push origin HEAD:main
