@@ -1,38 +1,25 @@
 FROM php:8.4-apache
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libcurl4-openssl-dev ca-certificates xz-utils \
-    && docker-php-ext-install curl \
+    && apt-get install -y --no-install-recommends libcurl4-openssl-dev libpq-dev \
+    && docker-php-ext-install curl pdo_pgsql \
     && a2enmod rewrite headers \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /var/www/html
-
-COPY remask-v7.part00 remask-v7.part01 remask-v7.part02 remask-v7.part03 remask-v7.part04 remask-v7.part05 remask-v7.part06 remask-v7.part07 remask-v7.part08 /tmp/remask-payload/
-
-RUN rm -rf /var/www/html/* \
-    && cat /tmp/remask-payload/remask-v7.part00 \
-           /tmp/remask-payload/remask-v7.part01 \
-           /tmp/remask-payload/remask-v7.part02 \
-           /tmp/remask-payload/remask-v7.part03 \
-           /tmp/remask-payload/remask-v7.part04 \
-           /tmp/remask-payload/remask-v7.part05 \
-           /tmp/remask-payload/remask-v7.part06 \
-           /tmp/remask-payload/remask-v7.part07 \
-           /tmp/remask-payload/remask-v7.part08 \
-       | base64 -d \
-       | xz -d \
-       | tar -x -C /var/www/html \
-    && mkdir -p /var/www/html/deploy-payload \
-    && cp /tmp/remask-payload/remask-v7.part* /var/www/html/deploy-payload/ \
-    && chown -R www-data:www-data /var/www/html
-
-COPY docker-start.sh /var/www/html/docker-start.sh
-RUN chmod +x /var/www/html/docker-start.sh \
-    && chown www-data:www-data /var/www/html/docker-start.sh
+COPY remask-preview-runtime.tar.gz /tmp/remask-preview-runtime.tar.gz
+RUN tar -xzf /tmp/remask-preview-runtime.tar.gz -C /var/www/html \
+    && rm -f /tmp/remask-preview-runtime.tar.gz \
+    && mkdir -p /var/lib/remask \
+    && printf '[]\n' > /var/lib/remask/accounts.json \
+    && printf '[]\n' > /var/lib/remask/bundles.json \
+    && chown -R www-data:www-data /var/lib/remask /var/www/html \
+    && chmod 700 /var/lib/remask \
+    && chmod +x /var/www/html/docker-start.sh
 
 ENV REMASK_META_CACHE_TTL=1800 \
-    META_GRAPH_API_VERSION=v26.0
+    META_GRAPH_API_VERSION=v26.0 \
+    REMASK_PROCESS_ROLE=web
 
 EXPOSE 80
 CMD ["/var/www/html/docker-start.sh"]
