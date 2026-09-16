@@ -27,6 +27,11 @@ touch "$REMASK_ACCOUNTS_FILE" "$REMASK_META_USAGE_FILE"
 chown -R www-data:www-data "$DATA_DIR" 2>/dev/null || true
 chmod -R u+rwX,g+rwX "$DATA_DIR" 2>/dev/null || true
 
+# The archived runtime may contain Apache module symlinks from another image.
+# Railway/php-apache must run with exactly one MPM loaded.
+a2dismod -f mpm_event mpm_worker 2>/dev/null || true
+a2enmod mpm_prefork 2>/dev/null || true
+
 # Railway supplies a dynamic PORT. Make Apache listen on it.
 sed -ri "s/^Listen [0-9]+/Listen ${PORT_VALUE}/" /etc/apache2/ports.conf
 sed -ri "s/<VirtualHost \*:[0-9]+>/<VirtualHost *:${PORT_VALUE}>/" /etc/apache2/sites-available/000-default.conf
