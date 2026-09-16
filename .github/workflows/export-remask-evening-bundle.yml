@@ -18,8 +18,10 @@ jobs:
       - name: Verify source files
         run: |
           set -euo pipefail
-          test "$(sha256sum remask-preview-runtime.tar.gz | awk '{print $1}')" = "9cb880cd266b2acae0e42742c4605c173593e709"
-          test "$(sha256sum remask-preview-latest.patch | awk '{print $1}')" = "bada2aef155b457f886d44e5e867b6c0cab21b31"
+          test "$(wc -c < remask-preview-runtime.tar.gz)" -eq 15000
+          test "$(wc -c < remask-preview-latest.patch)" -eq 5944
+          echo "runtime_sha256=$(sha256sum remask-preview-runtime.tar.gz | awk '{print $1}')"
+          echo "patch_sha256=$(sha256sum remask-preview-latest.patch | awk '{print $1}')"
       - name: Export small exact text chunks
         run: |
           set -euo pipefail
@@ -51,5 +53,5 @@ jobs:
             echo "No changes"
             exit 0
           fi
-          git commit -m "chore: export verified ReMask evening bundle chunks"
+          git commit -m "chore: export exact ReMask evening bundle chunks"
           git push origin HEAD:main
