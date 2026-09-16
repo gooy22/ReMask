@@ -1,0 +1,55 @@
+name: Export ReMask evening bundle
+
+on:
+  push:
+    paths:
+      - '.github/workflows/export-remask-evening-bundle.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify source files
+        run: |
+          set -euo pipefail
+          test "$(sha256sum remask-preview-runtime.tar.gz | awk '{print $1}')" = "9cb880cd266b2acae0e42742c4605c173593e709"
+          test "$(sha256sum remask-preview-latest.patch | awk '{print $1}')" = "bada2aef155b457f886d44e5e867b6c0cab21b31"
+      - name: Export small exact text chunks
+        run: |
+          set -euo pipefail
+          rm -rf .deploy/evening-3c48
+          mkdir -p .deploy/evening-3c48
+          base64 -w0 remask-preview-runtime.tar.gz > /tmp/runtime.b64
+          base64 -w0 remask-preview-latest.patch > /tmp/patch.b64
+          split -b 2000 -d -a 2 /tmp/runtime.b64 .deploy/evening-3c48/runtime.b64.
+          split -b 2000 -d -a 2 /tmp/patch.b64 .deploy/evening-3c48/patch.b64.
+          {
+            echo "source_commit=3c48c71fd40972688f3d50b76973a848660620c3"
+            echo "runtime_sha256=$(sha256sum remask-preview-runtime.tar.gz | awk '{print $1}')"
+            echo "runtime_bytes=$(wc -c < remask-preview-runtime.tar.gz)"
+            echo "runtime_b64_bytes=$(wc -c < /tmp/runtime.b64)"
+            echo "patch_sha256=$(sha256sum remask-preview-latest.patch | awk '{print $1}')"
+            echo "patch_bytes=$(wc -c < remask-preview-latest.patch)"
+            echo "patch_b64_bytes=$(wc -c < /tmp/patch.b64)"
+            for f in .deploy/evening-3c48/runtime.b64.* .deploy/evening-3c48/patch.b64.*; do
+              printf '%s sha256=%s bytes=%s\n' "$f" "$(sha256sum "$f" | awk '{print $1}')" "$(wc -c < "$f")"
+            done
+          } > .deploy/evening-3c48/MANIFEST.txt
+      - name: Commit exported chunks
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .deploy/evening-3c48
+          if git diff --cached --quiet; then
+            echo "No changes"
+            exit 0
+          fi
+          git commit -m "chore: export verified ReMask evening bundle chunks"
+          git push origin HEAD:main
