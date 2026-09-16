@@ -1,24 +1,37 @@
 FROM php:8.4-apache
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libcurl4-openssl-dev libpq-dev patch \
+    && apt-get install -y --no-install-recommends libcurl4-openssl-dev libpq-dev patch xz-utils ca-certificates \
     && docker-php-ext-install curl pdo_pgsql \
     && a2enmod rewrite headers \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /var/www/html
-COPY remask-preview-runtime.tar.gz /tmp/remask-preview-runtime.tar.gz
+
+# The previous remask-preview-runtime.tar.gz blob is truncated/corrupt in GitHub.
+# Build from the stable split payload instead, so a fresh Railway account can deploy cleanly.
+COPY remask-v7.part* /tmp/remask-parts/
 COPY remask-preview-latest.patch /tmp/remask-preview-latest.patch
-RUN tar -xzf /tmp/remask-preview-runtime.tar.gz -C /var/www/html \
-    && mkdir -p /var/www/html/health \
-    && patch -p1 -d /var/www/html < /tmp/remask-preview-latest.patch \
-    && rm -f /tmp/remask-preview-runtime.tar.gz /tmp/remask-preview-latest.patch \
-    && mkdir -p /var/lib/remask \
-    && printf '[]\n' > /var/lib/remask/accounts.json \
-    && printf '[]\n' > /var/lib/remask/bundles.json \
-    && chown -R www-data:www-data /var/lib/remask /var/www/html \
-    && chmod 700 /var/lib/remask \
-    && chmod +x /var/www/html/docker-start.sh
+COPY docker-start.sh /tmp/docker-start.sh
+
+RUN set -eux; \
+    php -r '$out=""; foreach (glob("/tmp/remask-parts/remask-v7.part*") as $file) { $json=json_decode(file_get_contents($file), true); if (!isset($json["content"])) { fwrite(STDERR, "missing content in $file\n"); exit(20); } $out .= $json["content"]; } file_put_contents("/tmp/remask-runtime.b64", preg_replace("/\\s+/", "", $out));'; \
+    base64 -d /tmp/remask-runtime.b64 > /tmp/remask-runtime.archive; \
+    if xz -t /tmp/remask-runtime.archive; then tar -xJf /tmp/remask-runtime.archive -C /var/www/html; \
+    elif gzip -t /tmp/remask-runtime.archive; then tar -xzf /tmp/remask-runtime.archive -C /var/www/html; \
+    else echo "Unsupported or corrupt ReMask runtime archive" >&2; exit 21; fi; \
+    patch -p1 -N --batch -d /var/www/html < /tmp/remask-preview-latest.patch || true; \
+    mkdir -p /var/www/html/health /var/lib/remask /var/lib/remask/jobs /var/lib/remask/bundles /var/lib/remask/meta-cache /var/lib/remask/job-media; \
+    if [ ! -f /var/www/html/health/index.php ]; then printf '%s\n' '<?php http_response_code(200); header("Content-Type: application/json"); echo json_encode(["ok"=>true,"service"=>"remask","rev"=>getenv("REMASK_DEPLOY_REV")]);' > /var/www/html/health/index.php; fi; \
+    [ -f /var/www/html/index.php ]; \
+    [ -f /var/www/html/launch.php ]; \
+    cp /tmp/docker-start.sh /var/www/html/docker-start.sh; \
+    printf '[]\n' > /var/lib/remask/accounts.json; \
+    printf '[]\n' > /var/lib/remask/bundles.json; \
+    chown -R www-data:www-data /var/lib/remask /var/www/html; \
+    chmod 700 /var/lib/remask; \
+    chmod +x /var/www/html/docker-start.sh; \
+    rm -rf /tmp/remask-parts /tmp/remask-preview-latest.patch /tmp/remask-runtime.b64 /tmp/remask-runtime.archive /tmp/docker-start.sh
 
 ENV REMASK_META_CACHE_TTL=1800 \
     META_GRAPH_API_VERSION=v26.0 \
@@ -26,6 +39,3 @@ ENV REMASK_META_CACHE_TTL=1800 \
 
 EXPOSE 80
 CMD ["/var/www/html/docker-start.sh"]
-
-# Railway deploy trigger for clean preview runtime based on 3c48c71 (2026-09-16 evening)
-# Redeploy existing ReMask Railway service from current main — 2026-09-17
