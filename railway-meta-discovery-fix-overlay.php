@@ -20,8 +20,8 @@ if ($count !== 1) {
 file_put_contents($servicePath, $service);
 fwrite(STDERR, "[meta-discovery-fix] /me/adaccounts uses minimal stable fields\n");
 
-// Replace the temporary probe with per-step diagnostics so one bad edge/field does
-// not hide whether identity, permissions, or direct ad-account discovery actually works.
+// Startup probe: isolate the exact failing Graph step and compare the transport
+// used by ReMask against the conventional access_token transport used by SDKs.
 $probePath = '/var/www/html/ajax/metaSyncProbe.php';
 $probeCode = <<<'PROBE'
 <?php
@@ -34,6 +34,7 @@ if (!hash_equals('rmx_probe_9fb2e8d1c43a6f057d18', (string)($_GET['k'] ?? ''))) 
 }
 require_once __DIR__ . '/../settings.php';
 require_once __DIR__ . '/../classes/MetaEndpoint.php';
+require_once __DIR__ . '/../classes/AccountStoreFactory.php';
 
 function rmx_probe_clean(string $message): string {
     $message = preg_replace('#(https?://)([^/@:\s]+):([^/@\s]+)@#i', '$1***:***@', $message) ?? $message;
@@ -56,6 +57,63 @@ function rmx_probe_step(callable $fn): array {
     }
 }
 
+/** Direct, read-only official Graph request. Token is never returned or logged. */
+function rmx_graph_transport_probe(string $version, string $token, string $authMode): array {
+    $url = 'https://graph.facebook.com/' . $version . '/me?fields=id%2Cname';
+    $headers = ['Accept: application/json', 'User-Agent: ReMask-AuthProbe/1.0'];
+    if ($authMode === 'bearer') {
+        $headers[] = 'Authorization: Bearer ' . $token;
+    } elseif ($authMode === 'oauth') {
+        $headers[] = 'Authorization: OAuth ' . $token;
+    } elseif ($authMode === 'query') {
+        $url .= '&access_token=' . rawurlencode($token);
+    } else {
+        return ['ok'=>false,'http'=>0,'message'=>'unsupported probe auth mode'];
+    }
+
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_FOLLOWLOCATION => false,
+        CURLOPT_CONNECTTIMEOUT => 10,
+        CURLOPT_TIMEOUT => 25,
+        CURLOPT_SSL_VERIFYPEER => true,
+        CURLOPT_SSL_VERIFYHOST => 2,
+        CURLOPT_HTTPHEADER => $headers,
+    ]);
+    $raw = curl_exec($ch);
+    $curlErr = curl_error($ch);
+    $curlNo = curl_errno($ch);
+    $http = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+    curl_close($ch);
+
+    if ($raw === false) {
+        return ['ok'=>false,'http'=>$http,'transport_error'=>rmx_probe_clean($curlErr ?: ('cURL errno ' . $curlNo))];
+    }
+    $decoded = json_decode((string)$raw, true);
+    if (!is_array($decoded)) {
+        return ['ok'=>false,'http'=>$http,'message'=>'non-json response'];
+    }
+    if (isset($decoded['error']) && is_array($decoded['error'])) {
+        $e = $decoded['error'];
+        return [
+            'ok'=>false,
+            'http'=>$http,
+            'type'=>(string)($e['type'] ?? ''),
+            'code'=>isset($e['code']) ? (int)$e['code'] : null,
+            'subcode'=>isset($e['error_subcode']) ? (int)$e['error_subcode'] : null,
+            'message'=>rmx_probe_clean((string)($e['message'] ?? 'Meta error')),
+            'fbtrace_id'=>(string)($e['fbtrace_id'] ?? ''),
+        ];
+    }
+    return [
+        'ok'=>$http >= 200 && $http < 300 && isset($decoded['id']),
+        'http'=>$http,
+        'id_present'=>isset($decoded['id']),
+        'name_present'=>isset($decoded['name']),
+    ];
+}
+
 $profile = '61594319066772';
 $out = [
     'ok' => false,
@@ -67,9 +125,36 @@ $out = [
     'ads_management_granted' => null,
     'direct_ad_account_count' => null,
     'business_count' => null,
+    'token_shape' => null,
+    'auth_transport' => null,
 ];
 
 try {
+    $store = AccountStoreFactory::create(ACCOUNTSFILENAME);
+    $account = $store->getAccountByName($profile);
+    if ($account === null) throw new RuntimeException('Configured profile not found in AccountStore.');
+    $rawToken = (string)$account->token;
+    $token = trim($rawToken);
+    if ($token === '') throw new RuntimeException('Configured profile has an empty token.');
+    $out['token_shape'] = [
+        'raw_length'=>strlen($rawToken),
+        'trimmed_length'=>strlen($token),
+        'had_surrounding_whitespace'=>$rawToken !== $token,
+        'starts_eaa'=>str_starts_with($token, 'EAA'),
+        'contains_space'=>preg_match('/\s/', $token) === 1,
+        'contains_pipe'=>str_contains($token, '|'),
+        'contains_colon'=>str_contains($token, ':'),
+    ];
+
+    // Direct network only. Compare auth encoding on the current API version.
+    $out['auth_transport'] = [
+        'v26_bearer'=>rmx_graph_transport_probe('v26.0', $token, 'bearer'),
+        'v26_query'=>rmx_graph_transport_probe('v26.0', $token, 'query'),
+        'v26_oauth'=>rmx_graph_transport_probe('v26.0', $token, 'oauth'),
+        'v25_query'=>rmx_graph_transport_probe('v25.0', $token, 'query'),
+        'v24_query'=>rmx_graph_transport_probe('v24.0', $token, 'query'),
+    ];
+
     $service = MetaEndpoint::serviceForAccountName($profile);
 
     $identity = rmx_probe_step(fn() => $service->getIdentity());
@@ -133,4 +218,4 @@ try {
 echo json_encode($out, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 PROBE;
 file_put_contents($probePath, $probeCode);
-fwrite(STDERR, "[meta-discovery-fix] per-step Meta sync probe ready\n");
+fwrite(STDERR, "[meta-discovery-fix] per-step + auth-mode Meta sync probe ready\n");
