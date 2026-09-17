@@ -31,17 +31,6 @@ printf '%s\n' '{"ok":true,"service":"remask"}' > "$ROOT/health"
 chown -R www-data:www-data "$DATA_DIR" 2>/dev/null || true
 chmod -R u+rwX,g+rwX "$DATA_DIR" 2>/dev/null || true
 
-# Historical profile-manager versions created accounts.json.bak.* before saves.
-# Recover only missing FB session context from a backup with the exact same token.
-if [ -f "$ROOT/remask-session-recover.php" ]; then
-  php "$ROOT/remask-session-recover.php" 2>&1 || true
-fi
-
-if [ -f "$ROOT/ajax/metaSyncProbe.php" ]; then
-  PROBE_OUT="$(php -r 'parse_str("k=rmx_probe_9fb2e8d1c43a6f057d18", $GLOBALS["_GET"]); include "/var/www/html/ajax/metaSyncProbe.php";' 2>&1 || true)"
-  printf '%s\n' "[remask-sync-probe] ${PROBE_OUT:0:4000}"
-fi
-
 if [ "${REMASK_JOB_EXECUTION_MODE:-browser}" = "background" ] && [ -f "$ROOT/bin/remask-worker.php" ]; then
   (
     echo "[$(date -u +%FT%TZ)] starting remask background worker loop" >> "$DATA_DIR/worker.log"
