@@ -20,6 +20,7 @@ COPY railway-retry-overlay.php /tmp/railway-retry-overlay.php
 COPY railway-targeting-autocomplete-overlay.php /tmp/railway-targeting-autocomplete-overlay.php
 COPY railway-selection-persistence-overlay.php /tmp/railway-selection-persistence-overlay.php
 COPY railway-hierarchy-guard-overlay.php /tmp/railway-hierarchy-guard-overlay.php
+COPY railway-hierarchy-autosync-overlay.php /tmp/railway-hierarchy-autosync-overlay.php
 COPY docker-start.sh /tmp/docker-start.sh
 
 RUN set -eux; \
@@ -36,6 +37,7 @@ RUN set -eux; \
     php /tmp/railway-targeting-autocomplete-overlay.php; \
     php /tmp/railway-selection-persistence-overlay.php; \
     php /tmp/railway-hierarchy-guard-overlay.php; \
+    php /tmp/railway-hierarchy-autosync-overlay.php; \
     php -l /var/www/html/classes/RemaskProxy.php; \
     php -l /var/www/html/ajax/checkAccount.php; \
     php -l /var/www/html/ajax/metaHierarchy.php; \
@@ -44,8 +46,10 @@ RUN set -eux; \
     php -l /var/www/html/ajax/metaJobRetry.php; \
     test -f /var/www/html/scripts/targeting-autocomplete.js; \
     test -f /var/www/html/scripts/selection-persistence.js; \
+    test -f /var/www/html/scripts/hierarchy-autosync.js; \
     grep -q 'targeting-autocomplete.js' /var/www/html/launch.php; \
     grep -q 'selection-persistence.js' /var/www/html/launch.php; \
+    grep -q 'hierarchy-autosync.js' /var/www/html/workspace.php; \
     mkdir -p /var/www/html/health /var/lib/remask /var/lib/remask/jobs /var/lib/remask/bundles /var/lib/remask/meta-cache /var/lib/remask/job-media; \
     if [ ! -f /var/www/html/health/index.php ]; then printf '%s\n' '<?php http_response_code(200); header("Content-Type: application/json"); echo json_encode(["ok"=>true,"service"=>"remask","rev"=>getenv("REMASK_DEPLOY_REV")]);' > /var/www/html/health/index.php; fi; \
     [ -f /var/www/html/index.php ]; \
@@ -56,7 +60,7 @@ RUN set -eux; \
     chown -R www-data:www-data /var/lib/remask /var/www/html; \
     chmod 700 /var/lib/remask; \
     chmod +x /var/www/html/docker-start.sh; \
-    rm -rf /tmp/remask-parts /tmp/railway-launch-overlay.php /tmp/railway-proxy-overlay.php /tmp/railway-worker-overlay.php /tmp/railway-retry-overlay.php /tmp/railway-targeting-autocomplete-overlay.php /tmp/railway-selection-persistence-overlay.php /tmp/railway-hierarchy-guard-overlay.php /tmp/remask-runtime.b64 /tmp/remask-runtime.archive /tmp/docker-start.sh
+    rm -rf /tmp/remask-parts /tmp/railway-launch-overlay.php /tmp/railway-proxy-overlay.php /tmp/railway-worker-overlay.php /tmp/railway-retry-overlay.php /tmp/railway-targeting-autocomplete-overlay.php /tmp/railway-selection-persistence-overlay.php /tmp/railway-hierarchy-guard-overlay.php /tmp/railway-hierarchy-autosync-overlay.php /tmp/remask-runtime.b64 /tmp/remask-runtime.archive /tmp/docker-start.sh
 
 ENV REMASK_META_CACHE_TTL=1800 \
     META_GRAPH_API_VERSION=v26.0 \
