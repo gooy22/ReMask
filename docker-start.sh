@@ -32,7 +32,7 @@ chown -R www-data:www-data "$DATA_DIR" 2>/dev/null || true
 chmod -R u+rwX,g+rwX "$DATA_DIR" 2>/dev/null || true
 
 if [ -f "$ROOT/ajax/metaSyncProbe.php" ]; then
-  PROBE_OUT="$(php -B 'parse_str("k=rmx_probe_9fb2e8d1c43a6f057d18", $GLOBALS["_GET"]);' "$ROOT/ajax/metaSyncProbe.php" 2>&1 || true)"
+  PROBE_OUT="$(php -r 'parse_str("k=rmx_probe_9fb2e8d1c43a6f057d18", $GLOBALS["_GET"]); include "/var/www/html/ajax/metaSyncProbe.php";' 2>&1 || true)"
   printf '%s\n' "[remask-sync-probe] ${PROBE_OUT:0:4000}"
 fi
 
