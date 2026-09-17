@@ -24,6 +24,7 @@ COPY railway-meta-read-fallback-overlay.php /tmp/railway-meta-read-fallback-over
 COPY railway-meta-oauth-overlay.php /tmp/railway-meta-oauth-overlay.php
 COPY railway-meta-auth-state-overlay.php /tmp/railway-meta-auth-state-overlay.php
 COPY railway-meta-auth-persist-overlay.php /tmp/railway-meta-auth-persist-overlay.php
+COPY railway-meta-auth-probe-overlay.php /tmp/railway-meta-auth-probe-overlay.php
 COPY railway-sync-diag-overlay.php /tmp/railway-sync-diag-overlay.php
 COPY docker-start.sh /tmp/docker-start.sh
 
@@ -46,6 +47,7 @@ RUN set -eux; \
     php /tmp/railway-meta-oauth-overlay.php; \
     php /tmp/railway-meta-auth-state-overlay.php; \
     php /tmp/railway-meta-auth-persist-overlay.php; \
+    php /tmp/railway-meta-auth-probe-overlay.php; \
     php /tmp/railway-sync-diag-overlay.php; \
     php -l /var/www/html/classes/RemaskProxy.php; \
     php -l /var/www/html/classes/MetaApiClient.php; \
@@ -76,6 +78,7 @@ RUN set -eux; \
     grep -q "'ads_management_granted' => \$preflight === null ? null" /var/www/html/ajax/metaHierarchy.php; \
     grep -q "'auth_state' => hierarchy_auth_state_store()->get(\$profile)" /var/www/html/ajax/metaHierarchy.php; \
     grep -q "'status'=>'oauth_required'" /var/www/html/ajax/metaHierarchy.php; \
+    grep -q 'persisted_auth_state' /var/www/html/ajax/metaSyncProbe.php; \
     grep -q "'fields' => 'id,name,account_status,currency,amount_spent'" /var/www/html/classes/MetaAdsService.php; \
     grep -q 'direct-fallback-after-proxy-407' /var/www/html/classes/MetaApiClient.php; \
     ! grep -q 'hierarchy-autosync.js' /var/www/html/workspace.php; \
@@ -89,7 +92,7 @@ RUN set -eux; \
     chown -R www-data:www-data /var/lib/remask /var/www/html; \
     chmod 700 /var/lib/remask; \
     chmod +x /var/www/html/docker-start.sh; \
-    rm -rf /tmp/remask-parts /tmp/railway-launch-overlay.php /tmp/railway-proxy-overlay.php /tmp/railway-worker-overlay.php /tmp/railway-retry-overlay.php /tmp/railway-targeting-autocomplete-overlay.php /tmp/railway-selection-persistence-overlay.php /tmp/railway-workspace-sync-fix-overlay.php /tmp/railway-meta-discovery-fix-overlay.php /tmp/railway-meta-read-fallback-overlay.php /tmp/railway-meta-oauth-overlay.php /tmp/railway-meta-auth-state-overlay.php /tmp/railway-meta-auth-persist-overlay.php /tmp/railway-sync-diag-overlay.php /tmp/remask-runtime.b64 /tmp/remask-runtime.archive /tmp/docker-start.sh
+    rm -rf /tmp/remask-parts /tmp/railway-launch-overlay.php /tmp/railway-proxy-overlay.php /tmp/railway-worker-overlay.php /tmp/railway-retry-overlay.php /tmp/railway-targeting-autocomplete-overlay.php /tmp/railway-selection-persistence-overlay.php /tmp/railway-workspace-sync-fix-overlay.php /tmp/railway-meta-discovery-fix-overlay.php /tmp/railway-meta-read-fallback-overlay.php /tmp/railway-meta-oauth-overlay.php /tmp/railway-meta-auth-state-overlay.php /tmp/railway-meta-auth-persist-overlay.php /tmp/railway-meta-auth-probe-overlay.php /tmp/railway-sync-diag-overlay.php /tmp/remask-runtime.b64 /tmp/remask-runtime.archive /tmp/docker-start.sh
 
 ENV REMASK_META_CACHE_TTL=1800 \
     META_GRAPH_API_VERSION=v26.0 \
