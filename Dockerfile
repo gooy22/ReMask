@@ -18,15 +18,6 @@ COPY railway-worker-overlay.php /tmp/railway-worker-overlay.php
 COPY railway-retry-overlay.php /tmp/railway-retry-overlay.php
 COPY railway-targeting-autocomplete-overlay.php /tmp/railway-targeting-autocomplete-overlay.php
 COPY railway-selection-persistence-overlay.php /tmp/railway-selection-persistence-overlay.php
-COPY railway-workspace-sync-fix-overlay.php /tmp/railway-workspace-sync-fix-overlay.php
-COPY railway-meta-discovery-fix-overlay.php /tmp/railway-meta-discovery-fix-overlay.php
-COPY railway-meta-read-fallback-overlay.php /tmp/railway-meta-read-fallback-overlay.php
-COPY railway-meta-oauth-overlay.php /tmp/railway-meta-oauth-overlay.php
-COPY railway-meta-app-config-overlay.php /tmp/railway-meta-app-config-overlay.php
-COPY railway-meta-auth-state-overlay.php /tmp/railway-meta-auth-state-overlay.php
-COPY railway-meta-auth-persist-overlay.php /tmp/railway-meta-auth-persist-overlay.php
-COPY railway-meta-auth-probe-overlay.php /tmp/railway-meta-auth-probe-overlay.php
-COPY railway-sync-diag-overlay.php /tmp/railway-sync-diag-overlay.php
 COPY docker-start.sh /tmp/docker-start.sh
 
 RUN set -eux; \
@@ -42,53 +33,17 @@ RUN set -eux; \
     php /tmp/railway-retry-overlay.php; \
     php /tmp/railway-targeting-autocomplete-overlay.php; \
     php /tmp/railway-selection-persistence-overlay.php; \
-    php /tmp/railway-workspace-sync-fix-overlay.php; \
-    php /tmp/railway-meta-discovery-fix-overlay.php; \
-    php /tmp/railway-meta-read-fallback-overlay.php; \
-    php /tmp/railway-meta-oauth-overlay.php; \
-    php /tmp/railway-meta-app-config-overlay.php; \
-    php /tmp/railway-meta-auth-state-overlay.php; \
-    php /tmp/railway-meta-auth-persist-overlay.php; \
-    php /tmp/railway-meta-auth-probe-overlay.php; \
-    php /tmp/railway-sync-diag-overlay.php; \
     php -l /var/www/html/classes/RemaskProxy.php; \
-    php -l /var/www/html/classes/MetaApiClient.php; \
-    php -l /var/www/html/classes/MetaAdsService.php; \
-    php -l /var/www/html/classes/MetaAuthStateStore.php; \
-    php -l /var/www/html/classes/MetaAppConfigStore.php; \
     php -l /var/www/html/ajax/checkAccount.php; \
     php -l /var/www/html/ajax/metaProfileManager.php; \
     php -l /var/www/html/ajax/metaHierarchy.php; \
-    php -l /var/www/html/ajax/metaSyncProbe.php; \
-    php -l /var/www/html/ajax/metaOAuthStatus.php; \
-    php -l /var/www/html/ajax/metaAuthState.php; \
-    php -l /var/www/html/ajax/metaAppConfig.php; \
-    php -l /var/www/html/meta-oauth-start.php; \
-    php -l /var/www/html/meta-oauth-callback.php; \
     php -l /var/www/html/bin/remask-worker.php; \
     php -l /var/www/html/ajax/metaWorkerStatus.php; \
     php -l /var/www/html/ajax/metaJobRetry.php; \
     test -f /var/www/html/scripts/targeting-autocomplete.js; \
     test -f /var/www/html/scripts/selection-persistence.js; \
-    test -f /var/www/html/scripts/meta-oauth.js; \
-    test -f /var/www/html/scripts/meta-auth-state.js; \
-    test -f /var/www/html/scripts/meta-app-config.js; \
     grep -q 'targeting-autocomplete.js' /var/www/html/launch.php; \
     grep -q 'selection-persistence.js' /var/www/html/launch.php; \
-    grep -q 'scripts/meta-oauth.js' /var/www/html/workspace.php; \
-    grep -q 'scripts/meta-auth-state.js' /var/www/html/workspace.php; \
-    grep -q 'scripts/meta-app-config.js' /var/www/html/workspace.php; \
-    grep -q 'Синхронизация Meta НЕ выполнена' /var/www/html/scripts/workspace.js; \
-    grep -q 'Business Manager list unavailable for this token; direct RK data kept' /var/www/html/ajax/metaHierarchy.php; \
-    grep -q 'META_OAUTH_REQUIRED' /var/www/html/ajax/metaHierarchy.php; \
-    grep -q "'ads_management_granted' => \$preflight === null ? null" /var/www/html/ajax/metaHierarchy.php; \
-    grep -q "'auth_state' => hierarchy_auth_state_store()->get(\$profile)" /var/www/html/ajax/metaHierarchy.php; \
-    grep -q "'status'=>'oauth_required'" /var/www/html/ajax/metaHierarchy.php; \
-    grep -q 'persisted_auth_state' /var/www/html/ajax/metaSyncProbe.php; \
-    grep -q 'MetaAppConfigStore' /var/www/html/meta-oauth-start.php; \
-    grep -q 'MetaAppConfigStore' /var/www/html/meta-oauth-callback.php; \
-    grep -q "'fields' => 'id,name,account_status,currency,amount_spent'" /var/www/html/classes/MetaAdsService.php; \
-    grep -q 'direct-fallback-after-proxy-407' /var/www/html/classes/MetaApiClient.php; \
     ! grep -q 'hierarchy-autosync.js' /var/www/html/workspace.php; \
     mkdir -p /var/www/html/health /var/lib/remask /var/lib/remask/jobs /var/lib/remask/bundles /var/lib/remask/meta-cache /var/lib/remask/job-media; \
     if [ ! -f /var/www/html/health/index.php ]; then printf '%s\n' '<?php http_response_code(200); header("Content-Type: application/json"); echo json_encode(["ok"=>true,"service"=>"remask","rev"=>getenv("REMASK_DEPLOY_REV")]);' > /var/www/html/health/index.php; fi; \
@@ -100,7 +55,7 @@ RUN set -eux; \
     chown -R www-data:www-data /var/lib/remask /var/www/html; \
     chmod 700 /var/lib/remask; \
     chmod +x /var/www/html/docker-start.sh; \
-    rm -rf /tmp/remask-parts /tmp/railway-launch-overlay.php /tmp/railway-proxy-overlay.php /tmp/railway-worker-overlay.php /tmp/railway-retry-overlay.php /tmp/railway-targeting-autocomplete-overlay.php /tmp/railway-selection-persistence-overlay.php /tmp/railway-workspace-sync-fix-overlay.php /tmp/railway-meta-discovery-fix-overlay.php /tmp/railway-meta-read-fallback-overlay.php /tmp/railway-meta-oauth-overlay.php /tmp/railway-meta-app-config-overlay.php /tmp/railway-meta-auth-state-overlay.php /tmp/railway-meta-auth-persist-overlay.php /tmp/railway-meta-auth-probe-overlay.php /tmp/railway-sync-diag-overlay.php /tmp/remask-runtime.b64 /tmp/remask-runtime.archive /tmp/docker-start.sh
+    rm -rf /tmp/remask-parts /tmp/railway-launch-overlay.php /tmp/railway-proxy-overlay.php /tmp/railway-worker-overlay.php /tmp/railway-retry-overlay.php /tmp/railway-targeting-autocomplete-overlay.php /tmp/railway-selection-persistence-overlay.php /tmp/remask-runtime.b64 /tmp/remask-runtime.archive /tmp/docker-start.sh
 
 ENV REMASK_META_CACHE_TTL=1800 \
     META_GRAPH_API_VERSION=v26.0 \
