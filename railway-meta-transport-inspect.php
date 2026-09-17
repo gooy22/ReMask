@@ -2,11 +2,9 @@
 $files = [
     '/var/www/html/classes/MetaApiClient.php',
     '/var/www/html/classes/FbRequests.php',
-    '/var/www/html/classes/FbRequest.php',
     '/var/www/html/ajax/checkAccount.php',
-    '/var/www/html/ajax/addAccount.php',
 ];
-$patterns = ['ApiGet','graph.facebook.com','access_token','Authorization: Bearer','CURLOPT_HTTPHEADER','CURLOPT_URL','CURLOPT_COOKIE','AddToCurlOptions','META_GRAPH_API_VERSION','curl_init','http_build_query'];
+$patterns = ['ApiGet','graph.facebook.com','access_token','Authorization: Bearer','CURLOPT_HTTPHEADER','CURLOPT_URL','CURLOPT_COOKIE','AddToCurlOptions','META_GRAPH_API_VERSION','curl_init','http_build_query','prepareParams','function request','function get','function post'];
 fwrite(STDERR, "[meta-transport-inspect] begin\n");
 foreach ($files as $file) {
     if (!is_file($file)) continue;
