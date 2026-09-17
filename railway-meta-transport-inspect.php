@@ -1,22 +1,13 @@
 <?php
-$files = [
-    '/var/www/html/classes/MetaApiClient.php',
-    '/var/www/html/classes/FbRequests.php',
-    '/var/www/html/ajax/checkAccount.php',
-];
-$patterns = ['ApiGet','graph.facebook.com','access_token','Authorization: Bearer','CURLOPT_HTTPHEADER','CURLOPT_URL','CURLOPT_COOKIE','AddToCurlOptions','META_GRAPH_API_VERSION','curl_init','http_build_query','prepareParams','function request','function get','function post'];
+$file = '/var/www/html/classes/MetaApiClient.php';
 fwrite(STDERR, "[meta-transport-inspect] begin\n");
-foreach ($files as $file) {
-    if (!is_file($file)) continue;
-    fwrite(STDERR, "[meta-transport-inspect] FILE {$file}\n");
+if (is_file($file)) {
     $lines = file($file, FILE_IGNORE_NEW_LINES);
-    if (!is_array($lines)) continue;
-    foreach ($lines as $i => $line) {
-        foreach ($patterns as $pattern) {
-            if (stripos($line, $pattern) !== false) {
-                $safe = preg_replace('/(Bearer\\s*[\'\"]?)[^\'\"\\s]+/i', '$1<TOKEN>', $line);
-                fwrite(STDERR, sprintf("[meta-transport-inspect] %04d %s\n", $i + 1, trim((string)$safe)));
-                break;
+    if (is_array($lines)) {
+        foreach ($lines as $i => $line) {
+            $n = $i + 1;
+            if (($n >= 355 && $n <= 390) || stripos($line, 'Authorization: Bearer') !== false || stripos($line, 'graph.facebook.com') !== false) {
+                fwrite(STDERR, sprintf("[meta-transport-inspect] %04d %s\n", $n, trim((string)$line)));
             }
         }
     }
