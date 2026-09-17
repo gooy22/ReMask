@@ -69,9 +69,8 @@ JS;
         }
     }
 
-    $before = $js;
     $js = preg_replace(
-        '/tr\.appendChild\(pageTd\);\s*tr\.appendChild\(pixelTd\);\s*tr\.appendChild\(audienceTd\);\s*tr\.appendChild\(mediaTd\);\s*tr\.appendChild\(statusTd\);/',
+        '/tr\\.appendChild\\(pageTd\\);\\s*tr\\.appendChild\\(pixelTd\\);\\s*tr\\.appendChild\\(audienceTd\\);\\s*tr\\.appendChild\\(mediaTd\\);\\s*tr\\.appendChild\\(statusTd\\);/',
         'tr.appendChild(pageTd); tr.appendChild(pixelTd); tr.appendChild(audienceTd); tr.appendChild(mediaTd); tr.appendChild(trackingTd); tr.appendChild(statusTd);',
         $js,
         1,
@@ -92,7 +91,7 @@ JS;
             fwrite(STDERR, "[remask overlay] payload url_tags exact: {$count}\n");
         } else {
             $js = preg_replace(
-                '/(binding\.existing_image_hash\)[^;]*row\.creative\.existing_image_hash\s*=\s*binding\.existing_image_hash;)/',
+                '/(binding\\.existing_image_hash\\)[^;]*row\\.creative\\.existing_image_hash\\s*=\\s*binding\\.existing_image_hash;)/',
                 '$1' . "\n            if (binding.url_tags) row.creative.url_tags = binding.url_tags;",
                 $js,
                 1,
@@ -129,3 +128,127 @@ if (is_file($launchPhpPath)) {
     file_put_contents($launchPhpPath, $php);
     fwrite(STDERR, "[remask overlay] launch.php ready\n");
 }
+
+$checkAccountPath = $root . '/ajax/checkAccount.php';
+$checkAccountPhp = <<<'PHP'
+<?php
+require_once __DIR__ . '/../settings.php';
+require_once __DIR__ . '/../checkpassword.php';
+require_once __DIR__ . '/../classes/ResponseFormatter.php';
+
+function remask_check_proxy(?string $proxy): string
+{
+    $proxy = trim((string)$proxy);
+    if ($proxy === '') return '';
+    if (preg_match('/^http:(?!\/\/)/i', $proxy)) {
+        $proxy = 'http://' . substr($proxy, 5);
+    }
+    if (!preg_match('#^(https?|socks5h?|socks5)://#i', $proxy) && preg_match('/^[^\s\/@:]+:\d+$/', $proxy)) {
+        $proxy = 'http://' . $proxy;
+    }
+    if (!preg_match('#^(https?|socks5h?|socks5)://[^\s]+:\d+(?:/)?$#i', $proxy) && !filter_var($proxy, FILTER_VALIDATE_URL)) {
+        throw new InvalidArgumentException('Proxy format is invalid. Use http://host:port or http://user:pass@host:port.');
+    }
+    return $proxy;
+}
+
+function remask_graph_get(string $path, array $params, string $token, string $proxy): array
+{
+    $version = getenv('META_GRAPH_API_VERSION') ?: 'v26.0';
+    if (!preg_match('/^v\d+\.\d+$/', $version)) $version = 'v26.0';
+    $url = 'https://graph.facebook.com/' . $version . '/' . ltrim($path, '/');
+    if ($params !== []) $url .= '?' . http_build_query($params);
+
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_HEADER => false,
+        CURLOPT_FOLLOWLOCATION => false,
+        CURLOPT_CONNECTTIMEOUT => 10,
+        CURLOPT_TIMEOUT => 25,
+        CURLOPT_SSL_VERIFYPEER => true,
+        CURLOPT_SSL_VERIFYHOST => 2,
+        CURLOPT_HTTPHEADER => [
+            'Accept: application/json',
+            'Authorization: Bearer ' . $token,
+        ],
+        CURLOPT_USERAGENT => 'ReMask-MetaApiCheck/1.0',
+    ]);
+    if ($proxy !== '') curl_setopt($ch, CURLOPT_PROXY, $proxy);
+
+    $raw = curl_exec($ch);
+    $curlError = curl_error($ch);
+    $httpStatus = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+    curl_close($ch);
+
+    if ($raw === false) {
+        throw new RuntimeException('Transport failed before Meta response: ' . ($curlError ?: 'unknown cURL error'));
+    }
+    $decoded = json_decode($raw, true);
+    if (!is_array($decoded)) {
+        throw new RuntimeException('Meta returned non-JSON response, HTTP ' . $httpStatus . '.');
+    }
+    if (isset($decoded['error']) && is_array($decoded['error'])) {
+        $err = $decoded['error'];
+        $message = trim((string)($err['message'] ?? 'Meta rejected request.'));
+        $code = isset($err['code']) ? (int)$err['code'] : 0;
+        $subcode = isset($err['error_subcode']) ? (int)$err['error_subcode'] : 0;
+        $type = trim((string)($err['type'] ?? ''));
+        $parts = [$message];
+        if ($type !== '') $parts[] = 'type ' . $type;
+        if ($code) $parts[] = 'code ' . $code;
+        if ($subcode) $parts[] = 'subcode ' . $subcode;
+        throw new RuntimeException('Meta API check failed: ' . implode(', ', $parts));
+    }
+    if ($httpStatus < 200 || $httpStatus >= 300) {
+        throw new RuntimeException('Meta API returned HTTP ' . $httpStatus . '.');
+    }
+    return $decoded;
+}
+
+try {
+    $token = trim((string)($_POST['token'] ?? $_POST['access_token'] ?? ''));
+    if ($token === '') throw new InvalidArgumentException('Access token is required.');
+    $proxy = remask_check_proxy($_POST['proxy'] ?? '');
+
+    $me = remask_graph_get('me', ['fields' => 'id,name'], $token, $proxy);
+    $permissions = remask_graph_get('me/permissions', ['limit' => 200], $token, $proxy);
+    $adsManagementGranted = false;
+    foreach ((array)($permissions['data'] ?? []) as $permission) {
+        if (!is_array($permission)) continue;
+        if (($permission['permission'] ?? '') === 'ads_management' && ($permission['status'] ?? '') === 'granted') {
+            $adsManagementGranted = true;
+            break;
+        }
+    }
+    if (!$adsManagementGranted) {
+        throw new RuntimeException('ads_management permission is not granted for this token.');
+    }
+
+    $adAccounts = remask_graph_get('me/adaccounts', [
+        'fields' => 'id,name,account_status,currency,disable_reason',
+        'limit' => 50,
+    ], $token, $proxy);
+
+    ResponseFormatter::Respond(['res' => json_encode([
+        'ok' => true,
+        'profile' => [
+            'id' => (string)($me['id'] ?? ''),
+            'name' => (string)($me['name'] ?? ''),
+        ],
+        'ads_management_granted' => true,
+        'ad_accounts_count' => count((array)($adAccounts['data'] ?? [])),
+        'proxy_used' => $proxy !== '',
+        'message' => 'Meta API profile is valid.',
+    ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR)]);
+} catch (Throwable $e) {
+    http_response_code(200);
+    ResponseFormatter::Respond(['error' => $e->getMessage()]);
+}
+PHP;
+
+if (!is_dir(dirname($checkAccountPath))) {
+    mkdir(dirname($checkAccountPath), 0775, true);
+}
+file_put_contents($checkAccountPath, $checkAccountPhp);
+fwrite(STDERR, "[remask overlay] ajax/checkAccount.php ready\n");
