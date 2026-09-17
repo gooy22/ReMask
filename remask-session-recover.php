@@ -5,44 +5,51 @@ declare(strict_types=1);
  * Recover only missing Facebook session context (cookies/dtsg) from historical
  * accounts.json backups on the persistent Railway volume. Tokens and proxies
  * from the current canonical AccountStore remain authoritative.
- *
- * Safety: cookie/token values are never printed.
+ * Cookie/token values are never printed.
  */
 require_once __DIR__ . '/settings.php';
 require_once __DIR__ . '/classes/FbAccount.php';
 require_once __DIR__ . '/classes/AccountStoreFactory.php';
 
-function rmx_recover_records(array $root): array {
-    if (function_exists('array_is_list') ? array_is_list($root) : array_keys($root) === range(0, count($root) - 1)) {
-        return $root;
-    }
+function rmx_is_list(array $value): bool {
+    return function_exists('array_is_list') ? array_is_list($value) : array_keys($value) === range(0, count($value) - 1);
+}
+
+function rmx_records(array $root): array {
+    if (rmx_is_list($root)) return $root;
     foreach (['accounts', 'profiles', 'items', 'data'] as $key) {
         if (isset($root[$key]) && is_array($root[$key])) return array_values($root[$key]);
     }
-    return [];
+    return [$root];
 }
 
-function rmx_recover_scalar(array $row, array $keys): string {
+function rmx_decode_jsonish(mixed $value): mixed {
+    if (!is_string($value)) return $value;
+    $trim = trim($value);
+    if ($trim === '' || (!str_starts_with($trim, '[') && !str_starts_with($trim, '{'))) return $value;
+    $decoded = json_decode($trim, true);
+    return is_array($decoded) ? $decoded : $value;
+}
+
+function rmx_find_scalar_recursive(mixed $node, array $keys, int $depth = 0): string {
+    if ($depth > 8) return '';
+    $node = rmx_decode_jsonish($node);
+    if (!is_array($node)) return '';
     foreach ($keys as $key) {
-        if (isset($row[$key]) && is_scalar($row[$key])) return trim((string)$row[$key]);
+        if (array_key_exists($key, $node) && is_scalar($node[$key])) {
+            $value = trim((string)$node[$key]);
+            if ($value !== '') return $value;
+        }
+    }
+    foreach ($node as $child) {
+        if (!is_array($child) && !is_string($child)) continue;
+        $found = rmx_find_scalar_recursive($child, $keys, $depth + 1);
+        if ($found !== '') return $found;
     }
     return '';
 }
 
-function rmx_recover_cookies(array $row): array {
-    foreach (['cookies', 'cookie', 'cookies_json', 'cookie_json'] as $key) {
-        if (!array_key_exists($key, $row)) continue;
-        $value = $row[$key];
-        if (is_array($value)) return array_values($value);
-        if (is_string($value) && trim($value) !== '') {
-            $decoded = json_decode($value, true);
-            if (is_array($decoded)) return array_values($decoded);
-        }
-    }
-    return [];
-}
-
-function rmx_recover_cookie_names(array $cookies): array {
+function rmx_cookie_names(array $cookies): array {
     $names = [];
     foreach ($cookies as $cookie) {
         if (!is_array($cookie)) continue;
@@ -52,7 +59,36 @@ function rmx_recover_cookie_names(array $cookies): array {
     return $names;
 }
 
-function rmx_recover_token_hash(string $token): string {
+function rmx_looks_like_cookie_jar(array $node): bool {
+    if ($node === [] || !rmx_is_list($node)) return false;
+    foreach ($node as $item) {
+        if (is_array($item) && isset($item['name']) && array_key_exists('value', $item)) return true;
+    }
+    return false;
+}
+
+function rmx_find_cookie_jar_recursive(mixed $node, int $depth = 0): array {
+    if ($depth > 10) return [];
+    $node = rmx_decode_jsonish($node);
+    if (!is_array($node)) return [];
+    if (rmx_looks_like_cookie_jar($node)) {
+        $names = rmx_cookie_names($node);
+        if (isset($names['c_user']) && isset($names['xs'])) return array_values($node);
+    }
+    foreach (['cookies','cookie','cookies_json','cookie_json','cookiesData','cookieData','session','session_data'] as $key) {
+        if (!array_key_exists($key, $node)) continue;
+        $found = rmx_find_cookie_jar_recursive($node[$key], $depth + 1);
+        if ($found !== []) return $found;
+    }
+    foreach ($node as $child) {
+        if (!is_array($child) && !is_string($child)) continue;
+        $found = rmx_find_cookie_jar_recursive($child, $depth + 1);
+        if ($found !== []) return $found;
+    }
+    return [];
+}
+
+function rmx_token_hash(string $token): string {
     $token = trim($token);
     return $token === '' ? '' : hash('sha256', $token);
 }
@@ -76,25 +112,40 @@ try {
     }
     arsort($backupFiles, SORT_NUMERIC);
 
+    $currentHashes = [];
+    foreach ($current as $account) {
+        if ($account instanceof FbAccount) {
+            $hash = rmx_token_hash((string)$account->token);
+            if ($hash !== '') $currentHashes[$hash] = true;
+        }
+    }
+
     $candidateRows = [];
+    $rowsScanned = 0;
+    $rowsWithToken = 0;
+    $sameTokenRows = 0;
+    $cookieJarsSeen = 0;
     foreach (array_keys($backupFiles) as $file) {
         $raw = @file_get_contents($file);
         if (!is_string($raw) || trim($raw) === '') continue;
         $json = json_decode($raw, true);
         if (!is_array($json)) continue;
-        foreach (rmx_recover_records($json) as $row) {
+        foreach (rmx_records($json) as $row) {
             if (!is_array($row)) continue;
-            $token = rmx_recover_scalar($row, ['token','access_token','accessToken','fb_token','meta_token']);
-            $hash = rmx_recover_token_hash($token);
-            if ($hash === '') continue;
-            $cookies = rmx_recover_cookies($row);
-            if ($cookies === []) continue;
-            $names = rmx_recover_cookie_names($cookies);
-            if (!isset($names['c_user']) || !isset($names['xs'])) continue;
+            $rowsScanned++;
+            $token = rmx_find_scalar_recursive($row, ['token','access_token','accessToken','fb_token','meta_token']);
+            $hash = rmx_token_hash($token);
+            if ($hash !== '') $rowsWithToken++;
+            if ($hash !== '' && isset($currentHashes[$hash])) $sameTokenRows++;
+
+            $cookies = rmx_find_cookie_jar_recursive($row);
+            if ($cookies !== []) $cookieJarsSeen++;
+            if ($hash === '' || $cookies === []) continue;
+
             if (!isset($candidateRows[$hash])) {
                 $candidateRows[$hash] = [
                     'cookies' => $cookies,
-                    'dtsg' => rmx_recover_scalar($row, ['dtsg','fb_dtsg','fbDtsg']),
+                    'dtsg' => rmx_find_scalar_recursive($row, ['dtsg','fb_dtsg','fbDtsg']),
                     'source' => basename($file),
                 ];
             }
@@ -106,10 +157,10 @@ try {
     $sources = [];
     foreach ($current as $account) {
         if (!$account instanceof FbAccount) continue;
-        $existingNames = rmx_recover_cookie_names((array)$account->cookies);
+        $existingNames = rmx_cookie_names((array)$account->cookies);
         if (isset($existingNames['c_user']) && isset($existingNames['xs'])) continue;
 
-        $hash = rmx_recover_token_hash((string)$account->token);
+        $hash = rmx_token_hash((string)$account->token);
         if ($hash === '' || !isset($candidateRows[$hash])) continue;
         $recoverable++;
         $candidate = $candidateRows[$hash];
@@ -133,12 +184,18 @@ try {
     }
 
     $safeSources = array_slice(array_keys($sources), 0, 5);
-    fwrite(STDERR, '[session-recovery] backups=' . count($backupFiles)
+    fwrite(STDERR,
+        '[session-recovery] backups=' . count($backupFiles)
+        . ' rows=' . $rowsScanned
+        . ' token_rows=' . $rowsWithToken
+        . ' same_token_rows=' . $sameTokenRows
+        . ' cookie_jars=' . $cookieJarsSeen
         . ' candidates=' . count($candidateRows)
         . ' recoverable=' . $recoverable
         . ' restored=' . $restored
         . ($safeSources ? ' sources=' . implode(',', $safeSources) : '')
-        . "\n");
+        . "\n"
+    );
 } catch (Throwable $e) {
     fwrite(STDERR, '[session-recovery] failed=' . get_class($e) . ':' . substr($e->getMessage(), 0, 240) . "\n");
 }
