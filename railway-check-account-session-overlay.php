@@ -1,8 +1,8 @@
 <?php
 /**
  * Session-aware checkAccount endpoint.
- * Browser-session Meta tokens may need the same saved Facebook cookies that the
- * canonical MetaApiClient receives after import. Never echoes secret values.
+ * A Meta-auth rejection does not block persistence of a new ReMask profile;
+ * malformed input / proxy transport errors still block it.
  */
 $target = '/var/www/html/ajax/checkAccount.php';
 $php = <<<'PHP_CODE'
@@ -56,9 +56,7 @@ function rmx_check_saved_account(string $token): ?FbAccount
             $saved = trim((string)$account->token);
             if ($saved !== '' && hash_equals(hash('sha256', $saved), hash('sha256', $token))) return $account;
         }
-    } catch (Throwable) {
-        // Preflight still works with explicit request context if storage is unavailable.
-    }
+    } catch (Throwable) {}
     return null;
 }
 
@@ -68,7 +66,6 @@ function rmx_check_graph_get(string $path, array $params, string $token, ?Remask
     if (!preg_match('/^v\d+\.\d+$/', $version)) $version = 'v26.0';
     $url = 'https://graph.facebook.com/' . $version . '/' . ltrim($path, '/');
     if ($params !== []) $url .= '?' . http_build_query($params);
-
     $ch = curl_init($url);
     $opts = [
         CURLOPT_RETURNTRANSFER => true,
@@ -79,7 +76,7 @@ function rmx_check_graph_get(string $path, array $params, string $token, ?Remask
         CURLOPT_SSL_VERIFYPEER => true,
         CURLOPT_SSL_VERIFYHOST => 2,
         CURLOPT_HTTPHEADER => ['Accept: application/json', 'Authorization: Bearer ' . $token],
-        CURLOPT_USERAGENT => 'ReMask-MetaApiCheck/1.4',
+        CURLOPT_USERAGENT => 'ReMask-MetaApiCheck/1.5',
     ];
     if ($cookieHeader !== '') $opts[CURLOPT_COOKIE] = $cookieHeader;
     if ($proxy !== null) $proxy->AddToCurlOptions($opts);
@@ -89,7 +86,6 @@ function rmx_check_graph_get(string $path, array $params, string $token, ?Remask
     $curlErrno = curl_errno($ch);
     $httpStatus = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
     curl_close($ch);
-
     if ($raw === false) throw new RuntimeException('Proxy/transport failed before Meta response: ' . ($curlError ?: ('cURL errno ' . $curlErrno)));
     $decoded = json_decode($raw, true);
     if (!is_array($decoded)) throw new RuntimeException('Meta returned non-JSON response, HTTP ' . $httpStatus . '.');
@@ -113,49 +109,43 @@ function rmx_check_graph_get(string $path, array $params, string $token, ?Remask
 try {
     $token = trim((string)($_POST['token'] ?? $_POST['access_token'] ?? ''));
     if ($token === '') throw new InvalidArgumentException('Access token is required.');
-
     $savedAccount = rmx_check_saved_account($token);
     $proxyRaw = trim((string)($_POST['proxy'] ?? ''));
     $proxy = $proxyRaw !== '' ? RemaskProxy::fromSemicolonString($proxyRaw) : ($savedAccount?->proxy ?? null);
-
     $cookies = rmx_check_cookie_jar($_POST['cookies'] ?? $_POST['cookie'] ?? '');
     $usedSavedSession = false;
-    if ($cookies === [] && $savedAccount instanceof FbAccount) {
-        $cookies = rmx_check_cookie_jar((array)$savedAccount->cookies);
-        $usedSavedSession = $cookies !== [];
-    }
+    if ($cookies === [] && $savedAccount instanceof FbAccount) { $cookies = rmx_check_cookie_jar((array)$savedAccount->cookies); $usedSavedSession = $cookies !== []; }
     $cookieHeader = rmx_check_cookie_header($cookies);
-
     $me = rmx_check_graph_get('me', ['fields'=>'id,name'], $token, $proxy, $cookieHeader);
     $permissions = rmx_check_graph_get('me/permissions', ['limit'=>200], $token, $proxy, $cookieHeader);
     $adsManagementGranted = false;
     foreach ((array)($permissions['data'] ?? []) as $permission) {
-        if (is_array($permission) && ($permission['permission'] ?? '') === 'ads_management' && ($permission['status'] ?? '') === 'granted') {
-            $adsManagementGranted = true;
-            break;
-        }
+        if (is_array($permission) && ($permission['permission'] ?? '') === 'ads_management' && ($permission['status'] ?? '') === 'granted') { $adsManagementGranted = true; break; }
     }
     if (!$adsManagementGranted) throw new RuntimeException('ads_management permission is not granted for this token.');
     $adAccounts = rmx_check_graph_get('me/adaccounts', ['fields'=>'id,name,account_status,currency,disable_reason','limit'=>50], $token, $proxy, $cookieHeader);
-
     ResponseFormatter::Respond(['res'=>json_encode([
-        'ok'=>true,
+        'ok'=>true,'meta_ok'=>true,
         'profile'=>['id'=>(string)($me['id'] ?? ''),'name'=>(string)($me['name'] ?? '')],
-        'ads_management_granted'=>true,
-        'ad_accounts_count'=>count((array)($adAccounts['data'] ?? [])),
-        'proxy_used'=>$proxy !== null,
-        'session_used'=>$cookieHeader !== '',
-        'saved_session_used'=>$usedSavedSession,
-        'cookie_count'=>count($cookies),
+        'ads_management_granted'=>true,'ad_accounts_count'=>count((array)($adAccounts['data'] ?? [])),
+        'proxy_used'=>$proxy !== null,'session_used'=>$cookieHeader !== '','saved_session_used'=>$usedSavedSession,'cookie_count'=>count($cookies),
         'message'=>'Meta API profile is valid.',
-    ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR)]);
+    ], JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR)]);
 } catch (Throwable $e) {
     http_response_code(200);
-    ResponseFormatter::Respond(['res'=>json_encode([
-        'ok'=>false,
-        'error'=>$e->getMessage(),
-    ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)]);
+    $message = trim($e->getMessage());
+    $metaAuthPending = str_starts_with($message, 'Meta API check failed:') || str_starts_with($message, 'ads_management permission is not granted');
+    if ($metaAuthPending) {
+        // The legacy Accounts screen is a pre-save check. Do not lose the profile just because
+        // this token needs the official OAuth path. The actual Meta sync still remains disabled
+        // until a valid token is connected.
+        ResponseFormatter::Respond(['res'=>json_encode([
+            'ok'=>true,'meta_ok'=>false,'oauth_required'=>true,
+            'message'=>'Profile input accepted. Meta authorization will be connected separately.',
+        ], JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE)]);
+    }
+    ResponseFormatter::Respond(['res'=>json_encode(['ok'=>false,'error'=>$message], JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE)]);
 }
 PHP_CODE;
 file_put_contents($target, $php);
-fwrite(STDERR, "[check-account-session] checkAccount uses explicit or saved token session/proxy context and always returns formatter-safe JSON\n");
+fwrite(STDERR, "[check-account-session] Meta auth rejection no longer blocks profile persistence; malformed input still blocks\n");
