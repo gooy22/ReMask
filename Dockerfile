@@ -56,7 +56,7 @@ RUN set -eux; \
     test -f /var/www/html/scripts/hierarchy-autosync.js; \
     grep -q 'targeting-autocomplete.js' /var/www/html/launch.php; \
     grep -q 'selection-persistence.js' /var/www/html/launch.php; \
-    grep -q 'hierarchy-autosync.js?v=20260917-autosync-v3' /var/www/html/workspace.php; \
+    grep -q 'hierarchy-autosync.js?v=20260917-autosync-v4' /var/www/html/workspace.php; \
     mkdir -p /var/www/html/health /var/lib/remask /var/lib/remask/jobs /var/lib/remask/bundles /var/lib/remask/meta-cache /var/lib/remask/job-media; \
     if [ ! -f /var/www/html/health/index.php ]; then printf '%s\n' '<?php http_response_code(200); header("Content-Type: application/json"); echo json_encode(["ok"=>true,"service"=>"remask","rev"=>getenv("REMASK_DEPLOY_REV")]);' > /var/www/html/health/index.php; fi; \
     [ -f /var/www/html/index.php ]; \
