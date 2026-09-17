@@ -25,18 +25,14 @@ touch "$REMASK_ACCOUNTS_FILE" "$REMASK_META_USAGE_FILE"
 [ -s "$REMASK_ACCOUNTS_FILE" ] || printf '[]\n' > "$REMASK_ACCOUNTS_FILE"
 [ -s "$REMASK_META_USAGE_FILE" ] || printf '{}\n' > "$REMASK_META_USAGE_FILE"
 
-# Railway healthcheck is /health. Keep it as a plain file so Apache returns 200,
-# not a directory redirect/autoindex response.
 rm -rf "$ROOT/health"
 printf '%s\n' '{"ok":true,"service":"remask"}' > "$ROOT/health"
 
 chown -R www-data:www-data "$DATA_DIR" 2>/dev/null || true
 chmod -R u+rwX,g+rwX "$DATA_DIR" 2>/dev/null || true
 
-# Temporary one-shot sync diagnostic. The endpoint returns only sanitized status/counts;
-# it never prints the stored token, cookies, password or proxy credentials.
 if [ -f "$ROOT/ajax/metaSyncProbe.php" ]; then
-  PROBE_OUT="$(php -r '\$_GET["k"]="rmx_probe_9fb2e8d1c43a6f057d18"; require "/var/www/html/ajax/metaSyncProbe.php";' 2>&1 || true)"
+  PROBE_OUT="$(php -B 'parse_str("k=rmx_probe_9fb2e8d1c43a6f057d18", $GLOBALS["_GET"]);' "$ROOT/ajax/metaSyncProbe.php" 2>&1 || true)"
   printf '%s\n' "[remask-sync-probe] ${PROBE_OUT:0:4000}"
 fi
 
@@ -51,23 +47,17 @@ if [ "${REMASK_JOB_EXECUTION_MODE:-browser}" = "background" ] && [ -f "$ROOT/bin
   echo "$!" > "$DATA_DIR/worker.pid" || true
 fi
 
-# The archived runtime may contain Apache module symlinks from another image.
-# Railway/php-apache must run with exactly one MPM loaded.
 a2dismod -f mpm_event mpm_worker 2>/dev/null || true
 a2enmod mpm_prefork 2>/dev/null || true
 
-# Suppress Apache FQDN warning and keep a stable public port.
 printf '%s\n' 'ServerName localhost' > /etc/apache2/conf-available/remask-servername.conf
 a2enconf remask-servername 2>/dev/null || true
 
-# The Railway domain is routed to targetPort 80. Keep Apache listening on 80.
-# Also listen on Railway $PORT if it is different, so health/proxy checks work either way.
 {
   printf '%s\n' 'Listen 80'
   if [ "$PORT_VALUE" != "80" ]; then printf 'Listen %s\n' "$PORT_VALUE"; fi
 } > /etc/apache2/ports.conf
 
-# Serve the application root directly.
 sed -ri "s#DocumentRoot .*#DocumentRoot ${ROOT}#" /etc/apache2/sites-available/000-default.conf
 sed -ri "s/<VirtualHost \*:[0-9]+>/<VirtualHost *:80>/" /etc/apache2/sites-available/000-default.conf
 
