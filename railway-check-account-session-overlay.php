@@ -11,6 +11,8 @@ require_once __DIR__ . '/../settings.php';
 require_once __DIR__ . '/../checkpassword.php';
 require_once __DIR__ . '/../classes/ResponseFormatter.php';
 require_once __DIR__ . '/../classes/RemaskProxy.php';
+require_once __DIR__ . '/../classes/AccountStoreFactory.php';
+require_once __DIR__ . '/../classes/FbAccount.php';
 
 function rmx_check_cookie_jar(mixed $raw): array
 {
@@ -45,6 +47,21 @@ function rmx_check_cookie_header(array $cookies): string
     return implode('; ', $parts);
 }
 
+function rmx_check_saved_account(string $token): ?FbAccount
+{
+    try {
+        $store = AccountStoreFactory::create(ACCOUNTSFILENAME);
+        foreach ((array)$store->deserialize() as $account) {
+            if (!$account instanceof FbAccount) continue;
+            $saved = trim((string)$account->token);
+            if ($saved !== '' && hash_equals(hash('sha256', $saved), hash('sha256', $token))) return $account;
+        }
+    } catch (Throwable) {
+        // Preflight still works with explicit request context if storage is unavailable.
+    }
+    return null;
+}
+
 function rmx_check_graph_get(string $path, array $params, string $token, ?RemaskProxy $proxy, string $cookieHeader): array
 {
     $version = getenv('META_GRAPH_API_VERSION') ?: 'v26.0';
@@ -62,7 +79,7 @@ function rmx_check_graph_get(string $path, array $params, string $token, ?Remask
         CURLOPT_SSL_VERIFYPEER => true,
         CURLOPT_SSL_VERIFYHOST => 2,
         CURLOPT_HTTPHEADER => ['Accept: application/json', 'Authorization: Bearer ' . $token],
-        CURLOPT_USERAGENT => 'ReMask-MetaApiCheck/1.2',
+        CURLOPT_USERAGENT => 'ReMask-MetaApiCheck/1.3',
     ];
     if ($cookieHeader !== '') $opts[CURLOPT_COOKIE] = $cookieHeader;
     if ($proxy !== null) $proxy->AddToCurlOptions($opts);
@@ -94,9 +111,17 @@ function rmx_check_graph_get(string $path, array $params, string $token, ?Remask
 try {
     $token = trim((string)($_POST['token'] ?? $_POST['access_token'] ?? ''));
     if ($token === '') throw new InvalidArgumentException('Access token is required.');
+
+    $savedAccount = rmx_check_saved_account($token);
     $proxyRaw = trim((string)($_POST['proxy'] ?? ''));
-    $proxy = $proxyRaw !== '' ? RemaskProxy::fromSemicolonString($proxyRaw) : null;
+    $proxy = $proxyRaw !== '' ? RemaskProxy::fromSemicolonString($proxyRaw) : ($savedAccount?->proxy ?? null);
+
     $cookies = rmx_check_cookie_jar($_POST['cookies'] ?? $_POST['cookie'] ?? '');
+    $usedSavedSession = false;
+    if ($cookies === [] && $savedAccount instanceof FbAccount) {
+        $cookies = rmx_check_cookie_jar((array)$savedAccount->cookies);
+        $usedSavedSession = $cookies !== [];
+    }
     $cookieHeader = rmx_check_cookie_header($cookies);
 
     $me = rmx_check_graph_get('me', ['fields'=>'id,name'], $token, $proxy, $cookieHeader);
@@ -118,6 +143,7 @@ try {
         'ad_accounts_count'=>count((array)($adAccounts['data'] ?? [])),
         'proxy_used'=>$proxy !== null,
         'session_used'=>$cookieHeader !== '',
+        'saved_session_used'=>$usedSavedSession,
         'cookie_count'=>count($cookies),
         'message'=>'Meta API profile is valid.',
     ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR)]);
@@ -127,4 +153,4 @@ try {
 }
 PHP_CODE;
 file_put_contents($target, $php);
-fwrite(STDERR, "[check-account-session] checkAccount uses token + proxy + optional FB session cookies\n");
+fwrite(STDERR, "[check-account-session] checkAccount uses explicit or saved token session/proxy context\n");
