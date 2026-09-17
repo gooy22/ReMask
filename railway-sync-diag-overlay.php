@@ -1,5 +1,12 @@
 <?php
-$needles = ['proxy_health', 'proxyHealth', 'proxy health', 'checkProxy', 'probeProxy', 'RemaskProxy', 'CURLOPT_PROXY', 'CURLPROXY_', 'proxy_status', 'proxy_status_url'];
+$needles = [
+    'proxy_health', 'proxyHealth', 'proxy health', 'checkProxy', 'probeProxy', 'RemaskProxy',
+    'CURLOPT_PROXY', 'CURLPROXY_', 'proxy_status', 'proxy_status_url',
+    'cachedPreflight', 'peekCachedPreflight', 'cachedAsset', 'peekCachedAsset', 'invalidateProfileCache',
+    'function preflight', 'function request', 'function get(', 'function ApiGet', 'MetaApiClient',
+    "'ad_accounts'", "'businesses'", 'me/adaccounts', 'me/businesses', 'me/permissions',
+    'Authorization: Bearer', 'AddToCurlOptions', 'cache->', 'MetaCache'
+];
 $files = glob('/var/www/html/classes/*.php') ?: [];
 $files = array_merge($files, glob('/var/www/html/ajax/*.php') ?: []);
 $files = array_merge($files, glob('/var/www/html/scripts/*.js') ?: []);
@@ -14,15 +21,15 @@ foreach ($files as $file) {
         }
     }
     if (!$hits) continue;
-    fwrite(STDERR, "[proxy-diag] FILE {$file}\n");
+    fwrite(STDERR, "[sync-diag] FILE {$file}\n");
     $printed = [];
     foreach ($hits as $hit) {
-        $start = max(0, $hit - 14);
-        $end = min(count($lines) - 1, $hit + 24);
+        $start = max(0, $hit - 18);
+        $end = min(count($lines) - 1, $hit + 38);
         for ($i = $start; $i <= $end; $i++) {
             if (isset($printed[$i])) continue;
             $printed[$i] = true;
-            fwrite(STDERR, sprintf("[proxy-diag] %s:%d %s\n", basename($file), $i + 1, $lines[$i]));
+            fwrite(STDERR, sprintf("[sync-diag] %s:%d %s\n", basename($file), $i + 1, $lines[$i]));
         }
     }
 }
