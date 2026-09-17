@@ -16,6 +16,7 @@ COPY .deploy/clean-preview-valid/runtime.b64.* /tmp/remask-parts/
 COPY railway-launch-overlay.php /tmp/railway-launch-overlay.php
 COPY railway-proxy-overlay.php /tmp/railway-proxy-overlay.php
 COPY railway-account-manager-overlay.php /tmp/railway-account-manager-overlay.php
+COPY railway-account-flow-diag-overlay.php /tmp/railway-account-flow-diag-overlay.php
 COPY railway-worker-overlay.php /tmp/railway-worker-overlay.php
 COPY railway-retry-overlay.php /tmp/railway-retry-overlay.php
 COPY railway-targeting-autocomplete-overlay.php /tmp/railway-targeting-autocomplete-overlay.php
@@ -36,6 +37,7 @@ RUN set -eux; \
     php /tmp/railway-launch-overlay.php; \
     php /tmp/railway-proxy-overlay.php; \
     php /tmp/railway-account-manager-overlay.php; \
+    php /tmp/railway-account-flow-diag-overlay.php; \
     php /tmp/railway-worker-overlay.php; \
     php /tmp/railway-retry-overlay.php; \
     php /tmp/railway-targeting-autocomplete-overlay.php; \
@@ -67,7 +69,7 @@ RUN set -eux; \
     chown -R www-data:www-data /var/lib/remask /var/www/html; \
     chmod 700 /var/lib/remask; \
     chmod +x /var/www/html/docker-start.sh; \
-    rm -rf /tmp/remask-parts /tmp/railway-launch-overlay.php /tmp/railway-proxy-overlay.php /tmp/railway-account-manager-overlay.php /tmp/railway-worker-overlay.php /tmp/railway-retry-overlay.php /tmp/railway-targeting-autocomplete-overlay.php /tmp/railway-selection-persistence-overlay.php /tmp/railway-hierarchy-guard-overlay.php /tmp/railway-hierarchy-autosync-overlay.php /tmp/railway-hierarchy-direct-overlay.php /tmp/railway-hierarchy-no-profile-overlay.php /tmp/remask-runtime.b64 /tmp/remask-runtime.archive /tmp/docker-start.sh
+    rm -rf /tmp/remask-parts /tmp/railway-launch-overlay.php /tmp/railway-proxy-overlay.php /tmp/railway-account-manager-overlay.php /tmp/railway-account-flow-diag-overlay.php /tmp/railway-worker-overlay.php /tmp/railway-retry-overlay.php /tmp/railway-targeting-autocomplete-overlay.php /tmp/railway-selection-persistence-overlay.php /tmp/railway-hierarchy-guard-overlay.php /tmp/railway-hierarchy-autosync-overlay.php /tmp/railway-hierarchy-direct-overlay.php /tmp/railway-hierarchy-no-profile-overlay.php /tmp/remask-runtime.b64 /tmp/remask-runtime.archive /tmp/docker-start.sh
 
 ENV REMASK_META_CACHE_TTL=1800 \
     META_GRAPH_API_VERSION=v26.0 \
