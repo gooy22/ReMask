@@ -1,7 +1,7 @@
 <?php
 /**
  * Adds Facebook-like live autocomplete for Meta targeting search in the packed Railway runtime.
- * Search buttons inside interests/behaviors targeting blocks are removed from the UI.
+ * Search buttons inside interests/behaviors targeting blocks are force-removed from the UI.
  */
 $root = '/var/www/html';
 $scriptsDir = $root . '/scripts';
@@ -16,32 +16,33 @@ $js = <<<'JS'
   window.__remaskTargetingAutocompleteLoaded = true;
 
   const MIN_LEN = 2;
-  const DEBOUNCE_MS = 260;
+  const DEBOUNCE_MS = 240;
   const endpoint = '/ajax/metaTargetingSearch.php';
   const attached = new WeakMap();
   const inflight = new WeakMap();
 
   const TARGETING_RE = /(targeting|interest|interests|behavior|behaviors|behaviour|behaviours|audience|detailed|деталь|интерес|інтерес|повед|аудитор|таргет|таргетинг)/i;
-  const EXCLUDE_RE = /(token|cookie|proxy|password|name|url|utm|pixel|page|creative|headline|text|budget|bid|date|time|account|campaign|adset|ad\s*name|rk|рк|карта|payment|billing)/i;
+  const EXCLUDE_INPUT_RE = /(token|cookie|proxy|password|url|utm|pixel|page|creative|headline|text|budget|bid|date|time|payment|billing)/i;
   const SEARCH_BUTTON_RE = /^(search|find|поиск|шукати|знайти|найти)$/i;
 
   function textOf(el) {
     if (!el) return '';
-    return [el.id, el.name, el.placeholder, el.getAttribute('aria-label'), el.getAttribute('data-label'), el.className]
+    return [el.id, el.name, el.placeholder, el.getAttribute?.('aria-label'), el.getAttribute?.('data-label'), el.className, el.textContent, el.value]
       .filter(Boolean)
-      .join(' ');
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
   }
 
   function labelFor(input) {
-    const id = input.id;
     let out = '';
-    if (id) {
-      const label = document.querySelector(`label[for="${CSS.escape(id)}"]`);
+    if (input.id) {
+      const label = document.querySelector(`label[for="${CSS.escape(input.id)}"]`);
       if (label) out += ' ' + label.textContent;
     }
     let p = input.parentElement;
-    for (let i = 0; p && i < 5; i++, p = p.parentElement) {
-      const label = p.querySelector('label, .form-label, .label, small, .muted, .section-title, h3, h4');
+    for (let i = 0; p && i < 6; i++, p = p.parentElement) {
+      const label = p.querySelector('label, .form-label, .label, small, .muted, .section-title, h2, h3, h4, h5');
       if (label) out += ' ' + label.textContent;
     }
     return out;
@@ -53,51 +54,58 @@ $js = <<<'JS'
     const type = (input.getAttribute('type') || 'text').toLowerCase();
     if (!['text', 'search', ''].includes(type)) return false;
     const hay = `${textOf(input)} ${labelFor(input)}`;
-    if (EXCLUDE_RE.test(hay)) return false;
+    if (EXCLUDE_INPUT_RE.test(hay)) return false;
     if (TARGETING_RE.test(hay)) return true;
-    const wrap = input.closest('[data-targeting], .targeting, .audience, .interests, .behaviors, .behaviours, .detailed-targeting');
+    const wrap = input.closest('[data-targeting], [data-audience], .targeting, .audience, .interests, .behaviors, .behaviours, .detailed-targeting, .targeting-search, .interest-search');
     return Boolean(wrap);
+  }
+
+  function looksLikeSearchButton(btn) {
+    const raw = textOf(btn);
+    return SEARCH_BUTTON_RE.test(raw) || /\b(search|find)\b|поиск|шукати|знайти|найти/i.test(raw);
+  }
+
+  function areaHasTargeting(area) {
+    if (!area) return false;
+    const cls = `${area.id || ''} ${area.className || ''} ${area.getAttribute?.('data-targeting') || ''} ${area.getAttribute?.('data-audience') || ''}`;
+    if (TARGETING_RE.test(cls)) return true;
+    const labels = Array.from(area.querySelectorAll('label, .form-label, .label, small, .muted, .section-title, h2, h3, h4, h5'))
+      .slice(0, 20)
+      .map(x => x.textContent || '')
+      .join(' ');
+    if (TARGETING_RE.test(labels)) return true;
+    return Array.from(area.querySelectorAll('input[type="text"], input[type="search"], textarea')).some(isTargetingInput);
+  }
+
+  function removeButton(btn) {
+    btn.dataset.remaskRemovedSearch = 'true';
+    btn.setAttribute('aria-hidden', 'true');
+    btn.setAttribute('tabindex', '-1');
+    btn.style.setProperty('display', 'none', 'important');
+    btn.style.setProperty('visibility', 'hidden', 'important');
+    btn.style.setProperty('width', '0', 'important');
+    btn.style.setProperty('min-width', '0', 'important');
+    btn.style.setProperty('height', '0', 'important');
+    btn.style.setProperty('padding', '0', 'important');
+    btn.style.setProperty('margin', '0', 'important');
+    btn.style.setProperty('border', '0', 'important');
+    btn.style.setProperty('pointer-events', 'none', 'important');
+    try { btn.remove(); } catch (_) {}
+  }
+
+  function removeAllTargetingSearchButtons() {
+    const buttons = Array.from(document.querySelectorAll('button, input[type="button"], input[type="submit"], a.btn, [role="button"]'))
+      .filter(looksLikeSearchButton);
+
+    for (const btn of buttons) {
+      const nearest = btn.closest('[data-targeting], [data-audience], .targeting, .audience, .interests, .behaviors, .behaviours, .detailed-targeting, .targeting-search, .interest-search, .input-group, .form-group, .field, .mb-3, .card, .panel, section, form, div');
+      const broad = btn.closest('.card, .panel, section, form, main, body');
+      if (areaHasTargeting(nearest) || areaHasTargeting(broad)) removeButton(btn);
+    }
   }
 
   function closestBox(input) {
     return input.closest('.input-group, .form-group, .field, .mb-3, .targeting, .audience, .interests, .behaviors, .behaviours, .detailed-targeting, .card, .panel, section, form, div') || input.parentElement || document.body;
-  }
-
-  function looksLikeSearchButton(btn) {
-    const raw = ((btn.textContent || btn.value || '') + ' ' + textOf(btn)).replace(/\s+/g, ' ').trim();
-    if (!raw) return false;
-    return SEARCH_BUTTON_RE.test(raw) || /\b(search|find)\b|поиск|шукати|знайти|найти/i.test(raw);
-  }
-
-  function removeSearchButtonsNear(input) {
-    const areas = [];
-    let p = input.parentElement;
-    for (let i = 0; p && i < 6; i++, p = p.parentElement) areas.push(p);
-    const form = input.closest('form');
-    if (form) areas.push(form);
-
-    for (const area of areas) {
-      if (!area || area.dataset.remaskSearchButtonsRemoved === 'true') continue;
-      const areaText = `${area.className || ''} ${area.id || ''} ${area.getAttribute?.('data-targeting') || ''} ${area.textContent || ''}`;
-      if (!TARGETING_RE.test(areaText) && area !== input.parentElement) continue;
-      const buttons = Array.from(area.querySelectorAll('button, input[type="button"], input[type="submit"], a.btn'));
-      for (const btn of buttons) {
-        if (!looksLikeSearchButton(btn)) continue;
-        btn.dataset.remaskRemovedSearch = 'true';
-        btn.setAttribute('aria-hidden', 'true');
-        btn.setAttribute('tabindex', '-1');
-        btn.style.display = 'none';
-        btn.style.visibility = 'hidden';
-        btn.style.width = '0';
-        btn.style.minWidth = '0';
-        btn.style.padding = '0';
-        btn.style.margin = '0';
-        btn.style.border = '0';
-        btn.style.pointerEvents = 'none';
-        try { btn.remove(); } catch (_) {}
-      }
-      area.dataset.remaskSearchButtonsRemoved = 'true';
-    }
   }
 
   function getContext(input) {
@@ -193,7 +201,7 @@ $js = <<<'JS'
     input.dispatchEvent(new Event('change', { bubbles: true }));
 
     const box = closestBox(input);
-    const add = Array.from(box.querySelectorAll('button, a.btn, input[type="button"]')).find(btn => /add|select|choose|добав|выбр|обрати|додати/i.test(btn.textContent || btn.value || ''));
+    const add = Array.from(box.querySelectorAll('button, a.btn, input[type="button"]')).find(btn => /add|select|choose|добав|выбр|обрати|додати/i.test(textOf(btn)));
     if (add) setTimeout(() => add.click(), 0);
   }
 
@@ -260,13 +268,12 @@ $js = <<<'JS'
 
   function install(input) {
     if (attached.has(input) || !isTargetingInput(input)) return;
-    removeSearchButtonsNear(input);
     const panel = makePanel(input);
     let timer = 0;
     let seq = 0;
 
     const run = () => {
-      removeSearchButtonsNear(input);
+      removeAllTargetingSearchButtons();
       const query = String(input.value || '').trim();
       window.clearTimeout(timer);
       if (query.length < MIN_LEN) {
@@ -282,7 +289,7 @@ $js = <<<'JS'
     input.dataset.remaskLiveTargeting = 'true';
     input.addEventListener('input', run);
     input.addEventListener('focus', () => {
-      removeSearchButtonsNear(input);
+      removeAllTargetingSearchButtons();
       if (String(input.value || '').trim().length >= MIN_LEN) run();
     });
     input.addEventListener('keydown', e => {
@@ -299,6 +306,7 @@ $js = <<<'JS'
   }
 
   function scan() {
+    removeAllTargetingSearchButtons();
     document.querySelectorAll('input[type="text"], input[type="search"], textarea').forEach(install);
   }
 
@@ -307,9 +315,7 @@ $js = <<<'JS'
     const style = document.createElement('style');
     style.id = 'remask-targeting-autocomplete-style';
     style.textContent = `
-      button[data-remask-removed-search="true"],
-      input[data-remask-removed-search="true"],
-      a[data-remask-removed-search="true"] { display: none !important; width: 0 !important; min-width: 0 !important; padding: 0 !important; margin: 0 !important; border: 0 !important; visibility: hidden !important; }
+      [data-remask-removed-search="true"] { display: none !important; width: 0 !important; min-width: 0 !important; height: 0 !important; padding: 0 !important; margin: 0 !important; border: 0 !important; visibility: hidden !important; pointer-events: none !important; }
       .remask-targeting-autocomplete-panel {
         position: absolute;
         z-index: 3000;
@@ -340,7 +346,13 @@ $js = <<<'JS'
       .remask-targeting-result:focus { background: rgba(255,255,255,.09); outline: none; }
       .remask-targeting-name { display: block; font-weight: 650; line-height: 1.2; }
       .remask-targeting-result small,
-      .remask-targeting-empty { display: block; color: rgba(255,255,255,.62); font-size: 12px; line-height: 1.35; margin-top: 3px; }
+      .remask-targeting-empty {
+        display: block;
+        color: rgba(255,255,255,.62);
+        font-size: 12px;
+        line-height: 1.35;
+        margin-top: 3px;
+      }
       .remask-targeting-empty { padding: 10px 12px; }
       input[data-remask-live-targeting="true"] { padding-right: 34px; }
     `;
@@ -350,6 +362,9 @@ $js = <<<'JS'
   function boot() {
     injectStyle();
     scan();
+    window.setTimeout(scan, 100);
+    window.setTimeout(scan, 500);
+    window.setTimeout(scan, 1500);
     const obs = new MutationObserver(scan);
     obs.observe(document.body, { childList: true, subtree: true });
   }
@@ -365,7 +380,7 @@ $launchPhp = $root . '/launch.php';
 if (is_file($launchPhp)) {
     $php = file_get_contents($launchPhp);
     if ($php === false) { fwrite(STDERR, "[remask targeting overlay] cannot read launch.php\n"); exit(51); }
-    $tag = '<script src="scripts/targeting-autocomplete.js?v=20260917-no-search"></script>';
+    $tag = '<script src="scripts/targeting-autocomplete.js?v=20260917-force-remove"></script>';
     if (strpos($php, 'targeting-autocomplete.js') === false) {
         if (stripos($php, '</body>') !== false) {
             $php = str_ireplace('</body>', $tag . "\n</body>", $php);
@@ -373,7 +388,7 @@ if (is_file($launchPhp)) {
             $php .= "\n" . $tag . "\n";
         }
     } else {
-        $php = preg_replace('#<script\s+src="scripts/targeting-autocomplete\.js\?v=[^"]*"></script>#', $tag, $php) ?? $php;
+        $php = preg_replace('#<script\s+src=["\']scripts/targeting-autocomplete\.js\?v=[^"\']*["\']></script>#i', $tag, $php) ?? $php;
     }
     file_put_contents($launchPhp, $php);
     fwrite(STDERR, "[remask targeting overlay] launch.php script tag ready\n");
