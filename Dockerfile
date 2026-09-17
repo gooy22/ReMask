@@ -67,6 +67,8 @@ RUN set -eux; \
     chmod +x /var/www/html/docker-start.sh; \
     rm -rf /tmp/remask-parts /tmp/railway-launch-overlay.php /tmp/railway-meta-session-context-overlay.php /tmp/railway-worker-overlay.php /tmp/railway-retry-overlay.php /tmp/railway-targeting-autocomplete-overlay.php /tmp/railway-selection-persistence-overlay.php /tmp/railway-clean-sync-probe-overlay.php /tmp/railway-meta-transport-ab-probe-overlay.php /tmp/remask-runtime.b64 /tmp/remask-runtime.archive /tmp/docker-start.sh
 
+COPY --chown=www-data:www-data remask-session-recover.php /var/www/html/remask-session-recover.php
+
 ENV REMASK_META_CACHE_TTL=1800 \
     META_GRAPH_API_VERSION=v26.0 \
     REMASK_PROCESS_ROLE=web
