@@ -61,16 +61,25 @@ $optionalCookies = <<<'JS'
 JS;
 $workspace = str_replace($mandatoryCookies, $optionalCookies, $workspace, $cookiePatchCount);
 
-$workspace = str_replace(
-    "await apiJson('ajax/metaProfileManager.php',post({action:'create',name,token,proxy:$(\'newProfileProxy\').value.trim(),cookies}));",
+$addPattern = <<<'REGEX'
+~await\s+apiJson\(\s*['"]ajax/metaProfileManager\.php['"]\s*,\s*post\(\{action\s*:\s*['"]create['"].*?\}\)\s*\);~s
+REGEX;
+$workspace = preg_replace(
+    $addPattern,
     "await profileSaveJson({action:'create',name,token,proxy:$(\'newProfileProxy\').value.trim(),cookies});",
     $workspace,
+    -1,
     $addPatchCount
 );
-$workspace = str_replace(
-    "await apiJson('ajax/metaProfileManager.php',post({action:'save',name:p.name,token:$(\'editToken\').value.trim(),cookies,proxy:$(\'editProxy\').value.trim(),clear_proxy:$(\'editClearProxy\').checked?'1':'0',clear_session:$(\'editClearSession\').checked?'1':'0'}));",
+
+$editPattern = <<<'REGEX'
+~await\s+apiJson\(\s*['"]ajax/metaProfileManager\.php['"]\s*,\s*post\(\{action\s*:\s*['"]save['"].*?\}\)\s*\);~s
+REGEX;
+$workspace = preg_replace(
+    $editPattern,
     "await profileSaveJson({action:'save',name:p.name,token:$(\'editToken\').value.trim(),cookies,proxy:$(\'editProxy\').value.trim(),clear_proxy:$(\'editClearProxy\').checked?'1':'0',clear_session:$(\'editClearSession\').checked?'1':'0'});",
     $workspace,
+    -1,
     $editPatchCount
 );
 
