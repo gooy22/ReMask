@@ -3,7 +3,7 @@ FROM php:8.4-apache
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libcurl4-openssl-dev libpq-dev patch xz-utils ca-certificates \
+    && apt-get install -y --no-install-recommends libcurl4-openssl-dev libpq-dev xz-utils ca-certificates \
     && docker-php-ext-install curl pdo_pgsql \
     && a2enmod rewrite headers \
     && rm -rf /var/lib/apt/lists/*
@@ -13,7 +13,6 @@ WORKDIR /var/www/html
 # The root remask-v7.part* payload is incomplete/corrupt.
 # Use the verified clean-preview payload from .deploy/clean-preview-valid.
 COPY .deploy/clean-preview-valid/runtime.b64.* /tmp/remask-parts/
-COPY remask-preview-latest.patch /tmp/remask-preview-latest.patch
 COPY railway-launch-overlay.php /tmp/railway-launch-overlay.php
 COPY railway-proxy-overlay.php /tmp/railway-proxy-overlay.php
 COPY railway-worker-overlay.php /tmp/railway-worker-overlay.php
@@ -26,7 +25,6 @@ RUN set -eux; \
     if xz -t /tmp/remask-runtime.archive; then tar -xJf /tmp/remask-runtime.archive -C /var/www/html; \
     elif gzip -t /tmp/remask-runtime.archive; then tar -xzf /tmp/remask-runtime.archive -C /var/www/html; \
     else echo "Unsupported or corrupt ReMask runtime archive" >&2; exit 21; fi; \
-    patch -p1 -N --batch -d /var/www/html < /tmp/remask-preview-latest.patch || true; \
     php /tmp/railway-launch-overlay.php; \
     php /tmp/railway-proxy-overlay.php; \
     php /tmp/railway-worker-overlay.php; \
@@ -39,12 +37,12 @@ RUN set -eux; \
     [ -f /var/www/html/index.php ]; \
     [ -f /var/www/html/launch.php ]; \
     cp /tmp/docker-start.sh /var/www/html/docker-start.sh; \
-    printf '[]\n' > /var/lib/remask/accounts.json; \
-    printf '[]\n' > /var/lib/remask/bundles.json; \
+    [ -f /var/lib/remask/accounts.json ] || printf '[]\n' > /var/lib/remask/accounts.json; \
+    [ -f /var/lib/remask/bundles.json ] || printf '[]\n' > /var/lib/remask/bundles.json; \
     chown -R www-data:www-data /var/lib/remask /var/www/html; \
     chmod 700 /var/lib/remask; \
     chmod +x /var/www/html/docker-start.sh; \
-    rm -rf /tmp/remask-parts /tmp/remask-preview-latest.patch /tmp/railway-launch-overlay.php /tmp/railway-proxy-overlay.php /tmp/railway-worker-overlay.php /tmp/remask-runtime.b64 /tmp/remask-runtime.archive /tmp/docker-start.sh
+    rm -rf /tmp/remask-parts /tmp/railway-launch-overlay.php /tmp/railway-proxy-overlay.php /tmp/railway-worker-overlay.php /tmp/remask-runtime.b64 /tmp/remask-runtime.archive /tmp/docker-start.sh
 
 ENV REMASK_META_CACHE_TTL=1800 \
     META_GRAPH_API_VERSION=v26.0 \
