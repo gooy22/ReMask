@@ -63,7 +63,7 @@ function rmx_check_saved_account(string $token): ?FbAccount
 function rmx_check_graph_get(string $path, array $params, string $token, ?RemaskProxy $proxy, string $cookieHeader): array
 {
     $version = getenv('META_GRAPH_API_VERSION') ?: 'v26.0';
-    if (!preg_match('/^v\d+\.\d+$/', $version)) $version = 'v26.0';
+    if (!preg_match('/^v\\d+\\.\\d+$/', $version)) $version = 'v26.0';
     $url = 'https://graph.facebook.com/' . $version . '/' . ltrim($path, '/');
     if ($params !== []) $url .= '?' . http_build_query($params);
     $ch = curl_init($url);
@@ -131,21 +131,21 @@ try {
         'proxy_used'=>$proxy !== null,'session_used'=>$cookieHeader !== '','saved_session_used'=>$usedSavedSession,'cookie_count'=>count($cookies),
         'message'=>'Meta API profile is valid.',
     ], JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR)]);
+    exit;
 } catch (Throwable $e) {
     http_response_code(200);
     $message = trim($e->getMessage());
     $metaAuthPending = str_starts_with($message, 'Meta API check failed:') || str_starts_with($message, 'ads_management permission is not granted');
     if ($metaAuthPending) {
-        // The legacy Accounts screen is a pre-save check. Do not lose the profile just because
-        // this token needs the official OAuth path. The actual Meta sync still remains disabled
-        // until a valid token is connected.
         ResponseFormatter::Respond(['res'=>json_encode([
             'ok'=>true,'meta_ok'=>false,'oauth_required'=>true,
             'message'=>'Profile input accepted. Meta authorization will be connected separately.',
         ], JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE)]);
+        exit;
     }
     ResponseFormatter::Respond(['res'=>json_encode(['ok'=>false,'error'=>$message], JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE)]);
+    exit;
 }
 PHP_CODE;
 file_put_contents($target, $php);
-fwrite(STDERR, "[check-account-session] Meta auth rejection no longer blocks profile persistence; malformed input still blocks\n");
+fwrite(STDERR, "[check-account-session] single-response checkAccount flow ready; OAuth-pending exits cleanly\n");
