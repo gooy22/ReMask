@@ -31,12 +31,6 @@ printf '%s\n' '{"ok":true,"service":"remask"}' > "$ROOT/health"
 chown -R www-data:www-data "$DATA_DIR" 2>/dev/null || true
 chmod -R u+rwX,g+rwX "$DATA_DIR" 2>/dev/null || true
 
-# Temporary safe A/B check of Meta transport using the persisted authorized account.
-# It logs only status/error metadata and token/account hashes, never secrets.
-if [ -f "$ROOT/remask-meta-runtime-probe.php" ]; then
-  php "$ROOT/remask-meta-runtime-probe.php" 2>&1 || true
-fi
-
 if [ "${REMASK_JOB_EXECUTION_MODE:-browser}" = "background" ] && [ -f "$ROOT/bin/remask-worker.php" ]; then
   (
     echo "[$(date -u +%FT%TZ)] starting remask background worker loop" >> "$DATA_DIR/worker.log"
