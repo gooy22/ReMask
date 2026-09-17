@@ -72,7 +72,6 @@ if ($patched === null || $syncCount !== 1) {
     throw new RuntimeException('syncSelection patch failed: ' . (string)$syncCount);
 }
 $js = $patched;
-
 file_put_contents($workspace, $js);
 fwrite(STDERR, "[workspace-sync-fix] workspace.js patched\n");
 
@@ -86,9 +85,9 @@ $syncProfileReplacement = <<<'PHP'
         $profile = trim((string)($input['profile'] ?? ''));
         if ($profile === '') throw new InvalidArgumentException('profile is required');
 
-        // The authoritative baseline is the profile/token preflight. It includes the
-        // directly accessible ad accounts (/me/adaccounts). Business Manager data is
-        // enrichment only and must never make an otherwise valid FB profile fail sync.
+        // Directly accessible ad accounts from the token are the baseline.
+        // Business Manager enumeration is optional enrichment and must not make
+        // an otherwise valid FB profile fail synchronization.
         MetaEndpoint::cachedPreflight($profile, true);
         $syncWarnings = [];
         try {
@@ -121,10 +120,14 @@ $syncProfileReplacement = <<<'PHP'
     }
 PHP;
 
-$profilePattern = "/    if \(\$action === 'sync_profile'\) \{.*?MetaEndpoint::ok\(hierarchy_profile_snapshot\(\$profile\)\);\n    \}/s";
-$patchedPhp = preg_replace($profilePattern, $syncProfileReplacement, $php, 1, $phpCount);
-if ($patchedPhp === null || $phpCount !== 1) {
-    throw new RuntimeException('sync_profile backend patch failed: ' . (string)$phpCount);
+$startNeedle = "    if (\$action === 'sync_profile') {";
+$endNeedle = "        MetaEndpoint::ok(hierarchy_profile_snapshot(\$profile));\n    }";
+$start = strpos($php, $startNeedle);
+$end = $start === false ? false : strpos($php, $endNeedle, $start);
+if ($start === false || $end === false) {
+    throw new RuntimeException('sync_profile backend patch boundaries not found');
 }
-file_put_contents($hierarchy, $patchedPhp);
+$end += strlen($endNeedle);
+$php = substr($php, 0, $start) . $syncProfileReplacement . substr($php, $end);
+file_put_contents($hierarchy, $php);
 fwrite(STDERR, "[workspace-sync-fix] metaHierarchy.php patched\n");
