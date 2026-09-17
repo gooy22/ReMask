@@ -79,7 +79,7 @@ function rmx_check_graph_get(string $path, array $params, string $token, ?Remask
         CURLOPT_SSL_VERIFYPEER => true,
         CURLOPT_SSL_VERIFYHOST => 2,
         CURLOPT_HTTPHEADER => ['Accept: application/json', 'Authorization: Bearer ' . $token],
-        CURLOPT_USERAGENT => 'ReMask-MetaApiCheck/1.3',
+        CURLOPT_USERAGENT => 'ReMask-MetaApiCheck/1.4',
     ];
     if ($cookieHeader !== '') $opts[CURLOPT_COOKIE] = $cookieHeader;
     if ($proxy !== null) $proxy->AddToCurlOptions($opts);
@@ -99,9 +99,11 @@ function rmx_check_graph_get(string $path, array $params, string $token, ?Remask
         $type = trim((string)($err['type'] ?? ''));
         $code = isset($err['code']) ? (int)$err['code'] : 0;
         $subcode = isset($err['error_subcode']) ? (int)$err['error_subcode'] : 0;
+        $trace = trim((string)($err['fbtrace_id'] ?? ''));
         if ($type !== '') $parts[] = 'type ' . $type;
         if ($code) $parts[] = 'code ' . $code;
         if ($subcode) $parts[] = 'subcode ' . $subcode;
+        if ($trace !== '') $parts[] = 'fbtrace_id ' . $trace;
         throw new RuntimeException('Meta API check failed: ' . implode(', ', $parts));
     }
     if ($httpStatus < 200 || $httpStatus >= 300) throw new RuntimeException('Meta API returned HTTP ' . $httpStatus . '.');
@@ -149,8 +151,11 @@ try {
     ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR)]);
 } catch (Throwable $e) {
     http_response_code(200);
-    ResponseFormatter::Respond(['error'=>$e->getMessage()]);
+    ResponseFormatter::Respond(['res'=>json_encode([
+        'ok'=>false,
+        'error'=>$e->getMessage(),
+    ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)]);
 }
 PHP_CODE;
 file_put_contents($target, $php);
-fwrite(STDERR, "[check-account-session] checkAccount uses explicit or saved token session/proxy context\n");
+fwrite(STDERR, "[check-account-session] checkAccount uses explicit or saved token session/proxy context and always returns formatter-safe JSON\n");
