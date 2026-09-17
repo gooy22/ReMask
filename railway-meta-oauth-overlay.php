@@ -289,9 +289,17 @@ $replacement = <<<'PHP'
             throw $metaAuthError;
         }
 PHP;
-$count = 0;
-$hierarchy = str_replace($needle, $replacement, $hierarchy, $count);
-if ($count !== 1) throw new RuntimeException('metaHierarchy OAuth error patch failed: ' . $count);
+if (!str_contains($hierarchy, 'META_OAUTH_REQUIRED')) {
+    $syncMarker = "    if (\$action === 'sync_profile') {";
+    $syncPos = strpos($hierarchy, $syncMarker);
+    $preflightPos = $syncPos === false ? false : strpos($hierarchy, $needle, $syncPos);
+    if ($syncPos === false || $preflightPos === false) {
+        throw new RuntimeException('metaHierarchy OAuth sync_profile patch target not found');
+    }
+    $hierarchy = substr($hierarchy, 0, $preflightPos)
+        . $replacement
+        . substr($hierarchy, $preflightPos + strlen($needle));
+}
 file_put_contents($hierarchyPath, $hierarchy);
 
 // Same clear message on the account validation endpoint.
