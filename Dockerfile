@@ -21,8 +21,7 @@ COPY railway-retry-overlay.php /tmp/railway-retry-overlay.php
 COPY railway-targeting-autocomplete-overlay.php /tmp/railway-targeting-autocomplete-overlay.php
 COPY railway-selection-persistence-overlay.php /tmp/railway-selection-persistence-overlay.php
 COPY railway-profile-error-fix-overlay.php /tmp/railway-profile-error-fix-overlay.php
-COPY railway-meta-transport-inspect.php /tmp/railway-meta-transport-inspect.php
-COPY remask-meta-runtime-probe.php /var/www/html/remask-meta-runtime-probe.php
+COPY railway-meta-official-auth-overlay.php /tmp/railway-meta-official-auth-overlay.php
 COPY docker-start.sh /tmp/docker-start.sh
 
 RUN set -eux; \
@@ -42,13 +41,19 @@ RUN set -eux; \
     php /tmp/railway-targeting-autocomplete-overlay.php; \
     php /tmp/railway-selection-persistence-overlay.php; \
     php /tmp/railway-profile-error-fix-overlay.php; \
-    php /tmp/railway-meta-transport-inspect.php; \
+    php /tmp/railway-meta-official-auth-overlay.php; \
     php -l /var/www/html/classes/RemaskProxy.php; \
     php -l /var/www/html/classes/MetaApiClient.php; \
     php -l /var/www/html/classes/MetaEndpoint.php; \
+    php -l /var/www/html/classes/MetaAppConfigStore.php; \
+    php -l /var/www/html/classes/MetaOAuthBindingStore.php; \
     php -l /var/www/html/ajax/checkAccount.php; \
     php -l /var/www/html/ajax/metaProfileManager.php; \
     php -l /var/www/html/ajax/metaHierarchy.php; \
+    php -l /var/www/html/ajax/metaAppConfig.php; \
+    php -l /var/www/html/ajax/metaOAuthStatus.php; \
+    php -l /var/www/html/meta-oauth-start.php; \
+    php -l /var/www/html/meta-oauth-callback.php; \
     php -l /var/www/html/bin/remask-worker.php; \
     php -l /var/www/html/ajax/metaWorkerStatus.php; \
     php -l /var/www/html/ajax/metaJobRetry.php; \
@@ -62,6 +67,11 @@ RUN set -eux; \
     grep -q 'existing->cookies' /var/www/html/ajax/metaHierarchy.php; \
     grep -q 'setSessionCookies' /var/www/html/classes/MetaApiClient.php; \
     grep -q 'setSessionCookies($account->getCurlCookies())' /var/www/html/classes/MetaEndpoint.php; \
+    grep -q 'setAppSecret' /var/www/html/classes/MetaApiClient.php; \
+    grep -q 'appsecret_proof' /var/www/html/classes/MetaApiClient.php; \
+    grep -q 'OAuth-bound appsecret_proof' /var/www/html/classes/MetaEndpoint.php; \
+    grep -q 'meta-official-auth.js' /var/www/html/workspace.php; \
+    grep -q 'meta-official-auth.js' /var/www/html/accounts.php; \
     grep -q 'CURLOPT_COOKIE' /var/www/html/ajax/checkAccount.php; \
     grep -q 'session_used' /var/www/html/ajax/checkAccount.php; \
     grep -q 'RemaskProxy::fromSemicolonString' /var/www/html/ajax/checkAccount.php; \
@@ -69,6 +79,7 @@ RUN set -eux; \
     ! test -f /var/www/html/remask-session-recover.php; \
     test -f /var/www/html/scripts/targeting-autocomplete.js; \
     test -f /var/www/html/scripts/selection-persistence.js; \
+    test -f /var/www/html/scripts/meta-official-auth.js; \
     grep -q 'targeting-autocomplete.js' /var/www/html/launch.php; \
     grep -q 'selection-persistence.js' /var/www/html/launch.php; \
     ! grep -q 'hierarchy-autosync.js' /var/www/html/workspace.php; \
@@ -82,7 +93,7 @@ RUN set -eux; \
     chown -R www-data:www-data /var/lib/remask /var/www/html; \
     chmod 700 /var/lib/remask; \
     chmod +x /var/www/html/docker-start.sh; \
-    rm -rf /tmp/remask-parts /tmp/railway-launch-overlay.php /tmp/railway-check-account-session-overlay.php /tmp/railway-profile-session-guard-overlay.php /tmp/railway-workspace-session-integrity-overlay.php /tmp/railway-meta-session-context-overlay.php /tmp/railway-worker-overlay.php /tmp/railway-retry-overlay.php /tmp/railway-targeting-autocomplete-overlay.php /tmp/railway-selection-persistence-overlay.php /tmp/railway-profile-error-fix-overlay.php /tmp/railway-meta-transport-inspect.php /tmp/remask-runtime.b64 /tmp/remask-runtime.archive /tmp/docker-start.sh
+    rm -rf /tmp/remask-parts /tmp/railway-launch-overlay.php /tmp/railway-check-account-session-overlay.php /tmp/railway-profile-session-guard-overlay.php /tmp/railway-workspace-session-integrity-overlay.php /tmp/railway-meta-session-context-overlay.php /tmp/railway-worker-overlay.php /tmp/railway-retry-overlay.php /tmp/railway-targeting-autocomplete-overlay.php /tmp/railway-selection-persistence-overlay.php /tmp/railway-profile-error-fix-overlay.php /tmp/railway-meta-official-auth-overlay.php /tmp/remask-runtime.b64 /tmp/remask-runtime.archive /tmp/docker-start.sh
 
 ENV REMASK_META_CACHE_TTL=1800 \
     META_GRAPH_API_VERSION=v26.0 \
