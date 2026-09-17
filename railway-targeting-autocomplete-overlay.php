@@ -1,0 +1,370 @@
+<?php
+/**
+ * Adds Facebook-like live autocomplete for Meta targeting search in the packed Railway runtime.
+ * It keeps the existing Search button/endpoint as a fallback, but triggers it automatically while typing.
+ */
+$root = '/var/www/html';
+$scriptsDir = $root . '/scripts';
+if (!is_dir($scriptsDir)) mkdir($scriptsDir, 0775, true);
+
+$scriptPath = $scriptsDir . '/targeting-autocomplete.js';
+$js = <<<'JS'
+(() => {
+  'use strict';
+
+  if (window.__remaskTargetingAutocompleteLoaded) return;
+  window.__remaskTargetingAutocompleteLoaded = true;
+
+  const MIN_LEN = 2;
+  const DEBOUNCE_MS = 280;
+  const endpoint = '/ajax/metaTargetingSearch.php';
+  const attached = new WeakMap();
+  const inflight = new WeakMap();
+
+  const TARGETING_RE = /(targeting|interest|interests|behavior|behaviors|behaviour|behaviours|audience|detailed|деталь|интерес|інтерес|повед|аудитор|таргет|таргетинг)/i;
+  const EXCLUDE_RE = /(token|cookie|proxy|password|name|url|utm|pixel|page|creative|headline|text|budget|bid|date|time|account|campaign|adset|ad\s*name|rk|рк|карта|payment|billing)/i;
+  const SEARCH_RE = /^(search|find|поиск|шукати|знайти|найти)$/i;
+
+  function textOf(el) {
+    if (!el) return '';
+    return [el.id, el.name, el.placeholder, el.getAttribute('aria-label'), el.getAttribute('data-label'), el.className]
+      .filter(Boolean)
+      .join(' ');
+  }
+
+  function labelFor(input) {
+    const id = input.id;
+    let out = '';
+    if (id) {
+      const label = document.querySelector(`label[for="${CSS.escape(id)}"]`);
+      if (label) out += ' ' + label.textContent;
+    }
+    let p = input.parentElement;
+    for (let i = 0; p && i < 4; i++, p = p.parentElement) {
+      const label = p.querySelector('label, .form-label, .label, small, .muted');
+      if (label) out += ' ' + label.textContent;
+    }
+    return out;
+  }
+
+  function isTargetingInput(input) {
+    if (!(input instanceof HTMLInputElement) && !(input instanceof HTMLTextAreaElement)) return false;
+    if (input.disabled || input.readOnly) return false;
+    const type = (input.getAttribute('type') || 'text').toLowerCase();
+    if (!['text', 'search', ''].includes(type)) return false;
+    const hay = `${textOf(input)} ${labelFor(input)}`;
+    if (EXCLUDE_RE.test(hay)) return false;
+    if (TARGETING_RE.test(hay)) return true;
+
+    const wrap = input.closest('[data-targeting], .targeting, .audience, .interests, .behaviors, .behaviours, .detailed-targeting');
+    return Boolean(wrap);
+  }
+
+  function closestBox(input) {
+    return input.closest('.form-group, .field, .input-group, .mb-3, .row, .card, .panel, form, section, div') || input.parentElement || document.body;
+  }
+
+  function findSearchButton(input) {
+    const boxes = [];
+    let p = input.parentElement;
+    for (let i = 0; p && i < 7; i++, p = p.parentElement) boxes.push(p);
+    const form = input.closest('form');
+    if (form) boxes.push(form);
+
+    for (const box of boxes) {
+      const buttons = Array.from(box.querySelectorAll('button, input[type="button"], input[type="submit"], a.btn'));
+      const found = buttons.find(btn => {
+        const txt = ((btn.textContent || btn.value || '') + ' ' + textOf(btn)).trim();
+        return /search|find|поиск|шукати|знайти|найти/i.test(txt);
+      });
+      if (found) return found;
+    }
+    return null;
+  }
+
+  function getContext(input) {
+    const form = input.closest('form') || document;
+    const pick = names => {
+      for (const name of names) {
+        const el = form.querySelector(`[name="${name}"], #${CSS.escape(name)}`) || document.querySelector(`[name="${name}"], #${CSS.escape(name)}`);
+        if (el && 'value' in el && String(el.value || '').trim() !== '') return String(el.value || '').trim();
+      }
+      return '';
+    };
+    return {
+      profile: pick(['profile', 'profile_name', 'fb_profile', 'account_profile']),
+      account_id: pick(['account_id', 'ad_account_id', 'rk_id', 'act_id', 'selected_account_id']),
+      locale: pick(['locale', 'language']) || navigator.language || 'en_US'
+    };
+  }
+
+  function normalizeResponse(payload) {
+    if (!payload) return [];
+    if (typeof payload === 'string') {
+      try { payload = JSON.parse(payload); } catch (_) { return []; }
+    }
+    if (payload.res) {
+      try { payload = typeof payload.res === 'string' ? JSON.parse(payload.res) : payload.res; } catch (_) {}
+    }
+    const arr = Array.isArray(payload) ? payload
+      : Array.isArray(payload.data) ? payload.data
+      : Array.isArray(payload.results) ? payload.results
+      : Array.isArray(payload.items) ? payload.items
+      : Array.isArray(payload.suggestions) ? payload.suggestions
+      : [];
+    return arr.map(item => {
+      if (typeof item === 'string') return { id: item, name: item, type: '' };
+      const path = Array.isArray(item.path) ? item.path.join(' › ') : (item.path || item.topic || item.category || '');
+      return {
+        id: String(item.id || item.key || item.value || item.name || ''),
+        name: String(item.name || item.title || item.label || item.value || item.id || ''),
+        type: String(item.type || item.class || item.kind || item.targeting_type || ''),
+        audience_size: item.audience_size || item.audienceSize || item.size || '',
+        path: String(path || ''),
+        raw: item
+      };
+    }).filter(x => x.name || x.id);
+  }
+
+  function makePanel(input) {
+    const box = closestBox(input);
+    if (getComputedStyle(box).position === 'static') box.style.position = 'relative';
+    let panel = box.querySelector(':scope > .remask-targeting-autocomplete-panel');
+    if (!panel) {
+      panel = document.createElement('div');
+      panel.className = 'remask-targeting-autocomplete-panel';
+      panel.hidden = true;
+      box.appendChild(panel);
+    }
+    return panel;
+  }
+
+  function setPanel(panel, html) {
+    panel.innerHTML = html;
+    panel.hidden = false;
+  }
+
+  function hidePanel(panel) {
+    panel.hidden = true;
+    panel.innerHTML = '';
+  }
+
+  function selectSuggestion(input, item) {
+    input.value = item.name;
+    input.dataset.selectedTargetingId = item.id || '';
+    input.dataset.selectedTargetingType = item.type || '';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+
+    const box = closestBox(input);
+    const add = Array.from(box.querySelectorAll('button, a.btn')).find(btn => /add|select|choose|добав|выбр|обрати|додати/i.test(btn.textContent || btn.value || ''));
+    if (add) setTimeout(() => add.click(), 0);
+  }
+
+  async function directSearch(input, panel, query, seq) {
+    const prev = inflight.get(input);
+    if (prev && prev.abort) prev.abort.abort();
+    const abort = new AbortController();
+    inflight.set(input, { seq, abort });
+
+    const ctx = getContext(input);
+    const params = new URLSearchParams();
+    params.set('q', query);
+    params.set('query', query);
+    params.set('search', query);
+    params.set('term', query);
+    params.set('type', 'all');
+    params.set('targeting_type', 'all');
+    if (ctx.profile) params.set('profile', ctx.profile);
+    if (ctx.account_id) {
+      params.set('account_id', ctx.account_id);
+      params.set('ad_account_id', ctx.account_id);
+      params.set('act_id', ctx.account_id);
+    }
+    if (ctx.locale) params.set('locale', ctx.locale);
+
+    try {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8', 'Accept': 'application/json' },
+        body: params,
+        signal: abort.signal
+      });
+      const text = await response.text();
+      let payload;
+      try { payload = JSON.parse(text); } catch (_) { payload = null; }
+      const state = inflight.get(input);
+      if (!state || state.seq !== seq) return;
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const results = normalizeResponse(payload);
+      if (!results.length) {
+        setPanel(panel, '<div class="remask-targeting-empty">No matching interests/behaviors</div>');
+        return;
+      }
+      panel.innerHTML = '';
+      results.slice(0, 12).forEach(item => {
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.className = 'remask-targeting-result';
+        const meta = [item.type, item.audience_size ? `Audience ${item.audience_size}` : '', item.path].filter(Boolean).join(' · ');
+        row.innerHTML = `<span class="remask-targeting-name"></span>${meta ? '<small></small>' : ''}`;
+        row.querySelector('.remask-targeting-name').textContent = item.name;
+        const small = row.querySelector('small');
+        if (small) small.textContent = meta;
+        row.addEventListener('mousedown', e => { e.preventDefault(); selectSuggestion(input, item); hidePanel(panel); });
+        panel.appendChild(row);
+      });
+      panel.hidden = false;
+    } catch (e) {
+      if (e && e.name === 'AbortError') return;
+      setPanel(panel, `<div class="remask-targeting-empty">Search endpoint error: ${String(e.message || e)}</div>`);
+    }
+  }
+
+  function install(input) {
+    if (attached.has(input) || !isTargetingInput(input)) return;
+    const panel = makePanel(input);
+    const button = findSearchButton(input);
+    let timer = 0;
+    let seq = 0;
+
+    if (button) {
+      button.dataset.remaskAutocompleteFallback = 'true';
+      button.title = 'Auto-search is enabled while typing';
+      button.style.position = 'absolute';
+      button.style.left = '-9999px';
+      button.style.width = '1px';
+      button.style.height = '1px';
+      button.style.opacity = '0';
+      button.style.pointerEvents = 'none';
+      button.tabIndex = -1;
+    }
+
+    const run = () => {
+      const query = String(input.value || '').trim();
+      window.clearTimeout(timer);
+      if (query.length < MIN_LEN) {
+        hidePanel(panel);
+        return;
+      }
+      const currentSeq = ++seq;
+      setPanel(panel, '<div class="remask-targeting-empty">Searching Meta targeting…</div>');
+      timer = window.setTimeout(() => {
+        if (button) {
+          button.click();
+          setTimeout(() => hidePanel(panel), 700);
+        } else {
+          directSearch(input, panel, query, currentSeq);
+        }
+      }, DEBOUNCE_MS);
+    };
+
+    input.setAttribute('autocomplete', 'off');
+    input.dataset.remaskLiveTargeting = 'true';
+    input.addEventListener('input', run);
+    input.addEventListener('focus', () => {
+      if (String(input.value || '').trim().length >= MIN_LEN) run();
+    });
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        if (button) button.click();
+      }
+      if (e.key === 'Escape') hidePanel(panel);
+    });
+
+    attached.set(input, true);
+  }
+
+  function scan() {
+    document.querySelectorAll('input[type="text"], input[type="search"], textarea').forEach(install);
+  }
+
+  function injectStyle() {
+    if (document.getElementById('remask-targeting-autocomplete-style')) return;
+    const style = document.createElement('style');
+    style.id = 'remask-targeting-autocomplete-style';
+    style.textContent = `
+      .remask-targeting-autocomplete-panel {
+        position: absolute;
+        z-index: 3000;
+        left: 0;
+        right: 0;
+        top: calc(100% + 6px);
+        max-height: 320px;
+        overflow: auto;
+        border: 1px solid rgba(255,255,255,.14);
+        border-radius: 14px;
+        background: rgba(16, 18, 27, .96);
+        box-shadow: 0 18px 55px rgba(0,0,0,.38);
+        padding: 6px;
+        backdrop-filter: blur(18px);
+      }
+      .remask-targeting-result {
+        display: block;
+        width: 100%;
+        text-align: left;
+        border: 0;
+        border-radius: 10px;
+        padding: 10px 12px;
+        background: transparent;
+        color: inherit;
+        cursor: pointer;
+      }
+      .remask-targeting-result:hover,
+      .remask-targeting-result:focus {
+        background: rgba(255,255,255,.09);
+        outline: none;
+      }
+      .remask-targeting-name {
+        display: block;
+        font-weight: 650;
+        line-height: 1.2;
+      }
+      .remask-targeting-result small,
+      .remask-targeting-empty {
+        display: block;
+        color: rgba(255,255,255,.62);
+        font-size: 12px;
+        line-height: 1.35;
+        margin-top: 3px;
+      }
+      .remask-targeting-empty { padding: 10px 12px; }
+      input[data-remask-live-targeting="true"] { padding-right: 34px; }
+    `;
+    document.head.appendChild(style);
+  }
+
+  function boot() {
+    injectStyle();
+    scan();
+    const obs = new MutationObserver(scan);
+    obs.observe(document.body, { childList: true, subtree: true });
+  }
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+  else boot();
+})();
+JS;
+file_put_contents($scriptPath, $js);
+fwrite(STDERR, "[remask targeting overlay] scripts/targeting-autocomplete.js ready\n");
+
+$launchPhp = $root . '/launch.php';
+if (is_file($launchPhp)) {
+    $php = file_get_contents($launchPhp);
+    if ($php === false) { fwrite(STDERR, "[remask targeting overlay] cannot read launch.php\n"); exit(51); }
+    $tag = '<script src="scripts/targeting-autocomplete.js?v=20260917"></script>';
+    if (strpos($php, 'targeting-autocomplete.js') === false) {
+        if (stripos($php, '</body>') !== false) {
+            $php = str_ireplace('</body>', $tag . "\n</body>", $php);
+        } else {
+            $php .= "\n" . $tag . "\n";
+        }
+        file_put_contents($launchPhp, $php);
+    }
+    fwrite(STDERR, "[remask targeting overlay] launch.php script tag ready\n");
+} else {
+    fwrite(STDERR, "[remask targeting overlay] launch.php missing\n");
+    exit(52);
+}
