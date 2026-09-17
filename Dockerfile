@@ -10,9 +10,9 @@ RUN apt-get update \
 
 WORKDIR /var/www/html
 
-# Use the verified clean-preview runtime as the authoritative Workspace/account flow.
 COPY .deploy/clean-preview-valid/runtime.b64.* /tmp/remask-parts/
 COPY railway-launch-overlay.php /tmp/railway-launch-overlay.php
+COPY railway-profile-session-guard-overlay.php /tmp/railway-profile-session-guard-overlay.php
 COPY railway-meta-session-context-overlay.php /tmp/railway-meta-session-context-overlay.php
 COPY railway-worker-overlay.php /tmp/railway-worker-overlay.php
 COPY railway-retry-overlay.php /tmp/railway-retry-overlay.php
@@ -30,6 +30,7 @@ RUN set -eux; \
     elif gzip -t /tmp/remask-runtime.archive; then tar -xzf /tmp/remask-runtime.archive -C /var/www/html; \
     else echo "Unsupported or corrupt ReMask runtime archive" >&2; exit 21; fi; \
     php /tmp/railway-launch-overlay.php; \
+    php /tmp/railway-profile-session-guard-overlay.php; \
     php /tmp/railway-meta-session-context-overlay.php; \
     php /tmp/railway-worker-overlay.php; \
     php /tmp/railway-retry-overlay.php; \
@@ -47,6 +48,7 @@ RUN set -eux; \
     php -l /var/www/html/bin/remask-worker.php; \
     php -l /var/www/html/ajax/metaWorkerStatus.php; \
     php -l /var/www/html/ajax/metaJobRetry.php; \
+    grep -q 'clear_session' /var/www/html/ajax/metaProfileManager.php; \
     grep -q 'setSessionCookies' /var/www/html/classes/MetaApiClient.php; \
     grep -q 'setSessionCookies($account->getCurlCookies())' /var/www/html/classes/MetaEndpoint.php; \
     grep -q 'legacy_graph' /var/www/html/ajax/metaSyncProbe.php; \
@@ -65,7 +67,7 @@ RUN set -eux; \
     chown -R www-data:www-data /var/lib/remask /var/www/html; \
     chmod 700 /var/lib/remask; \
     chmod +x /var/www/html/docker-start.sh; \
-    rm -rf /tmp/remask-parts /tmp/railway-launch-overlay.php /tmp/railway-meta-session-context-overlay.php /tmp/railway-worker-overlay.php /tmp/railway-retry-overlay.php /tmp/railway-targeting-autocomplete-overlay.php /tmp/railway-selection-persistence-overlay.php /tmp/railway-clean-sync-probe-overlay.php /tmp/railway-meta-transport-ab-probe-overlay.php /tmp/remask-runtime.b64 /tmp/remask-runtime.archive /tmp/docker-start.sh
+    rm -rf /tmp/remask-parts /tmp/railway-launch-overlay.php /tmp/railway-profile-session-guard-overlay.php /tmp/railway-meta-session-context-overlay.php /tmp/railway-worker-overlay.php /tmp/railway-retry-overlay.php /tmp/railway-targeting-autocomplete-overlay.php /tmp/railway-selection-persistence-overlay.php /tmp/railway-clean-sync-probe-overlay.php /tmp/railway-meta-transport-ab-probe-overlay.php /tmp/remask-runtime.b64 /tmp/remask-runtime.archive /tmp/docker-start.sh
 
 COPY --chown=www-data:www-data remask-session-recover.php /var/www/html/remask-session-recover.php
 
