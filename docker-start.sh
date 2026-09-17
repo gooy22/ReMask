@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="/var/www/html"
 PORT_VALUE="${PORT:-80}"
 DATA_DIR="${REMASK_DATA_DIR:-${RAILWAY_VOLUME_MOUNT_PATH:-/var/lib/remask}}"
+WORKER_INTERVAL="${REMASK_WORKER_INTERVAL_SECONDS:-15}"
 
 export REMASK_DATA_DIR="$DATA_DIR"
 export REMASK_ACCOUNTS_FILE="${REMASK_ACCOUNTS_FILE:-$DATA_DIR/accounts.json}"
@@ -26,6 +27,17 @@ touch "$REMASK_ACCOUNTS_FILE" "$REMASK_META_USAGE_FILE"
 
 chown -R www-data:www-data "$DATA_DIR" 2>/dev/null || true
 chmod -R u+rwX,g+rwX "$DATA_DIR" 2>/dev/null || true
+
+if [ "${REMASK_JOB_EXECUTION_MODE:-browser}" = "background" ] && [ -f "$ROOT/bin/remask-worker.php" ]; then
+  (
+    echo "[$(date -u +%FT%TZ)] starting remask background worker loop" >> "$DATA_DIR/worker.log"
+    while true; do
+      php "$ROOT/bin/remask-worker.php" >> "$DATA_DIR/worker.log" 2>&1 || true
+      sleep "$WORKER_INTERVAL"
+    done
+  ) &
+  echo "$!" > "$DATA_DIR/worker.pid" || true
+fi
 
 # The archived runtime may contain Apache module symlinks from another image.
 # Railway/php-apache must run with exactly one MPM loaded.
