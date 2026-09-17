@@ -11,10 +11,9 @@ RUN apt-get update \
 WORKDIR /var/www/html
 
 # Use the verified clean-preview runtime as the authoritative Workspace/account flow.
+# Keep the Meta transport/account-sync classes from that verified runtime intact.
 COPY .deploy/clean-preview-valid/runtime.b64.* /tmp/remask-parts/
 COPY railway-launch-overlay.php /tmp/railway-launch-overlay.php
-COPY railway-proxy-overlay.php /tmp/railway-proxy-overlay.php
-COPY railway-meta-read-fallback-overlay.php /tmp/railway-meta-read-fallback-overlay.php
 COPY railway-worker-overlay.php /tmp/railway-worker-overlay.php
 COPY railway-retry-overlay.php /tmp/railway-retry-overlay.php
 COPY railway-targeting-autocomplete-overlay.php /tmp/railway-targeting-autocomplete-overlay.php
@@ -30,8 +29,6 @@ RUN set -eux; \
     elif gzip -t /tmp/remask-runtime.archive; then tar -xzf /tmp/remask-runtime.archive -C /var/www/html; \
     else echo "Unsupported or corrupt ReMask runtime archive" >&2; exit 21; fi; \
     php /tmp/railway-launch-overlay.php; \
-    php /tmp/railway-proxy-overlay.php; \
-    php /tmp/railway-meta-read-fallback-overlay.php; \
     php /tmp/railway-worker-overlay.php; \
     php /tmp/railway-retry-overlay.php; \
     php /tmp/railway-targeting-autocomplete-overlay.php; \
@@ -46,7 +43,6 @@ RUN set -eux; \
     php -l /var/www/html/bin/remask-worker.php; \
     php -l /var/www/html/ajax/metaWorkerStatus.php; \
     php -l /var/www/html/ajax/metaJobRetry.php; \
-    grep -q 'direct-fallback-after-proxy-407' /var/www/html/classes/MetaApiClient.php; \
     test -f /var/www/html/scripts/targeting-autocomplete.js; \
     test -f /var/www/html/scripts/selection-persistence.js; \
     grep -q 'targeting-autocomplete.js' /var/www/html/launch.php; \
@@ -62,7 +58,7 @@ RUN set -eux; \
     chown -R www-data:www-data /var/lib/remask /var/www/html; \
     chmod 700 /var/lib/remask; \
     chmod +x /var/www/html/docker-start.sh; \
-    rm -rf /tmp/remask-parts /tmp/railway-launch-overlay.php /tmp/railway-proxy-overlay.php /tmp/railway-meta-read-fallback-overlay.php /tmp/railway-worker-overlay.php /tmp/railway-retry-overlay.php /tmp/railway-targeting-autocomplete-overlay.php /tmp/railway-selection-persistence-overlay.php /tmp/railway-clean-sync-probe-overlay.php /tmp/remask-runtime.b64 /tmp/remask-runtime.archive /tmp/docker-start.sh
+    rm -rf /tmp/remask-parts /tmp/railway-launch-overlay.php /tmp/railway-worker-overlay.php /tmp/railway-retry-overlay.php /tmp/railway-targeting-autocomplete-overlay.php /tmp/railway-selection-persistence-overlay.php /tmp/railway-clean-sync-probe-overlay.php /tmp/remask-runtime.b64 /tmp/remask-runtime.archive /tmp/docker-start.sh
 
 ENV REMASK_META_CACHE_TTL=1800 \
     META_GRAPH_API_VERSION=v26.0 \
