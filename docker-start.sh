@@ -25,10 +25,12 @@ touch "$REMASK_ACCOUNTS_FILE" "$REMASK_META_USAGE_FILE"
 [ -s "$REMASK_ACCOUNTS_FILE" ] || printf '[]\n' > "$REMASK_ACCOUNTS_FILE"
 [ -s "$REMASK_META_USAGE_FILE" ] || printf '{}\n' > "$REMASK_META_USAGE_FILE"
 
-# Railway healthcheck currently calls /health. Make it a plain static file,
-# not a directory, so Apache returns 200 instead of a trailing-slash 301.
+# Railway may call either /health or /health/. Serve both without 301/404.
 rm -rf "$ROOT/health"
-printf '%s\n' '{"ok":true,"service":"remask"}' > "$ROOT/health"
+mkdir -p "$ROOT/health"
+printf '%s\n' '{"ok":true,"service":"remask"}' > "$ROOT/health/index.html"
+printf '%s\n' '<Directory "/var/www/html/health">' '  DirectorySlash Off' '  Require all granted' '</Directory>' > /etc/apache2/conf-available/remask-health.conf
+a2enconf remask-health 2>/dev/null || true
 
 chown -R www-data:www-data "$DATA_DIR" 2>/dev/null || true
 chmod -R u+rwX,g+rwX "$DATA_DIR" 2>/dev/null || true
