@@ -25,18 +25,10 @@ touch "$REMASK_ACCOUNTS_FILE" "$REMASK_META_USAGE_FILE"
 [ -s "$REMASK_ACCOUNTS_FILE" ] || printf '[]\n' > "$REMASK_ACCOUNTS_FILE"
 [ -s "$REMASK_META_USAGE_FILE" ] || printf '{}\n' > "$REMASK_META_USAGE_FILE"
 
-# Railway may call either /health or /health/. Serve both without 301/403/404.
+# Railway healthcheck is /health. Keep it as a plain file so Apache returns 200,
+# not a directory redirect/autoindex response.
 rm -rf "$ROOT/health"
-mkdir -p "$ROOT/health"
-printf '%s\n' '{"ok":true,"service":"remask"}' > "$ROOT/health/index.html"
-printf '%s\n' \
-  '<Directory "/var/www/html/health">' \
-  '  DirectorySlash Off' \
-  '  DirectoryIndex index.html' \
-  '  Options -Indexes' \
-  '  Require all granted' \
-  '</Directory>' > /etc/apache2/conf-available/remask-health.conf
-a2enconf remask-health 2>/dev/null || true
+printf '%s\n' '{"ok":true,"service":"remask"}' > "$ROOT/health"
 
 chown -R www-data:www-data "$DATA_DIR" 2>/dev/null || true
 chmod -R u+rwX,g+rwX "$DATA_DIR" 2>/dev/null || true
