@@ -16,6 +16,7 @@ COPY .deploy/clean-preview-valid/runtime.b64.* /tmp/remask-parts/
 COPY remask-preview-latest.patch /tmp/remask-preview-latest.patch
 COPY railway-launch-overlay.php /tmp/railway-launch-overlay.php
 COPY railway-proxy-overlay.php /tmp/railway-proxy-overlay.php
+COPY railway-worker-overlay.php /tmp/railway-worker-overlay.php
 COPY docker-start.sh /tmp/docker-start.sh
 
 RUN set -eux; \
@@ -28,8 +29,11 @@ RUN set -eux; \
     patch -p1 -N --batch -d /var/www/html < /tmp/remask-preview-latest.patch || true; \
     php /tmp/railway-launch-overlay.php; \
     php /tmp/railway-proxy-overlay.php; \
+    php /tmp/railway-worker-overlay.php; \
     php -l /var/www/html/classes/RemaskProxy.php; \
     php -l /var/www/html/ajax/checkAccount.php; \
+    php -l /var/www/html/bin/remask-worker.php; \
+    php -l /var/www/html/ajax/metaWorkerStatus.php; \
     mkdir -p /var/www/html/health /var/lib/remask /var/lib/remask/jobs /var/lib/remask/bundles /var/lib/remask/meta-cache /var/lib/remask/job-media; \
     if [ ! -f /var/www/html/health/index.php ]; then printf '%s\n' '<?php http_response_code(200); header("Content-Type: application/json"); echo json_encode(["ok"=>true,"service"=>"remask","rev"=>getenv("REMASK_DEPLOY_REV")]);' > /var/www/html/health/index.php; fi; \
     [ -f /var/www/html/index.php ]; \
@@ -40,7 +44,7 @@ RUN set -eux; \
     chown -R www-data:www-data /var/lib/remask /var/www/html; \
     chmod 700 /var/lib/remask; \
     chmod +x /var/www/html/docker-start.sh; \
-    rm -rf /tmp/remask-parts /tmp/remask-preview-latest.patch /tmp/railway-launch-overlay.php /tmp/railway-proxy-overlay.php /tmp/remask-runtime.b64 /tmp/remask-runtime.archive /tmp/docker-start.sh
+    rm -rf /tmp/remask-parts /tmp/remask-preview-latest.patch /tmp/railway-launch-overlay.php /tmp/railway-proxy-overlay.php /tmp/railway-worker-overlay.php /tmp/remask-runtime.b64 /tmp/remask-runtime.archive /tmp/docker-start.sh
 
 ENV REMASK_META_CACHE_TTL=1800 \
     META_GRAPH_API_VERSION=v26.0 \
