@@ -22,6 +22,7 @@ COPY railway-targeting-autocomplete-overlay.php /tmp/railway-targeting-autocompl
 COPY railway-selection-persistence-overlay.php /tmp/railway-selection-persistence-overlay.php
 COPY railway-profile-error-fix-overlay.php /tmp/railway-profile-error-fix-overlay.php
 COPY railway-meta-transport-inspect.php /tmp/railway-meta-transport-inspect.php
+COPY remask-meta-runtime-probe.php /var/www/html/remask-meta-runtime-probe.php
 COPY docker-start.sh /tmp/docker-start.sh
 
 RUN set -eux; \
