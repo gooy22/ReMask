@@ -5,7 +5,9 @@ $needles = [
     'cachedPreflight', 'peekCachedPreflight', 'cachedAsset', 'peekCachedAsset', 'invalidateProfileCache',
     'function preflight', 'function request', 'function get(', 'function ApiGet', 'MetaApiClient',
     "'ad_accounts'", "'businesses'", 'me/adaccounts', 'me/businesses', 'me/permissions',
-    'Authorization: Bearer', 'AddToCurlOptions', 'cache->', 'MetaCache'
+    'Authorization: Bearer', 'AddToCurlOptions', 'cache->', 'MetaCache',
+    'profileAttention', 'profileReasons', 'attentionReasons', 'reason', 'statusText',
+    'function render', 'renderProfiles', 'applySnapshot', 'ТРЕБУЕТ ВНИМАНИЯ', 'не синхронизирован'
 ];
 $files = glob('/var/www/html/classes/*.php') ?: [];
 $files = array_merge($files, glob('/var/www/html/ajax/*.php') ?: []);
