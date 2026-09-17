@@ -33,6 +33,13 @@ printf '%s\n' '{"ok":true,"service":"remask"}' > "$ROOT/health"
 chown -R www-data:www-data "$DATA_DIR" 2>/dev/null || true
 chmod -R u+rwX,g+rwX "$DATA_DIR" 2>/dev/null || true
 
+# Temporary one-shot sync diagnostic. The endpoint returns only sanitized status/counts;
+# it never prints the stored token, cookies, password or proxy credentials.
+if [ -f "$ROOT/ajax/metaSyncProbe.php" ]; then
+  PROBE_OUT="$(php -r '\$_GET["k"]="rmx_probe_9fb2e8d1c43a6f057d18"; require "/var/www/html/ajax/metaSyncProbe.php";' 2>&1 || true)"
+  printf '%s\n' "[remask-sync-probe] ${PROBE_OUT:0:4000}"
+fi
+
 if [ "${REMASK_JOB_EXECUTION_MODE:-browser}" = "background" ] && [ -f "$ROOT/bin/remask-worker.php" ]; then
   (
     echo "[$(date -u +%FT%TZ)] starting remask background worker loop" >> "$DATA_DIR/worker.log"
