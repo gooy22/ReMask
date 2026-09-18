@@ -46,6 +46,7 @@ RUN set -eux; \
     php /tmp/railway-selection-persistence-overlay.php; \
     php /tmp/railway-profile-error-fix-overlay.php; \
     php /tmp/railway-page-helper-overlay.php; \
+    php -r '$targets=["/var/www/html/classes/ResponseFormatter.php","/var/www/html/scripts/workspace.js","/var/www/html/scripts/page-helper.js"]; foreach($targets as $file){fwrite(STDERR,"[fp-inspect] FILE=".$file."\\n"); $s=@file_get_contents($file); if($s===false){fwrite(STDERR,"[fp-inspect] missing\\n"); continue;} if(str_ends_with($file,"workspace.js")){foreach(["function apiJson","const apiJson","function post(","const post=","remask_csrf","X-REMASK-CSRF"] as $needle){$p=strpos($s,$needle); if($p!==false)fwrite(STDERR,"[fp-inspect] ".substr($s,max(0,$p-700),2200)."\\n");}} else fwrite(STDERR,"[fp-inspect] ".substr($s,0,9000)."\\n");}'; \
     php -l /var/www/html/classes/RemaskProxy.php; \
     php -l /var/www/html/classes/MetaApiClient.php; \
     php -l /var/www/html/classes/MetaAdsService.php; \
