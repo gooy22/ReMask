@@ -1,6 +1,6 @@
 <?php
 /**
- * v91: Retry FAILED with the current Launch form payload.
+ * v93: Retry FAILED with the current Launch form payload.
  * Preserve already-created Meta IDs/steps so a failed Ad Set resumes under the
  * existing Campaign instead of creating a duplicate Campaign.
  */
@@ -116,6 +116,11 @@ if(strpos($js,'REMASK_RETRY_WITH_CURRENT_FORM_V1')===false){
                 return;
             }
             await refreshCurrentJob();
+
+            // processCurrentJob owns the processing flag itself. Release our
+            // short endpoint-update lock first or it will intentionally no-op.
+            state.processingJob = false;
+            validateReady();
             await processCurrentJob();
         } catch (e) {
             show($('launchResult'), e.payload?.message || e.message || String(e), 'failed');
@@ -134,7 +139,7 @@ JS;
 
 $php=preg_replace(
     '#<script src="scripts/launch\.js(?:\?[^"]*)?" type="module"></script>#',
-    '<script src="scripts/launch.js?v=20260918-retry-current-v91" type="module"></script>',
+    '<script src="scripts/launch.js?v=20260918-retry-current-v93" type="module"></script>',
     $php,
     1,
     $count
@@ -142,4 +147,4 @@ $php=preg_replace(
 if($count!==1){fwrite(STDERR,"[retry-current-payload] launch.js tag missing\n");exit(167);}
 file_put_contents($phpPath,$php);
 
-fwrite(STDERR,"[retry-current-payload] v91 retry uses current form and preserves successful IDs\n");
+fwrite(STDERR,"[retry-current-payload] v93 retry uses current form, preserves successful IDs, and resumes processing\n");
