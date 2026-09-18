@@ -112,9 +112,10 @@ $syncProfileReplacement = <<<'PHP'
             'entity_id'=>$profile,
             'profile_name'=>$profile,
             'summary'=>'Синхронизация FB-профиля завершена',
-            'details'=>['warnings'=>$syncWarnings],
+            'details'=>['sync_source'=>'direct_ad_accounts_with_optional_business_enrichment','warnings'=>$syncWarnings],
         ]);
         $snapshot = hierarchy_profile_snapshot($profile);
+        $snapshot['sync_source'] = 'direct_ad_accounts_with_optional_business_enrichment';
         if ($syncWarnings !== []) $snapshot['sync_warnings'] = array_values(array_unique($syncWarnings));
         MetaEndpoint::ok($snapshot);
     }
