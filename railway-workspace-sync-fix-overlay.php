@@ -16,55 +16,97 @@ if ($count !== 1) {
 }
 
 $newSync = <<<'JS'
-// REMASK_SYNC_STABILIZED_V1\nasync function syncSelection(){
+ // REMASK_SYNC_STABILIZED_V2
+async function syncSelection(){
   if(state.running)return;
   const tab=state.activeTab, rows=selectedRows(tab);
   if(!rows.length)return;
+
   state.running=true;
   updateSelectionUi();
   $('workspaceStatus').textContent=`Доп. синхронизация: 0/${rows.length}`;
+
+  const errorText=(e)=>{
+    if(e&&typeof e==='object'){
+      if(e.message)return String(e.message);
+      if(e.error)return String(e.error);
+    }
+    return String(e||'Unknown sync error');
+  };
+
+  const syncProfileSafe=async(profile)=>{
+    try{
+      const d=await apiJson('ajax/metaHierarchy.php',post({action:'sync_profile',profile}));
+      applySnapshot(d);
+      return d;
+    }catch(e){
+      return {error:errorText(e),profile};
+    }
+  };
+
+  const syncBusinessSafe=async(row)=>{
+    try{
+      const d=await apiJson('ajax/metaHierarchy.php',post({action:'sync_business',profile:row.profile,business_id:row.id}));
+      applySnapshot(d);
+      return d;
+    }catch(e){
+      return {error:errorText(e),profile:row.profile,business_id:row.id};
+    }
+  };
+
   try{
     let results=[];
-    if(tab==='profiles') {
-      results=await concurrent(rows,3,async r=>{
-        const d=await apiJson('ajax/metaHierarchy.php',post({action:'sync_profile',profile:r.name}));
-        applySnapshot(d);
-        return d;
-      },(d,t)=>{$('workspaceStatus').textContent=`Синхронизация FB: ${d}/${t}`;setProgress(d,t)});
-    } else if(tab==='businesses') {
-      results=await concurrent(rows,3,async r=>{
-        const d=await apiJson('ajax/metaHierarchy.php',post({action:'sync_business',profile:r.profile,business_id:r.id}));
-        applySnapshot(d);
-        return d;
-      },(d,t)=>{$('workspaceStatus').textContent=`Синхронизация BM: ${d}/${t}`;setProgress(d,t)});
-    } else if(tab==='ad_accounts') {
-      const profiles=[...new Set(rows.map(r=>r.profile))];
-      results=await concurrent(profiles,3,async p=>{
-        const d=await apiJson('ajax/metaHierarchy.php',post({action:'sync_profile',profile:p}));
-        applySnapshot(d);
-        return d;
-      },(d,t)=>{$('workspaceStatus').textContent=`Синхронизация RK: ${d}/${t}`;setProgress(d,t)});
-    } else {
-      await refreshSelectedDelivery(tab, rows);
+    if(tab==='profiles'){
+      results=await concurrent(
+        rows,
+        3,
+        r=>syncProfileSafe(r.name),
+        (done,total)=>{$('workspaceStatus').textContent=`Синхронизация FB: ${done}/${total}`;setProgress(done,total)}
+      );
+    }else if(tab==='businesses'){
+      results=await concurrent(
+        rows,
+        3,
+        r=>syncBusinessSafe(r),
+        (done,total)=>{$('workspaceStatus').textContent=`Синхронизация BM: ${done}/${total}`;setProgress(done,total)}
+      );
+    }else if(tab==='ad_accounts'){
+      const profiles=[...new Set(rows.map(r=>r.profile).filter(Boolean))];
+      results=await concurrent(
+        profiles,
+        3,
+        p=>syncProfileSafe(p),
+        (done,total)=>{$('workspaceStatus').textContent=`Синхронизация RK: ${done}/${total}`;setProgress(done,total)}
+      );
+    }else{
+      try{
+        await refreshSelectedDelivery(tab,rows);
+      }catch(e){
+        results=[{error:errorText(e)}];
+      }
     }
 
-    const failures=results.filter(x=>x?.error).map(x=>String(x.error));
-    const warnings=results.flatMap(x=>Array.isArray(x?.sync_warnings)?x.sync_warnings:[]).filter(Boolean);
+    const failures=results
+      .filter(x=>x&&x.error)
+      .map(x=>[x.profile,x.business_id,x.error].filter(Boolean).join(': '));
+    const warnings=results
+      .flatMap(x=>Array.isArray(x?.sync_warnings)?x.sync_warnings:[])
+      .filter(Boolean);
+
     if(failures.length){
-      $('workspaceStatus').textContent=`Синхронизация Meta НЕ выполнена: ${failures.join(' · ')}`;
-    } else if(warnings.length){
+      $('workspaceStatus').textContent=`Синхронизация Meta частично/полностью не выполнена: ${failures.join(' · ')}`;
+    }else if(warnings.length){
       $('workspaceStatus').textContent=`Meta синхронизирована. ${warnings.join(' · ')}`;
-    } else {
+    }else{
       $('workspaceStatus').textContent='Синхронизация Meta завершена.';
     }
     render();
-  } finally {
+  }finally{
     state.running=false;
     updateSelectionUi();
   }
 }
 JS;
-
 $pattern = '/async function syncSelection\(\)\{.*?\n\}\n\nfunction buildActionMenu\(\)\{/s';
 $replacement = $newSync . "\n\nfunction buildActionMenu(){";
 $patched = preg_replace($pattern, $replacement, $js, 1, $syncCount);
