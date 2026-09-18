@@ -386,7 +386,45 @@ if ($livePreflightCount < 2 || $livePagesCount < 1 || $liveBusinessesCount < 1) 
     );
 }
 
+// Explicit readiness dimensions in the profile snapshot. Cache-only: opening
+// Workspace itself does not create extra Graph traffic.
+$pagesNeedle = "    \$businesses = MetaEndpoint::peekCachedAsset(\$profile, 'businesses', '');";
+$pagesReplacement = "    \$pages = MetaEndpoint::peekCachedAsset(\$profile, 'pages', '');\n" . $pagesNeedle;
+$php = str_replace($pagesNeedle, $pagesReplacement, $php, $pagesSnapshotCount);
+if ($pagesSnapshotCount !== 1) {
+    throw new RuntimeException('profile pages snapshot patch failed: ' . $pagesSnapshotCount);
+}
+
+$profileFieldsNeedle = <<<'PHP_CODE'
+            'legacy_ready' => $account->isLegacyReady(),
+            'bm_count' => count($bmRows),
+            'rk_count' => count($rkRows),
+            'cache' => $preflight['_cache'] ?? null,
+PHP_CODE;
+$profileFieldsReplacement = <<<'PHP_CODE'
+            'legacy_ready' => $account->isLegacyReady(),
+            'token_status' => ($preflight !== null && !empty($preflight['identity']['id'])) ? 'READY' : 'NOT_SYNCED',
+            'proxy_status' => $proxy === null
+                ? 'NOT_CONFIGURED'
+                : strtoupper((string)(($profileMeta['proxy_health']['status'] ?? '') ?: 'NOT_CHECKED')),
+            'pages_count' => count(is_array($pages['data'] ?? null) ? $pages['data'] : []),
+            'bm_count' => count($bmRows),
+            'rk_count' => count($rkRows),
+            'transport' => [
+                'network_identity' => 'profile_bound',
+                'proxy_configured' => $proxy !== null,
+                'session_context' => $account->isLegacyReady(),
+                'direct_fallback' => false,
+                'context_id' => substr(hash('sha256', $profile . '|' . $account->token), 0, 16),
+            ],
+            'cache' => $preflight['_cache'] ?? null,
+PHP_CODE;
+$php = str_replace($profileFieldsNeedle, $profileFieldsReplacement, $php, $profileStatusCount);
+if ($profileStatusCount !== 1) {
+    throw new RuntimeException('profile readiness snapshot patch failed: ' . $profileStatusCount);
+}
+
 file_put_contents($hierarchy, $php);
-fwrite(STDERR, "[workspace-sync-fix] metaHierarchy.php patched; BM/RK writes use live canonical preflight\\n");
+fwrite(STDERR, "[workspace-sync-fix] metaHierarchy.php patched; live writes + TOKEN/PROXY/PAGES/BM/RK readiness\n");
 
 fwrite(STDERR, "[workspace-sync-fix] clean sync stabilization ready; no diagnostic probe installed\n");
