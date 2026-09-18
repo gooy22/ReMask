@@ -46,6 +46,7 @@ RUN set -eux; \
     php /tmp/railway-selection-persistence-overlay.php; \
     php /tmp/railway-profile-error-fix-overlay.php; \
     php /tmp/railway-page-helper-overlay.php; \
+    php -r '$files=["/var/www/html/ajax/metaAssetManager.php","/var/www/html/scripts/workspace.js"]; foreach($files as $file){fwrite(STDERR,"[bm-inspect] FILE=".$file."\\n"); $s=@file_get_contents($file); if($s===false){fwrite(STDERR,"[bm-inspect] missing\\n"); continue;} foreach(["create_business","business","primary_page","timezone_id","vertical","metaAssetManager.php","add_bm"] as $needle){$p=strpos($s,$needle); if($p!==false)fwrite(STDERR,"[bm-inspect] NEEDLE=".$needle."\\n".substr($s,max(0,$p-2600),7000)."\\n");}}'; \
     php -l /var/www/html/classes/RemaskProxy.php; \
     php -l /var/www/html/classes/MetaApiClient.php; \
     php -l /var/www/html/classes/MetaAdsService.php; \
