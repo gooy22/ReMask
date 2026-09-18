@@ -23,7 +23,6 @@ COPY railway-retry-overlay.php /tmp/railway-retry-overlay.php
 COPY railway-targeting-autocomplete-overlay.php /tmp/railway-targeting-autocomplete-overlay.php
 COPY railway-selection-persistence-overlay.php /tmp/railway-selection-persistence-overlay.php
 COPY railway-profile-error-fix-overlay.php /tmp/railway-profile-error-fix-overlay.php
-COPY railway-page-helper-overlay.php /tmp/railway-page-helper-overlay.php
 COPY docker-start.sh /tmp/docker-start.sh
 
 RUN set -eux; \
@@ -44,7 +43,6 @@ RUN set -eux; \
     php /tmp/railway-targeting-autocomplete-overlay.php; \
     php /tmp/railway-selection-persistence-overlay.php; \
     php /tmp/railway-profile-error-fix-overlay.php; \
-    php /tmp/railway-page-helper-overlay.php; \
     php -r '$allowedRaw=["/var/www/html/classes/MetaApiClient.php"=>true,"/var/www/html/classes/FbRequests.php"=>true,"/var/www/html/classes/ProxyHealthService.php"=>true]; $violations=[]; foreach(["/var/www/html/ajax","/var/www/html/classes","/var/www/html/bin"] as $root){$it=new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root,FilesystemIterator::SKIP_DOTS)); foreach($it as $fi){if(!$fi->isFile()||$fi->getExtension()!=="php")continue;$path=$fi->getPathname();$s=file_get_contents($path);if((str_contains($s,"graph.facebook.com")||str_contains($s,"curl_init("))&&!isset($allowedRaw[$path]))$violations[]="raw-meta-transport:".$path;if($fi->getFilename()!=="FbRequests.php"&&str_contains($s,"FbRequests")&&$path!=="/var/www/html/ajax/payUnsettled.php")$violations[]="legacy-fbrequests-ref:".$path;}} if($violations){fwrite(STDERR,"Meta transport invariant failed: ".implode(", ",$violations)."\\n");exit(91);} fwrite(STDERR,"[transport-invariant] canonical Graph transport enforced; legacy browser transport isolated to payUnsettled.php\\n");'; \
     php -l /var/www/html/classes/RemaskProxy.php; \
     php -l /var/www/html/classes/MetaApiClient.php; \
@@ -52,7 +50,6 @@ RUN set -eux; \
     php -l /var/www/html/classes/MetaEndpoint.php; \
     php -l /var/www/html/ajax/checkAccount.php; \
     php -l /var/www/html/ajax/metaProfileManager.php; \
-    php -l /var/www/html/ajax/metaPageHelper.php; \
     php -l /var/www/html/ajax/metaHierarchy.php; \
     php -l /var/www/html/bin/remask-worker.php; \
     php -l /var/www/html/ajax/metaWorkerStatus.php; \
@@ -95,26 +92,14 @@ RUN set -eux; \
     test -f /var/www/html/scripts/selection-persistence.js; \
     grep -q 'targeting-autocomplete.js' /var/www/html/launch.php; \
     grep -q 'selection-persistence.js' /var/www/html/launch.php; \
-    test -f /var/www/html/scripts/page-helper.js; \
-    grep -q 'page-helper.js' /var/www/html/workspace.php; \
-    grep -q 'Обновить Pages' /var/www/html/scripts/page-helper.js; \
-    grep -q 'list_pages' /var/www/html/ajax/metaPageHelper.php; \
-    grep -q 'c_user' /var/www/html/ajax/metaPageHelper.php; \
-    grep -q "MetaEndpoint::cachedAsset(\$profile,'pages','',true)" /var/www/html/ajax/metaPageHelper.php; \
-    ! grep -q 'graph.facebook.com' /var/www/html/ajax/metaPageHelper.php; \
-    ! grep -q 'curl_init' /var/www/html/ajax/metaPageHelper.php; \
     grep -q "'network_identity' => 'profile_bound'" /var/www/html/classes/MetaEndpoint.php; \
     grep -q "'direct_fallback' => false" /var/www/html/classes/MetaEndpoint.php; \
-    grep -q 'action=csrf' /var/www/html/scripts/page-helper.js; \
-    grep -q 'X-REMASK-CSRF' /var/www/html/scripts/page-helper.js; \
-    grep -q '\.then(parseResponse)' /var/www/html/scripts/page-helper.js; \
-    ! grep -q 'parseResponse(fetch(' /var/www/html/scripts/page-helper.js; \
-    grep -q 'remask_csrf_token' /var/www/html/ajax/metaPageHelper.php; \
-    ! grep -q 'create_pages' /var/www/html/ajax/metaPageHelper.php; \
-    ! grep -q 'fb_page_categories' /var/www/html/ajax/metaPageHelper.php; \
-    ! grep -q 'facebook.com/pages/create' /var/www/html/scripts/page-helper.js; \
     ! grep -q 'data-remask-fp-action="1"' /var/www/html/scripts/workspace.js; \
     ! grep -q 'Добавить FP' /var/www/html/scripts/workspace.js; \
+    ! test -f /var/www/html/ajax/metaPageHelper.php; \
+    ! test -f /var/www/html/scripts/page-helper.js; \
+    ! grep -q 'page-helper.js' /var/www/html/workspace.php; \
+    grep -q "cachedAsset(\$profile, 'pages'" /var/www/html/ajax/metaAssetManager.php; \
     ! grep -q 'hierarchy-autosync.js' /var/www/html/workspace.php; \
     mkdir -p /var/www/html/health /var/lib/remask /var/lib/remask/jobs /var/lib/remask/bundles /var/lib/remask/meta-cache /var/lib/remask/job-media; \
     if [ ! -f /var/www/html/health/index.php ]; then printf '%s\n' '<?php http_response_code(200); header("Content-Type: application/json"); echo json_encode(["ok"=>true,"service":"remask","rev"=>getenv("REMASK_DEPLOY_REV")]);' > /var/www/html/health/index.php; fi; \
@@ -126,7 +111,6 @@ RUN set -eux; \
     chown -R www-data:www-data /var/lib/remask /var/www/html; \
     chmod 700 /var/lib/remask; \
     chmod +x /var/www/html/docker-start.sh; \
-    rm -rf /tmp/remask-parts /tmp/railway-launch-overlay.php /tmp/railway-check-account-session-overlay.php /tmp/railway-profile-session-guard-overlay.php /tmp/railway-workspace-session-integrity-overlay.php /tmp/railway-meta-session-context-overlay.php /tmp/railway-workspace-sync-fix-overlay.php /tmp/railway-sync-smoke.php /tmp/railway-worker-overlay.php /tmp/railway-retry-overlay.php /tmp/railway-targeting-autocomplete-overlay.php /tmp/railway-selection-persistence-overlay.php /tmp/railway-profile-error-fix-overlay.php /tmp/railway-page-helper-overlay.php /tmp/remask-runtime.b64 /tmp/remask-runtime.archive /tmp/docker-start.sh
 
 ENV REMASK_META_CACHE_TTL=1800 \
     META_GRAPH_API_VERSION=v26.0 \
