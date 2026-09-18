@@ -171,9 +171,21 @@ async function syncSelection(){
     return {kind,message};
   };
 
+  const withTimeout=async(promise,ms=35000)=>{
+    let timer=null;
+    try{
+      return await Promise.race([
+        promise,
+        new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('Meta request timeout after '+ms+'ms')),ms);})
+      ]);
+    }finally{
+      if(timer!==null)clearTimeout(timer);
+    }
+  };
+
   const syncProfileSafe=async(profile)=>{
     try{
-      const d=await apiJson('ajax/metaHierarchy.php',post({action:'sync_profile',profile}));
+      const d=await withTimeout(apiJson('ajax/metaHierarchy.php',post({action:'sync_profile',profile})));
       applySnapshot(d);
       return d;
     }catch(e){
@@ -184,7 +196,7 @@ async function syncSelection(){
 
   const syncBusinessSafe=async(row)=>{
     try{
-      const d=await apiJson('ajax/metaHierarchy.php',post({action:'sync_business',profile:row.profile,business_id:row.id}));
+      const d=await withTimeout(apiJson('ajax/metaHierarchy.php',post({action:'sync_business',profile:row.profile,business_id:row.id})));
       applySnapshot(d);
       return d;
     }catch(e){
@@ -254,8 +266,31 @@ if ($patched === null || $syncCount !== 1) {
     throw new RuntimeException('syncSelection patch failed: ' . (string)$syncCount);
 }
 $js = $patched;
+
+$oldSelectionUi = <<<'JS'
+function updateSelectionUi(){
+  const n=state.selected[state.activeTab].size; $('workspaceSelected').textContent=`Выбрано: ${n}`; $('workspaceActions').disabled=n===0||state.running; $('syncSelected').disabled=n===0||state.running; if($('loadDelivery'))$('loadDelivery').style.display=deliveryTabs.has(state.activeTab)?'inline-flex':'none'; buildActionMenu(); updateAssetsVisibility();
+}
+JS;
+$newSelectionUi = <<<'JS'
+function updateSelectionUi(){
+  const n=state.selected[state.activeTab].size;
+  $('workspaceSelected').textContent=`Выбрано: ${n}`;
+  // A Meta sync must never freeze navigation/actions. Lock only the sync trigger.
+  $('workspaceActions').disabled=n===0;
+  $('syncSelected').disabled=n===0||state.running;
+  if($('loadDelivery'))$('loadDelivery').style.display=deliveryTabs.has(state.activeTab)?'inline-flex':'none';
+  buildActionMenu();
+  updateAssetsVisibility();
+}
+JS;
+$js = str_replace($oldSelectionUi, $newSelectionUi, $js, $selectionUiCount);
+if ($selectionUiCount !== 1) {
+    throw new RuntimeException('responsive selection UI patch failed: ' . $selectionUiCount);
+}
+
 file_put_contents($workspace, $js);
-fwrite(STDERR, "[workspace-sync-fix] workspace.js patched\n");
+fwrite(STDERR, "[workspace-sync-fix] workspace.js patched; sync no longer blocks whole Workspace; timeout=35s\n");
 
 $php = file_get_contents($hierarchy);
 if ($php === false) {
