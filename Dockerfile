@@ -103,7 +103,7 @@ RUN set -eux; \
     grep -q 'REMASK_DAILY_BUDGET_GUARD_V1' /var/www/html/scripts/launch.js; \
     grep -q 'REMASK_RETRY_WITH_CURRENT_FORM_V1' /var/www/html/scripts/launch.js; \
     grep -q 'REMASK_RETRY_CURRENT_PAYLOAD_V1' /var/www/html/ajax/metaJobRetry.php; \
-    grep -q 'retry-current-v91' /var/www/html/launch.php; \
+    grep -q 'retry-current-v93' /var/www/html/launch.php; \
     grep -q 'REMASK_DIRECT_FUNDING_SNAPSHOT_V2' /var/www/html/ajax/metaHierarchy.php; \
     grep -q 'RemaskProxy::fromSemicolonString' /var/www/html/ajax/checkAccount.php; \
     ! test -f /var/www/html/ajax/metaSyncProbe.php; \
