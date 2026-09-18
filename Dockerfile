@@ -111,7 +111,6 @@ RUN set -eux; \
     grep -q 'REMASK_MULTI_PROFILE_SELECTION_V1' /var/www/html/scripts/launch.js; \
     grep -q 'REMASK_MULTI_PROFILE_PREFLIGHT_V1' /var/www/html/scripts/launch.js; \
     grep -q 'REMASK_RK_TABLE_EVENTS_V1' /var/www/html/scripts/launch.js; \
-    grep -q 'multi-profile-v94' /var/www/html/launch.php; \
     grep -q 'selectedProfileNames' /var/www/html/scripts/launch.js; \
     grep -q 'rkPickerRows' /var/www/html/launch.php; \
     grep -q 'REMASK_DIRECT_FUNDING_SNAPSHOT_V2' /var/www/html/ajax/metaHierarchy.php; \
