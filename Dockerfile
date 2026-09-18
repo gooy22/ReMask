@@ -64,6 +64,7 @@ RUN set -eux; \
     grep -q 'setSessionCookies($account->getCurlCookies())' /var/www/html/classes/MetaEndpoint.php; \
     grep -q 'CURLOPT_COOKIE' /var/www/html/ajax/checkAccount.php; \
     grep -q 'session_used' /var/www/html/ajax/checkAccount.php; \
+    grep -q 'rmx_check_graph_list_all' /var/www/html/ajax/checkAccount.php; \
     grep -q 'direct_ad_accounts_with_optional_business_enrichment' /var/www/html/ajax/metaHierarchy.php; \
     grep -q 'REMASK_BM_OWNED_CLIENT_V1' /var/www/html/classes/MetaAdsService.php; \
     grep -q 'RemaskProxy::fromSemicolonString' /var/www/html/ajax/checkAccount.php; \
