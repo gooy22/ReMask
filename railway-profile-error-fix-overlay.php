@@ -111,7 +111,7 @@ $workspaceScriptPattern = <<<'REGEX'
 REGEX;
 $workspacePage = preg_replace(
     $workspaceScriptPattern,
-    'scripts/workspace.js?v=20260918-workspace-restore-v64',
+    'scripts/workspace.js?v=20260918-responsive-sync-v65',
     $workspacePage,
     1,
     $workspaceScriptTagCount
