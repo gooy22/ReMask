@@ -66,6 +66,7 @@ RUN set -eux; \
     grep -q 'session_used' /var/www/html/ajax/checkAccount.php; \
     grep -q 'rmx_check_graph_list_all' /var/www/html/ajax/checkAccount.php; \
     grep -q 'direct_ad_accounts_with_optional_business_enrichment' /var/www/html/ajax/metaHierarchy.php; \
+    grep -Fq "p.proxy_configured && ps!==''&&ps!=='LIVE'" /var/www/html/scripts/workspace.js; \
     grep -q 'REMASK_BM_OWNED_CLIENT_V1' /var/www/html/classes/MetaAdsService.php; \
     grep -q 'RemaskProxy::fromSemicolonString' /var/www/html/ajax/checkAccount.php; \
     ! test -f /var/www/html/ajax/metaSyncProbe.php; \
