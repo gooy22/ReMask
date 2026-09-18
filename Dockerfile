@@ -46,7 +46,7 @@ RUN set -eux; \
     php /tmp/railway-selection-persistence-overlay.php; \
     php /tmp/railway-profile-error-fix-overlay.php; \
     php /tmp/railway-page-helper-overlay.php; \
-    php -r '$pairs=[["/var/www/html/classes/MetaApiClient.php","class MetaApiException",9000],["/var/www/html/scripts/workspace.js","async function apiJson",6000]]; foreach($pairs as [$file,$needle,$len]){$s=file_get_contents($file); $p=strpos($s,$needle); fwrite(STDERR,"[error-core] FILE=".$file." NEEDLE=".$needle."\\n".substr($s,max(0,$p-1200),$len)."\\n");}'; \
+    php -r '$pairs=[["/var/www/html/classes/MetaApiException.php","class MetaApiException",12000],["/var/www/html/scripts/workspace.js","async function apiJson",6000]]; foreach($pairs as [$file,$needle,$len]){$s=file_get_contents($file); $p=strpos($s,$needle); fwrite(STDERR,"[error-core] FILE=".$file." NEEDLE=".$needle."\\n".substr($s,max(0,$p-1200),$len)."\\n");}'; \
     php -l /var/www/html/classes/RemaskProxy.php; \
     php -l /var/www/html/classes/MetaApiClient.php; \
     php -l /var/www/html/classes/MetaAdsService.php; \
@@ -89,14 +89,12 @@ RUN set -eux; \
     grep -q 'page-helper.js' /var/www/html/workspace.php; \
     grep -q 'Обновить Pages' /var/www/html/scripts/page-helper.js; \
     grep -q 'list_pages' /var/www/html/ajax/metaPageHelper.php; \
-    grep -q 'me/accounts' /var/www/html/ajax/metaPageHelper.php; \
-    grep -q 'paging' /var/www/html/ajax/metaPageHelper.php; \
     grep -q 'c_user' /var/www/html/ajax/metaPageHelper.php; \
     grep -q "MetaEndpoint::cachedAsset(\$profile,'pages','',true)" /var/www/html/ajax/metaPageHelper.php; \
+    ! grep -q 'graph.facebook.com' /var/www/html/ajax/metaPageHelper.php; \
+    ! grep -q 'curl_init' /var/www/html/ajax/metaPageHelper.php; \
     grep -q "'network_identity' => 'profile_bound'" /var/www/html/classes/MetaEndpoint.php; \
     grep -q "'direct_fallback' => false" /var/www/html/classes/MetaEndpoint.php; \
-    grep -q 'account->proxy!==null' /var/www/html/ajax/metaPageHelper.php; \
-    ! grep -q 'rmx_page_helper_graph($account,$path,$params,false)' /var/www/html/ajax/metaPageHelper.php; \
     grep -q 'action=csrf' /var/www/html/scripts/page-helper.js; \
     grep -q 'X-REMASK-CSRF' /var/www/html/scripts/page-helper.js; \
     grep -q '\.then(parseResponse)' /var/www/html/scripts/page-helper.js; \
