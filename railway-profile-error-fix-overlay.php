@@ -93,6 +93,11 @@ if ($cookiePatchCount < 1 || $addPatchCount < 1 || $editPatchCount < 1) {
     fwrite(STDERR, "[profile-error-fix] expected Workspace blocks were not patched: cookies={$cookiePatchCount} add={$addPatchCount} edit={$editPatchCount}\n");
     exit(73);
 }
+$invalidSelector = '$(' . chr(92) . "'";
+if (strpos($workspace, $invalidSelector) !== false) {
+    fwrite(STDERR, "[profile-error-fix] invalid escaped selector syntax detected in workspace.js\n");
+    exit(76);
+}
 file_put_contents($workspacePath, $workspace);
 fwrite(STDERR, "[profile-error-fix] Workspace token-only add + detailed save errors ready\n");
 
