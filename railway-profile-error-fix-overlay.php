@@ -99,7 +99,26 @@ if (strpos($workspace, $invalidSelector) !== false) {
     exit(76);
 }
 file_put_contents($workspacePath, $workspace);
-fwrite(STDERR, "[profile-error-fix] Workspace token-only add + detailed save errors ready\n");
+
+$workspacePagePath = $root . '/workspace.php';
+$workspacePage = file_get_contents($workspacePagePath);
+if ($workspacePage === false) {
+    fwrite(STDERR, "[profile-error-fix] workspace.php missing\n");
+    exit(77);
+}
+$workspacePage = preg_replace(
+    '#scripts/workspace\\.js(?:\\?[^"\\']*)?#',
+    'scripts/workspace.js?v=20260918-buttons-fix',
+    $workspacePage,
+    1,
+    $workspaceScriptTagCount
+);
+if ($workspacePage === null || $workspaceScriptTagCount !== 1) {
+    fwrite(STDERR, "[profile-error-fix] workspace.js cache-bust tag patch failed: " . (string)$workspaceScriptTagCount . "\n");
+    exit(78);
+}
+file_put_contents($workspacePagePath, $workspacePage);
+fwrite(STDERR, "[profile-error-fix] Workspace token-only add + detailed save errors + JS cache bust ready\n");
 
 $managerPath = $root . '/ajax/metaProfileManager.php';
 $manager = file_get_contents($managerPath);
