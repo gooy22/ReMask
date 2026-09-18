@@ -136,6 +136,29 @@ function smoke_validate_candidate(string $token): array {
     if(!$rk['ok'])return ['ok'=>false,'stage'=>'ad_accounts','result'=>$rk];
     return ['ok'=>true,'stage'=>'complete','result'=>$rk];
 }
+function smoke_collect_tokens(mixed $node, string $profileName, array &$tokens, ?string $inheritedName = null, int $depth = 0): void {
+    if ($depth > 12 || !is_array($node)) return;
+    $localName = $inheritedName;
+    foreach (['name','profile_name','profile','label','fb_id','profile_id','account_id'] as $key) {
+        if (isset($node[$key]) && is_scalar($node[$key]) && trim((string)$node[$key]) !== '') {
+            $localName = trim((string)$node[$key]);
+            break;
+        }
+    }
+    if ($localName === $profileName) {
+        foreach (['token','access_token','accessToken','fb_token','meta_token'] as $key) {
+            if (isset($node[$key]) && is_scalar($node[$key])) {
+                $token = trim((string)$node[$key]);
+                if ($token !== '') $tokens[$token] = true;
+            }
+        }
+    }
+    foreach ($node as $key => $value) {
+        if (!is_array($value)) continue;
+        $childName = ((string)$key === $profileName) ? $profileName : $localName;
+        smoke_collect_tokens($value, $profileName, $tokens, $childName, $depth + 1);
+    }
+}
 function smoke_try_restore_history(FbAccount $current, object $store, string $profileHash): bool {
     $currentToken=trim((string)$current->token);
     $accountsPath=(string)ACCOUNTSFILENAME;
@@ -143,14 +166,17 @@ function smoke_try_restore_history(FbAccount $current, object $store, string $pr
     usort($files,static fn($a,$b)=>(@filemtime($b)?:0)<=> (@filemtime($a)?:0));
     $seen=[hash('sha256',$currentToken)=>true];
     $tested=0;
-    foreach($files as $file){
+    $rawCandidates=0;
+    foreach(array_slice($files,0,200) as $file){
         if($tested>=50)break;
-        try{
-            $backupStore=AccountStoreFactory::create($file);
-            $old=$backupStore->getAccountByName((string)$current->name);
-            if(!$old instanceof FbAccount)continue;
-            $token=trim((string)$old->token);
-            if($token==='')continue;
+        $raw=@file_get_contents($file);
+        if($raw===false||trim($raw)==='')continue;
+        $json=json_decode($raw,true);
+        if(!is_array($json))continue;
+        $tokens=[];
+        smoke_collect_tokens($json,(string)$current->name,$tokens);
+        foreach(array_keys($tokens) as $token){
+            $rawCandidates++;
             $hash=hash('sha256',$token);
             if(isset($seen[$hash]))continue;
             $seen[$hash]=true;
@@ -161,6 +187,7 @@ function smoke_try_restore_history(FbAccount $current, object $store, string $pr
                 'phase'=>'historical_token',
                 'profile_hash'=>$profileHash,
                 'candidate_hash'=>substr($hash,0,12),
+                'token_length'=>strlen($token),
                 'ok'=>(bool)$validation['ok'],
                 'stage'=>$validation['stage'],
                 'http'=>(int)($validation['result']['http']??0),
@@ -180,17 +207,18 @@ function smoke_try_restore_history(FbAccount $current, object $store, string $pr
                 'restored'=>true,
                 'candidate_hash'=>substr($hash,0,12),
                 'tested_candidates'=>$tested,
+                'raw_candidates'=>$rawCandidates,
             ]);
             return true;
-        }catch(Throwable $e){
-            smoke_log([
-                'phase'=>'historical_candidate_error',
-                'profile_hash'=>$profileHash,
-                'error_class'=>get_class($e),
-            ]);
         }
     }
-    smoke_log(['phase'=>'historical_restore','profile_hash'=>$profileHash,'restored'=>false,'tested_candidates'=>$tested]);
+    smoke_log([
+        'phase'=>'historical_restore',
+        'profile_hash'=>$profileHash,
+        'restored'=>false,
+        'tested_candidates'=>$tested,
+        'raw_candidates'=>$rawCandidates,
+    ]);
     return false;
 }
 
