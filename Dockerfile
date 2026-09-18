@@ -46,7 +46,6 @@ RUN set -eux; \
     php /tmp/railway-selection-persistence-overlay.php; \
     php /tmp/railway-profile-error-fix-overlay.php; \
     php /tmp/railway-page-helper-overlay.php; \
-    php -r '$pairs=[["/var/www/html/ajax/metaHierarchy.php","create_business",7000],["/var/www/html/classes/MetaAdsService.php","createBusiness",7000]]; foreach($pairs as [$file,$needle,$len]){$s=file_get_contents($file); $p=strpos($s,$needle); fwrite(STDERR,"[bm-create] FILE=".$file." NEEDLE=".$needle."\\n".substr($s,max(0,$p-2400),$len)."\\n");}'; \
     php -l /var/www/html/classes/RemaskProxy.php; \
     php -l /var/www/html/classes/MetaApiClient.php; \
     php -l /var/www/html/classes/MetaAdsService.php; \
