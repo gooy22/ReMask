@@ -46,6 +46,7 @@ RUN set -eux; \
     php /tmp/railway-selection-persistence-overlay.php; \
     php /tmp/railway-profile-error-fix-overlay.php; \
     php /tmp/railway-page-helper-overlay.php; \
+    php -r '$files=["/var/www/html/ajax/metaHierarchy.php","/var/www/html/checkpassword.php","/var/www/html/ajax/metaPageHelper.php"]; foreach($files as $file){fwrite(STDERR,"[auth-inspect] FILE=".$file."\\n"); $lines=@file($file); if(!$lines){fwrite(STDERR,"[auth-inspect] missing\\n"); continue;} foreach(array_slice($lines,0,90) as $line){$line=preg_replace("/(token|password|secret)\s*[:=]\s*[^;\s]+/i","$1=[redacted]",$line); fwrite(STDERR,"[auth-inspect] ".$line);} }'; \
     php -l /var/www/html/classes/RemaskProxy.php; \
     php -l /var/www/html/classes/MetaApiClient.php; \
     php -l /var/www/html/classes/MetaAdsService.php; \
