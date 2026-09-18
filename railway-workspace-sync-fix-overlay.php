@@ -30,17 +30,37 @@ $service = file_get_contents($servicePath);
 if ($service === false) throw new RuntimeException('MetaAdsService.php not found');
 
 $listAdAccountsMethod = <<<'PHP_METHOD'
-// REMASK_DIRECT_RK_FUNDING_V1
+// REMASK_DIRECT_RK_FUNDING_V2
 function listAdAccounts(int $limit = 0): array
     {
-        return $this->listPagedEdge('me/adaccounts', [
-            'fields' => 'id,name,account_status,disable_reason,currency,balance,amount_spent,spend_cap,is_prepay_account,funding_source,funding_source_details,expired_funding_source_details,business_name,timezone_name',
-        ], $limit);
+        $baseFields = 'id,name,account_status,disable_reason,currency,balance,amount_spent,spend_cap,business_name,timezone_name';
+        $fundingFields = $baseFields . ',is_prepay_account,funding_source,funding_source_details,expired_funding_source_details';
+
+        try {
+            $result = $this->listPagedEdge('me/adaccounts', ['fields' => $fundingFields], $limit);
+            foreach ((array)($result['data'] ?? []) as $i => $item) {
+                if (!is_array($item)) continue;
+                $result['data'][$i]['_funding_metadata_loaded'] = true;
+            }
+            return $result;
+        } catch (Throwable $fundingError) {
+            // Payment metadata must never be able to break baseline RK discovery.
+            $result = $this->listPagedEdge('me/adaccounts', ['fields' => $baseFields], $limit);
+            foreach ((array)($result['data'] ?? []) as $i => $item) {
+                if (!is_array($item)) continue;
+                $result['data'][$i]['_funding_metadata_loaded'] = false;
+            }
+            $result['_funding_enrichment_warning'] = [
+                'kind' => 'funding_metadata_unavailable',
+                'error_class' => get_class($fundingError),
+            ];
+            return $result;
+        }
     }
 PHP_METHOD;
 
 $businessAccountsMethod = <<<'PHP_METHOD'
-// REMASK_BM_OWNED_CLIENT_V1
+// REMASK_BM_OWNED_CLIENT_V2
 function listBusinessAdAccounts(string $businessId, int $limit = 0, bool $includeClient = true): array
     {
         $businessId = trim($businessId);
@@ -51,6 +71,8 @@ function listBusinessAdAccounts(string $businessId, int $limit = 0, bool $includ
         $bounded = $limit > 0;
         $limit = $bounded ? max(1, $limit) : 0;
         $edges = $includeClient ? ['owned_ad_accounts', 'client_ad_accounts'] : ['owned_ad_accounts'];
+        $baseFields = 'id,name,account_status,currency,amount_spent,balance,business{id,name},business_name,timezone_name,spend_cap';
+        $fundingFields = $baseFields . ',funding_source,funding_source_details';
         $items = [];
         $seen = [];
         $edgeWarnings = [];
@@ -60,12 +82,21 @@ function listBusinessAdAccounts(string $businessId, int $limit = 0, bool $includ
             if ($bounded && $remaining <= 0) break;
 
             try {
-                $page = $this->listPagedEdge("{$businessId}/{$edge}", [
-                    'fields' => 'id,name,account_status,currency,amount_spent,balance,business{id,name},business_name,timezone_name,spend_cap,funding_source,funding_source_details',
-                ], $remaining);
+                try {
+                    $page = $this->listPagedEdge("{$businessId}/{$edge}", ['fields' => $fundingFields], $remaining);
+                } catch (Throwable $fundingEdgeError) {
+                    // Preserve BM -> RK mapping even when payment metadata is restricted.
+                    $page = $this->listPagedEdge("{$businessId}/{$edge}", ['fields' => $baseFields], $remaining);
+                    $edgeWarnings[] = [
+                        'edge' => $edge,
+                        'kind' => 'funding_metadata_unavailable',
+                        'error_class' => get_class($fundingEdgeError),
+                    ];
+                }
             } catch (Throwable $edgeError) {
                 $edgeWarnings[] = [
                     'edge' => $edge,
+                    'kind' => 'edge_unavailable',
                     'error_class' => get_class($edgeError),
                 ];
                 continue;
@@ -215,11 +246,11 @@ if ($php === false) {
 
 $fundingNeedle = "        \$rk['funding'] = MetaEndpoint::peekCachedAsset(\$profile, 'funding', \$id);";
 $fundingReplacement = <<<'PHP_FUNDING'
-        // REMASK_DIRECT_FUNDING_SNAPSHOT_V1
+        // REMASK_DIRECT_FUNDING_SNAPSHOT_V2
         $cachedFunding = MetaEndpoint::peekCachedAsset($profile, 'funding', $id);
         if (is_array($cachedFunding)) {
             $rk['funding'] = $cachedFunding;
-        } else {
+        } elseif (($rk['_funding_metadata_loaded'] ?? false) === true) {
             $rk['funding'] = [
                 'id' => $id,
                 'name' => (string)($rk['name'] ?? ''),
@@ -235,6 +266,8 @@ $fundingReplacement = <<<'PHP_FUNDING'
                 'expired_funding_source_details' => is_array($rk['expired_funding_source_details'] ?? null) ? $rk['expired_funding_source_details'] : [],
                 '_source' => 'direct_ad_account_sync',
             ];
+        } else {
+            $rk['funding'] = null;
         }
 PHP_FUNDING;
 if (strpos($php, 'REMASK_DIRECT_FUNDING_SNAPSHOT_V1') === false) {
@@ -252,8 +285,11 @@ $syncProfileReplacement = <<<'PHP'
         // Directly accessible ad accounts from the token are the baseline.
         // Business Manager enumeration is optional enrichment and must not make
         // an otherwise valid FB profile fail synchronization.
-        MetaEndpoint::cachedPreflight($profile, true);
+        $preflight = MetaEndpoint::cachedPreflight($profile, true);
         $syncWarnings = [];
+        if (!empty($preflight['ad_accounts']['_funding_enrichment_warning'])) {
+            $syncWarnings[] = 'RK funding/payment metadata unavailable; RK list kept';
+        }
         try {
             $businesses = MetaEndpoint::cachedAsset($profile, 'businesses', '', true);
             foreach (($businesses['data'] ?? []) as $business) {
@@ -265,7 +301,12 @@ $syncProfileReplacement = <<<'PHP'
                     foreach ((array)($businessAccounts['_edge_warnings'] ?? []) as $edgeWarning) {
                         if (!is_array($edgeWarning)) continue;
                         $edgeName = trim((string)($edgeWarning['edge'] ?? 'business_ad_accounts'));
-                        $syncWarnings[] = 'BM ' . $businessId . ': ' . $edgeName . ' unavailable';
+                        $edgeKind = trim((string)($edgeWarning['kind'] ?? 'edge_unavailable'));
+                        if ($edgeKind === 'funding_metadata_unavailable') {
+                            $syncWarnings[] = 'BM ' . $businessId . ': ' . $edgeName . ' funding metadata unavailable';
+                        } else {
+                            $syncWarnings[] = 'BM ' . $businessId . ': ' . $edgeName . ' unavailable';
+                        }
                     }
                 } catch (Throwable $businessAccountError) {
                     $syncWarnings[] = 'BM ' . $businessId . ': RK enrichment unavailable';
