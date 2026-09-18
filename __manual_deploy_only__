@@ -1,3 +1,2 @@
-budget guard + current-payload retry v92
-base=49b241f8648b311c8e87bb94a084adad8253b9f3
-reason=apply-retry-patch-after-endpoint-generation
+retry processing handoff v93
+base=8abdac61577ab263f9464cdc78c47fd72d240151
