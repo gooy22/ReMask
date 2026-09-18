@@ -31,35 +31,6 @@ printf '%s\n' '{"ok":true,"service":"remask"}' > "$ROOT/health"
 chown -R www-data:www-data "$DATA_DIR" 2>/dev/null || true
 chmod -R u+rwX,g+rwX "$DATA_DIR" 2>/dev/null || true
 
-# Temporary read-only diagnostic for the failed Campaign POST. Emit only safe
-# Meta error fields; never print job payload, token, cookies, proxy or media paths.
-DIAG_JOB="$REMASK_JOB_STORAGE_DIR/20260918204521-eea59d3877.json"
-if [ -f "$DIAG_JOB" ]; then
-  php -r '
-    $job = json_decode((string)@file_get_contents($argv[1]), true);
-    if (!is_array($job)) exit(0);
-    foreach (($job["items"] ?? []) as $item) {
-      if ((string)($item["account_id"] ?? "") !== "act_958245207339458") continue;
-      $e = is_array($item["error"]["meta_error"] ?? null) ? $item["error"]["meta_error"] : [];
-      $safe = [
-        "job_id" => (string)($job["id"] ?? ""),
-        "account_id" => (string)($item["account_id"] ?? ""),
-        "failed_step" => (string)($item["failed_step"] ?? ""),
-        "message" => $e["message"] ?? null,
-        "http_status" => $e["http_status"] ?? null,
-        "type" => $e["type"] ?? null,
-        "code" => $e["code"] ?? null,
-        "subcode" => $e["subcode"] ?? null,
-        "user_title" => $e["user_title"] ?? null,
-        "user_message" => $e["user_message"] ?? null,
-        "fbtrace_id" => $e["fbtrace_id"] ?? null,
-      ];
-      fwrite(STDERR, "[remask-safe-launch-error] " . json_encode($safe, JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE) . PHP_EOL);
-      break;
-    }
-  ' "$DIAG_JOB" || true
-fi
-
 if [ "${REMASK_JOB_EXECUTION_MODE:-browser}" = "background" ] && [ -f "$ROOT/bin/remask-worker.php" ]; then
   (
     echo "[$(date -u +%FT%TZ)] starting remask background worker loop" >> "$DATA_DIR/worker.log"
