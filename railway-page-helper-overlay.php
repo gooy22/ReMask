@@ -14,6 +14,7 @@ require_once __DIR__ . '/../checkpassword.php';
 require_once __DIR__ . '/../classes/ResponseFormatter.php';
 require_once __DIR__ . '/../classes/AccountStoreFactory.php';
 require_once __DIR__ . '/../classes/FbAccount.php';
+require_once __DIR__ . '/../classes/MetaEndpoint.php';
 
 function rmx_page_helper_out(array $payload, int $status = 200): never {
     http_response_code($status);
@@ -28,120 +29,28 @@ function rmx_page_helper_cookie_value(FbAccount $account, string $wanted): strin
     }
     return '';
 }
-function rmx_page_helper_account(string $hint): FbAccount {
+function rmx_page_helper_profile_name(string $hint): string {
     $store=AccountStoreFactory::create(ACCOUNTSFILENAME);
     $accounts=array_values(array_filter((array)$store->deserialize(),static fn($x)=>$x instanceof FbAccount));
     $hint=trim($hint);
 
     if($hint!==''){
         foreach($accounts as $account){
-            if(trim((string)$account->name)===$hint)return $account;
+            if(trim((string)$account->name)===$hint)return (string)$account->name;
         }
         foreach($accounts as $account){
-            if(rmx_page_helper_cookie_value($account,'c_user')===$hint)return $account;
+            if(rmx_page_helper_cookie_value($account,'c_user')===$hint)return (string)$account->name;
         }
         foreach($accounts as $account){
             $name=trim((string)$account->name);
-            if($name!=='' && str_contains($hint,$name))return $account;
             $cUser=rmx_page_helper_cookie_value($account,'c_user');
-            if($cUser!=='' && str_contains($hint,$cUser))return $account;
+            if(($name!=='' && str_contains($hint,$name)) || ($cUser!=='' && str_contains($hint,$cUser))) {
+                return (string)$account->name;
+            }
         }
     }
-    if(count($accounts)===1)return $accounts[0];
+    if(count($accounts)===1)return (string)$accounts[0]->name;
     throw new RuntimeException('Не удалось сопоставить выбранный FB-аккаунт с сохранённым профилем ReMask.');
-}
-function rmx_page_helper_cookies(FbAccount $account): string {
-    if (method_exists($account,'isLegacyReady') && $account->isLegacyReady() && method_exists($account,'getCurlCookies')) {
-        return trim((string)$account->getCurlCookies());
-    }
-    $parts=[];
-    foreach ((array)$account->cookies as $cookie) {
-        if (!is_array($cookie)) continue;
-        $name=trim((string)($cookie['name']??''));
-        $value=(string)($cookie['value']??'');
-        if ($name!=='' && $value!=='') $parts[]=$name.'='.$value;
-    }
-    return implode('; ', $parts);
-}
-function rmx_page_helper_graph(FbAccount $account, string $path, array $params, bool $useProxy): array {
-    $version=getenv('META_GRAPH_API_VERSION') ?: 'v26.0';
-    if (!preg_match('/^v\d+\.\d+$/',$version)) $version='v26.0';
-    $url='https://graph.facebook.com/'.$version.'/'.ltrim($path,'/');
-    if($params!==[])$url.='?'.http_build_query($params);
-
-    $token=trim((string)$account->token);
-    if($token==='')throw new RuntimeException('У FB-профиля нет сохранённого access token.');
-
-    $ch=curl_init($url);
-    $opts=[
-        CURLOPT_RETURNTRANSFER=>true,
-        CURLOPT_FOLLOWLOCATION=>false,
-        CURLOPT_CONNECTTIMEOUT=>12,
-        CURLOPT_TIMEOUT=>40,
-        CURLOPT_SSL_VERIFYPEER=>true,
-        CURLOPT_SSL_VERIFYHOST=>2,
-        CURLOPT_HTTPHEADER=>['Accept: application/json','Authorization: Bearer '.$token],
-        CURLOPT_USERAGENT=>'ReMask-PageSync/1.0',
-    ];
-    $cookies=rmx_page_helper_cookies($account);
-    if($cookies!=='')$opts[CURLOPT_COOKIE]=$cookies;
-    if($useProxy && $account->proxy!==null)$account->proxy->AddToCurlOptions($opts);
-
-    curl_setopt_array($ch,$opts);
-    $raw=curl_exec($ch);
-    $curlError=curl_error($ch);
-    $curlErrno=curl_errno($ch);
-    $http=(int)curl_getinfo($ch,CURLINFO_RESPONSE_CODE);
-    curl_close($ch);
-
-    if($raw===false)throw new RuntimeException('TRANSPORT: '.($curlError ?: ('cURL errno '.$curlErrno)));
-    $decoded=json_decode($raw,true);
-    if(!is_array($decoded))throw new RuntimeException('Meta вернула не JSON, HTTP '.$http.'.');
-    if(is_array($decoded['error']??null)){
-        $e=$decoded['error'];
-        $msg=trim((string)($e['message']??'Meta rejected request.'));
-        $code=(int)($e['code']??0);
-        $sub=(int)($e['error_subcode']??0);
-        if($code)$msg.='; code '.$code;
-        if($sub)$msg.='; subcode '.$sub;
-        throw new RuntimeException($msg);
-    }
-    if($http<200||$http>=300)throw new RuntimeException('Meta API HTTP '.$http.'.');
-    return $decoded;
-}
-function rmx_page_helper_call(FbAccount $account, string $path, array $params=[]): array {
-    // Preserve one network identity per FB profile: never bypass a configured proxy.
-    return rmx_page_helper_graph($account,$path,$params,$account->proxy!==null);
-}
-function rmx_page_helper_list_pages(FbAccount $account): array {
-    $pages=[];
-    $after='';
-    $seenCursors=[];
-    for($pageNo=0;$pageNo<30;$pageNo++){
-        $params=[
-            'fields'=>'id,name,category,access_token',
-            'limit'=>200,
-        ];
-        if($after!=='')$params['after']=$after;
-        $raw=rmx_page_helper_call($account,'me/accounts',$params);
-        foreach((array)($raw['data']??[]) as $row){
-            if(!is_array($row))continue;
-            $id=trim((string)($row['id']??''));
-            if($id==='')continue;
-            $pages[$id]=[
-                'id'=>$id,
-                'name'=>(string)($row['name']??$id),
-                'category'=>(string)($row['category']??''),
-            ];
-        }
-        $next=trim((string)($raw['paging']['cursors']['after']??''));
-        $hasNext=trim((string)($raw['paging']['next']??''))!=='';
-        if(!$hasNext||$next==='')break;
-        if(isset($seenCursors[$next]))break;
-        $seenCursors[$next]=true;
-        $after=$next;
-    }
-    return array_values($pages);
 }
 
 try{
@@ -152,17 +61,44 @@ try{
     if($action!=='list_pages')throw new InvalidArgumentException('Unsupported action.');
 
     $hint=trim((string)($_POST['profile']??$_GET['profile']??''));
-    $account=rmx_page_helper_account($hint);
-    $pages=rmx_page_helper_list_pages($account);
-    error_log('[page-helper] list_pages profile_hash='.substr(hash('sha256',(string)$account->name),0,12).' count='.count($pages));
+    $profile=rmx_page_helper_profile_name($hint);
+
+    // One canonical Meta transport for Pages/BM/RK/Launch:
+    // MetaEndpoint -> MetaAdsService -> MetaApiClient(profile token + profile proxy).
+    $result=MetaEndpoint::cachedAsset($profile,'pages','',true);
+    $pages=[];
+    foreach((array)($result['data']??[]) as $row){
+        if(!is_array($row))continue;
+        $id=trim((string)($row['id']??''));
+        if($id==='')continue;
+        $pages[]=[
+            'id'=>$id,
+            'name'=>(string)($row['name']??$id),
+            'category'=>(string)($row['category']??''),
+            'instagram_business_account'=>is_array($row['instagram_business_account']??null)?$row['instagram_business_account']:null,
+        ];
+    }
+
+    $account=MetaEndpoint::accountForName($profile);
+    error_log('[page-helper] canonical list_pages profile_hash='.substr(hash('sha256',$profile),0,12).' count='.count($pages).' proxy='.(($account->proxy??null)!==null?'configured':'none'));
+
     rmx_page_helper_out([
         'ok'=>true,
-        'profile'=>(string)$account->name,
+        'profile'=>$profile,
         'profile_fb_id'=>rmx_page_helper_cookie_value($account,'c_user'),
         'pages'=>$pages,
+        'transport'=>[
+            'canonical'=>true,
+            'proxy_configured'=>($account->proxy??null)!==null,
+            'session_context'=>$account->isLegacyReady(),
+        ],
     ]);
 }catch(Throwable $e){
-    rmx_page_helper_out(['ok'=>false,'error'=>$e->getMessage()],400);
+    $error=['message'=>$e->getMessage(),'type'=>get_class($e)];
+    if(method_exists($e,'toArray')){
+        try{$error=array_replace($error,(array)$e->toArray());}catch(Throwable){}
+    }
+    rmx_page_helper_out(['ok'=>false,'error'=>$error],400);
 }
 PHP_ENDPOINT;
 
@@ -324,7 +260,7 @@ file_put_contents($scriptPath,$script);
 
 $workspace=file_get_contents($workspacePath);
 if($workspace===false)throw new RuntimeException('workspace.php not found');
-$tag='<script src="scripts/page-helper.js?v=20260918-page-helper-v11"></script>';
+$tag='<script src="scripts/page-helper.js?v=20260918-page-helper-v12"></script>';
 if(strpos($workspace,'scripts/page-helper.js')===false){
     if(stripos($workspace,'</body>')!==false)$workspace=str_ireplace('</body>',$tag."\n</body>",$workspace);
     else $workspace.="\n".$tag."\n";
