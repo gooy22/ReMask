@@ -13,6 +13,7 @@ require_once __DIR__ . '/../classes/ResponseFormatter.php';
 require_once __DIR__ . '/../classes/RemaskProxy.php';
 require_once __DIR__ . '/../classes/AccountStoreFactory.php';
 require_once __DIR__ . '/../classes/FbAccount.php';
+require_once __DIR__ . '/../classes/MetaApiClient.php';
 
 function rmx_check_cookie_jar(mixed $raw): array
 {
@@ -57,83 +58,29 @@ function rmx_check_saved_account(string $token): ?FbAccount
             if ($saved !== '' && hash_equals(hash('sha256', $saved), hash('sha256', $token))) return $account;
         }
     } catch (Throwable) {
-        // Preflight still works with explicit request context if storage is unavailable.
     }
     return null;
 }
 
-function rmx_check_graph_get(string $path, array $params, string $token, ?RemaskProxy $proxy, string $cookieHeader): array
+function rmx_check_list_all(MetaApiClient $client, string $path, array $params): array
 {
-    $version = getenv('META_GRAPH_API_VERSION') ?: 'v26.0';
-    if (!preg_match('/^v\d+\.\d+$/', $version)) $version = 'v26.0';
-    $url = 'https://graph.facebook.com/' . $version . '/' . ltrim($path, '/');
-    if ($params !== []) $url .= '?' . http_build_query($params);
-
-    $ch = curl_init($url);
-    $opts = [
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_HEADER => false,
-        CURLOPT_FOLLOWLOCATION => false,
-        CURLOPT_CONNECTTIMEOUT => 12,
-        CURLOPT_TIMEOUT => 35,
-        CURLOPT_SSL_VERIFYPEER => true,
-        CURLOPT_SSL_VERIFYHOST => 2,
-        CURLOPT_HTTPHEADER => ['Accept: application/json', 'Authorization: Bearer ' . $token],
-        CURLOPT_USERAGENT => 'ReMask-MetaApiCheck/1.3',
-    ];
-    if ($cookieHeader !== '') $opts[CURLOPT_COOKIE] = $cookieHeader;
-    if ($proxy !== null) $proxy->AddToCurlOptions($opts);
-    curl_setopt_array($ch, $opts);
-    $raw = curl_exec($ch);
-    $curlError = curl_error($ch);
-    $curlErrno = curl_errno($ch);
-    $httpStatus = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
-    curl_close($ch);
-
-    if ($raw === false) throw new RuntimeException('Proxy/transport failed before Meta response: ' . ($curlError ?: ('cURL errno ' . $curlErrno)));
-    $decoded = json_decode($raw, true);
-    if (!is_array($decoded)) throw new RuntimeException('Meta returned non-JSON response, HTTP ' . $httpStatus . '.');
-    if (isset($decoded['error']) && is_array($decoded['error'])) {
-        $err = $decoded['error'];
-        $parts = [trim((string)($err['message'] ?? 'Meta rejected request.'))];
-        $type = trim((string)($err['type'] ?? ''));
-        $code = isset($err['code']) ? (int)$err['code'] : 0;
-        $subcode = isset($err['error_subcode']) ? (int)$err['error_subcode'] : 0;
-        if ($type !== '') $parts[] = 'type ' . $type;
-        if ($code) $parts[] = 'code ' . $code;
-        if ($subcode) $parts[] = 'subcode ' . $subcode;
-        throw new RuntimeException('Meta API check failed: ' . implode(', ', $parts));
-    }
-    if ($httpStatus < 200 || $httpStatus >= 300) throw new RuntimeException('Meta API returned HTTP ' . $httpStatus . '.');
-    return $decoded;
-}
-
-function rmx_check_graph_list_all(string $path, array $params, string $token, ?RemaskProxy $proxy, string $cookieHeader): array
-{
-    $items = [];
-    $after = '';
-    $seen = [];
+    $items=[];
+    $after='';
+    $seen=[];
     do {
-        $pageParams = $params;
-        $pageParams['limit'] = 500;
-        if ($after !== '') $pageParams['after'] = $after;
+        $pageParams=$params;
+        $pageParams['limit']=500;
+        if($after!=='')$pageParams['after']=$after;
+        $page=$client->get($path,$pageParams);
+        $data=is_array($page['data']??null)?$page['data']:[];
+        foreach($data as $item) if(is_array($item)) $items[]=$item;
 
-        $page = rmx_check_graph_get($path, $pageParams, $token, $proxy, $cookieHeader);
-        $data = is_array($page['data'] ?? null) ? $page['data'] : [];
-        foreach ($data as $item) {
-            if (is_array($item)) $items[] = $item;
-        }
-
-        $next = (string)($page['paging']['cursors']['after'] ?? '');
-        $hasNext = !empty($page['paging']['next'])
-            && $next !== ''
-            && $data !== []
-            && !isset($seen[$next]);
-        if ($hasNext) $seen[$next] = true;
-        $after = $hasNext ? $next : '';
-    } while ($after !== '');
-
-    return ['data' => $items];
+        $next=(string)($page['paging']['cursors']['after']??'');
+        $hasNext=!empty($page['paging']['next']) && $next!=='' && $data!==[] && !isset($seen[$next]);
+        if($hasNext)$seen[$next]=true;
+        $after=$hasNext?$next:'';
+    } while($after!=='');
+    return ['data'=>$items];
 }
 
 try {
@@ -141,8 +88,11 @@ try {
     if ($token === '') throw new InvalidArgumentException('Access token is required.');
 
     $savedAccount = rmx_check_saved_account($token);
+
     $proxyRaw = trim((string)($_POST['proxy'] ?? ''));
-    $proxy = $proxyRaw !== '' ? RemaskProxy::fromSemicolonString($proxyRaw) : ($savedAccount?->proxy ?? null);
+    $proxy = $proxyRaw !== ''
+        ? RemaskProxy::fromSemicolonString($proxyRaw)
+        : ($savedAccount?->proxy ?? null);
 
     $cookies = rmx_check_cookie_jar($_POST['cookies'] ?? $_POST['cookie'] ?? '');
     $usedSavedSession = false;
@@ -152,32 +102,60 @@ try {
     }
     $cookieHeader = rmx_check_cookie_header($cookies);
 
-    $me = rmx_check_graph_get('me', ['fields'=>'id,name'], $token, $proxy, $cookieHeader);
-    $permissions = rmx_check_graph_get('me/permissions', ['limit'=>200], $token, $proxy, $cookieHeader);
-    $adsManagementGranted = false;
+    // Canonical Meta transport: same client class used by Pages/BM/RK/Launch.
+    $client = new MetaApiClient($token, $proxy, null, 35);
+    if ($cookieHeader !== '') $client->setSessionCookies($cookieHeader);
+
+    $me = $client->get('me', ['fields'=>'id,name']);
+    $permissions = $client->get('me/permissions', ['limit'=>200]);
+
+    $granted=[];
     foreach ((array)($permissions['data'] ?? []) as $permission) {
-        if (is_array($permission) && ($permission['permission'] ?? '') === 'ads_management' && ($permission['status'] ?? '') === 'granted') {
-            $adsManagementGranted = true;
-            break;
-        }
+        if (!is_array($permission)) continue;
+        if (($permission['status'] ?? '') !== 'granted') continue;
+        $name=trim((string)($permission['permission']??''));
+        if($name!=='')$granted[$name]=true;
     }
-    if (!$adsManagementGranted) throw new RuntimeException('ads_management permission is not granted for this token.');
-    $adAccounts = rmx_check_graph_list_all('me/adaccounts', ['fields'=>'id,name,account_status,currency,disable_reason'], $token, $proxy, $cookieHeader);
+    if (empty($granted['ads_management'])) {
+        throw new RuntimeException('ads_management permission is not granted for this token.');
+    }
+
+    $adAccounts = rmx_check_list_all($client,'me/adaccounts',[
+        'fields'=>'id,name,account_status,currency,disable_reason',
+    ]);
 
     ResponseFormatter::Respond(['res'=>json_encode([
         'ok'=>true,
-        'profile'=>['id'=>(string)($me['id'] ?? ''),'name'=>(string)($me['name'] ?? '')],
+        'profile'=>[
+            'id'=>(string)($me['id']??''),
+            'name'=>(string)($me['name']??''),
+        ],
+        'permissions'=>array_keys($granted),
         'ads_management_granted'=>true,
-        'ad_accounts_count'=>count((array)($adAccounts['data'] ?? [])),
-        'proxy_used'=>$proxy !== null,
-        'session_used'=>$cookieHeader !== '',
+        'business_management_granted'=>!empty($granted['business_management']),
+        'ad_accounts_count'=>count((array)($adAccounts['data']??[])),
+        'proxy_used'=>$proxy!==null,
+        'session_used'=>$cookieHeader!=='',
         'saved_session_used'=>$usedSavedSession,
         'cookie_count'=>count($cookies),
+        'transport'=>[
+            'client'=>'MetaApiClient',
+            'network_identity'=>'profile_bound',
+            'proxy_configured'=>$proxy!==null,
+            'direct_fallback'=>false,
+        ],
         'message'=>'Meta API profile is valid.',
-    ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR)]);
+    ], JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR)]);
 } catch (Throwable $e) {
     http_response_code(200);
-    ResponseFormatter::Respond(['error'=>$e->getMessage()]);
+    $detail=['message'=>$e->getMessage(),'type'=>get_class($e)];
+    if(method_exists($e,'toArray')){
+        try{$detail=array_replace($detail,(array)$e->toArray());}catch(Throwable){}
+    }
+    ResponseFormatter::Respond([
+        'error'=>$e->getMessage(),
+        'meta_error'=>$detail,
+    ]);
 }
 PHP_CODE;
 file_put_contents($target, $php);
