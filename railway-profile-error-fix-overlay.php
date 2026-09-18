@@ -14,6 +14,49 @@ if ($workspace === false) {
     exit(71);
 }
 
+
+$oldApiJson = <<<'JS'
+async function apiJson(url, options={}) { const r=await fetch(url,options); const t=await r.text(); let j; try{j=JSON.parse(t)}catch{throw new Error(\`Invalid JSON (\${r.status}): \${t}\`)} if(!r.ok||j.ok===false){const e=j?.error??j; throw new Error(e?.message||\`HTTP \${r.status}\`)} return j.data; }
+JS;
+$newApiJson = <<<'JS'
+async function apiJson(url, options={}){
+  const r=await fetch(url,options);
+  const t=await r.text();
+  let j;
+  try{j=JSON.parse(t)}catch{
+    const err=new Error(\`Invalid JSON (\${r.status})\`);
+    err.httpStatus=r.status;
+    err.raw=t;
+    throw err;
+  }
+  if(!r.ok||j.ok===false){
+    const raw=j?.error??j??{};
+    const e=(raw&&typeof raw==='object')?raw:{message:String(raw||'')};
+    const bits=[e.message||\`HTTP \${r.status}\`];
+    if(e.type)bits.push(\`type=\${e.type}\`);
+    if(e.code!==undefined&&e.code!==null&&e.code!=='')bits.push(\`code=\${e.code}\`);
+    if(e.subcode!==undefined&&e.subcode!==null&&e.subcode!=='')bits.push(\`subcode=\${e.subcode}\`);
+    if(e.user_title)bits.push(String(e.user_title));
+    if(e.user_message)bits.push(String(e.user_message));
+    if(e.fbtrace_id)bits.push(\`fbtrace_id=\${e.fbtrace_id}\`);
+    const err=new Error(bits.join(' · '));
+    err.meta=e;
+    err.httpStatus=r.status;
+    throw err;
+  }
+  return j.data;
+}
+JS;
+if (strpos($workspace, $oldApiJson) === false) {
+    fwrite(STDERR, "[profile-error-fix] apiJson marker missing\n");
+    exit(79);
+}
+$workspace = str_replace($oldApiJson, $newApiJson, $workspace, $apiJsonPatchCount);
+if ($apiJsonPatchCount !== 1) {
+    fwrite(STDERR, "[profile-error-fix] apiJson patch count: " . (string)$apiJsonPatchCount . "\n");
+    exit(80);
+}
+
 $helper = <<<'JS'
 async function profileSaveJson(payload){
   const response=await fetch('ajax/metaProfileManager.php',post(payload));
@@ -121,7 +164,7 @@ if ($workspacePage === null || $workspaceScriptTagCount !== 1) {
     exit(78);
 }
 file_put_contents($workspacePagePath, $workspacePage);
-fwrite(STDERR, "[profile-error-fix] Workspace token-only add + detailed save errors + JS cache bust ready\n");
+fwrite(STDERR, "[profile-error-fix] Workspace structured Meta errors + token-only profile save + JS cache bust ready\n");
 
 $managerPath = $root . '/ajax/metaProfileManager.php';
 $manager = file_get_contents($managerPath);
