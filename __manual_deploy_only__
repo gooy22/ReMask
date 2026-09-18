@@ -1,2 +1,3 @@
-accounts page observer removal v68
-base=63966b5204d00d2e040caa0320b37726f06b290b
+navigation freeze fix v69
+base=c53699eadc668a3f5cc2fde1d1080b2ba154922c
+reason=disable-global-selection-mutation-observer
