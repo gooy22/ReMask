@@ -40,6 +40,7 @@ RUN set -eux; \
     php /tmp/railway-launch-job-ui-overlay.php; \
     php /tmp/railway-launch-flow-overlay.php; \
     php /tmp/railway-media-persistence-overlay.php; \
+    php /tmp/railway-campaign-budget-sharing-overlay.php; \
     php /tmp/railway-check-account-session-overlay.php; \
     php /tmp/railway-profile-session-guard-overlay.php; \
     php /tmp/railway-workspace-session-integrity-overlay.php; \
