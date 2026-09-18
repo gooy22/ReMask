@@ -237,48 +237,62 @@ $script = <<<'JS'
     dialog.setAttribute('data-remask-page-helper','1');
   }
 
-  function actionNodes(root){
-    return [].slice.call(root.querySelectorAll('button,a,[role="menuitem"],li,.dropdown-item,.menu-item'));
+  function directText(el){
+    return String(el && el.textContent || '').replace(/\s+/g,' ').trim();
+  }
+  function visible(el){
+    if(!el || !(el instanceof Element))return false;
+    var r=el.getBoundingClientRect();
+    var s=getComputedStyle(el);
+    return r.width>0 && r.height>0 && s.display!=='none' && s.visibility!=='hidden';
+  }
+  function findMenuContainer(addBmNode){
+    var cur=addBmNode;
+    for(var i=0;i<8 && cur && cur!==document.body;i++,cur=cur.parentElement){
+      var t=directText(cur);
+      if(/Добавить\s+(?:BM|Business Manager)/i.test(t) &&
+         /Проверить\s+прокси/i.test(t) &&
+         /Редактировать\s+аккаунт/i.test(t)) return cur;
+    }
+    return null;
   }
   function enhanceActionMenus(){
-    var roots=[].slice.call(document.querySelectorAll(
-      '[role="menu"],.dropdown-menu,.context-menu,.popover,.menu,[class*="dropdown-menu"],[class*="context-menu"]'
-    ));
-    roots.forEach(function(menu){
-      if(menu.querySelector('[data-remask-create-page-action="1"]'))return;
-      var text=String(menu.textContent||'');
-      if(!/(Добавить\s+(?:BM|Business Manager)|Business Manager)/i.test(text))return;
-      if(!/(Проверить\s+прокси|Launch всех доступных RK|Редактировать аккаунт)/i.test(text))return;
+    var candidates=[].slice.call(document.querySelectorAll('button,a,div,span,li'));
+    candidates.forEach(function(node){
+      if(!visible(node))return;
+      var own=directText(node);
+      if(!/^Добавить\s+(?:BM|Business Manager)$/i.test(own))return;
 
-      var nodes=actionNodes(menu);
-      var reference=nodes.find(function(el){
-        return /(Добавить\s+(?:BM|Business Manager)|Business Manager)/i.test(String(el.textContent||'').trim());
-      }) || nodes.find(function(el){
-        return /Проверить\s+прокси/i.test(String(el.textContent||'').trim());
-      });
+      var menu=findMenuContainer(node);
+      if(!menu || menu.querySelector('[data-remask-create-page-action="1"]'))return;
 
-      var item;
-      if(reference){
-        item=reference.cloneNode(false);
-        item.removeAttribute('href');
-        item.removeAttribute('onclick');
-        item.removeAttribute('id');
-        item.removeAttribute('disabled');
-      }else{
-        item=document.createElement('button');
-        item.type='button';
+      var row=node;
+      for(var i=0;i<4 && row.parentElement && row.parentElement!==menu;i++){
+        var pt=directText(row.parentElement);
+        if(/Добавить\s+(?:BM|Business Manager)/i.test(pt) && !/Проверить\s+прокси/i.test(pt)) row=row.parentElement;
+        else break;
       }
+
+      var item=row.cloneNode(true);
       item.setAttribute('data-remask-create-page-action','1');
-      item.textContent='Создать Facebook Page';
+      item.removeAttribute('id');
+      item.removeAttribute('onclick');
+      item.removeAttribute('href');
+
+      var labelNode=[].slice.call(item.querySelectorAll('*')).find(function(el){
+        return /^Добавить\s+(?:BM|Business Manager)$/i.test(directText(el));
+      });
+      if(labelNode) labelNode.textContent='Создать Facebook Page';
+      else item.textContent='Создать Facebook Page';
+
       item.style.cursor='pointer';
       item.addEventListener('click',function(e){
         e.preventDefault();
         e.stopPropagation();
         window.open(createUrl,'_blank','noopener');
-      });
+      },true);
 
-      if(reference && reference.parentNode) reference.parentNode.insertBefore(item,reference.nextSibling);
-      else menu.appendChild(item);
+      if(row.parentNode) row.parentNode.insertBefore(item,row.nextSibling);
     });
   }
 
@@ -298,7 +312,7 @@ file_put_contents($scriptPath,$script);
 
 $workspace=file_get_contents($workspacePath);
 if($workspace===false)throw new RuntimeException('workspace.php not found');
-$tag='<script src="scripts/page-helper.js?v=20260918-page-helper-v3"></script>';
+$tag='<script src="scripts/page-helper.js?v=20260918-page-helper-v4"></script>';
 if(strpos($workspace,'scripts/page-helper.js')===false){
     if(stripos($workspace,'</body>')!==false)$workspace=str_ireplace('</body>',$tag."\n</body>",$workspace);
     else $workspace.="\n".$tag."\n";
