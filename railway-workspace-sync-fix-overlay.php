@@ -88,7 +88,7 @@ if ($js === false) {
 }
 
 $oldAttention = "function profileAttention(p){ const ps=String(p.proxy_health?.status||'').toUpperCase(); return !p.synced || !p.proxy_configured || (ps!==''&&ps!=='LIVE') || !p.ads_management_granted || p.bm_count===0 || p.rk_count===0; }";
-$newAttention = "function profileAttention(p){ const ps=String(p.proxy_health?.status||'').toUpperCase(); return !p.synced || !p.proxy_configured || (ps!==''&&ps!=='LIVE') || p.ads_management_granted===false; }";
+$newAttention = "function profileAttention(p){ const ps=String(p.proxy_health?.status||'').toUpperCase(); return !p.synced || (p.proxy_configured && ps!==''&&ps!=='LIVE') || p.ads_management_granted===false; }";
 $count = 0;
 $js = str_replace($oldAttention, $newAttention, $js, $count);
 if ($count !== 1) {
