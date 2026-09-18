@@ -73,7 +73,7 @@ RUN set -eux; \
     php -l /var/www/html/ajax/metaWorkerStatus.php; \
     php -l /var/www/html/ajax/metaJobRetry.php; \
     echo '--- REMASK BEHAVIOR INSPECT BEGIN ---'; \
-    grep -n -B 30 -A 140 "function searchInterests\\|function searchLocations" /var/www/html/classes/MetaAdsService.php || true; \
+    grep -n -B 50 -A 120 "id=\\\"geoQuery\\\"\\|id=\\\"interestQuery\\"" /var/www/html/launch.php || true; \
     echo '--- REMASK BEHAVIOR INSPECT END ---'; \
     grep -q 'REMASK_SYNC_ERROR_CLASSIFIER_V1' /var/www/html/scripts/workspace.js; \
     grep -q 'Meta request timeout after' /var/www/html/scripts/workspace.js; \
