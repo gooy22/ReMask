@@ -62,6 +62,8 @@ RUN set -eux; \
     grep -n -B 40 -A 180 'function process' /var/www/html/classes/MetaJobExecutor.php || true; \
     grep -n -B 50 -A 240 'function processNext' /var/www/html/classes/MetaJobStore.php || true; \
     grep -n -B 30 -A 180 'meta_error' /var/www/html/classes/MetaJobStore.php /var/www/html/ajax/metaJob*.php /var/www/html/scripts/launch.js || true; \
+    grep -n -B 40 -A 220 'function publicJob' /var/www/html/classes/MetaJobStore.php || true; \
+    grep -n -B 40 -A 220 'function renderJob' /var/www/html/scripts/launch.js || true; \
     grep -n -B 30 -A 140 'special_ad_categories' /var/www/html/classes/MetaLaunchValidator.php /var/www/html/classes/MetaDryRunPlanner.php /var/www/html/scripts/launch.js || true; \
     php -l /var/www/html/ajax/checkAccount.php; \
     php -l /var/www/html/ajax/metaProfileManager.php; \
