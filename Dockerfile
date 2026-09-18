@@ -46,6 +46,7 @@ RUN set -eux; \
     php /tmp/railway-profile-error-fix-overlay.php; \
     php -l /var/www/html/classes/RemaskProxy.php; \
     php -l /var/www/html/classes/MetaApiClient.php; \
+    php -l /var/www/html/classes/MetaAdsService.php; \
     php -l /var/www/html/classes/MetaEndpoint.php; \
     php -l /var/www/html/ajax/checkAccount.php; \
     php -l /var/www/html/ajax/metaProfileManager.php; \
@@ -66,6 +67,7 @@ RUN set -eux; \
     grep -q 'CURLOPT_COOKIE' /var/www/html/ajax/checkAccount.php; \
     grep -q 'session_used' /var/www/html/ajax/checkAccount.php; \
     grep -q 'direct_ad_accounts_with_optional_business_enrichment' /var/www/html/ajax/metaHierarchy.php; \
+    grep -q 'REMASK_BM_OWNED_CLIENT_V1' /var/www/html/classes/MetaAdsService.php; \
     grep -q 'RemaskProxy::fromSemicolonString' /var/www/html/ajax/checkAccount.php; \
     ! test -f /var/www/html/ajax/metaSyncProbe.php; \
     ! test -f /var/www/html/remask-session-recover.php; \
