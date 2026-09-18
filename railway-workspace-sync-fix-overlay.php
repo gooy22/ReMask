@@ -2,6 +2,86 @@
 $workspace = '/var/www/html/scripts/workspace.js';
 $hierarchy = '/var/www/html/ajax/metaHierarchy.php';
 
+$servicePath = '/var/www/html/classes/MetaAdsService.php';
+
+function rmx_sync_replace_method(string $source, string $methodName, string $replacement): string
+{
+    $needle = 'function ' . $methodName . '(';
+    $start = strpos($source, $needle);
+    if ($start === false) throw new RuntimeException($methodName . ' method not found');
+    $brace = strpos($source, '{', $start);
+    if ($brace === false) throw new RuntimeException($methodName . ' opening brace not found');
+    $depth = 0;
+    $end = null;
+    $len = strlen($source);
+    for ($i = $brace; $i < $len; $i++) {
+        if ($source[$i] === '{') $depth++;
+        elseif ($source[$i] === '}') {
+            $depth--;
+            if ($depth === 0) { $end = $i + 1; break; }
+        }
+    }
+    if ($end === null) throw new RuntimeException($methodName . ' closing brace not found');
+    return substr($source, 0, $start) . $replacement . substr($source, $end);
+}
+
+
+$service = file_get_contents($servicePath);
+if ($service === false) throw new RuntimeException('MetaAdsService.php not found');
+
+$businessAccountsMethod = <<<'PHP_METHOD'
+// REMASK_BM_OWNED_CLIENT_V1
+function listBusinessAdAccounts(string $businessId, int $limit = 0, bool $includeClient = true): array
+    {
+        $businessId = trim($businessId);
+        if ($businessId === '' || !preg_match('/^\\d+$/', $businessId)) {
+            throw new InvalidArgumentException('A numeric Business Manager ID is required.');
+        }
+
+        $bounded = $limit > 0;
+        $limit = $bounded ? max(1, $limit) : 0;
+        $edges = $includeClient ? ['owned_ad_accounts', 'client_ad_accounts'] : ['owned_ad_accounts'];
+        $items = [];
+        $seen = [];
+        $edgeWarnings = [];
+
+        foreach ($edges as $edge) {
+            $remaining = $bounded ? ($limit - count($items)) : 0;
+            if ($bounded && $remaining <= 0) break;
+
+            try {
+                $page = $this->listPagedEdge("{$businessId}/{$edge}", [
+                    'fields' => 'id,name,account_status,currency,amount_spent,balance,business{id,name},business_name,timezone_name,spend_cap,funding_source,funding_source_details',
+                ], $remaining);
+            } catch (Throwable $edgeError) {
+                $edgeWarnings[] = [
+                    'edge' => $edge,
+                    'error_class' => get_class($edgeError),
+                ];
+                continue;
+            }
+
+            foreach ((array)($page['data'] ?? []) as $item) {
+                if (!is_array($item)) continue;
+                $id = (string)($item['id'] ?? '');
+                if ($id === '' || isset($seen[$id])) continue;
+                $item['_business_edge'] = $edge;
+                $seen[$id] = true;
+                $items[] = $item;
+                if ($bounded && count($items) >= $limit) break 2;
+            }
+        }
+
+        $result = ['data' => $items];
+        if ($edgeWarnings !== []) $result['_edge_warnings'] = $edgeWarnings;
+        return $result;
+    }
+PHP_METHOD;
+
+$service = rmx_sync_replace_method($service, 'listBusinessAdAccounts', $businessAccountsMethod);
+file_put_contents($servicePath, $service);
+fwrite(STDERR, "[workspace-sync-fix] BM owned+client RK enrichment patched with per-edge fallback\n");
+
 $js = file_get_contents($workspace);
 if ($js === false) {
     throw new RuntimeException('workspace.js not found');
@@ -139,7 +219,12 @@ $syncProfileReplacement = <<<'PHP'
                 $businessId = trim((string)($business['id'] ?? ''));
                 if ($businessId === '') continue;
                 try {
-                    MetaEndpoint::cachedAsset($profile, 'business_ad_accounts', $businessId, true);
+                    $businessAccounts = MetaEndpoint::cachedAsset($profile, 'business_ad_accounts', $businessId, true);
+                    foreach ((array)($businessAccounts['_edge_warnings'] ?? []) as $edgeWarning) {
+                        if (!is_array($edgeWarning)) continue;
+                        $edgeName = trim((string)($edgeWarning['edge'] ?? 'business_ad_accounts'));
+                        $syncWarnings[] = 'BM ' . $businessId . ': ' . $edgeName . ' unavailable';
+                    }
                 } catch (Throwable $businessAccountError) {
                     $syncWarnings[] = 'BM ' . $businessId . ': RK enrichment unavailable';
                 }
