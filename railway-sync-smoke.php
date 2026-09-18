@@ -61,6 +61,45 @@ function smoke_service_variant(string $name, bool $useProxy, bool $useSession): 
     }
     return new MetaAdsService($client);
 }
+function smoke_restore_empty_accounts(object $store): array {
+    $path=(string)ACCOUNTSFILENAME;
+    $current=$store->deserialize();
+    $backups=glob($path.'.bak.*')?:[];
+    usort($backups,static fn($a,$b)=>(@filemtime($b)?:0)<=> (@filemtime($a)?:0));
+    smoke_log([
+        'phase'=>'storage',
+        'accounts_path_hash'=>substr(hash('sha256',$path),0,12),
+        'accounts_exists'=>is_file($path),
+        'accounts_size'=>is_file($path)?(int)filesize($path):0,
+        'profiles_deserialized'=>count($current),
+        'backup_files'=>count($backups),
+    ]);
+    if(count($current)>0)return $current;
+    foreach(array_slice($backups,0,200) as $i=>$file){
+        try{
+            $candidateStore=AccountStoreFactory::create($file);
+            $candidate=$candidateStore->deserialize();
+            if(count($candidate)===0)continue;
+            @copy($path,$path.'.bak.before-empty-recovery.'.gmdate('YmdHis'));
+            if(!@copy($file,$path))continue;
+            clearstatcache(true,$path);
+            $restored=$store->deserialize();
+            smoke_log([
+                'phase'=>'storage_restore',
+                'restored'=>count($restored)>0,
+                'backup_rank'=>$i+1,
+                'profiles_restored'=>count($restored),
+                'accounts_size'=>(int)(@filesize($path)?:0),
+            ]);
+            return $restored;
+        }catch(Throwable $e){
+            continue;
+        }
+    }
+    smoke_log(['phase'=>'storage_restore','restored'=>false,'profiles_restored'=>0]);
+    return [];
+}
+
 function smoke_graph_call(string $token, string $path, array $params = []): array {
     $url='https://graph.facebook.com/v26.0/'.ltrim($path,'/');
     if($params!==[])$url.='?'.http_build_query($params);
@@ -248,7 +287,7 @@ function smoke_log(array $data): void {
 
 try {
     $store = AccountStoreFactory::create(ACCOUNTSFILENAME);
-    $accounts = $store->deserialize();
+    $accounts = smoke_restore_empty_accounts($store);
     smoke_log(['phase'=>'start','profiles_saved'=>count($accounts),'max_profiles'=>8]);
     $tested=0; $success=0;
     foreach ($accounts as $account) {
