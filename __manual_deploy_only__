@@ -1,2 +1,2 @@
-inspect profile status runtime v53
-base=b4db9fd1ec7dfae8396c577ef2b5cdf064fcbb9f
+explicit profile readiness v54
+base=25d84768c9bafd0f330a3665f954aacacc2e4153
