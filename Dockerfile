@@ -13,6 +13,7 @@ WORKDIR /var/www/html
 COPY .deploy/clean-preview-valid/runtime.b64.* /tmp/remask-parts/
 COPY railway-launch-overlay.php /tmp/railway-launch-overlay.php
 COPY railway-launch-job-ui-overlay.php /tmp/railway-launch-job-ui-overlay.php
+COPY railway-launch-flow-overlay.php /tmp/railway-launch-flow-overlay.php
 COPY railway-check-account-session-overlay.php /tmp/railway-check-account-session-overlay.php
 COPY railway-profile-session-guard-overlay.php /tmp/railway-profile-session-guard-overlay.php
 COPY railway-workspace-session-integrity-overlay.php /tmp/railway-workspace-session-integrity-overlay.php
@@ -35,6 +36,7 @@ RUN set -eux; \
     else echo "Unsupported or corrupt ReMask runtime archive" >&2; exit 21; fi; \
     php /tmp/railway-launch-overlay.php; \
     php /tmp/railway-launch-job-ui-overlay.php; \
+    php /tmp/railway-launch-flow-overlay.php; \
     php /tmp/railway-check-account-session-overlay.php; \
     php /tmp/railway-profile-session-guard-overlay.php; \
     php /tmp/railway-workspace-session-integrity-overlay.php; \
@@ -47,7 +49,6 @@ RUN set -eux; \
     php /tmp/railway-profile-error-fix-overlay.php; \
     php -r '$allowedRaw=["/var/www/html/classes/MetaApiClient.php"=>true,"/var/www/html/classes/FbRequests.php"=>true,"/var/www/html/classes/ProxyHealthService.php"=>true]; $allowedLegacy=["/var/www/html/ajax/payUnsettled.php"=>true,"/var/www/html/ajax/policyAppeal.php"=>true,"/var/www/html/ajax/disapproveAppeal.php"=>true]; $violations=[]; foreach(["/var/www/html/ajax","/var/www/html/classes","/var/www/html/bin"] as $root){$it=new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root,FilesystemIterator::SKIP_DOTS)); foreach($it as $fi){if(!$fi->isFile()||$fi->getExtension()!=="php")continue;$path=$fi->getPathname();$s=file_get_contents($path);if((str_contains($s,"graph.facebook.com")||str_contains($s,"curl_init("))&&!isset($allowedRaw[$path]))$violations[]="raw-meta-transport:".$path;if($fi->getFilename()!=="FbRequests.php"&&preg_match("/new\\s+FbRequests\\s*\\(/",$s)&&!isset($allowedLegacy[$path]))$violations[]="legacy-fbrequests-ref:".$path;}} if($violations){fwrite(STDERR,"Meta transport invariant failed: ".implode(", ",$violations)."\\n");exit(91);} fwrite(STDERR,"[transport-invariant] canonical Graph transport enforced; legacy browser transport limited to payment/appeal endpoints\\n");'; \
     php -r '$pairs=[["/var/www/html/scripts/accounts.js","",24000],["/var/www/html/menu.php","",18000]]; foreach($pairs as [$file,$needle,$len]){$s=file_get_contents($file);fwrite(STDERR,"[accounts-js-inspect] FILE=".$file."\\n".substr($s,0,$len)."\\n");}'; \
-    grep -n -E -B 20 -A 80 'function validateReady|async function reviewSelected|async function createJobAndRun|launchButton.*disabled|launchReview' /var/www/html/scripts/launch.js || true; \
     php -l /var/www/html/classes/RemaskProxy.php; \
     php -l /var/www/html/classes/MetaApiClient.php; \
     php -l /var/www/html/classes/MetaAdsService.php; \
@@ -100,7 +101,9 @@ RUN set -eux; \
     grep -q 'jobActionSelect' /var/www/html/launch.php; \
     grep -q 'REMASK_AUTO_OPEN_RECENT_JOB_V1' /var/www/html/launch.php; \
     grep -q 'REMASK_JOB_ACTION_MENU_V1' /var/www/html/scripts/launch.js; \
-    grep -q 'launch.js?v=20260918-launch-job-ui-v71' /var/www/html/launch.php; \
+    grep -q 'REMASK_SINGLE_CLICK_LAUNCH_V1' /var/www/html/scripts/launch.js; \
+    grep -q 'Launch blocked: one or more selected RK failed Launch Review' /var/www/html/scripts/launch.js; \
+    grep -q 'launch.js?v=20260918-single-click-v73' /var/www/html/launch.php; \
     for f in /var/www/html/index.php /var/www/html/workspace.php /var/www/html/launch.php /var/www/html/campaigns.php /var/www/html/adsets.php /var/www/html/accounts.php; do [ ! -f "$f" ] || ! grep -q 'selection-persistence.js' "$f"; done; \
     grep -q 'accounts.js?v=20260918-accounts-v69' /var/www/html/accounts.php; \
     grep -q "'network_identity' => 'profile_bound'" /var/www/html/classes/MetaEndpoint.php; \
