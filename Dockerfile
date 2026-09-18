@@ -46,7 +46,6 @@ RUN set -eux; \
     php /tmp/railway-selection-persistence-overlay.php; \
     php /tmp/railway-profile-error-fix-overlay.php; \
     php /tmp/railway-page-helper-overlay.php; \
-    php -r '$pairs=[["/var/www/html/classes/MetaApiClient.php","class MetaApiException",9000],["/var/www/html/classes/MetaApiClient.php","throw new MetaApiException",9000],["/var/www/html/classes/MetaEndpoint.php","function fail",9000]]; foreach($pairs as [$file,$needle,$len]){$s=file_get_contents($file); $p=strpos($s,$needle); fwrite(STDERR,"[meta-error-inspect] FILE=".$file." NEEDLE=".$needle."\\n".substr($s,max(0,$p-1800),$len)."\\n");}'; \
     php -l /var/www/html/classes/RemaskProxy.php; \
     php -l /var/www/html/classes/MetaApiClient.php; \
     php -l /var/www/html/classes/MetaAdsService.php; \
@@ -92,6 +91,8 @@ RUN set -eux; \
     grep -q 'me/accounts' /var/www/html/ajax/metaPageHelper.php; \
     grep -q 'paging' /var/www/html/ajax/metaPageHelper.php; \
     grep -q 'c_user' /var/www/html/ajax/metaPageHelper.php; \
+    grep -q 'account->proxy!==null' /var/www/html/ajax/metaPageHelper.php; \
+    ! grep -q 'rmx_page_helper_graph($account,$path,$params,false)' /var/www/html/ajax/metaPageHelper.php; \
     grep -q 'action=csrf' /var/www/html/scripts/page-helper.js; \
     grep -q 'X-REMASK-CSRF' /var/www/html/scripts/page-helper.js; \
     grep -q '\.then(parseResponse)' /var/www/html/scripts/page-helper.js; \
