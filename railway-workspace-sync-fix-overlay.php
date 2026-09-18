@@ -16,7 +16,7 @@ if ($count !== 1) {
 }
 
 $newSync = <<<'JS'
-async function syncSelection(){
+// REMASK_SYNC_STABILIZED_V1\nasync function syncSelection(){
   if(state.running)return;
   const tab=state.activeTab, rows=selectedRows(tab);
   if(!rows.length)return;
