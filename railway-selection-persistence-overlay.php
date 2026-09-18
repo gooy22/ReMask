@@ -211,7 +211,7 @@ $tag = '<script src="scripts/selection-persistence.js?v=20260917-selection-v1"><
 $patched = 0;
 foreach ($targets as $file) {
     $base = basename($file);
-    if (!preg_match('/^(index|workspace|launch|campaigns|adsets|accounts)\.php$/i', $base)) continue;
+    if (!preg_match('/^(index|workspace|launch|campaigns|adsets)\.php$/i', $base)) continue;
     $html = file_get_contents($file);
     if ($html === false || strpos($html, 'selection-persistence.js') !== false) continue;
     if (stripos($html, '</body>') !== false) {
@@ -223,6 +223,27 @@ foreach ($targets as $file) {
     $patched++;
 }
 fwrite(STDERR, "[remask selection overlay] script tags patched: {$patched}\n");
+
+// accounts.php has no bulk-selection UI. Never run the global MutationObserver there.
+$accountsPage = $root . '/accounts.php';
+if (is_file($accountsPage)) {
+    $accountsHtml = file_get_contents($accountsPage);
+    if ($accountsHtml !== false) {
+        $accountsHtml = preg_replace(
+            '#\s*<script src="scripts/selection-persistence\.js\?v=[^"]+"></script>\s*#i',
+            "\n",
+            $accountsHtml
+        );
+        $accountsHtml = str_replace(
+            'src="scripts/accounts.js"',
+            'src="scripts/accounts.js?v=20260918-accounts-v68"',
+            $accountsHtml
+        );
+        file_put_contents($accountsPage, $accountsHtml);
+    }
+}
+fwrite(STDERR, "[remask selection overlay] accounts.php excluded from selection observer\n");
+
 if ($patched < 1) {
     fwrite(STDERR, "[remask selection overlay] no pages patched\n");
     exit(61);
