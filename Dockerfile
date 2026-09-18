@@ -106,9 +106,10 @@ RUN set -eux; \
     grep -q 'REMASK_AUTO_NAMING_V1' /var/www/html/scripts/launch.js; \
     grep -q 'Missing: ' /var/www/html/scripts/launch.js; \
     grep -q 'Launch blocked: one or more selected RK failed Launch Review' /var/www/html/scripts/launch.js; \
-    grep -q 'REMASK_MEDIA_DRAFT_PERSIST_V1' /var/www/html/scripts/launch.js; \
-    grep -q 'persistedMediaFile' /var/www/html/scripts/launch.js; \
-    grep -q 'launch.js?v=20260918-media-draft-v76' /var/www/html/launch.php; \
+    test -f /var/www/html/scripts/media-draft.js; \
+    grep -q 'REMASK_MEDIA_DRAFT_V2' /var/www/html/scripts/media-draft.js; \
+    grep -q 'DataTransfer' /var/www/html/scripts/media-draft.js; \
+    grep -q 'media-draft.js?v=20260918-media-draft-v77' /var/www/html/launch.php; \
     for f in /var/www/html/index.php /var/www/html/workspace.php /var/www/html/launch.php /var/www/html/campaigns.php /var/www/html/adsets.php /var/www/html/accounts.php; do [ ! -f "$f" ] || ! grep -q 'selection-persistence.js' "$f"; done; \
     grep -q 'accounts.js?v=20260918-accounts-v69' /var/www/html/accounts.php; \
     grep -q "'network_identity' => 'profile_bound'" /var/www/html/classes/MetaEndpoint.php; \
