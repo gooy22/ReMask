@@ -22,7 +22,7 @@ async function apiJson(url, options={}){
   const t=await r.text();
   let j;
   try{j=JSON.parse(t)}catch{
-    const err=new Error(\`Invalid JSON (\${r.status})\`);
+    const err=new Error(`Invalid JSON (\${r.status})`);
     err.httpStatus=r.status;
     err.raw=t;
     throw err;
@@ -30,13 +30,13 @@ async function apiJson(url, options={}){
   if(!r.ok||j.ok===false){
     const raw=j?.error??j??{};
     const e=(raw&&typeof raw==='object')?raw:{message:String(raw||'')};
-    const bits=[e.message||\`HTTP \${r.status}\`];
-    if(e.type)bits.push(\`type=\${e.type}\`);
-    if(e.code!==undefined&&e.code!==null&&e.code!=='')bits.push(\`code=\${e.code}\`);
-    if(e.subcode!==undefined&&e.subcode!==null&&e.subcode!=='')bits.push(\`subcode=\${e.subcode}\`);
+    const bits=[e.message||`HTTP \${r.status}`];
+    if(e.type)bits.push(`type=\${e.type}`);
+    if(e.code!==undefined&&e.code!==null&&e.code!=='')bits.push(`code=\${e.code}`);
+    if(e.subcode!==undefined&&e.subcode!==null&&e.subcode!=='')bits.push(`subcode=\${e.subcode}`);
     if(e.user_title)bits.push(String(e.user_title));
     if(e.user_message)bits.push(String(e.user_message));
-    if(e.fbtrace_id)bits.push(\`fbtrace_id=\${e.fbtrace_id}\`);
+    if(e.fbtrace_id)bits.push(`fbtrace_id=\${e.fbtrace_id}`);
     const err=new Error(bits.join(' · '));
     err.meta=e;
     err.httpStatus=r.status;
