@@ -46,7 +46,6 @@ RUN set -eux; \
     php /tmp/railway-campaign-budget-sharing-overlay.php; \
     php /tmp/railway-job-error-ui-overlay.php; \
     php /tmp/railway-budget-guard-overlay.php; \
-    php /tmp/railway-retry-current-payload-overlay.php; \
     php /tmp/railway-check-account-session-overlay.php; \
     php /tmp/railway-profile-session-guard-overlay.php; \
     php /tmp/railway-workspace-session-integrity-overlay.php; \
@@ -54,6 +53,7 @@ RUN set -eux; \
     php /tmp/railway-workspace-sync-fix-overlay.php; \
     php /tmp/railway-worker-overlay.php; \
     php /tmp/railway-retry-overlay.php; \
+    php /tmp/railway-retry-current-payload-overlay.php; \
     php /tmp/railway-targeting-autocomplete-overlay.php; \
     php /tmp/railway-selection-persistence-overlay.php; \
     php /tmp/railway-profile-error-fix-overlay.php; \
