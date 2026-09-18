@@ -68,6 +68,10 @@ RUN set -eux; \
     php -l /var/www/html/bin/remask-worker.php; \
     php -l /var/www/html/ajax/metaWorkerStatus.php; \
     php -l /var/www/html/ajax/metaJobRetry.php; \
+    echo '--- REMASK MULTI PROFILE INSPECT BEGIN ---'; \
+    grep -n -B 40 -A 140 "Select profile\\|Facebook profile\\|selectedAccountIds\\|targetMode\\|collectAccountOverrides\\|account_overrides\\|targets_json\\|reviewTargets\\|state.profile\\|\\$('profile')" /var/www/html/launch.php /var/www/html/scripts/launch.js || true; \
+    sed -n '1,430p' /var/www/html/scripts/launch.js; \
+    echo '--- REMASK MULTI PROFILE INSPECT END ---'; \
     grep -q 'REMASK_SYNC_ERROR_CLASSIFIER_V1' /var/www/html/scripts/workspace.js; \
     grep -q 'Meta request timeout after' /var/www/html/scripts/workspace.js; \
     grep -Fq "\$('workspaceActions').disabled=n===0;" /var/www/html/scripts/workspace.js; \
