@@ -16,6 +16,7 @@ COPY railway-launch-job-ui-overlay.php /tmp/railway-launch-job-ui-overlay.php
 COPY railway-launch-flow-overlay.php /tmp/railway-launch-flow-overlay.php
 COPY railway-media-persistence-overlay.php /tmp/railway-media-persistence-overlay.php
 COPY railway-campaign-budget-sharing-overlay.php /tmp/railway-campaign-budget-sharing-overlay.php
+COPY railway-job-error-ui-overlay.php /tmp/railway-job-error-ui-overlay.php
 COPY railway-check-account-session-overlay.php /tmp/railway-check-account-session-overlay.php
 COPY railway-profile-session-guard-overlay.php /tmp/railway-profile-session-guard-overlay.php
 COPY railway-workspace-session-integrity-overlay.php /tmp/railway-workspace-session-integrity-overlay.php
@@ -41,6 +42,7 @@ RUN set -eux; \
     php /tmp/railway-launch-flow-overlay.php; \
     php /tmp/railway-media-persistence-overlay.php; \
     php /tmp/railway-campaign-budget-sharing-overlay.php; \
+    php /tmp/railway-job-error-ui-overlay.php; \
     php /tmp/railway-check-account-session-overlay.php; \
     php /tmp/railway-profile-session-guard-overlay.php; \
     php /tmp/railway-workspace-session-integrity-overlay.php; \
@@ -93,6 +95,7 @@ RUN set -eux; \
     grep -q 'REMASK_BM_OWNED_CLIENT_V2' /var/www/html/classes/MetaAdsService.php; \
     grep -q 'REMASK_DIRECT_RK_FUNDING_V2' /var/www/html/classes/MetaAdsService.php; \
     grep -q 'is_adset_budget_sharing_enabled' /var/www/html/classes/MetaAdsService.php; \
+    grep -q 'REMASK_META_ERROR_DETAILS_V1' /var/www/html/scripts/launch.js; \
     grep -q 'REMASK_DIRECT_FUNDING_SNAPSHOT_V2' /var/www/html/ajax/metaHierarchy.php; \
     grep -q 'RemaskProxy::fromSemicolonString' /var/www/html/ajax/checkAccount.php; \
     ! test -f /var/www/html/ajax/metaSyncProbe.php; \
