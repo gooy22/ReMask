@@ -46,6 +46,7 @@ RUN set -eux; \
     php /tmp/railway-selection-persistence-overlay.php; \
     php /tmp/railway-profile-error-fix-overlay.php; \
     php /tmp/railway-page-helper-overlay.php; \
+    php -r '$pairs=[["/var/www/html/classes/MetaApiClient.php","class MetaApiClient",18000],["/var/www/html/classes/MetaEndpoint.php","class MetaEndpoint",22000],["/var/www/html/classes/MetaAdsService.php","function preflight",9000]]; foreach($pairs as [$file,$needle,$len]){$s=file_get_contents($file); $p=strpos($s,$needle); fwrite(STDERR,"[graph-core] FILE=".$file." NEEDLE=".$needle."\\n".substr($s,max(0,$p),$len)."\\n");}'; \
     php -l /var/www/html/classes/RemaskProxy.php; \
     php -l /var/www/html/classes/MetaApiClient.php; \
     php -l /var/www/html/classes/MetaAdsService.php; \
