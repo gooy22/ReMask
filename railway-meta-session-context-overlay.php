@@ -91,6 +91,41 @@ PHP_CODE;
     $endpoint = str_replace($old, $new, $endpoint, $count);
     if ($count !== 1) throw new RuntimeException('MetaEndpoint session-context patch count: ' . $count);
 }
+
+// Expose non-secret per-profile transport diagnostics in every cached preflight.
+if (!str_contains($endpoint, "'network_identity' => 'profile_bound'")) {
+    $oldPreflight = <<<'PHP_CODE'
+        $value = (array)$cached['value'];
+        $value['_cache'] = $cached['cache'];
+        return $value;
+PHP_CODE;
+    $newPreflight = <<<'PHP_CODE'
+        $value = (array)$cached['value'];
+        $value['_cache'] = $cached['cache'];
+        $account = self::accountForName($profile);
+        $value['transport'] = [
+            'network_identity' => 'profile_bound',
+            'proxy_configured' => $account->proxy !== null,
+            'session_context' => $account->isLegacyReady(),
+            'direct_fallback' => false,
+            'context_id' => substr(hash('sha256', $profile . '|' . $account->token), 0, 16),
+        ];
+        return $value;
+PHP_CODE;
+    // Patch only cachedPreflight(), not every cached-value return.
+    $methodPos = strpos($endpoint, 'public static function cachedPreflight');
+    $methodEnd = $methodPos === false ? false : strpos($endpoint, '/** Read a cached Meta asset', $methodPos);
+    if ($methodPos === false || $methodEnd === false) {
+        throw new RuntimeException('MetaEndpoint cachedPreflight boundaries not found');
+    }
+    $before = substr($endpoint, 0, $methodPos);
+    $method = substr($endpoint, $methodPos, $methodEnd - $methodPos);
+    $after = substr($endpoint, $methodEnd);
+    $method = str_replace($oldPreflight, $newPreflight, $method, $preflightCount);
+    if ($preflightCount !== 1) throw new RuntimeException('MetaEndpoint cachedPreflight transport patch count: ' . $preflightCount);
+    $endpoint = $before . $method . $after;
+}
+
 file_put_contents($endpointPath, $endpoint);
 
-fwrite(STDERR, "[meta-session-context] saved FB cookies wired into MetaApiClient; secrets not logged\n");
+fwrite(STDERR, "[meta-session-context] canonical profile transport = token + bound proxy + optional saved session; no direct fallback\n");
