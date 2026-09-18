@@ -46,7 +46,6 @@ RUN set -eux; \
     php /tmp/railway-selection-persistence-overlay.php; \
     php /tmp/railway-profile-error-fix-overlay.php; \
     php /tmp/railway-page-helper-overlay.php; \
-    php -r '$files=["/var/www/html/ajax/metaHierarchy.php","/var/www/html/checkpassword.php","/var/www/html/ajax/metaPageHelper.php"]; foreach($files as $file){fwrite(STDERR,"[auth-inspect] FILE=".$file."\\n"); $lines=@file($file); if(!$lines){fwrite(STDERR,"[auth-inspect] missing\\n"); continue;} foreach(array_slice($lines,0,90) as $line){$line=preg_replace("/(token|password|secret)\s*[:=]\s*[^;\s]+/i","$1=[redacted]",$line); fwrite(STDERR,"[auth-inspect] ".$line);} }'; \
     php -l /var/www/html/classes/RemaskProxy.php; \
     php -l /var/www/html/classes/MetaApiClient.php; \
     php -l /var/www/html/classes/MetaAdsService.php; \
@@ -92,6 +91,10 @@ RUN set -eux; \
     grep -q 'fb_page_categories' /var/www/html/ajax/metaPageHelper.php; \
     grep -q 'CURLOPT_POST' /var/www/html/ajax/metaPageHelper.php; \
     grep -q 'Создаю FP через Meta API' /var/www/html/scripts/page-helper.js; \
+    grep -q 'action=csrf' /var/www/html/scripts/page-helper.js; \
+    grep -q 'X-REMASK-CSRF' /var/www/html/scripts/page-helper.js; \
+    grep -q 'remask_csrf_token' /var/www/html/ajax/metaPageHelper.php; \
+    grep -q 'fb_page_categories' /var/www/html/ajax/metaPageHelper.php; \
     ! grep -q 'facebook.com/pages/create' /var/www/html/scripts/page-helper.js; \
     grep -q 'data-remask-fp-action="1"' /var/www/html/scripts/workspace.js; \
     grep -q 'Добавить FP' /var/www/html/scripts/workspace.js; \
