@@ -87,6 +87,11 @@ RUN set -eux; \
     test -f /var/www/html/scripts/page-helper.js; \
     grep -q 'page-helper.js' /var/www/html/workspace.php; \
     grep -q 'Обновить Pages' /var/www/html/scripts/page-helper.js; \
+    grep -q 'create_pages' /var/www/html/ajax/metaPageHelper.php; \
+    grep -q 'fb_page_categories' /var/www/html/ajax/metaPageHelper.php; \
+    grep -q 'CURLOPT_POST' /var/www/html/ajax/metaPageHelper.php; \
+    grep -q 'Создаю FP через Meta API' /var/www/html/scripts/page-helper.js; \
+    ! grep -q 'facebook.com/pages/create' /var/www/html/scripts/page-helper.js; \
     grep -q 'data-remask-fp-action="1"' /var/www/html/scripts/workspace.js; \
     grep -q 'Добавить FP' /var/www/html/scripts/workspace.js; \
     ! grep -q 'hierarchy-autosync.js' /var/www/html/workspace.php; \
