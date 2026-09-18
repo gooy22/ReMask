@@ -246,7 +246,6 @@ $script = <<<'JS'
 (function(){
   'use strict';
   var endpoint='ajax/metaPageHelper.php';
-  var createUrl='https://www.facebook.com/pages/create';
 
   function parseResponse(response){
     return response.text().then(function(text){
@@ -259,12 +258,18 @@ $script = <<<'JS'
       return data;
     });
   }
-  function api(profile){
+  function api(payload){
+    var body={};
+    payload=payload||{};
+    Object.keys(payload).forEach(function(k){
+      var v=payload[k];
+      body[k]=(typeof v==='string')?v:JSON.stringify(v);
+    });
     return parseResponse(fetch(endpoint,{
       method:'POST',
       credentials:'same-origin',
       headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8'},
-      body:new URLSearchParams({profile:profile||''})
+      body:new URLSearchParams(body)
     }));
   }
   function getDialog(){
@@ -313,7 +318,7 @@ $script = <<<'JS'
   function refresh(dialog){
     var profile=profileHint(dialog);
     setStatus(dialog,'Обновляю Pages из Meta…',false);
-    api(profile).then(function(data){
+    api({action:'list_pages',profile:profile}).then(function(data){
       var pages=data.pages||[];
       var select=primarySelect(dialog);
       pages.forEach(function(page){addPageOption(select,page);});
@@ -325,12 +330,106 @@ $script = <<<'JS'
         if(zero)zero.textContent=String(pages.length)+' Pages';
         setStatus(dialog,'Pages обновлены: '+pages.length+'. Первая Page выбрана как Primary Page.',false);
       }else{
-        setStatus(dialog,'Meta всё ещё возвращает 0 Pages для этого FB-профиля.',true);
+        setStatus(dialog,'Meta возвращает 0 Pages для этого FB-профиля.',true);
       }
     }).catch(function(e){
       setStatus(dialog,'Не удалось обновить Pages: '+e.message,true);
     });
   }
+
+  function selectedProfileHints(){
+    var out=[];
+    [].slice.call(document.querySelectorAll('input[type="checkbox"]:checked')).forEach(function(cb){
+      var row=cb.closest('tr');
+      if(!row)return;
+      var text=String(row.textContent||'').replace(/\s+/g,' ').trim();
+      if(text && out.indexOf(text)===-1)out.push(text);
+    });
+    return out;
+  }
+  function injectStyle(){
+    if(document.getElementById('remask-fp-modal-style'))return;
+    var style=document.createElement('style');
+    style.id='remask-fp-modal-style';
+    style.textContent='.rmx-fp-layer{position:fixed;inset:0;z-index:12000;background:rgba(0,0,0,.68);display:flex;align-items:center;justify-content:center;padding:16px}.rmx-fp-card{width:min(620px,96vw);background:#20252e;border:1px solid #4d5868;border-radius:14px;color:#eef3fb;box-shadow:0 24px 80px rgba(0,0,0,.55)}.rmx-fp-head,.rmx-fp-foot{display:flex;align-items:center;justify-content:space-between;padding:16px 18px}.rmx-fp-head{border-bottom:1px solid #3b4452}.rmx-fp-foot{border-top:1px solid #3b4452;justify-content:flex-end;gap:10px}.rmx-fp-body{padding:16px 18px}.rmx-fp-field{margin-bottom:13px}.rmx-fp-field label{display:block;font-size:12px;color:#aab5c4;margin-bottom:6px}.rmx-fp-field input,.rmx-fp-field select,.rmx-fp-field textarea{width:100%;box-sizing:border-box;background:#262d37;color:#eef3fb;border:1px solid #4b5666;border-radius:8px;padding:10px 12px}.rmx-fp-btn{border:1px solid #536071;background:#2b333e;color:#fff;border-radius:8px;padding:9px 13px;cursor:pointer}.rmx-fp-btn.primary{background:#3478f6;border-color:#3478f6}.rmx-fp-status{font-size:12px;line-height:1.5;white-space:pre-wrap;margin-top:8px}.rmx-fp-muted{font-size:12px;color:#9da9ba;margin-bottom:12px}';
+    document.head.appendChild(style);
+  }
+  function openCreateModal(hints){
+    injectStyle();
+    hints=hints||selectedProfileHints();
+    if(!hints.length){alert('Сначала выбери FB-аккаунт.');return;}
+
+    var layer=document.createElement('div');
+    layer.className='rmx-fp-layer';
+    layer.innerHTML='<div class="rmx-fp-card"><div class="rmx-fp-head"><strong>Добавить Facebook Page</strong><button type="button" class="rmx-fp-btn" data-close>×</button></div><div class="rmx-fp-body"><div class="rmx-fp-muted">Выбрано FB-аккаунтов: '+hints.length+'. ReMask создаст Page запросом к Meta без перехода в Facebook.</div><div class="rmx-fp-field"><label>Название Page</label><input data-name placeholder="'+(hints.length>1?'Page {n}':'Название Page')+'"></div><div class="rmx-fp-field"><label>Категория</label><select data-category><option value="">Загрузка категорий Meta…</option></select></div><div class="rmx-fp-field"><label>Описание (необязательно)</label><textarea data-about rows="3"></textarea></div><div class="rmx-fp-status" data-status></div></div><div class="rmx-fp-foot"><button type="button" class="rmx-fp-btn" data-cancel>Отмена</button><button type="button" class="rmx-fp-btn primary" data-create>Создать FP</button></div></div>';
+    document.body.appendChild(layer);
+
+    var close=function(){layer.remove();};
+    layer.querySelector('[data-close]').onclick=close;
+    layer.querySelector('[data-cancel]').onclick=close;
+    layer.addEventListener('mousedown',function(e){if(e.target===layer)close();});
+
+    var category=layer.querySelector('[data-category]');
+    var status=layer.querySelector('[data-status]');
+    api({action:'categories',profile:hints[0]}).then(function(data){
+      category.innerHTML='<option value="">Выбери категорию</option>';
+      (data.categories||[]).forEach(function(c){
+        var o=document.createElement('option');
+        o.value=c.api_enum;
+        o.textContent=c.name+' — '+c.api_enum;
+        category.appendChild(o);
+      });
+      if(!(data.categories||[]).length)throw new Error('Meta не вернула категории Page.');
+    }).catch(function(e){
+      category.innerHTML='<option value="">Категории недоступны</option>';
+      status.style.color='#ff8080';
+      status.textContent=e.message;
+    });
+
+    layer.querySelector('[data-create]').onclick=function(){
+      var name=layer.querySelector('[data-name]').value.trim();
+      var about=layer.querySelector('[data-about]').value.trim();
+      if(!name||!category.value){
+        status.style.color='#ff8080';
+        status.textContent='Заполни название и категорию.';
+        return;
+      }
+      var btn=layer.querySelector('[data-create]');
+      btn.disabled=true;
+      status.style.color='#c7d2e2';
+      status.textContent='Создаю FP через Meta API…';
+
+      api({
+        action:'create_pages',
+        profile_hints:hints,
+        name:name,
+        category_enum:category.value,
+        about:about
+      }).then(function(data){
+        var results=data.results||[];
+        var ok=results.filter(function(r){return r.ok;});
+        var fail=results.filter(function(r){return !r.ok;});
+        var lines=[];
+        ok.forEach(function(r){
+          lines.push('✓ '+r.profile+': '+((r.page&&r.page.name)||'Page создана')+((r.page&&r.page.id)?' ['+r.page.id+']':''));
+        });
+        fail.forEach(function(r){
+          lines.push('✕ '+r.profile+': ['+(r.error_kind||'META_API')+'] '+(r.error||'Ошибка Meta'));
+        });
+        status.style.color=fail.length?'#ffd27a':'#83dd99';
+        status.textContent=lines.join('\n') || 'Meta не вернула результат.';
+        if(ok.length){
+          window.__remaskLastCreatedPages=ok.map(function(r){return r.page;}).filter(Boolean);
+          var bm=getDialog();
+          if(bm)refresh(bm);
+        }
+      }).catch(function(e){
+        status.style.color='#ff8080';
+        status.textContent=e.message;
+      }).finally(function(){btn.disabled=false;});
+    };
+  }
+
   function enhanceBmDialog(){
     var dialog=getDialog();
     if(!dialog||dialog.getAttribute('data-remask-page-helper')==='1')return;
@@ -348,12 +447,9 @@ $script = <<<'JS'
 
     var create=document.createElement('button');
     create.type='button';
-    create.textContent='Создать Facebook Page';
+    create.textContent='Добавить FP';
     create.className='btn btn-primary';
-    create.addEventListener('click',function(){
-      window.open(createUrl,'_blank','noopener');
-      setStatus(dialog,'Создай Page в открывшейся вкладке Facebook, затем вернись сюда и нажми «Обновить Pages».',false);
-    });
+    create.addEventListener('click',function(){openCreateModal([profileHint(dialog)]);});
 
     var reload=document.createElement('button');
     reload.type='button';
@@ -365,6 +461,7 @@ $script = <<<'JS'
     wrap.appendChild(reload);
     anchor.appendChild(wrap);
     dialog.setAttribute('data-remask-page-helper','1');
+    refresh(dialog);
   }
 
   function bindDirectFpButton(){
@@ -373,8 +470,8 @@ $script = <<<'JS'
       btn.setAttribute('data-remask-fp-bound','1');
       btn.addEventListener('click',function(e){
         e.preventDefault();
-        e.stopPropagation();
-        window.open(createUrl,'_blank','noopener');
+        e.stopImmediatePropagation();
+        openCreateModal(selectedProfileHints());
       },true);
     });
   }
@@ -405,7 +502,7 @@ fwrite(STDERR,"[page-helper] Add FP inserted directly into buildActionMenu\n");
 
 $workspace=file_get_contents($workspacePath);
 if($workspace===false)throw new RuntimeException('workspace.php not found');
-$tag='<script src="scripts/page-helper.js?v=20260918-page-helper-v6"></script>';
+$tag='<script src="scripts/page-helper.js?v=20260918-page-helper-v7"></script>';
 if(strpos($workspace,'scripts/page-helper.js')===false){
     if(stripos($workspace,'</body>')!==false)$workspace=str_ireplace('</body>',$tag."\n</body>",$workspace);
     else $workspace.="\n".$tag."\n";
