@@ -45,6 +45,7 @@ RUN set -eux; \
     php /tmp/railway-selection-persistence-overlay.php; \
     php /tmp/railway-profile-error-fix-overlay.php; \
     php /tmp/railway-page-helper-overlay.php; \
+    php -r '$roots=["/var/www/html/ajax","/var/www/html/classes","/var/www/html/bin"]; foreach($roots as $root){$it=new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root,FilesystemIterator::SKIP_DOTS)); foreach($it as $fi){if(!$fi->isFile()||$fi->getExtension()!=="php")continue;$s=file_get_contents($fi->getPathname());$flags=[];if(str_contains($s,"graph.facebook.com"))$flags[]="GRAPH_HOST";if(str_contains($s,"curl_init("))$flags[]="RAW_CURL";if(str_contains($s,"new MetaApiClient"))$flags[]="META_CLIENT";if(str_contains($s,"serviceForAccountName"))$flags[]="PROFILE_SERVICE";if($flags)fwrite(STDERR,"[transport-audit] ".implode(",",$flags)." ".$fi->getPathname()."\\n");}}'; \
     php -l /var/www/html/classes/RemaskProxy.php; \
     php -l /var/www/html/classes/MetaApiClient.php; \
     php -l /var/www/html/classes/MetaAdsService.php; \
