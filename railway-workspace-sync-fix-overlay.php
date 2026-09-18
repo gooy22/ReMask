@@ -358,7 +358,35 @@ if ($start === false || $end === false) {
 }
 $end += strlen($endNeedle);
 $php = substr($php, 0, $start) . $syncProfileReplacement . substr($php, $end);
+
+// Mutations must validate the current profile transport and current asset access.
+// Never rely on a potentially stale read cache immediately before creating BM/RK.
+$php = str_replace(
+    "\$preflight = MetaEndpoint::cachedPreflight(\$profile, false);",
+    "\$preflight = MetaEndpoint::cachedPreflight(\$profile, true);",
+    $php,
+    $livePreflightCount
+);
+$php = str_replace(
+    "\$pages = MetaEndpoint::cachedAsset(\$profile, 'pages', '', false);",
+    "\$pages = MetaEndpoint::cachedAsset(\$profile, 'pages', '', true);",
+    $php,
+    $livePagesCount
+);
+$php = str_replace(
+    "\$businesses = MetaEndpoint::cachedAsset(\$profile, 'businesses', '', false);",
+    "\$businesses = MetaEndpoint::cachedAsset(\$profile, 'businesses', '', true);",
+    $php,
+    $liveBusinessesCount
+);
+if ($livePreflightCount < 2 || $livePagesCount < 1 || $liveBusinessesCount < 1) {
+    throw new RuntimeException(
+        'live mutation preflight patch failed: preflight=' . $livePreflightCount .
+        ' pages=' . $livePagesCount . ' businesses=' . $liveBusinessesCount
+    );
+}
+
 file_put_contents($hierarchy, $php);
-fwrite(STDERR, "[workspace-sync-fix] metaHierarchy.php patched\n");
+fwrite(STDERR, "[workspace-sync-fix] metaHierarchy.php patched; BM/RK writes use live canonical preflight\\n");
 
 fwrite(STDERR, "[workspace-sync-fix] clean sync stabilization ready; no diagnostic probe installed\n");
