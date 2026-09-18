@@ -61,6 +61,100 @@ function smoke_service_variant(string $name, bool $useProxy, bool $useSession): 
     }
     return new MetaAdsService($client);
 }
+function smoke_graph_call(string $token, string $path, array $params = []): array {
+    $url='https://graph.facebook.com/v26.0/'.ltrim($path,'/');
+    if($params!==[])$url.='?'.http_build_query($params);
+    $ch=curl_init($url);
+    curl_setopt_array($ch,[
+        CURLOPT_RETURNTRANSFER=>true,
+        CURLOPT_FOLLOWLOCATION=>false,
+        CURLOPT_CONNECTTIMEOUT=>12,
+        CURLOPT_TIMEOUT=>35,
+        CURLOPT_SSL_VERIFYPEER=>true,
+        CURLOPT_SSL_VERIFYHOST=>2,
+        CURLOPT_HTTPHEADER=>['Accept: application/json','Authorization: Bearer '.$token],
+        CURLOPT_USERAGENT=>'ReMask-HistoryCheck/1.0',
+    ]);
+    $raw=curl_exec($ch);
+    $errno=curl_errno($ch);
+    $http=(int)curl_getinfo($ch,CURLINFO_RESPONSE_CODE);
+    curl_close($ch);
+    $decoded=is_string($raw)?json_decode($raw,true):null;
+    $error=is_array($decoded['error']??null)?$decoded['error']:[];
+    return ['ok'=>is_array($decoded)&&$error===[]&&$http>=200&&$http<300,'http'=>$http,'errno'=>$errno,'data'=>$decoded,'error'=>$error];
+}
+function smoke_validate_candidate(string $token): array {
+    $me=smoke_graph_call($token,'me',['fields'=>'id,name']);
+    if(!$me['ok'])return ['ok'=>false,'stage'=>'identity','result'=>$me];
+    $perms=smoke_graph_call($token,'me/permissions',['limit'=>200]);
+    if(!$perms['ok'])return ['ok'=>false,'stage'=>'permissions','result'=>$perms];
+    $ads=false;
+    foreach((array)($perms['data']['data']??[]) as $row){
+        if(is_array($row)&&($row['permission']??'')==='ads_management'&&($row['status']??'')==='granted'){$ads=true;break;}
+    }
+    if(!$ads)return ['ok'=>false,'stage'=>'ads_management','result'=>$perms];
+    $rk=smoke_graph_call($token,'me/adaccounts',['fields'=>'id','limit'=>1]);
+    if(!$rk['ok'])return ['ok'=>false,'stage'=>'ad_accounts','result'=>$rk];
+    return ['ok'=>true,'stage'=>'complete','result'=>$rk];
+}
+function smoke_try_restore_history(FbAccount $current, object $store, string $profileHash): bool {
+    $currentToken=trim((string)$current->token);
+    $accountsPath=(string)ACCOUNTSFILENAME;
+    $files=glob($accountsPath.'.bak.*')?:[];
+    usort($files,static fn($a,$b)=>(@filemtime($b)?:0)<=> (@filemtime($a)?:0));
+    $seen=[hash('sha256',$currentToken)=>true];
+    $tested=0;
+    foreach($files as $file){
+        if($tested>=50)break;
+        try{
+            $backupStore=AccountStoreFactory::create($file);
+            $old=$backupStore->getAccountByName((string)$current->name);
+            if(!$old instanceof FbAccount)continue;
+            $token=trim((string)$old->token);
+            if($token==='')continue;
+            $hash=hash('sha256',$token);
+            if(isset($seen[$hash]))continue;
+            $seen[$hash]=true;
+            $tested++;
+            $validation=smoke_validate_candidate($token);
+            $err=(array)($validation['result']['error']??[]);
+            smoke_log([
+                'phase'=>'historical_token',
+                'profile_hash'=>$profileHash,
+                'candidate_hash'=>substr($hash,0,12),
+                'ok'=>(bool)$validation['ok'],
+                'stage'=>$validation['stage'],
+                'http'=>(int)($validation['result']['http']??0),
+                'graph_type'=>(string)($err['type']??''),
+                'graph_code'=>(int)($err['code']??0),
+                'graph_subcode'=>(int)($err['error_subcode']??0),
+            ]);
+            if(!$validation['ok'])continue;
+
+            @copy($accountsPath,$accountsPath.'.bak.before-token-restore.'.gmdate('YmdHis'));
+            $cookieJson=json_encode(array_values((array)$current->cookies),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_THROW_ON_ERROR);
+            $restored=new FbAccount((string)$current->name,$token,$cookieJson,$current->dtsg,$current->proxy);
+            $store->addOrUpdateAccount($restored);
+            smoke_log([
+                'phase'=>'historical_restore',
+                'profile_hash'=>$profileHash,
+                'restored'=>true,
+                'candidate_hash'=>substr($hash,0,12),
+                'tested_candidates'=>$tested,
+            ]);
+            return true;
+        }catch(Throwable $e){
+            smoke_log([
+                'phase'=>'historical_candidate_error',
+                'profile_hash'=>$profileHash,
+                'error_class'=>get_class($e),
+            ]);
+        }
+    }
+    smoke_log(['phase'=>'historical_restore','profile_hash'=>$profileHash,'restored'=>false,'tested_candidates'=>$tested]);
+    return false;
+}
+
 function smoke_raw_graph(string $token, string $profileHash): void {
     $tests = [
         ['label'=>'v26_bearer','url'=>'https://graph.facebook.com/v26.0/me?fields=id%2Cname','bearer'=>true],
@@ -173,6 +267,14 @@ try {
             'cookie_count'=>count((array)$account->cookies),
         ]);
         smoke_raw_graph(trim((string)$account->token), $profileHash);
+        $currentValidation=smoke_validate_candidate(trim((string)$account->token));
+        if(!$currentValidation['ok']){
+            $restored=smoke_try_restore_history($account,$store,$profileHash);
+            if($restored){
+                $fresh=$store->getAccountByName($name);
+                if($fresh instanceof FbAccount)$account=$fresh;
+            }
+        }
         smoke_transport_matrix($name, $profileHash, $account);
         try {
             $service = MetaEndpoint::serviceForAccountName($name);
