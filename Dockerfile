@@ -19,6 +19,7 @@ COPY railway-campaign-budget-sharing-overlay.php /tmp/railway-campaign-budget-sh
 COPY railway-job-error-ui-overlay.php /tmp/railway-job-error-ui-overlay.php
 COPY railway-budget-guard-overlay.php /tmp/railway-budget-guard-overlay.php
 COPY railway-retry-current-payload-overlay.php /tmp/railway-retry-current-payload-overlay.php
+COPY railway-launch-multi-profile-overlay.php /tmp/railway-launch-multi-profile-overlay.php
 COPY railway-check-account-session-overlay.php /tmp/railway-check-account-session-overlay.php
 COPY railway-profile-session-guard-overlay.php /tmp/railway-profile-session-guard-overlay.php
 COPY railway-workspace-session-integrity-overlay.php /tmp/railway-workspace-session-integrity-overlay.php
@@ -54,6 +55,7 @@ RUN set -eux; \
     php /tmp/railway-worker-overlay.php; \
     php /tmp/railway-retry-overlay.php; \
     php /tmp/railway-retry-current-payload-overlay.php; \
+    php /tmp/railway-launch-multi-profile-overlay.php; \
     php /tmp/railway-targeting-autocomplete-overlay.php; \
     php /tmp/railway-selection-persistence-overlay.php; \
     php /tmp/railway-profile-error-fix-overlay.php; \
@@ -68,11 +70,6 @@ RUN set -eux; \
     php -l /var/www/html/bin/remask-worker.php; \
     php -l /var/www/html/ajax/metaWorkerStatus.php; \
     php -l /var/www/html/ajax/metaJobRetry.php; \
-    echo '--- REMASK MULTI PROFILE INSPECT BEGIN ---'; \
-    grep -n -B 40 -A 140 "Select profile\\|Facebook profile\\|selectedAccountIds\\|targetMode\\|collectAccountOverrides\\|account_overrides\\|targets_json\\|reviewTargets\\|state.profile\\|\\$('profile')" /var/www/html/launch.php /var/www/html/scripts/launch.js || true; \
-    sed -n '1720,2180p' /var/www/html/scripts/launch.js; \
-    sed -n '1,260p' /var/www/html/launch.php; \
-    echo '--- REMASK MULTI PROFILE INSPECT END ---'; \
     grep -q 'REMASK_SYNC_ERROR_CLASSIFIER_V1' /var/www/html/scripts/workspace.js; \
     grep -q 'Meta request timeout after' /var/www/html/scripts/workspace.js; \
     grep -Fq "\$('workspaceActions').disabled=n===0;" /var/www/html/scripts/workspace.js; \
@@ -108,7 +105,13 @@ RUN set -eux; \
     grep -q 'REMASK_DAILY_BUDGET_GUARD_V1' /var/www/html/scripts/launch.js; \
     grep -q 'REMASK_RETRY_WITH_CURRENT_FORM_V1' /var/www/html/scripts/launch.js; \
     grep -q 'REMASK_RETRY_CURRENT_PAYLOAD_V1' /var/www/html/ajax/metaJobRetry.php; \
-    grep -q 'retry-current-v93' /var/www/html/launch.php; \
+    grep -q 'REMASK_MULTI_PROFILE_PICKER_V1' /var/www/html/launch.php; \
+    grep -q 'REMASK_MULTI_PROFILE_SELECTION_V1' /var/www/html/scripts/launch.js; \
+    grep -q 'REMASK_MULTI_PROFILE_PREFLIGHT_V1' /var/www/html/scripts/launch.js; \
+    grep -q 'REMASK_RK_TABLE_EVENTS_V1' /var/www/html/scripts/launch.js; \
+    grep -q 'multi-profile-v94' /var/www/html/launch.php; \
+    grep -q 'selectedProfileNames' /var/www/html/scripts/launch.js; \
+    grep -q 'rkPickerRows' /var/www/html/launch.php; \
     grep -q 'REMASK_DIRECT_FUNDING_SNAPSHOT_V2' /var/www/html/ajax/metaHierarchy.php; \
     grep -q 'RemaskProxy::fromSemicolonString' /var/www/html/ajax/checkAccount.php; \
     ! test -f /var/www/html/ajax/metaSyncProbe.php; \
