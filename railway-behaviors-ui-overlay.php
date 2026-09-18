@@ -206,7 +206,7 @@ $php=preg_replace(
 if($lc!==1){fwrite(STDERR,"[behaviors-ui] launch script tag missing\n");exit(234);}
 
 $php=preg_replace(
-    '#<script\\s+src=["\\']scripts/targeting-autocomplete\\.js(?:\\?v=[^"\\']*)?["\\']></script>#i',
+    "#<script\\s+src=[\"']scripts/targeting-autocomplete\\.js(?:\\?v=[^\"']*)?[\"']></script>#i",
     '<script src="scripts/targeting-autocomplete.js?v=20260919-behaviors-v96"></script>',
     $php,1,$tc
 ) ?? $php;
