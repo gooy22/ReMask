@@ -41,7 +41,12 @@ function audit_method(string $file, string $method): array {
 }
 
 $service=$root.'/classes/MetaAdsService.php';
+$endpoint=$root.'/classes/MetaEndpoint.php';
+$hierarchy=$root.'/ajax/metaHierarchy.php';
 $out=[
+  'hierarchy_profile_snapshot'=>audit_method($hierarchy,'hierarchy_profile_snapshot'),
+  'cachedPreflight'=>audit_method($endpoint,'cachedPreflight'),
+  'cachedAsset'=>audit_method($endpoint,'cachedAsset'),
   'listPagedEdge'=>audit_method($service,'listPagedEdge'),
   'listAdAccounts'=>audit_method($service,'listAdAccounts'),
   'listBusinesses'=>audit_method($service,'listBusinesses'),
