@@ -201,7 +201,7 @@ $script = <<<'JS'
       setStatus(dialog,'Не удалось обновить Pages: '+e.message,true);
     });
   }
-  function enhance(){
+  function enhanceBmDialog(){
     var dialog=getDialog();
     if(!dialog||dialog.getAttribute('data-remask-page-helper')==='1')return;
     var select=primarySelect(dialog);
@@ -237,6 +237,56 @@ $script = <<<'JS'
     dialog.setAttribute('data-remask-page-helper','1');
   }
 
+  function actionNodes(root){
+    return [].slice.call(root.querySelectorAll('button,a,[role="menuitem"],li,.dropdown-item,.menu-item'));
+  }
+  function enhanceActionMenus(){
+    var roots=[].slice.call(document.querySelectorAll(
+      '[role="menu"],.dropdown-menu,.context-menu,.popover,.menu,[class*="dropdown-menu"],[class*="context-menu"]'
+    ));
+    roots.forEach(function(menu){
+      if(menu.querySelector('[data-remask-create-page-action="1"]'))return;
+      var text=String(menu.textContent||'');
+      if(!/Проверить статус/i.test(text))return;
+      if(!/(Добавить\s+(?:BM|Business Manager)|Business Manager)/i.test(text))return;
+
+      var nodes=actionNodes(menu);
+      var reference=nodes.find(function(el){
+        return /Проверить статус/i.test(String(el.textContent||'').trim());
+      }) || nodes.find(function(el){
+        return /(Добавить\s+(?:BM|Business Manager)|Business Manager)/i.test(String(el.textContent||'').trim());
+      });
+
+      var item;
+      if(reference){
+        item=reference.cloneNode(false);
+        item.removeAttribute('href');
+        item.removeAttribute('onclick');
+        item.removeAttribute('id');
+        item.removeAttribute('disabled');
+      }else{
+        item=document.createElement('button');
+        item.type='button';
+      }
+      item.setAttribute('data-remask-create-page-action','1');
+      item.textContent='Создать Facebook Page';
+      item.style.cursor='pointer';
+      item.addEventListener('click',function(e){
+        e.preventDefault();
+        e.stopPropagation();
+        window.open(createUrl,'_blank','noopener');
+      });
+
+      if(reference && reference.parentNode) reference.parentNode.insertBefore(item,reference.nextSibling);
+      else menu.appendChild(item);
+    });
+  }
+
+  function enhance(){
+    enhanceBmDialog();
+    enhanceActionMenus();
+  }
+
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',enhance);
   else enhance();
   new MutationObserver(enhance).observe(document.documentElement,{childList:true,subtree:true});
@@ -248,10 +298,10 @@ file_put_contents($scriptPath,$script);
 
 $workspace=file_get_contents($workspacePath);
 if($workspace===false)throw new RuntimeException('workspace.php not found');
-$tag='<script src="scripts/page-helper.js?v=20260918-page-helper-v1"></script>';
+$tag='<script src="scripts/page-helper.js?v=20260918-page-helper-v2"></script>';
 if(strpos($workspace,'scripts/page-helper.js')===false){
     if(stripos($workspace,'</body>')!==false)$workspace=str_ireplace('</body>',$tag."\n</body>",$workspace);
     else $workspace.="\n".$tag."\n";
 }
 file_put_contents($workspacePath,$workspace);
-fwrite(STDERR,"[page-helper] BM modal Page create/refresh helper installed\n");
+fwrite(STDERR,"[page-helper] BM modal + account action menu Page helper installed\n");
