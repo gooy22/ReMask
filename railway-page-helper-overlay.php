@@ -152,8 +152,11 @@ function rmx_page_helper_resolve_hints(array $hints): array {
 }
 
 try {
-    $action=trim((string)($_POST['action']??'list_pages'));
-    $profile=trim((string)($_POST['profile']??''));
+    $action=trim((string)($_POST['action']??$_GET['action']??'list_pages'));
+    if($action==='csrf'){
+        rmx_page_helper_out(['ok'=>true,'csrf'=>remask_csrf_token()]);
+    }
+    $profile=trim((string)($_POST['profile']??$_GET['profile']??''));
 
     if($action==='categories'){
         $matches=rmx_page_helper_resolve_hints([$profile]);
@@ -172,6 +175,7 @@ try {
             $seen[$key]=true;$out[]=$row;
         }
         usort($out,static fn($a,$b)=>strcmp((string)$a['name'],(string)$b['name']));
+        error_log('[page-helper] categories profile_hash='.substr(hash('sha256',(string)$account->name),0,12).' count='.count($out));
         rmx_page_helper_out(['ok'=>true,'categories'=>$out]);
     }
 
@@ -260,6 +264,19 @@ $script = <<<'JS'
       return data;
     });
   }
+  var csrfPromise=null;
+  function getCsrf(){
+    if(csrfPromise)return csrfPromise;
+    csrfPromise=parseResponse(fetch(endpoint+'?action=csrf',{
+      method:'GET',
+      credentials:'same-origin',
+      cache:'no-store'
+    })).then(function(data){
+      if(!data.csrf)throw new Error('ReMask CSRF token missing.');
+      return data.csrf;
+    }).catch(function(e){csrfPromise=null;throw e;});
+    return csrfPromise;
+  }
   function api(payload){
     var body={};
     payload=payload||{};
@@ -267,12 +284,18 @@ $script = <<<'JS'
       var v=payload[k];
       body[k]=(typeof v==='string')?v:JSON.stringify(v);
     });
-    return parseResponse(fetch(endpoint,{
-      method:'POST',
-      credentials:'same-origin',
-      headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8'},
-      body:new URLSearchParams(body)
-    }));
+    return getCsrf().then(function(csrf){
+      body.remask_csrf=csrf;
+      return parseResponse(fetch(endpoint,{
+        method:'POST',
+        credentials:'same-origin',
+        headers:{
+          'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8',
+          'X-REMASK-CSRF':csrf
+        },
+        body:new URLSearchParams(body)
+      }));
+    });
   }
   function getDialog(){
     var nodes=[].slice.call(document.querySelectorAll('[role="dialog"],.modal,.modal-content'));
@@ -504,7 +527,7 @@ fwrite(STDERR,"[page-helper] Add FP inserted directly into buildActionMenu\n");
 
 $workspace=file_get_contents($workspacePath);
 if($workspace===false)throw new RuntimeException('workspace.php not found');
-$tag='<script src="scripts/page-helper.js?v=20260918-page-helper-v7"></script>';
+$tag='<script src="scripts/page-helper.js?v=20260918-page-helper-v8"></script>';
 if(strpos($workspace,'scripts/page-helper.js')===false){
     if(stripos($workspace,'</body>')!==false)$workspace=str_ireplace('</body>',$tag."\n</body>",$workspace);
     else $workspace.="\n".$tag."\n";
