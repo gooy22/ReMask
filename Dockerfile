@@ -23,6 +23,7 @@ COPY railway-retry-overlay.php /tmp/railway-retry-overlay.php
 COPY railway-targeting-autocomplete-overlay.php /tmp/railway-targeting-autocomplete-overlay.php
 COPY railway-selection-persistence-overlay.php /tmp/railway-selection-persistence-overlay.php
 COPY railway-profile-error-fix-overlay.php /tmp/railway-profile-error-fix-overlay.php
+COPY railway-page-helper-overlay.php /tmp/railway-page-helper-overlay.php
 COPY docker-start.sh /tmp/docker-start.sh
 
 RUN set -eux; \
@@ -44,12 +45,14 @@ RUN set -eux; \
     php /tmp/railway-targeting-autocomplete-overlay.php; \
     php /tmp/railway-selection-persistence-overlay.php; \
     php /tmp/railway-profile-error-fix-overlay.php; \
+    php /tmp/railway-page-helper-overlay.php; \
     php -l /var/www/html/classes/RemaskProxy.php; \
     php -l /var/www/html/classes/MetaApiClient.php; \
     php -l /var/www/html/classes/MetaAdsService.php; \
     php -l /var/www/html/classes/MetaEndpoint.php; \
     php -l /var/www/html/ajax/checkAccount.php; \
     php -l /var/www/html/ajax/metaProfileManager.php; \
+    php -l /var/www/html/ajax/metaPageHelper.php; \
     php -l /var/www/html/ajax/metaHierarchy.php; \
     php -l /var/www/html/bin/remask-worker.php; \
     php -l /var/www/html/ajax/metaWorkerStatus.php; \
@@ -81,6 +84,9 @@ RUN set -eux; \
     test -f /var/www/html/scripts/selection-persistence.js; \
     grep -q 'targeting-autocomplete.js' /var/www/html/launch.php; \
     grep -q 'selection-persistence.js' /var/www/html/launch.php; \
+    test -f /var/www/html/scripts/page-helper.js; \
+    grep -q 'page-helper.js' /var/www/html/workspace.php; \
+    grep -q 'Обновить Pages' /var/www/html/scripts/page-helper.js; \
     ! grep -q 'hierarchy-autosync.js' /var/www/html/workspace.php; \
     mkdir -p /var/www/html/health /var/lib/remask /var/lib/remask/jobs /var/lib/remask/bundles /var/lib/remask/meta-cache /var/lib/remask/job-media; \
     if [ ! -f /var/www/html/health/index.php ]; then printf '%s\n' '<?php http_response_code(200); header("Content-Type: application/json"); echo json_encode(["ok"=>true,"service":"remask","rev"=>getenv("REMASK_DEPLOY_REV")]);' > /var/www/html/health/index.php; fi; \
@@ -92,7 +98,7 @@ RUN set -eux; \
     chown -R www-data:www-data /var/lib/remask /var/www/html; \
     chmod 700 /var/lib/remask; \
     chmod +x /var/www/html/docker-start.sh; \
-    rm -rf /tmp/remask-parts /tmp/railway-launch-overlay.php /tmp/railway-check-account-session-overlay.php /tmp/railway-profile-session-guard-overlay.php /tmp/railway-workspace-session-integrity-overlay.php /tmp/railway-meta-session-context-overlay.php /tmp/railway-workspace-sync-fix-overlay.php /tmp/railway-sync-smoke.php /tmp/railway-worker-overlay.php /tmp/railway-retry-overlay.php /tmp/railway-targeting-autocomplete-overlay.php /tmp/railway-selection-persistence-overlay.php /tmp/railway-profile-error-fix-overlay.php /tmp/remask-runtime.b64 /tmp/remask-runtime.archive /tmp/docker-start.sh
+    rm -rf /tmp/remask-parts /tmp/railway-launch-overlay.php /tmp/railway-check-account-session-overlay.php /tmp/railway-profile-session-guard-overlay.php /tmp/railway-workspace-session-integrity-overlay.php /tmp/railway-meta-session-context-overlay.php /tmp/railway-workspace-sync-fix-overlay.php /tmp/railway-sync-smoke.php /tmp/railway-worker-overlay.php /tmp/railway-retry-overlay.php /tmp/railway-targeting-autocomplete-overlay.php /tmp/railway-selection-persistence-overlay.php /tmp/railway-profile-error-fix-overlay.php /tmp/railway-page-helper-overlay.php /tmp/remask-runtime.b64 /tmp/remask-runtime.archive /tmp/docker-start.sh
 
 ENV REMASK_META_CACHE_TTL=1800 \
     META_GRAPH_API_VERSION=v26.0 \
