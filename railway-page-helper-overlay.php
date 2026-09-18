@@ -110,12 +110,8 @@ function rmx_page_helper_graph(FbAccount $account, string $path, array $params, 
     return $decoded;
 }
 function rmx_page_helper_call(FbAccount $account, string $path, array $params=[]): array {
-    try{
-        return rmx_page_helper_graph($account,$path,$params,$account->proxy!==null);
-    }catch(Throwable $first){
-        if($account->proxy===null||!str_starts_with($first->getMessage(),'TRANSPORT:'))throw $first;
-        return rmx_page_helper_graph($account,$path,$params,false);
-    }
+    // Preserve one network identity per FB profile: never bypass a configured proxy.
+    return rmx_page_helper_graph($account,$path,$params,$account->proxy!==null);
 }
 function rmx_page_helper_list_pages(FbAccount $account): array {
     $pages=[];
@@ -328,7 +324,7 @@ file_put_contents($scriptPath,$script);
 
 $workspace=file_get_contents($workspacePath);
 if($workspace===false)throw new RuntimeException('workspace.php not found');
-$tag='<script src="scripts/page-helper.js?v=20260918-page-helper-v10"></script>';
+$tag='<script src="scripts/page-helper.js?v=20260918-page-helper-v11"></script>';
 if(strpos($workspace,'scripts/page-helper.js')===false){
     if(stripos($workspace,'</body>')!==false)$workspace=str_ireplace('</body>',$tag."\n</body>",$workspace);
     else $workspace.="\n".$tag."\n";
