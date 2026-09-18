@@ -69,9 +69,11 @@ RUN set -eux; \
     grep -q 'existing->cookies' /var/www/html/ajax/metaHierarchy.php; \
     grep -q 'setSessionCookies' /var/www/html/classes/MetaApiClient.php; \
     grep -q 'setSessionCookies($account->getCurlCookies())' /var/www/html/classes/MetaEndpoint.php; \
-    grep -q 'CURLOPT_COOKIE' /var/www/html/ajax/checkAccount.php; \
     grep -q 'session_used' /var/www/html/ajax/checkAccount.php; \
-    grep -q 'rmx_check_graph_list_all' /var/www/html/ajax/checkAccount.php; \
+    grep -q 'new MetaApiClient' /var/www/html/ajax/checkAccount.php; \
+    grep -q "network_identity'=>'profile_bound'" /var/www/html/ajax/checkAccount.php; \
+    ! grep -q 'curl_init' /var/www/html/ajax/checkAccount.php; \
+    ! grep -q 'graph.facebook.com' /var/www/html/ajax/checkAccount.php; \
     grep -q 'direct_ad_accounts_with_optional_business_enrichment' /var/www/html/ajax/metaHierarchy.php; \
     grep -Fq "p.proxy_configured && ps!==''&&ps!=='LIVE'" /var/www/html/scripts/workspace.js; \
     grep -q 'REMASK_BM_OWNED_CLIENT_V2' /var/www/html/classes/MetaAdsService.php; \
