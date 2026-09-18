@@ -15,6 +15,35 @@ function smoke_kind(Throwable $e): string {
     if (preg_match('/ads_management|ads_read|business_management|permission|not authorized|\\b(10|200)\\b/', $msg)) return 'PERMISSION';
     return 'META_API';
 }
+function smoke_safe_message(Throwable $e): string {
+    $msg = $e->getMessage();
+    $msg = preg_replace('/access_token=[^&\\s]+/i', 'access_token=[redacted]', $msg) ?? $msg;
+    $msg = preg_replace('/\\bEAA[A-Za-z0-9_-]{12,}\\b/', '[redacted-token]', $msg) ?? $msg;
+    $msg = preg_replace('/\\b\\d{12,}\\b/', '[redacted-id]', $msg) ?? $msg;
+    return mb_substr($msg, 0, 320);
+}
+function smoke_stage(string $profileHash, string $stage, callable $fn): array {
+    try {
+        $value = $fn();
+        $count = null;
+        if (is_array($value) && is_array($value['data'] ?? null)) $count = count($value['data']);
+        smoke_log(['phase'=>'stage','profile_hash'=>$profileHash,'stage'=>$stage,'ok'=>true,'count'=>$count]);
+        return ['ok'=>true,'value'=>$value];
+    } catch (Throwable $e) {
+        smoke_log([
+            'phase'=>'stage',
+            'profile_hash'=>$profileHash,
+            'stage'=>$stage,
+            'ok'=>false,
+            'error_kind'=>smoke_kind($e),
+            'error_class'=>get_class($e),
+            'error_code'=>$e->getCode(),
+            'message'=>smoke_safe_message($e),
+        ]);
+        return ['ok'=>false,'error'=>$e];
+    }
+}
+
 function smoke_log(array $data): void {
     fwrite(STDOUT, '[sync-smoke] ' . json_encode($data, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . PHP_EOL);
 }
@@ -32,6 +61,13 @@ try {
         $tested++;
         $profileHash = substr(hash('sha256',$name),0,12);
         try {
+            $service = MetaEndpoint::serviceForAccountName($name);
+            $identityStage = smoke_stage($profileHash, 'identity', static fn() => $service->getIdentity());
+            $permissionsStage = smoke_stage($profileHash, 'permissions', static fn() => $service->getPermissions());
+            $accountsStage = smoke_stage($profileHash, 'ad_accounts', static fn() => $service->listAdAccounts());
+            if (!$identityStage['ok'] || !$permissionsStage['ok'] || !$accountsStage['ok']) {
+                throw ($identityStage['error'] ?? $permissionsStage['error'] ?? $accountsStage['error']);
+            }
             $preflight = MetaEndpoint::cachedPreflight($name, true);
             $direct = is_array($preflight['ad_accounts']['data'] ?? null) ? $preflight['ad_accounts']['data'] : [];
             $businessRows = [];
@@ -86,6 +122,8 @@ try {
                 'ok'=>false,
                 'error_kind'=>smoke_kind($e),
                 'error_class'=>get_class($e),
+                'error_code'=>$e->getCode(),
+                'message'=>smoke_safe_message($e),
             ]);
         }
     }
