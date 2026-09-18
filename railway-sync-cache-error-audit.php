@@ -61,4 +61,4 @@ $out=[
     'workspaceHierarchyCalls'=>rmx_contexts($workspace,'metaHierarchy.php',1100,20),
     'hierarchyCatchTail'=>substr($hierarchy,max(0,strlen($hierarchy)-5000)),
 ];
-fwrite(STDERR,'[sync-cache-error-audit] '.json_encode($out,JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE)."\n");
+fwrite(STDERR,'[sync-cache-error-audit] '.json_encode($out,JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE|JSON_INVALID_UTF8_SUBSTITUTE)."\n");
