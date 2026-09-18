@@ -46,6 +46,7 @@ RUN set -eux; \
     php /tmp/railway-selection-persistence-overlay.php; \
     php /tmp/railway-profile-error-fix-overlay.php; \
     php /tmp/railway-page-helper-overlay.php; \
+    php -r '$s=file_get_contents("/var/www/html/scripts/workspace.js"); $p=strpos($s,"Добавить BM"); if($p===false){fwrite(STDERR,"[menu-source] Add BM marker missing\\n");}else{fwrite(STDERR,"[menu-source] ".substr($s,max(0,$p-2200),4400)."\\n");}'; \
     php -l /var/www/html/classes/RemaskProxy.php; \
     php -l /var/www/html/classes/MetaApiClient.php; \
     php -l /var/www/html/classes/MetaAdsService.php; \
