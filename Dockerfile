@@ -29,6 +29,7 @@ COPY railway-sync-smoke.php /tmp/railway-sync-smoke.php
 COPY railway-worker-overlay.php /tmp/railway-worker-overlay.php
 COPY railway-retry-overlay.php /tmp/railway-retry-overlay.php
 COPY railway-targeting-autocomplete-overlay.php /tmp/railway-targeting-autocomplete-overlay.php
+COPY railway-live-targeting-overlay.php /tmp/railway-live-targeting-overlay.php
 COPY railway-selection-persistence-overlay.php /tmp/railway-selection-persistence-overlay.php
 COPY railway-profile-error-fix-overlay.php /tmp/railway-profile-error-fix-overlay.php
 COPY docker-start.sh /tmp/docker-start.sh
@@ -57,6 +58,7 @@ RUN set -eux; \
     php /tmp/railway-retry-current-payload-overlay.php; \
     php /tmp/railway-launch-multi-profile-overlay.php; \
     php /tmp/railway-targeting-autocomplete-overlay.php; \
+    php /tmp/railway-live-targeting-overlay.php; \
     php /tmp/railway-selection-persistence-overlay.php; \
     php /tmp/railway-profile-error-fix-overlay.php; \
     php -r '$allowedRaw=["/var/www/html/classes/MetaApiClient.php"=>true,"/var/www/html/classes/FbRequests.php"=>true,"/var/www/html/classes/ProxyHealthService.php"=>true]; $allowedLegacy=["/var/www/html/ajax/payUnsettled.php"=>true,"/var/www/html/ajax/policyAppeal.php"=>true,"/var/www/html/ajax/disapproveAppeal.php"=>true]; $violations=[]; foreach(["/var/www/html/ajax","/var/www/html/classes","/var/www/html/bin"] as $root){$it=new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root,FilesystemIterator::SKIP_DOTS)); foreach($it as $fi){if(!$fi->isFile()||$fi->getExtension()!=="php")continue;$path=$fi->getPathname();$s=file_get_contents($path);if((str_contains($s,"graph.facebook.com")||str_contains($s,"curl_init("))&&!isset($allowedRaw[$path]))$violations[]="raw-meta-transport:".$path;if($fi->getFilename()!=="FbRequests.php"&&preg_match("/new\\s+FbRequests\\s*\\(/",$s)&&!isset($allowedLegacy[$path]))$violations[]="legacy-fbrequests-ref:".$path;}} if($violations){fwrite(STDERR,"Meta transport invariant failed: ".implode(", ",$violations)."\\n");exit(91);} fwrite(STDERR,"[transport-invariant] canonical Graph transport enforced; legacy browser transport limited to payment/appeal endpoints\\n");'; \
@@ -121,6 +123,11 @@ RUN set -eux; \
     test -f /var/www/html/scripts/selection-persistence.js; \
     ! grep -q 'MutationObserver' /var/www/html/scripts/selection-persistence.js; \
     grep -q 'targeting-autocomplete.js' /var/www/html/launch.php; \
+    grep -q 'REMASK_LIVE_GEO_INTEREST_V1' /var/www/html/scripts/launch.js; \
+    grep -q 'REMASK_SKIP_NATIVE_LIVE_TARGETING_V1' /var/www/html/scripts/targeting-autocomplete.js; \
+    grep -q 'live-targeting-v95' /var/www/html/launch.php; \
+    grep -q "installLiveTargetingInput('geoQuery', 'locations')" /var/www/html/scripts/launch.js; \
+    grep -q "installLiveTargetingInput('interestQuery', 'interests')" /var/www/html/scripts/launch.js; \
     grep -q 'jobActionSelect' /var/www/html/launch.php; \
     grep -q 'REMASK_AUTO_OPEN_RECENT_JOB_V1' /var/www/html/launch.php; \
     grep -q 'REMASK_JOB_ACTION_MENU_V1' /var/www/html/scripts/launch.js; \
