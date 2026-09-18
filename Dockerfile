@@ -92,10 +92,10 @@ RUN set -eux; \
     ! test -f /var/www/html/bin/remask-sync-smoke.php; \
     test -f /var/www/html/scripts/targeting-autocomplete.js; \
     test -f /var/www/html/scripts/selection-persistence.js; \
+    ! grep -q 'MutationObserver' /var/www/html/scripts/selection-persistence.js; \
     grep -q 'targeting-autocomplete.js' /var/www/html/launch.php; \
-    grep -q 'selection-persistence.js' /var/www/html/launch.php; \
-    ! grep -q 'selection-persistence.js' /var/www/html/accounts.php; \
-    grep -q 'accounts.js?v=20260918-accounts-v68' /var/www/html/accounts.php; \
+    for f in /var/www/html/index.php /var/www/html/workspace.php /var/www/html/launch.php /var/www/html/campaigns.php /var/www/html/adsets.php /var/www/html/accounts.php; do [ ! -f "$f" ] || ! grep -q 'selection-persistence.js' "$f"; done; \
+    grep -q 'accounts.js?v=20260918-accounts-v69' /var/www/html/accounts.php; \
     grep -q "'network_identity' => 'profile_bound'" /var/www/html/classes/MetaEndpoint.php; \
     grep -q "'direct_fallback' => false" /var/www/html/classes/MetaEndpoint.php; \
     ! grep -q 'data-remask-fp-action="1"' /var/www/html/scripts/workspace.js; \
