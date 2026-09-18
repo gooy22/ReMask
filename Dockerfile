@@ -94,6 +94,8 @@ RUN set -eux; \
     test -f /var/www/html/scripts/selection-persistence.js; \
     grep -q 'targeting-autocomplete.js' /var/www/html/launch.php; \
     grep -q 'selection-persistence.js' /var/www/html/launch.php; \
+    ! grep -q 'selection-persistence.js' /var/www/html/accounts.php; \
+    grep -q 'accounts.js?v=20260918-accounts-v68' /var/www/html/accounts.php; \
     grep -q "'network_identity' => 'profile_bound'" /var/www/html/classes/MetaEndpoint.php; \
     grep -q "'direct_fallback' => false" /var/www/html/classes/MetaEndpoint.php; \
     ! grep -q 'data-remask-fp-action="1"' /var/www/html/scripts/workspace.js; \
