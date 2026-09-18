@@ -42,6 +42,7 @@ function audit_method(string $file, string $method): array {
 
 $service=$root.'/classes/MetaAdsService.php';
 $out=[
+  'listPagedEdge'=>audit_method($service,'listPagedEdge'),
   'listAdAccounts'=>audit_method($service,'listAdAccounts'),
   'listBusinesses'=>audit_method($service,'listBusinesses'),
   'listBusinessAdAccounts'=>audit_method($service,'listBusinessAdAccounts'),
