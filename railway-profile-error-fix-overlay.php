@@ -106,9 +106,12 @@ if ($workspacePage === false) {
     fwrite(STDERR, "[profile-error-fix] workspace.php missing\n");
     exit(77);
 }
+$workspaceScriptPattern = <<<'REGEX'
+#scripts/workspace\.js(?:\?[^"']*)?#
+REGEX;
 $workspacePage = preg_replace(
-    '#scripts/workspace\\.js(?:\\?[^"\\']*)?#',
-    'scripts/workspace.js?v=20260918-buttons-fix',
+    $workspaceScriptPattern,
+    'scripts/workspace.js?v=20260918-buttons-fix-v28',
     $workspacePage,
     1,
     $workspaceScriptTagCount
