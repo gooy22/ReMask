@@ -108,6 +108,34 @@ function rmx_check_graph_get(string $path, array $params, string $token, ?Remask
     return $decoded;
 }
 
+function rmx_check_graph_list_all(string $path, array $params, string $token, ?RemaskProxy $proxy, string $cookieHeader): array
+{
+    $items = [];
+    $after = '';
+    $seen = [];
+    do {
+        $pageParams = $params;
+        $pageParams['limit'] = 500;
+        if ($after !== '') $pageParams['after'] = $after;
+
+        $page = rmx_check_graph_get($path, $pageParams, $token, $proxy, $cookieHeader);
+        $data = is_array($page['data'] ?? null) ? $page['data'] : [];
+        foreach ($data as $item) {
+            if (is_array($item)) $items[] = $item;
+        }
+
+        $next = (string)($page['paging']['cursors']['after'] ?? '');
+        $hasNext = !empty($page['paging']['next'])
+            && $next !== ''
+            && $data !== []
+            && !isset($seen[$next]);
+        if ($hasNext) $seen[$next] = true;
+        $after = $hasNext ? $next : '';
+    } while ($after !== '');
+
+    return ['data' => $items];
+}
+
 try {
     $token = trim((string)($_POST['token'] ?? $_POST['access_token'] ?? ''));
     if ($token === '') throw new InvalidArgumentException('Access token is required.');
@@ -134,7 +162,7 @@ try {
         }
     }
     if (!$adsManagementGranted) throw new RuntimeException('ads_management permission is not granted for this token.');
-    $adAccounts = rmx_check_graph_get('me/adaccounts', ['fields'=>'id,name,account_status,currency,disable_reason','limit'=>50], $token, $proxy, $cookieHeader);
+    $adAccounts = rmx_check_graph_list_all('me/adaccounts', ['fields'=>'id,name,account_status,currency,disable_reason'], $token, $proxy, $cookieHeader);
 
     ResponseFormatter::Respond(['res'=>json_encode([
         'ok'=>true,
