@@ -15,6 +15,7 @@ COPY railway-launch-overlay.php /tmp/railway-launch-overlay.php
 COPY railway-launch-job-ui-overlay.php /tmp/railway-launch-job-ui-overlay.php
 COPY railway-launch-flow-overlay.php /tmp/railway-launch-flow-overlay.php
 COPY railway-media-persistence-overlay.php /tmp/railway-media-persistence-overlay.php
+COPY railway-campaign-budget-sharing-overlay.php /tmp/railway-campaign-budget-sharing-overlay.php
 COPY railway-check-account-session-overlay.php /tmp/railway-check-account-session-overlay.php
 COPY railway-profile-session-guard-overlay.php /tmp/railway-profile-session-guard-overlay.php
 COPY railway-workspace-session-integrity-overlay.php /tmp/railway-workspace-session-integrity-overlay.php
@@ -54,18 +55,6 @@ RUN set -eux; \
     php -l /var/www/html/classes/MetaApiClient.php; \
     php -l /var/www/html/classes/MetaAdsService.php; \
     php -l /var/www/html/classes/MetaEndpoint.php; \
-    grep -n -B 20 -A 80 'createCampaign' /var/www/html/classes/MetaAdsService.php /var/www/html/classes/MetaJobExecutor.php || true; \
-    grep -n -B 30 -A 120 'function post' /var/www/html/classes/MetaApiClient.php || true; \
-    sed -n '203,300p' /var/www/html/classes/MetaApiClient.php || true; \
-    grep -n -B 20 -A 100 'prepareParams' /var/www/html/classes/MetaApiClient.php || true; \
-    grep -Rni -B 25 -A 140 'class MetaApiException\|class MetaLaunchException\|responsePayload\|error_subcode\|fbtrace_id' /var/www/html/classes /var/www/html/ajax || true; \
-    grep -n -B 40 -A 180 'function process' /var/www/html/classes/MetaJobExecutor.php || true; \
-    grep -n -B 50 -A 240 'function processNext' /var/www/html/classes/MetaJobStore.php || true; \
-    sed -n '1,150p' /var/www/html/classes/MetaJobStore.php || true; \
-    grep -n -B 30 -A 180 'meta_error' /var/www/html/classes/MetaJobStore.php /var/www/html/ajax/metaJob*.php /var/www/html/scripts/launch.js || true; \
-    grep -n -B 40 -A 220 'function publicJob' /var/www/html/classes/MetaJobStore.php || true; \
-    grep -n -B 40 -A 220 'function renderJob' /var/www/html/scripts/launch.js || true; \
-    grep -n -B 30 -A 140 'special_ad_categories' /var/www/html/classes/MetaLaunchValidator.php /var/www/html/classes/MetaDryRunPlanner.php /var/www/html/scripts/launch.js || true; \
     php -l /var/www/html/ajax/checkAccount.php; \
     php -l /var/www/html/ajax/metaProfileManager.php; \
     php -l /var/www/html/ajax/metaHierarchy.php; \
@@ -102,6 +91,7 @@ RUN set -eux; \
     grep -Fq "p.proxy_configured && ps!==''&&ps!=='LIVE'" /var/www/html/scripts/workspace.js; \
     grep -q 'REMASK_BM_OWNED_CLIENT_V2' /var/www/html/classes/MetaAdsService.php; \
     grep -q 'REMASK_DIRECT_RK_FUNDING_V2' /var/www/html/classes/MetaAdsService.php; \
+    grep -q 'is_adset_budget_sharing_enabled' /var/www/html/classes/MetaAdsService.php; \
     grep -q 'REMASK_DIRECT_FUNDING_SNAPSHOT_V2' /var/www/html/ajax/metaHierarchy.php; \
     grep -q 'RemaskProxy::fromSemicolonString' /var/www/html/ajax/checkAccount.php; \
     ! test -f /var/www/html/ajax/metaSyncProbe.php; \
