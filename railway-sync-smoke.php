@@ -44,6 +44,62 @@ function smoke_stage(string $profileHash, string $stage, callable $fn): array {
     }
 }
 
+function smoke_service_variant(string $name, bool $useProxy, bool $useSession): MetaAdsService {
+    $base = MetaEndpoint::serviceForAccountName($name);
+    $serviceRef = new ReflectionObject($base);
+    $clientProp = $serviceRef->getProperty('client');
+    $clientProp->setAccessible(true);
+    $client = clone $clientProp->getValue($base);
+    if (!$useSession && method_exists($client, 'setSessionCookies')) {
+        $client->setSessionCookies('');
+    }
+    if (!$useProxy) {
+        $clientRef = new ReflectionObject($client);
+        $proxyProp = $clientRef->getProperty('proxy');
+        $proxyProp->setAccessible(true);
+        $proxyProp->setValue($client, null);
+    }
+    return new MetaAdsService($client);
+}
+function smoke_transport_matrix(string $name, string $profileHash, FbAccount $account): void {
+    $variants = [
+        'saved_context' => [true, true],
+        'no_session' => [true, false],
+        'no_proxy' => [false, true],
+        'token_only' => [false, false],
+    ];
+    foreach ($variants as $label => [$useProxy,$useSession]) {
+        if ($label === 'no_session' && !$account->isLegacyReady()) continue;
+        if ($label === 'no_proxy' && $account->proxy === null) continue;
+        try {
+            $service = smoke_service_variant($name, $useProxy, $useSession);
+            $identity = $service->getIdentity();
+            smoke_log([
+                'phase'=>'transport',
+                'profile_hash'=>$profileHash,
+                'variant'=>$label,
+                'ok'=>true,
+                'proxy_enabled'=>$useProxy && $account->proxy !== null,
+                'session_enabled'=>$useSession && $account->isLegacyReady(),
+                'identity_present'=>trim((string)($identity['id'] ?? '')) !== '',
+            ]);
+        } catch (Throwable $e) {
+            smoke_log([
+                'phase'=>'transport',
+                'profile_hash'=>$profileHash,
+                'variant'=>$label,
+                'ok'=>false,
+                'proxy_enabled'=>$useProxy && $account->proxy !== null,
+                'session_enabled'=>$useSession && $account->isLegacyReady(),
+                'error_kind'=>smoke_kind($e),
+                'error_class'=>get_class($e),
+                'error_code'=>$e->getCode(),
+                'message'=>smoke_safe_message($e),
+            ]);
+        }
+    }
+}
+
 function smoke_log(array $data): void {
     fwrite(STDOUT, '[sync-smoke] ' . json_encode($data, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . PHP_EOL);
 }
@@ -60,6 +116,7 @@ try {
         if ($name === '') continue;
         $tested++;
         $profileHash = substr(hash('sha256',$name),0,12);
+        smoke_transport_matrix($name, $profileHash, $account);
         try {
             $service = MetaEndpoint::serviceForAccountName($name);
             $identityStage = smoke_stage($profileHash, 'identity', static fn() => $service->getIdentity());
