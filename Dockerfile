@@ -55,6 +55,8 @@ RUN set -eux; \
     php -l /var/www/html/classes/MetaAdsService.php; \
     php -l /var/www/html/classes/MetaEndpoint.php; \
     grep -n -B 20 -A 80 'createCampaign' /var/www/html/classes/MetaAdsService.php /var/www/html/classes/MetaJobExecutor.php || true; \
+    grep -n -B 30 -A 120 'function post' /var/www/html/classes/MetaApiClient.php || true; \
+    grep -n -B 30 -A 140 'special_ad_categories' /var/www/html/classes/MetaLaunchValidator.php /var/www/html/classes/MetaDryRunPlanner.php /var/www/html/scripts/launch.js || true; \
     php -l /var/www/html/ajax/checkAccount.php; \
     php -l /var/www/html/ajax/metaProfileManager.php; \
     php -l /var/www/html/ajax/metaHierarchy.php; \
