@@ -61,6 +61,54 @@ function smoke_service_variant(string $name, bool $useProxy, bool $useSession): 
     }
     return new MetaAdsService($client);
 }
+function smoke_raw_graph(string $token, string $profileHash): void {
+    $tests = [
+        ['label'=>'v26_bearer','url'=>'https://graph.facebook.com/v26.0/me?fields=id%2Cname','bearer'=>true],
+        ['label'=>'v26_query','url'=>'https://graph.facebook.com/v26.0/me?fields=id%2Cname','bearer'=>false],
+        ['label'=>'v25_bearer','url'=>'https://graph.facebook.com/v25.0/me?fields=id%2Cname','bearer'=>true],
+        ['label'=>'unversioned_bearer','url'=>'https://graph.facebook.com/me?fields=id%2Cname','bearer'=>true],
+    ];
+    foreach ($tests as $test) {
+        $url = $test['url'];
+        $headers = ['Accept: application/json'];
+        if ($test['bearer']) {
+            $headers[] = 'Authorization: Bearer ' . $token;
+        } else {
+            $url .= '&access_token=' . rawurlencode($token);
+        }
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER=>true,
+            CURLOPT_FOLLOWLOCATION=>false,
+            CURLOPT_CONNECTTIMEOUT=>12,
+            CURLOPT_TIMEOUT=>35,
+            CURLOPT_SSL_VERIFYPEER=>true,
+            CURLOPT_SSL_VERIFYHOST=>2,
+            CURLOPT_HTTPHEADER=>$headers,
+            CURLOPT_USERAGENT=>'ReMask-SyncSmoke/1.0',
+        ]);
+        $raw = curl_exec($ch);
+        $errno = curl_errno($ch);
+        $http = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+        curl_close($ch);
+        $decoded = is_string($raw) ? json_decode($raw,true) : null;
+        $error = is_array($decoded['error'] ?? null) ? $decoded['error'] : [];
+        $ok = is_array($decoded) && $error === [] && $http >= 200 && $http < 300;
+        smoke_log([
+            'phase'=>'raw_graph',
+            'profile_hash'=>$profileHash,
+            'variant'=>$test['label'],
+            'ok'=>$ok,
+            'http'=>$http,
+            'curl_errno'=>$errno,
+            'graph_type'=>(string)($error['type'] ?? ''),
+            'graph_code'=>(int)($error['code'] ?? 0),
+            'graph_subcode'=>(int)($error['error_subcode'] ?? 0),
+            'message'=>isset($error['message']) ? mb_substr((string)$error['message'],0,240) : '',
+        ]);
+    }
+}
+
 function smoke_transport_matrix(string $name, string $profileHash, FbAccount $account): void {
     $variants = [
         'saved_context' => [true, true],
@@ -116,6 +164,15 @@ try {
         if ($name === '') continue;
         $tested++;
         $profileHash = substr(hash('sha256',$name),0,12);
+        smoke_log([
+            'phase'=>'credential_shape',
+            'profile_hash'=>$profileHash,
+            'token_length'=>strlen(trim((string)$account->token)),
+            'proxy_configured'=>$account->proxy !== null,
+            'legacy_ready'=>$account->isLegacyReady(),
+            'cookie_count'=>count((array)$account->cookies),
+        ]);
+        smoke_raw_graph(trim((string)$account->token), $profileHash);
         smoke_transport_matrix($name, $profileHash, $account);
         try {
             $service = MetaEndpoint::serviceForAccountName($name);
