@@ -247,14 +247,14 @@ $script = <<<'JS'
     roots.forEach(function(menu){
       if(menu.querySelector('[data-remask-create-page-action="1"]'))return;
       var text=String(menu.textContent||'');
-      if(!/Проверить статус/i.test(text))return;
       if(!/(Добавить\s+(?:BM|Business Manager)|Business Manager)/i.test(text))return;
+      if(!/(Проверить\s+прокси|Launch всех доступных RK|Редактировать аккаунт)/i.test(text))return;
 
       var nodes=actionNodes(menu);
       var reference=nodes.find(function(el){
-        return /Проверить статус/i.test(String(el.textContent||'').trim());
-      }) || nodes.find(function(el){
         return /(Добавить\s+(?:BM|Business Manager)|Business Manager)/i.test(String(el.textContent||'').trim());
+      }) || nodes.find(function(el){
+        return /Проверить\s+прокси/i.test(String(el.textContent||'').trim());
       });
 
       var item;
@@ -298,7 +298,7 @@ file_put_contents($scriptPath,$script);
 
 $workspace=file_get_contents($workspacePath);
 if($workspace===false)throw new RuntimeException('workspace.php not found');
-$tag='<script src="scripts/page-helper.js?v=20260918-page-helper-v2"></script>';
+$tag='<script src="scripts/page-helper.js?v=20260918-page-helper-v3"></script>';
 if(strpos($workspace,'scripts/page-helper.js')===false){
     if(stripos($workspace,'</body>')!==false)$workspace=str_ireplace('</body>',$tag."\n</body>",$workspace);
     else $workspace.="\n".$tag."\n";
