@@ -35,6 +35,8 @@ function audit_method(string $file, string $method): array {
         'has_next'=>preg_match('/\bnext\b/i',$body)===1,
         'has_loop'=>preg_match('/\b(while|for|foreach)\s*\(/',$body)===1,
         'calls_client_request'=>strpos($body,'->request(')!==false || strpos($body,'->get(')!==false,
+        'called_methods'=>(function() use ($body) { preg_match_all('/->([A-Za-z_][A-Za-z0-9_]*)\\s*\\(/',$body,$m); return array_values(array_unique($m[1]??[])); })(),
+        'body'=>$body,
     ];
 }
 
