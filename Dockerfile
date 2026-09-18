@@ -32,6 +32,7 @@ COPY railway-targeting-autocomplete-overlay.php /tmp/railway-targeting-autocompl
 COPY railway-live-targeting-overlay.php /tmp/railway-live-targeting-overlay.php
 COPY railway-behaviors-backend-overlay.php /tmp/railway-behaviors-backend-overlay.php
 COPY railway-behaviors-ui-overlay.php /tmp/railway-behaviors-ui-overlay.php
+COPY railway-targeting-russian-overlay.php /tmp/railway-targeting-russian-overlay.php
 COPY railway-selection-persistence-overlay.php /tmp/railway-selection-persistence-overlay.php
 COPY railway-profile-error-fix-overlay.php /tmp/railway-profile-error-fix-overlay.php
 COPY docker-start.sh /tmp/docker-start.sh
@@ -65,6 +66,8 @@ RUN set -eux; \
     php -l /tmp/railway-behaviors-ui-overlay.php; \
     php /tmp/railway-behaviors-backend-overlay.php; \
     php /tmp/railway-behaviors-ui-overlay.php; \
+    php -l /tmp/railway-targeting-russian-overlay.php; \
+    php /tmp/railway-targeting-russian-overlay.php; \
     php /tmp/railway-selection-persistence-overlay.php; \
     php /tmp/railway-profile-error-fix-overlay.php; \
     php -r '$allowedRaw=["/var/www/html/classes/MetaApiClient.php"=>true,"/var/www/html/classes/FbRequests.php"=>true,"/var/www/html/classes/ProxyHealthService.php"=>true]; $allowedLegacy=["/var/www/html/ajax/payUnsettled.php"=>true,"/var/www/html/ajax/policyAppeal.php"=>true,"/var/www/html/ajax/disapproveAppeal.php"=>true]; $violations=[]; foreach(["/var/www/html/ajax","/var/www/html/classes","/var/www/html/bin"] as $root){$it=new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root,FilesystemIterator::SKIP_DOTS)); foreach($it as $fi){if(!$fi->isFile()||$fi->getExtension()!=="php")continue;$path=$fi->getPathname();$s=file_get_contents($path);if((str_contains($s,"graph.facebook.com")||str_contains($s,"curl_init("))&&!isset($allowedRaw[$path]))$violations[]="raw-meta-transport:".$path;if($fi->getFilename()!=="FbRequests.php"&&preg_match("/new\\s+FbRequests\\s*\\(/",$s)&&!isset($allowedLegacy[$path]))$violations[]="legacy-fbrequests-ref:".$path;}} if($violations){fwrite(STDERR,"Meta transport invariant failed: ".implode(", ",$violations)."\\n");exit(91);} fwrite(STDERR,"[transport-invariant] canonical Graph transport enforced; legacy browser transport limited to payment/appeal endpoints\\n");'; \
@@ -138,6 +141,8 @@ RUN set -eux; \
     grep -q 'REMASK_BEHAVIOR_UI_V1' /var/www/html/scripts/launch.js; \
     grep -q "installLiveTargetingInput('behaviorQuery', 'behaviors')" /var/www/html/scripts/launch.js; \
     grep -q 'detailedTargeting.behaviors' /var/www/html/scripts/launch.js; \
+    grep -q 'REMASK_TARGETING_RU_LOCALE_V1' /var/www/html/classes/MetaAdsService.php; \
+    test "$(grep -c "'locale' => 'ru_RU'" /var/www/html/classes/MetaAdsService.php)" -ge 3; \
     grep -q 'jobActionSelect' /var/www/html/launch.php; \
     grep -q 'REMASK_AUTO_OPEN_RECENT_JOB_V1' /var/www/html/launch.php; \
     grep -q 'REMASK_JOB_ACTION_MENU_V1' /var/www/html/scripts/launch.js; \
