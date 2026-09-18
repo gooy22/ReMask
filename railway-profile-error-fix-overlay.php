@@ -15,9 +15,7 @@ if ($workspace === false) {
 }
 
 
-$oldApiJson = <<<'JS'
-async function apiJson(url, options={}) { const r=await fetch(url,options); const t=await r.text(); let j; try{j=JSON.parse(t)}catch{throw new Error(\`Invalid JSON (\${r.status}): \${t}\`)} if(!r.ok||j.ok===false){const e=j?.error??j; throw new Error(e?.message||\`HTTP \${r.status}\`)} return j.data; }
-JS;
+
 $newApiJson = <<<'JS'
 async function apiJson(url, options={}){
   const r=await fetch(url,options);
@@ -47,14 +45,13 @@ async function apiJson(url, options={}){
   return j.data;
 }
 JS;
-if (strpos($workspace, $oldApiJson) === false) {
-    fwrite(STDERR, "[profile-error-fix] apiJson marker missing\n");
+
+$apiPattern = '/async function apiJson\\(url, options=\\{\\}\\)\\s*\\{.*?\\}\\s*const sleep\\s*=\\s*\\(ms\\)\\s*=>\\s*new Promise\\(r=>setTimeout\\(r,ms\\)\\);/s';
+$apiReplacement = $newApiJson . "\nconst sleep = (ms) => new Promise(r=>setTimeout(r,ms));";
+$workspace = preg_replace($apiPattern, $apiReplacement, $workspace, 1, $apiJsonPatchCount);
+if ($workspace === null || $apiJsonPatchCount !== 1) {
+    fwrite(STDERR, "[profile-error-fix] apiJson regex patch failed: " . (string)$apiJsonPatchCount . "\n");
     exit(79);
-}
-$workspace = str_replace($oldApiJson, $newApiJson, $workspace, $apiJsonPatchCount);
-if ($apiJsonPatchCount !== 1) {
-    fwrite(STDERR, "[profile-error-fix] apiJson patch count: " . (string)$apiJsonPatchCount . "\n");
-    exit(80);
 }
 
 $helper = <<<'JS'
