@@ -61,6 +61,8 @@ RUN set -eux; \
     php /tmp/railway-launch-multi-profile-overlay.php; \
     php /tmp/railway-targeting-autocomplete-overlay.php; \
     php /tmp/railway-live-targeting-overlay.php; \
+    php -l /tmp/railway-behaviors-backend-overlay.php; \
+    php -l /tmp/railway-behaviors-ui-overlay.php; \
     php /tmp/railway-behaviors-backend-overlay.php; \
     php /tmp/railway-behaviors-ui-overlay.php; \
     php /tmp/railway-selection-persistence-overlay.php; \
