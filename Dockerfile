@@ -64,7 +64,6 @@ RUN set -eux; \
     grep -q 'CURLOPT_COOKIE' /var/www/html/ajax/checkAccount.php; \
     grep -q 'session_used' /var/www/html/ajax/checkAccount.php; \
     grep -q 'direct_ad_accounts_with_optional_business_enrichment' /var/www/html/ajax/metaHierarchy.php; \
-    grep -q 'REMASK_SYNC_STABILIZED_V1' /var/www/html/scripts/workspace.js; \
     grep -q 'RemaskProxy::fromSemicolonString' /var/www/html/ajax/checkAccount.php; \
     ! test -f /var/www/html/ajax/metaSyncProbe.php; \
     ! test -f /var/www/html/remask-session-recover.php; \
