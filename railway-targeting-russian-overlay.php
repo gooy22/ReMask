@@ -3,22 +3,42 @@ $servicePath='/var/www/html/classes/MetaAdsService.php';
 $service=file_get_contents($servicePath);
 if($service===false){fwrite(STDERR,"[targeting-ru] read failed\n");exit(241);}
 
-/* Force Russian localized suggestions for GEO / Interests / Behaviors. */
 $patterns = [
     [
-        "needle" => "'type' => 'adinterest',\n            'q' => $query,",
-        "replace" => "'type' => 'adinterest',\n            'q' => $query,\n            'locale' => 'ru_RU',",
-        "label" => "interests"
+        'needle' => <<<'PHP'
+            'type' => 'adinterest',
+            'q' => $query,
+PHP,
+        'replace' => <<<'PHP'
+            'type' => 'adinterest',
+            'q' => $query,
+            'locale' => 'ru_RU',
+PHP,
+        'label' => 'interests',
     ],
     [
-        "needle" => "'type' => 'adgeolocation',\n            'q' => $query,",
-        "replace" => "'type' => 'adgeolocation',\n            'q' => $query,\n            'locale' => 'ru_RU',",
-        "label" => "geo"
+        'needle' => <<<'PHP'
+            'type' => 'adgeolocation',
+            'q' => $query,
+PHP,
+        'replace' => <<<'PHP'
+            'type' => 'adgeolocation',
+            'q' => $query,
+            'locale' => 'ru_RU',
+PHP,
+        'label' => 'geo',
     ],
     [
-        "needle" => "'q' => $query,\n            'limit_type' => 'behaviors',",
-        "replace" => "'q' => $query,\n            'locale' => 'ru_RU',\n            'limit_type' => 'behaviors',",
-        "label" => "behaviors"
+        'needle' => <<<'PHP'
+            'q' => $query,
+            'limit_type' => 'behaviors',
+PHP,
+        'replace' => <<<'PHP'
+            'q' => $query,
+            'locale' => 'ru_RU',
+            'limit_type' => 'behaviors',
+PHP,
+        'label' => 'behaviors',
     ],
 ];
 
@@ -36,12 +56,15 @@ foreach($patterns as $p){
 }
 
 if(strpos($service,'REMASK_TARGETING_RU_LOCALE_V1')===false){
-    $service=str_replace(
-        "    public function searchInterests(string $query, int $limit = 25): array\n",
-        "    /* REMASK_TARGETING_RU_LOCALE_V1 */\n    public function searchInterests(string $query, int $limit = 25): array\n",
-        $service,
-        $n
-    );
+    $anchor=<<<'PHP'
+    public function searchInterests(string $query, int $limit = 25): array
+PHP;
+    $replacement=<<<'PHP'
+    /* REMASK_TARGETING_RU_LOCALE_V1 */
+    public function searchInterests(string $query, int $limit = 25): array
+PHP;
+    if(strpos($service,$anchor)===false){fwrite(STDERR,"[targeting-ru] marker anchor missing\n");exit(244);}
+    $service=str_replace($anchor,$replacement,$service,$n);
 }
 
 file_put_contents($servicePath,$service);
