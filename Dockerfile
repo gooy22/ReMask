@@ -17,6 +17,7 @@ COPY railway-profile-session-guard-overlay.php /tmp/railway-profile-session-guar
 COPY railway-workspace-session-integrity-overlay.php /tmp/railway-workspace-session-integrity-overlay.php
 COPY railway-meta-session-context-overlay.php /tmp/railway-meta-session-context-overlay.php
 COPY railway-workspace-sync-fix-overlay.php /tmp/railway-workspace-sync-fix-overlay.php
+COPY railway-sync-cache-error-audit.php /tmp/railway-sync-cache-error-audit.php
 COPY railway-sync-cache-audit.php /tmp/railway-sync-cache-audit.php
 COPY railway-worker-overlay.php /tmp/railway-worker-overlay.php
 COPY railway-retry-overlay.php /tmp/railway-retry-overlay.php
@@ -38,6 +39,7 @@ RUN set -eux; \
     php /tmp/railway-workspace-session-integrity-overlay.php; \
     php /tmp/railway-meta-session-context-overlay.php; \
     php /tmp/railway-workspace-sync-fix-overlay.php; \
+    php /tmp/railway-sync-cache-error-audit.php; \
     php /tmp/railway-sync-cache-audit.php; \
     php /tmp/railway-worker-overlay.php; \
     php /tmp/railway-retry-overlay.php; \
