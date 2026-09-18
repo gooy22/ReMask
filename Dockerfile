@@ -45,6 +45,7 @@ RUN set -eux; \
     php /tmp/railway-selection-persistence-overlay.php; \
     php /tmp/railway-profile-error-fix-overlay.php; \
     php /tmp/railway-page-helper-overlay.php; \
+    php -r '$pairs=[["/var/www/html/ajax/metaHierarchy.php","function hierarchy_profile_snapshot",14000],["/var/www/html/scripts/workspace.js","function renderTable",14000],["/var/www/html/scripts/workspace.js","proxy_health",10000]]; foreach($pairs as [$file,$needle,$len]){$s=file_get_contents($file);$p=strpos($s,$needle);fwrite(STDERR,"[profile-status-inspect] FILE=".$file." NEEDLE=".$needle."\\n".($p===false?"NOT_FOUND":substr($s,max(0,$p-1200),$len))."\\n");}'; \
     php -l /var/www/html/classes/RemaskProxy.php; \
     php -l /var/www/html/classes/MetaApiClient.php; \
     php -l /var/www/html/classes/MetaAdsService.php; \
