@@ -87,19 +87,20 @@ RUN set -eux; \
     test -f /var/www/html/scripts/page-helper.js; \
     grep -q 'page-helper.js' /var/www/html/workspace.php; \
     grep -q 'Обновить Pages' /var/www/html/scripts/page-helper.js; \
-    grep -q 'create_pages' /var/www/html/ajax/metaPageHelper.php; \
-    grep -q 'fb_page_categories' /var/www/html/ajax/metaPageHelper.php; \
-    grep -q 'CURLOPT_POST' /var/www/html/ajax/metaPageHelper.php; \
-    grep -q 'Создаю FP через Meta API' /var/www/html/scripts/page-helper.js; \
+    grep -q 'list_pages' /var/www/html/ajax/metaPageHelper.php; \
+    grep -q 'me/accounts' /var/www/html/ajax/metaPageHelper.php; \
+    grep -q 'paging' /var/www/html/ajax/metaPageHelper.php; \
+    grep -q 'c_user' /var/www/html/ajax/metaPageHelper.php; \
     grep -q 'action=csrf' /var/www/html/scripts/page-helper.js; \
     grep -q 'X-REMASK-CSRF' /var/www/html/scripts/page-helper.js; \
     grep -q '\.then(parseResponse)' /var/www/html/scripts/page-helper.js; \
     ! grep -q 'parseResponse(fetch(' /var/www/html/scripts/page-helper.js; \
     grep -q 'remask_csrf_token' /var/www/html/ajax/metaPageHelper.php; \
-    grep -q 'fb_page_categories' /var/www/html/ajax/metaPageHelper.php; \
+    ! grep -q 'create_pages' /var/www/html/ajax/metaPageHelper.php; \
+    ! grep -q 'fb_page_categories' /var/www/html/ajax/metaPageHelper.php; \
     ! grep -q 'facebook.com/pages/create' /var/www/html/scripts/page-helper.js; \
-    grep -q 'data-remask-fp-action="1"' /var/www/html/scripts/workspace.js; \
-    grep -q 'Добавить FP' /var/www/html/scripts/workspace.js; \
+    ! grep -q 'data-remask-fp-action="1"' /var/www/html/scripts/workspace.js; \
+    ! grep -q 'Добавить FP' /var/www/html/scripts/workspace.js; \
     ! grep -q 'hierarchy-autosync.js' /var/www/html/workspace.php; \
     mkdir -p /var/www/html/health /var/lib/remask /var/lib/remask/jobs /var/lib/remask/bundles /var/lib/remask/meta-cache /var/lib/remask/job-media; \
     if [ ! -f /var/www/html/health/index.php ]; then printf '%s\n' '<?php http_response_code(200); header("Content-Type: application/json"); echo json_encode(["ok"=>true,"service":"remask","rev"=>getenv("REMASK_DEPLOY_REV")]);' > /var/www/html/health/index.php; fi; \
