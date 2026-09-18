@@ -29,6 +29,16 @@ function rmx_sync_replace_method(string $source, string $methodName, string $rep
 $service = file_get_contents($servicePath);
 if ($service === false) throw new RuntimeException('MetaAdsService.php not found');
 
+$listAdAccountsMethod = <<<'PHP_METHOD'
+// REMASK_DIRECT_RK_FUNDING_V1
+function listAdAccounts(int $limit = 0): array
+    {
+        return $this->listPagedEdge('me/adaccounts', [
+            'fields' => 'id,name,account_status,disable_reason,currency,balance,amount_spent,spend_cap,is_prepay_account,funding_source,funding_source_details,expired_funding_source_details,business_name,timezone_name',
+        ], $limit);
+    }
+PHP_METHOD;
+
 $businessAccountsMethod = <<<'PHP_METHOD'
 // REMASK_BM_OWNED_CLIENT_V1
 function listBusinessAdAccounts(string $businessId, int $limit = 0, bool $includeClient = true): array
@@ -78,6 +88,7 @@ function listBusinessAdAccounts(string $businessId, int $limit = 0, bool $includ
     }
 PHP_METHOD;
 
+$service = rmx_sync_replace_method($service, 'listAdAccounts', $listAdAccountsMethod);
 $service = rmx_sync_replace_method($service, 'listBusinessAdAccounts', $businessAccountsMethod);
 file_put_contents($servicePath, $service);
 fwrite(STDERR, "[workspace-sync-fix] BM owned+client RK enrichment patched with per-edge fallback\n");
@@ -200,6 +211,37 @@ fwrite(STDERR, "[workspace-sync-fix] workspace.js patched\n");
 $php = file_get_contents($hierarchy);
 if ($php === false) {
     throw new RuntimeException('metaHierarchy.php not found');
+}
+
+$fundingNeedle = "        \$rk['funding'] = MetaEndpoint::peekCachedAsset(\$profile, 'funding', \$id);";
+$fundingReplacement = <<<'PHP_FUNDING'
+        // REMASK_DIRECT_FUNDING_SNAPSHOT_V1
+        $cachedFunding = MetaEndpoint::peekCachedAsset($profile, 'funding', $id);
+        if (is_array($cachedFunding)) {
+            $rk['funding'] = $cachedFunding;
+        } else {
+            $rk['funding'] = [
+                'id' => $id,
+                'name' => (string)($rk['name'] ?? ''),
+                'account_status' => $rk['account_status'] ?? null,
+                'disable_reason' => $rk['disable_reason'] ?? null,
+                'currency' => (string)($rk['currency'] ?? ''),
+                'balance' => $rk['balance'] ?? null,
+                'amount_spent' => $rk['amount_spent'] ?? null,
+                'spend_cap' => $rk['spend_cap'] ?? null,
+                'is_prepay_account' => $rk['is_prepay_account'] ?? null,
+                'funding_source' => $rk['funding_source'] ?? null,
+                'funding_source_details' => is_array($rk['funding_source_details'] ?? null) ? $rk['funding_source_details'] : [],
+                'expired_funding_source_details' => is_array($rk['expired_funding_source_details'] ?? null) ? $rk['expired_funding_source_details'] : [],
+                '_source' => 'direct_ad_account_sync',
+            ];
+        }
+PHP_FUNDING;
+if (strpos($php, 'REMASK_DIRECT_FUNDING_SNAPSHOT_V1') === false) {
+    $php = str_replace($fundingNeedle, $fundingReplacement, $php, $fundingPatchCount);
+    if ($fundingPatchCount !== 1) {
+        throw new RuntimeException('direct funding snapshot patch failed: ' . $fundingPatchCount);
+    }
 }
 
 $syncProfileReplacement = <<<'PHP'
