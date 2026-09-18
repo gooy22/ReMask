@@ -156,7 +156,9 @@ try {
     $profile=trim((string)($_POST['profile']??''));
 
     if($action==='categories'){
-        $account=rmx_page_helper_account($profile);
+        $matches=rmx_page_helper_resolve_hints([$profile]);
+        $account=$matches[0]??null;
+        if(!$account instanceof FbAccount)$account=rmx_page_helper_account($profile);
         $raw=rmx_page_helper_call($account,'GET','fb_page_categories',[
             'fields'=>'id,name,api_enum,fb_page_categories{id,name,api_enum}',
             'limit'=>500,
