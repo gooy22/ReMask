@@ -40,13 +40,11 @@ RUN set -eux; \
     php /tmp/railway-meta-session-context-overlay.php; \
     php /tmp/railway-workspace-sync-fix-overlay.php; \
     php /tmp/railway-worker-overlay.php; \
-    mkdir -p /var/www/html/bin; cp /tmp/railway-sync-smoke.php /var/www/html/bin/remask-sync-smoke.php; \
     php /tmp/railway-retry-overlay.php; \
     php /tmp/railway-targeting-autocomplete-overlay.php; \
     php /tmp/railway-selection-persistence-overlay.php; \
     php /tmp/railway-profile-error-fix-overlay.php; \
     php /tmp/railway-page-helper-overlay.php; \
-    php -r '$pairs=[["/var/www/html/classes/MetaApiException.php","class MetaApiException",12000],["/var/www/html/scripts/workspace.js","async function apiJson",6000]]; foreach($pairs as [$file,$needle,$len]){$s=file_get_contents($file); $p=strpos($s,$needle); fwrite(STDERR,"[error-core] FILE=".$file." NEEDLE=".$needle."\\n".substr($s,max(0,$p-1200),$len)."\\n");}'; \
     php -l /var/www/html/classes/RemaskProxy.php; \
     php -l /var/www/html/classes/MetaApiClient.php; \
     php -l /var/www/html/classes/MetaAdsService.php; \
@@ -58,10 +56,11 @@ RUN set -eux; \
     php -l /var/www/html/bin/remask-worker.php; \
     php -l /var/www/html/ajax/metaWorkerStatus.php; \
     php -l /var/www/html/ajax/metaJobRetry.php; \
-    php -l /var/www/html/bin/remask-sync-smoke.php; \
     grep -q 'REMASK_SYNC_ERROR_CLASSIFIER_V1' /var/www/html/scripts/workspace.js; \
     grep -q 'clear_session' /var/www/html/ajax/metaProfileManager.php; \
     grep -q 'profileSaveJson' /var/www/html/scripts/workspace.js; \
+    grep -q 'fbtrace_id' /var/www/html/scripts/workspace.js; \
+    grep -q 'err.meta=e' /var/www/html/scripts/workspace.js; \
     grep -q 'error_id' /var/www/html/ajax/metaProfileManager.php; \
     ! grep -q 'Добавь Cookies JSON текущей FB-сессии' /var/www/html/scripts/workspace.js; \
     ! grep -Fq "value.trim()||'[]'" /var/www/html/scripts/workspace.js; \
@@ -81,6 +80,7 @@ RUN set -eux; \
     grep -q 'RemaskProxy::fromSemicolonString' /var/www/html/ajax/checkAccount.php; \
     ! test -f /var/www/html/ajax/metaSyncProbe.php; \
     ! test -f /var/www/html/remask-session-recover.php; \
+    ! test -f /var/www/html/bin/remask-sync-smoke.php; \
     test -f /var/www/html/scripts/targeting-autocomplete.js; \
     test -f /var/www/html/scripts/selection-persistence.js; \
     grep -q 'targeting-autocomplete.js' /var/www/html/launch.php; \
