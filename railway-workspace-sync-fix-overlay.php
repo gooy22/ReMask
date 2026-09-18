@@ -148,12 +148,27 @@ async function syncSelection(){
   updateSelectionUi();
   $('workspaceStatus').textContent=`Доп. синхронизация: 0/${rows.length}`;
 
+  // REMASK_SYNC_ERROR_CLASSIFIER_V1
   const errorText=(e)=>{
+    let raw='';
     if(e&&typeof e==='object'){
-      if(e.message)return String(e.message);
-      if(e.error)return String(e.error);
+      if(e.message)raw=String(e.message);
+      else if(e.error)raw=String(e.error);
     }
-    return String(e||'Unknown sync error');
+    if(!raw)raw=String(e||'Unknown sync error');
+    return raw.replace(/access_token=[^&\\s]+/ig,'access_token=[redacted]');
+  };
+  const classifySyncError=(e)=>{
+    const message=errorText(e);
+    const s=message.toLowerCase();
+    let kind='META_API';
+    if(/rate.?limit|too many|code[^0-9]*(4|17|32|613)\\b/.test(s))kind='RATE_LIMIT';
+    else if(/\\b407\\b|proxy authentication|proxy auth/.test(s))kind='PROXY_AUTH';
+    else if(/transport error|curl|could not resolve|connection timed out|connection refused|ssl connect/.test(s))kind='TRANSPORT';
+    else if(/oauth|access token|token.*(invalid|expired)|session.*expired|code[^0-9]*190\\b|\\(#190\\)/.test(s))kind='TOKEN_INVALID';
+    else if(/ads_management|ads_read|business_management|permission|permissions|not authorized|code[^0-9]*(10|200)\\b/.test(s))kind='PERMISSION';
+    else if(/http 5\\d\\d|temporar|transient/.test(s))kind='META_TEMPORARY';
+    return {kind,message};
   };
 
   const syncProfileSafe=async(profile)=>{
@@ -162,7 +177,8 @@ async function syncSelection(){
       applySnapshot(d);
       return d;
     }catch(e){
-      return {error:errorText(e),profile};
+      const x=classifySyncError(e);
+      return {error:x.message,error_kind:x.kind,profile};
     }
   };
 
@@ -172,7 +188,8 @@ async function syncSelection(){
       applySnapshot(d);
       return d;
     }catch(e){
-      return {error:errorText(e),profile:row.profile,business_id:row.id};
+      const x=classifySyncError(e);
+      return {error:x.message,error_kind:x.kind,profile:row.profile,business_id:row.id};
     }
   };
 
@@ -204,13 +221,14 @@ async function syncSelection(){
       try{
         await refreshSelectedDelivery(tab,rows);
       }catch(e){
-        results=[{error:errorText(e)}];
+        const x=classifySyncError(e);
+        results=[{error:x.message,error_kind:x.kind}];
       }
     }
 
     const failures=results
       .filter(x=>x&&x.error)
-      .map(x=>[x.profile,x.business_id,x.error].filter(Boolean).join(': '));
+      .map(x=>[x.profile,x.business_id,`[${x.error_kind||'META_API'}]`,x.error].filter(Boolean).join(': '));
     const warnings=results
       .flatMap(x=>Array.isArray(x?.sync_warnings)?x.sync_warnings:[])
       .filter(Boolean);

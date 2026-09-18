@@ -17,6 +17,7 @@ COPY railway-profile-session-guard-overlay.php /tmp/railway-profile-session-guar
 COPY railway-workspace-session-integrity-overlay.php /tmp/railway-workspace-session-integrity-overlay.php
 COPY railway-meta-session-context-overlay.php /tmp/railway-meta-session-context-overlay.php
 COPY railway-workspace-sync-fix-overlay.php /tmp/railway-workspace-sync-fix-overlay.php
+COPY railway-sync-smoke.php /tmp/railway-sync-smoke.php
 COPY railway-worker-overlay.php /tmp/railway-worker-overlay.php
 COPY railway-retry-overlay.php /tmp/railway-retry-overlay.php
 COPY railway-targeting-autocomplete-overlay.php /tmp/railway-targeting-autocomplete-overlay.php
@@ -38,6 +39,7 @@ RUN set -eux; \
     php /tmp/railway-meta-session-context-overlay.php; \
     php /tmp/railway-workspace-sync-fix-overlay.php; \
     php /tmp/railway-worker-overlay.php; \
+    mkdir -p /var/www/html/bin; cp /tmp/railway-sync-smoke.php /var/www/html/bin/remask-sync-smoke.php; \
     php /tmp/railway-retry-overlay.php; \
     php /tmp/railway-targeting-autocomplete-overlay.php; \
     php /tmp/railway-selection-persistence-overlay.php; \
@@ -52,6 +54,8 @@ RUN set -eux; \
     php -l /var/www/html/bin/remask-worker.php; \
     php -l /var/www/html/ajax/metaWorkerStatus.php; \
     php -l /var/www/html/ajax/metaJobRetry.php; \
+    php -l /var/www/html/bin/remask-sync-smoke.php; \
+    grep -q 'REMASK_SYNC_ERROR_CLASSIFIER_V1' /var/www/html/scripts/workspace.js; \
     grep -q 'clear_session' /var/www/html/ajax/metaProfileManager.php; \
     grep -q 'profileSaveJson' /var/www/html/scripts/workspace.js; \
     grep -q 'error_id' /var/www/html/ajax/metaProfileManager.php; \
@@ -88,7 +92,7 @@ RUN set -eux; \
     chown -R www-data:www-data /var/lib/remask /var/www/html; \
     chmod 700 /var/lib/remask; \
     chmod +x /var/www/html/docker-start.sh; \
-    rm -rf /tmp/remask-parts /tmp/railway-launch-overlay.php /tmp/railway-check-account-session-overlay.php /tmp/railway-profile-session-guard-overlay.php /tmp/railway-workspace-session-integrity-overlay.php /tmp/railway-meta-session-context-overlay.php /tmp/railway-workspace-sync-fix-overlay.php /tmp/railway-worker-overlay.php /tmp/railway-retry-overlay.php /tmp/railway-targeting-autocomplete-overlay.php /tmp/railway-selection-persistence-overlay.php /tmp/railway-profile-error-fix-overlay.php /tmp/remask-runtime.b64 /tmp/remask-runtime.archive /tmp/docker-start.sh
+    rm -rf /tmp/remask-parts /tmp/railway-launch-overlay.php /tmp/railway-check-account-session-overlay.php /tmp/railway-profile-session-guard-overlay.php /tmp/railway-workspace-session-integrity-overlay.php /tmp/railway-meta-session-context-overlay.php /tmp/railway-workspace-sync-fix-overlay.php /tmp/railway-sync-smoke.php /tmp/railway-worker-overlay.php /tmp/railway-retry-overlay.php /tmp/railway-targeting-autocomplete-overlay.php /tmp/railway-selection-persistence-overlay.php /tmp/railway-profile-error-fix-overlay.php /tmp/remask-runtime.b64 /tmp/remask-runtime.archive /tmp/docker-start.sh
 
 ENV REMASK_META_CACHE_TTL=1800 \
     META_GRAPH_API_VERSION=v26.0 \
