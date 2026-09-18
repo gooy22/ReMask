@@ -237,68 +237,21 @@ $script = <<<'JS'
     dialog.setAttribute('data-remask-page-helper','1');
   }
 
-  function directText(el){
-    return String(el && el.textContent || '').replace(/\s+/g,' ').trim();
-  }
-  function visible(el){
-    if(!el || !(el instanceof Element))return false;
-    var r=el.getBoundingClientRect();
-    var s=getComputedStyle(el);
-    return r.width>0 && r.height>0 && s.display!=='none' && s.visibility!=='hidden';
-  }
-  function findMenuContainer(addBmNode){
-    var cur=addBmNode;
-    for(var i=0;i<8 && cur && cur!==document.body;i++,cur=cur.parentElement){
-      var t=directText(cur);
-      if(/Добавить\s+(?:BM|Business Manager)/i.test(t) &&
-         /Проверить\s+прокси/i.test(t) &&
-         /Редактировать\s+аккаунт/i.test(t)) return cur;
-    }
-    return null;
-  }
-  function enhanceActionMenus(){
-    var candidates=[].slice.call(document.querySelectorAll('button,a,div,span,li'));
-    candidates.forEach(function(node){
-      if(!visible(node))return;
-      var own=directText(node);
-      if(!/^Добавить\s+(?:BM|Business Manager)$/i.test(own))return;
-
-      var menu=findMenuContainer(node);
-      if(!menu || menu.querySelector('[data-remask-create-page-action="1"]'))return;
-
-      var row=node;
-      for(var i=0;i<4 && row.parentElement && row.parentElement!==menu;i++){
-        var pt=directText(row.parentElement);
-        if(/Добавить\s+(?:BM|Business Manager)/i.test(pt) && !/Проверить\s+прокси/i.test(pt)) row=row.parentElement;
-        else break;
-      }
-
-      var item=row.cloneNode(true);
-      item.setAttribute('data-remask-create-page-action','1');
-      item.removeAttribute('id');
-      item.removeAttribute('onclick');
-      item.removeAttribute('href');
-
-      var labelNode=[].slice.call(item.querySelectorAll('*')).find(function(el){
-        return /^Добавить\s+(?:BM|Business Manager)$/i.test(directText(el));
-      });
-      if(labelNode) labelNode.textContent='Создать Facebook Page';
-      else item.textContent='Создать Facebook Page';
-
-      item.style.cursor='pointer';
-      item.addEventListener('click',function(e){
+  function bindDirectFpButton(){
+    [].slice.call(document.querySelectorAll('[data-remask-fp-action]')).forEach(function(btn){
+      if(btn.getAttribute('data-remask-fp-bound')==='1')return;
+      btn.setAttribute('data-remask-fp-bound','1');
+      btn.addEventListener('click',function(e){
         e.preventDefault();
         e.stopPropagation();
         window.open(createUrl,'_blank','noopener');
       },true);
-
-      if(row.parentNode) row.parentNode.insertBefore(item,row.nextSibling);
     });
   }
 
   function enhance(){
     enhanceBmDialog();
-    enhanceActionMenus();
+    bindDirectFpButton();
   }
 
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',enhance);
@@ -310,9 +263,19 @@ JS;
 file_put_contents($endpointPath,$endpoint);
 file_put_contents($scriptPath,$script);
 
+$workspaceJsPath=$root . '/scripts/workspace.js';
+$workspaceJs=file_get_contents($workspaceJsPath);
+if($workspaceJs===false)throw new RuntimeException('workspace.js not found');
+$oldMenu='<button data-act="add_bm"><i class="fa-solid fa-building"></i> Добавить BM</button><button data-act="assign_proxy">';
+$newMenu='<button data-act="add_bm"><i class="fa-solid fa-building"></i> Добавить BM</button><button data-remask-fp-action="1"><i class="fa-solid fa-flag"></i> Добавить FP</button><button data-act="assign_proxy">';
+$workspaceJs=str_replace($oldMenu,$newMenu,$workspaceJs,$workspaceMenuPatchCount);
+if($workspaceMenuPatchCount!==1)throw new RuntimeException('Direct Add FP menu patch failed: '.(string)$workspaceMenuPatchCount);
+file_put_contents($workspaceJsPath,$workspaceJs);
+fwrite(STDERR,"[page-helper] Add FP inserted directly into buildActionMenu\n");
+
 $workspace=file_get_contents($workspacePath);
 if($workspace===false)throw new RuntimeException('workspace.php not found');
-$tag='<script src="scripts/page-helper.js?v=20260918-page-helper-v4"></script>';
+$tag='<script src="scripts/page-helper.js?v=20260918-page-helper-v6"></script>';
 if(strpos($workspace,'scripts/page-helper.js')===false){
     if(stripos($workspace,'</body>')!==false)$workspace=str_ireplace('</body>',$tag."\n</body>",$workspace);
     else $workspace.="\n".$tag."\n";
