@@ -102,8 +102,10 @@ RUN set -eux; \
     grep -q 'REMASK_AUTO_OPEN_RECENT_JOB_V1' /var/www/html/launch.php; \
     grep -q 'REMASK_JOB_ACTION_MENU_V1' /var/www/html/scripts/launch.js; \
     grep -q 'REMASK_SINGLE_CLICK_LAUNCH_V1' /var/www/html/scripts/launch.js; \
+    grep -q 'REMASK_AUTO_NAMING_V1' /var/www/html/scripts/launch.js; \
+    grep -q 'Missing: ' /var/www/html/scripts/launch.js; \
     grep -q 'Launch blocked: one or more selected RK failed Launch Review' /var/www/html/scripts/launch.js; \
-    grep -q 'launch.js?v=20260918-single-click-v73' /var/www/html/launch.php; \
+    grep -q 'launch.js?v=20260918-single-click-v74' /var/www/html/launch.php; \
     for f in /var/www/html/index.php /var/www/html/workspace.php /var/www/html/launch.php /var/www/html/campaigns.php /var/www/html/adsets.php /var/www/html/accounts.php; do [ ! -f "$f" ] || ! grep -q 'selection-persistence.js' "$f"; done; \
     grep -q 'accounts.js?v=20260918-accounts-v69' /var/www/html/accounts.php; \
     grep -q "'network_identity' => 'profile_bound'" /var/www/html/classes/MetaEndpoint.php; \
