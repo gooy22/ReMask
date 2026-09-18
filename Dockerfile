@@ -46,7 +46,6 @@ RUN set -eux; \
     php /tmp/railway-selection-persistence-overlay.php; \
     php /tmp/railway-profile-error-fix-overlay.php; \
     php /tmp/railway-page-helper-overlay.php; \
-    php -r '$s=file_get_contents("/var/www/html/scripts/workspace.js"); $p=strpos($s,"Добавить BM"); if($p===false){fwrite(STDERR,"[menu-source] Add BM marker missing\\n");}else{fwrite(STDERR,"[menu-source] ".substr($s,max(0,$p-2200),4400)."\\n");}'; \
     php -l /var/www/html/classes/RemaskProxy.php; \
     php -l /var/www/html/classes/MetaApiClient.php; \
     php -l /var/www/html/classes/MetaAdsService.php; \
@@ -88,6 +87,8 @@ RUN set -eux; \
     test -f /var/www/html/scripts/page-helper.js; \
     grep -q 'page-helper.js' /var/www/html/workspace.php; \
     grep -q 'Обновить Pages' /var/www/html/scripts/page-helper.js; \
+    grep -q 'data-remask-fp-action="1"' /var/www/html/scripts/workspace.js; \
+    grep -q 'Добавить FP' /var/www/html/scripts/workspace.js; \
     ! grep -q 'hierarchy-autosync.js' /var/www/html/workspace.php; \
     mkdir -p /var/www/html/health /var/lib/remask /var/lib/remask/jobs /var/lib/remask/bundles /var/lib/remask/meta-cache /var/lib/remask/job-media; \
     if [ ! -f /var/www/html/health/index.php ]; then printf '%s\n' '<?php http_response_code(200); header("Content-Type: application/json"); echo json_encode(["ok"=>true,"service":"remask","rev"=>getenv("REMASK_DEPLOY_REV")]);' > /var/www/html/health/index.php; fi; \
