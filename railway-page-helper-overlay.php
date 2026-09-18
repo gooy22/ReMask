@@ -267,11 +267,11 @@ $script = <<<'JS'
   var csrfPromise=null;
   function getCsrf(){
     if(csrfPromise)return csrfPromise;
-    csrfPromise=parseResponse(fetch(endpoint+'?action=csrf',{
+    csrfPromise=fetch(endpoint+'?action=csrf',{
       method:'GET',
       credentials:'same-origin',
       cache:'no-store'
-    })).then(function(data){
+    }).then(parseResponse).then(function(data){
       if(!data.csrf)throw new Error('ReMask CSRF token missing.');
       return data.csrf;
     }).catch(function(e){csrfPromise=null;throw e;});
@@ -286,7 +286,7 @@ $script = <<<'JS'
     });
     return getCsrf().then(function(csrf){
       body.remask_csrf=csrf;
-      return parseResponse(fetch(endpoint,{
+      return fetch(endpoint,{
         method:'POST',
         credentials:'same-origin',
         headers:{
@@ -294,7 +294,7 @@ $script = <<<'JS'
           'X-REMASK-CSRF':csrf
         },
         body:new URLSearchParams(body)
-      }));
+      }).then(parseResponse);
     });
   }
   function getDialog(){
@@ -527,7 +527,7 @@ fwrite(STDERR,"[page-helper] Add FP inserted directly into buildActionMenu\n");
 
 $workspace=file_get_contents($workspacePath);
 if($workspace===false)throw new RuntimeException('workspace.php not found');
-$tag='<script src="scripts/page-helper.js?v=20260918-page-helper-v8"></script>';
+$tag='<script src="scripts/page-helper.js?v=20260918-page-helper-v9"></script>';
 if(strpos($workspace,'scripts/page-helper.js')===false){
     if(stripos($workspace,'</body>')!==false)$workspace=str_ireplace('</body>',$tag."\n</body>",$workspace);
     else $workspace.="\n".$tag."\n";
