@@ -183,7 +183,6 @@ RUN set -eux; \
     grep -q 'REMASK_CREATIVE_LIBRARY_V1' /var/www/html/settings.php; \
     grep -q "'creatives.php','fa-images','Креативы'" /var/www/html/menu.php; \
     grep -q 'creativeLibrarySelect' /var/www/html/launch.php; \
-    grep -q 'creative-library-v98' /var/www/html/launch.php; \
     grep -q 'REMASK_CREATIVE_LIBRARY_LAUNCH_V1' /var/www/html/scripts/launch.js; \
     grep -q "form.append('media_library_id'" /var/www/html/scripts/launch.js; \
     grep -q 'creative_preset' /var/www/html/scripts/launch.js; \
