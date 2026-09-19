@@ -41,6 +41,8 @@ COPY railway-v100-creatives.js /tmp/remask-v100-creatives.js
 COPY railway-creative-library-v100-overlay.php /tmp/railway-creative-library-v100-overlay.php
 COPY railway-meta-official-fields.php /tmp/railway-meta-official-fields.php
 COPY railway-meta-builder-v102-overlay.php /tmp/railway-meta-builder-v102-overlay.php
+COPY railway-v102-MetaSdkSchema.php /tmp/remask-v102-MetaSdkSchema.php
+COPY railway-meta-schema-ui-v103-overlay.php /tmp/railway-meta-schema-ui-v103-overlay.php
 COPY railway-selection-persistence-overlay.php /tmp/railway-selection-persistence-overlay.php
 COPY railway-profile-error-fix-overlay.php /tmp/railway-profile-error-fix-overlay.php
 COPY docker-start.sh /tmp/docker-start.sh
@@ -181,6 +183,13 @@ RUN set -eux; \
     grep -q 'ONLINE_GAMBLING_AND_GAMING' /var/www/html/creatives.php; \
     grep -q 'STORE_VISITS' /var/www/html/creatives.php; \
     grep -q 'meta-builder-v102' /var/www/html/launch.php; \
+    php -l /var/www/html/classes/MetaSdkSchema.php; \
+    php -l /var/www/html/ajax/metaSdkSchema.php; \
+    grep -q 'meta-builder-v103' /var/www/html/creatives.php; \
+    grep -q 'metaSdkFields' /var/www/html/creatives.php; \
+    grep -q 'loadMetaSdkSchema' /var/www/html/scripts/creatives.js; \
+    grep -q 'renderMetaSdkFields' /var/www/html/scripts/creatives.js; \
+    grep -q 'facebook/facebook-python-business-sdk' /var/www/html/ajax/metaSdkSchema.php; \
     grep -q 'presetCreativeName' /var/www/html/creatives.php; \
     grep -q 'presetAdName' /var/www/html/creatives.php; \
     grep -q 'presetMessage' /var/www/html/creatives.php; \
