@@ -175,6 +175,8 @@ RUN set -eux; \
     grep -q 'REMASK_META_BUILDER_JOB_V1' /var/www/html/ajax/metaJobCreate.php; \
     grep -q 'REMASK_META_OFFICIAL_VALIDATOR_V1' /var/www/html/classes/MetaLaunchValidator.php; \
     grep -q 'REMASK_META_OFFICIAL_FORWARD_V1' /var/www/html/classes/MetaAdsService.php; \
+    grep -q 'REMASK_META_BUILDER_BUDGET_V1' /var/www/html/scripts/launch.js; \
+    php -l /var/www/html/classes/MetaOfficialFields.php; \
     test -f /var/www/html/classes/MetaOfficialFields.php; \
     grep -q 'ONLINE_GAMBLING_AND_GAMING' /var/www/html/creatives.php; \
     grep -q 'STORE_VISITS' /var/www/html/creatives.php; \
