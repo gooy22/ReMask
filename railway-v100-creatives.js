@@ -4,6 +4,15 @@ let editing = null;
 let previewUrl = '';
 let carouselFiles = [];
 let carouselPreviewUrls = [];
+let metaSdkSchema = null;
+let pendingMetaBuilder = null;
+const coveredMetaFields = {
+    campaign: new Set(['name','objective','buying_type','special_ad_categories','bid_strategy','daily_budget','lifetime_budget','spend_cap','start_time','stop_time','status']),
+    adset: new Set(['name','optimization_goal','billing_event','bid_strategy','bid_amount','destination_type','daily_budget','lifetime_budget','start_time','end_time','attribution_spec','promoted_object','is_dynamic_creative','is_incremental_attribution_enabled','status']),
+    targeting: new Set(['age_min','age_max','genders','locales','geo_locations','excluded_geo_locations','interests','behaviors','custom_audiences','excluded_custom_audiences','flexible_spec','exclusions','publisher_platforms','facebook_positions','instagram_positions','messenger_positions','audience_network_positions','threads_positions','whatsapp_positions','device_platforms','user_os','user_device']),
+    creative: new Set(['degrees_of_freedom_spec','asset_feed_spec','platform_customizations']),
+    ad: new Set(['status','conversion_domain','priority','tracking_specs']),
+};
 
 function csrf() {
     return document.querySelector('meta[name="remask-csrf"]')?.content || '';
@@ -122,9 +131,174 @@ function selectedValues(selector, attr) {
 function idsToAudience(value) {
     return csvStrings(value).map((id) => ({id}));
 }
+function metaFieldId(group, field) {
+    return 'sdk_' + group + '_' + field.replace(/[^a-zA-Z0-9_]/g, '_');
+}
+function metaTypeIsComplex(type) {
+    type = String(type || '');
+    return type.includes('list<') || type.includes('Object') || type.includes('map') || type.includes('Targeting') || type.includes('IDName') || type.includes('AdSet') || type.includes('AdCreative');
+}
+function metaFieldValue(el, type, field) {
+    if (!el) return undefined;
+    const raw = String(el.value ?? '').trim();
+    if (raw === '') return undefined;
+    type = String(type || 'string');
+
+    if (type === 'bool') {
+        if (raw === 'true') return true;
+        if (raw === 'false') return false;
+        return undefined;
+    }
+    if (type === 'unsigned int' || type === 'int') {
+        const value = Number(raw);
+        if (!Number.isInteger(value)) throw new Error(field + ': нужно целое число.');
+        return value;
+    }
+    if (type === 'float') {
+        const value = Number(raw);
+        if (!Number.isFinite(value)) throw new Error(field + ': нужно число.');
+        return value;
+    }
+    if (metaTypeIsComplex(type)) {
+        try {
+            return JSON.parse(raw);
+        } catch {
+            if (type === 'list<string>' || type === 'list<enum>') return csvStrings(raw);
+            if (type === 'list<unsigned int>') return csvInts(raw);
+            throw new Error(field + ': невалидный JSON.');
+        }
+    }
+    return raw;
+}
+function metaFieldDisplayValue(value, type) {
+    if (value === undefined || value === null) return '';
+    if (type === 'bool') return value === true ? 'true' : value === false ? 'false' : '';
+    if (typeof value === 'object') return JSON.stringify(value);
+    return String(value);
+}
+function renderMetaSdkFields() {
+    const root = $('metaSdkFields');
+    if (!root || !metaSdkSchema) return;
+    const groups = ['campaign','adset','targeting','creative','ad'];
+    root.innerHTML = '';
+
+    for (const group of groups) {
+        const spec = metaSdkSchema[group] || {};
+        const fields = spec.fields || {};
+        const enums = spec.enums || {};
+        const names = Object.keys(fields).filter((field) => !coveredMetaFields[group]?.has(field));
+
+        const details = document.createElement('details');
+        details.className = 'cr-sdk-group';
+        details.open = false;
+        details.dataset.sdkGroup = group;
+
+        const summary = document.createElement('summary');
+        summary.innerHTML = '<span>' + esc(group.toUpperCase()) + '</span><span class="cr-sdk-count">' + names.length + ' полей</span>';
+        details.appendChild(summary);
+
+        const grid = document.createElement('div');
+        grid.className = 'cr-sdk-fields';
+
+        for (const field of names) {
+            const type = fields[field] || 'string';
+            const wrap = document.createElement('div');
+            wrap.className = 'cr-sdk-field';
+            wrap.dataset.search = (group + ' ' + field + ' ' + type).toLowerCase();
+
+            const label = document.createElement('label');
+            label.htmlFor = metaFieldId(group, field);
+            label.innerHTML = '<span>' + esc(field) + '</span><span class="cr-sdk-type">' + esc(type) + '</span>';
+            wrap.appendChild(label);
+
+            let input;
+            const enumValues = Array.isArray(enums[field]) ? enums[field] : [];
+            if (type === 'bool') {
+                input = document.createElement('select');
+                input.className = 'form-control';
+                input.innerHTML = '<option value="">Meta default</option><option value="true">true</option><option value="false">false</option>';
+            } else if (type === 'enum' && enumValues.length) {
+                input = document.createElement('select');
+                input.className = 'form-control';
+                input.appendChild(new Option('Meta default', ''));
+                for (const value of enumValues) input.appendChild(new Option(value, value));
+            } else if (metaTypeIsComplex(type)) {
+                input = document.createElement('textarea');
+                input.className = 'form-control cr-json';
+                input.placeholder = type.startsWith('list<') ? '[]' : '{}';
+            } else {
+                input = document.createElement('input');
+                input.className = 'form-control';
+                if (type === 'unsigned int' || type === 'int' || type === 'float') input.type = 'number';
+                else input.type = 'text';
+                if (type === 'datetime') input.placeholder = 'ISO 8601 / Meta datetime';
+            }
+
+            input.id = metaFieldId(group, field);
+            input.dataset.metaGroup = group;
+            input.dataset.metaField = field;
+            input.dataset.metaType = type;
+            wrap.appendChild(input);
+            grid.appendChild(wrap);
+        }
+
+        details.appendChild(grid);
+        root.appendChild(details);
+    }
+    $('metaSchemaStatus').textContent = 'SDK-схема загружена';
+    if (pendingMetaBuilder) {
+        const saved = pendingMetaBuilder;
+        pendingMetaBuilder = null;
+        populateMetaSdkFields(saved);
+    }
+}
+function readMetaSdkFields() {
+    const out = {campaign:{},adset:{},targeting:{},creative:{},ad:{}};
+    document.querySelectorAll('[data-meta-group][data-meta-field]').forEach((el) => {
+        const group = el.dataset.metaGroup;
+        const field = el.dataset.metaField;
+        const type = el.dataset.metaType || 'string';
+        const value = metaFieldValue(el, type, field);
+        if (value !== undefined) out[group][field] = value;
+    });
+    return out;
+}
+function populateMetaSdkFields(builder) {
+    if (!metaSdkSchema || !$('metaSdkFields')?.children.length) {
+        pendingMetaBuilder = builder || {};
+        return;
+    }
+    builder = builder || {};
+    document.querySelectorAll('[data-meta-group][data-meta-field]').forEach((el) => {
+        const group = el.dataset.metaGroup;
+        const field = el.dataset.metaField;
+        const type = el.dataset.metaType || 'string';
+        const value = builder[group]?.[field];
+        el.value = metaFieldDisplayValue(value, type);
+    });
+}
+function filterMetaSdkFields() {
+    const q = ($('metaFieldSearch')?.value || '').trim().toLowerCase();
+    document.querySelectorAll('.cr-sdk-group').forEach((group) => {
+        let visible = 0;
+        group.querySelectorAll('.cr-sdk-field').forEach((field) => {
+            const match = !q || (field.dataset.search || '').includes(q);
+            field.classList.toggle('cr-sdk-hidden', !match);
+            if (match) visible++;
+        });
+        group.classList.toggle('cr-sdk-hidden', visible === 0);
+        if (q && visible > 0) group.open = true;
+    });
+}
+async function loadMetaSdkSchema() {
+    const data = await api('ajax/metaSdkSchema.php');
+    metaSdkSchema = data.schema || {};
+    renderMetaSdkFields();
+}
 function buildMetaBuilder() {
     const special = $('mbSpecialCategory').value;
-    let campaign = parseJsonField('mbAdvancedCampaign', {});
+    const sdkFields = readMetaSdkFields();
+    let campaign = deepMerge(parseJsonField('mbAdvancedCampaign', {}), sdkFields.campaign);
     campaign = deepMerge(campaign, compactObject({
         name: $('mbCampaignName').value.trim(),
         objective: $('mbObjective').value,
@@ -144,7 +318,7 @@ function buildMetaBuilder() {
         pixel_id: $('mbPixelId').value.trim(),
         custom_event_type: $('mbConversionEvent').value.trim(),
     }));
-    let adset = parseJsonField('mbAdvancedAdset', {});
+    let adset = deepMerge(parseJsonField('mbAdvancedAdset', {}), sdkFields.adset);
     adset = deepMerge(adset, compactObject({
         name: $('mbAdsetName').value.trim(),
         optimization_goal: $('mbOptimizationGoal').value,
@@ -163,7 +337,7 @@ function buildMetaBuilder() {
         status: $('mbAdsetStatus').value,
     }));
 
-    let targeting = parseJsonField('mbAdvancedTargeting', {});
+    let targeting = deepMerge(parseJsonField('mbAdvancedTargeting', {}), sdkFields.targeting);
     const publisherPlatforms = selectedValues('[data-publisher]', 'data-publisher');
     const devicePlatforms = selectedValues('[data-device-platform]', 'data-device-platform');
     targeting = deepMerge(targeting, compactObject({
@@ -191,14 +365,14 @@ function buildMetaBuilder() {
         user_device: csvStrings($('mbUserDevice').value),
     }));
 
-    let creative = parseJsonField('mbAdvancedCreative', {});
+    let creative = deepMerge(parseJsonField('mbAdvancedCreative', {}), sdkFields.creative);
     creative = deepMerge(creative, compactObject({
         degrees_of_freedom_spec: parseJsonField('mbDegreesOfFreedom', undefined),
         asset_feed_spec: parseJsonField('mbAssetFeedSpec', undefined),
         platform_customizations: parseJsonField('mbPlatformCustomizations', undefined),
     }));
 
-    let ad = parseJsonField('mbAdvancedAd', {});
+    let ad = deepMerge(parseJsonField('mbAdvancedAd', {}), sdkFields.ad);
     ad = deepMerge(ad, compactObject({
         status: $('mbAdStatus').value,
         conversion_domain: $('mbConversionDomain').value.trim(),
@@ -300,6 +474,7 @@ function populateMetaBuilder(builder) {
     $('mbAdvancedTargeting').value = stringify(targeting);
     $('mbAdvancedCreative').value = stringify(creative);
     $('mbAdvancedAd').value = stringify(ad);
+    populateMetaSdkFields(builder);
 }
 function currentCarouselMeta() {
     return Array.from(document.querySelectorAll('#carouselRows .cr-carousel-row')).map((row) => ({
@@ -568,6 +743,7 @@ $('presetCarousel').addEventListener('change', function () {
 });
 $('creativeForm').addEventListener('submit', save);
 $('creativeSearch').addEventListener('input', render);
+$('metaFieldSearch')?.addEventListener('input', filterMetaSdkFields);
 $('refreshCreatives').addEventListener('click', () => load().catch((error) => alert(error.message)));
 $('creativeGrid').addEventListener('click', (event) => {
     const button = event.target.closest('[data-action]');
@@ -578,4 +754,8 @@ $('creativeGrid').addEventListener('click', (event) => {
 
 load().catch((error) => {
     $('creativeGrid').innerHTML = '<div class="cr-empty">' + esc(error.message) + '</div>';
+});
+loadMetaSdkSchema().catch((error) => {
+    const statusEl = $('metaSchemaStatus');
+    if (statusEl) statusEl.textContent = 'SDK-схема недоступна: ' + error.message;
 });
