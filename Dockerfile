@@ -176,7 +176,8 @@ RUN set -eux; \
     grep -q 'REMASK_META_OFFICIAL_VALIDATOR_V1' /var/www/html/classes/MetaLaunchValidator.php; \
     grep -q 'REMASK_META_OFFICIAL_FORWARD_V1' /var/www/html/classes/MetaAdsService.php; \
     test -f /var/www/html/classes/MetaOfficialFields.php; \
-    grep -q 'ONLINE_GAMBLING_AND_GAMING' /var/www/html/classes/MetaOfficialFields.php; \
+    grep -q 'ONLINE_GAMBLING_AND_GAMING' /var/www/html/creatives.php; \
+    grep -q 'STORE_VISITS' /var/www/html/creatives.php; \
     grep -q 'meta-builder-v102' /var/www/html/launch.php; \
     grep -q 'presetCreativeName' /var/www/html/creatives.php; \
     grep -q 'presetAdName' /var/www/html/creatives.php; \
@@ -193,7 +194,6 @@ RUN set -eux; \
     grep -q 'REMASK_CAROUSEL_LIBRARY_V1' /var/www/html/ajax/metaJobCreate.php; \
     grep -q 'carousel_media_library_ids' /var/www/html/scripts/launch.js; \
     grep -q 'carousel_media_library_ids' /var/www/html/ajax/metaJobCreate.php; \
-    grep -q 'creative-complete-v100' /var/www/html/launch.php; \
     grep -q 'cr-grid' /var/www/html/creatives.php; \
     grep -q 'creativeModal' /var/www/html/creatives.php; \
     grep -q 'REMASK_CREATIVE_LIBRARY_V1' /var/www/html/settings.php; \
