@@ -64,6 +64,243 @@ function closeEditor() {
     $('creativeModal').setAttribute('aria-hidden', 'true');
     clearObjectUrls();
 }
+function switchTab(name) {
+    document.querySelectorAll('.cr-tab').forEach((button) => button.classList.toggle('active', button.dataset.tab === name));
+    document.querySelectorAll('.cr-panel').forEach((panel) => panel.classList.toggle('active', panel.dataset.panel === name));
+}
+function parseJsonField(id, fallback) {
+    const raw = $(id).value.trim();
+    if (!raw) return fallback;
+    try { return JSON.parse(raw); }
+    catch { throw new Error('Невалидный JSON: ' + id); }
+}
+function stringify(value) {
+    return value === undefined || value === null || (Array.isArray(value) && !value.length) || (typeof value === 'object' && !Array.isArray(value) && !Object.keys(value).length)
+        ? ''
+        : JSON.stringify(value, null, 2);
+}
+function csvStrings(value) {
+    return String(value || '').split(',').map((v) => v.trim()).filter(Boolean);
+}
+function csvInts(value) {
+    return csvStrings(value).map((v) => Number(v)).filter((v) => Number.isInteger(v));
+}
+function numericValue(id) {
+    const raw = $(id).value.trim();
+    if (raw === '') return undefined;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : undefined;
+}
+function dateValue(id) {
+    const raw = $(id).value.trim();
+    return raw || undefined;
+}
+function compactObject(obj) {
+    const out = {};
+    for (const [key, value] of Object.entries(obj || {})) {
+        if (value === undefined || value === null || value === '') continue;
+        if (Array.isArray(value) && value.length === 0) continue;
+        if (typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0) continue;
+        out[key] = value;
+    }
+    return out;
+}
+function deepMerge(base, extra) {
+    const out = {...(base || {})};
+    for (const [key, value] of Object.entries(extra || {})) {
+        if (value && typeof value === 'object' && !Array.isArray(value) && out[key] && typeof out[key] === 'object' && !Array.isArray(out[key])) {
+            out[key] = deepMerge(out[key], value);
+        } else {
+            out[key] = value;
+        }
+    }
+    return out;
+}
+function selectedValues(selector, attr) {
+    return Array.from(document.querySelectorAll(selector)).filter((el) => el.checked).map((el) => el.getAttribute(attr)).filter(Boolean);
+}
+function idsToAudience(value) {
+    return csvStrings(value).map((id) => ({id}));
+}
+function buildMetaBuilder() {
+    const special = $('mbSpecialCategory').value;
+    let campaign = parseJsonField('mbAdvancedCampaign', {});
+    campaign = deepMerge(campaign, compactObject({
+        name: $('mbCampaignName').value.trim(),
+        objective: $('mbObjective').value,
+        buying_type: $('mbBuyingType').value,
+        special_ad_categories: special && special !== 'NONE' ? [special] : [],
+        bid_strategy: $('mbCampaignBidStrategy').value,
+        daily_budget: numericValue('mbCampaignDailyBudget'),
+        lifetime_budget: numericValue('mbCampaignLifetimeBudget'),
+        spend_cap: numericValue('mbCampaignSpendCap'),
+        start_time: dateValue('mbCampaignStart'),
+        stop_time: dateValue('mbCampaignStop'),
+        status: $('mbCampaignStatus').value,
+    }));
+
+    const promotedExtra = parseJsonField('mbPromotedObject', {});
+    const promotedObject = deepMerge(promotedExtra, compactObject({
+        pixel_id: $('mbPixelId').value.trim(),
+        custom_event_type: $('mbConversionEvent').value.trim(),
+    }));
+    let adset = parseJsonField('mbAdvancedAdset', {});
+    adset = deepMerge(adset, compactObject({
+        name: $('mbAdsetName').value.trim(),
+        optimization_goal: $('mbOptimizationGoal').value,
+        billing_event: $('mbBillingEvent').value,
+        bid_strategy: $('mbAdsetBidStrategy').value,
+        bid_amount: numericValue('mbBidAmount'),
+        destination_type: $('mbDestinationType').value,
+        daily_budget: numericValue('mbAdsetDailyBudget'),
+        lifetime_budget: numericValue('mbAdsetLifetimeBudget'),
+        start_time: dateValue('mbAdsetStart'),
+        end_time: dateValue('mbAdsetEnd'),
+        attribution_spec: parseJsonField('mbAttributionSpec', undefined),
+        promoted_object: Object.keys(promotedObject).length ? promotedObject : undefined,
+        is_dynamic_creative: $('mbDynamicCreative').checked ? true : undefined,
+        is_incremental_attribution_enabled: $('mbIncrementalAttribution').checked ? true : undefined,
+        status: $('mbAdsetStatus').value,
+    }));
+
+    let targeting = parseJsonField('mbAdvancedTargeting', {});
+    const publisherPlatforms = selectedValues('[data-publisher]', 'data-publisher');
+    const devicePlatforms = selectedValues('[data-device-platform]', 'data-device-platform');
+    targeting = deepMerge(targeting, compactObject({
+        age_min: numericValue('mbAgeMin'),
+        age_max: numericValue('mbAgeMax'),
+        genders: $('mbGender').value ? [Number($('mbGender').value)] : undefined,
+        locales: csvInts($('mbLocales').value),
+        geo_locations: parseJsonField('mbGeo', undefined),
+        excluded_geo_locations: parseJsonField('mbExcludedGeo', undefined),
+        interests: parseJsonField('mbInterests', undefined),
+        behaviors: parseJsonField('mbBehaviors', undefined),
+        custom_audiences: idsToAudience($('mbCustomAudiences').value),
+        excluded_custom_audiences: idsToAudience($('mbExcludedCustomAudiences').value),
+        flexible_spec: parseJsonField('mbFlexibleSpec', undefined),
+        exclusions: parseJsonField('mbExclusions', undefined),
+        publisher_platforms: publisherPlatforms,
+        facebook_positions: csvStrings($('mbFacebookPositions').value),
+        instagram_positions: csvStrings($('mbInstagramPositions').value),
+        messenger_positions: csvStrings($('mbMessengerPositions').value),
+        audience_network_positions: csvStrings($('mbAudienceNetworkPositions').value),
+        threads_positions: csvStrings($('mbThreadsPositions').value),
+        whatsapp_positions: csvStrings($('mbWhatsappPositions').value),
+        device_platforms: devicePlatforms,
+        user_os: csvStrings($('mbUserOs').value),
+        user_device: csvStrings($('mbUserDevice').value),
+    }));
+
+    let creative = parseJsonField('mbAdvancedCreative', {});
+    creative = deepMerge(creative, compactObject({
+        degrees_of_freedom_spec: parseJsonField('mbDegreesOfFreedom', undefined),
+        asset_feed_spec: parseJsonField('mbAssetFeedSpec', undefined),
+        platform_customizations: parseJsonField('mbPlatformCustomizations', undefined),
+    }));
+
+    let ad = parseJsonField('mbAdvancedAd', {});
+    ad = deepMerge(ad, compactObject({
+        status: $('mbAdStatus').value,
+        conversion_domain: $('mbConversionDomain').value.trim(),
+        priority: numericValue('mbAdPriority'),
+        tracking_specs: parseJsonField('mbTrackingSpecs', undefined),
+    }));
+
+    const identity = compactObject({
+        page_id: $('mbPageId').value.trim(),
+        instagram_actor_id: $('mbInstagramActorId').value.trim(),
+    });
+
+    return {campaign, adset, targeting, identity, creative, ad};
+}
+function setCheckboxValues(selector, attr, values) {
+    const wanted = new Set((values || []).map(String));
+    document.querySelectorAll(selector).forEach((el) => {
+        el.checked = wanted.has(String(el.getAttribute(attr)));
+    });
+}
+function populateMetaBuilder(builder) {
+    builder = builder || {};
+    const campaign = builder.campaign || {};
+    const adset = builder.adset || {};
+    const targeting = builder.targeting || {};
+    const identity = builder.identity || {};
+    const creative = builder.creative || {};
+    const ad = builder.ad || {};
+
+    $('mbCampaignName').value = campaign.name || '';
+    if (campaign.objective && Array.from($('mbObjective').options).some((o) => o.value === campaign.objective)) $('mbObjective').value = campaign.objective;
+    $('mbBuyingType').value = campaign.buying_type || 'AUCTION';
+    $('mbSpecialCategory').value = (campaign.special_ad_categories || [])[0] || 'NONE';
+    $('mbCampaignBidStrategy').value = campaign.bid_strategy || '';
+    $('mbCampaignDailyBudget').value = campaign.daily_budget ?? '';
+    $('mbCampaignLifetimeBudget').value = campaign.lifetime_budget ?? '';
+    $('mbCampaignSpendCap').value = campaign.spend_cap ?? '';
+    $('mbCampaignStart').value = campaign.start_time || '';
+    $('mbCampaignStop').value = campaign.stop_time || '';
+    $('mbCampaignStatus').value = campaign.status || 'PAUSED';
+
+    $('mbAdsetName').value = adset.name || '';
+    if (adset.optimization_goal && Array.from($('mbOptimizationGoal').options).some((o) => o.value === adset.optimization_goal)) $('mbOptimizationGoal').value = adset.optimization_goal;
+    if (adset.billing_event && Array.from($('mbBillingEvent').options).some((o) => o.value === adset.billing_event)) $('mbBillingEvent').value = adset.billing_event;
+    $('mbAdsetBidStrategy').value = adset.bid_strategy || 'LOWEST_COST_WITHOUT_CAP';
+    $('mbBidAmount').value = adset.bid_amount ?? '';
+    $('mbDestinationType').value = adset.destination_type || '';
+    $('mbAdsetDailyBudget').value = adset.daily_budget ?? '';
+    $('mbAdsetLifetimeBudget').value = adset.lifetime_budget ?? '';
+    $('mbAdsetStart').value = adset.start_time || '';
+    $('mbAdsetEnd').value = adset.end_time || '';
+    $('mbAttributionSpec').value = stringify(adset.attribution_spec);
+    $('mbDynamicCreative').checked = Boolean(adset.is_dynamic_creative);
+    $('mbIncrementalAttribution').checked = Boolean(adset.is_incremental_attribution_enabled);
+    $('mbAdsetStatus').value = adset.status || 'PAUSED';
+    const promoted = adset.promoted_object || {};
+    $('mbPixelId').value = promoted.pixel_id || '';
+    $('mbConversionEvent').value = promoted.custom_event_type || '';
+    $('mbPromotedObject').value = stringify(promoted);
+
+    $('mbAgeMin').value = targeting.age_min ?? 18;
+    $('mbAgeMax').value = targeting.age_max ?? 65;
+    $('mbGender').value = Array.isArray(targeting.genders) && targeting.genders.length === 1 ? String(targeting.genders[0]) : '';
+    $('mbLocales').value = (targeting.locales || []).join(',');
+    $('mbGeo').value = stringify(targeting.geo_locations);
+    $('mbExcludedGeo').value = stringify(targeting.excluded_geo_locations);
+    $('mbInterests').value = stringify(targeting.interests);
+    $('mbBehaviors').value = stringify(targeting.behaviors);
+    $('mbCustomAudiences').value = (targeting.custom_audiences || []).map((x) => x.id || x).join(',');
+    $('mbExcludedCustomAudiences').value = (targeting.excluded_custom_audiences || []).map((x) => x.id || x).join(',');
+    $('mbFlexibleSpec').value = stringify(targeting.flexible_spec);
+    $('mbExclusions').value = stringify(targeting.exclusions);
+    setCheckboxValues('[data-publisher]', 'data-publisher', targeting.publisher_platforms || ['facebook','instagram']);
+    setCheckboxValues('[data-device-platform]', 'data-device-platform', targeting.device_platforms || ['mobile','desktop']);
+    $('mbFacebookPositions').value = (targeting.facebook_positions || []).join(',');
+    $('mbInstagramPositions').value = (targeting.instagram_positions || []).join(',');
+    $('mbMessengerPositions').value = (targeting.messenger_positions || []).join(',');
+    $('mbAudienceNetworkPositions').value = (targeting.audience_network_positions || []).join(',');
+    $('mbThreadsPositions').value = (targeting.threads_positions || []).join(',');
+    $('mbWhatsappPositions').value = (targeting.whatsapp_positions || []).join(',');
+    $('mbUserOs').value = (targeting.user_os || []).join(',');
+    $('mbUserDevice').value = (targeting.user_device || []).join(',');
+
+    $('mbPageId').value = identity.page_id || '';
+    $('mbInstagramActorId').value = identity.instagram_actor_id || '';
+
+    $('mbDegreesOfFreedom').value = stringify(creative.degrees_of_freedom_spec);
+    $('mbAssetFeedSpec').value = stringify(creative.asset_feed_spec);
+    $('mbPlatformCustomizations').value = stringify(creative.platform_customizations);
+
+    $('mbAdStatus').value = ad.status || 'PAUSED';
+    $('mbConversionDomain').value = ad.conversion_domain || '';
+    $('mbAdPriority').value = ad.priority ?? '';
+    $('mbTrackingSpecs').value = stringify(ad.tracking_specs);
+
+    // Keep the complete saved sections here so rare official Meta fields survive editing.
+    $('mbAdvancedCampaign').value = stringify(campaign);
+    $('mbAdvancedAdset').value = stringify(adset);
+    $('mbAdvancedTargeting').value = stringify(targeting);
+    $('mbAdvancedCreative').value = stringify(creative);
+    $('mbAdvancedAd').value = stringify(ad);
+}
 function currentCarouselMeta() {
     return Array.from(document.querySelectorAll('#carouselRows .cr-carousel-row')).map((row) => ({
         headline: row.querySelector('.car-headline')?.value.trim() || '',
@@ -118,13 +355,29 @@ function renderCarousel() {
         '</div>';
     }).join('');
 }
+function resetBuilderDefaults() {
+    $('mbObjective').value = 'OUTCOME_TRAFFIC';
+    $('mbBuyingType').value = 'AUCTION';
+    $('mbSpecialCategory').value = 'NONE';
+    $('mbCampaignStatus').value = 'PAUSED';
+    $('mbOptimizationGoal').value = 'LINK_CLICKS';
+    $('mbBillingEvent').value = 'IMPRESSIONS';
+    $('mbAdsetBidStrategy').value = 'LOWEST_COST_WITHOUT_CAP';
+    $('mbAdsetStatus').value = 'PAUSED';
+    $('mbAgeMin').value = '18';
+    $('mbAgeMax').value = '65';
+    $('mbAdStatus').value = 'PAUSED';
+    setCheckboxValues('[data-publisher]', 'data-publisher', ['facebook','instagram']);
+    setCheckboxValues('[data-device-platform]', 'data-device-platform', ['mobile','desktop']);
+}
 function openEditor(item = null) {
     clearObjectUrls();
     editing = item;
     carouselFiles = [];
     $('creativeForm').reset();
+    resetBuilderDefaults();
     $('creativeId').value = item?.id || '';
-    $('creativeEditorTitle').textContent = item ? 'Редактирование' : 'Новое крео';
+    $('creativeEditorTitle').textContent = item ? 'Редактирование связки' : 'Новая связка';
 
     $('presetName').value = item?.name || '';
     $('presetCreativeName').value = item?.creative_name || '';
@@ -140,15 +393,18 @@ function openEditor(item = null) {
     $('presetMedia').value = '';
     $('presetCarousel').value = '';
 
+    populateMetaBuilder(item?.meta_builder || {});
+
     $('singlePreview').innerHTML = item?.format === 'SINGLE' && item.media
         ? mediaHtml(item.preview_url, item.media.media_type)
         : '<i class="fa-regular fa-image"></i>';
     $('singleCurrent').textContent = item?.format === 'SINGLE' && item.media
         ? item.media.original_name + ' · ' + formatBytes(item.media.size_bytes)
-        : '';
+        : 'Изображение или видео.';
 
     renderFormat();
     renderCarousel();
+    switchTab('campaign');
     setStatus('');
     $('creativeModal').classList.add('open');
     $('creativeModal').setAttribute('aria-hidden', 'false');
@@ -156,20 +412,15 @@ function openEditor(item = null) {
 function render() {
     const query = $('creativeSearch').value.trim().toLowerCase();
     const rows = items.filter((item) => {
+        const builder = item.meta_builder || {};
         const haystack = [
-            item.name,
-            item.creative_name,
-            item.ad_name,
-            item.message,
-            item.headline,
-            item.description,
-            item.destination_url,
-            item.media?.original_name
+            item.name,item.creative_name,item.ad_name,item.message,item.headline,item.description,item.destination_url,
+            item.media?.original_name,builder.campaign?.name,builder.campaign?.objective,builder.adset?.name,builder.adset?.optimization_goal
         ].join(' ').toLowerCase();
         return !query || haystack.includes(query);
     });
 
-    $('creativeCount').textContent = rows.length + ' крео';
+    $('creativeCount').textContent = rows.length + ' связок';
     if (!rows.length) {
         $('creativeGrid').innerHTML = '<div class="cr-empty">' + (items.length ? 'Ничего не найдено' : 'Пока пусто') + '</div>';
         return;
@@ -177,14 +428,11 @@ function render() {
 
     $('creativeGrid').innerHTML = rows.map((item) => {
         let fileLabel = '';
-        if (item.format === 'SINGLE') {
-            fileLabel = item.media?.original_name || 'Файл отсутствует';
-        } else if (item.format === 'CAROUSEL') {
-            fileLabel = (item.carousel?.length || 0) + ' карточок';
-        } else {
-            fileLabel = 'Instagram ' + (item.instagram_media_id || '');
-        }
+        if (item.format === 'SINGLE') fileLabel = item.media?.original_name || 'Файл отсутствует';
+        else if (item.format === 'CAROUSEL') fileLabel = (item.carousel?.length || 0) + ' карточок';
+        else fileLabel = 'Instagram ' + (item.instagram_media_id || '');
 
+        const objective = item.meta_builder?.campaign?.objective || '';
         const preview = item.preview_url
             ? mediaHtml(item.preview_url, item.format === 'SINGLE' ? item.media?.media_type : 'image')
             : '<div class="cr-empty">Instagram post / reel</div>';
@@ -193,7 +441,7 @@ function render() {
             '<div class="cr-preview">' + preview + '<span class="cr-format">' + formatLabel(item.format) + '</span></div>' +
             '<div class="cr-body">' +
                 '<div class="cr-name" title="' + esc(item.name || item.id) + '">' + esc(item.name || item.id) + '</div>' +
-                '<div class="cr-file">' + esc(fileLabel) + '</div>' +
+                '<div class="cr-file">' + esc([objective,fileLabel].filter(Boolean).join(' · ')) + '</div>' +
                 '<div class="cr-actions">' +
                     '<a class="cr-launch" href="launch.php?creative_preset=' + encodeURIComponent(item.id) + '">В АВТОЗАЛИВ</a>' +
                     '<button class="cr-icon" type="button" data-action="edit" title="Изменить"><i class="fa-solid fa-pen"></i></button>' +
@@ -211,12 +459,18 @@ async function load() {
 }
 async function save(event) {
     event.preventDefault();
+    let metaBuilder;
+    try { metaBuilder = buildMetaBuilder(); }
+    catch (error) { setStatus(error.message, 'bad'); return; }
+
     const format = $('presetFormat').value;
     const form = new FormData();
     const id = $('creativeId').value.trim();
 
     form.append('action', 'save');
     if (id) form.append('id', id);
+    form.append('meta_builder', JSON.stringify(metaBuilder));
+
     const values = {
         name: $('presetName').value.trim(),
         creative_name: $('presetCreativeName').value.trim(),
@@ -237,6 +491,7 @@ async function save(event) {
         if (file) form.append('media', file, file.name);
         if (!id && !file) {
             setStatus('Выбери image или video.', 'bad');
+            switchTab('creative');
             return;
         }
     } else if (format === 'CAROUSEL') {
@@ -245,6 +500,7 @@ async function save(event) {
         const count = carouselFiles.length || existingCount;
         if (count < 2 || count > 10) {
             setStatus('Carousel требует 2–10 изображений.', 'bad');
+            switchTab('creative');
             return;
         }
         form.append('carousel_cards', JSON.stringify(meta));
@@ -252,6 +508,7 @@ async function save(event) {
     } else {
         if (!/^\d+$/.test($('presetInstagramMediaId').value.trim())) {
             setStatus('Instagram media ID должен быть числом.', 'bad');
+            switchTab('creative');
             return;
         }
     }
@@ -262,7 +519,7 @@ async function save(event) {
         const data = await api('ajax/creativeLibrary.php', {method:'POST', body:form});
         items = data.items || [];
         render();
-        setStatus('Сохранено.', 'ok');
+        setStatus('Связка сохранена.', 'ok');
         setTimeout(closeEditor, 250);
     } catch (error) {
         setStatus(error.message, 'bad');
@@ -278,7 +535,6 @@ async function itemAction(id, action) {
         return;
     }
     if (action === 'delete' && !confirm('Удалить "' + (item.name || id) + '"?')) return;
-
     const form = new FormData();
     form.append('action', action);
     form.append('id', id);
@@ -291,15 +547,12 @@ async function itemAction(id, action) {
     }
 }
 
+document.querySelectorAll('.cr-tab').forEach((button) => button.addEventListener('click', () => switchTab(button.dataset.tab)));
 $('newCreative').addEventListener('click', () => openEditor());
 $('closeCreative').addEventListener('click', closeEditor);
 $('cancelCreative').addEventListener('click', closeEditor);
-$('creativeModal').addEventListener('click', (event) => {
-    if (event.target === $('creativeModal')) closeEditor();
-});
-document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && $('creativeModal').classList.contains('open')) closeEditor();
-});
+$('creativeModal').addEventListener('click', (event) => { if (event.target === $('creativeModal')) closeEditor(); });
+document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && $('creativeModal').classList.contains('open')) closeEditor(); });
 $('presetFormat').addEventListener('change', renderFormat);
 $('presetMedia').addEventListener('change', function () {
     const file = this.files[0];
