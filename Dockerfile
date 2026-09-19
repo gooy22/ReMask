@@ -280,6 +280,13 @@ RUN printf '%s\n' \
     'memory_limit=512M' \
     > /usr/local/etc/php/conf.d/remask-uploads.ini
 
+RUN echo '--- REMASK DEBUG metaPreflight.php ---' \
+    && sed -n '1,220p' /var/www/html/ajax/metaPreflight.php \
+    && echo '--- REMASK DEBUG MetaEndpoint cachedPreflight ---' \
+    && grep -n -A120 -B20 'function cachedPreflight' /var/www/html/classes/MetaEndpoint.php || true \
+    && echo '--- REMASK DEBUG MetaEndpoint launch review ---' \
+    && grep -n -A220 -B20 -E 'function .*review|function .*Review|launchReview|preflight' /var/www/html/classes/MetaEndpoint.php || true
+
 ENV REMASK_META_CACHE_TTL=1800 \
     META_GRAPH_API_VERSION=v26.0 \
     REMASK_JOB_EXECUTION_MODE=worker \
