@@ -70,6 +70,7 @@ require_once __DIR__ . '/checkpassword.php';
 .cr-thumb img{width:100%;height:100%;object-fit:cover}
 .cr-modal-foot{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;border-top:1px solid #343a45;background:#20242b}
 .cr-status{font-size:12px;color:#8993a3;min-height:18px}.cr-status.bad{color:#ff8f8f}.cr-status.ok{color:#69d99b}
+.cr-sdk-groups{display:grid;gap:10px}.cr-sdk-group{border:1px solid #343a45;border-radius:8px;background:#1d2128;overflow:hidden}.cr-sdk-group>summary{cursor:pointer;padding:10px 12px;color:#dbe0e8;font-size:12px;font-weight:700;list-style:none;display:flex;justify-content:space-between;align-items:center}.cr-sdk-group>summary::-webkit-details-marker{display:none}.cr-sdk-count{font-size:10px;color:#7f8898;font-weight:600}.cr-sdk-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;padding:0 12px 12px}.cr-sdk-field{min-width:0}.cr-sdk-field label{display:flex!important;justify-content:space-between;gap:8px;margin-bottom:5px!important}.cr-sdk-type{font-size:9px;color:#70798a;font-weight:500}.cr-sdk-field textarea{min-height:72px!important;height:72px!important}.cr-raw-json{margin-top:12px;border-top:1px solid #343a45;padding-top:10px}.cr-raw-json>summary{cursor:pointer;color:#9aa3b2;font-size:12px;font-weight:700;margin-bottom:10px}.cr-sdk-hidden{display:none!important}
 .cr-foot-actions{display:flex;gap:8px}
 @media(max-width:820px){.span-8,.span-6,.span-4,.span-3{grid-column:span 12}.cr-media-row{grid-template-columns:1fr}.cr-carousel-row{grid-template-columns:44px 1fr}.cr-carousel-row .form-control{grid-column:span 2}}
 </style>
@@ -246,15 +247,25 @@ require_once __DIR__ . '/checkpassword.php';
       </section>
 
       <section class="cr-panel" data-panel="advanced">
-        <div class="cr-section-title">Официальные параметры Meta API — расширенный режим</div>
-        <div class="cr-muted mb-3">Сюда можно добавить редкие параметры, которые есть в текущем Meta SDK, но не вынесены отдельным контролом. Неизвестные ключи backend не пропустит.</div>
-        <div class="cr-form-grid">
-          <div class="span-6 cr-field"><label>Campaign params (JSON)</label><textarea id="mbAdvancedCampaign" class="form-control cr-json" placeholder="{}"></textarea></div>
-          <div class="span-6 cr-field"><label>Ad Set params (JSON)</label><textarea id="mbAdvancedAdset" class="form-control cr-json" placeholder="{}"></textarea></div>
-          <div class="span-6 cr-field"><label>Targeting params (JSON)</label><textarea id="mbAdvancedTargeting" class="form-control cr-json" placeholder="{}"></textarea></div>
-          <div class="span-6 cr-field"><label>Creative params (JSON)</label><textarea id="mbAdvancedCreative" class="form-control cr-json" placeholder="{}"></textarea></div>
-          <div class="span-6 cr-field"><label>Ad params (JSON)</label><textarea id="mbAdvancedAd" class="form-control cr-json" placeholder="{}"></textarea></div>
+        <div class="cr-section-title">Все официальные поля Meta API</div>
+        <div class="cr-muted mb-3">Поля ниже строятся из актуальной SDK-схемы ReMask. Простые значения вводятся напрямую, сложные Object / map / list — JSON.</div>
+        <div class="cr-toolbar" style="margin:0 0 12px">
+          <input id="metaFieldSearch" class="cr-search" placeholder="Поиск поля Meta..." style="max-width:420px">
+          <span id="metaSchemaStatus" class="cr-count">Загрузка SDK-схемы…</span>
         </div>
+        <div id="metaSdkFields" class="cr-sdk-groups"></div>
+
+        <details class="cr-raw-json">
+          <summary>Raw JSON override</summary>
+          <div class="cr-muted mb-2">Нужен только если удобнее вставить готовый объект целиком. Значения из обычных контролов имеют приоритет.</div>
+          <div class="cr-form-grid">
+            <div class="span-6 cr-field"><label>Campaign params (JSON)</label><textarea id="mbAdvancedCampaign" class="form-control cr-json" placeholder="{}"></textarea></div>
+            <div class="span-6 cr-field"><label>Ad Set params (JSON)</label><textarea id="mbAdvancedAdset" class="form-control cr-json" placeholder="{}"></textarea></div>
+            <div class="span-6 cr-field"><label>Targeting params (JSON)</label><textarea id="mbAdvancedTargeting" class="form-control cr-json" placeholder="{}"></textarea></div>
+            <div class="span-6 cr-field"><label>Creative params (JSON)</label><textarea id="mbAdvancedCreative" class="form-control cr-json" placeholder="{}"></textarea></div>
+            <div class="span-6 cr-field"><label>Ad params (JSON)</label><textarea id="mbAdvancedAd" class="form-control cr-json" placeholder="{}"></textarea></div>
+          </div>
+        </details>
       </section>
     </div>
 
@@ -266,7 +277,7 @@ require_once __DIR__ . '/checkpassword.php';
 </div>
 </div>
 
-<script src="scripts/creatives.js?v=20260919-meta-builder-v102" type="module"></script>
+<script src="scripts/creatives.js?v=20260919-meta-builder-v103" type="module"></script>
 <div class="app-footer"><?php include 'copyright.php' ?></div>
 </main>
 </body>
