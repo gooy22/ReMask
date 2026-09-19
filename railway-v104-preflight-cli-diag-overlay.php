@@ -7,6 +7,7 @@ require_once __DIR__.'/../settings.php';
 require_once __DIR__.'/../classes/MetaEndpoint.php';
 require_once __DIR__.'/../classes/MetaApiClient.php';
 require_once __DIR__.'/../classes/AccountStoreFactory.php';
+require_once __DIR__.'/../classes/FbRequests.php';
 
 function dclean(string $m): string {
     $m=preg_replace('#(https?://)([^/@:\s]+):([^/@\s]+)@#i','$1***:***@',$m) ?? $m;
@@ -56,6 +57,33 @@ try{
         'permissions'=>dstep(fn()=>$c->get('me/permissions',['limit'=>200])),
         'ad_accounts'=>dstep(fn()=>$c->get('me/adaccounts',['fields'=>'id,name,account_status,currency','limit'=>50])),
     ];
+
+    $legacy=new FbRequests();
+    foreach([
+        'me'=>'me?fields=id,name',
+        'ad_accounts'=>'me/adaccounts?fields=id,name,account_status,currency&limit=50'
+    ] as $label=>$path){
+        try{
+            $raw=$legacy->ApiGet($account,$path);
+            $body=json_decode((string)($raw['res']??''),true);
+            $err=is_array($body['error']??null)?$body['error']:[];
+            $transport=trim((string)($raw['error']??''));
+            $out['legacy'][$label]=[
+                'ok'=>is_array($body) && $err===[] && $transport==='',
+                'has_id'=>is_array($body)&&isset($body['id']),
+                'count'=>is_array($body['data']??null)?count($body['data']):null,
+                'meta_error'=>$err===[]?null:[
+                    'message'=>isset($err['message'])?dclean((string)$err['message']):null,
+                    'type'=>$err['type']??null,
+                    'code'=>isset($err['code'])?(int)$err['code']:null,
+                    'subcode'=>isset($err['error_subcode'])?(int)$err['error_subcode']:null,
+                ],
+                'transport_error'=>$transport===''?null:dclean($transport),
+            ];
+        }catch(Throwable $legacyError){
+            $out['legacy'][$label]=['ok'=>false,'exception'=>get_class($legacyError),'error'=>dclean($legacyError->getMessage())];
+        }
+    }
 }catch(Throwable $e){
     $out['fatal']=['error'=>dclean($e->getMessage()),'class'=>get_class($e),'code'=>$e->getCode()];
 }
