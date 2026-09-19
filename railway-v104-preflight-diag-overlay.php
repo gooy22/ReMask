@@ -1,7 +1,7 @@
 <?php
 /**
  * Temporary sanitized Meta preflight diagnostic.
- * Protected by REMASK_DIAG_TOKEN and never returns access tokens/cookies/proxy credentials.
+ * Uses the same MetaApiClient transport as ReMask; no raw Graph transport.
  */
 $root='/var/www/html';
 $path=$root.'/ajax/metaPreflightDiag.php';
@@ -20,6 +20,7 @@ if($expected==='' || $provided==='' || !hash_equals($expected,$provided)){
 
 require_once __DIR__.'/../settings.php';
 require_once __DIR__.'/../classes/MetaEndpoint.php';
+require_once __DIR__.'/../classes/MetaApiClient.php';
 require_once __DIR__.'/../classes/AccountStoreFactory.php';
 
 function diag_clean(string $message): string {
@@ -44,41 +45,22 @@ function diag_step(callable $fn): array {
         return $out;
     }
 }
-function diag_graph(string $version,string $token,string $mode,string $path='me',array $params=['fields'=>'id,name']): array {
-    $url='https://graph.facebook.com/'.rawurlencode($version).'/'.ltrim($path,'/');
-    $headers=['Accept: application/json','User-Agent: ReMask-PreflightDiag/1.0'];
-    if($mode==='bearer')$headers[]='Authorization: Bearer '.$token;
-    else $params['access_token']=$token;
-    if($params!==[])$url.='?'.http_build_query($params);
-    $ch=curl_init($url);
-    curl_setopt_array($ch,[
-        CURLOPT_RETURNTRANSFER=>true,
-        CURLOPT_FOLLOWLOCATION=>false,
-        CURLOPT_CONNECTTIMEOUT=>10,
-        CURLOPT_TIMEOUT=>25,
-        CURLOPT_SSL_VERIFYPEER=>true,
-        CURLOPT_SSL_VERIFYHOST=>2,
-        CURLOPT_HTTPHEADER=>$headers,
-    ]);
-    $raw=curl_exec($ch);
-    $err=curl_error($ch);
-    $errno=curl_errno($ch);
-    $http=(int)curl_getinfo($ch,CURLINFO_RESPONSE_CODE);
-    curl_close($ch);
-    if($raw===false)return ['ok'=>false,'http'=>$http,'transport_error'=>diag_clean($err ?: ('cURL errno '.$errno))];
-    $d=json_decode((string)$raw,true);
-    if(!is_array($d))return ['ok'=>false,'http'=>$http,'error'=>'non-json'];
-    if(isset($d['error'])&&is_array($d['error'])){
-        $e=$d['error'];
-        return [
-            'ok'=>false,'http'=>$http,
-            'message'=>diag_clean((string)($e['message']??'Meta error')),
-            'type'=>(string)($e['type']??''),
-            'code'=>isset($e['code'])?(int)$e['code']:null,
-            'subcode'=>isset($e['error_subcode'])?(int)$e['error_subcode']:null,
-        ];
-    }
-    return ['ok'=>$http>=200&&$http<300,'http'=>$http,'has_id'=>isset($d['id']),'data_count'=>is_array($d['data']??null)?count($d['data']):null];
+function diag_client(object $account,string $version): MetaApiClient {
+    $client=new MetaApiClient((string)$account->token,$account->proxy,$version,35);
+    if($account->isLegacyReady())$client->setSessionCookies($account->getCurlCookies());
+    return $client;
+}
+function diag_public_step(array $step): array {
+    return [
+        'ok'=>(bool)($step['ok']??false),
+        'error'=>$step['error']??null,
+        'class'=>$step['class']??null,
+        'code'=>$step['code']??null,
+        'http_status'=>$step['http_status']??null,
+        'subcode'=>$step['subcode']??($step['error_subcode']??null),
+        'count'=>($step['ok']??false) && is_array($step['value']['data']??null) ? count($step['value']['data']) : null,
+        'has_id'=>($step['ok']??false) ? isset($step['value']['id']) : null,
+    ];
 }
 
 $profile=trim((string)($_GET['profile'] ?? ''));
@@ -88,32 +70,26 @@ try{
     $store=AccountStoreFactory::create(ACCOUNTSFILENAME);
     $account=$store->getAccountByName($profile);
     if($account===null)throw new RuntimeException('profile not found');
-    $token=trim((string)$account->token);
-    if($token==='')throw new RuntimeException('empty token');
+    if(trim((string)$account->token)==='')throw new RuntimeException('empty token');
 
     $service=MetaEndpoint::serviceForAccountName($profile);
-    $identity=diag_step(fn()=>$service->getIdentity());
-    $permissions=diag_step(fn()=>$service->getPermissions());
-    $accounts=diag_step(fn()=>$service->listAdAccounts());
-
     $out['service']=[
-        'identity'=>['ok'=>$identity['ok'],'error'=>$identity['error']??null,'code'=>$identity['code']??null],
-        'permissions'=>['ok'=>$permissions['ok'],'error'=>$permissions['error']??null,'code'=>$permissions['code']??null],
-        'ad_accounts'=>[
-            'ok'=>$accounts['ok'],
-            'count'=>$accounts['ok']?count((array)($accounts['value']['data']??[])):null,
-            'error'=>$accounts['error']??null,
-            'code'=>$accounts['code']??null,
-        ],
+        'identity'=>diag_public_step(diag_step(fn()=>$service->getIdentity())),
+        'permissions'=>diag_public_step(diag_step(fn()=>$service->getPermissions())),
+        'ad_accounts'=>diag_public_step(diag_step(fn()=>$service->listAdAccounts())),
     ];
-    $out['direct']=[
-        'v26_me_query'=>diag_graph('v26.0',$token,'query'),
-        'v26_me_bearer'=>diag_graph('v26.0',$token,'bearer'),
-        'v25_me_query'=>diag_graph('v25.0',$token,'query'),
-        'v24_me_query'=>diag_graph('v24.0',$token,'query'),
-        'v20_me_query'=>diag_graph('v20.0',$token,'query'),
-        'v26_permissions_query'=>diag_graph('v26.0',$token,'query','me/permissions',['limit'=>200]),
-        'v26_adaccounts_query'=>diag_graph('v26.0',$token,'query','me/adaccounts',['fields'=>'id,name,account_status,currency','limit'=>50]),
+
+    $versions=['v26.0','v25.0','v24.0','v20.0'];
+    foreach($versions as $version){
+        $client=diag_client($account,$version);
+        $out['versions'][$version]=[
+            'me'=>diag_public_step(diag_step(fn()=>$client->get('me',['fields'=>'id,name']))),
+        ];
+    }
+    $v26=diag_client($account,'v26.0');
+    $out['v26_edges']=[
+        'permissions'=>diag_public_step(diag_step(fn()=>$v26->get('me/permissions',['limit'=>200]))),
+        'ad_accounts'=>diag_public_step(diag_step(fn()=>$v26->get('me/adaccounts',['fields'=>'id,name,account_status,currency','limit'=>50]))),
     ];
     $out['ok']=true;
 }catch(Throwable $e){
@@ -122,4 +98,4 @@ try{
 echo json_encode($out,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);
 PHP;
 file_put_contents($path,$code);
-fwrite(STDERR,"[preflight-diag] sanitized diagnostic endpoint installed\n");
+fwrite(STDERR,"[preflight-diag] sanitized MetaApiClient diagnostic endpoint installed\n");
