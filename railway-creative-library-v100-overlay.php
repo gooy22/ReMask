@@ -261,4 +261,17 @@ JS_CODE;
     file_put_contents($launchPath, $launch);
 }
 
+$launchPhpPath = $root . '/launch.php';
+$launchPhp = file_get_contents($launchPhpPath);
+if ($launchPhp === false) { fwrite(STDERR, "[creative-v100] could not read launch.php\n"); exit(296); }
+$launchPhp = preg_replace(
+    '#<script src="scripts/launch\\.js(?:\\?[^"]*)?" type="module"></script>#',
+    '<script src="scripts/launch.js?v=20260919-creative-complete-v100" type="module"></script>',
+    $launchPhp,
+    1,
+    $cacheCount
+) ?? $launchPhp;
+if ($cacheCount !== 1) { fwrite(STDERR, "[creative-v100] Launch cache-bust tag missing\n"); exit(297); }
+file_put_contents($launchPhpPath, $launchPhp);
+
 fwrite(STDERR, "[creative-v100] full Creative/Ad functions + saved Carousel Launch handoff ready\n");
