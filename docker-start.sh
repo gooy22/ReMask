@@ -56,8 +56,5 @@ a2enconf remask-servername 2>/dev/null || true
 sed -ri "s#DocumentRoot .*#DocumentRoot ${ROOT}#" /etc/apache2/sites-available/000-default.conf
 sed -ri "s/<VirtualHost \*:[0-9]+>/<VirtualHost *:80>/" /etc/apache2/sites-available/000-default.conf
 
-if [ -n "${REMASK_TOKEN_HISTORY_DIAG_PROFILE:-}" ] && [ -f "$ROOT/bin/remask-profile-history-diag.php" ]; then
-  php "$ROOT/bin/remask-profile-history-diag.php" >&2 || true
-fi
 
 exec apache2-foreground
