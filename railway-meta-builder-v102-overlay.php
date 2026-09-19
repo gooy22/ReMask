@@ -157,6 +157,56 @@ PHP_CODE;
 }
 file_put_contents($servicePath,$service);
 
+/* -------- Launch budget validation supports saved daily/lifetime budgets -------- */
+$launch=file_get_contents($launchPath);
+if($launch===false){fwrite(STDERR,"[meta-builder-v102] read launch.js failed\n");exit(320);}
+if(strpos($launch,'REMASK_META_BUILDER_BUDGET_V1')===false){
+    $oldBudget=<<<'JS_CODE'
+    /* REMASK_DAILY_BUDGET_GUARD_V1 */
+    const campaignBudget = Number(payload.campaign.daily_budget || 0);
+    const adsetBudget = Number(payload.adset.daily_budget || 0);
+    if ((campaignBudget > 0) === (adsetBudget > 0)) {
+        throw new Error('Set a positive Daily budget on exactly one level: Campaign or Ad Set.');
+    }
+    const activeDailyBudget = campaignBudget > 0 ? campaignBudget : adsetBudget;
+    if (!Number.isInteger(activeDailyBudget)) {
+        throw new Error('Daily budget must be an integer in minor currency units.');
+    }
+    if (activeDailyBudget <= 100) {
+        throw new Error('Daily budget is too low. Enter more than 100 minor units (for USD: 101 = $1.01; recommended 200 = $2.00 or more).');
+    }
+JS_CODE;
+    $newBudget=<<<'JS_CODE'
+    /* REMASK_DAILY_BUDGET_GUARD_V1 */
+    /* REMASK_META_BUILDER_BUDGET_V1 */
+    const savedBuilder = remaskSelectedCreativePreset?.meta_builder || {};
+    const campaignDaily = Number(savedBuilder.campaign?.daily_budget ?? payload.campaign.daily_budget ?? 0);
+    const campaignLifetime = Number(savedBuilder.campaign?.lifetime_budget ?? payload.campaign.lifetime_budget ?? 0);
+    const adsetDaily = Number(savedBuilder.adset?.daily_budget ?? payload.adset.daily_budget ?? 0);
+    const adsetLifetime = Number(savedBuilder.adset?.lifetime_budget ?? payload.adset.lifetime_budget ?? 0);
+    const budgetEntries = [
+        ['Campaign daily', campaignDaily, true],
+        ['Campaign lifetime', campaignLifetime, false],
+        ['Ad Set daily', adsetDaily, true],
+        ['Ad Set lifetime', adsetLifetime, false],
+    ].filter(([, value]) => value > 0);
+    if (budgetEntries.length !== 1) {
+        throw new Error('Set exactly one budget: Campaign daily/lifetime OR Ad Set daily/lifetime.');
+    }
+    const [budgetName, activeBudget, isDailyBudget] = budgetEntries[0];
+    if (!Number.isInteger(activeBudget)) {
+        throw new Error(budgetName + ' budget must be an integer in minor currency units.');
+    }
+    if (isDailyBudget && activeBudget <= 100) {
+        throw new Error('Daily budget is too low. Enter more than 100 minor units (for USD: 101 = $1.01; recommended 200 = $2.00 or more).');
+    }
+JS_CODE;
+    if(strpos($launch,$oldBudget)===false){fwrite(STDERR,"[meta-builder-v102] legacy budget guard block missing\n");exit(322);}
+    $launch=str_replace($oldBudget,$newBudget,$launch,$bc);
+    if($bc!==1){fwrite(STDERR,"[meta-builder-v102] budget guard replacement count=$bc\n");exit(323);}
+    file_put_contents($launchPath,$launch);
+}
+
 /* -------- Launch cache-bust -------- */
 $launchPhp=file_get_contents($launchPhpPath);
 if($launchPhp===false){fwrite(STDERR,"[meta-builder-v102] read launch.php failed\n");exit(320);}
