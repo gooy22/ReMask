@@ -163,7 +163,7 @@ final class MetaOfficialFields
             throw new InvalidArgumentException('adset.targeting is required.');
         }
 
-        $hasBudget = false;
+        $activeBudgets = [];
         foreach ([['campaign','daily_budget'],['campaign','lifetime_budget'],['adset','daily_budget'],['adset','lifetime_budget']] as [$section,$field]) {
             $value = $payload[$section][$field] ?? null;
             if ($value === null || $value === '') continue;
@@ -171,9 +171,11 @@ final class MetaOfficialFields
                 throw new InvalidArgumentException("$section.$field must be a positive integer in minor currency units.");
             }
             $payload[$section][$field] = (int)$value;
-            $hasBudget = true;
+            $activeBudgets[] = $section . '.' . $field;
         }
-        if (!$hasBudget) throw new InvalidArgumentException('Set a daily_budget or lifetime_budget on Campaign or Ad Set.');
+        if (count($activeBudgets) !== 1) {
+            throw new InvalidArgumentException('Set exactly one budget: Campaign daily/lifetime OR Ad Set daily/lifetime.');
+        }
 
         foreach (['campaign','adset','ad'] as $section) {
             if (isset($payload[$section]['status'])) {
