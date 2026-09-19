@@ -151,6 +151,9 @@ RUN set -eux; \
     php -l /var/www/html/ajax/creativePreview.php; \
     php -l /var/www/html/creatives.php; \
     test -f /var/www/html/scripts/creatives.js; \
+    grep -q 'creative-library-v99' /var/www/html/creatives.php; \
+    grep -q 'cr-grid' /var/www/html/creatives.php; \
+    grep -q 'creativeModal' /var/www/html/creatives.php; \
     grep -q 'REMASK_CREATIVE_LIBRARY_V1' /var/www/html/settings.php; \
     grep -q "'creatives.php','fa-images','Креативы'" /var/www/html/menu.php; \
     grep -q 'creativeLibrarySelect' /var/www/html/launch.php; \
