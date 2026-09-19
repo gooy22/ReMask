@@ -267,6 +267,10 @@ RUN set -eux; \
     chmod 700 /var/lib/remask; \
     chmod +x /var/www/html/docker-start.sh;
 
+RUN mkdir -p /var/www/html/railway_health \
+    && printf '%s\n' '<?php http_response_code(200); header("Content-Type: application/json"); echo json_encode(["ok"=>true,"service"=>"remask","release"=>getenv("REMASK_RELEASE_VERSION") ?: "v104"]);' > /var/www/html/railway_health/index.php \
+    && chown -R www-data:www-data /var/www/html/railway_health
+
 RUN printf '%s\n' \
     'upload_max_filesize=160M' \
     'post_max_size=512M' \
