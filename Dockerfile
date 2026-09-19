@@ -39,6 +39,7 @@ COPY railway-v100-creativePreview.php /tmp/remask-v100-creativePreview.php
 COPY railway-v100-creatives.php /tmp/remask-v100-creatives.php
 COPY railway-v100-creatives.js /tmp/remask-v100-creatives.js
 COPY railway-creative-library-v100-overlay.php /tmp/railway-creative-library-v100-overlay.php
+COPY railway-launch-fields-inspect.php /tmp/railway-launch-fields-inspect.php
 COPY railway-selection-persistence-overlay.php /tmp/railway-selection-persistence-overlay.php
 COPY railway-profile-error-fix-overlay.php /tmp/railway-profile-error-fix-overlay.php
 COPY docker-start.sh /tmp/docker-start.sh
