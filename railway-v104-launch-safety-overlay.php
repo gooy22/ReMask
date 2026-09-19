@@ -1,5 +1,5 @@
 <?php
-/** v104: strict funding review and generated-Creative ownership. */
+/** v104: non-blocking funding review and generated-Creative ownership. */
 $root = rtrim((string)(getenv('REMASK_RUNTIME_ROOT') ?: '/var/www/html'), '/');
 $path = $root . '/classes/MetaEndpoint.php';
 $servicePath = $root . '/classes/MetaAdsService.php';
@@ -50,16 +50,23 @@ if (strpos($source, 'REMASK_REQUIRED_FUNDING_REVIEW_V1') === false) {
 PHP_CODE;
     $new = <<<'PHP_CODE'
                 /* REMASK_REQUIRED_FUNDING_REVIEW_V1 */
-                // A Launch may reuse a still-fresh funding snapshot, but an absent or
-                // expired cache is loaded from Meta before any mutation is queued.
-                try {
-                    $funding = self::cachedAsset($profile, 'funding', $accountId, $force);
-                } catch (Throwable $fundingError) {
-                    throw new RuntimeException('PAYMENT CHECK FAILED: ' . $fundingError->getMessage(), 0, $fundingError);
+                // Compatibility mode: Launch Review must never fail only because Meta
+                // refuses payment/funding metadata for this token/app context.
+                // Use already cached funding data as advisory context only.
+                $funding = self::peekCachedAsset($profile, 'funding', $accountId);
+                if ($funding !== null) {
+                    $row['funding'] = $funding;
+                    if (!empty($funding['expired_funding_source_details'])) {
+                        $row['warnings'][] = 'Meta reports an expired funding source.';
+                    } elseif (empty($funding['funding_source']) && empty($funding['funding_source_details']) && empty($funding['is_prepay_account'])) {
+                        $row['warnings'][] = 'Funding source is UNKNOWN from the cached official API response.';
+                    }
+                    if (!empty($funding['_cache']['stale'])) {
+                        $row['warnings'][] = 'Funding snapshot is stale; run CHECK FUNDING to refresh it.';
+                    }
+                } else {
+                    $row['warnings'][] = 'Funding/payment metadata unavailable for this token; Launch Review continues without blocking.';
                 }
-                $row['funding'] = $funding;
-
-                MetaFundingGuard::assertLaunchReady($funding);
 PHP_CODE;
     if (strpos($source, $old) === false) {
         fwrite(STDERR, "[v104-launch-safety] funding review anchor missing\n");
@@ -72,9 +79,10 @@ PHP_CODE;
     }
 }
 
-$source = str_replace("'funding_mode' => 'cached_only'", "'funding_mode' => 'required_fresh_cache'", $source, $modeCount);
-if ($modeCount !== 2 && strpos($source, "'funding_mode' => 'required_fresh_cache'") === false) {
-    fwrite(STDERR, "[v104-launch-safety] funding mode replacement failed\n");
+// Keep v103-compatible funding semantics: cached metadata is advisory only.
+$source = str_replace("'funding_mode' => 'required_fresh_cache'", "'funding_mode' => 'cached_only'", $source, $modeCount);
+if (strpos($source, "'funding_mode' => 'cached_only'") === false) {
+    fwrite(STDERR, "[v104-launch-safety] cached funding mode missing\n");
     exit(404);
 }
 
@@ -137,4 +145,4 @@ if (file_put_contents($versionPath, $version . "\n") === false) {
     exit(414);
 }
 
-fwrite(STDERR, "[v104-launch-safety] strict funding and Creative ownership installed\n");
+fwrite(STDERR, "[v104-launch-safety] non-blocking funding compatibility and Creative ownership installed\n");
