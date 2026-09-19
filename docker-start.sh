@@ -52,4 +52,8 @@ case "${REMASK_JOB_EXECUTION_MODE:-browser}" in
     ;;
 esac
 
+if [ -n "${REMASK_DIAG_PROFILE:-}" ] && [ -f "$ROOT/bin/remask-preflight-diag.php" ]; then
+  php "$ROOT/bin/remask-preflight-diag.php" >&2 || true
+fi
+
 exec apache2-foreground
