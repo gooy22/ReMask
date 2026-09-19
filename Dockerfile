@@ -34,6 +34,11 @@ COPY railway-behaviors-backend-overlay.php /tmp/railway-behaviors-backend-overla
 COPY railway-behaviors-ui-overlay.php /tmp/railway-behaviors-ui-overlay.php
 COPY railway-targeting-russian-overlay.php /tmp/railway-targeting-russian-overlay.php
 COPY railway-creative-library-overlay.php /tmp/railway-creative-library-overlay.php
+COPY railway-v100-creativeLibrary.php /tmp/remask-v100-creativeLibrary.php
+COPY railway-v100-creativePreview.php /tmp/remask-v100-creativePreview.php
+COPY railway-v100-creatives.php /tmp/remask-v100-creatives.php
+COPY railway-v100-creatives.js /tmp/remask-v100-creatives.js
+COPY railway-creative-library-v100-overlay.php /tmp/railway-creative-library-v100-overlay.php
 COPY railway-selection-persistence-overlay.php /tmp/railway-selection-persistence-overlay.php
 COPY railway-profile-error-fix-overlay.php /tmp/railway-profile-error-fix-overlay.php
 COPY docker-start.sh /tmp/docker-start.sh
@@ -151,7 +156,23 @@ RUN set -eux; \
     php -l /var/www/html/ajax/creativePreview.php; \
     php -l /var/www/html/creatives.php; \
     test -f /var/www/html/scripts/creatives.js; \
-    grep -q 'creative-library-v99' /var/www/html/creatives.php; \
+    grep -q 'creative-complete-v100' /var/www/html/creatives.php; \
+    grep -q 'presetCreativeName' /var/www/html/creatives.php; \
+    grep -q 'presetAdName' /var/www/html/creatives.php; \
+    grep -q 'presetMessage' /var/www/html/creatives.php; \
+    grep -q 'presetHeadline' /var/www/html/creatives.php; \
+    grep -q 'presetDescription' /var/www/html/creatives.php; \
+    grep -q 'presetUrl' /var/www/html/creatives.php; \
+    grep -q 'presetCta' /var/www/html/creatives.php; \
+    grep -q 'presetTags' /var/www/html/creatives.php; \
+    grep -q 'presetFormat' /var/www/html/creatives.php; \
+    grep -q 'presetCarousel' /var/www/html/creatives.php; \
+    grep -q 'presetInstagramMediaId' /var/www/html/creatives.php; \
+    grep -q 'REMASK_COMPLETE_CREATIVE_PRESET_V1' /var/www/html/scripts/launch.js; \
+    grep -q 'REMASK_CAROUSEL_LIBRARY_V1' /var/www/html/ajax/metaJobCreate.php; \
+    grep -q 'carousel_media_library_ids' /var/www/html/scripts/launch.js; \
+    grep -q 'carousel_media_library_ids' /var/www/html/ajax/metaJobCreate.php; \
+    grep -q 'creative-complete-v100' /var/www/html/launch.php; \
     grep -q 'cr-grid' /var/www/html/creatives.php; \
     grep -q 'creativeModal' /var/www/html/creatives.php; \
     grep -q 'REMASK_CREATIVE_LIBRARY_V1' /var/www/html/settings.php; \
