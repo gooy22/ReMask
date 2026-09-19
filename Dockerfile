@@ -33,9 +33,9 @@ COPY railway-live-targeting-overlay.php /tmp/railway-live-targeting-overlay.php
 COPY railway-behaviors-backend-overlay.php /tmp/railway-behaviors-backend-overlay.php
 COPY railway-behaviors-ui-overlay.php /tmp/railway-behaviors-ui-overlay.php
 COPY railway-targeting-russian-overlay.php /tmp/railway-targeting-russian-overlay.php
+COPY railway-creative-library-overlay.php /tmp/railway-creative-library-overlay.php
 COPY railway-selection-persistence-overlay.php /tmp/railway-selection-persistence-overlay.php
 COPY railway-profile-error-fix-overlay.php /tmp/railway-profile-error-fix-overlay.php
-COPY railway-creatives-inspect.php /tmp/railway-creatives-inspect.php
 COPY docker-start.sh /tmp/docker-start.sh
 
 RUN set -eux; \
@@ -82,7 +82,6 @@ RUN set -eux; \
     php -l /var/www/html/bin/remask-worker.php; \
     php -l /var/www/html/ajax/metaWorkerStatus.php; \
     php -l /var/www/html/ajax/metaJobRetry.php; \
-    php /tmp/railway-creatives-inspect.php; \
     grep -q 'REMASK_SYNC_ERROR_CLASSIFIER_V1' /var/www/html/scripts/workspace.js; \
     grep -q 'Meta request timeout after' /var/www/html/scripts/workspace.js; \
     grep -Fq "\$('workspaceActions').disabled=n===0;" /var/www/html/scripts/workspace.js; \
@@ -145,6 +144,18 @@ RUN set -eux; \
     grep -q 'detailedTargeting.behaviors' /var/www/html/scripts/launch.js; \
     grep -q 'REMASK_TARGETING_RU_LOCALE_V1' /var/www/html/classes/MetaAdsService.php; \
     test "$(grep -c "'locale' => 'ru_RU'" /var/www/html/classes/MetaAdsService.php)" -ge 3; \
+    php -l /var/www/html/classes/CreativePresetStore.php; \
+    php -l /var/www/html/ajax/creativeLibrary.php; \
+    php -l /var/www/html/ajax/creativePreview.php; \
+    php -l /var/www/html/creatives.php; \
+    test -f /var/www/html/scripts/creatives.js; \
+    grep -q 'REMASK_CREATIVE_LIBRARY_V1' /var/www/html/settings.php; \
+    grep -q "'creatives.php','fa-images','Креативы'" /var/www/html/menu.php; \
+    grep -q 'creativeLibrarySelect' /var/www/html/launch.php; \
+    grep -q 'creative-library-v98' /var/www/html/launch.php; \
+    grep -q 'REMASK_CREATIVE_LIBRARY_LAUNCH_V1' /var/www/html/scripts/launch.js; \
+    grep -q "form.append('media_library_id'" /var/www/html/scripts/launch.js; \
+    grep -q 'creative_preset' /var/www/html/scripts/launch.js; \
     grep -q 'jobActionSelect' /var/www/html/launch.php; \
     grep -q 'REMASK_AUTO_OPEN_RECENT_JOB_V1' /var/www/html/launch.php; \
     grep -q 'REMASK_JOB_ACTION_MENU_V1' /var/www/html/scripts/launch.js; \
@@ -168,7 +179,7 @@ RUN set -eux; \
     grep -Fq 'MetaEndpoint::cachedAsset($profile, $resource' /var/www/html/ajax/metaAssetManager.php; \
     grep -q "resource:'pages'" /var/www/html/scripts/workspace.js; \
     ! grep -q 'hierarchy-autosync.js' /var/www/html/workspace.php; \
-    mkdir -p /var/www/html/health /var/lib/remask /var/lib/remask/jobs /var/lib/remask/bundles /var/lib/remask/meta-cache /var/lib/remask/job-media; \
+    mkdir -p /var/www/html/health /var/lib/remask /var/lib/remask/jobs /var/lib/remask/bundles /var/lib/remask/meta-cache /var/lib/remask/job-media /var/lib/remask/media-library /var/lib/remask/creative-presets; \
     if [ ! -f /var/www/html/health/index.php ]; then printf '%s\n' '<?php http_response_code(200); header("Content-Type: application/json"); echo json_encode(["ok"=>true,"service":"remask","rev"=>getenv("REMASK_DEPLOY_REV")]);' > /var/www/html/health/index.php; fi; \
     [ -f /var/www/html/index.php ]; \
     [ -f /var/www/html/launch.php ]; \
