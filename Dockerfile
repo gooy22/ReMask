@@ -46,6 +46,7 @@ COPY railway-meta-schema-ui-v103-overlay.php /tmp/railway-meta-schema-ui-v103-ov
 COPY railway-v104-MetaFundingGuard.php /tmp/railway-v104-MetaFundingGuard.php
 COPY railway-v104-launch-safety-overlay.php /tmp/railway-v104-launch-safety-overlay.php
 COPY railway-v104-preflight-diag-overlay.php /tmp/railway-v104-preflight-diag-overlay.php
+COPY railway-v104-preflight-cli-diag-overlay.php /tmp/railway-v104-preflight-cli-diag-overlay.php
 COPY tests/v104_regression.php /tmp/v104_regression.php
 COPY railway-selection-persistence-overlay.php /tmp/railway-selection-persistence-overlay.php
 COPY railway-profile-error-fix-overlay.php /tmp/railway-profile-error-fix-overlay.php
@@ -101,6 +102,8 @@ RUN set -eux; \
     php /tmp/railway-v104-launch-safety-overlay.php; \
     php -l /tmp/railway-v104-preflight-diag-overlay.php; \
     php /tmp/railway-v104-preflight-diag-overlay.php; \
+    php -l /tmp/railway-v104-preflight-cli-diag-overlay.php; \
+    php /tmp/railway-v104-preflight-cli-diag-overlay.php; \
     sh -n /tmp/docker-start.sh; \
     grep -q 'REMASK_PROCESS_ROLE' /tmp/docker-start.sh; \
     grep -q 'REMASK_JOBS_DIR' /tmp/docker-start.sh; \
