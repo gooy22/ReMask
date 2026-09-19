@@ -83,6 +83,9 @@ RUN set -eux; \
     php -l /tmp/remask-v100-creatives.php; \
     php -l /tmp/railway-creative-library-v100-overlay.php; \
     php /tmp/railway-creative-library-v100-overlay.php; \
+    php -l /tmp/railway-meta-official-fields.php; \
+    php -l /tmp/railway-meta-builder-v102-overlay.php; \
+    php /tmp/railway-meta-builder-v102-overlay.php; \
     php /tmp/railway-selection-persistence-overlay.php; \
     php /tmp/railway-profile-error-fix-overlay.php; \
     php -r '$allowedRaw=["/var/www/html/classes/MetaApiClient.php"=>true,"/var/www/html/classes/FbRequests.php"=>true,"/var/www/html/classes/ProxyHealthService.php"=>true]; $allowedLegacy=["/var/www/html/ajax/payUnsettled.php"=>true,"/var/www/html/ajax/policyAppeal.php"=>true,"/var/www/html/ajax/disapproveAppeal.php"=>true]; $violations=[]; foreach(["/var/www/html/ajax","/var/www/html/classes","/var/www/html/bin"] as $root){$it=new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root,FilesystemIterator::SKIP_DOTS)); foreach($it as $fi){if(!$fi->isFile()||$fi->getExtension()!=="php")continue;$path=$fi->getPathname();$s=file_get_contents($path);if((str_contains($s,"graph.facebook.com")||str_contains($s,"curl_init("))&&!isset($allowedRaw[$path]))$violations[]="raw-meta-transport:".$path;if($fi->getFilename()!=="FbRequests.php"&&preg_match("/new\\s+FbRequests\\s*\\(/",$s)&&!isset($allowedLegacy[$path]))$violations[]="legacy-fbrequests-ref:".$path;}} if($violations){fwrite(STDERR,"Meta transport invariant failed: ".implode(", ",$violations)."\\n");exit(91);} fwrite(STDERR,"[transport-invariant] canonical Graph transport enforced; legacy browser transport limited to payment/appeal endpoints\\n");'; \
@@ -175,7 +178,6 @@ RUN set -eux; \
     test -f /var/www/html/classes/MetaOfficialFields.php; \
     grep -q 'ONLINE_GAMBLING_AND_GAMING' /var/www/html/classes/MetaOfficialFields.php; \
     grep -q 'meta-builder-v102' /var/www/html/launch.php; \
-    grep -q 'creative-complete-v100' /var/www/html/creatives.php; \
     grep -q 'presetCreativeName' /var/www/html/creatives.php; \
     grep -q 'presetAdName' /var/www/html/creatives.php; \
     grep -q 'presetMessage' /var/www/html/creatives.php; \
