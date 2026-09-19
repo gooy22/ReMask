@@ -58,7 +58,7 @@ try{
         'ad_accounts'=>dstep(fn()=>$c->get('me/adaccounts',['fields'=>'id,name,account_status,currency','limit'=>50])),
     ];
 
-    $legacy=new FbRequests();
+    $legacy=(new ReflectionClass(FbRequests::class))->newInstance();
     foreach([
         'me'=>'me?fields=id,name',
         'ad_accounts'=>'me/adaccounts?fields=id,name,account_status,currency&limit=50'
