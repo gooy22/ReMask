@@ -69,6 +69,12 @@ if [ "$PROCESS_ROLE" = "worker" ]; then
   exec su -s /bin/sh -c 'exec php /var/www/html/worker.php' www-data
 fi
 
+# php:apache must run a single MPM. Some package/module combinations can leave
+# event/worker enabled alongside prefork, which makes apache2-foreground abort
+# with AH00534: More than one MPM loaded.
+a2dismod -f mpm_event mpm_worker 2>/dev/null || true
+a2enmod mpm_prefork 2>/dev/null || true
+
 sed -ri "s/^Listen [0-9]+$/Listen ${APP_PORT}/" /etc/apache2/ports.conf
 sed -ri "s/<VirtualHost \\*:[0-9]+>/<VirtualHost *:${APP_PORT}>/" /etc/apache2/sites-available/000-default.conf
 
