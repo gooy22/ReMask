@@ -15,7 +15,7 @@ require_once __DIR__ . '/checkpassword.php';
 <link rel="icon" type="image/png" href="styles/img/favicon.png">
 <title><?php include 'version.php' ?> — Креативы</title>
 <style>
-/* creative-complete-v100 / creative-ui-v101 */
+/* creative-meta-builder-v102 */
 .cr-page{max-width:1460px;margin:0 auto;padding:18px 22px 56px;text-align:left;color:#e7e9ee}
 .cr-head{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:2px 0 16px}
 .cr-title{font-size:26px;font-weight:700;margin:0}
@@ -34,24 +34,27 @@ require_once __DIR__ . '/checkpassword.php';
 .cr-icon,.cr-btn{border-radius:7px;border:1px solid #3b424d;background:#2b3038;color:#dfe4ec}
 .cr-icon{width:34px;height:34px}.cr-btn{padding:9px 13px}.cr-primary{background:#2d67e8;border-color:#2d67e8;color:#fff;font-weight:700}
 .cr-empty{grid-column:1/-1;padding:60px 20px;text-align:center;color:#788292}
-
-.cr-backdrop{display:none;position:fixed;inset:0;background:rgba(7,9,12,.78);z-index:900;align-items:center;justify-content:center;padding:18px}
+.cr-backdrop{display:none;position:fixed;inset:0;background:rgba(7,9,12,.78);z-index:900;align-items:center;justify-content:center;padding:16px}
 .cr-backdrop.open{display:flex}
-.cr-modal{width:min(940px,calc(100vw - 36px));max-height:92vh;display:flex;flex-direction:column;background:#22262e;border:1px solid #363d48;border-radius:11px;box-shadow:0 24px 80px rgba(0,0,0,.55);overflow:hidden}
-.cr-modal-head{display:flex;align-items:center;justify-content:space-between;padding:13px 16px;border-bottom:1px solid #343a45;flex:0 0 auto}
+.cr-modal{width:min(1120px,calc(100vw - 32px));max-height:94vh;display:flex;flex-direction:column;background:#22262e;border:1px solid #363d48;border-radius:11px;box-shadow:0 24px 80px rgba(0,0,0,.55);overflow:hidden}
+.cr-modal-head{display:flex;align-items:center;justify-content:space-between;padding:13px 16px;border-bottom:1px solid #343a45}
 .cr-modal-head h3{font-size:18px;margin:0;font-weight:700}.cr-close{border:0;background:transparent;color:#9099a8;font-size:24px;line-height:1;padding:4px}
-#creativeForm{display:flex;flex-direction:column;min-height:0}
-.cr-editor{padding:15px 16px 12px;overflow:auto}
+#creativeForm{display:flex;flex-direction:column;min-height:0;flex:1}
+.cr-tabs{display:flex;gap:4px;padding:9px 12px;border-bottom:1px solid #343a45;background:#20242b;overflow-x:auto}
+.cr-tab{border:0;background:transparent;color:#8f98a8;padding:7px 10px;border-radius:6px;font-size:12px;font-weight:700;white-space:nowrap}
+.cr-tab.active{background:#313741;color:#fff}
+.cr-editor{padding:15px 16px 12px;overflow:auto;min-height:0}
+.cr-panel{display:none}.cr-panel.active{display:block}
 .cr-form-grid{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:12px}
 .span-12{grid-column:span 12}.span-8{grid-column:span 8}.span-6{grid-column:span 6}.span-4{grid-column:span 4}.span-3{grid-column:span 3}
 .cr-field{min-width:0}
 .cr-field label,.cr-media-box>label,.cr-instagram-field label{display:block!important;margin:0 0 5px!important;font-size:11px!important;line-height:1.25;color:#9aa3b2;font-weight:600}
 .cr-editor .form-control{display:block!important;width:100%!important;height:38px!important;margin:0!important;padding:8px 10px!important;background:#1b1f25!important;border:1px solid #39414d!important;color:#e8ebf0!important;border-radius:7px!important;box-shadow:none!important;font-size:13px!important}
 .cr-editor textarea.form-control{height:82px!important;min-height:82px!important;resize:vertical;line-height:1.35}
-.cr-editor select.form-control{padding-right:30px!important}
-.cr-section-title{font-size:12px;font-weight:700;color:#c6ccd5;margin:14px 0 8px}
-.cr-separator{height:1px;background:#343a45;margin:14px 0}
-
+.cr-editor textarea.cr-json{height:120px!important;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:11px!important}
+.cr-checkrow{display:flex;gap:14px;flex-wrap:wrap;padding:8px 0}.cr-check{display:flex;align-items:center;gap:6px;color:#c6ccd5;font-size:12px}.cr-check input{margin:0}
+.cr-section-title{font-size:12px;font-weight:700;color:#d2d7df;margin:4px 0 10px}
+.cr-muted{font-size:11px;color:#7f8898;line-height:1.4}
 .cr-media-box{margin-top:14px;padding-top:14px;border-top:1px solid #343a45}
 .cr-media-row{display:grid;grid-template-columns:230px minmax(0,1fr);gap:14px;align-items:start}
 .cr-preview-box{height:150px;background:#171a1f;border:1px solid #303640;border-radius:8px;overflow:hidden;display:flex;align-items:center;justify-content:center;color:#747d8b}
@@ -65,19 +68,10 @@ require_once __DIR__ . '/checkpassword.php';
 .cr-carousel-row .form-control{height:34px!important;font-size:12px!important;padding:6px 8px!important}
 .cr-thumb{width:48px;height:48px;background:#15181d;border-radius:6px;overflow:hidden;display:flex;align-items:center;justify-content:center;color:#7f8898}
 .cr-thumb img{width:100%;height:100%;object-fit:cover}
-.cr-instagram-field{max-width:420px}
-
-.cr-modal-foot{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;border-top:1px solid #343a45;background:#20242b;flex:0 0 auto}
+.cr-modal-foot{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;border-top:1px solid #343a45;background:#20242b}
 .cr-status{font-size:12px;color:#8993a3;min-height:18px}.cr-status.bad{color:#ff8f8f}.cr-status.ok{color:#69d99b}
 .cr-foot-actions{display:flex;gap:8px}
-@media(max-width:820px){
-  .span-8,.span-6,.span-4,.span-3{grid-column:span 12}
-  .cr-modal{width:min(680px,calc(100vw - 18px))}
-  .cr-media-row{grid-template-columns:1fr}
-  .cr-preview-box{height:180px}
-  .cr-carousel-row{grid-template-columns:44px 1fr}
-  .cr-carousel-row .form-control{grid-column:span 2}
-}
+@media(max-width:820px){.span-8,.span-6,.span-4,.span-3{grid-column:span 12}.cr-media-row{grid-template-columns:1fr}.cr-carousel-row{grid-template-columns:44px 1fr}.cr-carousel-row .form-control{grid-column:span 2}}
 </style>
 </head>
 <body class="app-shell">
@@ -86,7 +80,7 @@ require_once __DIR__ . '/checkpassword.php';
 <div class="cr-page">
   <div class="cr-head">
     <h1 class="cr-title">Креативы</h1>
-    <button id="newCreative" type="button" class="cr-btn cr-primary"><i class="fa-solid fa-plus mr-1"></i> ДОБАВИТЬ КРЕО</button>
+    <button id="newCreative" type="button" class="cr-btn cr-primary"><i class="fa-solid fa-plus mr-1"></i> ДОБАВИТЬ СВЯЗКУ</button>
   </div>
   <div class="cr-toolbar">
     <input id="creativeSearch" class="cr-search" placeholder="Поиск">
@@ -99,107 +93,180 @@ require_once __DIR__ . '/checkpassword.php';
 <div id="creativeModal" class="cr-backdrop" aria-hidden="true">
 <div class="cr-modal">
   <div class="cr-modal-head">
-    <h3 id="creativeEditorTitle">Новое крео</h3>
+    <h3 id="creativeEditorTitle">Новая связка</h3>
     <button id="closeCreative" class="cr-close" type="button">×</button>
   </div>
 
   <form id="creativeForm">
     <input id="creativeId" type="hidden">
+
+    <div class="cr-tabs">
+      <button type="button" class="cr-tab active" data-tab="campaign">Campaign</button>
+      <button type="button" class="cr-tab" data-tab="adset">Ad Set</button>
+      <button type="button" class="cr-tab" data-tab="audience">Audience</button>
+      <button type="button" class="cr-tab" data-tab="placements">Placements</button>
+      <button type="button" class="cr-tab" data-tab="identity">Identity</button>
+      <button type="button" class="cr-tab" data-tab="creative">Creative</button>
+      <button type="button" class="cr-tab" data-tab="tracking">Tracking</button>
+      <button type="button" class="cr-tab" data-tab="advanced">Advanced</button>
+    </div>
+
     <div class="cr-editor">
-      <div class="cr-form-grid">
-        <div class="span-4 cr-field">
-          <label for="presetName">Название в библиотеке</label>
-          <input id="presetName" class="form-control">
+      <section class="cr-panel active" data-panel="campaign">
+        <div class="cr-section-title">Campaign</div>
+        <div class="cr-form-grid">
+          <div class="span-4 cr-field"><label>Название связки</label><input id="presetName" class="form-control"></div>
+          <div class="span-4 cr-field"><label>Campaign name</label><input id="mbCampaignName" class="form-control"></div>
+          <div class="span-4 cr-field"><label>Objective</label><select id="mbObjective" class="form-control">
+            <option>OUTCOME_TRAFFIC</option><option>OUTCOME_SALES</option><option>OUTCOME_LEADS</option><option>OUTCOME_ENGAGEMENT</option><option>OUTCOME_AWARENESS</option><option>OUTCOME_APP_PROMOTION</option>
+            <option>APP_INSTALLS</option><option>BRAND_AWARENESS</option><option>CONVERSIONS</option><option>EVENT_RESPONSES</option><option>LEAD_GENERATION</option><option>LINK_CLICKS</option><option>MESSAGES</option><option>PAGE_LIKES</option><option>POST_ENGAGEMENT</option><option>PRODUCT_CATALOG_SALES</option><option>REACH</option><option>VIDEO_VIEWS</option>
+          </select></div>
+          <div class="span-4 cr-field"><label>Buying type</label><select id="mbBuyingType" class="form-control"><option value="AUCTION">AUCTION</option><option value="RESERVED">RESERVED</option></select></div>
+          <div class="span-4 cr-field"><label>Special ad category</label><select id="mbSpecialCategory" class="form-control"><option value="NONE">NONE</option><option>CREDIT</option><option>EMPLOYMENT</option><option>HOUSING</option><option>FINANCIAL_PRODUCTS_SERVICES</option><option>ONLINE_GAMBLING_AND_GAMING</option><option>ISSUES_ELECTIONS_POLITICS</option></select></div>
+          <div class="span-4 cr-field"><label>Campaign bid strategy</label><select id="mbCampaignBidStrategy" class="form-control"><option value="">Meta default</option><option>LOWEST_COST_WITHOUT_CAP</option><option>LOWEST_COST_WITH_BID_CAP</option><option>COST_CAP</option><option>LOWEST_COST_WITH_MIN_ROAS</option></select></div>
+          <div class="span-3 cr-field"><label>Daily budget</label><input id="mbCampaignDailyBudget" type="number" min="0" class="form-control"></div>
+          <div class="span-3 cr-field"><label>Lifetime budget</label><input id="mbCampaignLifetimeBudget" type="number" min="0" class="form-control"></div>
+          <div class="span-3 cr-field"><label>Spend cap</label><input id="mbCampaignSpendCap" type="number" min="0" class="form-control"></div>
+          <div class="span-3 cr-field"><label>Status</label><select id="mbCampaignStatus" class="form-control"><option>PAUSED</option><option>ACTIVE</option></select></div>
+          <div class="span-6 cr-field"><label>Start time</label><input id="mbCampaignStart" type="datetime-local" class="form-control"></div>
+          <div class="span-6 cr-field"><label>Stop time</label><input id="mbCampaignStop" type="datetime-local" class="form-control"></div>
         </div>
-        <div class="span-4 cr-field">
-          <label for="presetCreativeName">Creative name</label>
-          <input id="presetCreativeName" class="form-control">
+      </section>
+
+      <section class="cr-panel" data-panel="adset">
+        <div class="cr-section-title">Ad Set</div>
+        <div class="cr-form-grid">
+          <div class="span-4 cr-field"><label>Ad Set name</label><input id="mbAdsetName" class="form-control"></div>
+          <div class="span-4 cr-field"><label>Optimization goal</label><select id="mbOptimizationGoal" class="form-control">
+            <option>LINK_CLICKS</option><option>LANDING_PAGE_VIEWS</option><option>IMPRESSIONS</option><option>REACH</option><option>OFFSITE_CONVERSIONS</option><option>LEAD_GENERATION</option><option>POST_ENGAGEMENT</option><option>PAGE_LIKES</option><option>THRUPLAY</option><option>APP_INSTALLS</option><option>VALUE</option><option>PROFILE_VISIT</option><option>QUALITY_LEAD</option><option>QUALITY_CALL</option><option>VISIT_INSTAGRAM_PROFILE</option><option>CONVERSATIONS</option>
+          </select></div>
+          <div class="span-4 cr-field"><label>Billing event</label><select id="mbBillingEvent" class="form-control"><option>IMPRESSIONS</option><option>LINK_CLICKS</option><option>CLICKS</option><option>THRUPLAY</option><option>APP_INSTALLS</option><option>POST_ENGAGEMENT</option><option>PAGE_LIKES</option><option>PURCHASE</option></select></div>
+          <div class="span-4 cr-field"><label>Bid strategy</label><select id="mbAdsetBidStrategy" class="form-control"><option>LOWEST_COST_WITHOUT_CAP</option><option>LOWEST_COST_WITH_BID_CAP</option><option>COST_CAP</option><option>LOWEST_COST_WITH_MIN_ROAS</option></select></div>
+          <div class="span-4 cr-field"><label>Bid amount</label><input id="mbBidAmount" type="number" min="0" class="form-control"></div>
+          <div class="span-4 cr-field"><label>Destination type</label><select id="mbDestinationType" class="form-control"><option value="">Meta default</option><option>WEBSITE</option><option>APP</option><option>FACEBOOK_PAGE</option><option>INSTAGRAM_PROFILE</option><option>MESSENGER</option><option>WHATSAPP</option><option>INSTAGRAM_DIRECT</option><option>ON_AD</option><option>ON_POST</option><option>ON_VIDEO</option></select></div>
+          <div class="span-3 cr-field"><label>Daily budget</label><input id="mbAdsetDailyBudget" type="number" min="0" class="form-control"></div>
+          <div class="span-3 cr-field"><label>Lifetime budget</label><input id="mbAdsetLifetimeBudget" type="number" min="0" class="form-control"></div>
+          <div class="span-3 cr-field"><label>Start time</label><input id="mbAdsetStart" type="datetime-local" class="form-control"></div>
+          <div class="span-3 cr-field"><label>End time</label><input id="mbAdsetEnd" type="datetime-local" class="form-control"></div>
+          <div class="span-4 cr-field"><label>Pixel ID</label><input id="mbPixelId" class="form-control"></div>
+          <div class="span-4 cr-field"><label>Conversion event</label><input id="mbConversionEvent" class="form-control" placeholder="LEAD / PURCHASE / ..."></div>
+          <div class="span-4 cr-field"><label>Status</label><select id="mbAdsetStatus" class="form-control"><option>PAUSED</option><option>ACTIVE</option></select></div>
+          <div class="span-6 cr-field"><label>Attribution spec (JSON)</label><textarea id="mbAttributionSpec" class="form-control cr-json" placeholder='[{"event_type":"CLICK_THROUGH","window_days":7}]'></textarea></div>
+          <div class="span-6 cr-field"><label>Promoted object extra (JSON)</label><textarea id="mbPromotedObject" class="form-control cr-json" placeholder='{"application_id":"..."}'></textarea></div>
+          <div class="span-12 cr-checkrow"><label class="cr-check"><input id="mbDynamicCreative" type="checkbox"> Dynamic creative</label><label class="cr-check"><input id="mbIncrementalAttribution" type="checkbox"> Incremental attribution</label></div>
         </div>
-        <div class="span-4 cr-field">
-          <label for="presetAdName">Ad name</label>
-          <input id="presetAdName" class="form-control">
+      </section>
+
+      <section class="cr-panel" data-panel="audience">
+        <div class="cr-section-title">Audience / Targeting</div>
+        <div class="cr-form-grid">
+          <div class="span-3 cr-field"><label>Age min</label><input id="mbAgeMin" type="number" min="13" max="65" class="form-control" value="18"></div>
+          <div class="span-3 cr-field"><label>Age max</label><input id="mbAgeMax" type="number" min="13" max="65" class="form-control" value="65"></div>
+          <div class="span-3 cr-field"><label>Gender</label><select id="mbGender" class="form-control"><option value="">All</option><option value="1">Male</option><option value="2">Female</option></select></div>
+          <div class="span-3 cr-field"><label>Locales IDs</label><input id="mbLocales" class="form-control" placeholder="6,24"></div>
+          <div class="span-6 cr-field"><label>Geo locations (JSON)</label><textarea id="mbGeo" class="form-control cr-json" placeholder='{"countries":["UA"]}'></textarea></div>
+          <div class="span-6 cr-field"><label>Excluded geo (JSON)</label><textarea id="mbExcludedGeo" class="form-control cr-json" placeholder='{"countries":["RU"]}'></textarea></div>
+          <div class="span-6 cr-field"><label>Interests (JSON)</label><textarea id="mbInterests" class="form-control cr-json" placeholder='[{"id":"6003139266461","name":"Business"}]'></textarea></div>
+          <div class="span-6 cr-field"><label>Behaviors (JSON)</label><textarea id="mbBehaviors" class="form-control cr-json" placeholder='[{"id":"...","name":"..."}]'></textarea></div>
+          <div class="span-6 cr-field"><label>Custom audience IDs</label><input id="mbCustomAudiences" class="form-control" placeholder="123,456"></div>
+          <div class="span-6 cr-field"><label>Excluded custom audience IDs</label><input id="mbExcludedCustomAudiences" class="form-control" placeholder="123,456"></div>
+          <div class="span-6 cr-field"><label>Flexible spec (JSON)</label><textarea id="mbFlexibleSpec" class="form-control cr-json"></textarea></div>
+          <div class="span-6 cr-field"><label>Exclusions (JSON)</label><textarea id="mbExclusions" class="form-control cr-json"></textarea></div>
+        </div>
+      </section>
+
+      <section class="cr-panel" data-panel="placements">
+        <div class="cr-section-title">Placements / Devices</div>
+        <div class="cr-checkrow">
+          <label class="cr-check"><input type="checkbox" data-publisher="facebook" checked> Facebook</label>
+          <label class="cr-check"><input type="checkbox" data-publisher="instagram" checked> Instagram</label>
+          <label class="cr-check"><input type="checkbox" data-publisher="messenger"> Messenger</label>
+          <label class="cr-check"><input type="checkbox" data-publisher="audience_network"> Audience Network</label>
+          <label class="cr-check"><input type="checkbox" data-publisher="threads"> Threads</label>
+          <label class="cr-check"><input type="checkbox" data-publisher="whatsapp"> WhatsApp</label>
+        </div>
+        <div class="cr-form-grid">
+          <div class="span-6 cr-field"><label>Facebook positions</label><input id="mbFacebookPositions" class="form-control" placeholder="feed,story,video_feeds,marketplace"></div>
+          <div class="span-6 cr-field"><label>Instagram positions</label><input id="mbInstagramPositions" class="form-control" placeholder="stream,story,reels,explore"></div>
+          <div class="span-6 cr-field"><label>Messenger positions</label><input id="mbMessengerPositions" class="form-control" placeholder="messenger_home,sponsored_messages"></div>
+          <div class="span-6 cr-field"><label>Audience Network positions</label><input id="mbAudienceNetworkPositions" class="form-control" placeholder="classic,rewarded_video"></div>
+          <div class="span-6 cr-field"><label>Threads positions</label><input id="mbThreadsPositions" class="form-control"></div>
+          <div class="span-6 cr-field"><label>WhatsApp positions</label><input id="mbWhatsappPositions" class="form-control"></div>
+        </div>
+        <div class="cr-checkrow">
+          <label class="cr-check"><input type="checkbox" data-device-platform="mobile" checked> Mobile</label>
+          <label class="cr-check"><input type="checkbox" data-device-platform="desktop" checked> Desktop</label>
+          <label class="cr-check"><input type="checkbox" data-device-platform="connected_tv"> Connected TV</label>
+        </div>
+        <div class="cr-form-grid">
+          <div class="span-6 cr-field"><label>User OS</label><input id="mbUserOs" class="form-control" placeholder="Android,iOS"></div>
+          <div class="span-6 cr-field"><label>User devices</label><input id="mbUserDevice" class="form-control" placeholder="Galaxy S24,iPhone"></div>
+        </div>
+      </section>
+
+      <section class="cr-panel" data-panel="identity">
+        <div class="cr-section-title">Identity</div>
+        <div class="cr-form-grid">
+          <div class="span-6 cr-field"><label>Facebook Page ID</label><input id="mbPageId" class="form-control"></div>
+          <div class="span-6 cr-field"><label>Instagram actor ID</label><input id="mbInstagramActorId" class="form-control"></div>
+        </div>
+        <div class="cr-muted mt-2">Если в Launch для конкретного RK задан свой Page / Instagram, account override может заменить эти значения.</div>
+      </section>
+
+      <section class="cr-panel" data-panel="creative">
+        <div class="cr-section-title">Creative / Ad</div>
+        <div class="cr-form-grid">
+          <div class="span-4 cr-field"><label>Creative name</label><input id="presetCreativeName" class="form-control"></div>
+          <div class="span-4 cr-field"><label>Ad name</label><input id="presetAdName" class="form-control"></div>
+          <div class="span-4 cr-field"><label>Ad status</label><select id="mbAdStatus" class="form-control"><option>PAUSED</option><option>ACTIVE</option></select></div>
+          <div class="span-12 cr-field"><label>Primary text</label><textarea id="presetMessage" class="form-control"></textarea></div>
+          <div class="span-4 cr-field"><label>Headline</label><input id="presetHeadline" class="form-control"></div>
+          <div class="span-4 cr-field"><label>Description</label><input id="presetDescription" class="form-control"></div>
+          <div class="span-4 cr-field"><label>CTA</label><select id="presetCta" class="form-control"><option value="LEARN_MORE">Подробнее</option><option value="SIGN_UP">Регистрация</option><option value="APPLY_NOW">Подать заявку</option><option value="CONTACT_US">Связаться</option><option value="SHOP_NOW">Купить</option><option value="GET_OFFER">Получить предложение</option></select></div>
+          <div class="span-8 cr-field"><label>Destination URL</label><input id="presetUrl" class="form-control" placeholder="https://..."></div>
+          <div class="span-4 cr-field"><label>URL tags / UTM</label><input id="presetTags" class="form-control"></div>
+          <div class="span-4 cr-field"><label>Creative format</label><select id="presetFormat" class="form-control"><option value="SINGLE">Single image / video</option><option value="CAROUSEL">Carousel (2–10 images)</option><option value="INSTAGRAM_POST">Existing Instagram post / reel</option></select></div>
         </div>
 
-        <div class="span-12 cr-field">
-          <label for="presetMessage">Основной текст</label>
-          <textarea id="presetMessage" class="form-control"></textarea>
-        </div>
+        <div id="singleSection" class="cr-media-box"><div class="cr-media-row"><div id="singlePreview" class="cr-preview-box"><i class="fa-regular fa-image"></i></div><div class="cr-upload-panel"><label class="cr-file-btn">ВЫБРАТЬ IMAGE / VIDEO<input id="presetMedia" type="file" accept="image/*,video/*"></label><div id="singleCurrent" class="cr-hint">Изображение или видео.</div></div></div></div>
+        <div id="carouselSection" class="cr-media-box" style="display:none"><label class="cr-file-btn" style="max-width:300px">ВЫБРАТЬ 2–10 ИЗОБРАЖЕНИЙ<input id="presetCarousel" type="file" accept="image/*" multiple></label><div id="carouselHint" class="cr-hint"></div><div id="carouselRows" class="cr-carousel-list"></div></div>
+        <div id="instagramSection" class="cr-media-box" style="display:none"><div class="cr-field" style="max-width:430px"><label>Instagram media ID</label><input id="presetInstagramMediaId" class="form-control" inputmode="numeric"></div></div>
+      </section>
 
-        <div class="span-4 cr-field">
-          <label for="presetHeadline">Headline</label>
-          <input id="presetHeadline" class="form-control">
+      <section class="cr-panel" data-panel="tracking">
+        <div class="cr-section-title">Tracking / Creative enhancements</div>
+        <div class="cr-form-grid">
+          <div class="span-6 cr-field"><label>Conversion domain</label><input id="mbConversionDomain" class="form-control"></div>
+          <div class="span-6 cr-field"><label>Ad priority</label><input id="mbAdPriority" type="number" min="0" class="form-control"></div>
+          <div class="span-6 cr-field"><label>Tracking specs (JSON)</label><textarea id="mbTrackingSpecs" class="form-control cr-json"></textarea></div>
+          <div class="span-6 cr-field"><label>Degrees of freedom / Advantage+ creative (JSON)</label><textarea id="mbDegreesOfFreedom" class="form-control cr-json" placeholder='{"creative_features_spec":{...}}'></textarea></div>
+          <div class="span-6 cr-field"><label>Asset feed spec (JSON)</label><textarea id="mbAssetFeedSpec" class="form-control cr-json"></textarea></div>
+          <div class="span-6 cr-field"><label>Platform customizations (JSON)</label><textarea id="mbPlatformCustomizations" class="form-control cr-json"></textarea></div>
         </div>
-        <div class="span-4 cr-field">
-          <label for="presetDescription">Description</label>
-          <input id="presetDescription" class="form-control">
-        </div>
-        <div class="span-4 cr-field">
-          <label for="presetCta">CTA</label>
-          <select id="presetCta" class="form-control">
-            <option value="LEARN_MORE">Подробнее</option>
-            <option value="SIGN_UP">Регистрация</option>
-            <option value="APPLY_NOW">Подать заявку</option>
-            <option value="CONTACT_US">Связаться</option>
-            <option value="SHOP_NOW">Купить</option>
-            <option value="GET_OFFER">Получить предложение</option>
-          </select>
-        </div>
+      </section>
 
-        <div class="span-8 cr-field">
-          <label for="presetUrl">Destination URL</label>
-          <input id="presetUrl" class="form-control" placeholder="https://...">
+      <section class="cr-panel" data-panel="advanced">
+        <div class="cr-section-title">Официальные параметры Meta API — расширенный режим</div>
+        <div class="cr-muted mb-3">Сюда можно добавить редкие параметры, которые есть в текущем Meta SDK, но не вынесены отдельным контролом. Неизвестные ключи backend не пропустит.</div>
+        <div class="cr-form-grid">
+          <div class="span-6 cr-field"><label>Campaign params (JSON)</label><textarea id="mbAdvancedCampaign" class="form-control cr-json" placeholder="{}"></textarea></div>
+          <div class="span-6 cr-field"><label>Ad Set params (JSON)</label><textarea id="mbAdvancedAdset" class="form-control cr-json" placeholder="{}"></textarea></div>
+          <div class="span-6 cr-field"><label>Targeting params (JSON)</label><textarea id="mbAdvancedTargeting" class="form-control cr-json" placeholder="{}"></textarea></div>
+          <div class="span-6 cr-field"><label>Creative params (JSON)</label><textarea id="mbAdvancedCreative" class="form-control cr-json" placeholder="{}"></textarea></div>
+          <div class="span-6 cr-field"><label>Ad params (JSON)</label><textarea id="mbAdvancedAd" class="form-control cr-json" placeholder="{}"></textarea></div>
         </div>
-        <div class="span-4 cr-field">
-          <label for="presetTags">URL tags / UTM</label>
-          <input id="presetTags" class="form-control" placeholder="utm_source=facebook&...">
-        </div>
-
-        <div class="span-4 cr-field">
-          <label for="presetFormat">Creative format</label>
-          <select id="presetFormat" class="form-control">
-            <option value="SINGLE">Single image / video</option>
-            <option value="CAROUSEL">Carousel (2–10 images)</option>
-            <option value="INSTAGRAM_POST">Existing Instagram post / reel</option>
-          </select>
-        </div>
-      </div>
-
-      <div id="singleSection" class="cr-media-box">
-        <div class="cr-media-row">
-          <div id="singlePreview" class="cr-preview-box"><i class="fa-regular fa-image"></i></div>
-          <div class="cr-upload-panel">
-            <label class="cr-file-btn">ВЫБРАТЬ IMAGE / VIDEO<input id="presetMedia" type="file" accept="image/*,video/*"></label>
-            <div id="singleCurrent" class="cr-hint">Изображение или видео для этого крео.</div>
-          </div>
-        </div>
-      </div>
-
-      <div id="carouselSection" class="cr-media-box" style="display:none">
-        <label class="cr-file-btn" style="max-width:300px">ВЫБРАТЬ 2–10 ИЗОБРАЖЕНИЙ<input id="presetCarousel" type="file" accept="image/*" multiple></label>
-        <div id="carouselHint" class="cr-hint"></div>
-        <div id="carouselRows" class="cr-carousel-list"></div>
-      </div>
-
-      <div id="instagramSection" class="cr-media-box" style="display:none">
-        <div class="cr-instagram-field">
-          <label for="presetInstagramMediaId">Instagram media ID</label>
-          <input id="presetInstagramMediaId" class="form-control" inputmode="numeric" placeholder="Existing post / reel media ID">
-        </div>
-      </div>
+      </section>
     </div>
 
     <div class="cr-modal-foot">
       <div id="creativeStatus" class="cr-status"></div>
-      <div class="cr-foot-actions">
-        <button id="cancelCreative" type="button" class="cr-btn">ОТМЕНА</button>
-        <button id="saveCreative" type="submit" class="cr-btn cr-primary">СОХРАНИТЬ</button>
-      </div>
+      <div class="cr-foot-actions"><button id="cancelCreative" type="button" class="cr-btn">ОТМЕНА</button><button id="saveCreative" type="submit" class="cr-btn cr-primary">СОХРАНИТЬ СВЯЗКУ</button></div>
     </div>
   </form>
 </div>
 </div>
 
-<script src="scripts/creatives.js?v=20260919-creative-ui-v101" type="module"></script>
+<script src="scripts/creatives.js?v=20260919-meta-builder-v102" type="module"></script>
 <div class="app-footer"><?php include 'copyright.php' ?></div>
 </main>
 </body>
