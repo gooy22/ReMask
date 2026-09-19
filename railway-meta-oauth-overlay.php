@@ -283,8 +283,14 @@ $replacement = <<<'PHP'
         try {
             MetaEndpoint::cachedPreflight($profile, true);
         } catch (Throwable $metaAuthError) {
-            if ((int)$metaAuthError->getCode() === 1 && trim($metaAuthError->getMessage()) === 'Invalid request.') {
-                throw new RuntimeException('META_OAUTH_REQUIRED: текущий EAA-токен отклонён официальным Graph API даже на /me. Подключите токен через Meta OAuth/Marketing API.');
+            $metaAuthMessage = trim((string)$metaAuthError->getMessage());
+            $metaAuthCode = (int)$metaAuthError->getCode();
+            if (
+                ($metaAuthCode === 1 && $metaAuthMessage === 'Invalid request.')
+                || $metaAuthCode === 190
+                || stripos($metaAuthMessage, 'Error loading application') !== false
+            ) {
+                throw new RuntimeException('META_OAUTH_REQUIRED: сохранённый Meta access token больше не принимается Graph API. Переподключите этот FB-профиль через Meta OAuth.');
             }
             throw $metaAuthError;
         }
@@ -316,8 +322,8 @@ PHP;
 } catch (Throwable $e) {
     http_response_code(200);
     $message = $e->getMessage();
-    if (str_contains($message, 'Invalid request') && str_contains($message, 'OAuthException') && str_contains($message, 'code 1')) {
-        $message = 'Текущий EAA-токен не принимается официальным Graph API. Используйте Meta OAuth/Marketing API token; session-bound Ads Manager token для Launch не поддерживается.';
+    if (str_contains($message, 'Invalid request') || str_contains($message, 'Error loading application') || str_contains($message, 'code 190')) {
+        $message = 'Сохранённый Meta access token больше не принимается Graph API. Переподключите FB-профиль через Meta OAuth.';
     }
     ResponseFormatter::Respond(['error' => $message]);
 }
