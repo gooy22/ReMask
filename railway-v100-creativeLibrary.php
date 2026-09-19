@@ -4,6 +4,7 @@ require_once __DIR__ . '/../checkpassword.php';
 require_once __DIR__ . '/../classes/MetaEndpoint.php';
 require_once __DIR__ . '/../classes/MediaLibraryStoreFactory.php';
 require_once __DIR__ . '/../classes/CreativePresetStore.php';
+require_once __DIR__ . '/../classes/MetaOfficialFields.php';
 
 function cl100_string(string $key, int $max = 5000): string {
     $value = trim((string)($_POST[$key] ?? ''));
@@ -120,6 +121,11 @@ try {
         $name = cl100_string('name', 180);
         if ($name === '') $name = 'Creative ' . gmdate('Y-m-d H:i');
 
+        $metaBuilderRaw = trim((string)($_POST['meta_builder'] ?? '{}'));
+        $metaBuilder = $metaBuilderRaw !== '' ? json_decode($metaBuilderRaw, true, 512, JSON_THROW_ON_ERROR) : [];
+        if (!is_array($metaBuilder)) throw new InvalidArgumentException('meta_builder must be a JSON object.');
+        $metaBuilder = MetaOfficialFields::sanitizeBuilder($metaBuilder);
+
         $record = [
             'name' => $name,
             'format' => $format,
@@ -134,6 +140,7 @@ try {
             'media_library_id' => '',
             'carousel' => [],
             'instagram_media_id' => '',
+            'meta_builder' => $metaBuilder,
         ];
 
         if ($format === 'SINGLE') {
