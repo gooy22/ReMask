@@ -18,13 +18,20 @@ function rmx_collect_secrets($node, array &$out, string $path = ''): void {
     foreach ($node as $k => $v) {
         $key = strtolower((string)$k);
         $childPath = $path === '' ? (string)$k : $path . '.' . $k;
+        if (preg_match('/token|cookie|proxy|dtsg/', $key)) {
+            if (is_array($v)) {
+                $serialized = json_encode($v, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+                if (is_string($serialized) && $serialized !== '') {
+                    $out[$childPath] = substr(hash('sha256', $serialized), 0, 16) . ':' . strlen($serialized);
+                }
+            } else {
+                $h = rmx_hash_scalar($v);
+                if ($h !== null) $out[$childPath] = $h;
+            }
+        }
         if (is_array($v)) {
             rmx_collect_secrets($v, $out, $childPath);
             continue;
-        }
-        if (preg_match('/token|cookie|proxy/', $key)) {
-            $h = rmx_hash_scalar($v);
-            if ($h !== null) $out[$childPath] = $h;
         }
     }
 }
