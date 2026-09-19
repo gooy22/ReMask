@@ -77,7 +77,6 @@ final class MetaSdkSchema
                     'budget_source'=>'enum',
                     'budget_split_set_id'=>'string',
                     'campaign_attribution'=>'Object',
-                    'campaign_spec'=>'Object',
                     'creative_sequence'=>'list<string>',
                     'creative_sequence_repetition_pattern'=>'enum',
                     'daily_budget'=>'unsigned int',
@@ -198,9 +197,8 @@ final class MetaSdkSchema
             ],
             'ad' => [
                 'fields' => [
-                    'ad_schedule_end_time'=>'datetime','ad_schedule_start_time'=>'datetime','adlabels'=>'list<Object>',
-                    'adset_spec'=>'AdSet','audience_id'=>'string','bid_amount'=>'int',
-                    'conversion_domain'=>'string','creative'=>'AdCreative','creative_asset_groups_spec'=>'Object',
+                    'ad_schedule_end_time'=>'datetime','ad_schedule_start_time'=>'datetime','adlabels'=>'list<Object>','audience_id'=>'string','bid_amount'=>'int',
+                    'conversion_domain'=>'string','creative_asset_groups_spec'=>'Object',
                     'creative_audience_pairing_persona'=>'map','creative_automation_spec'=>'Object',
                     'dataset_split_specs'=>'list<map>','date_format'=>'string','display_sequence'=>'unsigned int',
                     'draft_adgroup_id'=>'string','engagement_audience'=>'bool','execution_options'=>'list<enum>',
