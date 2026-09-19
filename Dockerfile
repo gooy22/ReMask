@@ -35,6 +35,7 @@ COPY railway-behaviors-ui-overlay.php /tmp/railway-behaviors-ui-overlay.php
 COPY railway-targeting-russian-overlay.php /tmp/railway-targeting-russian-overlay.php
 COPY railway-selection-persistence-overlay.php /tmp/railway-selection-persistence-overlay.php
 COPY railway-profile-error-fix-overlay.php /tmp/railway-profile-error-fix-overlay.php
+COPY railway-creatives-inspect.php /tmp/railway-creatives-inspect.php
 COPY docker-start.sh /tmp/docker-start.sh
 
 RUN set -eux; \
@@ -81,10 +82,7 @@ RUN set -eux; \
     php -l /var/www/html/bin/remask-worker.php; \
     php -l /var/www/html/ajax/metaWorkerStatus.php; \
     php -l /var/www/html/ajax/metaJobRetry.php; \
-    echo '--- REMASK CREATIVES INSPECT BEGIN ---'; \
-    find /var/www/html -maxdepth 2 -type f \( -iname '*creat*' -o -iname '*library*' \) -print | sort || true; \
-    grep -R -n -E 'Креатив|Creativ|creative' /var/www/html/*.php /var/www/html/scripts /var/www/html/ajax 2>/dev/null | head -n 260 || true; \
-    echo '--- REMASK CREATIVES INSPECT END ---'; \
+    php /tmp/railway-creatives-inspect.php; \
     grep -q 'REMASK_SYNC_ERROR_CLASSIFIER_V1' /var/www/html/scripts/workspace.js; \
     grep -q 'Meta request timeout after' /var/www/html/scripts/workspace.js; \
     grep -Fq "\$('workspaceActions').disabled=n===0;" /var/www/html/scripts/workspace.js; \
