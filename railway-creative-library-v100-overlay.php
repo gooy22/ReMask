@@ -194,6 +194,43 @@ function applyCreativeLibrarySelection() {
     $('urlTags').value = item.url_tags || '';
     if ($('instagramMediaId')) $('instagramMediaId').value = item.instagram_media_id || '';
 
+    const metaBuilder = item.meta_builder || {};
+    const campaign = metaBuilder.campaign || {};
+    const adset = metaBuilder.adset || {};
+    const targeting = metaBuilder.targeting || {};
+    const identity = metaBuilder.identity || {};
+    const ad = metaBuilder.ad || {};
+    const setIfExists = (id, value) => {
+        const el = $(id);
+        if (!el || value === undefined || value === null || value === '') return;
+        if (el.tagName === 'SELECT' && !hasOptionValue(el, String(value))) return;
+        el.value = String(value);
+    };
+    setIfExists('campaignName', campaign.name);
+    setIfExists('objective', campaign.objective);
+    setIfExists('specialCategory', Array.isArray(campaign.special_ad_categories) ? (campaign.special_ad_categories[0] || '') : '');
+    setIfExists('adsetName', adset.name);
+    if (campaign.daily_budget) {
+        setIfExists('budgetLevel', 'CAMPAIGN');
+        setIfExists('dailyBudget', campaign.daily_budget);
+    } else if (adset.daily_budget) {
+        setIfExists('budgetLevel', 'ADSET');
+        setIfExists('dailyBudget', adset.daily_budget);
+    }
+    setIfExists('optimizationGoal', adset.optimization_goal);
+    setIfExists('billingEvent', adset.billing_event);
+    setIfExists('bidStrategy', adset.bid_strategy);
+    setIfExists('bidAmount', adset.bid_amount);
+    setIfExists('startTime', adset.start_time);
+    setIfExists('endTime', adset.end_time);
+    setIfExists('ageMin', targeting.age_min);
+    setIfExists('ageMax', targeting.age_max);
+    if (identity.page_id && hasOptionValue($('page'), String(identity.page_id))) $('page').value = String(identity.page_id);
+    if (identity.instagram_actor_id && hasOptionValue($('instagram'), String(identity.instagram_actor_id))) $('instagram').value = String(identity.instagram_actor_id);
+    if (adset.promoted_object?.pixel_id && hasOptionValue($('pixel'), String(adset.promoted_object.pixel_id))) $('pixel').value = String(adset.promoted_object.pixel_id);
+    if (adset.promoted_object?.custom_event_type && hasOptionValue($('conversionEvent'), String(adset.promoted_object.custom_event_type))) $('conversionEvent').value = String(adset.promoted_object.custom_event_type);
+    if (Array.isArray(targeting.publisher_platforms) && targeting.publisher_platforms.length) setIfExists('placementMode', 'MANUAL');
+
     renderCreativeFormat();
     if (format === 'CAROUSEL') renderSavedCarouselPreset(item.carousel || []);
     renderCreativeLibraryStatus();
@@ -249,6 +286,7 @@ JS_CODE;
         }
     } else if (isInstagramPost && !targetMode()) form.append('source_instagram_media_id', $('instagramMediaId').value.trim());
     else if (libraryPreset?.format === 'SINGLE' && libraryPreset?.media_library_id) form.append('media_library_id', libraryPreset.media_library_id);
+    if (libraryPreset?.meta_builder) form.append('meta_builder', JSON.stringify(libraryPreset.meta_builder));
 JS_CODE;
     if (strpos($launch, $formOld) === false) { fwrite(STDERR, "[creative-v100] createJob FormData block missing\n"); exit(294); }
     $launch = str_replace($formOld, $formNew, $launch, $count);
