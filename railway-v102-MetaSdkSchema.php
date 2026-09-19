@@ -77,7 +77,6 @@ final class MetaSdkSchema
                     'budget_source'=>'enum',
                     'budget_split_set_id'=>'string',
                     'campaign_attribution'=>'Object',
-                    'campaign_id'=>'string',
                     'campaign_spec'=>'Object',
                     'creative_sequence'=>'list<string>',
                     'creative_sequence_repetition_pattern'=>'enum',
@@ -126,7 +125,6 @@ final class MetaSdkSchema
                     'source_adset_id'=>'string',
                     'start_time'=>'datetime',
                     'status'=>'enum',
-                    'targeting'=>'Targeting',
                     'time_based_ad_rotation_id_blocks'=>'list<list<unsigned int>>',
                     'time_based_ad_rotation_intervals'=>'list<unsigned int>',
                     'time_start'=>'datetime',
@@ -201,7 +199,7 @@ final class MetaSdkSchema
             'ad' => [
                 'fields' => [
                     'ad_schedule_end_time'=>'datetime','ad_schedule_start_time'=>'datetime','adlabels'=>'list<Object>',
-                    'adset_id'=>'unsigned int','adset_spec'=>'AdSet','audience_id'=>'string','bid_amount'=>'int',
+                    'adset_spec'=>'AdSet','audience_id'=>'string','bid_amount'=>'int',
                     'conversion_domain'=>'string','creative'=>'AdCreative','creative_asset_groups_spec'=>'Object',
                     'creative_audience_pairing_persona'=>'map','creative_automation_spec'=>'Object',
                     'dataset_split_specs'=>'list<map>','date_format'=>'string','display_sequence'=>'unsigned int',
@@ -216,7 +214,7 @@ final class MetaSdkSchema
             ],
             'targeting' => [
                 'fields' => [
-                    'adgroup_id'=>'string','age_max'=>'unsigned int','age_min'=>'unsigned int','age_range'=>'list<unsigned int>',
+'age_max'=>'unsigned int','age_min'=>'unsigned int','age_range'=>'list<unsigned int>',
                     'alternate_auto_targeting_option'=>'string','app_install_state'=>'string',
                     'audience_network_positions'=>'list<string>','behaviors'=>'list<IDName>',
                     'brand_safety_content_filter_levels'=>'list<string>','catalog_based_targeting'=>'Object',
