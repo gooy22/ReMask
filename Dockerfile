@@ -24,6 +24,8 @@ COPY railway-check-account-session-overlay.php /tmp/railway-check-account-sessio
 COPY railway-profile-session-guard-overlay.php /tmp/railway-profile-session-guard-overlay.php
 COPY railway-workspace-session-integrity-overlay.php /tmp/railway-workspace-session-integrity-overlay.php
 COPY railway-meta-session-context-overlay.php /tmp/railway-meta-session-context-overlay.php
+COPY railway-meta-oauth-overlay.php /tmp/railway-meta-oauth-overlay.php
+COPY railway-meta-app-config-overlay.php /tmp/railway-meta-app-config-overlay.php
 COPY railway-workspace-sync-fix-overlay.php /tmp/railway-workspace-sync-fix-overlay.php
 COPY railway-sync-smoke.php /tmp/railway-sync-smoke.php
 COPY railway-worker-overlay.php /tmp/railway-worker-overlay.php
@@ -45,8 +47,6 @@ COPY railway-v102-MetaSdkSchema.php /tmp/remask-v102-MetaSdkSchema.php
 COPY railway-meta-schema-ui-v103-overlay.php /tmp/railway-meta-schema-ui-v103-overlay.php
 COPY railway-v104-MetaFundingGuard.php /tmp/railway-v104-MetaFundingGuard.php
 COPY railway-v104-launch-safety-overlay.php /tmp/railway-v104-launch-safety-overlay.php
-COPY railway-v104-preflight-diag-overlay.php /tmp/railway-v104-preflight-diag-overlay.php
-COPY railway-v104-preflight-cli-diag-overlay.php /tmp/railway-v104-preflight-cli-diag-overlay.php
 COPY tests/v104_regression.php /tmp/v104_regression.php
 COPY railway-selection-persistence-overlay.php /tmp/railway-selection-persistence-overlay.php
 COPY railway-profile-error-fix-overlay.php /tmp/railway-profile-error-fix-overlay.php
@@ -71,6 +71,10 @@ RUN set -eux; \
     php /tmp/railway-workspace-session-integrity-overlay.php; \
     php /tmp/railway-meta-session-context-overlay.php; \
     php /tmp/railway-workspace-sync-fix-overlay.php; \
+    php -l /tmp/railway-meta-oauth-overlay.php; \
+    php /tmp/railway-meta-oauth-overlay.php; \
+    php -l /tmp/railway-meta-app-config-overlay.php; \
+    php /tmp/railway-meta-app-config-overlay.php; \
     php /tmp/railway-worker-overlay.php; \
     php /tmp/railway-retry-overlay.php; \
     php /tmp/railway-retry-current-payload-overlay.php; \
@@ -100,10 +104,6 @@ RUN set -eux; \
     cp /tmp/railway-v104-MetaFundingGuard.php /var/www/html/classes/MetaFundingGuard.php; \
     php -l /tmp/railway-v104-launch-safety-overlay.php; \
     php /tmp/railway-v104-launch-safety-overlay.php; \
-    php -l /tmp/railway-v104-preflight-diag-overlay.php; \
-    php /tmp/railway-v104-preflight-diag-overlay.php; \
-    php -l /tmp/railway-v104-preflight-cli-diag-overlay.php; \
-    php /tmp/railway-v104-preflight-cli-diag-overlay.php; \
     sh -n /tmp/docker-start.sh; \
     grep -q 'REMASK_PROCESS_ROLE' /tmp/docker-start.sh; \
     grep -q 'REMASK_JOBS_DIR' /tmp/docker-start.sh; \
@@ -136,6 +136,13 @@ RUN set -eux; \
     grep -q 'setSessionCookies' /var/www/html/classes/MetaApiClient.php; \
     grep -q 'setSessionCookies($account->getCurlCookies())' /var/www/html/classes/MetaEndpoint.php; \
     grep -q 'session_used' /var/www/html/ajax/checkAccount.php; \
+    test -f /var/www/html/meta-oauth-start.php; \
+    test -f /var/www/html/meta-oauth-callback.php; \
+    test -f /var/www/html/ajax/metaOAuthStatus.php; \
+    test -f /var/www/html/ajax/metaAppConfig.php; \
+    test -f /var/www/html/classes/MetaAppConfigStore.php; \
+    grep -q 'meta-oauth.js' /var/www/html/workspace.php; \
+    grep -q 'meta-app-config.js' /var/www/html/workspace.php; \
     grep -q 'new MetaApiClient' /var/www/html/ajax/checkAccount.php; \
     grep -q "network_identity'=>'profile_bound'" /var/www/html/ajax/checkAccount.php; \
     ! grep -q 'curl_init' /var/www/html/ajax/checkAccount.php; \
@@ -286,15 +293,7 @@ RUN printf '%s\n' \
     'memory_limit=512M' \
     > /usr/local/etc/php/conf.d/remask-uploads.ini
 
-RUN echo '--- REMASK DEBUG metaPreflight.php ---' \
-    && sed -n '1,220p' /var/www/html/ajax/metaPreflight.php \
-    && echo '--- REMASK DEBUG MetaEndpoint cachedPreflight ---' \
-    && grep -n -A120 -B20 'function cachedPreflight' /var/www/html/classes/MetaEndpoint.php || true \
-    && echo '--- REMASK DEBUG MetaEndpoint launch review ---' \
-    && grep -n -A220 -B20 -E 'function .*review|function .*Review|launchReview|preflight' /var/www/html/classes/MetaEndpoint.php || true
 
-RUN echo '--- REMASK DEBUG MetaAdsService preflight ---' \
-    && grep -n -A180 -B30 'function preflight' /var/www/html/classes/MetaAdsService.php || true
 
 ENV REMASK_META_CACHE_TTL=1800 \
     META_GRAPH_API_VERSION=v26.0 \
