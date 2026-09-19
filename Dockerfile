@@ -46,7 +46,6 @@ COPY railway-meta-schema-ui-v103-overlay.php /tmp/railway-meta-schema-ui-v103-ov
 COPY railway-selection-persistence-overlay.php /tmp/railway-selection-persistence-overlay.php
 COPY railway-profile-error-fix-overlay.php /tmp/railway-profile-error-fix-overlay.php
 COPY docker-start.sh /tmp/docker-start.sh
-COPY railway-profile-history-diag.php /tmp/railway-profile-history-diag.php
 
 RUN set -eux; \
     php -r '$out=""; $files=glob("/tmp/remask-parts/runtime.b64.*"); sort($files, SORT_NATURAL); foreach ($files as $file) { $out .= preg_replace("/\\s+/", "", file_get_contents($file)); } if ($out === "") { fwrite(STDERR, "empty ReMask runtime payload\n"); exit(20); } file_put_contents("/tmp/remask-runtime.b64", $out);'; \
@@ -246,7 +245,6 @@ RUN set -eux; \
     [ -f /var/www/html/launch.php ]; \
     cp /tmp/docker-start.sh /var/www/html/docker-start.sh; \
     mkdir -p /var/www/html/bin; \
-    cp /tmp/railway-profile-history-diag.php /var/www/html/bin/remask-profile-history-diag.php; \
     [ -f /var/lib/remask/accounts.json ] || printf '[]\n' > /var/lib/remask/accounts.json; \
     [ -f /var/lib/remask/bundles.json ] || printf '[]\n' > /var/lib/remask/bundles.json; \
     chown -R www-data:www-data /var/lib/remask /var/www/html; \
