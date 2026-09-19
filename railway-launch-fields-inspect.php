@@ -1,29 +1,22 @@
 <?php
-echo "--- REMASK BACKEND META INTEGRATION BEGIN ---\n";
-$targets=[
-  '/var/www/html/classes/MetaAdsService.php'=>['createCampaign','createAdSet','createImageCreative','createVideoCreative','createAd','uploadImage','uploadVideo'],
-  '/var/www/html/classes/MetaJobExecutor.php'=>['process','execute','createCampaign','createAdSet','createCreative','createAd'],
-  '/var/www/html/classes/MetaLaunchValidator.php'=>['validateAndNormalize','normalize','targeting'],
-  '/var/www/html/ajax/metaJobCreate.php'=>['payload','targets','media_library_id','carousel_media_library_ids'],
-];
-foreach($targets as $path=>$needles){
-  if(!is_file($path)) continue;
-  echo "=== FILE: $path ===\n";
-  $s=file_get_contents($path) ?: '';
-  $lines=preg_split('/\R/',$s);
-  $printed=[];
-  foreach($needles as $needle){
-    foreach($lines as $i=>$line){
-      if(stripos($line,$needle)!==false){
-        $from=max(0,$i-20); $to=min(count($lines)-1,$i+160);
-        $key=$from.':'.$to;
-        if(isset($printed[$key])) break;
-        $printed[$key]=true;
-        echo "--- $needle lines ".($from+1)."-".($to+1)." ---\n";
-        for($j=$from;$j<=$to;$j++) echo ($j+1).": ".$lines[$j]."\n";
-        break;
-      }
-    }
+$path='/var/www/html/launch.php';
+$html=file_get_contents($path) ?: '';
+echo "--- REMASK LAUNCH FIELD IDS BEGIN ---\n";
+if($html===''){echo "missing launch.php\n";exit;}
+libxml_use_internal_errors(true);
+$dom=new DOMDocument();
+$dom->loadHTML($html);
+$xp=new DOMXPath($dom);
+foreach($xp->query('//input|//select|//textarea|//button') as $n){
+  $id=$n->getAttribute('id');
+  if($id==='') continue;
+  $type=$n->nodeName==='select'?'select':($n->nodeName==='textarea'?'textarea':($n->getAttribute('type')?:$n->nodeName));
+  echo $id."|".$type;
+  if($n->nodeName==='select'){
+    $opts=[];
+    foreach($n->getElementsByTagName('option') as $o){$opts[]=$o->getAttribute('value');}
+    echo "|".implode(',',$opts);
   }
+  echo "\n";
 }
-echo "--- REMASK BACKEND META INTEGRATION END ---\n";
+echo "--- REMASK LAUNCH FIELD IDS END ---\n";
