@@ -358,97 +358,142 @@ require_once __DIR__ . '/checkpassword.php';
     <link rel="icon" type="image/png" href="styles/img/favicon.png">
     <title><?php include 'version.php' ?> — Креативы</title>
     <style>
-        .creative-wrap{max-width:1540px;margin:0 auto 50px;padding:0 18px;color:#d9dde6;text-align:left}
-        .creative-head{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;margin:14px 0 18px}
-        .creative-head h2{margin:0;color:#eef1f6;font-size:27px}.creative-sub{color:#929aaa;font-size:12px;margin-top:5px}
-        .creative-layout{display:grid;grid-template-columns:minmax(360px,460px) 1fr;gap:14px;align-items:start}
-        .creative-card{background:#262a33;border:1px solid #3b414d;border-radius:8px;padding:16px}
-        .creative-card h5{margin:0 0 14px;color:#eef1f6}.creative-form label{font-size:12px;color:#aeb5c4;margin-bottom:5px}
-        .creative-form .form-control{background:#22262e;border:1px solid #414855;color:#e0e4ec}
-        .creative-form textarea{resize:vertical}.creative-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
-        .creative-library-head{display:flex;gap:8px;align-items:center;margin-bottom:12px}.creative-library-head input{flex:1;background:#22262e;border:1px solid #414855;color:#e0e4ec}
-        .creative-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:12px}
-        .creative-item{background:#20242c;border:1px solid #3b414d;border-radius:8px;overflow:hidden;display:flex;flex-direction:column;min-height:330px}
-        .creative-preview{height:180px;background:#171a20;display:flex;align-items:center;justify-content:center;overflow:hidden;border-bottom:1px solid #343a45}
-        .creative-preview img,.creative-preview video{width:100%;height:100%;object-fit:contain;background:#11141a}
-        .creative-item-body{padding:12px;display:flex;flex-direction:column;gap:7px;flex:1}.creative-name{font-weight:700;color:#f0f2f6}
-        .creative-meta{font-size:11px;color:#8f98a9}.creative-copy{font-size:12px;color:#c3c9d4;white-space:pre-wrap;max-height:54px;overflow:hidden}
-        .creative-item-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:auto;padding-top:6px}.creative-item-actions .btn{font-size:11px;padding:5px 8px}
-        .creative-empty{padding:50px 20px;text-align:center;color:#8e97a8;border:1px dashed #414855;border-radius:8px}
-        .creative-status{font-size:12px;color:#9ba4b4;margin-top:8px;min-height:18px}.creative-status.bad{color:#ff8f8f}.creative-status.ok{color:#67d89b}
-        .creative-file-name{font-size:11px;color:#8e97a8;margin-top:5px}
-        @media(max-width:980px){.creative-layout{grid-template-columns:1fr}.creative-wrap{padding:0 10px}}
+        .cr-page{max-width:1500px;margin:0 auto;padding:18px 22px 56px;text-align:left;color:#e7e9ee}
+        .cr-head{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:2px 0 18px}
+        .cr-title{font-size:28px;font-weight:700;line-height:1.15;margin:0}
+        .cr-head-actions{display:flex;gap:8px}
+        .cr-primary{background:#2d67e8;border:1px solid #2d67e8;color:#fff;border-radius:7px;padding:9px 14px;font-weight:700}
+        .cr-secondary{background:#2b3039;border:1px solid #3b424e;color:#dfe3eb;border-radius:7px;padding:9px 12px}
+        .cr-toolbar{display:flex;align-items:center;gap:10px;margin-bottom:16px}
+        .cr-search-wrap{position:relative;max-width:440px;width:100%}
+        .cr-search-wrap i{position:absolute;left:12px;top:50%;transform:translateY(-50%);color:#707989;font-size:13px}
+        .cr-search{width:100%;height:40px;background:#20242b;border:1px solid #343a45;border-radius:8px;color:#e5e8ee;padding:0 12px 0 36px;outline:0}
+        .cr-count{font-size:12px;color:#7f8898;white-space:nowrap}
+        .cr-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(235px,1fr));gap:14px}
+        .cr-card{background:#23272f;border:1px solid #313742;border-radius:10px;overflow:hidden;transition:.16s ease;min-width:0}
+        .cr-card:hover{transform:translateY(-1px);border-color:#46505f}
+        .cr-preview{position:relative;aspect-ratio:4/3;background:#15181d;overflow:hidden}
+        .cr-preview img,.cr-preview video{width:100%;height:100%;object-fit:cover;display:block}
+        .cr-preview-empty{height:100%;display:flex;align-items:center;justify-content:center;color:#707989}
+        .cr-type{position:absolute;left:9px;top:9px;background:rgba(15,17,21,.78);backdrop-filter:blur(8px);padding:4px 7px;border-radius:5px;font-size:10px;font-weight:700;letter-spacing:.5px;color:#dce1e9}
+        .cr-body{padding:11px}
+        .cr-name{font-size:14px;font-weight:700;color:#edf0f5;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .cr-file{font-size:11px;color:#7f8898;margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .cr-actions{display:flex;gap:7px;margin-top:11px}
+        .cr-launch{flex:1;background:#248653;border:1px solid #248653;color:#fff;border-radius:7px;padding:7px 9px;font-weight:700;font-size:12px;text-align:center;text-decoration:none!important}
+        .cr-icon{width:34px;height:34px;display:inline-flex;align-items:center;justify-content:center;background:#2b3038;border:1px solid #3b424d;color:#cfd5df;border-radius:7px}
+        .cr-empty{grid-column:1/-1;padding:70px 20px;text-align:center;color:#788292}
+        .cr-empty i{font-size:28px;margin-bottom:12px;color:#525b69;display:block}
+        .cr-backdrop{display:none;position:fixed;inset:0;background:rgba(7,9,12,.74);z-index:900;align-items:center;justify-content:center;padding:24px}
+        .cr-backdrop.open{display:flex}
+        .cr-modal{width:min(920px,100%);max-height:90vh;overflow:auto;background:#242831;border:1px solid #373e49;border-radius:12px;box-shadow:0 24px 80px rgba(0,0,0,.45)}
+        .cr-modal-head{display:flex;align-items:center;justify-content:space-between;padding:16px 18px;border-bottom:1px solid #343a45}
+        .cr-modal-head h3{font-size:18px;margin:0;color:#f0f2f6}.cr-close{border:0;background:transparent;color:#8f98a8;font-size:24px;line-height:1}
+        .cr-modal-body{display:grid;grid-template-columns:300px 1fr;gap:20px;padding:18px}
+        .cr-editor-preview{aspect-ratio:4/3;background:#171a1f;border-radius:9px;overflow:hidden;display:flex;align-items:center;justify-content:center;color:#737d8c}
+        .cr-editor-preview img,.cr-editor-preview video{width:100%;height:100%;object-fit:contain}
+        .cr-file-button{display:flex;align-items:center;justify-content:center;width:100%;margin-top:10px;height:38px;border:1px solid #414955;border-radius:7px;background:#2a2f38;color:#dbe0e8;cursor:pointer;font-size:12px;font-weight:700}
+        .cr-file-button input{display:none}
+        .cr-current-file{font-size:11px;color:#7f8898;margin-top:7px;overflow-wrap:anywhere}
+        .cr-form label{font-size:11px;color:#929bab;margin:0 0 5px}
+        .cr-form .form-control{background:#1f232a;border:1px solid #373e49;color:#e6e9ef;border-radius:7px}
+        .cr-form .form-group{margin-bottom:12px}
+        .cr-form textarea{resize:vertical;min-height:90px}
+        .cr-more{margin-top:5px;border-top:1px solid #343a45;padding-top:10px}
+        .cr-more summary{cursor:pointer;color:#9fa8b7;font-size:12px;list-style:none}
+        .cr-more summary::-webkit-details-marker{display:none}
+        .cr-more[open] summary{margin-bottom:12px}
+        .cr-modal-foot{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 18px;border-top:1px solid #343a45}
+        .cr-status{font-size:12px;color:#8f98a8;min-height:18px}.cr-status.bad{color:#ff8f8f}.cr-status.ok{color:#69d99b}
+        @media(max-width:760px){.cr-page{padding:12px}.cr-head{align-items:flex-start}.cr-modal-body{grid-template-columns:1fr}.cr-editor-preview{max-height:260px}.cr-grid{grid-template-columns:repeat(auto-fill,minmax(190px,1fr))}}
     </style>
 </head>
 <body class="app-shell">
 <?php include 'menu.php' ?>
 <main class="app-main">
-<div class="creative-wrap">
-    <div class="creative-head">
-        <div>
-            <div class="app-eyebrow">CREATIVE LIBRARY</div>
-            <h2>Креативы</h2>
-            <div class="creative-sub">Сохрани файл и текст один раз. В «Автозаливе» ReMask сам загрузит этот media-файл в каждый выбранный RK.</div>
+<div class="cr-page">
+    <div class="cr-head">
+        <h1 class="cr-title">Креативы</h1>
+        <div class="cr-head-actions">
+            <button id="newCreative" type="button" class="cr-primary"><i class="fa-solid fa-plus mr-1"></i> ДОБАВИТЬ КРЕО</button>
         </div>
-        <a href="launch.php" class="btn btn-success"><i class="fa-solid fa-wand-magic-sparkles mr-1"></i> АВТОЗАЛИВ</a>
     </div>
 
-    <div class="creative-layout">
-        <section class="creative-card">
-            <h5 id="creativeEditorTitle">Новое крео</h5>
-            <form id="creativeForm" class="creative-form" autocomplete="off">
-                <input id="creativeId" type="hidden">
-                <div class="form-group">
-                    <label>Название в библиотеке</label>
-                    <input id="presetName" class="form-control" placeholder="Например: Betting 01">
-                </div>
-                <div class="form-group">
-                    <label>Изображение / видео</label>
-                    <input id="presetMedia" name="media" type="file" class="form-control" accept="image/*,video/*">
-                    <div id="presetCurrentMedia" class="creative-file-name">Для нового крео файл обязателен.</div>
-                </div>
-                <div class="row">
-                    <div class="col-md-6 form-group"><label>Creative name</label><input id="presetCreativeName" class="form-control" placeholder="Meta Creative name"></div>
-                    <div class="col-md-6 form-group"><label>Ad name</label><input id="presetAdName" class="form-control" placeholder="Ad name"></div>
-                </div>
-                <div class="form-group"><label>Основной текст</label><textarea id="presetMessage" class="form-control" rows="4" placeholder="Primary text"></textarea></div>
-                <div class="row">
-                    <div class="col-md-6 form-group"><label>Заголовок</label><input id="presetHeadline" class="form-control"></div>
-                    <div class="col-md-6 form-group"><label>Описание</label><input id="presetDescription" class="form-control"></div>
-                </div>
-                <div class="form-group"><label>Ссылка</label><input id="presetUrl" class="form-control" placeholder="https://..."></div>
-                <div class="row">
-                    <div class="col-md-5 form-group">
-                        <label>CTA</label>
-                        <select id="presetCta" class="form-control">
-                            <option value="LEARN_MORE">Подробнее</option>
-                            <option value="SIGN_UP">Регистрация</option>
-                            <option value="APPLY_NOW">Подать заявку</option>
-                            <option value="CONTACT_US">Связаться</option>
-                            <option value="SHOP_NOW">Купить</option>
-                            <option value="GET_OFFER">Получить предложение</option>
-                        </select>
-                    </div>
-                    <div class="col-md-7 form-group"><label>UTM / URL tags</label><input id="presetTags" class="form-control" placeholder="utm_source=facebook&..."></div>
-                </div>
-                <div class="creative-actions">
-                    <button id="saveCreative" type="submit" class="btn btn-primary">СОХРАНИТЬ КРЕО</button>
-                    <button id="resetCreative" type="button" class="btn btn-secondary">НОВОЕ</button>
-                </div>
-                <div id="creativeStatus" class="creative-status"></div>
-            </form>
-        </section>
+    <div class="cr-toolbar">
+        <div class="cr-search-wrap">
+            <i class="fa-solid fa-magnifying-glass"></i>
+            <input id="creativeSearch" class="cr-search" placeholder="Поиск">
+        </div>
+        <span id="creativeCount" class="cr-count"></span>
+        <button id="refreshCreatives" type="button" class="cr-secondary" title="Обновить"><i class="fa-solid fa-rotate"></i></button>
+    </div>
 
-        <section class="creative-card">
-            <div class="creative-library-head">
-                <input id="creativeSearch" class="form-control" placeholder="Поиск по библиотеке...">
-                <button id="refreshCreatives" type="button" class="btn btn-secondary">ОБНОВИТЬ</button>
-            </div>
-            <div id="creativeGrid" class="creative-grid"><div class="creative-empty">Загрузка библиотеки…</div></div>
-        </section>
+    <div id="creativeGrid" class="cr-grid">
+        <div class="cr-empty"><i class="fa-regular fa-images"></i>Загрузка…</div>
     </div>
 </div>
-<script src="scripts/creatives.js?v=20260919-creative-library-v98" type="module"></script>
+
+<div id="creativeModal" class="cr-backdrop" aria-hidden="true">
+    <div class="cr-modal" role="dialog" aria-modal="true">
+        <div class="cr-modal-head">
+            <h3 id="creativeEditorTitle">Новое крео</h3>
+            <button id="closeCreative" type="button" class="cr-close">×</button>
+        </div>
+        <form id="creativeForm">
+            <input id="creativeId" type="hidden">
+            <div class="cr-modal-body">
+                <div>
+                    <div id="editorPreview" class="cr-editor-preview"><i class="fa-regular fa-image"></i></div>
+                    <label class="cr-file-button">ВЫБРАТЬ ФАЙЛ<input id="presetMedia" name="media" type="file" accept="image/*,video/*"></label>
+                    <div id="presetCurrentMedia" class="cr-current-file"></div>
+                </div>
+                <div class="cr-form">
+                    <div class="form-group">
+                        <label>Название</label>
+                        <input id="presetName" class="form-control" placeholder="Название крео">
+                    </div>
+                    <div class="form-group">
+                        <label>Основной текст</label>
+                        <textarea id="presetMessage" class="form-control" rows="4" placeholder="Primary text"></textarea>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6 form-group"><label>Заголовок</label><input id="presetHeadline" class="form-control"></div>
+                        <div class="col-md-6 form-group"><label>CTA</label>
+                            <select id="presetCta" class="form-control">
+                                <option value="LEARN_MORE">Подробнее</option>
+                                <option value="SIGN_UP">Регистрация</option>
+                                <option value="APPLY_NOW">Подать заявку</option>
+                                <option value="CONTACT_US">Связаться</option>
+                                <option value="SHOP_NOW">Купить</option>
+                                <option value="GET_OFFER">Получить предложение</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-group"><label>Ссылка</label><input id="presetUrl" class="form-control" placeholder="https://..."></div>
+
+                    <details class="cr-more">
+                        <summary>Дополнительные поля</summary>
+                        <div class="row">
+                            <div class="col-md-6 form-group"><label>Creative name</label><input id="presetCreativeName" class="form-control"></div>
+                            <div class="col-md-6 form-group"><label>Ad name</label><input id="presetAdName" class="form-control"></div>
+                        </div>
+                        <div class="form-group"><label>Description</label><input id="presetDescription" class="form-control"></div>
+                        <div class="form-group"><label>UTM / URL tags</label><input id="presetTags" class="form-control"></div>
+                    </details>
+                </div>
+            </div>
+            <div class="cr-modal-foot">
+                <div id="creativeStatus" class="cr-status"></div>
+                <div>
+                    <button id="cancelCreative" type="button" class="cr-secondary mr-2">ОТМЕНА</button>
+                    <button id="saveCreative" type="submit" class="cr-primary">СОХРАНИТЬ</button>
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script src="scripts/creatives.js?v=20260919-creative-library-v99" type="module"></script>
 <div class="app-footer"><?php include 'copyright.php' ?></div>
 </main>
 </body>
@@ -461,6 +506,7 @@ $creativeJs=<<<'JS_CODE'
 const $ = (id) => document.getElementById(id);
 let items = [];
 let editing = null;
+let previewObjectUrl = '';
 
 function csrfToken(){ return document.querySelector('meta[name="remask-csrf"]')?.content || ''; }
 function esc(value){ return String(value ?? '').replace(/[&<>'"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c];}); }
@@ -472,7 +518,7 @@ async function api(url,options){
     if((options.method||'GET').toUpperCase()!=='GET') options.headers['X-ReMask-CSRF']=csrfToken();
     const r=await fetch(url,options);
     const text=await r.text();
-    let j; try{j=JSON.parse(text);}catch(e){throw new Error('Invalid JSON ('+r.status+'): '+text);}
+    let j; try{j=JSON.parse(text);}catch(e){throw new Error('Invalid JSON ('+r.status+')');}
     if(!r.ok||j.ok===false){const err=j.error||j;throw new Error(err.message||('HTTP '+r.status));}
     return j.data;
 }
@@ -480,71 +526,72 @@ async function api(url,options){
 function setStatus(message,type){
     const el=$('creativeStatus');
     el.textContent=message||'';
-    el.className='creative-status'+(type?' '+type:'');
+    el.className='cr-status'+(type?' '+type:'');
 }
 
-function resetEditor(){
-    editing=null;
-    $('creativeId').value='';
-    $('creativeEditorTitle').textContent='Новое крео';
+function closeEditor(){
+    $('creativeModal').classList.remove('open');
+    $('creativeModal').setAttribute('aria-hidden','true');
+    if(previewObjectUrl){URL.revokeObjectURL(previewObjectUrl);previewObjectUrl='';}
+}
+
+function previewHtml(src,type){
+    if(!src) return '<i class="fa-regular fa-image"></i>';
+    return type==='video'
+        ? '<video src="'+esc(src)+'" muted controls preload="metadata"></video>'
+        : '<img src="'+esc(src)+'" alt="">';
+}
+
+function openEditor(item){
+    editing=item||null;
     $('creativeForm').reset();
-    $('presetCta').value='LEARN_MORE';
-    $('presetCurrentMedia').textContent='Для нового крео файл обязателен.';
+    $('creativeId').value=item?.id||'';
+    $('creativeEditorTitle').textContent=item?'Редактирование':'Новое крео';
+    $('presetName').value=item?.name||'';
+    $('presetCreativeName').value=item?.creative_name||'';
+    $('presetAdName').value=item?.ad_name||'';
+    $('presetMessage').value=item?.message||'';
+    $('presetHeadline').value=item?.headline||'';
+    $('presetDescription').value=item?.description||'';
+    $('presetUrl').value=item?.destination_url||'';
+    $('presetCta').value=item?.cta||'LEARN_MORE';
+    $('presetTags').value=item?.url_tags||'';
+    $('presetCurrentMedia').textContent=item?.media
+        ? item.media.original_name+' · '+formatBytes(item.media.size_bytes)
+        : 'Для нового крео выбери изображение или видео';
+    $('editorPreview').innerHTML=item?.media ? previewHtml(item.preview_url,item.media.media_type) : '<i class="fa-regular fa-image"></i>';
     setStatus('');
-}
-
-function editItem(id){
-    const item=items.find(function(x){return x.id===id;});
-    if(!item)return;
-    editing=item;
-    $('creativeId').value=item.id;
-    $('creativeEditorTitle').textContent='Редактирование: '+(item.name||item.id);
-    $('presetName').value=item.name||'';
-    $('presetCreativeName').value=item.creative_name||'';
-    $('presetAdName').value=item.ad_name||'';
-    $('presetMessage').value=item.message||'';
-    $('presetHeadline').value=item.headline||'';
-    $('presetDescription').value=item.description||'';
-    $('presetUrl').value=item.destination_url||'';
-    $('presetCta').value=item.cta||'LEARN_MORE';
-    $('presetTags').value=item.url_tags||'';
-    $('presetMedia').value='';
-    $('presetCurrentMedia').textContent=item.media ? ('Текущий файл: '+item.media.original_name+' · '+formatBytes(item.media.size_bytes)) : 'Файл отсутствует — загрузи новый.';
-    setStatus('');
-    window.scrollTo({top:0,behavior:'smooth'});
+    $('creativeModal').classList.add('open');
+    $('creativeModal').setAttribute('aria-hidden','false');
 }
 
 function render(){
     const q=$('creativeSearch').value.trim().toLowerCase();
     const rows=items.filter(function(item){
-        const hay=[item.name,item.creative_name,item.ad_name,item.message,item.headline,item.description,item.destination_url,item.media?.original_name].join(' ').toLowerCase();
+        const hay=[item.name,item.message,item.headline,item.media?.original_name].join(' ').toLowerCase();
         return !q||hay.includes(q);
     });
+    $('creativeCount').textContent=rows.length+(rows.length===1?' крео':' крео');
     if(!rows.length){
-        $('creativeGrid').innerHTML='<div class="creative-empty">'+(items.length?'Ничего не найдено.':'Библиотека пока пустая. Загрузи первое крео слева.')+'</div>';
+        $('creativeGrid').innerHTML='<div class="cr-empty"><i class="fa-regular fa-images"></i>'+(items.length?'Ничего не найдено':'Пока пусто')+'</div>';
         return;
     }
     $('creativeGrid').innerHTML=rows.map(function(item){
         const media=item.media||{};
-        const isVideo=media.media_type==='video';
+        const type=(media.media_type||'media').toUpperCase();
         const preview=item.missing_media
-            ? '<div class="creative-meta">Файл отсутствует</div>'
-            : (isVideo
-                ? '<video src="'+esc(item.preview_url)+'" muted controls preload="metadata"></video>'
-                : '<img src="'+esc(item.preview_url)+'" alt="">');
-        const text=item.message||item.headline||item.description||'Текст не сохранён';
-        return '<article class="creative-item" data-id="'+esc(item.id)+'">'+
-            '<div class="creative-preview">'+preview+'</div>'+
-            '<div class="creative-item-body">'+
-                '<div class="creative-name">'+esc(item.name||item.id)+'</div>'+
-                '<div class="creative-meta">'+esc((media.media_type||'media').toUpperCase())+' · '+esc(media.original_name||'missing')+(media.size_bytes?' · '+esc(formatBytes(media.size_bytes)):'')+'</div>'+
-                '<div class="creative-copy">'+esc(text)+'</div>'+
-                '<div class="creative-meta">'+esc(item.headline||'')+(item.cta?' · '+esc(item.cta):'')+'</div>'+
-                '<div class="creative-item-actions">'+
-                    '<a class="btn btn-success" href="launch.php?creative_preset='+encodeURIComponent(item.id)+'">В АВТОЗАЛИВ</a>'+
-                    '<button type="button" class="btn btn-outline-light" data-action="edit">ИЗМЕНИТЬ</button>'+
-                    '<button type="button" class="btn btn-outline-light" data-action="duplicate">КОПИЯ</button>'+
-                    '<button type="button" class="btn btn-danger" data-action="delete">УДАЛИТЬ</button>'+
+            ? '<div class="cr-preview-empty"><i class="fa-regular fa-image"></i></div>'
+            : previewHtml(item.preview_url,media.media_type);
+        return '<article class="cr-card" data-id="'+esc(item.id)+'">'+
+            '<div class="cr-preview">'+preview+'<span class="cr-type">'+esc(type)+'</span></div>'+
+            '<div class="cr-body">'+
+                '<div class="cr-name" title="'+esc(item.name||item.id)+'">'+esc(item.name||item.id)+'</div>'+
+                '<div class="cr-file">'+esc(media.original_name||'Файл отсутствует')+'</div>'+
+                '<div class="cr-actions">'+
+                    '<a class="cr-launch" href="launch.php?creative_preset='+encodeURIComponent(item.id)+'">В АВТОЗАЛИВ</a>'+
+                    '<button class="cr-icon" type="button" data-action="edit" title="Изменить"><i class="fa-solid fa-pen"></i></button>'+
+                    '<button class="cr-icon" type="button" data-action="duplicate" title="Дублировать"><i class="fa-regular fa-copy"></i></button>'+
+                    '<button class="cr-icon" type="button" data-action="delete" title="Удалить"><i class="fa-regular fa-trash-can"></i></button>'+
                 '</div>'+
             '</div>'+
         '</article>';
@@ -552,7 +599,6 @@ function render(){
 }
 
 async function load(){
-    $('creativeGrid').innerHTML='<div class="creative-empty">Загрузка библиотеки…</div>';
     const data=await api('ajax/creativeLibrary.php?action=list');
     items=data.items||[];
     render();
@@ -562,7 +608,7 @@ async function save(e){
     e.preventDefault();
     const id=$('creativeId').value.trim();
     const file=$('presetMedia').files[0];
-    if(!id&&!file){setStatus('Выбери изображение или видео.','bad');return;}
+    if(!id&&!file){setStatus('Выбери файл.','bad');return;}
     const form=new FormData();
     form.append('action','save');
     if(id)form.append('id',id);
@@ -581,9 +627,9 @@ async function save(e){
     try{
         const data=await api('ajax/creativeLibrary.php',{method:'POST',body:form});
         items=data.items||[];
-        resetEditor();
-        setStatus('Крео сохранено. Теперь его можно выбрать в «Автозаливе».','ok');
         render();
+        setStatus('Сохранено.','ok');
+        setTimeout(closeEditor,300);
     }catch(err){setStatus(err.message,'bad');}
     finally{$('saveCreative').disabled=false;}
 }
@@ -591,29 +637,41 @@ async function save(e){
 async function itemAction(id,action){
     const item=items.find(function(x){return x.id===id;});
     if(!item)return;
-    if(action==='edit'){editItem(id);return;}
-    if(action==='delete'&&!confirm('Удалить крео "'+(item.name||id)+'"?'))return;
+    if(action==='edit'){openEditor(item);return;}
+    if(action==='delete'&&!confirm('Удалить "'+(item.name||id)+'"?'))return;
     const form=new FormData();form.append('action',action);form.append('id',id);
     try{
         const data=await api('ajax/creativeLibrary.php',{method:'POST',body:form});
         items=data.items||[];
-        if(editing&&editing.id===id)resetEditor();
         render();
-    }catch(err){setStatus(err.message,'bad');}
+    }catch(err){alert(err.message);}
 }
 
+$('newCreative').addEventListener('click',()=>openEditor(null));
+$('closeCreative').addEventListener('click',closeEditor);
+$('cancelCreative').addEventListener('click',closeEditor);
+$('creativeModal').addEventListener('click',(e)=>{if(e.target===$('creativeModal'))closeEditor();});
+document.addEventListener('keydown',(e)=>{if(e.key==='Escape'&&$('creativeModal').classList.contains('open'))closeEditor();});
 $('creativeForm').addEventListener('submit',save);
-$('resetCreative').addEventListener('click',resetEditor);
-$('refreshCreatives').addEventListener('click',function(){load().catch(function(e){setStatus(e.message,'bad');});});
+$('refreshCreatives').addEventListener('click',()=>load().catch(e=>alert(e.message)));
 $('creativeSearch').addEventListener('input',render);
 $('creativeGrid').addEventListener('click',function(e){
     const button=e.target.closest('[data-action]');
     if(!button)return;
     const card=button.closest('[data-id]');
-    if(!card)return;
-    itemAction(card.dataset.id,button.dataset.action);
+    if(card)itemAction(card.dataset.id,button.dataset.action);
 });
-load().catch(function(e){$('creativeGrid').innerHTML='<div class="creative-empty">'+esc(e.message)+'</div>';});
+$('presetMedia').addEventListener('change',function(){
+    const file=this.files[0];
+    if(!file)return;
+    if(previewObjectUrl)URL.revokeObjectURL(previewObjectUrl);
+    previewObjectUrl=URL.createObjectURL(file);
+    $('editorPreview').innerHTML=previewHtml(previewObjectUrl,file.type.startsWith('video/')?'video':'image');
+    $('presetCurrentMedia').textContent=file.name+' · '+formatBytes(file.size);
+});
+load().catch(function(e){
+    $('creativeGrid').innerHTML='<div class="cr-empty"><i class="fa-solid fa-triangle-exclamation"></i>'+esc(e.message)+'</div>';
+});
 JS_CODE;
 file_put_contents($root.'/scripts/creatives.js',$creativeJs);
 
@@ -838,4 +896,4 @@ JS_CODE;
 }
 file_put_contents($launchJsPath,$js);
 
-fwrite(STDERR,"[creative-library] v98 dedicated library + bulk Launch handoff ready\n");
+fwrite(STDERR,"[creative-library] v99 minimal creative library UI + bulk Launch handoff ready\n");
