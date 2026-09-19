@@ -43,6 +43,9 @@ COPY railway-meta-official-fields.php /tmp/railway-meta-official-fields.php
 COPY railway-meta-builder-v102-overlay.php /tmp/railway-meta-builder-v102-overlay.php
 COPY railway-v102-MetaSdkSchema.php /tmp/remask-v102-MetaSdkSchema.php
 COPY railway-meta-schema-ui-v103-overlay.php /tmp/railway-meta-schema-ui-v103-overlay.php
+COPY railway-v104-MetaFundingGuard.php /tmp/railway-v104-MetaFundingGuard.php
+COPY railway-v104-launch-safety-overlay.php /tmp/railway-v104-launch-safety-overlay.php
+COPY tests/v104_regression.php /tmp/v104_regression.php
 COPY railway-selection-persistence-overlay.php /tmp/railway-selection-persistence-overlay.php
 COPY railway-profile-error-fix-overlay.php /tmp/railway-profile-error-fix-overlay.php
 COPY docker-start.sh /tmp/docker-start.sh
@@ -91,6 +94,14 @@ RUN set -eux; \
     php -l /tmp/remask-v102-MetaSdkSchema.php; \
     php -l /tmp/railway-meta-schema-ui-v103-overlay.php; \
     php /tmp/railway-meta-schema-ui-v103-overlay.php; \
+    php -l /tmp/railway-v104-MetaFundingGuard.php; \
+    cp /tmp/railway-v104-MetaFundingGuard.php /var/www/html/classes/MetaFundingGuard.php; \
+    php -l /tmp/railway-v104-launch-safety-overlay.php; \
+    php /tmp/railway-v104-launch-safety-overlay.php; \
+    sh -n /tmp/docker-start.sh; \
+    grep -q 'REMASK_PROCESS_ROLE' /tmp/docker-start.sh; \
+    grep -q 'REMASK_JOBS_DIR' /tmp/docker-start.sh; \
+    ! grep -q 'REMASK_JOB_EXECUTION_MODE:-browser.*background' /tmp/docker-start.sh; \
     php /tmp/railway-selection-persistence-overlay.php; \
     php /tmp/railway-profile-error-fix-overlay.php; \
     php -r '$allowedRaw=["/var/www/html/classes/MetaApiClient.php"=>true,"/var/www/html/classes/FbRequests.php"=>true,"/var/www/html/classes/ProxyHealthService.php"=>true]; $allowedLegacy=["/var/www/html/ajax/payUnsettled.php"=>true,"/var/www/html/ajax/policyAppeal.php"=>true,"/var/www/html/ajax/disapproveAppeal.php"=>true]; $violations=[]; foreach(["/var/www/html/ajax","/var/www/html/classes","/var/www/html/bin"] as $root){$it=new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root,FilesystemIterator::SKIP_DOTS)); foreach($it as $fi){if(!$fi->isFile()||$fi->getExtension()!=="php")continue;$path=$fi->getPathname();$s=file_get_contents($path);if((str_contains($s,"graph.facebook.com")||str_contains($s,"curl_init("))&&!isset($allowedRaw[$path]))$violations[]="raw-meta-transport:".$path;if($fi->getFilename()!=="FbRequests.php"&&preg_match("/new\\s+FbRequests\\s*\\(/",$s)&&!isset($allowedLegacy[$path]))$violations[]="legacy-fbrequests-ref:".$path;}} if($violations){fwrite(STDERR,"Meta transport invariant failed: ".implode(", ",$violations)."\\n");exit(91);} fwrite(STDERR,"[transport-invariant] canonical Graph transport enforced; legacy browser transport limited to payment/appeal endpoints\\n");'; \
@@ -193,6 +204,12 @@ RUN set -eux; \
     grep -q 'loadMetaSdkSchema' /var/www/html/scripts/creatives.js; \
     grep -q 'renderMetaSdkFields' /var/www/html/scripts/creatives.js; \
     grep -q 'facebook/facebook-python-business-sdk' /var/www/html/ajax/metaSdkSchema.php; \
+    grep -q 'REMASK_REQUIRED_FUNDING_REVIEW_V1' /var/www/html/classes/MetaEndpoint.php; \
+    grep -q 'NO ACTIVE FUNDING SOURCE' /var/www/html/classes/MetaFundingGuard.php; \
+    grep -q 'generatedStoryCreativeParams' /var/www/html/classes/MetaAdsService.php; \
+    grep -q 'queueOperational;' /var/www/html/health.php; \
+    grep -q 'REMASK_RELEASE_VERSION' /var/www/html/version.php; \
+    REMASK_TEST_RUNTIME=/var/www/html php /tmp/v104_regression.php; \
     grep -q 'presetCreativeName' /var/www/html/creatives.php; \
     grep -q 'presetAdName' /var/www/html/creatives.php; \
     grep -q 'presetMessage' /var/www/html/creatives.php; \
@@ -250,8 +267,20 @@ RUN set -eux; \
     chmod 700 /var/lib/remask; \
     chmod +x /var/www/html/docker-start.sh;
 
+RUN printf '%s\n' \
+    'upload_max_filesize=160M' \
+    'post_max_size=512M' \
+    'max_file_uploads=20' \
+    'max_execution_time=300' \
+    'max_input_time=300' \
+    'memory_limit=512M' \
+    > /usr/local/etc/php/conf.d/remask-uploads.ini
+
 ENV REMASK_META_CACHE_TTL=1800 \
     META_GRAPH_API_VERSION=v26.0 \
+    REMASK_JOB_EXECUTION_MODE=worker \
+    REMASK_WORKER_PROCESSES=2 \
+    REMASK_RELEASE_VERSION=v104 \
     REMASK_PROCESS_ROLE=web
 
 EXPOSE 80

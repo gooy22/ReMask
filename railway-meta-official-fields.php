@@ -90,6 +90,17 @@ final class MetaOfficialFields
         'name','priority','source_ad_id','status','tracking_specs'
     ];
 
+    /**
+     * ReMask derives these fields from the selected identity and persisted
+     * media. Advanced SDK input must never replace them after construction.
+     */
+    private const GENERATED_STORY_OWNED_CREATIVE = [
+        'actor_id','image_file','image_hash','image_url','instagram_permalink_url',
+        'instagram_user_id','link_url','name','object_id','object_story_id',
+        'object_story_spec','object_type','object_url','source_facebook_post_id',
+        'source_instagram_media_id'
+    ];
+
     public static function sanitizeBuilder(array $builder): array
     {
         $out = [];
@@ -201,6 +212,16 @@ final class MetaOfficialFields
             'ad' => self::pick($source, self::AD),
             default => [],
         };
+    }
+
+    /** Parameters that are safe to merge into a ReMask-generated story. */
+    public static function generatedStoryCreativeParams(array $source): array
+    {
+        $params = self::officialParams('creative', $source);
+        foreach (self::GENERATED_STORY_OWNED_CREATIVE as $field) {
+            unset($params[$field]);
+        }
+        return $params;
     }
 
     private static function pick(array $source, array $allowed): array
