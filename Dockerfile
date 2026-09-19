@@ -287,6 +287,9 @@ RUN echo '--- REMASK DEBUG metaPreflight.php ---' \
     && echo '--- REMASK DEBUG MetaEndpoint launch review ---' \
     && grep -n -A220 -B20 -E 'function .*review|function .*Review|launchReview|preflight' /var/www/html/classes/MetaEndpoint.php || true
 
+RUN echo '--- REMASK DEBUG MetaAdsService preflight ---' \
+    && grep -n -A180 -B30 'function preflight' /var/www/html/classes/MetaAdsService.php || true
+
 ENV REMASK_META_CACHE_TTL=1800 \
     META_GRAPH_API_VERSION=v26.0 \
     REMASK_JOB_EXECUTION_MODE=worker \
