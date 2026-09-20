@@ -275,6 +275,9 @@ RUN set -eux; \
     chmod +x /var/www/html/docker-start.sh;
 
 
+# REMASK_CREATIVE_MEDIA_TRACE
+RUN php -r '$files=["/var/www/html/classes/MetaAdsService.php","/var/www/html/classes/MetaLaunchMediaValidator.php","/var/www/html/ajax/metaJobCreate.php"]; foreach($files as $file){ if(!is_file($file))continue; $s=file_get_contents($file); foreach(["function createCreative","class MetaLaunchMediaValidator","validateMedia","existing_image_hash","existing_video_id","media_library_id"] as $needle){ $p=strpos($s,$needle); if($p!==false){ fwrite(STDERR,"[media-trace] ".$file." :: ".$needle."\n".substr($s,max(0,$p-1800),7000)."\n---\n"); } } }'
+
 ENV REMASK_META_CACHE_TTL=1800 \
     META_GRAPH_API_VERSION=v26.0 \
     REMASK_PROCESS_ROLE=web
