@@ -190,8 +190,14 @@ RUN set -eux; \
     grep -q 'REMASK_META_BUILDER_BUDGET_V1' /var/www/html/scripts/launch.js; \
     php -l /var/www/html/classes/MetaOfficialFields.php; \
     test -f /var/www/html/classes/MetaOfficialFields.php; \
-    grep -q 'ONLINE_GAMBLING_AND_GAMING' /var/www/html/creatives.php; \
-    grep -q 'STORE_VISITS' /var/www/html/creatives.php; \
+    grep -q 'ONLINE_GAMBLING_AND_GAMING' /var/www/html/classes/MetaSdkSchema.php; \
+    grep -q 'STORE_VISITS' /var/www/html/classes/MetaSdkSchema.php; \
+    grep -q 'metaProfileContext' /var/www/html/creatives.php; \
+    grep -q 'metaAccountContext' /var/www/html/creatives.php; \
+    grep -q 'audienceEstimateValue' /var/www/html/creatives.php; \
+    grep -q 'populatePrimaryMetaControls' /var/www/html/scripts/creatives.js; \
+    grep -q 'metaCreativeCapabilities.php' /var/www/html/scripts/creatives.js; \
+    grep -q 'metaAudienceEstimate.php' /var/www/html/scripts/creatives.js; \
     grep -q 'meta-builder-v102' /var/www/html/launch.php; \
     php -l /var/www/html/classes/MetaSdkSchema.php; \
     php -l /var/www/html/ajax/metaSdkSchema.php; \
@@ -251,7 +257,6 @@ RUN set -eux; \
     [ -f /var/www/html/index.php ]; \
     [ -f /var/www/html/launch.php ]; \
     cp /tmp/docker-start.sh /var/www/html/docker-start.sh; \
-    mkdir -p /var/www/html/bin; \
     mkdir -p /var/www/html/bin; \
     [ -f /var/lib/remask/accounts.json ] || printf '[]\n' > /var/lib/remask/accounts.json; \
     [ -f /var/lib/remask/bundles.json ] || printf '[]\n' > /var/lib/remask/bundles.json; \
