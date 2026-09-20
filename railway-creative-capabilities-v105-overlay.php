@@ -95,6 +95,25 @@ if (strpos($service, 'REMASK_CREATIVE_CAPABILITIES_V1') === false) {
         );
     }
 
+    public function listCreativeCustomConversions(string $accountId): array
+    {
+        return $this->client->get(
+            $this->remaskCreativeAccountNode($accountId) . '/customconversions',
+            [
+                'fields' => 'id,name,custom_event_type,event_source_type,event_source_id,is_archived,is_unavailable,last_fired_time',
+                'limit' => 200,
+            ]
+        );
+    }
+
+    public function listCreativeIdentities(): array
+    {
+        return $this->client->get('me/accounts', [
+            'fields' => 'id,name,instagram_business_account{id,username,name,profile_picture_url}',
+            'limit' => 200,
+        ]);
+    }
+
 PHP_CODE;
 
     $service = str_replace($anchor, $methods . $anchor, $service, $count);
@@ -154,6 +173,15 @@ $ctaTypes = [
     'WHATSAPP_MESSAGE','WOODHENGE_SUPPORT'
 ];
 
+$standardEvents = [
+    'ACHIEVEMENT_UNLOCKED','ADD_PAYMENT_INFO','ADD_TO_CART','ADD_TO_WISHLIST','AD_IMPRESSION',
+    'COMPLETE_REGISTRATION','CONTACT','CONTENT_VIEW','CUSTOMIZE_PRODUCT','D2_RETENTION','D7_RETENTION',
+    'DONATE','FIND_LOCATION','INITIATED_CHECKOUT','LEAD','LEVEL_ACHIEVED','LISTING_INTERACTION',
+    'MESSAGING_CONVERSATION_STARTED_7D','OTHER','PURCHASE','RATE','SCHEDULE','SEARCH',
+    'SERVICE_BOOKING_REQUEST','SPENT_CREDITS','START_TRIAL','SUBMIT_APPLICATION','SUBSCRIBE',
+    'TUTORIAL_COMPLETION'
+];
+
 try {
     $input = MetaEndpoint::input();
     $profile = trim((string)($input['profile'] ?? ''));
@@ -177,13 +205,16 @@ try {
         'graph_version' => (string)(getenv('META_GRAPH_API_VERSION') ?: 'v26.0'),
         'schema' => MetaSdkSchema::schema(),
         'cta_types' => $ctaTypes,
+        'standard_conversion_events' => $standardEvents,
         'profiles' => $profiles,
         'profile' => $profile,
         'account_id' => $accountId,
         'ad_accounts' => [],
         'pages' => [],
+        'instagram_accounts' => [],
         'pixels' => [],
         'custom_audiences' => [],
+        'custom_conversions' => [],
         'warnings' => [],
     ];
 
@@ -200,15 +231,38 @@ try {
         $out['warnings'][] = ['resource' => 'profile', 'error' => remask_creative_error($e)];
     }
 
+    $service = MetaEndpoint::serviceForAccountName($profile);
     try {
-        $pages = MetaEndpoint::cachedAsset($profile, 'pages', '', $refresh);
-        $out['pages'] = remask_creative_rows($pages);
+        $identityRows = remask_creative_rows($service->listCreativeIdentities());
+        if ($identityRows !== []) {
+            $out['pages'] = $identityRows;
+            foreach ($identityRows as $page) {
+                $ig = $page['instagram_business_account'] ?? null;
+                if (!is_array($ig) || trim((string)($ig['id'] ?? '')) === '') continue;
+                $out['instagram_accounts'][] = [
+                    'id' => (string)$ig['id'],
+                    'username' => (string)($ig['username'] ?? ''),
+                    'name' => (string)($ig['name'] ?? ''),
+                    'profile_picture_url' => (string)($ig['profile_picture_url'] ?? ''),
+                    'page_id' => (string)($page['id'] ?? ''),
+                    'page_name' => (string)($page['name'] ?? ''),
+                ];
+            }
+        }
     } catch (Throwable $e) {
-        $out['warnings'][] = ['resource' => 'pages', 'error' => remask_creative_error($e)];
+        $out['warnings'][] = ['resource' => 'identities', 'error' => remask_creative_error($e)];
+    }
+
+    if ($out['pages'] === []) {
+        try {
+            $pages = MetaEndpoint::cachedAsset($profile, 'pages', '', $refresh);
+            $out['pages'] = remask_creative_rows($pages);
+        } catch (Throwable $e) {
+            $out['warnings'][] = ['resource' => 'pages', 'error' => remask_creative_error($e)];
+        }
     }
 
     if ($accountId !== '') {
-        $service = MetaEndpoint::serviceForAccountName($profile);
         try {
             $out['pixels'] = remask_creative_rows($service->listCreativePixels($accountId));
         } catch (Throwable $e) {
@@ -218,6 +272,11 @@ try {
             $out['custom_audiences'] = remask_creative_rows($service->listCreativeCustomAudiences($accountId));
         } catch (Throwable $e) {
             $out['warnings'][] = ['resource' => 'custom_audiences', 'error' => remask_creative_error($e)];
+        }
+        try {
+            $out['custom_conversions'] = remask_creative_rows($service->listCreativeCustomConversions($accountId));
+        } catch (Throwable $e) {
+            $out['warnings'][] = ['resource' => 'custom_conversions', 'error' => remask_creative_error($e)];
         }
     }
 
