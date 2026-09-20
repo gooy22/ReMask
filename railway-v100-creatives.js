@@ -420,6 +420,15 @@ function populatePrimaryMetaControls() {
     if (Array.isArray(metaCapabilities?.cta_types) && metaCapabilities.cta_types.length) {
         setMetaSelectOptions('presetCta', metaCapabilities.cta_types, {fallback:'LEARN_MORE'});
     }
+    if (Array.isArray(metaCapabilities?.preview_formats) && metaCapabilities.preview_formats.length) {
+        const preferred = [
+            'MOBILE_FEED_STANDARD','DESKTOP_FEED_STANDARD','FACEBOOK_STORY_MOBILE',
+            'FACEBOOK_REELS_MOBILE','INSTAGRAM_STANDARD','INSTAGRAM_STORY','INSTAGRAM_REELS',
+            'MARKETPLACE_MOBILE','MESSENGER_MOBILE_STORY_MEDIA','WHATSAPP_STATUS_MEDIA'
+        ];
+        const all = [...new Set([...preferred.filter((x) => metaCapabilities.preview_formats.includes(x)), ...metaCapabilities.preview_formats])];
+        setMetaSelectOptions('metaPreviewFormat', all, {fallback:'MOBILE_FEED_STANDARD'});
+    }
 }
 
 function normalizeAdAccountId(value) {
@@ -556,6 +565,125 @@ function applyMetaExistingMediaSelection() {
         : '<i class="fa-solid fa-photo-film"></i>';
     $('singleCurrent').textContent = asset.name + ' · Existing Meta ' + asset.type;
     if (hint) hint.textContent = 'Используется существующий asset reference RK: ' + asset.value;
+}
+
+function metaPreviewCallToAction() {
+    const type = String($('presetCta')?.value || '').trim();
+    const link = String($('presetUrl')?.value || '').trim();
+    if (!type || type === 'NO_BUTTON') return undefined;
+    const value = link ? {link} : {};
+    return {type, value};
+}
+
+function buildMetaPreviewCreative() {
+    const asset = selectedMetaExistingMedia();
+    const pageId = String($('mbPageId')?.value || '').trim();
+    const instagramActorId = String($('mbInstagramActorId')?.value || '').trim();
+    const message = String($('presetMessage')?.value || '').trim();
+    const headline = String($('presetHeadline')?.value || '').trim();
+    const description = String($('presetDescription')?.value || '').trim();
+    const link = String($('presetUrl')?.value || '').trim();
+    const cta = metaPreviewCallToAction();
+
+    if (asset?.type === 'creative') {
+        return {creative_id: asset.value};
+    }
+
+    if ($('presetFormat')?.value === 'INSTAGRAM_POST') {
+        const sourceId = String($('presetInstagramMediaId')?.value || '').trim();
+        if (!sourceId) throw new Error('Для Meta Preview нужен Instagram media ID.');
+        return compactObject({
+            source_instagram_media_id: sourceId,
+            instagram_actor_id: instagramActorId || undefined,
+        });
+    }
+
+    if (!asset) {
+        if ($('presetMedia')?.files?.[0]) {
+            throw new Error('Локальный файл ещё не существует в Meta. Выбери existing Meta Image/Video для официального Meta Preview.');
+        }
+        throw new Error('Выбери существующий Meta Image / Video / Creative.');
+    }
+    if (!pageId) throw new Error('Для Meta Preview выбери Facebook Page.');
+    if (!link && asset.type !== 'creative') throw new Error('Для Meta Preview укажи Destination URL.');
+
+    const story = {page_id: pageId};
+    if (asset.type === 'image') {
+        story.link_data = compactObject({
+            image_hash: asset.value,
+            link,
+            message: message || undefined,
+            name: headline || undefined,
+            description: description || undefined,
+            call_to_action: cta,
+        });
+    } else if (asset.type === 'video') {
+        story.video_data = compactObject({
+            video_id: asset.value,
+            message: message || undefined,
+            title: headline || undefined,
+            link_description: description || undefined,
+            call_to_action: cta,
+        });
+    }
+
+    const builder = buildMetaBuilder();
+    const official = isPlainObject(builder?.creative) ? builder.creative : {};
+    const preview = deepMerge(official, compactObject({
+        name: $('presetCreativeName')?.value.trim() || undefined,
+        object_story_spec: story,
+        instagram_actor_id: instagramActorId || undefined,
+        url_tags: $('presetTags')?.value.trim() || undefined,
+    }));
+    delete preview.image_hash;
+    delete preview.video_id;
+    return preview;
+}
+
+async function generateMetaPreview() {
+    const status = $('metaPreviewStatus');
+    const wrap = $('metaPreviewFrameWrap');
+    const frame = $('metaPreviewFrame');
+    if (!status || !wrap || !frame) return;
+    if (!metaContext.profile || !metaContext.accountId) {
+        status.textContent = 'Выбери Meta profile и reference RK.';
+        return;
+    }
+    const adFormat = String($('metaPreviewFormat')?.value || '').trim();
+    if (!adFormat) {
+        status.textContent = 'Выбери формат Meta Preview.';
+        return;
+    }
+
+    let creative;
+    try { creative = buildMetaPreviewCreative(); }
+    catch (error) { status.textContent = error.message; return; }
+
+    $('generateMetaPreview').disabled = true;
+    status.textContent = 'Meta генерирует preview…';
+    try {
+        const data = await api('ajax/metaCreativePreview.php', {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({
+                profile: metaContext.profile,
+                account_id: metaContext.accountId,
+                ad_format: adFormat,
+                creative,
+            }),
+        });
+        frame.srcdoc = String(data?.body || '');
+        wrap.style.display = data?.body ? 'block' : 'none';
+        status.textContent = data?.body
+            ? ('Meta Preview · ' + adFormat)
+            : 'Meta не вернула preview body.';
+    } catch (error) {
+        wrap.style.display = 'none';
+        frame.srcdoc = '';
+        status.textContent = error.message;
+    } finally {
+        $('generateMetaPreview').disabled = false;
+    }
 }
 
 function capabilityWarningText(rows) {
@@ -1114,7 +1242,14 @@ function currentCarouselMeta() {
         link: row.querySelector('.car-link')?.value.trim() || '',
     }));
 }
+function clearMetaPreview() {
+    const wrap = $('metaPreviewFrameWrap');
+    const frame = $('metaPreviewFrame');
+    if (wrap) wrap.style.display = 'none';
+    if (frame) frame.srcdoc = '';
+}
 function renderFormat() {
+    clearMetaPreview();
     const format = $('presetFormat').value;
     $('singleSection').style.display = format === 'SINGLE' ? 'block' : 'none';
     $('carouselSection').style.display = format === 'CAROUSEL' ? 'block' : 'none';
@@ -1373,6 +1508,10 @@ document.addEventListener('click', (event) => {
 $('presetFormat').addEventListener('change', renderFormat);
 $('metaExistingMedia')?.addEventListener('change', () => {
     applyMetaExistingMediaSelection();
+    clearMetaPreview();
+});
+$('generateMetaPreview')?.addEventListener('click', () => {
+    generateMetaPreview();
 });
 $('presetMedia').addEventListener('change', function () {
     const file = this.files[0];
