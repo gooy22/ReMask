@@ -22,7 +22,7 @@ function cl100_meta_media_ref(array $record): array {
     $asset = is_array($record['meta_asset'] ?? null) ? $record['meta_asset'] : [];
     $type = strtolower(trim((string)($asset['type'] ?? '')));
     $value = trim((string)($asset['value'] ?? ''));
-    if (in_array($type, ['image','video'], true) && $value !== '') {
+    if (in_array($type, ['image','video','creative'], true) && $value !== '') {
         return [
             'type' => $type,
             'value' => $value,
@@ -31,11 +31,13 @@ function cl100_meta_media_ref(array $record): array {
         ];
     }
     $builder = is_array($record['meta_builder'] ?? null) ? $record['meta_builder'] : [];
-    $creative = is_array($builder['creative'] ?? null) ? $builder['creative'] : [];
-    $image = trim((string)($creative['image_hash'] ?? ''));
+    $existing = is_array($builder['existing_media'] ?? null) ? $builder['existing_media'] : [];
+    $image = trim((string)($existing['image_hash'] ?? ''));
     if ($image !== '') return ['type'=>'image','value'=>$image,'name'=>'Meta image','preview_url'=>''];
-    $video = trim((string)($creative['video_id'] ?? ''));
+    $video = trim((string)($existing['video_id'] ?? ''));
     if ($video !== '') return ['type'=>'video','value'=>$video,'name'=>'Meta video','preview_url'=>''];
+    $creativeId = trim((string)($existing['creative_id'] ?? ''));
+    if ($creativeId !== '') return ['type'=>'creative','value'=>$creativeId,'name'=>'Meta creative','preview_url'=>''];
     return [];
 }
 
@@ -74,7 +76,7 @@ function cl100_public_items(CreativePresetStore $store, $library): array {
                 $row['media'] = [
                     'id' => 'meta:' . $metaMedia['value'],
                     'original_name' => $metaMedia['name'] !== '' ? $metaMedia['name'] : ('Meta ' . $metaMedia['type']),
-                    'media_type' => $metaMedia['type'],
+                    'media_type' => $metaMedia['type'] === 'video' ? 'video' : 'image',
                     'source' => 'meta',
                 ];
                 $row['missing_media'] = false;
@@ -184,8 +186,8 @@ try {
             if (!is_array($metaAsset)) throw new InvalidArgumentException('meta_asset must be a JSON object.');
             $metaType = strtolower(trim((string)($metaAsset['type'] ?? '')));
             $metaValue = trim((string)($metaAsset['value'] ?? ''));
-            if (!in_array($metaType, ['image','video'], true) || $metaValue === '') {
-                throw new InvalidArgumentException('meta_asset must contain image/video type and value.');
+            if (!in_array($metaType, ['image','video','creative'], true) || $metaValue === '') {
+                throw new InvalidArgumentException('meta_asset must contain image/video/creative type and value.');
             }
             $record['meta_asset'] = [
                 'type' => $metaType,
