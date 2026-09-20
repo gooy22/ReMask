@@ -106,6 +106,39 @@ if (strpos($service, 'REMASK_CREATIVE_CAPABILITIES_V1') === false) {
         );
     }
 
+    public function listCreativeImages(string $accountId): array
+    {
+        return $this->client->get(
+            $this->remaskCreativeAccountNode($accountId) . '/adimages',
+            [
+                'fields' => 'hash,name,url,url_128,width,height,status,created_time',
+                'limit' => 100,
+            ]
+        );
+    }
+
+    public function listCreativeVideos(string $accountId): array
+    {
+        return $this->client->get(
+            $this->remaskCreativeAccountNode($accountId) . '/advideos',
+            [
+                'fields' => 'id,title,description,picture,length,status,created_time,updated_time',
+                'limit' => 100,
+            ]
+        );
+    }
+
+    public function listExistingAdCreatives(string $accountId): array
+    {
+        return $this->client->get(
+            $this->remaskCreativeAccountNode($accountId) . '/adcreatives',
+            [
+                'fields' => 'id,name,status,image_hash,image_url,video_id,thumbnail_url,effective_object_story_id,object_story_id,source_facebook_post_id,source_instagram_media_id',
+                'limit' => 100,
+            ]
+        );
+    }
+
     public function listCreativeIdentities(): array
     {
         return $this->client->get('me/accounts', [
@@ -215,6 +248,9 @@ try {
         'pixels' => [],
         'custom_audiences' => [],
         'custom_conversions' => [],
+        'ad_images' => [],
+        'ad_videos' => [],
+        'ad_creatives' => [],
         'warnings' => [],
     ];
 
@@ -277,6 +313,21 @@ try {
             $out['custom_conversions'] = remask_creative_rows($service->listCreativeCustomConversions($accountId));
         } catch (Throwable $e) {
             $out['warnings'][] = ['resource' => 'custom_conversions', 'error' => remask_creative_error($e)];
+        }
+        try {
+            $out['ad_images'] = remask_creative_rows($service->listCreativeImages($accountId));
+        } catch (Throwable $e) {
+            $out['warnings'][] = ['resource' => 'ad_images', 'error' => remask_creative_error($e)];
+        }
+        try {
+            $out['ad_videos'] = remask_creative_rows($service->listCreativeVideos($accountId));
+        } catch (Throwable $e) {
+            $out['warnings'][] = ['resource' => 'ad_videos', 'error' => remask_creative_error($e)];
+        }
+        try {
+            $out['ad_creatives'] = remask_creative_rows($service->listExistingAdCreatives($accountId));
+        } catch (Throwable $e) {
+            $out['warnings'][] = ['resource' => 'ad_creatives', 'error' => remask_creative_error($e)];
         }
     }
 
