@@ -314,6 +314,23 @@ require_once __DIR__ . '/checkpassword.php';
         </div>
         <div id="carouselSection" class="cr-media-box" style="display:none"><label class="cr-file-btn" style="max-width:300px">ВЫБРАТЬ 2–10 ИЗОБРАЖЕНИЙ<input id="presetCarousel" type="file" accept="image/*" multiple></label><div id="carouselHint" class="cr-hint"></div><div id="carouselRows" class="cr-carousel-list"></div></div>
         <div id="instagramSection" class="cr-media-box" style="display:none"><div class="cr-field" style="max-width:430px"><label>Instagram media ID</label><input id="presetInstagramMediaId" class="form-control" inputmode="numeric"></div></div>
+
+        <div class="cr-media-box" id="metaPreviewSection">
+          <div class="cr-section-title">Meta Ad Preview</div>
+          <div class="cr-form-grid">
+            <div class="span-8 cr-field">
+              <label>Формат предпросмотра Meta</label>
+              <select id="metaPreviewFormat" class="form-control"><option value="">Выбери reference RK</option></select>
+            </div>
+            <div class="span-4 cr-field" style="display:flex;align-items:end">
+              <button id="generateMetaPreview" type="button" class="cr-btn" style="width:100%">META PREVIEW</button>
+            </div>
+          </div>
+          <div id="metaPreviewStatus" class="cr-hint" style="margin-top:8px">Предпросмотр создаёт сама Meta через generatepreviews. Для локального файла до загрузки доступен только локальный preview.</div>
+          <div id="metaPreviewFrameWrap" style="display:none;margin-top:10px;border:1px solid #343a45;border-radius:8px;overflow:hidden;background:#fff">
+            <iframe id="metaPreviewFrame" title="Meta Ad Preview" sandbox="allow-scripts allow-forms allow-popups" style="display:block;width:100%;height:620px;border:0;background:#fff"></iframe>
+          </div>
+        </div>
       </section>
 
       <section class="cr-panel" data-panel="tracking">
