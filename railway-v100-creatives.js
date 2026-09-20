@@ -6,6 +6,10 @@ let carouselFiles = [];
 let carouselPreviewUrls = [];
 let metaSdkSchema = null;
 let pendingMetaBuilder = null;
+let metaCapabilities = null;
+let metaContext = {profile:'', accountId:''};
+let audienceEstimateTimer = null;
+let audienceEstimateSeq = 0;
 const coveredMetaFields = {
     campaign: new Set(['name','objective','buying_type','special_ad_categories','bid_strategy','daily_budget','lifetime_budget','spend_cap','start_time','stop_time','status']),
     adset: new Set(['name','optimization_goal','billing_event','bid_strategy','bid_amount','destination_type','daily_budget','lifetime_budget','start_time','end_time','attribution_spec','promoted_object','is_dynamic_creative','is_incremental_attribution_enabled','status']),
@@ -131,6 +135,260 @@ function selectedValues(selector, attr) {
 function idsToAudience(value) {
     return csvStrings(value).map((id) => ({id}));
 }
+
+function setMetaSelectOptions(id, values, options = {}) {
+    const el = $(id);
+    if (!el) return;
+    const previous = String(el.value || '');
+    const fallback = String(options.fallback ?? '');
+    const placeholder = options.placeholder ?? null;
+    const normalized = Array.from(new Set((values || []).map((v) => String(v)).filter(Boolean)));
+
+    el.innerHTML = '';
+    if (placeholder !== null) el.appendChild(new Option(String(placeholder), ''));
+    for (const value of normalized) el.appendChild(new Option(value, value));
+
+    if (previous && normalized.includes(previous)) el.value = previous;
+    else if (fallback && (fallback === '' || normalized.includes(fallback))) el.value = fallback;
+    else if (placeholder !== null) el.value = '';
+    else if (normalized.length) el.value = normalized[0];
+}
+
+function schemaEnum(group, field) {
+    const values = metaSdkSchema?.[group]?.enums?.[field];
+    return Array.isArray(values) ? values : [];
+}
+
+function populatePrimaryMetaControls() {
+    if (!metaSdkSchema) return;
+
+    setMetaSelectOptions('mbObjective', schemaEnum('campaign','objective'), {fallback:'OUTCOME_TRAFFIC'});
+    setMetaSelectOptions('mbSpecialCategory', schemaEnum('campaign','special_ad_categories'), {fallback:'NONE'});
+    setMetaSelectOptions('mbCampaignBidStrategy', schemaEnum('campaign','bid_strategy'), {placeholder:'Meta default'});
+    setMetaSelectOptions('mbCampaignStatus', schemaEnum('campaign','status'), {fallback:'PAUSED'});
+
+    setMetaSelectOptions('mbOptimizationGoal', schemaEnum('adset','optimization_goal'), {fallback:'LINK_CLICKS'});
+    setMetaSelectOptions('mbBillingEvent', schemaEnum('adset','billing_event'), {fallback:'IMPRESSIONS'});
+    setMetaSelectOptions('mbAdsetBidStrategy', schemaEnum('adset','bid_strategy'), {fallback:'LOWEST_COST_WITHOUT_CAP'});
+    setMetaSelectOptions('mbDestinationType', schemaEnum('adset','destination_type'), {placeholder:'Meta default'});
+    setMetaSelectOptions('mbAdsetStatus', schemaEnum('adset','status'), {fallback:'PAUSED'});
+    setMetaSelectOptions('mbAdStatus', schemaEnum('ad','status'), {fallback:'PAUSED'});
+
+    if (Array.isArray(metaCapabilities?.cta_types) && metaCapabilities.cta_types.length) {
+        setMetaSelectOptions('presetCta', metaCapabilities.cta_types, {fallback:'LEARN_MORE'});
+    }
+}
+
+function normalizeAdAccountId(value) {
+    return String(value || '').replace(/^act_/i,'').trim();
+}
+
+function renderMetaProfiles(rows) {
+    const el = $('metaProfileContext');
+    if (!el) return;
+    const previous = metaContext.profile || String(el.value || '');
+    el.innerHTML = '<option value="">Выбери FB-профиль</option>';
+    for (const row of rows || []) {
+        const name = String(row?.name || '').trim();
+        if (!name) continue;
+        const extra = [row?.session_ready ? 'session' : '', row?.proxy_configured ? 'proxy' : ''].filter(Boolean).join(' · ');
+        el.appendChild(new Option(name + (extra ? ' · ' + extra : ''), name));
+    }
+    if (previous && Array.from(el.options).some((o) => o.value === previous)) el.value = previous;
+}
+
+function renderMetaAccounts(rows) {
+    const el = $('metaAccountContext');
+    if (!el) return;
+    const previous = metaContext.accountId || normalizeAdAccountId(el.value);
+    el.innerHTML = '<option value="">Выбери рекламный кабинет</option>';
+    for (const row of rows || []) {
+        const id = normalizeAdAccountId(row?.account_id || row?.id);
+        if (!id) continue;
+        const label = [row?.name || ('act_' + id), row?.currency || '', row?.account_status ? ('status ' + row.account_status) : ''].filter(Boolean).join(' · ');
+        el.appendChild(new Option(label, id));
+    }
+    el.disabled = el.options.length <= 1;
+    if (previous && Array.from(el.options).some((o) => o.value === previous)) el.value = previous;
+}
+
+function renderMetaDatalist(id, rows, valueKey = 'id', labelKeys = ['name']) {
+    const list = $(id);
+    if (!list) return;
+    list.innerHTML = '';
+    for (const row of rows || []) {
+        const value = String(row?.[valueKey] ?? '').trim();
+        if (!value) continue;
+        const label = labelKeys.map((key) => String(row?.[key] ?? '').trim()).filter(Boolean).join(' · ');
+        const option = document.createElement('option');
+        option.value = value;
+        if (label) option.label = label;
+        list.appendChild(option);
+    }
+}
+
+function capabilityWarningText(rows) {
+    const first = (rows || []).find((x) => x?.error?.message);
+    return first?.error?.message || '';
+}
+
+function persistMetaContext() {
+    try {
+        localStorage.setItem('remask.creatives.metaProfile', metaContext.profile || '');
+        localStorage.setItem('remask.creatives.metaAccount', metaContext.accountId || '');
+    } catch {}
+}
+
+async function loadMetaContext(profile = '', accountId = '', refresh = false) {
+    const params = new URLSearchParams();
+    if (profile) params.set('profile', profile);
+    if (accountId) params.set('account_id', normalizeAdAccountId(accountId));
+    if (refresh) params.set('refresh', '1');
+
+    const status = $('metaCapabilitiesStatus');
+    if (status) status.textContent = profile ? 'Загрузка Meta assets…' : 'Загрузка Meta schema…';
+
+    const data = await api('ajax/metaCreativeCapabilities.php' + (params.toString() ? '?' + params.toString() : ''));
+    metaCapabilities = data || {};
+
+    if (!metaSdkSchema && data?.schema) {
+        metaSdkSchema = data.schema;
+        renderMetaSdkFields();
+    } else if (data?.schema) {
+        metaSdkSchema = data.schema;
+    }
+    populatePrimaryMetaControls();
+    renderMetaProfiles(data?.profiles || []);
+
+    if (profile) {
+        metaContext.profile = profile;
+        renderMetaAccounts(data?.ad_accounts || []);
+        renderMetaDatalist('mbPageOptions', data?.pages || [], 'id', ['name','id']);
+        if (accountId) {
+            metaContext.accountId = normalizeAdAccountId(accountId);
+            renderMetaDatalist('mbPixelOptions', data?.pixels || [], 'id', ['name','id']);
+            renderMetaDatalist('mbCustomAudienceOptions', data?.custom_audiences || [], 'id', ['name','subtype']);
+        } else {
+            renderMetaDatalist('mbPixelOptions', [], 'id', ['name']);
+            renderMetaDatalist('mbCustomAudienceOptions', [], 'id', ['name']);
+        }
+    } else {
+        renderMetaAccounts([]);
+        renderMetaDatalist('mbPageOptions', [], 'id', ['name']);
+        renderMetaDatalist('mbPixelOptions', [], 'id', ['name']);
+        renderMetaDatalist('mbCustomAudienceOptions', [], 'id', ['name']);
+    }
+
+    const warning = capabilityWarningText(data?.warnings || []);
+    if (status) {
+        const source = data?.graph_version ? ('Meta ' + data.graph_version) : 'Meta';
+        status.textContent = warning ? (source + ' · ' + warning) : (source + ' · capabilities готовы');
+    }
+    persistMetaContext();
+    return data;
+}
+
+function formatAudienceNumber(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return null;
+    try { return new Intl.NumberFormat('ru-RU', {maximumFractionDigits:0}).format(n); }
+    catch { return String(Math.round(n)); }
+}
+
+function audienceFunnelLabel(builder) {
+    const campaign = builder?.campaign || {};
+    const adset = builder?.adset || {};
+    const promoted = adset.promoted_object || {};
+    return [
+        campaign.objective || 'Objective',
+        adset.destination_type || 'Meta destination',
+        adset.optimization_goal || 'Optimization',
+        promoted.custom_event_type || ''
+    ].filter(Boolean).join(' → ');
+}
+
+function audienceHasTargetingAnchor(targeting) {
+    if (!targeting || typeof targeting !== 'object') return false;
+    return Boolean(
+        targeting.geo_locations ||
+        targeting.countries ||
+        targeting.country ||
+        targeting.country_groups ||
+        (Array.isArray(targeting.custom_audiences) && targeting.custom_audiences.length)
+    );
+}
+
+async function refreshAudienceEstimate() {
+    const valueEl = $('audienceEstimateValue');
+    const metaEl = $('audienceEstimateMeta');
+    const stateEl = $('audienceEstimateState');
+    if (!valueEl || !metaEl || !stateEl) return;
+
+    if (!metaContext.profile || !metaContext.accountId) {
+        valueEl.textContent = '—';
+        stateEl.textContent = 'Нужен reference RK';
+        metaEl.textContent = 'Выбери Meta profile и reference RK. Оценка берётся из Meta delivery_estimate / reachestimate.';
+        return;
+    }
+
+    let builder;
+    try { builder = buildMetaBuilder(); }
+    catch (error) {
+        valueEl.textContent = '—';
+        stateEl.textContent = 'Проверь поля';
+        metaEl.textContent = error.message;
+        return;
+    }
+
+    if (!audienceHasTargetingAnchor(builder.targeting)) {
+        valueEl.textContent = '—';
+        stateEl.textContent = 'Нужен GEO / Custom Audience';
+        metaEl.textContent = audienceFunnelLabel(builder) + ' · добавь GEO или Custom Audience для расчёта Meta.';
+        return;
+    }
+
+    const seq = ++audienceEstimateSeq;
+    stateEl.textContent = 'Meta считает…';
+    metaEl.textContent = audienceFunnelLabel(builder);
+
+    try {
+        const payload = {
+            profile: metaContext.profile,
+            account_id: metaContext.accountId,
+            targeting_spec: builder.targeting || {},
+            optimization_goal: builder.adset?.optimization_goal || '',
+            promoted_object: builder.adset?.promoted_object || {},
+        };
+        const data = await api('ajax/metaAudienceEstimate.php', {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify(payload),
+        });
+        if (seq !== audienceEstimateSeq) return;
+
+        const lower = formatAudienceNumber(data?.lower_bound);
+        const upper = formatAudienceNumber(data?.upper_bound);
+        valueEl.textContent = lower && upper ? (lower + ' – ' + upper) : (lower || upper || '—');
+        stateEl.textContent = data?.estimate_ready === false ? 'Meta: расчёт не готов' : 'Meta estimate';
+        const source = data?.source === 'meta_reach_estimate_fallback' ? 'reachestimate' : 'delivery_estimate';
+        const cache = data?._cache?.state ? (' · cache ' + data._cache.state) : '';
+        metaEl.textContent = audienceFunnelLabel(builder) + ' · ' + source + cache;
+    } catch (error) {
+        if (seq !== audienceEstimateSeq) return;
+        valueEl.textContent = '—';
+        stateEl.textContent = 'Meta estimate недоступен';
+        metaEl.textContent = audienceFunnelLabel(builder) + ' · ' + error.message;
+    }
+}
+
+function scheduleAudienceEstimate(delay = 650) {
+    if (audienceEstimateTimer) clearTimeout(audienceEstimateTimer);
+    audienceEstimateTimer = setTimeout(() => {
+        audienceEstimateTimer = null;
+        refreshAudienceEstimate();
+    }, delay);
+}
+
 function metaFieldId(group, field) {
     return 'sdk_' + group + '_' + field.replace(/[^a-zA-Z0-9_]/g, '_');
 }
@@ -291,9 +549,28 @@ function filterMetaSdkFields() {
     });
 }
 async function loadMetaSdkSchema() {
-    const data = await api('ajax/metaSdkSchema.php');
-    metaSdkSchema = data.schema || {};
+    const initial = await loadMetaContext('', '', false);
+    metaSdkSchema = initial?.schema || metaSdkSchema || {};
     renderMetaSdkFields();
+    populatePrimaryMetaControls();
+
+    let savedProfile = '';
+    let savedAccount = '';
+    try {
+        savedProfile = localStorage.getItem('remask.creatives.metaProfile') || '';
+        savedAccount = localStorage.getItem('remask.creatives.metaAccount') || '';
+    } catch {}
+
+    if (savedProfile && Array.from($('metaProfileContext')?.options || []).some((o) => o.value === savedProfile)) {
+        metaContext.profile = savedProfile;
+        $('metaProfileContext').value = savedProfile;
+        const profileData = await loadMetaContext(savedProfile, '', false);
+        if (savedAccount && (profileData?.ad_accounts || []).some((row) => normalizeAdAccountId(row?.account_id || row?.id) === savedAccount)) {
+            metaContext.accountId = savedAccount;
+            $('metaAccountContext').value = savedAccount;
+            await loadMetaContext(savedProfile, savedAccount, false);
+        }
+    }
 }
 function buildMetaBuilder() {
     const special = $('mbSpecialCategory').value;
@@ -583,6 +860,7 @@ function openEditor(item = null) {
     setStatus('');
     $('creativeModal').classList.add('open');
     $('creativeModal').setAttribute('aria-hidden', 'false');
+    scheduleAudienceEstimate(120);
 }
 function render() {
     const query = $('creativeSearch').value.trim().toLowerCase();
@@ -744,6 +1022,60 @@ $('presetCarousel').addEventListener('change', function () {
 $('creativeForm').addEventListener('submit', save);
 $('creativeSearch').addEventListener('input', render);
 $('metaFieldSearch')?.addEventListener('input', filterMetaSdkFields);
+$('metaProfileContext')?.addEventListener('change', async function () {
+    metaContext.profile = this.value || '';
+    metaContext.accountId = '';
+    persistMetaContext();
+    try {
+        await loadMetaContext(metaContext.profile, '', false);
+    } catch (error) {
+        const status = $('metaCapabilitiesStatus');
+        if (status) status.textContent = error.message;
+    }
+    scheduleAudienceEstimate(50);
+});
+$('metaAccountContext')?.addEventListener('change', async function () {
+    metaContext.accountId = normalizeAdAccountId(this.value);
+    persistMetaContext();
+    if (metaContext.profile && metaContext.accountId) {
+        try {
+            await loadMetaContext(metaContext.profile, metaContext.accountId, false);
+            if ($('metaAccountContext')) $('metaAccountContext').value = metaContext.accountId;
+        } catch (error) {
+            const status = $('metaCapabilitiesStatus');
+            if (status) status.textContent = error.message;
+        }
+    }
+    scheduleAudienceEstimate(50);
+});
+$('refreshMetaCapabilities')?.addEventListener('click', async () => {
+    try {
+        await loadMetaContext(metaContext.profile, metaContext.accountId, true);
+        if ($('metaProfileContext')) $('metaProfileContext').value = metaContext.profile || '';
+        if ($('metaAccountContext')) $('metaAccountContext').value = metaContext.accountId || '';
+    } catch (error) {
+        const status = $('metaCapabilitiesStatus');
+        if (status) status.textContent = error.message;
+    }
+    scheduleAudienceEstimate(50);
+});
+
+const audienceEstimateIds = [
+    'mbObjective','mbDestinationType','mbOptimizationGoal','mbConversionEvent','mbPixelId',
+    'mbAgeMin','mbAgeMax','mbGender','mbLocales','mbGeo','mbExcludedGeo',
+    'mbInterests','mbBehaviors','mbCustomAudiences','mbExcludedCustomAudiences',
+    'mbFlexibleSpec','mbExclusions','mbFacebookPositions','mbInstagramPositions',
+    'mbMessengerPositions','mbAudienceNetworkPositions','mbThreadsPositions',
+    'mbWhatsappPositions','mbUserOs','mbUserDevice'
+];
+for (const id of audienceEstimateIds) {
+    const el = $(id);
+    if (!el) continue;
+    el.addEventListener(el.tagName === 'SELECT' ? 'change' : 'input', () => scheduleAudienceEstimate());
+}
+document.querySelectorAll('[data-publisher],[data-device-platform]').forEach((el) => {
+    el.addEventListener('change', () => scheduleAudienceEstimate());
+});
 $('refreshCreatives').addEventListener('click', () => load().catch((error) => alert(error.message)));
 $('creativeGrid').addEventListener('click', (event) => {
     const button = event.target.closest('[data-action]');
