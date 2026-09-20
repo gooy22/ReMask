@@ -49,6 +49,20 @@ require_once __DIR__ . '/checkpassword.php';
 .cr-audience-estimate-value{font-size:24px;font-weight:750;line-height:1.15;color:#eef1f6;margin-top:3px}
 .cr-audience-estimate-meta{font-size:11px;color:#7f8999;margin-top:5px;line-height:1.4}
 .cr-audience-estimate-state{font-size:11px;color:#9da7b7;text-align:right}
+.cr-target-box{border:1px solid #343c48;background:#1a1f26;border-radius:8px;padding:10px;min-height:112px}
+.cr-target-box label{display:block;margin:0 0 6px;font-size:11px;color:#9aa3b2;font-weight:650}
+.cr-target-input{position:relative}
+.cr-target-results{display:none;position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:40;max-height:220px;overflow:auto;background:#171b21;border:1px solid #3b4451;border-radius:7px;box-shadow:0 14px 36px rgba(0,0,0,.35)}
+.cr-target-results.open{display:block}
+.cr-target-result{padding:8px 10px;cursor:pointer;border-bottom:1px solid #262d36;font-size:12px;color:#dfe4eb}
+.cr-target-result:last-child{border-bottom:0}.cr-target-result:hover{background:#252c35}
+.cr-target-result small{display:block;color:#7f8999;margin-top:2px}
+.cr-target-pills{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.cr-target-pill{display:inline-flex;align-items:center;gap:6px;max-width:100%;border:1px solid #414b59;background:#262d36;border-radius:999px;padding:5px 7px 5px 9px;font-size:11px;color:#dde2e9}
+.cr-target-pill button{border:0;background:transparent;color:#929dad;padding:0;line-height:1;cursor:pointer}
+.cr-target-empty{padding:9px 10px;color:#7f8999;font-size:11px}
+.cr-raw-targeting{grid-column:span 12;border-top:1px solid #343a45;padding-top:8px}
+.cr-raw-targeting summary{cursor:pointer;color:#8f99a9;font-size:11px;font-weight:650;margin-bottom:8px}
 .cr-tabs{display:flex;gap:4px;padding:9px 12px;border-bottom:1px solid #343a45;background:#20242b;overflow-x:auto}
 .cr-tab{border:0;background:transparent;color:#8f98a8;padding:7px 10px;border-radius:6px;font-size:12px;font-weight:700;white-space:nowrap}
 .cr-tab.active{background:#313741;color:#fff}
@@ -182,14 +196,43 @@ require_once __DIR__ . '/checkpassword.php';
           <div class="span-3 cr-field"><label>Age max</label><input id="mbAgeMax" type="number" min="13" max="65" class="form-control" value="65"></div>
           <div class="span-3 cr-field"><label>Gender</label><select id="mbGender" class="form-control"><option value="">All</option><option value="1">Male</option><option value="2">Female</option></select></div>
           <div class="span-3 cr-field"><label>Locales IDs</label><input id="mbLocales" class="form-control" placeholder="6,24"></div>
-          <div class="span-6 cr-field"><label>Geo locations (JSON)</label><textarea id="mbGeo" class="form-control cr-json" placeholder='{"countries":["UA"]}'></textarea></div>
-          <div class="span-6 cr-field"><label>Excluded geo (JSON)</label><textarea id="mbExcludedGeo" class="form-control cr-json" placeholder='{"countries":["RU"]}'></textarea></div>
-          <div class="span-6 cr-field"><label>Interests (JSON)</label><textarea id="mbInterests" class="form-control cr-json" placeholder='[{"id":"6003139266461","name":"Business"}]'></textarea></div>
-          <div class="span-6 cr-field"><label>Behaviors (JSON)</label><textarea id="mbBehaviors" class="form-control cr-json" placeholder='[{"id":"...","name":"..."}]'></textarea></div>
-          <div class="span-6 cr-field"><label>Custom audience IDs</label><input id="mbCustomAudiences" class="form-control" list="mbCustomAudienceOptions" placeholder="123,456"><datalist id="mbCustomAudienceOptions"></datalist></div>
+          <div class="span-4 cr-target-box">
+            <label>GEO — поиск Meta</label>
+            <div class="cr-target-input">
+              <input id="mbGeoSearch" class="form-control" autocomplete="off" placeholder="Страна, регион или город">
+              <div id="mbGeoResults" class="cr-target-results"></div>
+            </div>
+            <div id="mbGeoPills" class="cr-target-pills"></div>
+          </div>
+          <div class="span-4 cr-target-box">
+            <label>Interests — поиск Meta</label>
+            <div class="cr-target-input">
+              <input id="mbInterestSearch" class="form-control" autocomplete="off" placeholder="Минимум 2 символа">
+              <div id="mbInterestResults" class="cr-target-results"></div>
+            </div>
+            <div id="mbInterestPills" class="cr-target-pills"></div>
+          </div>
+          <div class="span-4 cr-target-box">
+            <label>Behaviors — поиск Meta</label>
+            <div class="cr-target-input">
+              <input id="mbBehaviorSearch" class="form-control" autocomplete="off" placeholder="Минимум 2 символа">
+              <div id="mbBehaviorResults" class="cr-target-results"></div>
+            </div>
+            <div id="mbBehaviorPills" class="cr-target-pills"></div>
+          </div>
+          <div class="span-6 cr-field"><label>Custom audience IDs</label><input id="mbCustomAudiences" class="form-control" list="mbCustomAudienceOptions" placeholder="Выбери из Meta или введи ID"><datalist id="mbCustomAudienceOptions"></datalist></div>
           <div class="span-6 cr-field"><label>Excluded custom audience IDs</label><input id="mbExcludedCustomAudiences" class="form-control" placeholder="123,456"></div>
-          <div class="span-6 cr-field"><label>Flexible spec (JSON)</label><textarea id="mbFlexibleSpec" class="form-control cr-json"></textarea></div>
-          <div class="span-6 cr-field"><label>Exclusions (JSON)</label><textarea id="mbExclusions" class="form-control cr-json"></textarea></div>
+          <details class="cr-raw-targeting">
+            <summary>Расширенный Targeting JSON (официальные Meta-поля)</summary>
+            <div class="cr-form-grid">
+              <div class="span-6 cr-field"><label>Geo locations</label><textarea id="mbGeo" class="form-control cr-json" placeholder='{"countries":["UA"]}'></textarea></div>
+              <div class="span-6 cr-field"><label>Excluded geo</label><textarea id="mbExcludedGeo" class="form-control cr-json" placeholder='{"countries":["RU"]}'></textarea></div>
+              <div class="span-6 cr-field"><label>Interests</label><textarea id="mbInterests" class="form-control cr-json" placeholder='[{"id":"6003139266461","name":"Business"}]'></textarea></div>
+              <div class="span-6 cr-field"><label>Behaviors</label><textarea id="mbBehaviors" class="form-control cr-json" placeholder='[{"id":"...","name":"..."}]'></textarea></div>
+              <div class="span-6 cr-field"><label>Flexible spec</label><textarea id="mbFlexibleSpec" class="form-control cr-json"></textarea></div>
+              <div class="span-6 cr-field"><label>Exclusions</label><textarea id="mbExclusions" class="form-control cr-json"></textarea></div>
+            </div>
+          </details>
         </div>
         <div id="audienceEstimateCard" class="cr-audience-estimate">
           <div>
