@@ -180,9 +180,10 @@ require_once __DIR__ . '/checkpassword.php';
           <div class="span-3 cr-field"><label>Lifetime budget</label><input id="mbAdsetLifetimeBudget" type="number" min="0" class="form-control"></div>
           <div class="span-3 cr-field"><label>Start time</label><input id="mbAdsetStart" type="datetime-local" class="form-control"></div>
           <div class="span-3 cr-field"><label>End time</label><input id="mbAdsetEnd" type="datetime-local" class="form-control"></div>
-          <div class="span-4 cr-field"><label>Pixel ID</label><input id="mbPixelId" class="form-control" list="mbPixelOptions" autocomplete="off"><datalist id="mbPixelOptions"></datalist></div>
-          <div class="span-4 cr-field"><label>Conversion event</label><input id="mbConversionEvent" class="form-control" placeholder="LEAD / PURCHASE / ..."></div>
-          <div class="span-4 cr-field"><label>Status</label><select id="mbAdsetStatus" class="form-control"><option value="PAUSED">PAUSED</option></select></div>
+          <div class="span-3 cr-field"><label>Pixel ID</label><input id="mbPixelId" class="form-control" list="mbPixelOptions" autocomplete="off"><datalist id="mbPixelOptions"></datalist></div>
+          <div class="span-3 cr-field"><label>Conversion event</label><input id="mbConversionEvent" class="form-control" list="mbConversionEventOptions" placeholder="LEAD / PURCHASE / ..."><datalist id="mbConversionEventOptions"></datalist></div>
+          <div class="span-3 cr-field"><label>Custom conversion ID</label><input id="mbCustomConversionId" class="form-control" list="mbCustomConversionOptions" autocomplete="off" placeholder="Meta custom conversion"><datalist id="mbCustomConversionOptions"></datalist></div>
+          <div class="span-3 cr-field"><label>Status</label><select id="mbAdsetStatus" class="form-control"><option value="PAUSED">PAUSED</option></select></div>
           <div class="span-6 cr-field"><label>Attribution spec (JSON)</label><textarea id="mbAttributionSpec" class="form-control cr-json" placeholder='[{"event_type":"CLICK_THROUGH","window_days":7}]'></textarea></div>
           <div class="span-6 cr-field"><label>Promoted object extra (JSON)</label><textarea id="mbPromotedObject" class="form-control cr-json" placeholder='{"application_id":"..."}'></textarea></div>
           <div class="span-12 cr-checkrow"><label class="cr-check"><input id="mbDynamicCreative" type="checkbox"> Dynamic creative</label><label class="cr-check"><input id="mbIncrementalAttribution" type="checkbox"> Incremental attribution</label></div>
@@ -277,7 +278,7 @@ require_once __DIR__ . '/checkpassword.php';
         <div class="cr-section-title">Identity</div>
         <div class="cr-form-grid">
           <div class="span-6 cr-field"><label>Facebook Page ID</label><input id="mbPageId" class="form-control" list="mbPageOptions" autocomplete="off"><datalist id="mbPageOptions"></datalist></div>
-          <div class="span-6 cr-field"><label>Instagram actor ID</label><input id="mbInstagramActorId" class="form-control"></div>
+          <div class="span-6 cr-field"><label>Instagram actor ID</label><input id="mbInstagramActorId" class="form-control" list="mbInstagramOptions" autocomplete="off"><datalist id="mbInstagramOptions"></datalist></div>
         </div>
         <div class="cr-muted mt-2">Если в Launch для конкретного RK задан свой Page / Instagram, account override может заменить эти значения.</div>
       </section>
