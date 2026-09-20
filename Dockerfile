@@ -215,6 +215,10 @@ RUN set -eux; \
     grep -q 'listCreativeImages' /var/www/html/classes/MetaAdsService.php; \
     grep -q 'listCreativeVideos' /var/www/html/classes/MetaAdsService.php; \
     grep -q 'cl100_meta_media_ref' /var/www/html/ajax/creativeLibrary.php; \
+    grep -q 'existing_media' /var/www/html/classes/MetaOfficialFields.php; \
+    grep -q 'existing_creative_id' /var/www/html/classes/MetaOfficialFields.php; \
+    grep -q 'Meta Ad Creatives' /var/www/html/scripts/creatives.js; \
+    grep -q 'ad_creatives' /var/www/html/ajax/metaCreativeCapabilities.php; \
     grep -q "'video_id'" /var/www/html/classes/MetaOfficialFields.php; \
     grep -q 'meta-builder-v102' /var/www/html/launch.php; \
     php -l /var/www/html/classes/MetaSdkSchema.php; \
