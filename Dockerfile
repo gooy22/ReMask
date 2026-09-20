@@ -217,6 +217,7 @@ RUN set -eux; \
     grep -q 'cl100_meta_media_ref' /var/www/html/ajax/creativeLibrary.php; \
     grep -q 'existing_media' /var/www/html/classes/MetaOfficialFields.php; \
     grep -q 'existing_creative_id' /var/www/html/classes/MetaOfficialFields.php; \
+    php -r 'require "/var/www/html/classes/MetaOfficialFields.php"; $base=["campaign"=>[],"adset"=>["targeting"=>[]],"creative"=>[],"ad"=>[]]; foreach([["image_hash"=>"abcDEF_123"],["video_id"=>"123456"],["creative_id"=>"987654"]] as $m){$p=MetaOfficialFields::applyBuilderToPayload($base,["existing_media"=>$m]);$c=$p["creative"]; if(isset($m["image_hash"])&&($c["existing_image_hash"]??"")!==$m["image_hash"])exit(71); if(isset($m["video_id"])&&($c["existing_video_id"]??"")!==$m["video_id"])exit(72); if(isset($m["creative_id"])&&($c["existing_creative_id"]??"")!==$m["creative_id"])exit(73);}'; \
     grep -q 'Meta Ad Creatives' /var/www/html/scripts/creatives.js; \
     grep -q 'ad_creatives' /var/www/html/ajax/metaCreativeCapabilities.php; \
     grep -q "'video_id'" /var/www/html/classes/MetaOfficialFields.php; \
