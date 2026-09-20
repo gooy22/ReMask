@@ -190,7 +190,7 @@ final class MetaSdkSchema
                     'playable_asset_id'=>'string','portrait_customizations'=>'map','product_set_id'=>'string',
                     'product_suggestion_settings'=>'map','recommender_settings'=>'map','regional_regulation_disclaimer_spec'=>'map',
                     'source_facebook_post_id'=>'string','source_instagram_media_id'=>'string','template_url'=>'string',
-                    'template_url_spec'=>'string','thumbnail_url'=>'string','title'=>'string','url_tags'=>'string',
+                    'template_url_spec'=>'string','thumbnail_url'=>'string','title'=>'string','url_tags'=>'string','video_id'=>'string',
                     'use_page_actor_override'=>'bool','wamo_whatsapp_identity_spec'=>'map',
                 ],
                 'enums'=>[],
