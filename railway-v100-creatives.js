@@ -470,6 +470,83 @@ function renderMetaDatalist(id, rows, valueKey = 'id', labelKeys = ['name']) {
     }
 }
 
+function selectedMetaExistingMedia() {
+    const select = $('metaExistingMedia');
+    const raw = String(select?.value || '');
+    if (!raw.includes(':')) return null;
+    const [type, ...parts] = raw.split(':');
+    const value = parts.join(':').trim();
+    if (!value || !['image','video'].includes(type)) return null;
+    const rows = type === 'image' ? (metaCapabilities?.ad_images || []) : (metaCapabilities?.ad_videos || []);
+    const row = rows.find((item) => String(type === 'image' ? (item?.hash || '') : (item?.id || '')) === value) || {};
+    return {
+        type,
+        value,
+        name: String(row?.name || row?.title || (type === 'image' ? 'Meta image' : 'Meta video')),
+        preview_url: String(row?.url_128 || row?.url || row?.picture || ''),
+    };
+}
+
+function metaAssetFromBuilder(builder) {
+    const creative = builder?.creative || {};
+    if (creative.image_hash) return {type:'image', value:String(creative.image_hash)};
+    if (creative.video_id) return {type:'video', value:String(creative.video_id)};
+    return null;
+}
+
+function renderMetaExistingMediaOptions(preferred = null) {
+    const select = $('metaExistingMedia');
+    if (!select) return;
+    const current = preferred?.type && preferred?.value
+        ? (preferred.type + ':' + preferred.value)
+        : String(select.value || '');
+    select.innerHTML = '<option value="">Не выбрано — загрузить новый файл</option>';
+
+    const addGroup = (label, rows, type, valueKey, labelKeys) => {
+        if (!Array.isArray(rows) || !rows.length) return;
+        const group = document.createElement('optgroup');
+        group.label = label;
+        for (const row of rows) {
+            const value = String(row?.[valueKey] || '').trim();
+            if (!value) continue;
+            const parts = labelKeys.map((key) => String(row?.[key] || '').trim()).filter(Boolean);
+            const option = new Option(parts.join(' · ') || value, type + ':' + value);
+            group.appendChild(option);
+        }
+        if (group.children.length) select.appendChild(group);
+    };
+
+    addGroup('Meta Images', metaCapabilities?.ad_images || [], 'image', 'hash', ['name','width','height']);
+    addGroup('Meta Videos', metaCapabilities?.ad_videos || [], 'video', 'id', ['title','id']);
+
+    if (current && Array.from(select.options).some((o) => o.value === current)) {
+        select.value = current;
+    }
+    const hint = $('metaExistingMediaHint');
+    if (hint) {
+        const count = (metaCapabilities?.ad_images || []).length + (metaCapabilities?.ad_videos || []).length;
+        hint.textContent = metaContext.accountId
+            ? (count + ' Meta assets · asset принадлежит reference RK и для bulk требует per-RK mapping.')
+            : 'Выбери reference RK, чтобы подтянуть Images / Videos.';
+    }
+}
+
+function applyMetaExistingMediaSelection() {
+    const asset = selectedMetaExistingMedia();
+    const hint = $('metaExistingMediaHint');
+    if (!asset) {
+        if (hint && metaContext.accountId) hint.textContent = 'Meta asset не выбран — можно загрузить новый файл.';
+        return;
+    }
+    if ($('presetMedia')) $('presetMedia').value = '';
+    if (previewUrl) { URL.revokeObjectURL(previewUrl); previewUrl = ''; }
+    $('singlePreview').innerHTML = asset.preview_url
+        ? mediaHtml(asset.preview_url, asset.type)
+        : '<i class="fa-solid fa-photo-film"></i>';
+    $('singleCurrent').textContent = asset.name + ' · Existing Meta ' + asset.type;
+    if (hint) hint.textContent = 'Используется существующий asset reference RK: ' + asset.value;
+}
+
 function capabilityWarningText(rows) {
     const first = (rows || []).find((x) => x?.error?.message);
     return first?.error?.message || '';
@@ -514,10 +591,12 @@ async function loadMetaContext(profile = '', accountId = '', refresh = false) {
             renderMetaDatalist('mbPixelOptions', data?.pixels || [], 'id', ['name','id']);
             renderMetaDatalist('mbCustomAudienceOptions', data?.custom_audiences || [], 'id', ['name','subtype']);
             renderMetaDatalist('mbCustomConversionOptions', data?.custom_conversions || [], 'id', ['name','custom_event_type','id']);
+            renderMetaExistingMediaOptions(editing?.meta_asset || metaAssetFromBuilder(editing?.meta_builder || {}));
         } else {
             renderMetaDatalist('mbPixelOptions', [], 'id', ['name']);
             renderMetaDatalist('mbCustomAudienceOptions', [], 'id', ['name']);
             renderMetaDatalist('mbCustomConversionOptions', [], 'id', ['name']);
+            renderMetaExistingMediaOptions(null);
         }
     } else {
         renderMetaAccounts([]);
@@ -527,6 +606,7 @@ async function loadMetaContext(profile = '', accountId = '', refresh = false) {
         renderMetaDatalist('mbPixelOptions', [], 'id', ['name']);
         renderMetaDatalist('mbCustomAudienceOptions', [], 'id', ['name']);
         renderMetaDatalist('mbCustomConversionOptions', [], 'id', ['name']);
+        renderMetaExistingMediaOptions(null);
     }
 
     const warning = capabilityWarningText(data?.warnings || []);
@@ -899,6 +979,17 @@ function buildMetaBuilder() {
         asset_feed_spec: parseJsonField('mbAssetFeedSpec', undefined),
         platform_customizations: parseJsonField('mbPlatformCustomizations', undefined),
     }));
+    const existingMetaMedia = $('presetFormat')?.value === 'SINGLE' ? selectedMetaExistingMedia() : null;
+    if (existingMetaMedia?.type === 'image') {
+        creative.image_hash = existingMetaMedia.value;
+        delete creative.video_id;
+    } else if (existingMetaMedia?.type === 'video') {
+        creative.video_id = existingMetaMedia.value;
+        delete creative.image_hash;
+    } else if ($('presetMedia')?.files?.[0]) {
+        delete creative.image_hash;
+        delete creative.video_id;
+    }
 
     let ad = deepMerge(parseJsonField('mbAdvancedAd', {}), sdkFields.ad);
     ad = deepMerge(ad, compactObject({
@@ -991,6 +1082,8 @@ function populateMetaBuilder(builder) {
     $('mbDegreesOfFreedom').value = stringify(creative.degrees_of_freedom_spec);
     $('mbAssetFeedSpec').value = stringify(creative.asset_feed_spec);
     $('mbPlatformCustomizations').value = stringify(creative.platform_customizations);
+    renderMetaExistingMediaOptions(editing?.meta_asset || metaAssetFromBuilder(builder));
+    applyMetaExistingMediaSelection();
 
     $('mbAdStatus').value = ad.status || 'PAUSED';
     $('mbConversionDomain').value = ad.conversion_domain || '';
@@ -1099,13 +1192,17 @@ function openEditor(item = null) {
     $('presetCarousel').value = '';
 
     populateMetaBuilder(item?.meta_builder || {});
+    renderMetaExistingMediaOptions(item?.meta_asset || metaAssetFromBuilder(item?.meta_builder || {}));
+    applyMetaExistingMediaSelection();
 
-    $('singlePreview').innerHTML = item?.format === 'SINGLE' && item.media
-        ? mediaHtml(item.preview_url, item.media.media_type)
-        : '<i class="fa-regular fa-image"></i>';
-    $('singleCurrent').textContent = item?.format === 'SINGLE' && item.media
-        ? item.media.original_name + ' · ' + formatBytes(item.media.size_bytes)
-        : 'Изображение или видео.';
+    if (!selectedMetaExistingMedia()) {
+        $('singlePreview').innerHTML = item?.format === 'SINGLE' && item.media
+            ? mediaHtml(item.preview_url, item.media.media_type)
+            : '<i class="fa-regular fa-image"></i>';
+        $('singleCurrent').textContent = item?.format === 'SINGLE' && item.media
+            ? item.media.original_name + (item.media.size_bytes ? (' · ' + formatBytes(item.media.size_bytes)) : '')
+            : 'Изображение или видео.';
+    }
 
     renderFormat();
     renderCarousel();
@@ -1176,6 +1273,8 @@ async function save(event) {
     form.append('action', 'save');
     if (id) form.append('id', id);
     form.append('meta_builder', JSON.stringify(metaBuilder));
+    const metaAsset = selectedMetaExistingMedia();
+    if (metaAsset) form.append('meta_asset', JSON.stringify(metaAsset));
 
     const values = {
         name: $('presetName').value.trim(),
@@ -1195,8 +1294,8 @@ async function save(event) {
     if (format === 'SINGLE') {
         const file = $('presetMedia').files[0];
         if (file) form.append('media', file, file.name);
-        if (!id && !file) {
-            setStatus('Выбери image или video.', 'bad');
+        if (!id && !file && !metaAsset) {
+            setStatus('Выбери upload или существующий Meta image/video.', 'bad');
             switchTab('creative');
             return;
         }
@@ -1264,9 +1363,13 @@ document.addEventListener('click', (event) => {
     document.querySelectorAll('.cr-target-results.open').forEach((el) => el.classList.remove('open'));
 });
 $('presetFormat').addEventListener('change', renderFormat);
+$('metaExistingMedia')?.addEventListener('change', () => {
+    applyMetaExistingMediaSelection();
+});
 $('presetMedia').addEventListener('change', function () {
     const file = this.files[0];
     if (!file) return;
+    if ($('metaExistingMedia')) $('metaExistingMedia').value = '';
     if (previewUrl) URL.revokeObjectURL(previewUrl);
     previewUrl = URL.createObjectURL(file);
     $('singlePreview').innerHTML = mediaHtml(previewUrl, file.type.startsWith('video/') ? 'video' : 'image');
