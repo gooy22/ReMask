@@ -195,6 +195,10 @@ RUN set -eux; \
     grep -q 'metaProfileContext' /var/www/html/creatives.php; \
     grep -q 'metaAccountContext' /var/www/html/creatives.php; \
     grep -q 'audienceEstimateValue' /var/www/html/creatives.php; \
+    grep -q 'mbGeoSearch' /var/www/html/creatives.php; \
+    grep -q 'mbInterestSearch' /var/www/html/creatives.php; \
+    grep -q 'mbBehaviorSearch' /var/www/html/creatives.php; \
+    grep -q 'searchCreativeTargeting' /var/www/html/scripts/creatives.js; \
     grep -q 'populatePrimaryMetaControls' /var/www/html/scripts/creatives.js; \
     grep -q 'metaCreativeCapabilities.php' /var/www/html/scripts/creatives.js; \
     grep -q 'metaAudienceEstimate.php' /var/www/html/scripts/creatives.js; \
