@@ -211,6 +211,11 @@ RUN set -eux; \
     grep -q 'adPreviewFormats' /var/www/html/classes/MetaSdkSchema.php; \
     grep -q 'creativeCallToActionTypes' /var/www/html/classes/MetaSdkSchema.php; \
     grep -q 'constrainTargetingCheckboxes' /var/www/html/scripts/creatives.js; \
+    grep -q 'listConnectedInstagramAccounts' /var/www/html/classes/MetaAdsService.php; \
+    grep -q 'listConversionGoals' /var/www/html/classes/MetaAdsService.php; \
+    grep -q 'connected_instagram_accounts' /var/www/html/ajax/metaCreativeCapabilities.php; \
+    grep -q 'conversion_goals' /var/www/html/ajax/metaCreativeCapabilities.php; \
+    grep -q 'liveOptimizationGoals' /var/www/html/scripts/creatives.js; \
     grep -q 'publisher_platforms' /var/www/html/classes/MetaSdkSchema.php; \
     grep -q 'device_platforms' /var/www/html/classes/MetaSdkSchema.php; \
     grep -q 'async function loadMetaContext' /var/www/html/scripts/creatives.js; \
