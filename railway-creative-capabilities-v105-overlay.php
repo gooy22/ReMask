@@ -106,6 +106,20 @@ if (strpos($service, 'REMASK_CREATIVE_CAPABILITIES_V1') === false) {
         );
     }
 
+    public function generateCreativePreview(string $accountId, array $creative, string $adFormat): array
+    {
+        $adFormat = strtoupper(trim($adFormat));
+        if ($adFormat === '') throw new InvalidArgumentException('ad_format is required.');
+        if ($creative === []) throw new InvalidArgumentException('creative preview spec is required.');
+        return $this->client->get(
+            $this->remaskCreativeAccountNode($accountId) . '/generatepreviews',
+            [
+                'creative' => json_encode($creative, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR),
+                'ad_format' => $adFormat,
+            ]
+        );
+    }
+
     public function listCreativeImages(string $accountId): array
     {
         return $this->client->get(
@@ -187,24 +201,8 @@ function remask_creative_error(Throwable $e): array
     return $out;
 }
 
-$ctaTypes = [
-    'ADD_TO_CART','APPLY_NOW','ASK_ABOUT_SERVICES','ASK_A_QUESTION','ASK_FOR_MORE_INFO','ASK_US',
-    'AUDIO_CALL','BOOK_A_CONSULTATION','BOOK_NOW','BOOK_TRAVEL','BROWSE_SHOP','BUY','BUY_NOW',
-    'BUY_TICKETS','BUY_VIA_MESSAGE','CALL','CALL_ME','CALL_NOW','CHAT_NOW','CHAT_WITH_US','CONFIRM',
-    'CONTACT','CONTACT_US','DONATE','DONATE_NOW','DOWNLOAD','EVENT_RSVP','FIND_A_GROUP','FIND_OUT_MORE',
-    'FIND_YOUR_GROUPS','FOLLOW_NEWS_STORYLINE','FOLLOW_PAGE','FOLLOW_USER','GET_A_QUOTE','GET_DETAILS',
-    'GET_DIRECTIONS','GET_IN_TOUCH','GET_OFFER','GET_OFFER_VIEW','GET_PROMOTIONS','GET_QUOTE',
-    'GET_SHOWTIMES','GET_STARTED','INQUIRE_NOW','INSTALL_APP','INSTALL_MOBILE_APP','JOIN_CHANNEL',
-    'JOIN_LIVE_VIDEO','LEARN_MORE','LIKE_PAGE','LISTEN_MUSIC','LISTEN_NOW','MAKE_AN_APPOINTMENT',
-    'MESSAGE_PAGE','MOBILE_DOWNLOAD','NO_BUTTON','OPEN_INSTANT_APP','OPEN_LINK','ORDER_NOW','PAY_TO_ACCESS',
-    'PLAY_GAME','PLAY_GAME_ON_FACEBOOK','PURCHASE_GIFT_CARDS','RAISE_MONEY','RECORD_NOW','REFER_FRIENDS',
-    'REQUEST_TIME','SAY_THANKS','SEE_MORE','SEE_SHOP','SELL_NOW','SEND_A_GIFT','SEND_GIFT_MONEY',
-    'SEND_UPDATES','SHARE','SHOP_NOW','SHOP_WITH_AI','SIGN_UP','SOTTO_SUBSCRIBE','START_A_CHAT',
-    'START_ORDER','SUBSCRIBE','SWIPE_UP_PRODUCT','SWIPE_UP_SHOP','TRY_DEMO','TRY_ON_WITH_AI','UPDATE_APP',
-    'USE_APP','USE_MOBILE_APP','VIDEO_ANNOTATION','VIDEO_CALL','VIEW_CART','VIEW_CHANNEL','VIEW_IN_CART',
-    'VIEW_PRODUCT','VISIT_PAGES_FEED','VISIT_WEBSITE','WATCH_LIVE_VIDEO','WATCH_MORE','WATCH_VIDEO',
-    'WHATSAPP_MESSAGE','WOODHENGE_SUPPORT'
-];
+$ctaTypes = MetaSdkSchema::creativeCallToActionTypes();
+$previewFormats = MetaSdkSchema::adPreviewFormats();
 
 $standardEvents = [
     'ACHIEVEMENT_UNLOCKED','ADD_PAYMENT_INFO','ADD_TO_CART','ADD_TO_WISHLIST','AD_IMPRESSION',
@@ -238,6 +236,7 @@ try {
         'graph_version' => (string)(getenv('META_GRAPH_API_VERSION') ?: 'v26.0'),
         'schema' => MetaSdkSchema::schema(),
         'cta_types' => $ctaTypes,
+        'preview_formats' => $previewFormats,
         'standard_conversion_events' => $standardEvents,
         'profiles' => $profiles,
         'profile' => $profile,
@@ -456,6 +455,58 @@ try {
 }
 PHP_CODE;
 
+$preview = <<<'PHP_CODE'
+<?php
+require_once __DIR__ . '/../settings.php';
+require_once __DIR__ . '/../checkpassword.php';
+require_once __DIR__ . '/../classes/MetaEndpoint.php';
+require_once __DIR__ . '/../classes/MetaSdkSchema.php';
+
+function remask_preview_first(array $response): array
+{
+    if (isset($response['data']) && is_array($response['data'])) {
+        $first = reset($response['data']);
+        return is_array($first) ? $first : [];
+    }
+    return $response;
+}
+
+try {
+    $input = MetaEndpoint::input();
+    $profile = trim((string)($input['profile'] ?? ''));
+    $accountId = trim((string)($input['account_id'] ?? ''));
+    $adFormat = strtoupper(trim((string)($input['ad_format'] ?? '')));
+    $creative = $input['creative'] ?? [];
+
+    if ($profile === '') throw new InvalidArgumentException('profile is required');
+    if ($accountId === '') throw new InvalidArgumentException('account_id is required');
+    if (!in_array($adFormat, MetaSdkSchema::adPreviewFormats(), true)) {
+        throw new InvalidArgumentException('Unsupported Meta ad preview format.');
+    }
+    if (is_string($creative) && trim($creative) !== '') {
+        $creative = json_decode($creative, true, 512, JSON_THROW_ON_ERROR);
+    }
+    if (!is_array($creative) || $creative === []) {
+        throw new InvalidArgumentException('creative preview spec is required');
+    }
+
+    $service = MetaEndpoint::serviceForAccountName($profile);
+    $raw = $service->generateCreativePreview($accountId, $creative, $adFormat);
+    $row = remask_preview_first($raw);
+    $body = (string)($row['body'] ?? '');
+    if ($body === '') throw new RuntimeException('Meta preview response did not contain HTML body.');
+
+    MetaEndpoint::ok([
+        'source' => 'meta_generatepreviews',
+        'ad_format' => $adFormat,
+        'body' => $body,
+        'transformation_spec' => is_array($row['transformation_spec'] ?? null) ? $row['transformation_spec'] : null,
+    ]);
+} catch (Throwable $e) {
+    MetaEndpoint::fail($e);
+}
+PHP_CODE;
+
 if (file_put_contents($root . '/ajax/metaCreativeCapabilities.php', $capabilities) === false) {
     fwrite(STDERR, "[creative-capabilities] capabilities endpoint write failed\n");
     exit(354);
@@ -464,5 +515,9 @@ if (file_put_contents($root . '/ajax/metaAudienceEstimate.php', $estimate) === f
     fwrite(STDERR, "[creative-capabilities] audience endpoint write failed\n");
     exit(355);
 }
+if (file_put_contents($root . '/ajax/metaCreativePreview.php', $preview) === false) {
+    fwrite(STDERR, "[creative-capabilities] preview endpoint write failed\n");
+    exit(356);
+}
 
-fwrite(STDERR, "[creative-capabilities] live capabilities + delivery estimate ready\n");
+fwrite(STDERR, "[creative-capabilities] live capabilities + audience estimate + Meta preview ready\n");
