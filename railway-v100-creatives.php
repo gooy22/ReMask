@@ -298,7 +298,20 @@ require_once __DIR__ . '/checkpassword.php';
           <div class="span-4 cr-field"><label>Creative format</label><select id="presetFormat" class="form-control"><option value="SINGLE">Single image / video</option><option value="CAROUSEL">Carousel (2–10 images)</option><option value="INSTAGRAM_POST">Existing Instagram post / reel</option></select></div>
         </div>
 
-        <div id="singleSection" class="cr-media-box"><div class="cr-media-row"><div id="singlePreview" class="cr-preview-box"><i class="fa-regular fa-image"></i></div><div class="cr-upload-panel"><label class="cr-file-btn">ВЫБРАТЬ IMAGE / VIDEO<input id="presetMedia" type="file" accept="image/*,video/*"></label><div id="singleCurrent" class="cr-hint">Изображение или видео.</div></div></div></div>
+        <div id="singleSection" class="cr-media-box">
+          <div class="cr-media-row">
+            <div id="singlePreview" class="cr-preview-box"><i class="fa-regular fa-image"></i></div>
+            <div class="cr-upload-panel">
+              <div class="cr-field">
+                <label>Существующий Meta asset из reference RK</label>
+                <select id="metaExistingMedia" class="form-control"><option value="">Не выбрано — загрузить новый файл</option></select>
+              </div>
+              <div id="metaExistingMediaHint" class="cr-hint">Images / Videos подтягиваются из выбранного рекламного кабинета.</div>
+              <label class="cr-file-btn">ВЫБРАТЬ IMAGE / VIDEO<input id="presetMedia" type="file" accept="image/*,video/*"></label>
+              <div id="singleCurrent" class="cr-hint">Изображение или видео.</div>
+            </div>
+          </div>
+        </div>
         <div id="carouselSection" class="cr-media-box" style="display:none"><label class="cr-file-btn" style="max-width:300px">ВЫБРАТЬ 2–10 ИЗОБРАЖЕНИЙ<input id="presetCarousel" type="file" accept="image/*" multiple></label><div id="carouselHint" class="cr-hint"></div><div id="carouselRows" class="cr-carousel-list"></div></div>
         <div id="instagramSection" class="cr-media-box" style="display:none"><div class="cr-field" style="max-width:430px"><label>Instagram media ID</label><input id="presetInstagramMediaId" class="form-control" inputmode="numeric"></div></div>
       </section>
