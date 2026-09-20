@@ -226,14 +226,7 @@ function remask_creative_error(Throwable $e): array
 $ctaTypes = MetaSdkSchema::creativeCallToActionTypes();
 $previewFormats = MetaSdkSchema::adPreviewFormats();
 
-$standardEvents = [
-    'ACHIEVEMENT_UNLOCKED','ADD_PAYMENT_INFO','ADD_TO_CART','ADD_TO_WISHLIST','AD_IMPRESSION',
-    'COMPLETE_REGISTRATION','CONTACT','CONTENT_VIEW','CUSTOMIZE_PRODUCT','D2_RETENTION','D7_RETENTION',
-    'DONATE','FIND_LOCATION','INITIATED_CHECKOUT','LEAD','LEVEL_ACHIEVED','LISTING_INTERACTION',
-    'MESSAGING_CONVERSATION_STARTED_7D','OTHER','PURCHASE','RATE','SCHEDULE','SEARCH',
-    'SERVICE_BOOKING_REQUEST','SPENT_CREDITS','START_TRIAL','SUBMIT_APPLICATION','SUBSCRIBE',
-    'TUTORIAL_COMPLETION'
-];
+$standardEvents = MetaSdkSchema::promotedObjectCustomEventTypes();
 
 try {
     $input = MetaEndpoint::input();
