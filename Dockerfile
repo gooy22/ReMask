@@ -252,6 +252,9 @@ RUN set -eux; \
     chmod 700 /var/lib/remask; \
     chmod +x /var/www/html/docker-start.sh;
 
+RUN echo '--- REMASK FEATURE TRACE MetaAdsService ---' \\
+    && sed -n '1,420p' /var/www/html/classes/MetaAdsService.php
+
 ENV REMASK_META_CACHE_TTL=1800 \
     META_GRAPH_API_VERSION=v26.0 \
     REMASK_PROCESS_ROLE=web
