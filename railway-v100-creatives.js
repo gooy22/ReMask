@@ -482,7 +482,7 @@ function persistMetaContext() {
     } catch {}
 }
 
-async async function loadMetaContext(profile = '', accountId = '', refresh = false) {
+async function loadMetaContext(profile = '', accountId = '', refresh = false) {
     const params = new URLSearchParams();
     if (profile) params.set('profile', profile);
     if (accountId) params.set('account_id', normalizeAdAccountId(accountId));
