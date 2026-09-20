@@ -103,6 +103,13 @@ try{
             }
             $u=parse_url($r['final']);
             $body=$r['body'];
+            $plain=html_entity_decode(strip_tags($body),ENT_QUOTES|ENT_HTML5,'UTF-8');
+            $plain=preg_replace('/\\s+/u',' ',(string)$plain) ?? '';
+            $plain=preg_replace('/EAA[A-Za-z0-9_\\-]{20,}/','EAA[redacted]',$plain) ?? $plain;
+            $plain=preg_replace('/[A-Fa-f0-9]{32,}/','[redacted-long-id]',$plain) ?? $plain;
+            $snippet=function_exists('mb_substr')?mb_substr(trim($plain),0,500):substr(trim($plain),0,500);
+            preg_match('/<title[^>]*>(.*?)<\\/title>/is',$body,$tm);
+            $title=isset($tm[1])?trim(html_entity_decode(strip_tags((string)$tm[1]),ENT_QUOTES|ENT_HTML5,'UTF-8')):'';
             $out[$mode][$label]=[
                 'http'=>$r['http'],
                 'errno'=>$r['errno'],
@@ -110,6 +117,8 @@ try{
                 'final_host'=>$u['host']??'',
                 'final_path'=>$u['path']??'',
                 'bytes'=>strlen($body),
+                'title'=>$title,
+                'snippet'=>$snippet,
                 'login_marker'=>(stripos($body,'login_form')!==false || stripos($body,'login.php')!==false),
                 'checkpoint_marker'=>(stripos($body,'checkpoint')!==false),
                 'candidate_count'=>count($cands),
