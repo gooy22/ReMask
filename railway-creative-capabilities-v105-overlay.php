@@ -120,6 +120,28 @@ if (strpos($service, 'REMASK_CREATIVE_CAPABILITIES_V1') === false) {
         );
     }
 
+    public function listConnectedInstagramAccounts(string $accountId): array
+    {
+        return $this->client->get(
+            $this->remaskCreativeAccountNode($accountId) . '/connected_instagram_accounts',
+            [
+                'fields' => 'id,ig_id,username,name,profile_picture_url,is_published',
+                'limit' => 100,
+            ]
+        );
+    }
+
+    public function listConversionGoals(string $accountId): array
+    {
+        return $this->client->get(
+            $this->remaskCreativeAccountNode($accountId) . '/conversion_goals',
+            [
+                'fields' => 'id,name,description,performance_goal,goal_creation_method,conversion_event_value_source,update_status',
+                'limit' => 100,
+            ]
+        );
+    }
+
     public function listCreativeImages(string $accountId): array
     {
         return $this->client->get(
@@ -247,6 +269,8 @@ try {
         'pixels' => [],
         'custom_audiences' => [],
         'custom_conversions' => [],
+        'connected_instagram_accounts' => [],
+        'conversion_goals' => [],
         'ad_images' => [],
         'ad_videos' => [],
         'ad_creatives' => [],
@@ -312,6 +336,16 @@ try {
             $out['custom_conversions'] = remask_creative_rows($service->listCreativeCustomConversions($accountId));
         } catch (Throwable $e) {
             $out['warnings'][] = ['resource' => 'custom_conversions', 'error' => remask_creative_error($e)];
+        }
+        try {
+            $out['connected_instagram_accounts'] = remask_creative_rows($service->listConnectedInstagramAccounts($accountId));
+        } catch (Throwable $e) {
+            $out['warnings'][] = ['resource' => 'connected_instagram_accounts', 'error' => remask_creative_error($e)];
+        }
+        try {
+            $out['conversion_goals'] = remask_creative_rows($service->listConversionGoals($accountId));
+        } catch (Throwable $e) {
+            $out['warnings'][] = ['resource' => 'conversion_goals', 'error' => remask_creative_error($e)];
         }
         try {
             $out['ad_images'] = remask_creative_rows($service->listCreativeImages($accountId));
