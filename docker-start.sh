@@ -58,8 +58,5 @@ sed -ri "s/<VirtualHost \*:[0-9]+>/<VirtualHost *:80>/" /etc/apache2/sites-avail
 
 
 
-if [ -n "${REMASK_COOKIE_TOKEN_PROBE_PROFILE:-}" ] && [ -f "$ROOT/bin/remask-cookie-token-probe.php" ]; then
-  php "$ROOT/bin/remask-cookie-token-probe.php" >&2 || true
-fi
 
 exec apache2-foreground
