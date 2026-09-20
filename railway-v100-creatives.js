@@ -425,7 +425,11 @@ function populatePrimaryMetaControls() {
     setMetaSelectOptions('mbCampaignBidStrategy', schemaEnum('campaign','bid_strategy'), {placeholder:'Meta default'});
     setMetaSelectOptions('mbCampaignStatus', schemaEnum('campaign','status'), {fallback:'PAUSED'});
 
-    setMetaSelectOptions('mbOptimizationGoal', schemaEnum('adset','optimization_goal'), {fallback:'LINK_CLICKS'});
+    const schemaOptimizationGoals = schemaEnum('adset','optimization_goal');
+    const liveOptimizationGoals = (metaCapabilities?.conversion_goals || [])
+        .map((row) => String(row?.performance_goal || '').trim())
+        .filter(Boolean);
+    setMetaSelectOptions('mbOptimizationGoal', [...new Set([...liveOptimizationGoals, ...schemaOptimizationGoals])], {fallback:'LINK_CLICKS'});
     setMetaSelectOptions('mbBillingEvent', schemaEnum('adset','billing_event'), {fallback:'IMPRESSIONS'});
     setMetaSelectOptions('mbAdsetBidStrategy', schemaEnum('adset','bid_strategy'), {fallback:'LOWEST_COST_WITHOUT_CAP'});
     setMetaSelectOptions('mbDestinationType', schemaEnum('adset','destination_type'), {placeholder:'Meta default'});
@@ -742,10 +746,14 @@ async function loadMetaContext(profile = '', accountId = '', refresh = false) {
         metaContext.profile = profile;
         renderMetaAccounts(data?.ad_accounts || []);
         renderMetaDatalist('mbPageOptions', data?.pages || [], 'id', ['name','id']);
-        renderMetaDatalist('mbInstagramOptions', data?.instagram_accounts || [], 'id', ['username','name','page_name']);
+        const profileInstagram = data?.instagram_accounts || [];
+        const accountInstagram = data?.connected_instagram_accounts || [];
+        renderMetaDatalist('mbInstagramOptions', accountInstagram.length ? accountInstagram : profileInstagram, 'id', ['username','name','page_name','id']);
         renderMetaDatalist('mbConversionEventOptions', (data?.standard_conversion_events || []).map((name) => ({id:name,name})), 'id', ['name']);
         if (accountId) {
             metaContext.accountId = normalizeAdAccountId(accountId);
+            // Re-run primary controls after account-specific conversion goals arrive.
+            populatePrimaryMetaControls();
             renderMetaDatalist('mbPixelOptions', data?.pixels || [], 'id', ['name','id']);
             renderMetaDatalist('mbCustomAudienceOptions', data?.custom_audiences || [], 'id', ['name','subtype']);
             renderMetaDatalist('mbCustomConversionOptions', data?.custom_conversions || [], 'id', ['name','custom_event_type','id']);
