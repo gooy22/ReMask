@@ -130,7 +130,22 @@ final class MetaOfficialFields
         foreach ($builder['identity'] as $key => $value) {
             $payload['creative'][$key] = $value;
         }
-        $payload['creative']['official_params'] = $builder['creative'];
+        $creativeOfficial = $builder['creative'];
+        // Existing account-owned media must flow through ReMask's proven media
+        // ownership path, not be treated as a new upload.
+        if (!empty($creativeOfficial['image_hash'])) {
+            $payload['creative']['existing_image_hash'] = (string)$creativeOfficial['image_hash'];
+            unset($creativeOfficial['image_hash']);
+        }
+        if (!empty($creativeOfficial['video_id'])) {
+            $payload['creative']['existing_video_id'] = (string)$creativeOfficial['video_id'];
+            unset($creativeOfficial['video_id']);
+        }
+        if (!empty($creativeOfficial['source_instagram_media_id'])) {
+            $payload['creative']['source_instagram_media_id'] = (string)$creativeOfficial['source_instagram_media_id'];
+            unset($creativeOfficial['source_instagram_media_id']);
+        }
+        $payload['creative']['official_params'] = $creativeOfficial;
 
         $payload['ad'] = array_replace(
             is_array($payload['ad'] ?? null) ? $payload['ad'] : [],
