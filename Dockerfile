@@ -210,6 +210,9 @@ RUN set -eux; \
     grep -q 'generatepreviews' /var/www/html/classes/MetaAdsService.php; \
     grep -q 'adPreviewFormats' /var/www/html/classes/MetaSdkSchema.php; \
     grep -q 'creativeCallToActionTypes' /var/www/html/classes/MetaSdkSchema.php; \
+    grep -q 'constrainTargetingCheckboxes' /var/www/html/scripts/creatives.js; \
+    grep -q 'publisher_platforms' /var/www/html/classes/MetaSdkSchema.php; \
+    grep -q 'device_platforms' /var/www/html/classes/MetaSdkSchema.php; \
     grep -q 'async function loadMetaContext' /var/www/html/scripts/creatives.js; \
     ! grep -q 'async async function' /var/www/html/scripts/creatives.js; \
     grep -q 'mbCustomConversionId' /var/www/html/creatives.php; \
