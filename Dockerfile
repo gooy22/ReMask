@@ -109,6 +109,7 @@ RUN set -eux; \
     php -l /var/www/html/ajax/metaJobRetry.php; \
     php -l /var/www/html/ajax/metaCreativeCapabilities.php; \
     php -l /var/www/html/ajax/metaAudienceEstimate.php; \
+    php -l /var/www/html/ajax/metaCreativePreview.php; \
     grep -q 'REMASK_CREATIVE_CAPABILITIES_V1' /var/www/html/classes/MetaAdsService.php; \
     grep -q 'delivery_estimate' /var/www/html/classes/MetaAdsService.php; \
     grep -q 'REMASK_SYNC_ERROR_CLASSIFIER_V1' /var/www/html/scripts/workspace.js; \
@@ -202,6 +203,13 @@ RUN set -eux; \
     grep -q 'populatePrimaryMetaControls' /var/www/html/scripts/creatives.js; \
     grep -q 'metaCreativeCapabilities.php' /var/www/html/scripts/creatives.js; \
     grep -q 'metaAudienceEstimate.php' /var/www/html/scripts/creatives.js; \
+    grep -q 'metaCreativePreview.php' /var/www/html/scripts/creatives.js; \
+    grep -q 'metaPreviewFormat' /var/www/html/creatives.php; \
+    grep -q 'generateMetaPreview' /var/www/html/scripts/creatives.js; \
+    grep -q 'generateCreativePreview' /var/www/html/classes/MetaAdsService.php; \
+    grep -q 'generatepreviews' /var/www/html/classes/MetaAdsService.php; \
+    grep -q 'adPreviewFormats' /var/www/html/classes/MetaSdkSchema.php; \
+    grep -q 'creativeCallToActionTypes' /var/www/html/classes/MetaSdkSchema.php; \
     grep -q 'async function loadMetaContext' /var/www/html/scripts/creatives.js; \
     ! grep -q 'async async function' /var/www/html/scripts/creatives.js; \
     grep -q 'mbCustomConversionId' /var/www/html/creatives.php; \
