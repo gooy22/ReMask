@@ -507,19 +507,26 @@ async function loadMetaContext(profile = '', accountId = '', refresh = false) {
         metaContext.profile = profile;
         renderMetaAccounts(data?.ad_accounts || []);
         renderMetaDatalist('mbPageOptions', data?.pages || [], 'id', ['name','id']);
+        renderMetaDatalist('mbInstagramOptions', data?.instagram_accounts || [], 'id', ['username','name','page_name']);
+        renderMetaDatalist('mbConversionEventOptions', (data?.standard_conversion_events || []).map((name) => ({id:name,name})), 'id', ['name']);
         if (accountId) {
             metaContext.accountId = normalizeAdAccountId(accountId);
             renderMetaDatalist('mbPixelOptions', data?.pixels || [], 'id', ['name','id']);
             renderMetaDatalist('mbCustomAudienceOptions', data?.custom_audiences || [], 'id', ['name','subtype']);
+            renderMetaDatalist('mbCustomConversionOptions', data?.custom_conversions || [], 'id', ['name','custom_event_type','id']);
         } else {
             renderMetaDatalist('mbPixelOptions', [], 'id', ['name']);
             renderMetaDatalist('mbCustomAudienceOptions', [], 'id', ['name']);
+            renderMetaDatalist('mbCustomConversionOptions', [], 'id', ['name']);
         }
     } else {
         renderMetaAccounts([]);
         renderMetaDatalist('mbPageOptions', [], 'id', ['name']);
+        renderMetaDatalist('mbInstagramOptions', [], 'id', ['name']);
+        renderMetaDatalist('mbConversionEventOptions', (data?.standard_conversion_events || []).map((name) => ({id:name,name})), 'id', ['name']);
         renderMetaDatalist('mbPixelOptions', [], 'id', ['name']);
         renderMetaDatalist('mbCustomAudienceOptions', [], 'id', ['name']);
+        renderMetaDatalist('mbCustomConversionOptions', [], 'id', ['name']);
     }
 
     const warning = capabilityWarningText(data?.warnings || []);
@@ -837,6 +844,7 @@ function buildMetaBuilder() {
     const promotedObject = deepMerge(promotedExtra, compactObject({
         pixel_id: $('mbPixelId').value.trim(),
         custom_event_type: $('mbConversionEvent').value.trim(),
+        custom_conversion_id: $('mbCustomConversionId')?.value.trim() || undefined,
     }));
     let adset = deepMerge(parseJsonField('mbAdvancedAdset', {}), sdkFields.adset);
     adset = deepMerge(adset, compactObject({
@@ -951,6 +959,7 @@ function populateMetaBuilder(builder) {
     const promoted = adset.promoted_object || {};
     $('mbPixelId').value = promoted.pixel_id || '';
     $('mbConversionEvent').value = promoted.custom_event_type || '';
+    if ($('mbCustomConversionId')) $('mbCustomConversionId').value = promoted.custom_conversion_id || '';
     $('mbPromotedObject').value = stringify(promoted);
 
     $('mbAgeMin').value = targeting.age_min ?? 18;
@@ -1318,7 +1327,7 @@ $('refreshMetaCapabilities')?.addEventListener('click', async () => {
 });
 
 const audienceEstimateIds = [
-    'mbObjective','mbDestinationType','mbOptimizationGoal','mbConversionEvent','mbPixelId',
+    'mbObjective','mbDestinationType','mbOptimizationGoal','mbConversionEvent','mbCustomConversionId','mbPixelId',
     'mbAgeMin','mbAgeMax','mbGender','mbLocales','mbGeo','mbExcludedGeo',
     'mbInterests','mbBehaviors','mbCustomAudiences','mbExcludedCustomAudiences',
     'mbFlexibleSpec','mbExclusions','mbFacebookPositions','mbInstagramPositions',
