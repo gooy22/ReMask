@@ -476,18 +476,28 @@ function selectedMetaExistingMedia() {
     if (!raw.includes(':')) return null;
     const [type, ...parts] = raw.split(':');
     const value = parts.join(':').trim();
-    if (!value || !['image','video'].includes(type)) return null;
-    const rows = type === 'image' ? (metaCapabilities?.ad_images || []) : (metaCapabilities?.ad_videos || []);
+    if (!value || !['image','video','creative'].includes(type)) return null;
+    const rows = type === 'image'
+        ? (metaCapabilities?.ad_images || [])
+        : type === 'video'
+            ? (metaCapabilities?.ad_videos || [])
+            : (metaCapabilities?.ad_creatives || []);
     const row = rows.find((item) => String(type === 'image' ? (item?.hash || '') : (item?.id || '')) === value) || {};
+    const fallbackName = type === 'creative' ? 'Meta creative' : (type === 'image' ? 'Meta image' : 'Meta video');
     return {
         type,
         value,
-        name: String(row?.name || row?.title || (type === 'image' ? 'Meta image' : 'Meta video')),
-        preview_url: String(row?.url_128 || row?.url || row?.picture || ''),
+        name: String(row?.name || row?.title || fallbackName),
+        preview_url: String(row?.url_128 || row?.url || row?.thumbnail_url || row?.picture || ''),
+        preview_type: type === 'video' && row?.picture ? 'image' : (type === 'creative' ? 'image' : type),
     };
 }
 
 function metaAssetFromBuilder(builder) {
+    const existing = builder?.existing_media || {};
+    if (existing.image_hash) return {type:'image', value:String(existing.image_hash)};
+    if (existing.video_id) return {type:'video', value:String(existing.video_id)};
+    if (existing.creative_id) return {type:'creative', value:String(existing.creative_id)};
     const creative = builder?.creative || {};
     if (creative.image_hash) return {type:'image', value:String(creative.image_hash)};
     if (creative.video_id) return {type:'video', value:String(creative.video_id)};
@@ -518,16 +528,17 @@ function renderMetaExistingMediaOptions(preferred = null) {
 
     addGroup('Meta Images', metaCapabilities?.ad_images || [], 'image', 'hash', ['name','width','height']);
     addGroup('Meta Videos', metaCapabilities?.ad_videos || [], 'video', 'id', ['title','id']);
+    addGroup('Meta Ad Creatives', metaCapabilities?.ad_creatives || [], 'creative', 'id', ['name','id']);
 
     if (current && Array.from(select.options).some((o) => o.value === current)) {
         select.value = current;
     }
     const hint = $('metaExistingMediaHint');
     if (hint) {
-        const count = (metaCapabilities?.ad_images || []).length + (metaCapabilities?.ad_videos || []).length;
+        const count = (metaCapabilities?.ad_images || []).length + (metaCapabilities?.ad_videos || []).length + (metaCapabilities?.ad_creatives || []).length;
         hint.textContent = metaContext.accountId
             ? (count + ' Meta assets · asset принадлежит reference RK и для bulk требует per-RK mapping.')
-            : 'Выбери reference RK, чтобы подтянуть Images / Videos.';
+            : 'Выбери reference RK, чтобы подтянуть Images / Videos / Creatives.';
     }
 }
 
@@ -541,7 +552,7 @@ function applyMetaExistingMediaSelection() {
     if ($('presetMedia')) $('presetMedia').value = '';
     if (previewUrl) { URL.revokeObjectURL(previewUrl); previewUrl = ''; }
     $('singlePreview').innerHTML = asset.preview_url
-        ? mediaHtml(asset.preview_url, asset.type)
+        ? mediaHtml(asset.preview_url, asset.preview_type || asset.type)
         : '<i class="fa-solid fa-photo-film"></i>';
     $('singleCurrent').textContent = asset.name + ' · Existing Meta ' + asset.type;
     if (hint) hint.textContent = 'Используется существующий asset reference RK: ' + asset.value;
@@ -980,16 +991,13 @@ function buildMetaBuilder() {
         platform_customizations: parseJsonField('mbPlatformCustomizations', undefined),
     }));
     const existingMetaMedia = $('presetFormat')?.value === 'SINGLE' ? selectedMetaExistingMedia() : null;
-    if (existingMetaMedia?.type === 'image') {
-        creative.image_hash = existingMetaMedia.value;
-        delete creative.video_id;
-    } else if (existingMetaMedia?.type === 'video') {
-        creative.video_id = existingMetaMedia.value;
-        delete creative.image_hash;
-    } else if ($('presetMedia')?.files?.[0]) {
-        delete creative.image_hash;
-        delete creative.video_id;
-    }
+    const existing_media = existingMetaMedia?.type === 'image'
+        ? {image_hash: existingMetaMedia.value}
+        : existingMetaMedia?.type === 'video'
+            ? {video_id: existingMetaMedia.value}
+            : existingMetaMedia?.type === 'creative'
+                ? {creative_id: existingMetaMedia.value}
+                : {};
 
     let ad = deepMerge(parseJsonField('mbAdvancedAd', {}), sdkFields.ad);
     ad = deepMerge(ad, compactObject({
@@ -1004,7 +1012,7 @@ function buildMetaBuilder() {
         instagram_actor_id: $('mbInstagramActorId').value.trim(),
     });
 
-    return {campaign, adset, targeting, identity, creative, ad};
+    return {campaign, adset, targeting, identity, existing_media, creative, ad};
 }
 function setCheckboxValues(selector, attr, values) {
     const wanted = new Set((values || []).map(String));
