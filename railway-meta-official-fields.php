@@ -107,6 +107,9 @@ final class MetaOfficialFields
         $identity = isset($builder['identity']) && is_array($builder['identity']) ? $builder['identity'] : [];
         $out['identity'] = self::pick($identity, ['page_id','instagram_actor_id']);
 
+        $existingMedia = isset($builder['existing_media']) && is_array($builder['existing_media']) ? $builder['existing_media'] : [];
+        $out['existing_media'] = self::pick($existingMedia, ['image_hash','video_id','creative_id','source_instagram_media_id']);
+
         return $out;
     }
 
@@ -131,17 +134,34 @@ final class MetaOfficialFields
             $payload['creative'][$key] = $value;
         }
         $creativeOfficial = $builder['creative'];
-        // Existing account-owned media must flow through ReMask's proven media
-        // ownership path, not be treated as a new upload.
-        if (!empty($creativeOfficial['image_hash'])) {
+        // Existing account-owned media uses ReMask's existing-media ownership
+        // validator. Keep this separate from AdCreative creation parameters.
+        $existingMedia = is_array($builder['existing_media'] ?? null) ? $builder['existing_media'] : [];
+        if (!empty($existingMedia['image_hash'])) {
+            $payload['creative']['existing_image_hash'] = (string)$existingMedia['image_hash'];
+        }
+        if (!empty($existingMedia['video_id'])) {
+            $payload['creative']['existing_video_id'] = (string)$existingMedia['video_id'];
+        }
+        if (!empty($existingMedia['creative_id'])) {
+            $payload['creative']['existing_creative_id'] = (string)$existingMedia['creative_id'];
+        }
+        if (!empty($existingMedia['source_instagram_media_id'])) {
+            $payload['creative']['source_instagram_media_id'] = (string)$existingMedia['source_instagram_media_id'];
+        }
+
+        // Advanced users may still provide official image_hash/video_id fields.
+        // Route them through the same ownership path when no explicit existing_media
+        // selection is present, so a media upload is not required.
+        if (empty($existingMedia) && !empty($creativeOfficial['image_hash'])) {
             $payload['creative']['existing_image_hash'] = (string)$creativeOfficial['image_hash'];
             unset($creativeOfficial['image_hash']);
         }
-        if (!empty($creativeOfficial['video_id'])) {
+        if (empty($existingMedia) && !empty($creativeOfficial['video_id'])) {
             $payload['creative']['existing_video_id'] = (string)$creativeOfficial['video_id'];
             unset($creativeOfficial['video_id']);
         }
-        if (!empty($creativeOfficial['source_instagram_media_id'])) {
+        if (empty($existingMedia) && !empty($creativeOfficial['source_instagram_media_id'])) {
             $payload['creative']['source_instagram_media_id'] = (string)$creativeOfficial['source_instagram_media_id'];
             unset($creativeOfficial['source_instagram_media_id']);
         }
