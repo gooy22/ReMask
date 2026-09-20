@@ -78,7 +78,7 @@ final class MetaOfficialFields
         'place_page_set_id','platform_customizations','playable_asset_id','portrait_customizations',
         'product_set_id','product_suggestion_settings','recommender_settings',
         'regional_regulation_disclaimer_spec','source_facebook_post_id',
-        'source_instagram_media_id','template_url','template_url_spec','thumbnail_url',
+        'source_instagram_media_id','template_url','template_url_spec','thumbnail_url','video_id',
         'title','url_tags','use_page_actor_override','wamo_whatsapp_identity_spec'
     ];
 
