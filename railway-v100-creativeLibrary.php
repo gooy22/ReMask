@@ -28,6 +28,7 @@ function cl100_meta_media_ref(array $record): array {
             'value' => $value,
             'name' => trim((string)($asset['name'] ?? '')),
             'preview_url' => trim((string)($asset['preview_url'] ?? '')),
+            'preview_type' => strtolower(trim((string)($asset['preview_type'] ?? ''))),
         ];
     }
     $builder = is_array($record['meta_builder'] ?? null) ? $record['meta_builder'] : [];
@@ -76,7 +77,9 @@ function cl100_public_items(CreativePresetStore $store, $library): array {
                 $row['media'] = [
                     'id' => 'meta:' . $metaMedia['value'],
                     'original_name' => $metaMedia['name'] !== '' ? $metaMedia['name'] : ('Meta ' . $metaMedia['type']),
-                    'media_type' => $metaMedia['type'] === 'video' ? 'video' : 'image',
+                    'media_type' => in_array(($metaMedia['preview_type'] ?? ''), ['image','video'], true)
+                        ? $metaMedia['preview_type']
+                        : ($metaMedia['type'] === 'video' ? 'video' : 'image'),
                     'source' => 'meta',
                 ];
                 $row['missing_media'] = false;
@@ -194,6 +197,9 @@ try {
                 'value' => $metaValue,
                 'name' => substr(trim((string)($metaAsset['name'] ?? '')), 0, 500),
                 'preview_url' => substr(trim((string)($metaAsset['preview_url'] ?? '')), 0, 2000),
+                'preview_type' => in_array(strtolower(trim((string)($metaAsset['preview_type'] ?? ''))), ['image','video'], true)
+                    ? strtolower(trim((string)($metaAsset['preview_type'] ?? '')))
+                    : '',
             ];
         }
 
