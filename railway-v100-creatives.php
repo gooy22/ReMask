@@ -40,6 +40,15 @@ require_once __DIR__ . '/checkpassword.php';
 .cr-modal-head{display:flex;align-items:center;justify-content:space-between;padding:13px 16px;border-bottom:1px solid #343a45}
 .cr-modal-head h3{font-size:18px;margin:0;font-weight:700}.cr-close{border:0;background:transparent;color:#9099a8;font-size:24px;line-height:1;padding:4px}
 #creativeForm{display:flex;flex-direction:column;min-height:0;flex:1}
+.cr-meta-context{display:grid;grid-template-columns:minmax(180px,1fr) minmax(220px,1.25fr) auto minmax(180px,1.2fr);gap:10px;align-items:end;padding:12px 14px;background:#1b1f25;border-bottom:1px solid #343a45}
+.cr-meta-context .cr-field label{display:block;margin:0 0 5px;font-size:11px;color:#9aa3b2;font-weight:600}
+.cr-meta-context .form-control{height:38px!important;background:#171b21!important;border:1px solid #39414d!important;color:#e8ebf0!important;border-radius:7px!important}
+.cr-meta-context-status{font-size:11px;color:#8f99aa;line-height:1.35;padding-bottom:8px}
+.cr-audience-estimate{margin-top:14px;border:1px solid #37404c;background:#191e25;border-radius:9px;padding:13px 14px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px 18px;align-items:center}
+.cr-audience-estimate-title{font-size:11px;color:#8993a3;text-transform:uppercase;letter-spacing:.04em}
+.cr-audience-estimate-value{font-size:24px;font-weight:750;line-height:1.15;color:#eef1f6;margin-top:3px}
+.cr-audience-estimate-meta{font-size:11px;color:#7f8999;margin-top:5px;line-height:1.4}
+.cr-audience-estimate-state{font-size:11px;color:#9da7b7;text-align:right}
 .cr-tabs{display:flex;gap:4px;padding:9px 12px;border-bottom:1px solid #343a45;background:#20242b;overflow-x:auto}
 .cr-tab{border:0;background:transparent;color:#8f98a8;padding:7px 10px;border-radius:6px;font-size:12px;font-weight:700;white-space:nowrap}
 .cr-tab.active{background:#313741;color:#fff}
@@ -72,7 +81,7 @@ require_once __DIR__ . '/checkpassword.php';
 .cr-status{font-size:12px;color:#8993a3;min-height:18px}.cr-status.bad{color:#ff8f8f}.cr-status.ok{color:#69d99b}
 .cr-sdk-groups{display:grid;gap:10px}.cr-sdk-group{border:1px solid #343a45;border-radius:8px;background:#1d2128;overflow:hidden}.cr-sdk-group>summary{cursor:pointer;padding:10px 12px;color:#dbe0e8;font-size:12px;font-weight:700;list-style:none;display:flex;justify-content:space-between;align-items:center}.cr-sdk-group>summary::-webkit-details-marker{display:none}.cr-sdk-count{font-size:10px;color:#7f8898;font-weight:600}.cr-sdk-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;padding:0 12px 12px}.cr-sdk-field{min-width:0}.cr-sdk-field label{display:flex!important;justify-content:space-between;gap:8px;margin-bottom:5px!important}.cr-sdk-type{font-size:9px;color:#70798a;font-weight:500}.cr-sdk-field textarea{min-height:72px!important;height:72px!important}.cr-raw-json{margin-top:12px;border-top:1px solid #343a45;padding-top:10px}.cr-raw-json>summary{cursor:pointer;color:#9aa3b2;font-size:12px;font-weight:700;margin-bottom:10px}.cr-sdk-hidden{display:none!important}
 .cr-foot-actions{display:flex;gap:8px}
-@media(max-width:820px){.span-8,.span-6,.span-4,.span-3{grid-column:span 12}.cr-media-row{grid-template-columns:1fr}.cr-carousel-row{grid-template-columns:44px 1fr}.cr-carousel-row .form-control{grid-column:span 2}}
+@media(max-width:820px){.cr-meta-context{grid-template-columns:1fr}.cr-audience-estimate{grid-template-columns:1fr}.cr-audience-estimate-state{text-align:left}.span-8,.span-6,.span-4,.span-3{grid-column:span 12}.cr-media-row{grid-template-columns:1fr}.cr-carousel-row{grid-template-columns:44px 1fr}.cr-carousel-row .form-control{grid-column:span 2}}
 </style>
 </head>
 <body class="app-shell">
@@ -101,6 +110,19 @@ require_once __DIR__ . '/checkpassword.php';
   <form id="creativeForm">
     <input id="creativeId" type="hidden">
 
+    <div class="cr-meta-context">
+      <div class="cr-field">
+        <label>Meta profile</label>
+        <select id="metaProfileContext" class="form-control"><option value="">Выбери FB-профиль</option></select>
+      </div>
+      <div class="cr-field">
+        <label>Reference RK</label>
+        <select id="metaAccountContext" class="form-control" disabled><option value="">Выбери рекламный кабинет</option></select>
+      </div>
+      <button id="refreshMetaCapabilities" type="button" class="cr-btn">ОБНОВИТЬ META</button>
+      <div id="metaCapabilitiesStatus" class="cr-meta-context-status">SDK-схема загружается…</div>
+    </div>
+
     <div class="cr-tabs">
       <button type="button" class="cr-tab active" data-tab="campaign">Campaign</button>
       <button type="button" class="cr-tab" data-tab="adset">Ad Set</button>
@@ -118,17 +140,14 @@ require_once __DIR__ . '/checkpassword.php';
         <div class="cr-form-grid">
           <div class="span-4 cr-field"><label>Название связки</label><input id="presetName" class="form-control"></div>
           <div class="span-4 cr-field"><label>Campaign name</label><input id="mbCampaignName" class="form-control"></div>
-          <div class="span-4 cr-field"><label>Objective</label><select id="mbObjective" class="form-control">
-            <option>OUTCOME_TRAFFIC</option><option>OUTCOME_SALES</option><option>OUTCOME_LEADS</option><option>OUTCOME_ENGAGEMENT</option><option>OUTCOME_AWARENESS</option><option>OUTCOME_APP_PROMOTION</option>
-            <option>APP_INSTALLS</option><option>BRAND_AWARENESS</option><option>CONVERSIONS</option><option>EVENT_RESPONSES</option><option>LEAD_GENERATION</option><option>LINK_CLICKS</option><option>LOCAL_AWARENESS</option><option>MESSAGES</option><option>OFFER_CLAIMS</option><option>PAGE_LIKES</option><option>POST_ENGAGEMENT</option><option>PRODUCT_CATALOG_SALES</option><option>REACH</option><option>STORE_VISITS</option><option>VIDEO_VIEWS</option>
-          </select></div>
+          <div class="span-4 cr-field"><label>Objective</label><select id="mbObjective" class="form-control"><option value="">Загрузка из Meta SDK…</option></select></div>
           <div class="span-4 cr-field"><label>Buying type</label><select id="mbBuyingType" class="form-control"><option value="AUCTION">AUCTION</option><option value="RESERVED">RESERVED</option></select></div>
-          <div class="span-4 cr-field"><label>Special ad category</label><select id="mbSpecialCategory" class="form-control"><option value="NONE">NONE</option><option>CREDIT</option><option>EMPLOYMENT</option><option>HOUSING</option><option>FINANCIAL_PRODUCTS_SERVICES</option><option>ONLINE_GAMBLING_AND_GAMING</option><option>ISSUES_ELECTIONS_POLITICS</option></select></div>
-          <div class="span-4 cr-field"><label>Campaign bid strategy</label><select id="mbCampaignBidStrategy" class="form-control"><option value="">Meta default</option><option>LOWEST_COST_WITHOUT_CAP</option><option>LOWEST_COST_WITH_BID_CAP</option><option>COST_CAP</option><option>LOWEST_COST_WITH_MIN_ROAS</option></select></div>
+          <div class="span-4 cr-field"><label>Special ad category</label><select id="mbSpecialCategory" class="form-control"><option value="NONE">NONE</option></select></div>
+          <div class="span-4 cr-field"><label>Campaign bid strategy</label><select id="mbCampaignBidStrategy" class="form-control"><option value="">Meta default</option></select></div>
           <div class="span-3 cr-field"><label>Daily budget</label><input id="mbCampaignDailyBudget" type="number" min="0" class="form-control"></div>
           <div class="span-3 cr-field"><label>Lifetime budget</label><input id="mbCampaignLifetimeBudget" type="number" min="0" class="form-control"></div>
           <div class="span-3 cr-field"><label>Spend cap</label><input id="mbCampaignSpendCap" type="number" min="0" class="form-control"></div>
-          <div class="span-3 cr-field"><label>Status</label><select id="mbCampaignStatus" class="form-control"><option>PAUSED</option><option>ACTIVE</option></select></div>
+          <div class="span-3 cr-field"><label>Status</label><select id="mbCampaignStatus" class="form-control"><option value="PAUSED">PAUSED</option></select></div>
           <div class="span-6 cr-field"><label>Start time</label><input id="mbCampaignStart" type="datetime-local" class="form-control"></div>
           <div class="span-6 cr-field"><label>Stop time</label><input id="mbCampaignStop" type="datetime-local" class="form-control"></div>
         </div>
@@ -138,20 +157,18 @@ require_once __DIR__ . '/checkpassword.php';
         <div class="cr-section-title">Ad Set</div>
         <div class="cr-form-grid">
           <div class="span-4 cr-field"><label>Ad Set name</label><input id="mbAdsetName" class="form-control"></div>
-          <div class="span-4 cr-field"><label>Optimization goal</label><select id="mbOptimizationGoal" class="form-control">
-            <option>LINK_CLICKS</option><option>LANDING_PAGE_VIEWS</option><option>IMPRESSIONS</option><option>REACH</option><option>OFFSITE_CONVERSIONS</option><option>LEAD_GENERATION</option><option>POST_ENGAGEMENT</option><option>PAGE_LIKES</option><option>THRUPLAY</option><option>APP_INSTALLS</option><option>VALUE</option><option>PROFILE_VISIT</option><option>QUALITY_LEAD</option><option>QUALITY_CALL</option><option>VISIT_INSTAGRAM_PROFILE</option><option>CONVERSATIONS</option>
-          </select></div>
-          <div class="span-4 cr-field"><label>Billing event</label><select id="mbBillingEvent" class="form-control"><option>IMPRESSIONS</option><option>LINK_CLICKS</option><option>CLICKS</option><option>THRUPLAY</option><option>APP_INSTALLS</option><option>POST_ENGAGEMENT</option><option>PAGE_LIKES</option><option>PURCHASE</option></select></div>
-          <div class="span-4 cr-field"><label>Bid strategy</label><select id="mbAdsetBidStrategy" class="form-control"><option>LOWEST_COST_WITHOUT_CAP</option><option>LOWEST_COST_WITH_BID_CAP</option><option>COST_CAP</option><option>LOWEST_COST_WITH_MIN_ROAS</option></select></div>
+          <div class="span-4 cr-field"><label>Optimization goal</label><select id="mbOptimizationGoal" class="form-control"><option value="">Загрузка из Meta SDK…</option></select></div>
+          <div class="span-4 cr-field"><label>Billing event</label><select id="mbBillingEvent" class="form-control"><option value="">Загрузка из Meta SDK…</option></select></div>
+          <div class="span-4 cr-field"><label>Bid strategy</label><select id="mbAdsetBidStrategy" class="form-control"><option value="">Meta default</option></select></div>
           <div class="span-4 cr-field"><label>Bid amount</label><input id="mbBidAmount" type="number" min="0" class="form-control"></div>
-          <div class="span-4 cr-field"><label>Destination type</label><select id="mbDestinationType" class="form-control"><option value="">Meta default</option><option>WEBSITE</option><option>APP</option><option>FACEBOOK_PAGE</option><option>INSTAGRAM_PROFILE</option><option>MESSENGER</option><option>WHATSAPP</option><option>INSTAGRAM_DIRECT</option><option>ON_AD</option><option>ON_POST</option><option>ON_VIDEO</option></select></div>
+          <div class="span-4 cr-field"><label>Destination type</label><select id="mbDestinationType" class="form-control"><option value="">Meta default</option></select></div>
           <div class="span-3 cr-field"><label>Daily budget</label><input id="mbAdsetDailyBudget" type="number" min="0" class="form-control"></div>
           <div class="span-3 cr-field"><label>Lifetime budget</label><input id="mbAdsetLifetimeBudget" type="number" min="0" class="form-control"></div>
           <div class="span-3 cr-field"><label>Start time</label><input id="mbAdsetStart" type="datetime-local" class="form-control"></div>
           <div class="span-3 cr-field"><label>End time</label><input id="mbAdsetEnd" type="datetime-local" class="form-control"></div>
-          <div class="span-4 cr-field"><label>Pixel ID</label><input id="mbPixelId" class="form-control"></div>
+          <div class="span-4 cr-field"><label>Pixel ID</label><input id="mbPixelId" class="form-control" list="mbPixelOptions" autocomplete="off"><datalist id="mbPixelOptions"></datalist></div>
           <div class="span-4 cr-field"><label>Conversion event</label><input id="mbConversionEvent" class="form-control" placeholder="LEAD / PURCHASE / ..."></div>
-          <div class="span-4 cr-field"><label>Status</label><select id="mbAdsetStatus" class="form-control"><option>PAUSED</option><option>ACTIVE</option></select></div>
+          <div class="span-4 cr-field"><label>Status</label><select id="mbAdsetStatus" class="form-control"><option value="PAUSED">PAUSED</option></select></div>
           <div class="span-6 cr-field"><label>Attribution spec (JSON)</label><textarea id="mbAttributionSpec" class="form-control cr-json" placeholder='[{"event_type":"CLICK_THROUGH","window_days":7}]'></textarea></div>
           <div class="span-6 cr-field"><label>Promoted object extra (JSON)</label><textarea id="mbPromotedObject" class="form-control cr-json" placeholder='{"application_id":"..."}'></textarea></div>
           <div class="span-12 cr-checkrow"><label class="cr-check"><input id="mbDynamicCreative" type="checkbox"> Dynamic creative</label><label class="cr-check"><input id="mbIncrementalAttribution" type="checkbox"> Incremental attribution</label></div>
@@ -173,6 +190,14 @@ require_once __DIR__ . '/checkpassword.php';
           <div class="span-6 cr-field"><label>Excluded custom audience IDs</label><input id="mbExcludedCustomAudiences" class="form-control" placeholder="123,456"></div>
           <div class="span-6 cr-field"><label>Flexible spec (JSON)</label><textarea id="mbFlexibleSpec" class="form-control cr-json"></textarea></div>
           <div class="span-6 cr-field"><label>Exclusions (JSON)</label><textarea id="mbExclusions" class="form-control cr-json"></textarea></div>
+        </div>
+        <div id="audienceEstimateCard" class="cr-audience-estimate">
+          <div>
+            <div class="cr-audience-estimate-title">Потенциальная аудитория Meta</div>
+            <div id="audienceEstimateValue" class="cr-audience-estimate-value">—</div>
+            <div id="audienceEstimateMeta" class="cr-audience-estimate-meta">Выбери Meta profile и reference RK. Оценка берётся из delivery_estimate / reachestimate Meta, без локальной формулы.</div>
+          </div>
+          <div id="audienceEstimateState" class="cr-audience-estimate-state">Не рассчитано</div>
         </div>
       </section>
 
@@ -208,7 +233,7 @@ require_once __DIR__ . '/checkpassword.php';
       <section class="cr-panel" data-panel="identity">
         <div class="cr-section-title">Identity</div>
         <div class="cr-form-grid">
-          <div class="span-6 cr-field"><label>Facebook Page ID</label><input id="mbPageId" class="form-control"></div>
+          <div class="span-6 cr-field"><label>Facebook Page ID</label><input id="mbPageId" class="form-control" list="mbPageOptions" autocomplete="off"><datalist id="mbPageOptions"></datalist></div>
           <div class="span-6 cr-field"><label>Instagram actor ID</label><input id="mbInstagramActorId" class="form-control"></div>
         </div>
         <div class="cr-muted mt-2">Если в Launch для конкретного RK задан свой Page / Instagram, account override может заменить эти значения.</div>
@@ -219,11 +244,11 @@ require_once __DIR__ . '/checkpassword.php';
         <div class="cr-form-grid">
           <div class="span-4 cr-field"><label>Creative name</label><input id="presetCreativeName" class="form-control"></div>
           <div class="span-4 cr-field"><label>Ad name</label><input id="presetAdName" class="form-control"></div>
-          <div class="span-4 cr-field"><label>Ad status</label><select id="mbAdStatus" class="form-control"><option>PAUSED</option><option>ACTIVE</option></select></div>
+          <div class="span-4 cr-field"><label>Ad status</label><select id="mbAdStatus" class="form-control"><option value="PAUSED">PAUSED</option></select></div>
           <div class="span-12 cr-field"><label>Primary text</label><textarea id="presetMessage" class="form-control"></textarea></div>
           <div class="span-4 cr-field"><label>Headline</label><input id="presetHeadline" class="form-control"></div>
           <div class="span-4 cr-field"><label>Description</label><input id="presetDescription" class="form-control"></div>
-          <div class="span-4 cr-field"><label>CTA</label><select id="presetCta" class="form-control"><option value="LEARN_MORE">Подробнее</option><option value="SIGN_UP">Регистрация</option><option value="APPLY_NOW">Подать заявку</option><option value="CONTACT_US">Связаться</option><option value="SHOP_NOW">Купить</option><option value="GET_OFFER">Получить предложение</option></select></div>
+          <div class="span-4 cr-field"><label>CTA</label><select id="presetCta" class="form-control"><option value="LEARN_MORE">LEARN_MORE</option></select></div>
           <div class="span-8 cr-field"><label>Destination URL</label><input id="presetUrl" class="form-control" placeholder="https://..."></div>
           <div class="span-4 cr-field"><label>URL tags / UTM</label><input id="presetTags" class="form-control"></div>
           <div class="span-4 cr-field"><label>Creative format</label><select id="presetFormat" class="form-control"><option value="SINGLE">Single image / video</option><option value="CAROUSEL">Carousel (2–10 images)</option><option value="INSTAGRAM_POST">Existing Instagram post / reel</option></select></div>
