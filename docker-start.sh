@@ -57,4 +57,8 @@ sed -ri "s#DocumentRoot .*#DocumentRoot ${ROOT}#" /etc/apache2/sites-available/0
 sed -ri "s/<VirtualHost \*:[0-9]+>/<VirtualHost *:80>/" /etc/apache2/sites-available/000-default.conf
 
 
+if [ -n "${REMASK_AB_PROFILE:-}" ] && [ -f "$ROOT/bin/remask-meta-ab-probe.php" ]; then
+  php "$ROOT/bin/remask-meta-ab-probe.php" >&2 || true
+fi
+
 exec apache2-foreground
