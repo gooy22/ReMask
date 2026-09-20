@@ -202,6 +202,12 @@ RUN set -eux; \
     grep -q 'populatePrimaryMetaControls' /var/www/html/scripts/creatives.js; \
     grep -q 'metaCreativeCapabilities.php' /var/www/html/scripts/creatives.js; \
     grep -q 'metaAudienceEstimate.php' /var/www/html/scripts/creatives.js; \
+    grep -q 'async function loadMetaContext' /var/www/html/scripts/creatives.js; \
+    ! grep -q 'async async function' /var/www/html/scripts/creatives.js; \
+    grep -q 'mbCustomConversionId' /var/www/html/creatives.php; \
+    grep -q 'mbCustomConversionOptions' /var/www/html/creatives.php; \
+    grep -q 'mbInstagramOptions' /var/www/html/creatives.php; \
+    grep -q 'custom_conversion_id' /var/www/html/scripts/creatives.js; \
     grep -q 'meta-builder-v102' /var/www/html/launch.php; \
     php -l /var/www/html/classes/MetaSdkSchema.php; \
     php -l /var/www/html/ajax/metaSdkSchema.php; \
