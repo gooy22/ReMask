@@ -402,6 +402,21 @@ function schemaEnum(group, field) {
     return Array.isArray(values) ? values : [];
 }
 
+function constrainTargetingCheckboxes(selector, attr, allowed) {
+    const set = new Set((allowed || []).map(String));
+    document.querySelectorAll(selector).forEach((el) => {
+        const value = String(el.getAttribute(attr) || '');
+        const supported = set.size === 0 || set.has(value);
+        el.disabled = !supported;
+        const label = el.closest('label');
+        if (label) {
+            label.style.display = supported ? '' : 'none';
+            label.title = supported ? '' : 'Нет в текущей Meta SDK schema';
+        }
+        if (!supported) el.checked = false;
+    });
+}
+
 function populatePrimaryMetaControls() {
     if (!metaSdkSchema) return;
 
@@ -429,6 +444,10 @@ function populatePrimaryMetaControls() {
         const all = [...new Set([...preferred.filter((x) => metaCapabilities.preview_formats.includes(x)), ...metaCapabilities.preview_formats])];
         setMetaSelectOptions('metaPreviewFormat', all, {fallback:'MOBILE_FEED_STANDARD'});
     }
+
+    const targetingEnums = metaSdkSchema?.targeting?.enums || {};
+    constrainTargetingCheckboxes('[data-publisher]', 'data-publisher', targetingEnums.publisher_platforms || []);
+    constrainTargetingCheckboxes('[data-device-platform]', 'data-device-platform', targetingEnums.device_platforms || []);
 }
 
 function normalizeAdAccountId(value) {
