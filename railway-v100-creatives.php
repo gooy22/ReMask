@@ -186,7 +186,7 @@ require_once __DIR__ . '/checkpassword.php';
           <div class="span-6 cr-field"><label>Excluded geo (JSON)</label><textarea id="mbExcludedGeo" class="form-control cr-json" placeholder='{"countries":["RU"]}'></textarea></div>
           <div class="span-6 cr-field"><label>Interests (JSON)</label><textarea id="mbInterests" class="form-control cr-json" placeholder='[{"id":"6003139266461","name":"Business"}]'></textarea></div>
           <div class="span-6 cr-field"><label>Behaviors (JSON)</label><textarea id="mbBehaviors" class="form-control cr-json" placeholder='[{"id":"...","name":"..."}]'></textarea></div>
-          <div class="span-6 cr-field"><label>Custom audience IDs</label><input id="mbCustomAudiences" class="form-control" placeholder="123,456"></div>
+          <div class="span-6 cr-field"><label>Custom audience IDs</label><input id="mbCustomAudiences" class="form-control" list="mbCustomAudienceOptions" placeholder="123,456"><datalist id="mbCustomAudienceOptions"></datalist></div>
           <div class="span-6 cr-field"><label>Excluded custom audience IDs</label><input id="mbExcludedCustomAudiences" class="form-control" placeholder="123,456"></div>
           <div class="span-6 cr-field"><label>Flexible spec (JSON)</label><textarea id="mbFlexibleSpec" class="form-control cr-json"></textarea></div>
           <div class="span-6 cr-field"><label>Exclusions (JSON)</label><textarea id="mbExclusions" class="form-control cr-json"></textarea></div>
