@@ -210,6 +210,7 @@ RUN set -eux; \
     grep -q 'generatepreviews' /var/www/html/classes/MetaAdsService.php; \
     grep -q 'adPreviewFormats' /var/www/html/classes/MetaSdkSchema.php; \
     grep -q 'creativeCallToActionTypes' /var/www/html/classes/MetaSdkSchema.php; \
+    grep -q 'promotedObjectCustomEventTypes' /var/www/html/classes/MetaSdkSchema.php; \
     grep -q 'constrainTargetingCheckboxes' /var/www/html/scripts/creatives.js; \
     grep -q 'listConnectedInstagramAccounts' /var/www/html/classes/MetaAdsService.php; \
     grep -q 'listConversionGoals' /var/www/html/classes/MetaAdsService.php; \
