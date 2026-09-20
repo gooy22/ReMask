@@ -208,6 +208,14 @@ RUN set -eux; \
     grep -q 'mbCustomConversionOptions' /var/www/html/creatives.php; \
     grep -q 'mbInstagramOptions' /var/www/html/creatives.php; \
     grep -q 'custom_conversion_id' /var/www/html/scripts/creatives.js; \
+    grep -q 'metaExistingMedia' /var/www/html/creatives.php; \
+    grep -q 'selectedMetaExistingMedia' /var/www/html/scripts/creatives.js; \
+    grep -q 'creative.image_hash' /var/www/html/scripts/creatives.js; \
+    grep -q 'creative.video_id' /var/www/html/scripts/creatives.js; \
+    grep -q 'listCreativeImages' /var/www/html/classes/MetaAdsService.php; \
+    grep -q 'listCreativeVideos' /var/www/html/classes/MetaAdsService.php; \
+    grep -q 'cl100_meta_media_ref' /var/www/html/ajax/creativeLibrary.php; \
+    grep -q "'video_id'" /var/www/html/classes/MetaOfficialFields.php; \
     grep -q 'meta-builder-v102' /var/www/html/launch.php; \
     php -l /var/www/html/classes/MetaSdkSchema.php; \
     php -l /var/www/html/ajax/metaSdkSchema.php; \
@@ -274,9 +282,6 @@ RUN set -eux; \
     chmod 700 /var/lib/remask; \
     chmod +x /var/www/html/docker-start.sh;
 
-
-# REMASK_CREATIVE_MEDIA_TRACE
-RUN php -r '$files=["/var/www/html/classes/MetaAdsService.php","/var/www/html/classes/MetaLaunchMediaValidator.php","/var/www/html/ajax/metaJobCreate.php"]; foreach($files as $file){ if(!is_file($file))continue; $s=file_get_contents($file); foreach(["function createCreative","class MetaLaunchMediaValidator","validateMedia","existing_image_hash","existing_video_id","media_library_id"] as $needle){ $p=strpos($s,$needle); if($p!==false){ fwrite(STDERR,"[media-trace] ".$file." :: ".$needle."\n".substr($s,max(0,$p-1800),7000)."\n---\n"); } } }'
 
 ENV REMASK_META_CACHE_TTL=1800 \
     META_GRAPH_API_VERSION=v26.0 \
