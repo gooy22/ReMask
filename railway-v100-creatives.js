@@ -206,11 +206,22 @@ function syncPlacementCardStates() {
 }
 
 function renderPlacementOptions(options = {}, targeting = null) {
-    metaPlacementOptions = options || {};
+    const previous = {};
     const groups = [
         'facebook_positions','instagram_positions','messenger_positions',
         'audience_network_positions','threads_positions','whatsapp_positions'
     ];
+    for (const group of groups) {
+        previous[group] = {
+            all: placementGroupUsesAll(group),
+            selected: selectedPlacementValues(group)
+        };
+    }
+    const previousPublishers = selectedValues('[data-publisher]', 'data-publisher');
+    const previousDevices = selectedValues('[data-device-platform]', 'data-device-platform');
+    const previousMode = placementMode();
+
+    metaPlacementOptions = options || {};
 
     for (const group of groups) {
         const id = placementGroupContainerId(group);
@@ -254,6 +265,18 @@ function renderPlacementOptions(options = {}, targeting = null) {
         setCheckboxValues('[data-device-platform]', 'data-device-platform',
             Array.isArray(source.device_platforms) ? source.device_platforms : []);
         pendingPlacementTargeting = null;
+    } else {
+        setPlacementMode(previousMode);
+        setCheckboxValues('[data-publisher]', 'data-publisher', previousPublishers);
+        setCheckboxValues('[data-device-platform]', 'data-device-platform', previousDevices);
+        for (const group of groups) {
+            const state = previous[group] || {all:true, selected:[]};
+            const allToggle = document.querySelector('[data-position-all="' + group + '"]');
+            if (allToggle) allToggle.checked = state.all;
+            document.querySelectorAll('[data-position-group="' + group + '"]').forEach((el) => {
+                el.checked = state.selected.includes(String(el.value));
+            });
+        }
     }
 
     syncPlacementCardStates();
@@ -1281,6 +1304,27 @@ function buildMetaBuilder() {
     const manualPlacements = placementMode() === 'manual';
     const publisherPlatforms = manualPlacements ? selectedValues('[data-publisher]', 'data-publisher') : [];
     const devicePlatforms = manualPlacements ? selectedValues('[data-device-platform]', 'data-device-platform') : [];
+    if (manualPlacements && publisherPlatforms.length === 0) {
+        throw new Error('Manual placements: выбери хотя бы одну платформу.');
+    }
+    if (manualPlacements) {
+        const platformGroups = {
+            facebook:'facebook_positions',
+            instagram:'instagram_positions',
+            messenger:'messenger_positions',
+            audience_network:'audience_network_positions',
+            threads:'threads_positions',
+            whatsapp:'whatsapp_positions'
+        };
+        for (const platform of publisherPlatforms) {
+            const group = platformGroups[platform];
+            if (!group || placementGroupUsesAll(group)) continue;
+            if (selectedPlacementValues(group).length === 0) {
+                throw new Error('Manual placements: для ' + placementLabel(platform) + ' выбери место показа или «Все доступные».');
+            }
+        }
+    }
+
     const placementSpec = manualPlacements ? compactObject({
         publisher_platforms: publisherPlatforms,
         facebook_positions: placementGroupUsesAll('facebook_positions') ? undefined : selectedPlacementValues('facebook_positions'),
