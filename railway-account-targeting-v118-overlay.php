@@ -50,7 +50,34 @@ PHP_CODE;
             $params['limit_type'] = trim($limitType);
         }
 
-        return $this->client->get("{$accountId}/targetingsearch", $params);
+        $result = $this->client->get("{$accountId}/targetingsearch", $params);
+
+        if (array_intersect($types, ['countries','country','regions','region','cities','city','zips','zip'])) {
+            $rows = is_array($result['data'] ?? null) ? $result['data'] : [];
+            $normalized = [];
+            $typeMap = [
+                'countries'=>'country',
+                'country'=>'country',
+                'regions'=>'region',
+                'region'=>'region',
+                'cities'=>'city',
+                'city'=>'city',
+                'zips'=>'zip',
+                'zip'=>'zip',
+            ];
+            foreach ($rows as $row) {
+                if (!is_array($row)) continue;
+                $rawType = strtolower(trim((string)($row['type'] ?? '')));
+                $row['type'] = $typeMap[$rawType] ?? $rawType;
+                if (!isset($row['key']) || trim((string)$row['key']) === '') {
+                    $row['key'] = (string)($row['id'] ?? '');
+                }
+                $normalized[] = $row;
+            }
+            $result['data'] = $normalized;
+        }
+
+        return $result;
     }
 
 PHP_CODE;
@@ -60,77 +87,82 @@ PHP_CODE;
 }
 
 if(strpos($endpoint,'REMASK_ACCOUNT_TARGETING_DISPATCH_V1')===false){
-    $pattern='#\$result\s*=\s*match\s*\(\$type\)\s*\{.*?default\s*=>\s*throw\s+new\s+InvalidArgumentException\([^;]+;\s*\};#s';
-    if(!preg_match($pattern,$endpoint,$m)){
-        fwrite(STDERR,"[account-targeting-v118] endpoint match block missing\n");
-        exit(465);
-    }
-    $dispatch=<<<'PHP_CODE'
-/* REMASK_ACCOUNT_TARGETING_DISPATCH_V1 */
-$accountId = trim((string)($input['account_id'] ?? ''));
-if ($accountId === '') {
-    throw new RuntimeException('Targeting search requires an accessible Meta ad account.');
-}
+    $replacements = [
+        [
+            'label' => 'interests',
+            'old' => <<<'PHP_CODE'
+        'interest', 'interests' => $service->searchInterests($query, $limit),
+PHP_CODE,
+            'new' => <<<'PHP_CODE'
+        /* REMASK_ACCOUNT_TARGETING_DISPATCH_V1 */
+        'interest', 'interests' => $service->searchAccountTargeting(
+            trim((string)($input['account_id'] ?? '')),
+            $query,
+            ['interests'],
+            $limit,
+            'interests'
+        ),
+PHP_CODE,
+        ],
+        [
+            'label' => 'behaviors',
+            'old' => <<<'PHP_CODE'
+        'behavior', 'behaviors' => $service->searchBehaviors(trim((string)($input['account_id'] ?? '')), $query, $limit),
+PHP_CODE,
+            'new' => <<<'PHP_CODE'
+        'behavior', 'behaviors' => $service->searchAccountTargeting(
+            trim((string)($input['account_id'] ?? '')),
+            $query,
+            ['behaviors'],
+            $limit,
+            'behaviors'
+        ),
+PHP_CODE,
+        ],
+        [
+            'label' => 'languages',
+            'old' => <<<'PHP_CODE'
+        'language', 'languages', 'locale', 'locales' => $service->searchLocales($query, $limit),
+PHP_CODE,
+            'new' => <<<'PHP_CODE'
+        'language', 'languages', 'locale', 'locales' => $service->searchAccountTargeting(
+            trim((string)($input['account_id'] ?? '')),
+            $query,
+            ['locales'],
+            $limit,
+            null
+        ),
+PHP_CODE,
+        ],
+        [
+            'label' => 'locations',
+            'old' => <<<'PHP_CODE'
+        'location', 'locations', 'geo' => $service->searchLocations($query, is_array($input['location_types'] ?? null) ? $input['location_types'] : ['country', 'region', 'city'], $limit),
+PHP_CODE,
+            'new' => <<<'PHP_CODE'
+        'location', 'locations', 'geo' => $service->searchAccountTargeting(
+            trim((string)($input['account_id'] ?? '')),
+            $query,
+            ['countries','regions','cities','zips'],
+            $limit,
+            null
+        ),
+PHP_CODE,
+        ],
+    ];
 
-$result = match ($type) {
-    'interest', 'interests' => $service->searchAccountTargeting(
-        $accountId,
-        $query,
-        ['interests'],
-        $limit,
-        'interests'
-    ),
-    'behavior', 'behaviors' => $service->searchAccountTargeting(
-        $accountId,
-        $query,
-        ['behaviors'],
-        $limit,
-        'behaviors'
-    ),
-    'language', 'languages', 'locale', 'locales' => $service->searchAccountTargeting(
-        $accountId,
-        $query,
-        ['locales'],
-        $limit,
-        null
-    ),
-    'location', 'locations', 'geo' => $service->searchAccountTargeting(
-        $accountId,
-        $query,
-        ['countries','regions','cities','zips'],
-        $limit,
-        null
-    ),
-    default => throw new InvalidArgumentException('type must be interests, behaviors, languages or locations'),
-};
-
-if (in_array($type, ['location','locations','geo'], true)) {
-    $rows = is_array($result['data'] ?? null) ? $result['data'] : [];
-    $normalized = [];
-    foreach ($rows as $row) {
-        if (!is_array($row)) continue;
-        $rawType = strtolower(trim((string)($row['type'] ?? '')));
-        $typeMap = [
-            'countries'=>'country',
-            'country'=>'country',
-            'regions'=>'region',
-            'region'=>'region',
-            'cities'=>'city',
-            'city'=>'city',
-            'zips'=>'zip',
-            'zip'=>'zip',
-        ];
-        $row['type'] = $typeMap[$rawType] ?? $rawType;
-        if (!isset($row['key']) || trim((string)$row['key']) === '') {
-            $row['key'] = (string)($row['id'] ?? '');
+    foreach ($replacements as $patch) {
+        if (strpos($endpoint, $patch['new']) !== false) continue;
+        if (strpos($endpoint, $patch['old']) === false) {
+            fwrite(STDERR, "[account-targeting-v118] ".$patch['label']." dispatch anchor missing\n");
+            exit(465);
         }
-        $normalized[] = $row;
+        $endpoint = str_replace($patch['old'], $patch['new'], $endpoint, $n);
+        if ($n !== 1) {
+            fwrite(STDERR, "[account-targeting-v118] ".$patch['label']." dispatch count=$n\n");
+            exit(466);
+        }
     }
-    $result['data'] = $normalized;
-}
-PHP_CODE;
-    $endpoint=preg_replace($pattern,$dispatch,$endpoint,1,$n) ?? $endpoint;
-    if($n!==1){fwrite(STDERR,"[account-targeting-v118] dispatch patch count=$n\n");exit(466);}
 }
 
 /* Launch should pass the selected RK instead of forcing backend discovery. */
