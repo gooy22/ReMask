@@ -89,7 +89,7 @@ if(strpos($src,'REMASK_ACCOUNTLESS_TARGETING_V1')===false){
     $src=preg_replace($profilePattern,$replacement,$src,1,$count) ?? $src;
     if($count!==1){fwrite(STDERR,"[creative-targeting-v109] profile patch count=$count\n");exit(374);}
 
-    if(strpos($src,'REMASK_ACCOUNTLESS_BEHAVIOR_ACCOUNT_V1')===false){
+    if(strpos($src,'REMASK_ACCOUNTLESS_TARGETING_ACCOUNT_V2')===false){
         $serviceAnchor='$service = MetaEndpoint::serviceForAccountName($profile);';
         if(strpos($src,$serviceAnchor)===false){
             fwrite(STDERR,"[creative-targeting-v109] service anchor missing\n");
@@ -173,6 +173,11 @@ if (!empty($remaskAccountlessTargeting)) {
             throw new RuntimeException('All Meta targeting transports failed. ' . $last);
         }
 
+        public function searchAccountTargeting(string $accountId, string $query, array $whitelistedTypes, int $limit = 25, ?string $limitType = null): array
+        {
+            return $this->run(fn($s) => $s->searchAccountTargeting($accountId, $query, $whitelistedTypes, $limit, $limitType));
+        }
+
         public function searchInterests(string $query, int $limit = 25): array
         {
             return $this->run(fn($s) => $s->searchInterests($query, $limit));
@@ -199,22 +204,27 @@ if (!empty($remaskAccountlessTargeting)) {
 
 /* REMASK_ACCOUNTLESS_BEHAVIOR_ACCOUNT_V1 */
 $remaskTargetingType = strtolower(trim((string)($input['type'] ?? '')));
-if (in_array($remaskTargetingType, ['behavior','behaviors'], true)
+$remaskAccountScopedTypes = [
+    'interest','interests','behavior','behaviors',
+    'language','languages','locale','locales',
+    'location','locations','geo'
+];
+if (in_array($remaskTargetingType, $remaskAccountScopedTypes, true)
     && trim((string)($input['account_id'] ?? '')) === '') {
     $accountRows = $service->listAdAccounts(1);
-    $behaviorAccountId = '';
+    $targetingAccountId = '';
     foreach ((array)($accountRows['data'] ?? []) as $row) {
         if (!is_array($row)) continue;
         $candidate = preg_replace('/^act_/i', '', trim((string)($row['id'] ?? ''))) ?? '';
         if ($candidate !== '' && preg_match('/^\\d+$/', $candidate)) {
-            $behaviorAccountId = $candidate;
+            $targetingAccountId = $candidate;
             break;
         }
     }
-    if ($behaviorAccountId === '') {
-        throw new RuntimeException('No Meta ad account is available for Behaviors search.');
+    if ($targetingAccountId === '') {
+        throw new RuntimeException('No Meta ad account is available for targeting search.');
     }
-    $input['account_id'] = $behaviorAccountId;
+    $input['account_id'] = $targetingAccountId;
 }
 PHP_CODE;
         $src=str_replace($serviceAnchor,$serviceReplacement,$src,$serviceCount);
@@ -223,4 +233,4 @@ PHP_CODE;
 
     file_put_contents($endpoint,$src);
 }
-fwrite(STDERR,"[creative-targeting-v109] real-call targeting failover + accountless Behaviors context enabled\n");
+fwrite(STDERR,"[creative-targeting-v109] real-call targeting failover + account-scoped targeting context enabled\n");
