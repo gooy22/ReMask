@@ -127,6 +127,7 @@ try {
     $accountId = trim((string)($input['account_id'] ?? ''));
     $objective = strtoupper(trim((string)($input['objective'] ?? '')));
     $optimizationGoal = strtoupper(trim((string)($input['optimization_goal'] ?? '')));
+    $refresh = !empty($input['refresh']);
 
     $groups = array_keys(MetaSdkSchema::placementOptions());
     $emptyOptions = array_fill_keys($groups, []);
@@ -153,6 +154,7 @@ try {
         'objective' => $objective,
         'optimization_goal' => $optimizationGoal,
         'graph_version' => (string)(getenv('META_GRAPH_API_VERSION') ?: 'v26.0'),
+        'placement_contract' => 'live-only-v2',
     ], JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR));
 
     $dataRoot = rtrim((string)(getenv('REMASK_DATA_DIR') ?: '/var/lib/remask'), '/');
@@ -161,9 +163,9 @@ try {
     $cacheFile = $cacheDir . '/' . $fingerprint . '.json';
     $ttl = 600;
 
-    if (is_file($cacheFile) && (time() - (int)@filemtime($cacheFile)) < $ttl) {
+    if (!$refresh && is_file($cacheFile) && (time() - (int)@filemtime($cacheFile)) < $ttl) {
         $cached = json_decode((string)@file_get_contents($cacheFile), true);
-        if (is_array($cached)) {
+        if (is_array($cached) && ($cached['source'] ?? '') === 'meta_targetingbrowse') {
             $cached['_cache'] = ['state' => 'HIT', 'ttl' => $ttl];
             MetaEndpoint::ok($cached);
         }
