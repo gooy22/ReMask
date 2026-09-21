@@ -10,6 +10,10 @@ let metaCapabilities = null;
 let metaContext = {profile:'', accountId:''};
 let audienceEstimateTimer = null;
 let audienceEstimateSeq = 0;
+let placementCapabilitiesTimer = null;
+let placementCapabilitiesSeq = 0;
+let metaPlacementOptions = {};
+let pendingPlacementTargeting = null;
 const creativeTargetingSelections = {geo:[], interests:[], behaviors:[]};
 const creativeTargetingTimers = {geo:0, interests:0, behaviors:0};
 const creativeTargetingControllers = {geo:null, interests:null, behaviors:null};
@@ -135,6 +139,167 @@ function deepMerge(base, extra) {
 function selectedValues(selector, attr) {
     return Array.from(document.querySelectorAll(selector)).filter((el) => el.checked).map((el) => el.getAttribute(attr)).filter(Boolean);
 }
+function placementMode() {
+    return document.querySelector('input[name="placementMode"]:checked')?.value || 'auto';
+}
+
+function placementLabel(value) {
+    const labels = {
+        feed:'Feed', right_hand_column:'Right column', marketplace:'Marketplace',
+        video_feeds:'Video feeds', story:'Stories', search:'Search',
+        instream_video:'In-stream video', facebook_reels:'Reels',
+        facebook_reels_overlay:'Reels overlay', profile_feed:'Profile feed',
+        notification:'Notifications', stream:'Feed', explore:'Explore',
+        explore_home:'Explore home', reels:'Reels', ig_search:'Search',
+        profile_reels:'Profile Reels', messenger_home:'Inbox',
+        sponsored_messages:'Sponsored messages', classic:'Native / banner / interstitial',
+        rewarded_video:'Rewarded video', threads_stream:'Threads feed',
+        status:'Status', mobile:'Mobile', desktop:'Desktop', connected_tv:'Connected TV'
+    };
+    if (labels[value]) return labels[value];
+    return String(value || '').replace(/_/g,' ').replace(/w/g,(m)=>m.toUpperCase());
+}
+
+function placementGroupContainerId(group) {
+    return {
+        facebook_positions:'placementFacebookOptions',
+        instagram_positions:'placementInstagramOptions',
+        messenger_positions:'placementMessengerOptions',
+        audience_network_positions:'placementAudienceNetworkOptions',
+        threads_positions:'placementThreadsOptions',
+        whatsapp_positions:'placementWhatsappOptions'
+    }[group] || '';
+}
+
+function selectedPlacementValues(group) {
+    return Array.from(document.querySelectorAll('[data-position-group="' + group + '"]'))
+        .filter((el) => el.checked && !el.disabled)
+        .map((el) => String(el.value || '').trim())
+        .filter(Boolean);
+}
+
+function placementGroupUsesAll(group) {
+    return Boolean(document.querySelector('[data-position-all="' + group + '"]')?.checked);
+}
+
+function setPlacementMode(mode) {
+    const target = mode === 'manual' ? 'manual' : 'auto';
+    document.querySelectorAll('input[name="placementMode"]').forEach((el) => {
+        el.checked = el.value === target;
+    });
+    const manual = $('manualPlacements');
+    if (manual) manual.style.display = target === 'manual' ? 'block' : 'none';
+}
+
+function syncPlacementCardStates() {
+    document.querySelectorAll('[data-placement-card]').forEach((card) => {
+        const platform = card.getAttribute('data-placement-card');
+        const publisher = document.querySelector('[data-publisher="' + platform + '"]');
+        const enabled = Boolean(publisher?.checked);
+        card.classList.toggle('disabled', !enabled);
+        card.querySelectorAll('[data-position-all],[data-position-group]').forEach((el) => {
+            const group = el.getAttribute('data-position-all') || el.getAttribute('data-position-group');
+            const all = document.querySelector('[data-position-all="' + group + '"]');
+            el.disabled = !enabled || (el.hasAttribute('data-position-group') && Boolean(all?.checked));
+        });
+    });
+}
+
+function renderPlacementOptions(options = {}, targeting = null) {
+    metaPlacementOptions = options || {};
+    const groups = [
+        'facebook_positions','instagram_positions','messenger_positions',
+        'audience_network_positions','threads_positions','whatsapp_positions'
+    ];
+
+    for (const group of groups) {
+        const id = placementGroupContainerId(group);
+        const box = id ? $(id) : null;
+        if (!box) continue;
+        const values = Array.isArray(metaPlacementOptions[group]) ? metaPlacementOptions[group] : [];
+        box.innerHTML = values.map((value) =>
+            '<label class="cr-check"><input type="checkbox" data-position-group="' + esc(group) +
+            '" value="' + esc(value) + '"> ' + esc(placementLabel(value)) + '</label>'
+        ).join('') || '<span class="cr-hint">Meta не вернула доступные позиции.</span>';
+    }
+
+    const deviceBox = $('placementDeviceOptions');
+    if (deviceBox) {
+        const devices = Array.isArray(metaPlacementOptions.device_platforms) ? metaPlacementOptions.device_platforms : [];
+        deviceBox.innerHTML = devices.map((value) =>
+            '<label class="cr-check"><input type="checkbox" data-device-platform="' + esc(value) +
+            '"> ' + esc(placementLabel(value)) + '</label>'
+        ).join('');
+    }
+
+    const source = targeting || pendingPlacementTargeting;
+    if (source) {
+        const hasPlacementConfig = [
+            'publisher_platforms','facebook_positions','instagram_positions','messenger_positions',
+            'audience_network_positions','threads_positions','whatsapp_positions','device_platforms'
+        ].some((key) => Array.isArray(source[key]) && source[key].length);
+        setPlacementMode(hasPlacementConfig ? 'manual' : 'auto');
+
+        const publishers = Array.isArray(source.publisher_platforms) ? source.publisher_platforms : [];
+        setCheckboxValues('[data-publisher]', 'data-publisher', publishers);
+
+        for (const group of groups) {
+            const selected = Array.isArray(source[group]) ? source[group].map(String) : [];
+            const allToggle = document.querySelector('[data-position-all="' + group + '"]');
+            if (allToggle) allToggle.checked = selected.length === 0;
+            document.querySelectorAll('[data-position-group="' + group + '"]').forEach((el) => {
+                el.checked = selected.includes(String(el.value));
+            });
+        }
+        setCheckboxValues('[data-device-platform]', 'data-device-platform',
+            Array.isArray(source.device_platforms) ? source.device_platforms : []);
+        pendingPlacementTargeting = null;
+    }
+
+    syncPlacementCardStates();
+}
+
+async function loadPlacementCapabilities(refresh = false) {
+    const seq = ++placementCapabilitiesSeq;
+    const payload = {
+        profile: metaContext.profile || '',
+        account_id: metaContext.accountId || '',
+        objective: $('mbObjective')?.value || '',
+        optimization_goal: $('mbOptimizationGoal')?.value || '',
+        refresh
+    };
+    const status = $('placementCapabilitiesStatus');
+    if (status) status.textContent = metaContext.accountId ? 'Meta проверяет placements…' : 'SDK fallback · выбери reference RK для live Meta placements.';
+
+    try {
+        const data = await api('ajax/metaPlacementCapabilities.php', {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify(payload)
+        });
+        if (seq !== placementCapabilitiesSeq) return;
+        renderPlacementOptions(data?.options || {}, pendingPlacementTargeting);
+        if (status) {
+            const live = Array.isArray(data?.live_groups) ? data.live_groups.length : 0;
+            status.className = 'cr-hint ' + (data?.source === 'meta_targetingbrowse' ? 'cr-placement-live' : 'cr-placement-fallback');
+            status.textContent = data?.source === 'meta_targetingbrowse'
+                ? ('LIVE META · ' + live + ' групп · ' + (data?.objective || 'без objective'))
+                : ('SDK fallback' + (data?.warning ? ' · ' + data.warning : ''));
+        }
+    } catch (error) {
+        if (seq !== placementCapabilitiesSeq) return;
+        if (status) {
+            status.className = 'cr-hint cr-placement-fallback';
+            status.textContent = 'Placement capabilities: ' + error.message;
+        }
+    }
+}
+
+function schedulePlacementCapabilities(delay = 350) {
+    clearTimeout(placementCapabilitiesTimer);
+    placementCapabilitiesTimer = setTimeout(() => loadPlacementCapabilities(false), delay);
+}
+
 function idsToAudience(value) {
     return csvStrings(value).map((id) => ({id}));
 }
