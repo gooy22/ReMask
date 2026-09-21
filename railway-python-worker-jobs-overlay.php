@@ -50,32 +50,35 @@ function rmx_pwj_worker_request(string $method, string $path, ?array $payload = 
     $key = trim((string)(getenv('REMASK_WORKER_API_KEY') ?: ''));
     if ($key !== '') $headers[] = 'X-Remask-Worker-Key: ' . $key;
 
-    $ch = curl_init($url);
-    $opts = [
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_HEADER => false,
-        CURLOPT_FOLLOWLOCATION => false,
-        CURLOPT_CONNECTTIMEOUT => 5,
-        CURLOPT_TIMEOUT => 20,
-        CURLOPT_CUSTOMREQUEST => strtoupper($method),
-        CURLOPT_HTTPHEADER => $headers,
-    ];
-
+    $body = null;
     if ($payload !== null) {
         $body = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
-        $opts[CURLOPT_POSTFIELDS] = $body;
-        $opts[CURLOPT_HTTPHEADER][] = 'Content-Type: application/json';
+        $headers[] = 'Content-Type: application/json';
     }
 
-    curl_setopt_array($ch, $opts);
-    $raw = curl_exec($ch);
-    $errno = curl_errno($ch);
-    $error = curl_error($ch);
-    $status = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
-    curl_close($ch);
+    $http = [
+        'method' => strtoupper($method),
+        'header' => implode("\r\n", $headers) . "\r\n",
+        'timeout' => 20,
+        'ignore_errors' => true,
+        'follow_location' => 0,
+    ];
+    if ($body !== null) $http['content'] = $body;
+
+    $context = stream_context_create(['http' => $http]);
+    $raw = @file_get_contents($url, false, $context);
+
+    $status = 0;
+    foreach ((array)($http_response_header ?? []) as $line) {
+        if (preg_match('#^HTTP/\\S+\\s+(\\d{3})#i', (string)$line, $m)) {
+            $status = (int)$m[1];
+        }
+    }
 
     if ($raw === false) {
-        throw new RuntimeException('PYTHON_WORKER_TRANSPORT: ' . ($error ?: ('cURL errno ' . $errno)));
+        $last = error_get_last();
+        $detail = is_array($last) ? trim((string)($last['message'] ?? '')) : '';
+        throw new RuntimeException('PYTHON_WORKER_TRANSPORT' . ($detail !== '' ? ': ' . $detail : ''));
     }
 
     $decoded = json_decode($raw, true);
