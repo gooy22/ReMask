@@ -1,39 +1,51 @@
-# ReMask async automation backend
+# ReMask Python worker
 
-This directory contains the asynchronous HTTP/session layer intended for a
-separate ReMask worker/service.
+Separate asynchronous service for ReMask bulk jobs.
 
-## Components
+Implemented in v0.1:
+- FastAPI job API
+- persistent SQLite Job / JobItem / Task state
+- restart recovery for QUEUED/RUNNING items
+- per-profile locks
+- configurable worker concurrency
+- idempotent job creation
+- Retry Failed
+- internal profile resolver so cookies/proxy credentials are not persisted in the job database
+- `proxy_check` task handler as the first end-to-end action
 
-- `AppSessionManager` — one isolated aiohttp session per profile with its own
-  cookies, User-Agent, proxy, timeout and TCP connection pool.
-- `BusinessLogicController` — generic command composition on top of the
-  transport layer.
+## API
 
-The module deliberately keeps target URLs and operation IDs outside the
-transport class so ReMask can reuse the same worker for authorized QA,
-integration and supported API workflows.
+- `GET /health`
+- `POST /api/v1/jobs`
+- `GET /api/v1/jobs/{job_id}`
+- `POST /api/v1/jobs/{job_id}/retry-failed`
 
-## Run locally
+Example job:
 
-```bash
-python -m venv .venv
-. .venv/bin/activate
-pip install -r python_backend/requirements.txt
-python python_backend/remask_async_automation.py
+```json
+{
+  "idempotency_key": "bulk-2026-09-22-001",
+  "profiles": [
+    {
+      "profile_id": "profile-123",
+      "tasks": [
+        {"action": "proxy_check", "payload": {}}
+      ]
+    }
+  ]
+}
 ```
 
-The `main()` block uses `qa.example.internal` placeholders and will not
-perform real requests until replaced with an authorized environment.
+## Required environment
 
-## ReMask deployment
+- `REMASK_WORKER_API_KEY` - optional API key required in `X-Remask-Worker-Key`
+- `REMASK_PROFILE_RESOLVER_URL` - internal PHP endpoint returning `{cookies, proxy, user_agent}` for a `profile_id`
+- `REMASK_INTERNAL_KEY` - optional key sent to the resolver in `X-Remask-Internal-Key`
+- `REMASK_JOB_DB` - defaults to `/var/lib/remask-python/jobs.sqlite3`
+- `REMASK_WORKER_CONCURRENCY` - defaults to `30`
 
-Recommended production topology:
+Deploy this directory as its own Railway service using `python_backend/Dockerfile` and mount a persistent volume at `/var/lib/remask-python`.
 
-```
-ReMask PHP/API -> job queue/internal API -> Python aiohttp worker
-                                      -> per-profile proxy session
-```
+## Current boundary
 
-Do not create one OS thread per Facebook/ReMask profile. aiohttp concurrency,
-a global semaphore and independent per-profile TCP pools scale more cleanly.
+This first stage intentionally wires the queue, persistence, profile isolation, proxy validation, recovery and retry infrastructure before additional task handlers are registered. New handlers are added in `app/runner.py` without changing the Job API.
