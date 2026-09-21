@@ -157,9 +157,227 @@ PHP_CODE;
 }
 file_put_contents($servicePath,$service);
 
-/* -------- Launch budget validation supports saved daily/lifetime budgets -------- */
+/* -------- Launch uses the exact saved Meta builder before Review / Job -------- */
 $launch=file_get_contents($launchPath);
 if($launch===false){fwrite(STDERR,"[meta-builder-v102] read launch.js failed\n");exit(320);}
+
+if(strpos($launch,'REMASK_EFFECTIVE_META_BUILDER_V2')===false){
+    $helper=<<<'JS_CODE'
+/* REMASK_EFFECTIVE_META_BUILDER_V2 */
+function remaskMergeBuilderObject(base, extra) {
+    const out = (base && typeof base === 'object' && !Array.isArray(base)) ? {...base} : {};
+    if (!extra || typeof extra !== 'object' || Array.isArray(extra)) return out;
+    for (const [key, value] of Object.entries(extra)) {
+        if (value && typeof value === 'object' && !Array.isArray(value)
+            && out[key] && typeof out[key] === 'object' && !Array.isArray(out[key])) {
+            out[key] = remaskMergeBuilderObject(out[key], value);
+        } else {
+            out[key] = value;
+        }
+    }
+    return out;
+}
+
+function remaskApplySavedMetaBuilderToPayload(payload) {
+    const builder = remaskSelectedCreativePreset?.meta_builder;
+    if (!builder || typeof builder !== 'object') return payload;
+
+    const out = remaskMergeBuilderObject({}, payload || {});
+    out.campaign = {...(out.campaign || {}), ...(builder.campaign || {})};
+    out.adset = {...(out.adset || {}), ...(builder.adset || {})};
+    out.adset.targeting = remaskMergeBuilderObject(
+        out.adset.targeting || {},
+        builder.targeting || {}
+    );
+
+    out.creative = {...(out.creative || {})};
+    for (const [key, value] of Object.entries(builder.identity || {})) {
+        if (value !== '' && value !== null && value !== undefined) out.creative[key] = value;
+    }
+
+    const existingMedia = builder.existing_media && typeof builder.existing_media === 'object'
+        ? builder.existing_media
+        : {};
+    if (existingMedia.image_hash) out.creative.existing_image_hash = String(existingMedia.image_hash);
+    if (existingMedia.video_id) out.creative.existing_video_id = String(existingMedia.video_id);
+    if (existingMedia.creative_id) out.creative.existing_creative_id = String(existingMedia.creative_id);
+    if (existingMedia.source_instagram_media_id) {
+        out.creative.source_instagram_media_id = String(existingMedia.source_instagram_media_id);
+    }
+
+    const creativeOfficial = {...(builder.creative || {})};
+    if (!Object.keys(existingMedia).length && creativeOfficial.image_hash) {
+        out.creative.existing_image_hash = String(creativeOfficial.image_hash);
+        delete creativeOfficial.image_hash;
+    }
+    if (!Object.keys(existingMedia).length && creativeOfficial.video_id) {
+        out.creative.existing_video_id = String(creativeOfficial.video_id);
+        delete creativeOfficial.video_id;
+    }
+    if (!Object.keys(existingMedia).length && creativeOfficial.source_instagram_media_id) {
+        out.creative.source_instagram_media_id = String(creativeOfficial.source_instagram_media_id);
+        delete creativeOfficial.source_instagram_media_id;
+    }
+    out.creative.official_params = remaskMergeBuilderObject(
+        out.creative.official_params || {},
+        creativeOfficial
+    );
+
+    out.ad = {...(out.ad || {}), ...(builder.ad || {})};
+    out._meta_official_v1 = true;
+    return out;
+}
+
+/* REMASK_PLACEMENT_PREFLIGHT_V1 */
+function remaskExplicitPlacementGroups(payload) {
+    const targeting = payload?.adset?.targeting || {};
+    const groups = [
+        'publisher_platforms',
+        'facebook_positions',
+        'instagram_positions',
+        'messenger_positions',
+        'audience_network_positions',
+        'threads_positions',
+        'whatsapp_positions',
+        'device_platforms'
+    ];
+    const out = {};
+    for (const group of groups) {
+        const values = Array.isArray(targeting[group])
+            ? [...new Set(targeting[group].map((v) => String(v).trim()).filter(Boolean))]
+            : [];
+        if (values.length) out[group] = values;
+    }
+    return out;
+}
+
+async function remaskValidatePlacementsForLaunch(config) {
+    const explicit = remaskExplicitPlacementGroups(config?.payload || {});
+    const groups = Object.keys(explicit);
+    if (!groups.length) return {ok:true, verified:false, checked:0, warnings:[]};
+
+    const accountIds = Array.isArray(config?.accountIds) ? config.accountIds : [];
+    const objective = String(config?.payload?.campaign?.objective || '');
+    const optimizationGoal = String(config?.payload?.adset?.optimization_goal || '');
+    const rows = accountIds.map((accountId) => {
+        const target = typeof targetForAccount === 'function' ? targetForAccount(accountId) : null;
+        return {
+            accountId:String(accountId || '').replace(/^act_/i,''),
+            profile:String(target?.profile || state.profile || '')
+        };
+    });
+
+    const failures = [];
+    const warnings = [];
+    let checked = 0;
+    let cursor = 0;
+    const workers = Array.from({length:Math.min(4, Math.max(1, rows.length))}, async () => {
+        while (true) {
+            const index = cursor++;
+            if (index >= rows.length) return;
+            const row = rows[index];
+            if (!row.accountId || !row.profile) {
+                failures.push('RK ' + (row.accountId || '?') + ': Facebook profile context is missing.');
+                continue;
+            }
+            try {
+                const data = await apiJson('ajax/metaPlacementCapabilities.php', formPost({
+                    profile:row.profile,
+                    account_id:row.accountId,
+                    objective,
+                    optimization_goal:optimizationGoal
+                }));
+                if (data?.source !== 'meta_targetingbrowse') {
+                    warnings.push('RK ' + row.accountId + ': Meta did not expose live placement capabilities.');
+                    continue;
+                }
+                checked++;
+                const options = data.options || {};
+                for (const group of groups) {
+                    const live = Array.isArray(options[group]) ? options[group].map(String) : [];
+                    if (!live.length) {
+                        warnings.push('RK ' + row.accountId + ': ' + group + ' was not verifiable from Meta.');
+                        continue;
+                    }
+                    const invalid = explicit[group].filter((value) => !live.includes(String(value)));
+                    if (invalid.length) {
+                        failures.push('RK ' + row.accountId + ': unavailable ' + group + ' = ' + invalid.join(', '));
+                    }
+                }
+            } catch (e) {
+                const message = e?.payload?.message || e?.message || String(e);
+                warnings.push('RK ' + row.accountId + ': placement verification unavailable — ' + message);
+            }
+        }
+    });
+    await Promise.all(workers);
+
+    return {
+        ok:failures.length === 0,
+        verified:checked > 0,
+        checked,
+        failures,
+        warnings
+    };
+}
+JS_CODE;
+
+    $helperAnchor='function ensureLaunchNames() {';
+    if(strpos($launch,$helperAnchor)===false){fwrite(STDERR,"[meta-builder-v102] effective payload helper anchor missing\n");exit(324);}
+    $launch=str_replace($helperAnchor,$helper."\n\n".$helperAnchor,$launch,$hc);
+    if($hc!==1){fwrite(STDERR,"[meta-builder-v102] effective payload helper count=$hc\n");exit(325);}
+
+    $payloadNeedle=<<<'JS_CODE'
+    ensureLaunchNames();
+    const payload = buildPayload();
+JS_CODE;
+    $payloadReplace=<<<'JS_CODE'
+    ensureLaunchNames();
+    let payload = buildPayload();
+    payload = remaskApplySavedMetaBuilderToPayload(payload);
+JS_CODE;
+    if(strpos($launch,$payloadNeedle)===false){fwrite(STDERR,"[meta-builder-v102] current payload anchor missing\n");exit(326);}
+    $launch=str_replace($payloadNeedle,$payloadReplace,$launch,$pc);
+    if($pc!==1){fwrite(STDERR,"[meta-builder-v102] current payload replacement count=$pc\n");exit(327);}
+
+    $placementNeedle=<<<'JS_CODE'
+    const payload = config.payload;
+    const accountOverrides = config.accountOverrides;
+
+    // One-click flow: validate the exact selection against Meta before any mutation.
+JS_CODE;
+    $placementReplace=<<<'JS_CODE'
+    const payload = config.payload;
+    const accountOverrides = config.accountOverrides;
+
+    const placementCheck = await remaskValidatePlacementsForLaunch(config);
+    if (!placementCheck.ok) {
+        show(
+            $('launchResult'),
+            'Launch blocked by RK-specific placements: ' + placementCheck.failures.join(' | '),
+            'failed'
+        );
+        return;
+    }
+    if (placementCheck.verified) {
+        show(
+            $('launchResult'),
+            'Placements verified from Meta for ' + placementCheck.checked + ' RK.' +
+                (placementCheck.warnings?.length ? ' Warnings: ' + placementCheck.warnings.join(' | ') : ''),
+            'ready'
+        );
+    }
+
+    // One-click flow: validate the exact selection against Meta before any mutation.
+JS_CODE;
+    if(strpos($launch,$placementNeedle)===false){fwrite(STDERR,"[meta-builder-v102] placement preflight anchor missing\n");exit(328);}
+    $launch=str_replace($placementNeedle,$placementReplace,$launch,$vc);
+    if($vc!==1){fwrite(STDERR,"[meta-builder-v102] placement preflight replacement count=$vc\n");exit(329);}
+
+    file_put_contents($launchPath,$launch);
+}
+
+/* -------- Launch budget validation supports saved daily/lifetime budgets -------- */
 if(strpos($launch,'REMASK_META_BUILDER_BUDGET_V1')===false){
     $oldBudget=<<<'JS_CODE'
     /* REMASK_DAILY_BUDGET_GUARD_V1 */
@@ -212,10 +430,10 @@ $launchPhp=file_get_contents($launchPhpPath);
 if($launchPhp===false){fwrite(STDERR,"[meta-builder-v102] read launch.php failed\n");exit(320);}
 $launchPhp=preg_replace(
     '#<script src="scripts/launch\.js(?:\?[^"]*)?" type="module"></script>#',
-    '<script src="scripts/launch.js?v=20260919-meta-builder-v102" type="module"></script>',
+    '<script src="scripts/launch.js?v=20260921-effective-builder-v110" type="module"></script>',
     $launchPhp,1,$lc
 ) ?? $launchPhp;
 if($lc!==1){fwrite(STDERR,"[meta-builder-v102] launch cache tag missing\n");exit(321);}
 file_put_contents($launchPhpPath,$launchPhp);
 
-fwrite(STDERR,"[meta-builder-v102] official Meta builder backend ready\n");
+fwrite(STDERR,"[meta-builder-v102] official Meta builder + effective Review payload + RK placement preflight ready\n");
