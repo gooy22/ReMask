@@ -1189,12 +1189,6 @@ async function save(event) {
         }
         form.append('carousel_cards', JSON.stringify(meta));
         for (const file of carouselFiles) form.append('carousel_media[]', file, file.name);
-    } else {
-        if (!/^\d+$/.test($('presetInstagramMediaId').value.trim())) {
-            setStatus('Instagram media ID должен быть числом.', 'bad');
-            switchTab('creative');
-            return;
-        }
     }
 
     $('saveCreative').disabled = true;
