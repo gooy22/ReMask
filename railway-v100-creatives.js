@@ -160,6 +160,168 @@ function placementLabel(value) {
     return String(value || '').replace(/_/g,' ').replace(/w/g,(m)=>m.toUpperCase());
 }
 
+
+function placementPlatformLabel(group) {
+    return {
+        facebook_positions:'Facebook',
+        instagram_positions:'Instagram',
+        messenger_positions:'Messenger',
+        audience_network_positions:'Audience Network',
+        threads_positions:'Threads',
+        whatsapp_positions:'WhatsApp'
+    }[group] || 'Meta';
+}
+
+function placementPreviewMode(value) {
+    const v = String(value || '');
+    if (v === 'right_hand_column') return 'column';
+    if (['story','status'].includes(v)) return v === 'status' ? 'status' : 'story';
+    if (['facebook_reels','facebook_reels_overlay','reels','profile_reels'].includes(v)) return 'reels';
+    if (['marketplace','search','ig_search','explore','explore_home','classic'].includes(v)) return 'grid';
+    if (['messenger_home','sponsored_messages','notification'].includes(v)) return 'messages';
+    if (['video_feeds','instream_video','rewarded_video'].includes(v)) return 'video';
+    return 'feed';
+}
+
+function placementPreviewDescription(group, value) {
+    const key = String(value || '');
+    const map = {
+        feed:'Реклама появляется между обычными публикациями в ленте.',
+        stream:'Реклама появляется между публикациями Instagram Feed.',
+        story:'Полноэкранный вертикальный показ между Stories.',
+        facebook_reels:'Вертикальный показ между Facebook Reels.',
+        facebook_reels_overlay:'Рекламный блок поверх/рядом с Reels-контентом.',
+        reels:'Вертикальный показ между Instagram Reels.',
+        profile_reels:'Показ в разделе Reels профиля.',
+        right_hand_column:'Desktop Facebook: рекламный блок в правой колонке.',
+        marketplace:'Реклама встроена в сетку карточек Marketplace.',
+        video_feeds:'Рекламное видео внутри Video Feeds.',
+        instream_video:'Реклама показывается внутри видеоконтента.',
+        search:'Рекламный результат среди результатов поиска Facebook.',
+        ig_search:'Рекламный результат в Instagram Search.',
+        explore:'Реклама среди публикаций Instagram Explore.',
+        explore_home:'Реклама в сетке Explore Home.',
+        profile_feed:'Реклама внутри ленты профиля.',
+        notification:'Рекламный/промо-блок в интерфейсе уведомлений.',
+        messenger_home:'Рекламный блок среди диалогов Messenger.',
+        sponsored_messages:'Sponsored message внутри Messenger.',
+        classic:'Native / banner / interstitial в Audience Network.',
+        rewarded_video:'Видео с вознаграждением в Audience Network.',
+        threads_stream:'Реклама в ленте Threads.',
+        status:'Полноэкранный показ между WhatsApp Status.'
+    };
+    return map[key] || (placementPlatformLabel(group) + ': позиция ' + placementLabel(key) + '.');
+}
+
+function currentPlacementPreviewMedia() {
+    const input = $('presetMedia');
+    const file = input?.files?.[0] || null;
+    if (previewUrl && file) {
+        return {src:previewUrl, type:String(file.type || '').startsWith('video/') ? 'video' : 'image'};
+    }
+    if (carouselPreviewUrls.length && carouselPreviewUrls[0]) {
+        return {src:carouselPreviewUrls[0], type:'image'};
+    }
+    if (editing?.format === 'SINGLE' && editing?.preview_url) {
+        const type = String(editing?.media?.media_type || editing?.media?.mime_type || '');
+        return {src:String(editing.preview_url), type:/video/i.test(type) ? 'video' : 'image'};
+    }
+    if (editing?.format === 'CAROUSEL') {
+        const first = Array.isArray(editing?.carousel) ? editing.carousel[0] : null;
+        const src = first?.preview_url || first?.media?.preview_url || '';
+        if (src) return {src:String(src), type:'image'};
+    }
+    return null;
+}
+
+function placementPreviewMediaHtml() {
+    const media = currentPlacementPreviewMedia();
+    if (!media?.src) {
+        return '<div class="cr-placement-demo-media-placeholder">YOUR CREATIVE</div>';
+    }
+    if (media.type === 'video') {
+        return '<video src="' + esc(media.src) + '" autoplay muted loop playsinline preload="metadata"></video>';
+    }
+    return '<img src="' + esc(media.src) + '" alt="">';
+}
+
+function placementPreviewCards(mode) {
+    const media = placementPreviewMediaHtml();
+    const ad = '<div class="cr-placement-demo-card cr-placement-demo-ad"><div class="cr-placement-demo-media">' + media + '</div></div>';
+    if (mode === 'grid') {
+        return '<div class="cr-placement-demo-card"></div>' + ad +
+            '<div class="cr-placement-demo-card"></div><div class="cr-placement-demo-card"></div>' +
+            '<div class="cr-placement-demo-card"></div><div class="cr-placement-demo-card"></div>';
+    }
+    if (mode === 'messages') {
+        return '<div class="cr-placement-demo-card"></div><div class="cr-placement-demo-card"></div>' + ad +
+            '<div class="cr-placement-demo-card"></div><div class="cr-placement-demo-card"></div>';
+    }
+    if (mode === 'story' || mode === 'reels' || mode === 'status') return ad;
+    if (mode === 'video') {
+        return '<div class="cr-placement-demo-card"></div>' + ad + '<div class="cr-placement-demo-card"></div>';
+    }
+    return '<div class="cr-placement-demo-card"></div>' + ad +
+        '<div class="cr-placement-demo-card"></div><div class="cr-placement-demo-card"></div>';
+}
+
+function renderPlacementHoverPreview(group, value) {
+    const preview = $('placementHoverPreview');
+    if (!preview) return;
+    const mode = placementPreviewMode(value);
+    const platform = placementPlatformLabel(group);
+    preview.innerHTML =
+        '<div class="cr-placement-preview-head">' +
+            '<div><div class="cr-placement-preview-title">' + esc(platform + ' · ' + placementLabel(value)) + '</div>' +
+            '<div class="cr-placement-preview-meta">Пример размещения рекламы</div></div>' +
+            '<div class="cr-placement-preview-live">PREVIEW</div>' +
+        '</div>' +
+        '<div class="cr-placement-demo ' + esc(mode) + '">' +
+            '<div class="cr-placement-demo-screen">' +
+                '<div class="cr-placement-demo-top"><span class="cr-placement-demo-dot"></span>' + esc(platform) + '</div>' +
+                '<div class="cr-placement-demo-feed">' + placementPreviewCards(mode) + '</div>' +
+                '<div class="cr-placement-demo-column-ad"><div class="cr-placement-demo-media">' + placementPreviewMediaHtml() + '</div></div>' +
+            '</div>' +
+        '</div>' +
+        '<div class="cr-placement-preview-foot">' + esc(placementPreviewDescription(group, value)) + '</div>';
+}
+
+function positionPlacementHoverPreview(anchorEl) {
+    const preview = $('placementHoverPreview');
+    if (!preview || !anchorEl) return;
+    const rect = anchorEl.getBoundingClientRect();
+    const width = 292;
+    const estimatedHeight = 390;
+    let left = rect.right + 12;
+    if (left + width > window.innerWidth - 10) left = rect.left - width - 12;
+    left = Math.max(10, Math.min(left, window.innerWidth - width - 10));
+    let top = rect.top - 44;
+    top = Math.max(10, Math.min(top, window.innerHeight - estimatedHeight - 10));
+    preview.style.left = Math.round(left) + 'px';
+    preview.style.top = Math.round(top) + 'px';
+}
+
+function showPlacementHoverPreview(label) {
+    const input = label?.querySelector?.('[data-position-group]');
+    if (!input || input.disabled) return;
+    const group = String(input.getAttribute('data-position-group') || '');
+    const value = String(input.value || '');
+    if (!group || !value) return;
+    renderPlacementHoverPreview(group, value);
+    positionPlacementHoverPreview(label);
+    const preview = $('placementHoverPreview');
+    if (!preview) return;
+    preview.classList.add('open');
+    preview.setAttribute('aria-hidden','false');
+}
+
+function hidePlacementHoverPreview() {
+    const preview = $('placementHoverPreview');
+    if (!preview) return;
+    preview.classList.remove('open');
+    preview.setAttribute('aria-hidden','true');
+}
+
 function placementGroupContainerId(group) {
     return {
         facebook_positions:'placementFacebookOptions',
@@ -305,7 +467,7 @@ function renderPlacementOptions(options = {}, targeting = null) {
         if (!box) continue;
         const values = Array.isArray(metaPlacementOptions[group]) ? metaPlacementOptions[group] : [];
         box.innerHTML = values.map((value) =>
-            '<label class="cr-check"><input type="checkbox" data-position-group="' + esc(group) +
+            '<label class="cr-check" data-placement-preview="1" title="Наведи для предпросмотра"><input type="checkbox" data-position-group="' + esc(group) +
             '" value="' + esc(value) + '"> ' + esc(placementLabel(value)) + '</label>'
         ).join('') || '<span class="cr-hint">Meta не вернула доступные позиции.</span>';
     }
@@ -1303,6 +1465,27 @@ document.addEventListener('change', (event) => {
 $('refreshPlacements')?.addEventListener('click', () => {
     loadPlacementCapabilities(true);
 });
+const placementPreviewRoot = $('placementPlatformGrid');
+placementPreviewRoot?.addEventListener('mouseover', (event) => {
+    const label = event.target.closest?.('[data-placement-preview="1"]');
+    if (!label || !placementPreviewRoot.contains(label)) return;
+    if (event.relatedTarget && label.contains(event.relatedTarget)) return;
+    showPlacementHoverPreview(label);
+});
+placementPreviewRoot?.addEventListener('mouseout', (event) => {
+    const label = event.target.closest?.('[data-placement-preview="1"]');
+    if (!label || !placementPreviewRoot.contains(label)) return;
+    if (event.relatedTarget && label.contains(event.relatedTarget)) return;
+    hidePlacementHoverPreview();
+});
+placementPreviewRoot?.addEventListener('focusin', (event) => {
+    const label = event.target.closest?.('[data-placement-preview="1"]');
+    if (label) showPlacementHoverPreview(label);
+});
+placementPreviewRoot?.addEventListener('focusout', () => hidePlacementHoverPreview());
+$('creativeModal')?.querySelector?.('.cr-modal')?.addEventListener('scroll', () => hidePlacementHoverPreview(), {passive:true});
+window.addEventListener('resize', () => hidePlacementHoverPreview(), {passive:true});
+
 $('refreshCreatives').addEventListener('click', () => load().catch((error) => alert(error.message)));
 $('creativeGrid').addEventListener('click', (event) => {
     const button = event.target.closest('[data-action]');
