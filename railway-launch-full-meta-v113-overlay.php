@@ -307,17 +307,29 @@ JS;
     $js=$before.$fn.$after;
 
     // Hydrate all additional Launch fields when a saved Creative preset is selected.
-    $hydrateNeedle="    renderCreativeLibraryStatus();\n    invalidateLaunchReview();";
-    $hydrateReplace="    renderCreativeLibraryStatus();\n    remaskPopulateLaunchMetaSdkFields(metaBuilder);\n    invalidateLaunchReview();";
-    if(strpos($js,$hydrateNeedle)===false){
-        fwrite(STDERR,"[launch-full-meta-v113] preset hydrate anchor missing\n");
+    $applyStart=strpos($js,'function applyCreativeLibrarySelection()');
+    $applyEnd=$applyStart===false?false:strpos($js,'async function loadCreativeLibraryForLaunch',$applyStart);
+    if($applyStart===false||$applyEnd===false){
+        fwrite(STDERR,"[launch-full-meta-v113] preset hydrate boundaries missing\n");
         exit(409);
     }
-    $js=str_replace($hydrateNeedle,$hydrateReplace,$js,$hydrateCount);
-    if($hydrateCount!==1){
-        fwrite(STDERR,"[launch-full-meta-v113] preset hydrate count=$hydrateCount\n");
-        exit(410);
+    $applyBefore=substr($js,0,$applyStart);
+    $applyFn=substr($js,$applyStart,$applyEnd-$applyStart);
+    $applyAfter=substr($js,$applyEnd);
+    if(strpos($applyFn,'remaskPopulateLaunchMetaSdkFields(metaBuilder)')===false){
+        $hydrateNeedle="    renderCreativeLibraryStatus();\n    invalidateLaunchReview();";
+        $hydrateReplace="    renderCreativeLibraryStatus();\n    remaskPopulateLaunchMetaSdkFields(metaBuilder);\n    invalidateLaunchReview();";
+        if(strpos($applyFn,$hydrateNeedle)===false){
+            fwrite(STDERR,"[launch-full-meta-v113] preset hydrate anchor missing\n");
+            exit(410);
+        }
+        $applyFn=str_replace($hydrateNeedle,$hydrateReplace,$applyFn,$hydrateCount);
+        if($hydrateCount!==1){
+            fwrite(STDERR,"[launch-full-meta-v113] preset hydrate count=$hydrateCount\n");
+            exit(411);
+        }
     }
+    $js=$applyBefore.$applyFn.$applyAfter;
 
     // Backend receives the same effective builder, not the stale saved preset.
     $formNeedle="    if (libraryPreset?.meta_builder) form.append('meta_builder', JSON.stringify(libraryPreset.meta_builder));";
