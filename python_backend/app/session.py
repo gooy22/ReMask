@@ -22,6 +22,27 @@ class ProfileResolver:
         self.key=internal_key
         self.timeout=aiohttp.ClientTimeout(total=timeout)
 
+    async def list_profiles(self) -> list[dict[str, Any]]:
+        if not self.url:
+            raise ProfileContextError('REMASK_PROFILE_RESOLVER_URL is not configured')
+        headers={'Accept':'application/json'}
+        if self.key:
+            headers['X-Remask-Internal-Key']=self.key
+        try:
+            async with aiohttp.ClientSession(timeout=self.timeout, headers=headers) as client:
+                async with client.get(self.url, params={'action':'list'}) as response:
+                    payload=await response.json(content_type=None)
+                    if response.status >= 400 or not isinstance(payload, dict):
+                        raise ProfileContextError(f'profile resolver list HTTP {response.status}')
+        except asyncio.TimeoutError as exc:
+            raise ProfileContextError('profile resolver list timeout') from exc
+        except aiohttp.ClientError as exc:
+            raise ProfileContextError(f'profile resolver list network error: {exc.__class__.__name__}') from exc
+        profiles=payload.get('profiles') or []
+        if not isinstance(profiles,list):
+            raise ProfileContextError('profile resolver list returned invalid profiles')
+        return [p for p in profiles if isinstance(p,dict)]
+
     async def resolve(self, profile_id: str) -> ProfileContext:
         if not self.url:
             raise ProfileContextError('REMASK_PROFILE_RESOLVER_URL is not configured')
