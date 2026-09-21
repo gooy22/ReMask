@@ -136,7 +136,7 @@ RUN set -eux; \
     grep -q 'creative-targeting-transport.json' /var/www/html/ajax/metaTargetingSearch.php; \
     grep -q 'successful_targeting_call' /var/www/html/ajax/metaTargetingSearch.php; \
     ! grep -q 'cachedPreflight($candidateName, true)' /var/www/html/ajax/metaTargetingSearch.php; \
-    grep -q 'REMASK_ACCOUNTLESS_BEHAVIOR_ACCOUNT_V1' /var/www/html/ajax/metaTargetingSearch.php; \
+    grep -q 'REMASK_ACCOUNTLESS_TARGETING_ACCOUNT_V2' /var/www/html/ajax/metaTargetingSearch.php; \
     grep -q 'REMASK_EFFECTIVE_META_BUILDER_V2' /var/www/html/scripts/launch.js; \
     grep -q 'REMASK_PLACEMENT_PREFLIGHT_V1' /var/www/html/scripts/launch.js; \
     grep -q 'REMASK_FULL_META_LAUNCH_V1' /var/www/html/scripts/launch.js; \
