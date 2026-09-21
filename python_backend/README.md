@@ -49,3 +49,6 @@ Deploy this directory as its own Railway service using `python_backend/Dockerfil
 ## Current boundary
 
 This first stage intentionally wires the queue, persistence, profile isolation, proxy validation, recovery and retry infrastructure before additional task handlers are registered. New handlers are added in `app/runner.py` without changing the Job API.
+
+
+Deployment trigger: worker v0.2 e2e smoke.
