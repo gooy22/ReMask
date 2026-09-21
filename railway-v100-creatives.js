@@ -281,6 +281,24 @@ function renderPlacementOptions(options = {}, targeting = null) {
 
     metaPlacementOptions = options || {};
 
+    const livePublishers = new Set(Array.isArray(metaPlacementOptions.publisher_platforms)
+        ? metaPlacementOptions.publisher_platforms.map(String)
+        : []);
+    const platformToGroup = {
+        facebook:'facebook_positions',
+        instagram:'instagram_positions',
+        messenger:'messenger_positions',
+        audience_network:'audience_network_positions',
+        threads:'threads_positions',
+        whatsapp:'whatsapp_positions'
+    };
+    document.querySelectorAll('[data-placement-card]').forEach((card) => {
+        const platform = String(card.getAttribute('data-placement-card') || '');
+        const group = platformToGroup[platform];
+        const hasPositions = group && Array.isArray(metaPlacementOptions[group]) && metaPlacementOptions[group].length > 0;
+        card.style.display = (livePublishers.has(platform) || hasPositions) ? '' : 'none';
+    });
+
     for (const group of groups) {
         const id = placementGroupContainerId(group);
         const box = id ? $(id) : null;
@@ -343,15 +361,35 @@ function renderPlacementOptions(options = {}, targeting = null) {
 
 async function loadPlacementCapabilities(refresh = false) {
     const seq = ++placementCapabilitiesSeq;
+    const status = $('placementCapabilitiesStatus');
+    const grid = $('placementPlatformGrid');
+    const devices = $('placementDevices');
+    const refreshButton = $('refreshPlacements');
+
+    if (!metaContext.profile || !metaContext.accountId) {
+        if (grid) grid.style.display = 'none';
+        if (devices) devices.style.display = 'none';
+        if (refreshButton) refreshButton.disabled = true;
+        if (status) {
+            status.className = 'cr-hint';
+            status.textContent = 'Выбери FB-профиль и reference RK — placements загрузятся напрямую из Meta.';
+        }
+        return;
+    }
+
+    if (refreshButton) refreshButton.disabled = true;
+    if (status) {
+        status.className = 'cr-hint';
+        status.textContent = 'Meta загружает доступные placements для выбранного RK и воронки…';
+    }
+
     const payload = {
-        profile: metaContext.profile || '',
-        account_id: metaContext.accountId || '',
+        profile: metaContext.profile,
+        account_id: metaContext.accountId,
         objective: $('mbObjective')?.value || '',
         optimization_goal: $('mbOptimizationGoal')?.value || '',
         refresh
     };
-    const status = $('placementCapabilitiesStatus');
-    if (status) status.textContent = metaContext.accountId ? 'Meta проверяет placements…' : 'SDK fallback · выбери reference RK для live Meta placements.';
 
     try {
         const data = await api('ajax/metaPlacementCapabilities.php', {
@@ -360,20 +398,35 @@ async function loadPlacementCapabilities(refresh = false) {
             body:JSON.stringify(payload)
         });
         if (seq !== placementCapabilitiesSeq) return;
+
+        const live = Array.isArray(data?.live_groups) ? data.live_groups.length : 0;
+        if (data?.source !== 'meta_targetingbrowse' || live === 0) {
+            if (grid) grid.style.display = 'none';
+            if (devices) devices.style.display = 'none';
+            if (status) {
+                status.className = 'cr-hint cr-placement-fallback';
+                status.textContent = 'META НЕ ВЕРНУЛА PLACEMENTS' + (data?.warning ? ' · ' + data.warning : '');
+            }
+            return;
+        }
+
         renderPlacementOptions(data?.options || {}, pendingPlacementTargeting);
+        if (grid) grid.style.display = 'grid';
+        if (devices) devices.style.display = (data?.options?.device_platforms || []).length ? 'block' : 'none';
         if (status) {
-            const live = Array.isArray(data?.live_groups) ? data.live_groups.length : 0;
-            status.className = 'cr-hint ' + (data?.source === 'meta_targetingbrowse' ? 'cr-placement-live' : 'cr-placement-fallback');
-            status.textContent = data?.source === 'meta_targetingbrowse'
-                ? ('LIVE META · ' + live + ' групп · ' + (data?.objective || 'без objective'))
-                : ('SDK fallback' + (data?.warning ? ' · ' + data.warning : ''));
+            status.className = 'cr-hint cr-placement-live';
+            status.textContent = 'LIVE META · ' + live + ' групп · ' + (data?.objective || 'без objective');
         }
     } catch (error) {
         if (seq !== placementCapabilitiesSeq) return;
+        if (grid) grid.style.display = 'none';
+        if (devices) devices.style.display = 'none';
         if (status) {
             status.className = 'cr-hint cr-placement-fallback';
-            status.textContent = 'Placement capabilities: ' + error.message;
+            status.textContent = 'META ERROR · ' + error.message;
         }
+    } finally {
+        if (seq === placementCapabilitiesSeq && refreshButton) refreshButton.disabled = false;
     }
 }
 
@@ -696,9 +749,6 @@ function populatePrimaryMetaControls() {
         setMetaSelectOptions('metaPreviewFormat', all, {fallback:'MOBILE_FEED_STANDARD'});
     }
 
-    const targetingEnums = metaSdkSchema?.targeting?.enums || {};
-    constrainTargetingCheckboxes('[data-publisher]', 'data-publisher', targetingEnums.publisher_platforms || []);
-    constrainTargetingCheckboxes('[data-device-platform]', 'data-device-platform', targetingEnums.device_platforms || []);
 }
 
 function normalizeAdAccountId(value) {
