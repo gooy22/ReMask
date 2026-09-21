@@ -244,9 +244,39 @@ require_once __DIR__ . '/checkpassword.php';
           <div class="span-3 cr-field"><label>Age max</label><input id="mbAgeMax" type="number" min="13" max="65" class="form-control" value="65"></div>
           <div class="span-3 cr-field"><label>Gender</label><select id="mbGender" class="form-control"><option value="">All</option><option value="1">Male</option><option value="2">Female</option></select></div>
           <div class="span-3 cr-field"><label>Locales IDs</label><input id="mbLocales" class="form-control" placeholder="6,24"></div>
-          <div class="span-12 cr-muted" style="padding:8px 0 2px">
-            Live GEO / Interests / Behaviors search выполняется в Launch после выбора рекламных кабинетов. Здесь сохраняется универсальный targeting-шаблон.
+          <div class="span-6 cr-target-box" data-targeting>
+            <label>GEO</label>
+            <div class="cr-target-input">
+              <input id="mbGeoSearch" class="form-control" autocomplete="off" placeholder="Страна, регион или город — от 2 символов">
+              <div id="mbGeoResults" class="cr-target-results"></div>
+            </div>
+            <div id="mbGeoPills" class="cr-target-pills"></div>
           </div>
+          <div class="span-6 cr-target-box" data-targeting>
+            <label>Excluded GEO</label>
+            <div class="cr-target-input">
+              <input id="mbExcludedGeoSearch" class="form-control" autocomplete="off" placeholder="Исключить страну, регион или город">
+              <div id="mbExcludedGeoResults" class="cr-target-results"></div>
+            </div>
+            <div id="mbExcludedGeoPills" class="cr-target-pills"></div>
+          </div>
+          <div class="span-6 cr-target-box" data-targeting>
+            <label>Interests</label>
+            <div class="cr-target-input">
+              <input id="mbInterestSearch" class="form-control" autocomplete="off" placeholder="Начни вводить интерес — от 2 символов">
+              <div id="mbInterestResults" class="cr-target-results"></div>
+            </div>
+            <div id="mbInterestPills" class="cr-target-pills"></div>
+          </div>
+          <div class="span-6 cr-target-box" data-targeting>
+            <label>Behaviors</label>
+            <div class="cr-target-input">
+              <input id="mbBehaviorSearch" class="form-control" autocomplete="off" placeholder="Начни вводить поведение — от 2 символов">
+              <div id="mbBehaviorResults" class="cr-target-results"></div>
+            </div>
+            <div id="mbBehaviorPills" class="cr-target-pills"></div>
+          </div>
+          <div class="span-12 cr-muted">Подсказки загружаются из Meta автоматически. FB-профиль/RK в этом разделе выбирать не нужно.</div>
           <details class="cr-raw-targeting">
             <summary>Расширенный Targeting JSON (официальные Meta-поля)</summary>
             <div class="cr-form-grid">
@@ -397,7 +427,7 @@ require_once __DIR__ . '/checkpassword.php';
 </div>
 </div>
 
-<script src="scripts/creatives.js?v=20260921-placement-hover-preview-v108" type="module"></script>
+<script src="scripts/creatives.js?v=20260921-live-targeting-v109" type="module"></script>
 <div class="app-footer"><?php include 'copyright.php' ?></div>
 </main>
 </body>
