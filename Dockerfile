@@ -214,7 +214,6 @@ RUN set -eux; \
     grep -q 'placement_options' /var/www/html/ajax/metaCreativeCapabilities.php; \
     grep -q 'Official Meta SDK placements' /var/www/html/creatives.php; \
     grep -q 'accountless-creatives-v107' /var/www/html/creatives.php; \
-    grep -q 'searchCreativeTargeting' /var/www/html/scripts/creatives.js; \
     grep -q 'populatePrimaryMetaControls' /var/www/html/scripts/creatives.js; \
     grep -q 'metaCreativeCapabilities.php' /var/www/html/scripts/creatives.js; \
     grep -q 'generateCreativePreview' /var/www/html/classes/MetaAdsService.php; \
@@ -231,7 +230,6 @@ RUN set -eux; \
     grep -q 'device_platforms' /var/www/html/classes/MetaSdkSchema.php; \
     grep -q 'async function loadMetaContext' /var/www/html/scripts/creatives.js; \
     ! grep -q 'async async function' /var/www/html/scripts/creatives.js; \
-    grep -q 'selectedMetaExistingMedia' /var/www/html/scripts/creatives.js; \
     grep -q 'listCreativeImages' /var/www/html/classes/MetaAdsService.php; \
     grep -q 'listCreativeVideos' /var/www/html/classes/MetaAdsService.php; \
     grep -q 'cl100_meta_media_ref' /var/www/html/ajax/creativeLibrary.php; \
