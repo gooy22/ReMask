@@ -33,6 +33,7 @@ COPY railway-live-targeting-overlay.php /tmp/railway-live-targeting-overlay.php
 COPY railway-behaviors-backend-overlay.php /tmp/railway-behaviors-backend-overlay.php
 COPY railway-behaviors-ui-overlay.php /tmp/railway-behaviors-ui-overlay.php
 COPY railway-targeting-russian-overlay.php /tmp/railway-targeting-russian-overlay.php
+COPY railway-creative-targeting-v109-overlay.php /tmp/railway-creative-targeting-v109-overlay.php
 COPY railway-creative-library-overlay.php /tmp/railway-creative-library-overlay.php
 COPY railway-v100-creativeLibrary.php /tmp/remask-v100-creativeLibrary.php
 COPY railway-v100-creativePreview.php /tmp/remask-v100-creativePreview.php
@@ -80,6 +81,8 @@ RUN set -eux; \
     php /tmp/railway-behaviors-ui-overlay.php; \
     php -l /tmp/railway-targeting-russian-overlay.php; \
     php /tmp/railway-targeting-russian-overlay.php; \
+    php -l /tmp/railway-creative-targeting-v109-overlay.php; \
+    php /tmp/railway-creative-targeting-v109-overlay.php; \
     php -l /tmp/railway-creative-library-overlay.php; \
     php /tmp/railway-creative-library-overlay.php; \
     php -l /tmp/remask-v100-creativeLibrary.php; \
@@ -114,6 +117,14 @@ RUN set -eux; \
     php -l /var/www/html/ajax/metaAudienceEstimate.php; \
     php -l /var/www/html/ajax/metaCreativePreview.php; \
     php -l /var/www/html/ajax/metaPlacementCapabilities.php; \
+    php -l /var/www/html/ajax/metaTargetingSearch.php; \
+    grep -q 'REMASK_ACCOUNTLESS_TARGETING_V1' /var/www/html/ajax/metaTargetingSearch.php; \
+    grep -q 'mbGeoSearch' /var/www/html/creatives.php; \
+    grep -q 'mbExcludedGeoSearch' /var/www/html/creatives.php; \
+    grep -q 'mbInterestSearch' /var/www/html/creatives.php; \
+    grep -q 'mbBehaviorSearch' /var/www/html/creatives.php; \
+    grep -q 'searchCreativeTargeting' /var/www/html/scripts/creatives.js; \
+    grep -q 'live-targeting-v109' /var/www/html/creatives.php; \
     grep -q 'REMASK_PLACEMENT_CAPABILITIES_V1' /var/www/html/classes/MetaAdsService.php; \
     grep -q 'targetingbrowse' /var/www/html/classes/MetaAdsService.php; \
     grep -q 'placementOptions' /var/www/html/classes/MetaSdkSchema.php; \
