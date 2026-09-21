@@ -545,17 +545,19 @@ function idsToAudience(value) {
 
 
 function creativeTargetIdentity(kind, item) {
-    if (kind === 'geo') return [item?.type || '', item?.key || item?.country_code || item?.name || ''].join(':');
-    return String(item?.id || '');
+    if (kind === 'geo' || kind === 'excludedGeo') {
+        return [item?.type || '', item?.key || item?.country_code || item?.name || ''].join(':');
+    }
+    return String(item?.id || item?.key || '');
 }
 
 function creativeTargetLabel(kind, item) {
-    if (kind === 'geo') {
+    if (kind === 'geo' || kind === 'excludedGeo') {
         const main = item?.name || item?.country_code || item?.key || 'GEO';
         const meta = [item?.type, item?.country_code, item?.region].filter(Boolean).join(' · ');
         return {main:String(main), meta:String(meta)};
     }
-    return {main:String(item?.name || item?.id || ''), meta:String(item?.id || '')};
+    return {main:String(item?.name || item?.id || item?.key || ''), meta:String(item?.id || item?.key || '')};
 }
 
 function renderCreativeTargetPills(kind) {
