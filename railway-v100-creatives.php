@@ -427,7 +427,7 @@ require_once __DIR__ . '/checkpassword.php';
 </div>
 </div>
 
-<script src="scripts/creatives.js?v=20260921-placement-matrix-v106" type="module"></script>
+<script src="scripts/creatives.js?v=20260921-placement-matrix-v106-1" type="module"></script>
 <div class="app-footer"><?php include 'copyright.php' ?></div>
 </main>
 </body>
