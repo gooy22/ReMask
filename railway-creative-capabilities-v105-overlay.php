@@ -253,6 +253,7 @@ try {
         'cta_types' => $ctaTypes,
         'preview_formats' => $previewFormats,
         'standard_conversion_events' => $standardEvents,
+        'placement_options' => MetaSdkSchema::placementOptions(),
         'profiles' => $profiles,
         'profile' => $profile,
         'account_id' => $accountId,
