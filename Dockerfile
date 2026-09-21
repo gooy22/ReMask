@@ -46,6 +46,7 @@ COPY railway-v102-MetaSdkSchema.php /tmp/remask-v102-MetaSdkSchema.php
 COPY railway-meta-schema-ui-v103-overlay.php /tmp/railway-meta-schema-ui-v103-overlay.php
 COPY railway-creative-capabilities-v105-overlay.php /tmp/railway-creative-capabilities-v105-overlay.php
 COPY railway-placement-capabilities-v106-overlay.php /tmp/railway-placement-capabilities-v106-overlay.php
+COPY railway-launch-full-meta-v113-overlay.php /tmp/railway-launch-full-meta-v113-overlay.php
 COPY railway-selection-persistence-overlay.php /tmp/railway-selection-persistence-overlay.php
 COPY railway-profile-error-fix-overlay.php /tmp/railway-profile-error-fix-overlay.php
 COPY docker-start.sh /tmp/docker-start.sh
@@ -100,6 +101,8 @@ RUN set -eux; \
     php /tmp/railway-creative-capabilities-v105-overlay.php; \
     php -l /tmp/railway-placement-capabilities-v106-overlay.php; \
     php /tmp/railway-placement-capabilities-v106-overlay.php; \
+    php -l /tmp/railway-launch-full-meta-v113-overlay.php; \
+    php /tmp/railway-launch-full-meta-v113-overlay.php; \
     php /tmp/railway-selection-persistence-overlay.php; \
     php /tmp/railway-profile-error-fix-overlay.php; \
     php -r '$allowedRaw=["/var/www/html/classes/MetaApiClient.php"=>true,"/var/www/html/classes/FbRequests.php"=>true,"/var/www/html/classes/ProxyHealthService.php"=>true]; $allowedLegacy=["/var/www/html/ajax/payUnsettled.php"=>true,"/var/www/html/ajax/policyAppeal.php"=>true,"/var/www/html/ajax/disapproveAppeal.php"=>true]; $violations=[]; foreach(["/var/www/html/ajax","/var/www/html/classes","/var/www/html/bin"] as $root){$it=new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root,FilesystemIterator::SKIP_DOTS)); foreach($it as $fi){if(!$fi->isFile()||$fi->getExtension()!=="php")continue;$path=$fi->getPathname();$s=file_get_contents($path);if((str_contains($s,"graph.facebook.com")||str_contains($s,"curl_init("))&&!isset($allowedRaw[$path]))$violations[]="raw-meta-transport:".$path;if($fi->getFilename()!=="FbRequests.php"&&preg_match("/new\\s+FbRequests\\s*\\(/",$s)&&!isset($allowedLegacy[$path]))$violations[]="legacy-fbrequests-ref:".$path;}} if($violations){fwrite(STDERR,"Meta transport invariant failed: ".implode(", ",$violations)."\\n");exit(91);} fwrite(STDERR,"[transport-invariant] canonical Graph transport enforced; legacy browser transport limited to payment/appeal endpoints\\n");'; \
@@ -126,6 +129,10 @@ RUN set -eux; \
     grep -q 'REMASK_ACCOUNTLESS_BEHAVIOR_ACCOUNT_V1' /var/www/html/ajax/metaTargetingSearch.php; \
     grep -q 'REMASK_EFFECTIVE_META_BUILDER_V2' /var/www/html/scripts/launch.js; \
     grep -q 'REMASK_PLACEMENT_PREFLIGHT_V1' /var/www/html/scripts/launch.js; \
+    grep -q 'REMASK_FULL_META_LAUNCH_V1' /var/www/html/scripts/launch.js; \
+    grep -q 'launchMetaSdkFields' /var/www/html/launch.php; \
+    grep -q 'remaskCurrentMetaBuilderForJob' /var/www/html/scripts/launch.js; \
+    grep -q 'full-meta-v113' /var/www/html/launch.php; \
     grep -Fq "kind === 'geo' || kind === 'excludedGeo'" /var/www/html/scripts/creatives.js; \
     grep -q "state.behaviors = Array.isArray(targeting.behaviors)" /var/www/html/scripts/launch.js; \
     grep -q 'mbGeoSearch' /var/www/html/creatives.php; \
