@@ -18,7 +18,16 @@ error_reporting(E_ALL);
 
 ob_start();
 require_once __DIR__ . '/../settings.php';
-require_once __DIR__ . '/../checkpassword.php';
+
+$expectedInternal = trim((string)(getenv('REMASK_INTERNAL_KEY') ?: ''));
+$providedInternal = trim((string)($_SERVER['HTTP_X_REMASK_INTERNAL_KEY'] ?? ''));
+$internalAuthorized = $expectedInternal !== ''
+    && $providedInternal !== ''
+    && hash_equals($expectedInternal, $providedInternal);
+
+if (!$internalAuthorized) {
+    require_once __DIR__ . '/../checkpassword.php';
+}
 while (ob_get_level() > 0) { @ob_end_clean(); }
 
 header('Content-Type: application/json; charset=utf-8');
