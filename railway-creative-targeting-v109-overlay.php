@@ -33,7 +33,7 @@ if(strpos($src,'REMASK_ACCOUNTLESS_TARGETING_V1')===false){
     $match=$m[0][0];
     $replacement=$match."\n".
 "    /* REMASK_ACCOUNTLESS_TARGETING_V1 */\n".
-"    /* REMASK_ACCOUNTLESS_TRANSPORT_POOL_V2 */\n".
+"    /* REMASK_ACCOUNTLESS_TRANSPORT_POOL_V3 */\n".
 "    if (\$profile === '') {\n".
 "        \$store = AccountStoreFactory::create(ACCOUNTSFILENAME);\n".
 "        \$stored = [];\n".
@@ -54,42 +54,27 @@ if(strpos($src,'REMASK_ACCOUNTLESS_TARGETING_V1')===false){
 "            : [];\n".
 "        if (!is_array(\$transportCache)) \$transportCache = [];\n".
 "\n".
-"        \$orderedNames = [];\n".
 "        \$cachedName = trim((string)(\$transportCache['profile'] ?? ''));\n".
 "        \$cachedAt = (int)(\$transportCache['verified_at'] ?? 0);\n".
-"        if (\$cachedName !== '' && isset(\$stored[\$cachedName]) && (time() - \$cachedAt) < 30) {\n".
-"            \$orderedNames[] = \$cachedName;\n".
-"        }\n".
-"        foreach (\$stored as \$candidateName => \$candidate) {\n".
-"            if (\$candidate->proxy === null && !in_array(\$candidateName, \$orderedNames, true)) {\n".
-"                \$orderedNames[] = \$candidateName;\n".
-"            }\n".
-"        }\n".
-"        foreach (array_keys(\$stored) as \$candidateName) {\n".
-"            if (!in_array(\$candidateName, \$orderedNames, true)) \$orderedNames[] = \$candidateName;\n".
-"        }\n".
-"\n".
-"        \$transportErrors = [];\n".
-"        foreach (\$orderedNames as \$candidateName) {\n".
-"            try {\n".
-"                if (\$candidateName !== \$cachedName || (time() - \$cachedAt) >= 30) {\n".
-"                    MetaEndpoint::cachedPreflight(\$candidateName, true);\n".
-"                    @file_put_contents(\$transportCacheFile, json_encode([\n".
-"                        'profile' => \$candidateName,\n".
-"                        'verified_at' => time(),\n".
-"                    ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));\n".
+"        if (\$cachedName !== '' && isset(\$stored[\$cachedName]) && (time() - \$cachedAt) < 900) {\n".
+"            \$profile = \$cachedName;\n".
+"        } else {\n".
+"            // Targeting autocomplete must stay fast: never run a full Meta preflight here.\n".
+"            // Prefer a saved profile without a proxy, otherwise use the first stored profile.\n".
+"            foreach (\$stored as \$candidateName => \$candidate) {\n".
+"                if (\$candidate->proxy === null) {\n".
+"                    \$profile = \$candidateName;\n".
+"                    break;\n".
 "                }\n".
-"                \$profile = \$candidateName;\n".
-"                break;\n".
-"            } catch (Throwable \$transportError) {\n".
-"                \$message = trim((string)\$transportError->getMessage());\n".
-"                if (\$message !== '') \$transportErrors[] = \$candidateName . ': ' . \$message;\n".
 "            }\n".
+"            if (\$profile === '') \$profile = (string)array_key_first(\$stored);\n".
+"            @file_put_contents(\$transportCacheFile, json_encode([\n".
+"                'profile' => \$profile,\n".
+"                'verified_at' => time(),\n".
+"                'source' => 'fast_targeting_transport',\n".
+"            ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));\n".
 "        }\n".
-"        if (\$profile === '') {\n".
-"            \$last = \$transportErrors !== [] ? end(\$transportErrors) : 'no usable transport';\n".
-"            throw new RuntimeException('No working Meta profile transport for targeting search. ' . \$last);\n".
-"        }\n".
+"        if (\$profile === '') throw new RuntimeException('No Meta profile transport is available for targeting search.');\n".
 "    }";
     $src=preg_replace($profilePattern,$replacement,$src,1,$count) ?? $src;
     if($count!==1){fwrite(STDERR,"[creative-targeting-v109] profile patch count=$count\n");exit(374);}
@@ -129,4 +114,4 @@ PHP_CODE;
 
     file_put_contents($endpoint,$src);
 }
-fwrite(STDERR,"[creative-targeting-v109] working-profile transport pool + accountless Behaviors context enabled\n");
+fwrite(STDERR,"[creative-targeting-v109] fast cached targeting transport + accountless Behaviors context enabled\n");
