@@ -14,9 +14,9 @@ let placementCapabilitiesTimer = null;
 let placementCapabilitiesSeq = 0;
 let metaPlacementOptions = {};
 let pendingPlacementTargeting = null;
-const creativeTargetingSelections = {geo:[], excludedGeo:[], interests:[], behaviors:[]};
-const creativeTargetingTimers = {geo:0, excludedGeo:0, interests:0, behaviors:0};
-const creativeTargetingControllers = {geo:null, excludedGeo:null, interests:null, behaviors:null};
+const creativeTargetingSelections = {geo:[], excludedGeo:[], interests:[], behaviors:[], languages:[]};
+const creativeTargetingTimers = {geo:0, excludedGeo:0, interests:0, behaviors:0, languages:0};
+const creativeTargetingControllers = {geo:null, excludedGeo:null, interests:null, behaviors:null, languages:null};
 const coveredMetaFields = {
     campaign: new Set(['name','objective','buying_type','special_ad_categories','bid_strategy','daily_budget','lifetime_budget','spend_cap','start_time','stop_time','status']),
     adset: new Set(['name','optimization_goal','billing_event','bid_strategy','bid_amount','destination_type','daily_budget','lifetime_budget','start_time','end_time','attribution_spec','promoted_object','is_dynamic_creative','is_incremental_attribution_enabled','status']),
@@ -561,7 +561,7 @@ function creativeTargetLabel(kind, item) {
 }
 
 function renderCreativeTargetPills(kind) {
-    const ids = {geo:'mbGeoPills', excludedGeo:'mbExcludedGeoPills', interests:'mbInterestPills', behaviors:'mbBehaviorPills'};
+    const ids = {geo:'mbGeoPills', excludedGeo:'mbExcludedGeoPills', interests:'mbInterestPills', behaviors:'mbBehaviorPills', languages:'mbLanguagePills'};
     const box = $(ids[kind]);
     if (!box) return;
     const rows = creativeTargetingSelections[kind] || [];
@@ -639,6 +639,11 @@ function syncCreativeTargetingRaw(kind) {
         $('mbBehaviors').value = stringify((creativeTargetingSelections.behaviors || []).map((row) => ({
             id:String(row.id || ''), name:String(row.name || row.id || '')
         })).filter((row) => row.id));
+    } else if (kind === 'languages') {
+        const values = (creativeTargetingSelections.languages || [])
+            .map((row) => Number(row?.key ?? row?.id))
+            .filter((value) => Number.isInteger(value) && value > 0);
+        $('mbLocales').value = [...new Set(values)].join(',');
     }
 }
 
@@ -647,6 +652,7 @@ function hydrateCreativeTargetingSelections() {
     creativeTargetingSelections.excludedGeo = [];
     creativeTargetingSelections.interests = [];
     creativeTargetingSelections.behaviors = [];
+    creativeTargetingSelections.languages = [];
 
     try {
         const geo = parseJsonField('mbGeo', {});
@@ -690,10 +696,17 @@ function hydrateCreativeTargetingSelections() {
         if (Array.isArray(behaviors)) creativeTargetingSelections.behaviors = behaviors.filter((row) => row && (row.id || typeof row === 'string')).map((row) => typeof row === 'string' ? {id:row,name:row} : row);
     } catch {}
 
+    creativeTargetingSelections.languages = csvInts($('mbLocales')?.value || '').map((id) => ({
+        id:String(id),
+        key:Number(id),
+        name:'Язык #' + id
+    }));
+
     renderCreativeTargetPills('geo');
     renderCreativeTargetPills('excludedGeo');
     renderCreativeTargetPills('interests');
     renderCreativeTargetPills('behaviors');
+    renderCreativeTargetPills('languages');
 }
 
 function addCreativeTarget(kind, item) {
@@ -711,7 +724,8 @@ function creativeTargetSearchConfig(kind) {
         geo:{input:'mbGeoSearch', results:'mbGeoResults', apiType:'locations'},
         excludedGeo:{input:'mbExcludedGeoSearch', results:'mbExcludedGeoResults', apiType:'locations'},
         interests:{input:'mbInterestSearch', results:'mbInterestResults', apiType:'interests'},
-        behaviors:{input:'mbBehaviorSearch', results:'mbBehaviorResults', apiType:'behaviors'}
+        behaviors:{input:'mbBehaviorSearch', results:'mbBehaviorResults', apiType:'behaviors'},
+        languages:{input:'mbLanguageSearch', results:'mbLanguageResults', apiType:'languages'}
     }[kind];
 }
 
@@ -1569,7 +1583,8 @@ installCreativeTargetSearch('geo');
 installCreativeTargetSearch('excludedGeo');
 installCreativeTargetSearch('interests');
 installCreativeTargetSearch('behaviors');
-for (const id of ['mbGeo','mbExcludedGeo','mbInterests','mbBehaviors']) {
+installCreativeTargetSearch('languages');
+for (const id of ['mbGeo','mbExcludedGeo','mbInterests','mbBehaviors','mbLocales']) {
     $(id)?.addEventListener('change', () => {
         hydrateCreativeTargetingSelections();
     });
