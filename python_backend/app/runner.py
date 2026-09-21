@@ -6,6 +6,7 @@ import os
 from collections import defaultdict
 from typing import Any, Awaitable, Callable
 
+from .mirror import MirrorError, SnapshotMirror
 from .session import ProfileResolver, ProfileSession, ProfileContextError, ProxyCheckError
 from .store import JobStore
 
@@ -29,8 +30,9 @@ async def _proxy_check(session: ProfileSession, payload: dict[str,Any]) -> dict[
     return await session.proxy_check()
 
 class WorkerPool:
-    def __init__(self, store: JobStore, concurrency: int = 30) -> None:
+    def __init__(self, store: JobStore, mirror: SnapshotMirror | None = None, concurrency: int = 30) -> None:
         self.store=store
+        self.mirror=mirror
         self.concurrency=max(1,concurrency)
         self.queue: asyncio.Queue[str]=asyncio.Queue()
         self.profile_locks: defaultdict[str,asyncio.Lock]=defaultdict(asyncio.Lock)
@@ -103,3 +105,12 @@ class WorkerPool:
                     await self.store.set_task_failed(first['id'],'PROFILE_CONTEXT_ERROR',str(exc))
             finally:
                 await self.store.finalize_item(item_id)
+                if self.mirror and self.mirror.enabled:
+                    current = await self.store.item(item_id)
+                    if current:
+                        view = await self.store.job_view(str(current['job_id']))
+                        if view:
+                            try:
+                                await self.mirror.save_job(view)
+                            except MirrorError as exc:
+                                log.error('job mirror save failed job=%s: %s', current['job_id'], exc)
