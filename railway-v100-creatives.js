@@ -198,10 +198,68 @@ function syncPlacementCardStates() {
         const enabled = Boolean(publisher?.checked);
         card.classList.toggle('disabled', !enabled);
         card.querySelectorAll('[data-position-all],[data-position-group]').forEach((el) => {
-            const group = el.getAttribute('data-position-all') || el.getAttribute('data-position-group');
-            const all = document.querySelector('[data-position-all="' + group + '"]');
-            el.disabled = !enabled || (el.hasAttribute('data-position-group') && Boolean(all?.checked));
+            el.disabled = !enabled;
         });
+    });
+}
+
+function setPlacementGroupAll(group, checked) {
+    const all = document.querySelector('[data-position-all="' + group + '"]');
+    if (all) all.checked = Boolean(checked);
+    document.querySelectorAll('[data-position-group="' + group + '"]').forEach((el) => {
+        el.checked = Boolean(checked);
+    });
+}
+
+function refreshPlacementGroupAll(group) {
+    const items = Array.from(document.querySelectorAll('[data-position-group="' + group + '"]'))
+        .filter((el) => !el.disabled);
+    const all = document.querySelector('[data-position-all="' + group + '"]');
+    if (!all) return;
+    all.checked = items.length > 0 && items.every((el) => el.checked);
+}
+
+function initializeManualPlacementsIfEmpty() {
+    if (placementMode() !== 'manual') return;
+    const selectedPublishers = selectedValues('[data-publisher]', 'data-publisher');
+    if (selectedPublishers.length > 0) {
+        syncPlacementCardStates();
+        return;
+    }
+
+    document.querySelectorAll('[data-publisher]').forEach((el) => {
+        const platform = String(el.getAttribute('data-publisher') || '');
+        const group = {
+            facebook:'facebook_positions',
+            instagram:'instagram_positions',
+            messenger:'messenger_positions',
+            audience_network:'audience_network_positions',
+            threads:'threads_positions',
+            whatsapp:'whatsapp_positions'
+        }[platform];
+        const hasOptions = group && document.querySelectorAll('[data-position-group="' + group + '"]').length > 0;
+        el.checked = Boolean(hasOptions);
+    });
+
+    syncPlacementCardStates();
+
+    for (const group of [
+        'facebook_positions','instagram_positions','messenger_positions',
+        'audience_network_positions','threads_positions','whatsapp_positions'
+    ]) {
+        const publisher = document.querySelector('[data-publisher="' + ({
+            facebook_positions:'facebook',
+            instagram_positions:'instagram',
+            messenger_positions:'messenger',
+            audience_network_positions:'audience_network',
+            threads_positions:'threads',
+            whatsapp_positions:'whatsapp'
+        }[group]) + '"]');
+        if (publisher?.checked) setPlacementGroupAll(group, true);
+    }
+
+    document.querySelectorAll('[data-device-platform]').forEach((el) => {
+        el.checked = true;
     });
 }
 
@@ -280,6 +338,7 @@ function renderPlacementOptions(options = {}, targeting = null) {
     }
 
     syncPlacementCardStates();
+    if (!source && placementMode() === 'manual') initializeManualPlacementsIfEmpty();
 }
 
 async function loadPlacementCapabilities(refresh = false) {
@@ -1839,6 +1898,7 @@ for (const id of audienceEstimateIds) {
 document.querySelectorAll('input[name="placementMode"]').forEach((el) => {
     el.addEventListener('change', () => {
         setPlacementMode(placementMode());
+        if (placementMode() === 'manual') initializeManualPlacementsIfEmpty();
         scheduleAudienceEstimate(80);
     });
 });
@@ -1854,11 +1914,18 @@ document.addEventListener('change', (event) => {
     const target = event.target;
     if (!(target instanceof HTMLInputElement)) return;
     if (target.hasAttribute('data-position-all')) {
-        syncPlacementCardStates();
+        const group = String(target.getAttribute('data-position-all') || '');
+        setPlacementGroupAll(group, target.checked);
         scheduleAudienceEstimate(80);
         return;
     }
-    if (target.hasAttribute('data-position-group') || target.hasAttribute('data-device-platform')) {
+    if (target.hasAttribute('data-position-group')) {
+        const group = String(target.getAttribute('data-position-group') || '');
+        refreshPlacementGroupAll(group);
+        scheduleAudienceEstimate(80);
+        return;
+    }
+    if (target.hasAttribute('data-device-platform')) {
         scheduleAudienceEstimate(80);
     }
 });
