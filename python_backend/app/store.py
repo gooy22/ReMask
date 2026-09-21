@@ -86,9 +86,12 @@ class JobStore:
                 con.execute('INSERT INTO job_items(id,job_id,profile_id,status,created_at,updated_at) VALUES(?,?,?,?,?,?)',
                             (item_id,job_id,profile.profile_id,'QUEUED',now,now))
                 for pos, task in enumerate(profile.tasks):
+                    execution_payload = dict(task.payload)
+                    task_dump = task.model_dump(exclude={'action','payload','idempotency_key'}, exclude_none=True)
+                    execution_payload.update(task_dump)
                     con.execute('''INSERT INTO job_tasks(id,item_id,position,action,payload_json,idempotency_key,status,created_at,updated_at)
                                    VALUES(?,?,?,?,?,?,?,?,?)''',
-                                (uuid.uuid4().hex,item_id,pos,task.action,json.dumps(task.payload,separators=(',',':')),
+                                (uuid.uuid4().hex,item_id,pos,task.action,json.dumps(execution_payload,separators=(',',':')),
                                  task.idempotency_key,'QUEUED',now,now))
             return job_id, True
 
