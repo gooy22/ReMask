@@ -274,7 +274,7 @@ RUN set -eux; \
     php -r 'require "/var/www/html/classes/MetaOfficialFields.php"; $base=["campaign"=>[],"adset"=>["targeting"=>[]],"creative"=>[],"ad"=>[]]; foreach([["image_hash"=>"abcDEF_123"],["video_id"=>"123456"],["creative_id"=>"987654"]] as $m){$p=MetaOfficialFields::applyBuilderToPayload($base,["existing_media"=>$m]);$c=$p["creative"]; if(isset($m["image_hash"])&&($c["existing_image_hash"]??"")!==$m["image_hash"])exit(71); if(isset($m["video_id"])&&($c["existing_video_id"]??"")!==$m["video_id"])exit(72); if(isset($m["creative_id"])&&($c["existing_creative_id"]??"")!==$m["creative_id"])exit(73);}'; \
     grep -q 'ad_creatives' /var/www/html/ajax/metaCreativeCapabilities.php; \
     grep -q "'video_id'" /var/www/html/classes/MetaOfficialFields.php; \
-    grep -q 'full-meta-v113' /var/www/html/launch.php; \
+    grep -q 'meta-editors-v114' /var/www/html/launch.php; \
     php -l /var/www/html/classes/MetaSdkSchema.php; \
     php -l /var/www/html/ajax/metaSdkSchema.php; \
     grep -q 'metaSdkFields' /var/www/html/creatives.php; \
