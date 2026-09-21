@@ -119,9 +119,10 @@ RUN set -eux; \
     php -l /var/www/html/ajax/metaPlacementCapabilities.php; \
     php -l /var/www/html/ajax/metaTargetingSearch.php; \
     grep -q 'REMASK_ACCOUNTLESS_TARGETING_V1' /var/www/html/ajax/metaTargetingSearch.php; \
-    grep -q 'REMASK_ACCOUNTLESS_TRANSPORT_POOL_V2' /var/www/html/ajax/metaTargetingSearch.php; \
+    grep -q 'REMASK_ACCOUNTLESS_TRANSPORT_POOL_V3' /var/www/html/ajax/metaTargetingSearch.php; \
     grep -q 'creative-targeting-transport.json' /var/www/html/ajax/metaTargetingSearch.php; \
-    grep -q 'cachedPreflight($candidateName, true)' /var/www/html/ajax/metaTargetingSearch.php; \
+    grep -q 'fast_targeting_transport' /var/www/html/ajax/metaTargetingSearch.php; \
+    ! grep -q 'cachedPreflight($candidateName, true)' /var/www/html/ajax/metaTargetingSearch.php; \
     grep -q 'REMASK_ACCOUNTLESS_BEHAVIOR_ACCOUNT_V1' /var/www/html/ajax/metaTargetingSearch.php; \
     grep -q 'REMASK_EFFECTIVE_META_BUILDER_V2' /var/www/html/scripts/launch.js; \
     grep -q 'REMASK_PLACEMENT_PREFLIGHT_V1' /var/www/html/scripts/launch.js; \
