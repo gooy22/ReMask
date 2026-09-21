@@ -93,8 +93,11 @@ function rmx_pwj_worker_request(string $method, string $path, ?array $payload = 
     $decoded = json_decode($raw, true);
     if (!is_array($decoded)) throw new RuntimeException('PYTHON_WORKER_INVALID_JSON');
     if ($status < 200 || $status >= 300) {
-        $detail = trim((string)($decoded['detail'] ?? $decoded['error'] ?? ('HTTP ' . $status)));
-        throw new RuntimeException('PYTHON_WORKER_HTTP_' . $status . ': ' . $detail);
+        $detailValue = $decoded['detail'] ?? $decoded['error'] ?? ('HTTP ' . $status);
+        $detail = is_scalar($detailValue)
+            ? trim((string)$detailValue)
+            : json_encode($detailValue, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        throw new RuntimeException('PYTHON_WORKER_HTTP_' . $status . ': ' . ($detail ?: ('HTTP ' . $status)));
     }
     return $decoded;
 }
@@ -107,6 +110,19 @@ try {
         $profiles = $input['profiles'] ?? null;
         if (!is_array($profiles) || $profiles === []) {
             rmx_pwj_out(['ok'=>false,'error'=>'PROFILES_REQUIRED'], 400);
+        }
+
+        // Preserve JSON object semantics for empty task payloads.
+        foreach ($profiles as $pi => $profileRow) {
+            if (!is_array($profileRow)) continue;
+            $tasks = $profileRow['tasks'] ?? [];
+            if (!is_array($tasks)) continue;
+            foreach ($tasks as $ti => $taskRow) {
+                if (!is_array($taskRow)) continue;
+                if (!array_key_exists('payload', $taskRow) || $taskRow['payload'] === []) {
+                    $profiles[$pi]['tasks'][$ti]['payload'] = (object)[];
+                }
+            }
         }
 
         $payload = ['profiles'=>$profiles];
