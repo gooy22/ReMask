@@ -96,10 +96,10 @@ if(strpos($endpoint,'public function searchLocales(')===false){
         {
             /*
              * Locale discovery is a distinct Meta /search capability.
-             * Do not poison the generic targeting transport cache when only
-             * adlocale fails for a profile.
+             * Preserve the original Meta exception so code/subcode/fbtrace_id
+             * are not flattened into a generic RuntimeException.
              */
-            $errors = [];
+            $lastError = null;
             foreach ($this->candidates as $profile) {
                 try {
                     $real = MetaEndpoint::serviceForAccountName($profile);
@@ -107,11 +107,11 @@ if(strpos($endpoint,'public function searchLocales(')===false){
                     $this->cacheSuccess($profile);
                     return is_array($result) ? $result : [];
                 } catch (Throwable $e) {
-                    $errors[] = $profile . ': ' . trim((string)$e->getMessage());
+                    $lastError = $e;
                 }
             }
-            $last = $errors !== [] ? end($errors) : 'no candidate transports';
-            throw new RuntimeException('All Meta locale transports failed. ' . $last);
+            if ($lastError instanceof Throwable) throw $lastError;
+            throw new RuntimeException('No Meta locale transport candidate is available.');
         }
 
 PHP_CODE;
