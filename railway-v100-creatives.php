@@ -196,29 +196,8 @@ require_once __DIR__ . '/checkpassword.php';
           <div class="span-3 cr-field"><label>Age max</label><input id="mbAgeMax" type="number" min="13" max="65" class="form-control" value="65"></div>
           <div class="span-3 cr-field"><label>Gender</label><select id="mbGender" class="form-control"><option value="">All</option><option value="1">Male</option><option value="2">Female</option></select></div>
           <div class="span-3 cr-field"><label>Locales IDs</label><input id="mbLocales" class="form-control" placeholder="6,24"></div>
-          <div class="span-4 cr-target-box">
-            <label>GEO — поиск Meta</label>
-            <div class="cr-target-input">
-              <input id="mbGeoSearch" class="form-control" autocomplete="off" placeholder="Страна, регион или город">
-              <div id="mbGeoResults" class="cr-target-results"></div>
-            </div>
-            <div id="mbGeoPills" class="cr-target-pills"></div>
-          </div>
-          <div class="span-4 cr-target-box">
-            <label>Interests — поиск Meta</label>
-            <div class="cr-target-input">
-              <input id="mbInterestSearch" class="form-control" autocomplete="off" placeholder="Минимум 2 символа">
-              <div id="mbInterestResults" class="cr-target-results"></div>
-            </div>
-            <div id="mbInterestPills" class="cr-target-pills"></div>
-          </div>
-          <div class="span-4 cr-target-box">
-            <label>Behaviors — поиск Meta</label>
-            <div class="cr-target-input">
-              <input id="mbBehaviorSearch" class="form-control" autocomplete="off" placeholder="Минимум 2 символа">
-              <div id="mbBehaviorResults" class="cr-target-results"></div>
-            </div>
-            <div id="mbBehaviorPills" class="cr-target-pills"></div>
+          <div class="span-12 cr-muted" style="padding:8px 0 2px">
+            Live GEO / Interests / Behaviors search выполняется в Launch после выбора рекламных кабинетов. Здесь сохраняется универсальный targeting-шаблон.
           </div>
           <details class="cr-raw-targeting">
             <summary>Расширенный Targeting JSON (официальные Meta-поля)</summary>
