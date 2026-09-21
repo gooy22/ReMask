@@ -360,76 +360,18 @@ function renderPlacementOptions(options = {}, targeting = null) {
 }
 
 async function loadPlacementCapabilities(refresh = false) {
-    const seq = ++placementCapabilitiesSeq;
-    const status = $('placementCapabilitiesStatus');
+    const options = metaCapabilities?.placement_options || {};
+    renderPlacementOptions(options, pendingPlacementTargeting);
     const grid = $('placementPlatformGrid');
     const devices = $('placementDevices');
-    const refreshButton = $('refreshPlacements');
-
-    if (!metaContext.profile || !metaContext.accountId) {
-        if (grid) grid.style.display = 'none';
-        if (devices) devices.style.display = 'none';
-        if (refreshButton) refreshButton.disabled = true;
-        if (status) {
-            status.className = 'cr-hint';
-            status.textContent = 'Выбери FB-профиль и reference RK — placements загрузятся напрямую из Meta.';
-        }
-        return;
-    }
-
-    if (refreshButton) refreshButton.disabled = true;
+    if (grid) grid.style.display = 'grid';
+    if (devices) devices.style.display = (options.device_platforms || []).length ? 'block' : 'none';
+    const status = $('placementCapabilitiesStatus');
     if (status) {
-        status.className = 'cr-hint';
-        status.textContent = 'Meta загружает доступные placements для выбранного RK и воронки…';
-    }
-
-    const payload = {
-        profile: metaContext.profile,
-        account_id: metaContext.accountId,
-        objective: $('mbObjective')?.value || '',
-        optimization_goal: $('mbOptimizationGoal')?.value || '',
-        refresh
-    };
-
-    try {
-        const data = await api('ajax/metaPlacementCapabilities.php', {
-            method:'POST',
-            headers:{'Content-Type':'application/json'},
-            body:JSON.stringify(payload)
-        });
-        if (seq !== placementCapabilitiesSeq) return;
-
-        const live = Array.isArray(data?.live_groups) ? data.live_groups.length : 0;
-        if (data?.source !== 'meta_targetingbrowse' || live === 0) {
-            if (grid) grid.style.display = 'none';
-            if (devices) devices.style.display = 'none';
-            if (status) {
-                status.className = 'cr-hint cr-placement-fallback';
-                status.textContent = 'META НЕ ВЕРНУЛА PLACEMENTS' + (data?.warning ? ' · ' + data.warning : '');
-            }
-            return;
-        }
-
-        renderPlacementOptions(data?.options || {}, pendingPlacementTargeting);
-        if (grid) grid.style.display = 'grid';
-        if (devices) devices.style.display = (data?.options?.device_platforms || []).length ? 'block' : 'none';
-        if (status) {
-            status.className = 'cr-hint cr-placement-live';
-            status.textContent = 'LIVE META · ' + live + ' групп · ' + (data?.objective || 'без objective');
-        }
-    } catch (error) {
-        if (seq !== placementCapabilitiesSeq) return;
-        if (grid) grid.style.display = 'none';
-        if (devices) devices.style.display = 'none';
-        if (status) {
-            status.className = 'cr-hint cr-placement-fallback';
-            status.textContent = 'META ERROR · ' + error.message;
-        }
-    } finally {
-        if (seq === placementCapabilitiesSeq && refreshButton) refreshButton.disabled = false;
+        status.className = 'cr-hint cr-placement-live';
+        status.textContent = 'Official Meta SDK placements';
     }
 }
-
 function schedulePlacementCapabilities(delay = 350) {
     clearTimeout(placementCapabilitiesTimer);
     placementCapabilitiesTimer = setTimeout(() => loadPlacementCapabilities(false), delay);
@@ -476,7 +418,6 @@ function renderCreativeTargetPills(kind) {
             creativeTargetingSelections[kind] = creativeTargetingSelections[kind].filter((row) => creativeTargetIdentity(kind,row) !== identity);
             syncCreativeTargetingRaw(kind);
             renderCreativeTargetPills(kind);
-            scheduleAudienceEstimate(80);
         });
         pill.append(text, remove);
         box.appendChild(pill);
@@ -565,7 +506,6 @@ function addCreativeTarget(kind, item) {
         creativeTargetingSelections[kind].push(item);
         syncCreativeTargetingRaw(kind);
         renderCreativeTargetPills(kind);
-        scheduleAudienceEstimate(80);
     }
 }
 
@@ -1345,25 +1285,14 @@ function filterMetaSdkFields() {
 async function loadMetaSdkSchema() {
     const initial = await loadMetaContext('', '', false);
     metaSdkSchema = initial?.schema || metaSdkSchema || {};
+    metaCapabilities = initial || {};
     renderMetaSdkFields();
     populatePrimaryMetaControls();
-
-    let savedProfile = '';
-    let savedAccount = '';
-    try {
-        savedProfile = localStorage.getItem('remask.creatives.metaProfile') || '';
-        savedAccount = localStorage.getItem('remask.creatives.metaAccount') || '';
-    } catch {}
-
-    if (savedProfile && Array.from($('metaProfileContext')?.options || []).some((o) => o.value === savedProfile)) {
-        metaContext.profile = savedProfile;
-        $('metaProfileContext').value = savedProfile;
-        const profileData = await loadMetaContext(savedProfile, '', false);
-        if (savedAccount && (profileData?.ad_accounts || []).some((row) => normalizeAdAccountId(row?.account_id || row?.id) === savedAccount)) {
-            metaContext.accountId = savedAccount;
-            $('metaAccountContext').value = savedAccount;
-            await loadMetaContext(savedProfile, savedAccount, false);
-        }
+    renderPlacementOptions(metaCapabilities?.placement_options || {}, pendingPlacementTargeting);
+    const status = $('placementCapabilitiesStatus');
+    if (status) {
+        status.className = 'cr-hint cr-placement-live';
+        status.textContent = 'Official Meta SDK placements';
     }
 }
 function buildMetaBuilder() {
@@ -1386,9 +1315,7 @@ function buildMetaBuilder() {
 
     const promotedExtra = parseJsonField('mbPromotedObject', {});
     const promotedObject = deepMerge(promotedExtra, compactObject({
-        pixel_id: $('mbPixelId').value.trim(),
         custom_event_type: $('mbConversionEvent').value.trim(),
-        custom_conversion_id: $('mbCustomConversionId')?.value.trim() || undefined,
     }));
     let adset = deepMerge(parseJsonField('mbAdvancedAdset', {}), sdkFields.adset);
     adset = deepMerge(adset, compactObject({
@@ -1462,8 +1389,6 @@ function buildMetaBuilder() {
         excluded_geo_locations: parseJsonField('mbExcludedGeo', undefined),
         interests: parseJsonField('mbInterests', undefined),
         behaviors: parseJsonField('mbBehaviors', undefined),
-        custom_audiences: idsToAudience($('mbCustomAudiences').value),
-        excluded_custom_audiences: idsToAudience($('mbExcludedCustomAudiences').value),
         flexible_spec: parseJsonField('mbFlexibleSpec', undefined),
         exclusions: parseJsonField('mbExclusions', undefined),
         ...placementSpec,
@@ -1477,15 +1402,7 @@ function buildMetaBuilder() {
         asset_feed_spec: parseJsonField('mbAssetFeedSpec', undefined),
         platform_customizations: parseJsonField('mbPlatformCustomizations', undefined),
     }));
-    const existingMetaMedia = $('presetFormat')?.value === 'SINGLE' ? selectedMetaExistingMedia() : null;
-    const existing_media = existingMetaMedia?.type === 'image'
-        ? {image_hash: existingMetaMedia.value}
-        : existingMetaMedia?.type === 'video'
-            ? {video_id: existingMetaMedia.value}
-            : existingMetaMedia?.type === 'creative'
-                ? {creative_id: existingMetaMedia.value}
-                : {};
-
+    const existing_media = {};
     let ad = deepMerge(parseJsonField('mbAdvancedAd', {}), sdkFields.ad);
     ad = deepMerge(ad, compactObject({
         status: $('mbAdStatus').value,
@@ -1494,10 +1411,7 @@ function buildMetaBuilder() {
         tracking_specs: parseJsonField('mbTrackingSpecs', undefined),
     }));
 
-    const identity = compactObject({
-        page_id: $('mbPageId').value.trim(),
-        instagram_actor_id: $('mbInstagramActorId').value.trim(),
-    });
+    const identity = {};
 
     return {campaign, adset, targeting, identity, existing_media, creative, ad};
 }
@@ -1543,10 +1457,11 @@ function populateMetaBuilder(builder) {
     $('mbIncrementalAttribution').checked = Boolean(adset.is_incremental_attribution_enabled);
     $('mbAdsetStatus').value = adset.status || 'PAUSED';
     const promoted = adset.promoted_object || {};
-    $('mbPixelId').value = promoted.pixel_id || '';
     $('mbConversionEvent').value = promoted.custom_event_type || '';
-    if ($('mbCustomConversionId')) $('mbCustomConversionId').value = promoted.custom_conversion_id || '';
-    $('mbPromotedObject').value = stringify(promoted);
+    const promotedTemplate = {...promoted};
+    delete promotedTemplate.pixel_id;
+    delete promotedTemplate.custom_conversion_id;
+    $('mbPromotedObject').value = stringify(promotedTemplate);
 
     $('mbAgeMin').value = targeting.age_min ?? 18;
     $('mbAgeMax').value = targeting.age_max ?? 65;
@@ -1556,8 +1471,6 @@ function populateMetaBuilder(builder) {
     $('mbExcludedGeo').value = stringify(targeting.excluded_geo_locations);
     $('mbInterests').value = stringify(targeting.interests);
     $('mbBehaviors').value = stringify(targeting.behaviors);
-    $('mbCustomAudiences').value = (targeting.custom_audiences || []).map((x) => x.id || x).join(',');
-    $('mbExcludedCustomAudiences').value = (targeting.excluded_custom_audiences || []).map((x) => x.id || x).join(',');
     $('mbFlexibleSpec').value = stringify(targeting.flexible_spec);
     $('mbExclusions').value = stringify(targeting.exclusions);
     pendingPlacementTargeting = targeting;
@@ -1565,15 +1478,9 @@ function populateMetaBuilder(builder) {
     $('mbUserOs').value = (targeting.user_os || []).join(',');
     $('mbUserDevice').value = (targeting.user_device || []).join(',');
 
-    $('mbPageId').value = identity.page_id || '';
-    $('mbInstagramActorId').value = identity.instagram_actor_id || '';
-
     $('mbDegreesOfFreedom').value = stringify(creative.degrees_of_freedom_spec);
     $('mbAssetFeedSpec').value = stringify(creative.asset_feed_spec);
     $('mbPlatformCustomizations').value = stringify(creative.platform_customizations);
-    renderMetaExistingMediaOptions(editing?.meta_asset || metaAssetFromBuilder(builder));
-    applyMetaExistingMediaSelection();
-
     $('mbAdStatus').value = ad.status || 'PAUSED';
     $('mbConversionDomain').value = ad.conversion_domain || '';
     $('mbAdPriority').value = ad.priority ?? '';
@@ -1606,7 +1513,7 @@ function renderFormat() {
     const format = $('presetFormat').value;
     $('singleSection').style.display = format === 'SINGLE' ? 'block' : 'none';
     $('carouselSection').style.display = format === 'CAROUSEL' ? 'block' : 'none';
-    $('instagramSection').style.display = format === 'INSTAGRAM_POST' ? 'block' : 'none';
+
 }
 function renderCarousel() {
     const useNewFiles = carouselFiles.length > 0;
@@ -1684,22 +1591,16 @@ function openEditor(item = null) {
     $('presetCta').value = item?.cta || 'LEARN_MORE';
     $('presetTags').value = item?.url_tags || '';
     $('presetFormat').value = item?.format || 'SINGLE';
-    $('presetInstagramMediaId').value = item?.instagram_media_id || '';
     $('presetMedia').value = '';
     $('presetCarousel').value = '';
 
     populateMetaBuilder(item?.meta_builder || {});
-    renderMetaExistingMediaOptions(item?.meta_asset || metaAssetFromBuilder(item?.meta_builder || {}));
-    applyMetaExistingMediaSelection();
-
-    if (!selectedMetaExistingMedia()) {
-        $('singlePreview').innerHTML = item?.format === 'SINGLE' && item.media
-            ? mediaHtml(item.preview_url, item.media.media_type)
-            : '<i class="fa-regular fa-image"></i>';
-        $('singleCurrent').textContent = item?.format === 'SINGLE' && item.media
-            ? item.media.original_name + (item.media.size_bytes ? (' · ' + formatBytes(item.media.size_bytes)) : '')
-            : 'Изображение или видео.';
-    }
+    $('singlePreview').innerHTML = item?.format === 'SINGLE' && item.media
+        ? mediaHtml(item.preview_url, item.media.media_type)
+        : '<i class="fa-regular fa-image"></i>';
+    $('singleCurrent').textContent = item?.format === 'SINGLE' && item.media
+        ? item.media.original_name + (item.media.size_bytes ? (' · ' + formatBytes(item.media.size_bytes)) : '')
+        : 'Изображение или видео.';
 
     renderFormat();
     renderCarousel();
@@ -1707,7 +1608,6 @@ function openEditor(item = null) {
     setStatus('');
     $('creativeModal').classList.add('open');
     $('creativeModal').setAttribute('aria-hidden', 'false');
-    scheduleAudienceEstimate(120);
 }
 function render() {
     const query = $('creativeSearch').value.trim().toLowerCase();
@@ -1730,12 +1630,12 @@ function render() {
         let fileLabel = '';
         if (item.format === 'SINGLE') fileLabel = item.media?.original_name || 'Файл отсутствует';
         else if (item.format === 'CAROUSEL') fileLabel = (item.carousel?.length || 0) + ' карточок';
-        else fileLabel = 'Instagram ' + (item.instagram_media_id || '');
+        else fileLabel = 'Файл отсутствует';
 
         const objective = item.meta_builder?.campaign?.objective || '';
         const preview = item.preview_url
             ? mediaHtml(item.preview_url, item.format === 'SINGLE' ? item.media?.media_type : 'image')
-            : '<div class="cr-empty">Instagram post / reel</div>';
+            : '<div class="cr-empty">Нет превью</div>';
 
         return '<article class="cr-card" data-id="' + esc(item.id) + '">' +
             '<div class="cr-preview">' + preview + '<span class="cr-format">' + formatLabel(item.format) + '</span></div>' +
@@ -1770,9 +1670,6 @@ async function save(event) {
     form.append('action', 'save');
     if (id) form.append('id', id);
     form.append('meta_builder', JSON.stringify(metaBuilder));
-    const metaAsset = selectedMetaExistingMedia();
-    if (metaAsset) form.append('meta_asset', JSON.stringify(metaAsset));
-
     const values = {
         name: $('presetName').value.trim(),
         creative_name: $('presetCreativeName').value.trim(),
@@ -1784,15 +1681,14 @@ async function save(event) {
         cta: $('presetCta').value,
         url_tags: $('presetTags').value.trim(),
         format,
-        instagram_media_id: $('presetInstagramMediaId').value.trim(),
     };
     for (const [key, value] of Object.entries(values)) form.append(key, value);
 
     if (format === 'SINGLE') {
         const file = $('presetMedia').files[0];
         if (file) form.append('media', file, file.name);
-        if (!id && !file && !metaAsset) {
-            setStatus('Выбери upload или существующий Meta image/video.', 'bad');
+        if (!id && !file) {
+            setStatus('Выбери image или video.', 'bad');
             switchTab('creative');
             return;
         }
@@ -1860,17 +1756,9 @@ document.addEventListener('click', (event) => {
     document.querySelectorAll('.cr-target-results.open').forEach((el) => el.classList.remove('open'));
 });
 $('presetFormat').addEventListener('change', renderFormat);
-$('metaExistingMedia')?.addEventListener('change', () => {
-    applyMetaExistingMediaSelection();
-    clearMetaPreview();
-});
-$('generateMetaPreview')?.addEventListener('click', () => {
-    generateMetaPreview();
-});
 $('presetMedia').addEventListener('change', function () {
     const file = this.files[0];
     if (!file) return;
-    if ($('metaExistingMedia')) $('metaExistingMedia').value = '';
     if (previewUrl) URL.revokeObjectURL(previewUrl);
     previewUrl = URL.createObjectURL(file);
     $('singlePreview').innerHTML = mediaHtml(previewUrl, file.type.startsWith('video/') ? 'video' : 'image');
@@ -1889,46 +1777,8 @@ installCreativeTargetSearch('behaviors');
 for (const id of ['mbGeo','mbInterests','mbBehaviors']) {
     $(id)?.addEventListener('change', () => {
         hydrateCreativeTargetingSelections();
-        scheduleAudienceEstimate(80);
     });
 }
-$('metaProfileContext')?.addEventListener('change', async function () {
-    metaContext.profile = this.value || '';
-    metaContext.accountId = '';
-    persistMetaContext();
-    try {
-        await loadMetaContext(metaContext.profile, '', false);
-    } catch (error) {
-        const status = $('metaCapabilitiesStatus');
-        if (status) status.textContent = error.message;
-    }
-    scheduleAudienceEstimate(50);
-});
-$('metaAccountContext')?.addEventListener('change', async function () {
-    metaContext.accountId = normalizeAdAccountId(this.value);
-    persistMetaContext();
-    if (metaContext.profile && metaContext.accountId) {
-        try {
-            await loadMetaContext(metaContext.profile, metaContext.accountId, false);
-            if ($('metaAccountContext')) $('metaAccountContext').value = metaContext.accountId;
-        } catch (error) {
-            const status = $('metaCapabilitiesStatus');
-            if (status) status.textContent = error.message;
-        }
-    }
-    scheduleAudienceEstimate(50);
-});
-$('refreshMetaCapabilities')?.addEventListener('click', async () => {
-    try {
-        await loadMetaContext(metaContext.profile, metaContext.accountId, true);
-        if ($('metaProfileContext')) $('metaProfileContext').value = metaContext.profile || '';
-        if ($('metaAccountContext')) $('metaAccountContext').value = metaContext.accountId || '';
-    } catch (error) {
-        const status = $('metaCapabilitiesStatus');
-        if (status) status.textContent = error.message;
-    }
-    scheduleAudienceEstimate(50);
-});
 
 const audienceEstimateIds = [
     'mbObjective','mbDestinationType','mbOptimizationGoal','mbConversionEvent','mbCustomConversionId','mbPixelId',
@@ -1941,7 +1791,7 @@ for (const id of audienceEstimateIds) {
     if (!el) continue;
     el.addEventListener(el.tagName === 'SELECT' ? 'change' : 'input', () => {
         scheduleAudienceEstimate();
-        if (id === 'mbObjective' || id === 'mbOptimizationGoal') schedulePlacementCapabilities();
+        if (id === 'mbObjective' || id === 'mbOptimizationGoal') schedulePlacementCapabilities(0);
     });
 }
 
@@ -1949,14 +1799,12 @@ document.querySelectorAll('input[name="placementMode"]').forEach((el) => {
     el.addEventListener('change', () => {
         setPlacementMode(placementMode());
         if (placementMode() === 'manual') initializeManualPlacementsIfEmpty();
-        scheduleAudienceEstimate(80);
     });
 });
 
 document.querySelectorAll('[data-publisher]').forEach((el) => {
     el.addEventListener('change', () => {
         syncPlacementCardStates();
-        scheduleAudienceEstimate(80);
     });
 });
 
@@ -1966,17 +1814,14 @@ document.addEventListener('change', (event) => {
     if (target.hasAttribute('data-position-all')) {
         const group = String(target.getAttribute('data-position-all') || '');
         setPlacementGroupAll(group, target.checked);
-        scheduleAudienceEstimate(80);
         return;
     }
     if (target.hasAttribute('data-position-group')) {
         const group = String(target.getAttribute('data-position-group') || '');
         refreshPlacementGroupAll(group);
-        scheduleAudienceEstimate(80);
         return;
     }
     if (target.hasAttribute('data-device-platform')) {
-        scheduleAudienceEstimate(80);
     }
 });
 
