@@ -109,6 +109,54 @@ require_once __DIR__ . '/checkpassword.php';
 .cr-placement-options-inline{padding-top:0}
 .cr-placement-devices{margin-top:12px;border:1px solid #343d49;background:#191e25;border-radius:9px;padding:10px}
 .cr-placement-live{color:#63d69b}.cr-placement-fallback{color:#d4a55d}
+.cr-placement-options .cr-check{transition:border-color .16s ease,background .16s ease,transform .16s ease}
+.cr-placement-options .cr-check:hover{border-color:#52627a;background:#242c36;transform:translateY(-1px)}
+.cr-placement-hover-preview{position:fixed;z-index:2600;width:292px;padding:10px;border:1px solid #3b4655;border-radius:13px;background:#151a20;box-shadow:0 18px 55px rgba(0,0,0,.48);opacity:0;transform:translateY(5px) scale(.985);pointer-events:none;transition:opacity .13s ease,transform .13s ease}
+.cr-placement-hover-preview.open{opacity:1;transform:translateY(0) scale(1)}
+.cr-placement-preview-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:8px}
+.cr-placement-preview-title{font-size:12px;font-weight:800;color:#eef2f7}
+.cr-placement-preview-meta{font-size:10px;color:#8d98a9;margin-top:2px}
+.cr-placement-preview-live{font-size:9px;font-weight:800;letter-spacing:.08em;color:#78d9a7;border:1px solid #315a47;border-radius:999px;padding:3px 6px}
+.cr-placement-demo{height:330px;border:1px solid #333e4c;border-radius:20px;background:#0f1318;overflow:hidden;position:relative}
+.cr-placement-demo::before{content:"";position:absolute;top:7px;left:50%;width:48px;height:5px;border-radius:999px;background:#2d3540;transform:translateX(-50%);z-index:5}
+.cr-placement-demo-screen{position:absolute;inset:20px 7px 7px;border-radius:14px;overflow:hidden;background:#edf0f4;color:#24272c}
+.cr-placement-demo-top{height:30px;display:flex;align-items:center;gap:6px;padding:0 8px;background:#fff;border-bottom:1px solid #d8dce2;font-size:7px;font-weight:800}
+.cr-placement-demo-dot{width:13px;height:13px;border-radius:50%;background:#d7dce4}
+.cr-placement-demo-feed{position:absolute;inset:30px 0 0;padding:8px;display:flex;flex-direction:column;gap:8px;animation:crPlacementFeed 4.4s ease-in-out infinite}
+.cr-placement-demo-card{height:67px;border-radius:8px;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.08);position:relative;overflow:hidden}
+.cr-placement-demo-card::before{content:"";position:absolute;left:8px;top:8px;width:46%;height:5px;border-radius:4px;background:#dfe3e9;box-shadow:0 10px 0 #e8ebef}
+.cr-placement-demo-ad{min-height:105px;border:2px solid #3b79f4!important;box-shadow:0 0 0 2px rgba(59,121,244,.12)!important;background:#d8e5ff!important;position:relative;overflow:hidden}
+.cr-placement-demo-ad::after{content:"AD";position:absolute;right:6px;top:5px;z-index:4;background:#2e6be6;color:#fff;font-size:7px;font-weight:900;line-height:1;padding:4px 5px;border-radius:4px}
+.cr-placement-demo-media{position:absolute;left:7px;right:7px;top:28px;bottom:7px;border-radius:6px;overflow:hidden;background:linear-gradient(135deg,#c6d7ff,#8daff9)}
+.cr-placement-demo-media img,.cr-placement-demo-media video{width:100%;height:100%;object-fit:cover;display:block}
+.cr-placement-demo-media-placeholder{width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:800;color:#244a91;letter-spacing:.04em}
+.cr-placement-demo.story .cr-placement-demo-screen,.cr-placement-demo.reels .cr-placement-demo-screen,.cr-placement-demo.status .cr-placement-demo-screen{background:#111;color:#fff}
+.cr-placement-demo.story .cr-placement-demo-top,.cr-placement-demo.reels .cr-placement-demo-top,.cr-placement-demo.status .cr-placement-demo-top{background:rgba(0,0,0,.35);border:0;color:#fff;position:relative;z-index:4}
+.cr-placement-demo.story .cr-placement-demo-feed,.cr-placement-demo.reels .cr-placement-demo-feed,.cr-placement-demo.status .cr-placement-demo-feed{inset:30px 0 0;padding:0;animation:crPlacementVertical 3.8s ease-in-out infinite}
+.cr-placement-demo.story .cr-placement-demo-card,.cr-placement-demo.reels .cr-placement-demo-card,.cr-placement-demo.status .cr-placement-demo-card{display:none}
+.cr-placement-demo.story .cr-placement-demo-ad,.cr-placement-demo.reels .cr-placement-demo-ad,.cr-placement-demo.status .cr-placement-demo-ad{display:block;height:100%;min-height:0;border:0!important;border-radius:0;box-shadow:none!important;background:#10151d!important}
+.cr-placement-demo.story .cr-placement-demo-media,.cr-placement-demo.reels .cr-placement-demo-media,.cr-placement-demo.status .cr-placement-demo-media{inset:0;border-radius:0}
+.cr-placement-demo.story .cr-placement-demo-ad::after,.cr-placement-demo.reels .cr-placement-demo-ad::after,.cr-placement-demo.status .cr-placement-demo-ad::after{top:auto;bottom:10px;right:10px}
+.cr-placement-demo.column .cr-placement-demo-screen{background:#eef1f4}
+.cr-placement-demo.column .cr-placement-demo-feed{right:90px;animation:crPlacementFeed 4.4s ease-in-out infinite}
+.cr-placement-demo-column-ad{display:none}
+.cr-placement-demo.column .cr-placement-demo-column-ad{display:block;position:absolute;right:6px;top:40px;width:78px;height:104px;border:2px solid #3b79f4;border-radius:7px;background:#fff;overflow:hidden}
+.cr-placement-demo.column .cr-placement-demo-column-ad .cr-placement-demo-media{inset:18px 5px 5px}
+.cr-placement-demo.column .cr-placement-demo-feed .cr-placement-demo-ad{display:none}
+.cr-placement-demo.grid .cr-placement-demo-feed{display:grid;grid-template-columns:repeat(2,1fr);grid-auto-rows:82px;gap:7px;animation:crPlacementGrid 4s ease-in-out infinite}
+.cr-placement-demo.grid .cr-placement-demo-card{height:auto}
+.cr-placement-demo.grid .cr-placement-demo-ad{min-height:0}
+.cr-placement-demo.grid .cr-placement-demo-media{inset:18px 5px 5px}
+.cr-placement-demo.messages .cr-placement-demo-feed{animation:none}
+.cr-placement-demo.messages .cr-placement-demo-card{height:38px;border-radius:7px}
+.cr-placement-demo.messages .cr-placement-demo-ad{min-height:64px}
+.cr-placement-demo.video .cr-placement-demo-feed{animation:crPlacementVideo 4s ease-in-out infinite}
+.cr-placement-demo.video .cr-placement-demo-ad{min-height:148px}
+.cr-placement-preview-foot{font-size:9px;line-height:1.35;color:#7f8998;margin-top:7px}
+@keyframes crPlacementFeed{0%,12%{transform:translateY(0)}45%,65%{transform:translateY(-72px)}88%,100%{transform:translateY(0)}}
+@keyframes crPlacementVertical{0%,18%{transform:scale(1)}48%,68%{transform:scale(1.035)}100%{transform:scale(1)}}
+@keyframes crPlacementGrid{0%,15%{transform:translateY(0)}50%,70%{transform:translateY(-38px)}100%{transform:translateY(0)}}
+@keyframes crPlacementVideo{0%,15%{transform:translateY(0)}48%,68%{transform:translateY(-35px)}100%{transform:translateY(0)}}
 .cr-foot-actions{display:flex;gap:8px}
 @media(max-width:820px){.cr-meta-context{grid-template-columns:1fr}.cr-placement-mode,.cr-placement-grid{grid-template-columns:1fr}.cr-audience-estimate{grid-template-columns:1fr}.cr-audience-estimate-state{text-align:left}.span-8,.span-6,.span-4,.span-3{grid-column:span 12}.cr-media-row{grid-template-columns:1fr}.cr-carousel-row{grid-template-columns:44px 1fr}.cr-carousel-row .form-control{grid-column:span 2}}
 </style>
@@ -266,6 +314,8 @@ require_once __DIR__ . '/checkpassword.php';
             <div class="cr-section-title" style="margin:0 0 8px">Devices</div>
             <div id="placementDeviceOptions" class="cr-placement-options cr-placement-options-inline" data-device-container></div>
           </div>
+
+          <div id="placementHoverPreview" class="cr-placement-hover-preview" aria-hidden="true"></div>
         </div>
 
         <details class="cr-raw-targeting" style="margin-top:12px">
@@ -347,7 +397,7 @@ require_once __DIR__ . '/checkpassword.php';
 </div>
 </div>
 
-<script src="scripts/creatives.js?v=20260921-accountless-creatives-v107" type="module"></script>
+<script src="scripts/creatives.js?v=20260921-placement-hover-preview-v108" type="module"></script>
 <div class="app-footer"><?php include 'copyright.php' ?></div>
 </main>
 </body>
