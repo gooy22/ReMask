@@ -79,10 +79,25 @@ try {
         rmx_py_out(['ok'=>false,'error'=>'UNAUTHORIZED'], 401);
     }
 
+    $store = AccountStoreFactory::create(ACCOUNTSFILENAME);
+    $action = strtolower(trim((string)($_GET['action'] ?? $_POST['action'] ?? 'resolve')));
+
+    if ($action === 'list') {
+        $profiles = [];
+        foreach ($store->deserialize() as $candidate) {
+            if (!$candidate instanceof FbAccount) continue;
+            $profiles[] = [
+                'profile_id' => $candidate->name,
+                'proxy_configured' => $candidate->proxy !== null,
+                'cookies_present' => is_array($candidate->cookies) && count($candidate->cookies) > 0,
+            ];
+        }
+        rmx_py_out(['ok'=>true,'profiles'=>$profiles,'count'=>count($profiles)]);
+    }
+
     $profile = trim((string)($_GET['profile_id'] ?? $_POST['profile_id'] ?? ''));
     if ($profile === '') rmx_py_out(['ok'=>false,'error'=>'PROFILE_REQUIRED'], 400);
 
-    $store = AccountStoreFactory::create(ACCOUNTSFILENAME);
     $account = $store->getAccountByName($profile);
     if (!$account instanceof FbAccount) rmx_py_out(['ok'=>false,'error'=>'PROFILE_NOT_FOUND'], 404);
 
