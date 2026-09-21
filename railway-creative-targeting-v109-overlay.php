@@ -202,7 +202,7 @@ if (!empty($remaskAccountlessTargeting)) {
     $service = MetaEndpoint::serviceForAccountName($profile);
 }
 
-/* REMASK_ACCOUNTLESS_BEHAVIOR_ACCOUNT_V1 */
+/* REMASK_ACCOUNTLESS_TARGETING_ACCOUNT_V2 */
 $remaskTargetingType = strtolower(trim((string)($input['type'] ?? '')));
 $remaskAccountScopedTypes = [
     'interest','interests','behavior','behaviors',
