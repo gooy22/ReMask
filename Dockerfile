@@ -207,25 +207,22 @@ RUN set -eux; \
     test -f /var/www/html/classes/MetaOfficialFields.php; \
     grep -q 'ONLINE_GAMBLING_AND_GAMING' /var/www/html/classes/MetaSdkSchema.php; \
     grep -q 'STORE_VISITS' /var/www/html/classes/MetaSdkSchema.php; \
-    grep -q 'metaProfileContext' /var/www/html/creatives.php; \
-    grep -q 'metaAccountContext' /var/www/html/creatives.php; \
-    grep -q 'audienceEstimateValue' /var/www/html/creatives.php; \
-    grep -q 'mbGeoSearch' /var/www/html/creatives.php; \
-    grep -q 'mbInterestSearch' /var/www/html/creatives.php; \
-    grep -q 'mbBehaviorSearch' /var/www/html/creatives.php; \
+    ! grep -q 'metaProfileContext' /var/www/html/creatives.php; \
+    ! grep -q 'metaAccountContext' /var/www/html/creatives.php; \
+    ! grep -q 'audienceEstimateValue' /var/www/html/creatives.php; \
+    ! grep -q 'metaExistingMedia' /var/www/html/creatives.php; \
+    ! grep -q 'presetInstagramMediaId' /var/www/html/creatives.php; \
+    grep -q 'placement_options' /var/www/html/ajax/metaCreativeCapabilities.php; \
+    grep -q 'Official Meta SDK placements' /var/www/html/creatives.php; \
+    grep -q 'accountless-creatives-v107' /var/www/html/creatives.php; \
     grep -q 'searchCreativeTargeting' /var/www/html/scripts/creatives.js; \
     grep -q 'populatePrimaryMetaControls' /var/www/html/scripts/creatives.js; \
     grep -q 'metaCreativeCapabilities.php' /var/www/html/scripts/creatives.js; \
-    grep -q 'metaAudienceEstimate.php' /var/www/html/scripts/creatives.js; \
-    grep -q 'metaCreativePreview.php' /var/www/html/scripts/creatives.js; \
-    grep -q 'metaPreviewFormat' /var/www/html/creatives.php; \
-    grep -q 'generateMetaPreview' /var/www/html/scripts/creatives.js; \
     grep -q 'generateCreativePreview' /var/www/html/classes/MetaAdsService.php; \
     grep -q 'generatepreviews' /var/www/html/classes/MetaAdsService.php; \
     grep -q 'adPreviewFormats' /var/www/html/classes/MetaSdkSchema.php; \
     grep -q 'creativeCallToActionTypes' /var/www/html/classes/MetaSdkSchema.php; \
     grep -q 'promotedObjectCustomEventTypes' /var/www/html/classes/MetaSdkSchema.php; \
-    grep -q 'constrainTargetingCheckboxes' /var/www/html/scripts/creatives.js; \
     grep -q 'listConnectedInstagramAccounts' /var/www/html/classes/MetaAdsService.php; \
     grep -q 'listConversionGoals' /var/www/html/classes/MetaAdsService.php; \
     grep -q 'connected_instagram_accounts' /var/www/html/ajax/metaCreativeCapabilities.php; \
@@ -235,21 +232,13 @@ RUN set -eux; \
     grep -q 'device_platforms' /var/www/html/classes/MetaSdkSchema.php; \
     grep -q 'async function loadMetaContext' /var/www/html/scripts/creatives.js; \
     ! grep -q 'async async function' /var/www/html/scripts/creatives.js; \
-    grep -q 'mbCustomConversionId' /var/www/html/creatives.php; \
-    grep -q 'mbCustomConversionOptions' /var/www/html/creatives.php; \
-    grep -q 'mbInstagramOptions' /var/www/html/creatives.php; \
-    grep -q 'custom_conversion_id' /var/www/html/scripts/creatives.js; \
-    grep -q 'metaExistingMedia' /var/www/html/creatives.php; \
     grep -q 'selectedMetaExistingMedia' /var/www/html/scripts/creatives.js; \
-    grep -q 'creative.image_hash' /var/www/html/scripts/creatives.js; \
-    grep -q 'creative.video_id' /var/www/html/scripts/creatives.js; \
     grep -q 'listCreativeImages' /var/www/html/classes/MetaAdsService.php; \
     grep -q 'listCreativeVideos' /var/www/html/classes/MetaAdsService.php; \
     grep -q 'cl100_meta_media_ref' /var/www/html/ajax/creativeLibrary.php; \
     grep -q 'existing_media' /var/www/html/classes/MetaOfficialFields.php; \
     grep -q 'existing_creative_id' /var/www/html/classes/MetaOfficialFields.php; \
     php -r 'require "/var/www/html/classes/MetaOfficialFields.php"; $base=["campaign"=>[],"adset"=>["targeting"=>[]],"creative"=>[],"ad"=>[]]; foreach([["image_hash"=>"abcDEF_123"],["video_id"=>"123456"],["creative_id"=>"987654"]] as $m){$p=MetaOfficialFields::applyBuilderToPayload($base,["existing_media"=>$m]);$c=$p["creative"]; if(isset($m["image_hash"])&&($c["existing_image_hash"]??"")!==$m["image_hash"])exit(71); if(isset($m["video_id"])&&($c["existing_video_id"]??"")!==$m["video_id"])exit(72); if(isset($m["creative_id"])&&($c["existing_creative_id"]??"")!==$m["creative_id"])exit(73);}'; \
-    grep -q 'Meta Ad Creatives' /var/www/html/scripts/creatives.js; \
     grep -q 'ad_creatives' /var/www/html/ajax/metaCreativeCapabilities.php; \
     grep -q "'video_id'" /var/www/html/classes/MetaOfficialFields.php; \
     grep -q 'meta-builder-v102' /var/www/html/launch.php; \
@@ -269,7 +258,6 @@ RUN set -eux; \
     grep -q 'presetTags' /var/www/html/creatives.php; \
     grep -q 'presetFormat' /var/www/html/creatives.php; \
     grep -q 'presetCarousel' /var/www/html/creatives.php; \
-    grep -q 'presetInstagramMediaId' /var/www/html/creatives.php; \
     grep -q 'REMASK_COMPLETE_CREATIVE_PRESET_V1' /var/www/html/scripts/launch.js; \
     grep -q 'REMASK_CAROUSEL_LIBRARY_V1' /var/www/html/ajax/metaJobCreate.php; \
     grep -q 'carousel_media_library_ids' /var/www/html/scripts/launch.js; \
