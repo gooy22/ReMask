@@ -2,7 +2,7 @@
 /**
  * v106: Ads Manager-like placement capabilities.
  * - Live account/objective-aware placement discovery via Meta targetingbrowse.
- * - SDK-compatible fallback when the live call is unavailable.
+ * - No UI fallback: placements are rendered only from live Meta data.
  */
 $root = '/var/www/html';
 $servicePath = $root . '/classes/MetaAdsService.php';
@@ -128,19 +128,22 @@ try {
     $objective = strtoupper(trim((string)($input['objective'] ?? '')));
     $optimizationGoal = strtoupper(trim((string)($input['optimization_goal'] ?? '')));
 
-    $fallback = MetaSdkSchema::placementOptions();
+    $groups = array_keys(MetaSdkSchema::placementOptions());
+    $emptyOptions = array_fill_keys($groups, []);
     $result = [
-        'source' => 'meta_sdk_fallback',
+        'source' => 'meta_required',
         'profile' => $profile,
         'account_id' => preg_replace('/^act_/i', '', $accountId),
         'objective' => $objective,
         'optimization_goal' => $optimizationGoal,
-        'options' => $fallback,
+        'options' => $emptyOptions,
         'live_groups' => [],
         'warning' => null,
+        'requires_context' => ($profile === '' || $accountId === ''),
     ];
 
     if ($profile === '' || $accountId === '') {
+        $result['warning'] = 'Select FB profile and reference RK to load placements from Meta.';
         MetaEndpoint::ok($result);
     }
 
@@ -174,7 +177,7 @@ try {
         $live = [];
         foreach ($rows as $row) {
             $group = remask_placement_group((string)($row['type'] ?? ''));
-            if (!array_key_exists($group, $fallback)) continue;
+            if (!in_array($group, $groups, true)) continue;
             $value = remask_placement_value($group, $row);
             if ($value === '') continue;
             $live[$group][] = $value;
@@ -187,21 +190,23 @@ try {
             $result['live_groups'][] = $group;
         }
 
-        if ($result['live_groups'] !== []) {
-            $result['source'] = 'meta_targetingbrowse';
-        } else {
-            $result['warning'] = 'Meta targetingbrowse returned no placement rows; SDK fallback is shown.';
+        if ($result['live_groups'] === []) {
+            $result['source'] = 'meta_unavailable';
+            $result['warning'] = 'Meta did not return placement capabilities for this RK / funnel.';
+            MetaEndpoint::ok($result);
         }
-    } catch (Throwable $e) {
-        $result['warning'] = $e->getMessage();
-    }
 
-    $result['_cache'] = ['state' => 'MISS', 'ttl' => $ttl];
-    @file_put_contents($cacheFile, json_encode(
-        $result,
-        JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT
-    ));
-    MetaEndpoint::ok($result);
+        $result['source'] = 'meta_targetingbrowse';
+        $result['requires_context'] = false;
+        $result['_cache'] = ['state' => 'MISS', 'ttl' => $ttl];
+        @file_put_contents($cacheFile, json_encode(
+            $result,
+            JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT
+        ));
+        MetaEndpoint::ok($result);
+    } catch (Throwable $e) {
+        throw $e;
+    }
 } catch (Throwable $e) {
     MetaEndpoint::fail($e);
 }
