@@ -208,6 +208,67 @@ class JobStore:
             data['items_failed']=sum(1 for x in items if x['status']=='FAILED')
             return data
 
+    async def import_snapshots(self, snapshots: list[dict[str, Any]]) -> int:
+        return await asyncio.to_thread(self._import_snapshots_sync, snapshots)
+
+    def _import_snapshots_sync(self, snapshots: list[dict[str, Any]]) -> int:
+        imported = 0
+        with self._connect() as con:
+            for snapshot in snapshots:
+                if not isinstance(snapshot, dict):
+                    continue
+                job_id = str(snapshot.get('id') or '').strip()
+                if not job_id:
+                    continue
+                created_at = int(snapshot.get('created_at') or _now())
+                updated_at = int(snapshot.get('updated_at') or created_at)
+                con.execute(
+                    """INSERT INTO jobs(id,status,idempotency_key,created_at,updated_at) VALUES(?,?,?,?,?)
+                       ON CONFLICT(id) DO UPDATE SET status=excluded.status,idempotency_key=excluded.idempotency_key,
+                       created_at=excluded.created_at,updated_at=excluded.updated_at""",
+                    (job_id, str(snapshot.get('status') or 'QUEUED'), snapshot.get('idempotency_key'), created_at, updated_at),
+                )
+                for item in snapshot.get('items') or []:
+                    if not isinstance(item, dict):
+                        continue
+                    item_id = str(item.get('id') or '').strip()
+                    profile_id = str(item.get('profile_id') or '').strip()
+                    if not item_id or not profile_id:
+                        continue
+                    icreated = int(item.get('created_at') or created_at)
+                    iupdated = int(item.get('updated_at') or updated_at)
+                    con.execute(
+                        """INSERT INTO job_items(id,job_id,profile_id,status,attempt,error_code,error_message,created_at,updated_at)
+                           VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
+                           job_id=excluded.job_id,profile_id=excluded.profile_id,status=excluded.status,attempt=excluded.attempt,
+                           error_code=excluded.error_code,error_message=excluded.error_message,created_at=excluded.created_at,updated_at=excluded.updated_at""",
+                        (item_id, job_id, profile_id, str(item.get('status') or 'QUEUED'), int(item.get('attempt') or 0),
+                         item.get('error_code'), item.get('error_message'), icreated, iupdated),
+                    )
+                    for task in item.get('tasks') or []:
+                        if not isinstance(task, dict):
+                            continue
+                        task_id = str(task.get('id') or '').strip()
+                        if not task_id:
+                            continue
+                        payload = task.get('payload') if isinstance(task.get('payload'), dict) else {}
+                        result = task.get('result') if isinstance(task.get('result'), dict) else None
+                        tcreated = int(task.get('created_at') or icreated)
+                        tupdated = int(task.get('updated_at') or iupdated)
+                        con.execute(
+                            """INSERT INTO job_tasks(id,item_id,position,action,payload_json,idempotency_key,status,attempt,result_json,error_code,error_message,created_at,updated_at)
+                               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
+                               item_id=excluded.item_id,position=excluded.position,action=excluded.action,payload_json=excluded.payload_json,
+                               idempotency_key=excluded.idempotency_key,status=excluded.status,attempt=excluded.attempt,result_json=excluded.result_json,
+                               error_code=excluded.error_code,error_message=excluded.error_message,created_at=excluded.created_at,updated_at=excluded.updated_at""",
+                            (task_id, item_id, int(task.get('position') or 0), str(task.get('action') or ''),
+                             json.dumps(payload, separators=(',', ':')), task.get('idempotency_key'), str(task.get('status') or 'QUEUED'),
+                             int(task.get('attempt') or 0), json.dumps(result, separators=(',', ':')) if result is not None else None,
+                             task.get('error_code'), task.get('error_message'), tcreated, tupdated),
+                        )
+                imported += 1
+        return imported
+
     async def retry_failed(self, job_id: str) -> int:
         return await asyncio.to_thread(self._retry_failed_sync, job_id)
 
