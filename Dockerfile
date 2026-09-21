@@ -119,6 +119,11 @@ RUN set -eux; \
     php -l /var/www/html/ajax/metaPlacementCapabilities.php; \
     php -l /var/www/html/ajax/metaTargetingSearch.php; \
     grep -q 'REMASK_ACCOUNTLESS_TARGETING_V1' /var/www/html/ajax/metaTargetingSearch.php; \
+    grep -q 'REMASK_ACCOUNTLESS_BEHAVIOR_ACCOUNT_V1' /var/www/html/ajax/metaTargetingSearch.php; \
+    grep -q 'REMASK_EFFECTIVE_META_BUILDER_V2' /var/www/html/scripts/launch.js; \
+    grep -q 'REMASK_PLACEMENT_PREFLIGHT_V1' /var/www/html/scripts/launch.js; \
+    grep -Fq "kind === 'geo' || kind === 'excludedGeo'" /var/www/html/scripts/creatives.js; \
+    grep -q "state.behaviors = Array.isArray(targeting.behaviors)" /var/www/html/scripts/launch.js; \
     grep -q 'mbGeoSearch' /var/www/html/creatives.php; \
     grep -q 'mbExcludedGeoSearch' /var/www/html/creatives.php; \
     grep -q 'mbInterestSearch' /var/www/html/creatives.php; \
