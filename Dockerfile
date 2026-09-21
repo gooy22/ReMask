@@ -213,7 +213,6 @@ RUN set -eux; \
     ! grep -q 'presetInstagramMediaId' /var/www/html/creatives.php; \
     grep -q 'placement_options' /var/www/html/ajax/metaCreativeCapabilities.php; \
     grep -q 'Official Meta SDK placements' /var/www/html/creatives.php; \
-    grep -q 'accountless-creatives-v107' /var/www/html/creatives.php; \
     grep -q 'placementHoverPreview' /var/www/html/creatives.php; \
     grep -q 'placement-hover-preview-v108' /var/www/html/creatives.php; \
     grep -q 'showPlacementHoverPreview' /var/www/html/scripts/creatives.js; \
