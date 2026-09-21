@@ -147,6 +147,12 @@ RUN set -eux; \
     grep -q 'REMASK_LANGUAGE_SEARCH_V1' /var/www/html/classes/MetaAdsService.php; \
     grep -q 'REMASK_ACCOUNT_TARGETING_SEARCH_V1' /var/www/html/classes/MetaAdsService.php; \
     grep -q 'REMASK_ACCOUNT_TARGETING_DISPATCH_V1' /var/www/html/ajax/metaTargetingSearch.php; \
+    grep -q "\['interests'\]" /var/www/html/ajax/metaTargetingSearch.php; \
+    grep -q "\['behaviors'\]" /var/www/html/ajax/metaTargetingSearch.php; \
+    grep -q "\['locales'\]" /var/www/html/ajax/metaTargetingSearch.php; \
+    grep -q "\['countries','regions','cities','zips'\]" /var/www/html/ajax/metaTargetingSearch.php; \
+    ! grep -q "=> \$service->searchInterests(\$query" /var/www/html/ajax/metaTargetingSearch.php; \
+    ! grep -q "=> \$service->searchLocations(\$query" /var/www/html/ajax/metaTargetingSearch.php; \
     grep -q 'whitelisted_types' /var/www/html/classes/MetaAdsService.php; \
     grep -q "act_<RK>/targetingsearch" /var/www/html/scripts/launch.js || true; \
     grep -q "'type' => 'adlocale'" /var/www/html/classes/MetaAdsService.php; \
