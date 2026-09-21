@@ -130,9 +130,12 @@ RUN set -eux; \
     php -l /var/www/html/ajax/pythonProfileContext.php; \
     grep -q 'X-Remask-Internal-Key' /var/www/html/ajax/pythonProfileContext.php; \
     grep -q 'REMASK_INTERNAL_KEY' /var/www/html/ajax/pythonProfileContext.php; \
+    grep -q "'action' => 'list'\|'action'] ?? .*'resolve'" /var/www/html/ajax/pythonProfileContext.php || grep -q "action === 'list'" /var/www/html/ajax/pythonProfileContext.php; \
     php -l /var/www/html/ajax/pythonWorkerJobs.php; \
     grep -q 'REMASK_PYTHON_WORKER_URL' /var/www/html/ajax/pythonWorkerJobs.php; \
     grep -q 'retry-failed' /var/www/html/ajax/pythonWorkerJobs.php; \
+    grep -q 'internalAuthorized' /var/www/html/ajax/pythonWorkerJobs.php; \
+    grep -q 'X_REMASK_INTERNAL_KEY' /var/www/html/ajax/pythonWorkerJobs.php; \
     php -l /var/www/html/ajax/pythonWorkerState.php; \
     grep -q 'python-worker-jobs' /var/www/html/ajax/pythonWorkerState.php; \
     grep -q 'RAW_PAYMENT_DATA_REJECTED' /var/www/html/ajax/pythonWorkerState.php; \
