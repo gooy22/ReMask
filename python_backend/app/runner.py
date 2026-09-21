@@ -7,6 +7,7 @@ from collections import defaultdict
 from typing import Any, Awaitable, Callable
 
 from .mirror import MirrorError, SnapshotMirror
+from .router import RoutePolicyError, TransparentPostRouter
 from .session import ProfileResolver, ProfileSession, ProfileContextError, ProxyCheckError
 from .store import JobStore
 
@@ -37,7 +38,9 @@ class WorkerPool:
         self.queue: asyncio.Queue[str]=asyncio.Queue()
         self.profile_locks: defaultdict[str,asyncio.Lock]=defaultdict(asyncio.Lock)
         self.registry=TaskRegistry()
+        self.router=TransparentPostRouter()
         self.registry.register('proxy_check',_proxy_check)
+        self.registry.register('transparent_post',self.router.execute)
         self.resolver=ProfileResolver(os.getenv('REMASK_PROFILE_RESOLVER_URL'),os.getenv('REMASK_INTERNAL_KEY'))
         self._workers: list[asyncio.Task[None]]=[]
 
@@ -95,6 +98,9 @@ class WorkerPool:
                             await self.store.set_task_success(task['id'],result)
                         except ProxyCheckError as exc:
                             await self.store.set_task_failed(task['id'],'PROXY_DEAD',str(exc))
+                            break
+                        except RoutePolicyError as exc:
+                            await self.store.set_task_failed(task['id'],'ROUTE_POLICY',str(exc))
                             break
                         except Exception as exc:
                             await self.store.set_task_failed(task['id'],'TASK_FAILED',str(exc))
