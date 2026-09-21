@@ -49,7 +49,6 @@ COPY railway-placement-capabilities-v106-overlay.php /tmp/railway-placement-capa
 COPY railway-launch-full-meta-v113-overlay.php /tmp/railway-launch-full-meta-v113-overlay.php
 COPY railway-launch-meta-editors-v114-overlay.php /tmp/railway-launch-meta-editors-v114-overlay.php
 COPY railway-language-targeting-v116-overlay.php /tmp/railway-language-targeting-v116-overlay.php
-COPY railway-account-targeting-v118-overlay.php /tmp/railway-account-targeting-v118-overlay.php
 COPY railway-selection-persistence-overlay.php /tmp/railway-selection-persistence-overlay.php
 COPY railway-profile-error-fix-overlay.php /tmp/railway-profile-error-fix-overlay.php
 COPY docker-start.sh /tmp/docker-start.sh
@@ -112,8 +111,6 @@ RUN set -eux; \
     php /tmp/railway-launch-meta-editors-v114-overlay.php; \
     php -l /tmp/railway-language-targeting-v116-overlay.php; \
     php /tmp/railway-language-targeting-v116-overlay.php; \
-    php -l /tmp/railway-account-targeting-v118-overlay.php; \
-    php /tmp/railway-account-targeting-v118-overlay.php; \
     php -r '$allowedRaw=["/var/www/html/classes/MetaApiClient.php"=>true,"/var/www/html/classes/FbRequests.php"=>true,"/var/www/html/classes/ProxyHealthService.php"=>true]; $allowedLegacy=["/var/www/html/ajax/payUnsettled.php"=>true,"/var/www/html/ajax/policyAppeal.php"=>true,"/var/www/html/ajax/disapproveAppeal.php"=>true]; $violations=[]; foreach(["/var/www/html/ajax","/var/www/html/classes","/var/www/html/bin"] as $root){$it=new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root,FilesystemIterator::SKIP_DOTS)); foreach($it as $fi){if(!$fi->isFile()||$fi->getExtension()!=="php")continue;$path=$fi->getPathname();$s=file_get_contents($path);if((str_contains($s,"graph.facebook.com")||str_contains($s,"curl_init("))&&!isset($allowedRaw[$path]))$violations[]="raw-meta-transport:".$path;if($fi->getFilename()!=="FbRequests.php"&&preg_match("/new\\s+FbRequests\\s*\\(/",$s)&&!isset($allowedLegacy[$path]))$violations[]="legacy-fbrequests-ref:".$path;}} if($violations){fwrite(STDERR,"Meta transport invariant failed: ".implode(", ",$violations)."\\n");exit(91);} fwrite(STDERR,"[transport-invariant] canonical Graph transport enforced; legacy browser transport limited to payment/appeal endpoints\\n");'; \
     php -l /var/www/html/classes/RemaskProxy.php; \
     php -l /var/www/html/classes/MetaApiClient.php; \
@@ -136,7 +133,7 @@ RUN set -eux; \
     grep -q 'creative-targeting-transport.json' /var/www/html/ajax/metaTargetingSearch.php; \
     grep -q 'successful_targeting_call' /var/www/html/ajax/metaTargetingSearch.php; \
     ! grep -q 'cachedPreflight($candidateName, true)' /var/www/html/ajax/metaTargetingSearch.php; \
-    grep -q 'REMASK_ACCOUNTLESS_TARGETING_ACCOUNT_V2' /var/www/html/ajax/metaTargetingSearch.php; \
+    grep -q 'REMASK_ACCOUNTLESS_BEHAVIOR_ACCOUNT_V3' /var/www/html/ajax/metaTargetingSearch.php; \
     grep -q 'REMASK_EFFECTIVE_META_BUILDER_V2' /var/www/html/scripts/launch.js; \
     grep -q 'REMASK_PLACEMENT_PREFLIGHT_V1' /var/www/html/scripts/launch.js; \
     grep -q 'REMASK_FULL_META_LAUNCH_V1' /var/www/html/scripts/launch.js; \
@@ -145,16 +142,6 @@ RUN set -eux; \
     grep -q 'languages-v117' /var/www/html/launch.php; \
     grep -q 'REMASK_META_VISUAL_EDITORS_V1' /var/www/html/scripts/launch.js; \
     grep -q 'REMASK_LANGUAGE_SEARCH_V1' /var/www/html/classes/MetaAdsService.php; \
-    grep -q 'REMASK_ACCOUNT_TARGETING_SEARCH_V1' /var/www/html/classes/MetaAdsService.php; \
-    grep -q 'REMASK_ACCOUNT_TARGETING_DISPATCH_V1' /var/www/html/ajax/metaTargetingSearch.php; \
-    grep -q "\['interests'\]" /var/www/html/ajax/metaTargetingSearch.php; \
-    grep -q "\['behaviors'\]" /var/www/html/ajax/metaTargetingSearch.php; \
-    grep -q "\['locales'\]" /var/www/html/ajax/metaTargetingSearch.php; \
-    grep -q "\['countries','regions','cities','zips'\]" /var/www/html/ajax/metaTargetingSearch.php; \
-    ! grep -q "=> \$service->searchInterests(\$query" /var/www/html/ajax/metaTargetingSearch.php; \
-    ! grep -q "=> \$service->searchLocations(\$query" /var/www/html/ajax/metaTargetingSearch.php; \
-    grep -q 'whitelisted_types' /var/www/html/classes/MetaAdsService.php; \
-    grep -q "act_<RK>/targetingsearch" /var/www/html/scripts/launch.js || true; \
     grep -q "'type' => 'adlocale'" /var/www/html/classes/MetaAdsService.php; \
     grep -q "'limit' => 1000" /var/www/html/classes/MetaAdsService.php; \
     grep -q 'All Meta locale transports failed' /var/www/html/ajax/metaTargetingSearch.php; \
