@@ -139,25 +139,11 @@ require_once __DIR__ . '/checkpassword.php';
   <form id="creativeForm">
     <input id="creativeId" type="hidden">
 
-    <div class="cr-meta-context">
-      <div class="cr-field">
-        <label>Meta profile</label>
-        <select id="metaProfileContext" class="form-control"><option value="">Выбери FB-профиль</option></select>
-      </div>
-      <div class="cr-field">
-        <label>Reference RK</label>
-        <select id="metaAccountContext" class="form-control" disabled><option value="">Выбери рекламный кабинет</option></select>
-      </div>
-      <button id="refreshMetaCapabilities" type="button" class="cr-btn">ОБНОВИТЬ META</button>
-      <div id="metaCapabilitiesStatus" class="cr-meta-context-status">SDK-схема загружается…</div>
-    </div>
-
     <div class="cr-tabs">
       <button type="button" class="cr-tab active" data-tab="campaign">Campaign</button>
       <button type="button" class="cr-tab" data-tab="adset">Ad Set</button>
       <button type="button" class="cr-tab" data-tab="audience">Audience</button>
       <button type="button" class="cr-tab" data-tab="placements">Placements</button>
-      <button type="button" class="cr-tab" data-tab="identity">Identity</button>
       <button type="button" class="cr-tab" data-tab="creative">Creative</button>
       <button type="button" class="cr-tab" data-tab="tracking">Tracking</button>
       <button type="button" class="cr-tab" data-tab="advanced">Advanced</button>
@@ -195,10 +181,8 @@ require_once __DIR__ . '/checkpassword.php';
           <div class="span-3 cr-field"><label>Lifetime budget</label><input id="mbAdsetLifetimeBudget" type="number" min="0" class="form-control"></div>
           <div class="span-3 cr-field"><label>Start time</label><input id="mbAdsetStart" type="datetime-local" class="form-control"></div>
           <div class="span-3 cr-field"><label>End time</label><input id="mbAdsetEnd" type="datetime-local" class="form-control"></div>
-          <div class="span-3 cr-field"><label>Pixel ID</label><input id="mbPixelId" class="form-control" list="mbPixelOptions" autocomplete="off"><datalist id="mbPixelOptions"></datalist></div>
-          <div class="span-3 cr-field"><label>Conversion event</label><input id="mbConversionEvent" class="form-control" list="mbConversionEventOptions" placeholder="LEAD / PURCHASE / ..."><datalist id="mbConversionEventOptions"></datalist></div>
-          <div class="span-3 cr-field"><label>Custom conversion ID</label><input id="mbCustomConversionId" class="form-control" list="mbCustomConversionOptions" autocomplete="off" placeholder="Meta custom conversion"><datalist id="mbCustomConversionOptions"></datalist></div>
-          <div class="span-3 cr-field"><label>Status</label><select id="mbAdsetStatus" class="form-control"><option value="PAUSED">PAUSED</option></select></div>
+          <div class="span-6 cr-field"><label>Conversion event</label><input id="mbConversionEvent" class="form-control" list="mbConversionEventOptions" placeholder="LEAD / PURCHASE / ..."><datalist id="mbConversionEventOptions"></datalist></div>
+          <div class="span-6 cr-field"><label>Status</label><select id="mbAdsetStatus" class="form-control"><option value="PAUSED">PAUSED</option></select></div>
           <div class="span-6 cr-field"><label>Attribution spec (JSON)</label><textarea id="mbAttributionSpec" class="form-control cr-json" placeholder='[{"event_type":"CLICK_THROUGH","window_days":7}]'></textarea></div>
           <div class="span-6 cr-field"><label>Promoted object extra (JSON)</label><textarea id="mbPromotedObject" class="form-control cr-json" placeholder='{"application_id":"..."}'></textarea></div>
           <div class="span-12 cr-checkrow"><label class="cr-check"><input id="mbDynamicCreative" type="checkbox"> Dynamic creative</label><label class="cr-check"><input id="mbIncrementalAttribution" type="checkbox"> Incremental attribution</label></div>
@@ -236,8 +220,6 @@ require_once __DIR__ . '/checkpassword.php';
             </div>
             <div id="mbBehaviorPills" class="cr-target-pills"></div>
           </div>
-          <div class="span-6 cr-field"><label>Custom audience IDs</label><input id="mbCustomAudiences" class="form-control" list="mbCustomAudienceOptions" placeholder="Выбери из Meta или введи ID"><datalist id="mbCustomAudienceOptions"></datalist></div>
-          <div class="span-6 cr-field"><label>Excluded custom audience IDs</label><input id="mbExcludedCustomAudiences" class="form-control" placeholder="123,456"></div>
           <details class="cr-raw-targeting">
             <summary>Расширенный Targeting JSON (официальные Meta-поля)</summary>
             <div class="cr-form-grid">
@@ -249,14 +231,6 @@ require_once __DIR__ . '/checkpassword.php';
               <div class="span-6 cr-field"><label>Exclusions</label><textarea id="mbExclusions" class="form-control cr-json"></textarea></div>
             </div>
           </details>
-        </div>
-        <div id="audienceEstimateCard" class="cr-audience-estimate">
-          <div>
-            <div class="cr-audience-estimate-title">Потенциальная аудитория Meta</div>
-            <div id="audienceEstimateValue" class="cr-audience-estimate-value">—</div>
-            <div id="audienceEstimateMeta" class="cr-audience-estimate-meta">Выбери Meta profile и reference RK. Оценка берётся из delivery_estimate / reachestimate Meta, без локальной формулы.</div>
-          </div>
-          <div id="audienceEstimateState" class="cr-audience-estimate-state">Не рассчитано</div>
         </div>
       </section>
 
@@ -278,12 +252,11 @@ require_once __DIR__ . '/checkpassword.php';
           <div class="cr-placement-toolbar">
             <div>
               <div class="cr-section-title" style="margin:0">Платформы и места показа</div>
-              <div id="placementCapabilitiesStatus" class="cr-hint">Выбери FB-профиль и reference RK — placements загрузятся напрямую из Meta.</div>
+              <div id="placementCapabilitiesStatus" class="cr-hint cr-placement-live">Official Meta SDK placements</div>
             </div>
-            <button id="refreshPlacements" type="button" class="cr-btn">ОБНОВИТЬ PLACEMENTS</button>
           </div>
 
-          <div id="placementPlatformGrid" class="cr-placement-grid" style="display:none">
+          <div id="placementPlatformGrid" class="cr-placement-grid">
             <div class="cr-placement-card" data-placement-card="facebook">
               <div class="cr-placement-card-head"><label class="cr-check"><input type="checkbox" data-publisher="facebook"> Facebook</label><label class="cr-check cr-placement-all"><input type="checkbox" data-position-all="facebook_positions" checked> Все доступные</label></div>
               <div id="placementFacebookOptions" class="cr-placement-options" data-position-container="facebook_positions"></div>
@@ -310,7 +283,7 @@ require_once __DIR__ . '/checkpassword.php';
             </div>
           </div>
 
-          <div id="placementDevices" class="cr-placement-devices" style="display:none">
+          <div id="placementDevices" class="cr-placement-devices">
             <div class="cr-section-title" style="margin:0 0 8px">Devices</div>
             <div id="placementDeviceOptions" class="cr-placement-options cr-placement-options-inline" data-device-container></div>
           </div>
@@ -325,15 +298,6 @@ require_once __DIR__ . '/checkpassword.php';
         </details>
       </section>
 
-      <section class="cr-panel" data-panel="identity">
-        <div class="cr-section-title">Identity</div>
-        <div class="cr-form-grid">
-          <div class="span-6 cr-field"><label>Facebook Page ID</label><input id="mbPageId" class="form-control" list="mbPageOptions" autocomplete="off"><datalist id="mbPageOptions"></datalist></div>
-          <div class="span-6 cr-field"><label>Instagram actor ID</label><input id="mbInstagramActorId" class="form-control" list="mbInstagramOptions" autocomplete="off"><datalist id="mbInstagramOptions"></datalist></div>
-        </div>
-        <div class="cr-muted mt-2">Если в Launch для конкретного RK задан свой Page / Instagram, account override может заменить эти значения.</div>
-      </section>
-
       <section class="cr-panel" data-panel="creative">
         <div class="cr-section-title">Creative / Ad</div>
         <div class="cr-form-grid">
@@ -346,42 +310,19 @@ require_once __DIR__ . '/checkpassword.php';
           <div class="span-4 cr-field"><label>CTA</label><select id="presetCta" class="form-control"><option value="LEARN_MORE">LEARN_MORE</option></select></div>
           <div class="span-8 cr-field"><label>Destination URL</label><input id="presetUrl" class="form-control" placeholder="https://..."></div>
           <div class="span-4 cr-field"><label>URL tags / UTM</label><input id="presetTags" class="form-control"></div>
-          <div class="span-4 cr-field"><label>Creative format</label><select id="presetFormat" class="form-control"><option value="SINGLE">Single image / video</option><option value="CAROUSEL">Carousel (2–10 images)</option><option value="INSTAGRAM_POST">Existing Instagram post / reel</option></select></div>
+          <div class="span-4 cr-field"><label>Creative format</label><select id="presetFormat" class="form-control"><option value="SINGLE">Single image / video</option><option value="CAROUSEL">Carousel (2–10 images)</option></select></div>
         </div>
 
         <div id="singleSection" class="cr-media-box">
           <div class="cr-media-row">
             <div id="singlePreview" class="cr-preview-box"><i class="fa-regular fa-image"></i></div>
             <div class="cr-upload-panel">
-              <div class="cr-field">
-                <label>Существующий Meta asset из reference RK</label>
-                <select id="metaExistingMedia" class="form-control"><option value="">Не выбрано — загрузить новый файл</option></select>
-              </div>
-              <div id="metaExistingMediaHint" class="cr-hint">Images / Videos подтягиваются из выбранного рекламного кабинета.</div>
               <label class="cr-file-btn">ВЫБРАТЬ IMAGE / VIDEO<input id="presetMedia" type="file" accept="image/*,video/*"></label>
               <div id="singleCurrent" class="cr-hint">Изображение или видео.</div>
             </div>
           </div>
         </div>
         <div id="carouselSection" class="cr-media-box" style="display:none"><label class="cr-file-btn" style="max-width:300px">ВЫБРАТЬ 2–10 ИЗОБРАЖЕНИЙ<input id="presetCarousel" type="file" accept="image/*" multiple></label><div id="carouselHint" class="cr-hint"></div><div id="carouselRows" class="cr-carousel-list"></div></div>
-        <div id="instagramSection" class="cr-media-box" style="display:none"><div class="cr-field" style="max-width:430px"><label>Instagram media ID</label><input id="presetInstagramMediaId" class="form-control" inputmode="numeric"></div></div>
-
-        <div class="cr-media-box" id="metaPreviewSection">
-          <div class="cr-section-title">Meta Ad Preview</div>
-          <div class="cr-form-grid">
-            <div class="span-8 cr-field">
-              <label>Формат предпросмотра Meta</label>
-              <select id="metaPreviewFormat" class="form-control"><option value="">Выбери reference RK</option></select>
-            </div>
-            <div class="span-4 cr-field" style="display:flex;align-items:end">
-              <button id="generateMetaPreview" type="button" class="cr-btn" style="width:100%">META PREVIEW</button>
-            </div>
-          </div>
-          <div id="metaPreviewStatus" class="cr-hint" style="margin-top:8px">Предпросмотр создаёт сама Meta через generatepreviews. Для локального файла до загрузки доступен только локальный preview.</div>
-          <div id="metaPreviewFrameWrap" style="display:none;margin-top:10px;border:1px solid #343a45;border-radius:8px;overflow:hidden;background:#fff">
-            <iframe id="metaPreviewFrame" title="Meta Ad Preview" sandbox="allow-scripts allow-forms allow-popups" style="display:block;width:100%;height:620px;border:0;background:#fff"></iframe>
-          </div>
-        </div>
       </section>
 
       <section class="cr-panel" data-panel="tracking">
@@ -427,7 +368,7 @@ require_once __DIR__ . '/checkpassword.php';
 </div>
 </div>
 
-<script src="scripts/creatives.js?v=20260921-placement-matrix-v106-1" type="module"></script>
+<script src="scripts/creatives.js?v=20260921-accountless-creatives-v107" type="module"></script>
 <div class="app-footer"><?php include 'copyright.php' ?></div>
 </main>
 </body>
