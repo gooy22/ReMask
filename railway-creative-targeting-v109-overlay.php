@@ -1,8 +1,8 @@
 <?php
 /**
  * v109: Accountless targeting search for Creative Library.
- * If UI does not provide a profile, use the first stored ReMask profile
- * only as hidden transport for Meta targeting search.
+ * If UI does not provide a profile, use stored ReMask profiles as a hidden
+ * transport pool. Cache only a profile that has completed a real targeting call.
  */
 $root='/var/www/html';
 $endpoint=$root.'/ajax/metaTargetingSearch.php';
@@ -33,47 +33,57 @@ if(strpos($src,'REMASK_ACCOUNTLESS_TARGETING_V1')===false){
     $match=$m[0][0];
     $replacement=$match."\n".
 "    /* REMASK_ACCOUNTLESS_TARGETING_V1 */\n".
-"    /* REMASK_ACCOUNTLESS_TRANSPORT_POOL_V3 */\n".
-"    if (\$profile === '') {\n".
+"    /* REMASK_ACCOUNTLESS_TRANSPORT_POOL_V4 */\n".
+"    \$remaskAccountlessTargeting = (\$profile === '');\n".
+"    \$remaskTargetingCandidateNames = [];\n".
+"    \$remaskTargetingStored = [];\n".
+"    \$remaskTransportCacheFile = '';\n".
+"    if (\$remaskAccountlessTargeting) {\n".
 "        \$store = AccountStoreFactory::create(ACCOUNTSFILENAME);\n".
-"        \$stored = [];\n".
 "        foreach ((array)\$store->deserialize() as \$candidate) {\n".
 "            if (!\$candidate instanceof FbAccount) continue;\n".
 "            \$candidateName = trim((string)\$candidate->name);\n".
 "            if (\$candidateName === '' || trim((string)\$candidate->token) === '') continue;\n".
-"            \$stored[\$candidateName] = \$candidate;\n".
+"            \$remaskTargetingStored[\$candidateName] = \$candidate;\n".
 "        }\n".
-"        if (\$stored === []) throw new RuntimeException('No stored Meta profile is available for targeting search.');\n".
+"        if (\$remaskTargetingStored === []) throw new RuntimeException('No stored Meta profile is available for targeting search.');\n".
 "\n".
 "        \$dataRoot = rtrim((string)(getenv('REMASK_DATA_DIR') ?: '/var/lib/remask'), '/');\n".
 "        \$transportCacheDir = \$dataRoot . '/meta-cache';\n".
 "        if (!is_dir(\$transportCacheDir)) @mkdir(\$transportCacheDir, 0770, true);\n".
-"        \$transportCacheFile = \$transportCacheDir . '/creative-targeting-transport.json';\n".
-"        \$transportCache = is_file(\$transportCacheFile)\n".
-"            ? json_decode((string)@file_get_contents(\$transportCacheFile), true)\n".
+"        \$remaskTransportCacheFile = \$transportCacheDir . '/creative-targeting-transport.json';\n".
+"        \$transportCache = is_file(\$remaskTransportCacheFile)\n".
+"            ? json_decode((string)@file_get_contents(\$remaskTransportCacheFile), true)\n".
 "            : [];\n".
 "        if (!is_array(\$transportCache)) \$transportCache = [];\n".
-"\n".
 "        \$cachedName = trim((string)(\$transportCache['profile'] ?? ''));\n".
 "        \$cachedAt = (int)(\$transportCache['verified_at'] ?? 0);\n".
-"        if (\$cachedName !== '' && isset(\$stored[\$cachedName]) && (time() - \$cachedAt) < 900) {\n".
-"            \$profile = \$cachedName;\n".
-"        } else {\n".
-"            // Targeting autocomplete must stay fast: never run a full Meta preflight here.\n".
-"            // Prefer a saved profile without a proxy, otherwise use the first stored profile.\n".
-"            foreach (\$stored as \$candidateName => \$candidate) {\n".
-"                if (\$candidate->proxy === null) {\n".
-"                    \$profile = \$candidateName;\n".
-"                    break;\n".
-"                }\n".
-"            }\n".
-"            if (\$profile === '') \$profile = (string)array_key_first(\$stored);\n".
-"            @file_put_contents(\$transportCacheFile, json_encode([\n".
-"                'profile' => \$profile,\n".
-"                'verified_at' => time(),\n".
-"                'source' => 'fast_targeting_transport',\n".
-"            ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));\n".
+"        \$cachedSource = trim((string)(\$transportCache['source'] ?? ''));\n".
+"        \$failedMap = is_array(\$transportCache['failed'] ?? null) ? \$transportCache['failed'] : [];\n".
+"\n".
+"        if (\$cachedSource === 'successful_targeting_call'\n".
+"            && \$cachedName !== ''\n".
+"            && isset(\$remaskTargetingStored[\$cachedName])\n".
+"            && (time() - \$cachedAt) < 900) {\n".
+"            \$remaskTargetingCandidateNames[] = \$cachedName;\n".
 "        }\n".
+"        foreach (\$remaskTargetingStored as \$candidateName => \$candidate) {\n".
+"            \$failedAt = (int)(\$failedMap[\$candidateName] ?? 0);\n".
+"            if (\$failedAt > 0 && (time() - \$failedAt) < 120) continue;\n".
+"            if (\$candidate->proxy === null && !in_array(\$candidateName, \$remaskTargetingCandidateNames, true)) {\n".
+"                \$remaskTargetingCandidateNames[] = \$candidateName;\n".
+"            }\n".
+"        }\n".
+"        foreach (array_keys(\$remaskTargetingStored) as \$candidateName) {\n".
+"            \$failedAt = (int)(\$failedMap[\$candidateName] ?? 0);\n".
+"            if (\$failedAt > 0 && (time() - \$failedAt) < 120) continue;\n".
+"            if (!in_array(\$candidateName, \$remaskTargetingCandidateNames, true)) \$remaskTargetingCandidateNames[] = \$candidateName;\n".
+"        }\n".
+"        if (\$remaskTargetingCandidateNames === []) {\n".
+"            // All transports failed very recently. Retry them once instead of getting stuck forever.\n".
+"            \$remaskTargetingCandidateNames = array_keys(\$remaskTargetingStored);\n".
+"        }\n".
+"        \$profile = (string)(\$remaskTargetingCandidateNames[0] ?? '');\n".
 "        if (\$profile === '') throw new RuntimeException('No Meta profile transport is available for targeting search.');\n".
 "    }";
     $src=preg_replace($profilePattern,$replacement,$src,1,$count) ?? $src;
@@ -86,7 +96,106 @@ if(strpos($src,'REMASK_ACCOUNTLESS_TARGETING_V1')===false){
             exit(375);
         }
         $serviceReplacement=<<<'PHP_CODE'
-$service = MetaEndpoint::serviceForAccountName($profile);
+if (!empty($remaskAccountlessTargeting)) {
+    /* REMASK_TARGETING_RUNTIME_FAILOVER_V1 */
+    $service = new class($remaskTargetingCandidateNames, $remaskTransportCacheFile) {
+        private array $candidates;
+        private string $cacheFile;
+
+        public function __construct(array $candidates, string $cacheFile)
+        {
+            $this->candidates = array_values(array_filter(array_map('strval', $candidates)));
+            $this->cacheFile = $cacheFile;
+        }
+
+        private static function retryable(Throwable $e): bool
+        {
+            $m = strtolower(trim((string)$e->getMessage()));
+            if ($m === '') return false;
+            foreach ([
+                'proxy', 'transport error', 'connection', 'timed out', 'timeout',
+                'could not connect', 'couldn\'t connect', 'empty reply', 'recv failure',
+                'connection reset', 'connection closed', 'failed to connect',
+                'oauth', 'error loading application', 'invalid oauth', 'code 190'
+            ] as $needle) {
+                if (str_contains($m, $needle)) return true;
+            }
+            return false;
+        }
+
+        private function cacheRead(): array
+        {
+            if ($this->cacheFile === '' || !is_file($this->cacheFile)) return [];
+            $data = json_decode((string)@file_get_contents($this->cacheFile), true);
+            return is_array($data) ? $data : [];
+        }
+
+        private function cacheFailure(string $profile): void
+        {
+            if ($this->cacheFile === '') return;
+            $data = $this->cacheRead();
+            $failed = is_array($data['failed'] ?? null) ? $data['failed'] : [];
+            $failed[$profile] = time();
+            $data['failed'] = $failed;
+            @file_put_contents($this->cacheFile, json_encode($data, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
+        }
+
+        private function cacheSuccess(string $profile): void
+        {
+            if ($this->cacheFile === '') return;
+            $data = $this->cacheRead();
+            $failed = is_array($data['failed'] ?? null) ? $data['failed'] : [];
+            unset($failed[$profile]);
+            @file_put_contents($this->cacheFile, json_encode([
+                'profile' => $profile,
+                'verified_at' => time(),
+                'source' => 'successful_targeting_call',
+                'failed' => $failed,
+            ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
+        }
+
+        private function run(callable $fn): array
+        {
+            $errors = [];
+            foreach ($this->candidates as $profile) {
+                try {
+                    $real = MetaEndpoint::serviceForAccountName($profile);
+                    $result = $fn($real);
+                    $this->cacheSuccess($profile);
+                    return is_array($result) ? $result : [];
+                } catch (Throwable $e) {
+                    $errors[] = $profile . ': ' . trim((string)$e->getMessage());
+                    if (!self::retryable($e)) throw $e;
+                    $this->cacheFailure($profile);
+                }
+            }
+            $last = $errors !== [] ? end($errors) : 'no candidate transports';
+            throw new RuntimeException('All Meta targeting transports failed. ' . $last);
+        }
+
+        public function searchInterests(string $query, int $limit = 25): array
+        {
+            return $this->run(fn($s) => $s->searchInterests($query, $limit));
+        }
+
+        public function searchLocations(string $query, array $locationTypes = ['country','region','city'], int $limit = 25): array
+        {
+            return $this->run(fn($s) => $s->searchLocations($query, $locationTypes, $limit));
+        }
+
+        public function searchBehaviors(string $accountId, string $query, int $limit = 25): array
+        {
+            return $this->run(fn($s) => $s->searchBehaviors($accountId, $query, $limit));
+        }
+
+        public function listAdAccounts(int $limit = 1): array
+        {
+            return $this->run(fn($s) => $s->listAdAccounts($limit));
+        }
+    };
+} else {
+    $service = MetaEndpoint::serviceForAccountName($profile);
+}
 
 /* REMASK_ACCOUNTLESS_BEHAVIOR_ACCOUNT_V1 */
 $remaskTargetingType = strtolower(trim((string)($input['type'] ?? '')));
@@ -114,4 +223,4 @@ PHP_CODE;
 
     file_put_contents($endpoint,$src);
 }
-fwrite(STDERR,"[creative-targeting-v109] fast cached targeting transport + accountless Behaviors context enabled\n");
+fwrite(STDERR,"[creative-targeting-v109] real-call targeting failover + accountless Behaviors context enabled\n");
