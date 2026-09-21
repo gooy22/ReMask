@@ -44,6 +44,7 @@ COPY railway-meta-builder-v102-overlay.php /tmp/railway-meta-builder-v102-overla
 COPY railway-v102-MetaSdkSchema.php /tmp/remask-v102-MetaSdkSchema.php
 COPY railway-meta-schema-ui-v103-overlay.php /tmp/railway-meta-schema-ui-v103-overlay.php
 COPY railway-creative-capabilities-v105-overlay.php /tmp/railway-creative-capabilities-v105-overlay.php
+COPY railway-placement-capabilities-v106-overlay.php /tmp/railway-placement-capabilities-v106-overlay.php
 COPY railway-selection-persistence-overlay.php /tmp/railway-selection-persistence-overlay.php
 COPY railway-profile-error-fix-overlay.php /tmp/railway-profile-error-fix-overlay.php
 COPY docker-start.sh /tmp/docker-start.sh
@@ -94,6 +95,8 @@ RUN set -eux; \
     php /tmp/railway-meta-schema-ui-v103-overlay.php; \
     php -l /tmp/railway-creative-capabilities-v105-overlay.php; \
     php /tmp/railway-creative-capabilities-v105-overlay.php; \
+    php -l /tmp/railway-placement-capabilities-v106-overlay.php; \
+    php /tmp/railway-placement-capabilities-v106-overlay.php; \
     php /tmp/railway-selection-persistence-overlay.php; \
     php /tmp/railway-profile-error-fix-overlay.php; \
     php -r '$allowedRaw=["/var/www/html/classes/MetaApiClient.php"=>true,"/var/www/html/classes/FbRequests.php"=>true,"/var/www/html/classes/ProxyHealthService.php"=>true]; $allowedLegacy=["/var/www/html/ajax/payUnsettled.php"=>true,"/var/www/html/ajax/policyAppeal.php"=>true,"/var/www/html/ajax/disapproveAppeal.php"=>true]; $violations=[]; foreach(["/var/www/html/ajax","/var/www/html/classes","/var/www/html/bin"] as $root){$it=new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root,FilesystemIterator::SKIP_DOTS)); foreach($it as $fi){if(!$fi->isFile()||$fi->getExtension()!=="php")continue;$path=$fi->getPathname();$s=file_get_contents($path);if((str_contains($s,"graph.facebook.com")||str_contains($s,"curl_init("))&&!isset($allowedRaw[$path]))$violations[]="raw-meta-transport:".$path;if($fi->getFilename()!=="FbRequests.php"&&preg_match("/new\\s+FbRequests\\s*\\(/",$s)&&!isset($allowedLegacy[$path]))$violations[]="legacy-fbrequests-ref:".$path;}} if($violations){fwrite(STDERR,"Meta transport invariant failed: ".implode(", ",$violations)."\\n");exit(91);} fwrite(STDERR,"[transport-invariant] canonical Graph transport enforced; legacy browser transport limited to payment/appeal endpoints\\n");'; \
@@ -110,6 +113,17 @@ RUN set -eux; \
     php -l /var/www/html/ajax/metaCreativeCapabilities.php; \
     php -l /var/www/html/ajax/metaAudienceEstimate.php; \
     php -l /var/www/html/ajax/metaCreativePreview.php; \
+    php -l /var/www/html/ajax/metaPlacementCapabilities.php; \
+    grep -q 'REMASK_PLACEMENT_CAPABILITIES_V1' /var/www/html/classes/MetaAdsService.php; \
+    grep -q 'targetingbrowse' /var/www/html/classes/MetaAdsService.php; \
+    grep -q 'placementOptions' /var/www/html/classes/MetaSdkSchema.php; \
+    grep -q 'metaPlacementCapabilities.php' /var/www/html/scripts/creatives.js; \
+    grep -q 'Manual placements' /var/www/html/creatives.php; \
+    grep -q 'Advantage+ placements' /var/www/html/creatives.php; \
+    grep -q 'data-position-group' /var/www/html/scripts/creatives.js; \
+    grep -q 'placementMode()' /var/www/html/scripts/creatives.js; \
+    ! grep -q 'mbFacebookPositions' /var/www/html/creatives.php; \
+    ! grep -q 'mbInstagramPositions' /var/www/html/creatives.php; \
     grep -q 'REMASK_CREATIVE_CAPABILITIES_V1' /var/www/html/classes/MetaAdsService.php; \
     grep -q 'delivery_estimate' /var/www/html/classes/MetaAdsService.php; \
     grep -q 'REMASK_SYNC_ERROR_CLASSIFIER_V1' /var/www/html/scripts/workspace.js; \
