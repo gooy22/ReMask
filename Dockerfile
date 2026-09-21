@@ -135,7 +135,7 @@ RUN set -eux; \
     grep -q 'REMASK_FULL_META_LAUNCH_V1' /var/www/html/scripts/launch.js; \
     grep -q 'launchMetaSdkFields' /var/www/html/launch.php; \
     grep -q 'remaskCurrentMetaBuilderForJob' /var/www/html/scripts/launch.js; \
-    grep -q 'full-meta-v113' /var/www/html/launch.php; \
+    grep -q 'meta-editors-v114' /var/www/html/launch.php; \
     grep -q 'REMASK_META_VISUAL_EDITORS_V1' /var/www/html/scripts/launch.js; \
     grep -q 'rmMetaVisualModal' /var/www/html/launch.php; \
     grep -q 'meta-editors-v114' /var/www/html/launch.php; \
