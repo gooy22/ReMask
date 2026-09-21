@@ -509,116 +509,6 @@ function addCreativeTarget(kind, item) {
     }
 }
 
-function creativeTargetSearchElements(kind) {
-    const ids = {
-        geo:['mbGeoSearch','mbGeoResults'],
-        interests:['mbInterestSearch','mbInterestResults'],
-        behaviors:['mbBehaviorSearch','mbBehaviorResults'],
-    };
-    const pair = ids[kind] || [];
-    return {input:$(pair[0]), results:$(pair[1])};
-}
-
-async function searchCreativeTargeting(kind) {
-    const {input,results} = creativeTargetSearchElements(kind);
-    if (!input || !results) return;
-    const query = String(input.value || '').trim();
-
-    if (query.length < 2) {
-        creativeTargetingControllers[kind]?.abort();
-        creativeTargetingControllers[kind] = null;
-        results.classList.remove('open');
-        results.innerHTML = query ? '<div class="cr-target-empty">Минимум 2 символа.</div>' : '';
-        return;
-    }
-    if (!metaContext.profile) {
-        results.innerHTML = '<div class="cr-target-empty">Сначала выбери Meta profile.</div>';
-        results.classList.add('open');
-        return;
-    }
-    if (kind === 'behaviors' && !metaContext.accountId) {
-        results.innerHTML = '<div class="cr-target-empty">Для Behaviors выбери reference RK.</div>';
-        results.classList.add('open');
-        return;
-    }
-
-    creativeTargetingControllers[kind]?.abort();
-    const controller = new AbortController();
-    creativeTargetingControllers[kind] = controller;
-    results.innerHTML = '<div class="cr-target-empty">Поиск в Meta…</div>';
-    results.classList.add('open');
-
-    const type = kind === 'geo' ? 'locations' : kind;
-    const body = new URLSearchParams({
-        profile:metaContext.profile,
-        type,
-        q:query,
-        limit:'25',
-    });
-    if (metaContext.accountId) body.set('account_id', metaContext.accountId);
-
-    try {
-        const data = await api('ajax/metaTargetingSearch.php', {
-            method:'POST',
-            headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8'},
-            body,
-            signal:controller.signal,
-        });
-        const rows = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : []);
-        results.innerHTML = '';
-        if (!rows.length) {
-            results.innerHTML = '<div class="cr-target-empty">Meta ничего не нашла.</div>';
-            return;
-        }
-        for (const item of rows) {
-            const label = creativeTargetLabel(kind, item);
-            const row = document.createElement('div');
-            row.className = 'cr-target-result';
-            const main = document.createElement('div');
-            main.textContent = label.main;
-            row.appendChild(main);
-            if (label.meta) {
-                const small = document.createElement('small');
-                small.textContent = label.meta;
-                row.appendChild(small);
-            }
-            row.addEventListener('click', () => {
-                addCreativeTarget(kind, item);
-                input.value = '';
-                results.classList.remove('open');
-                results.innerHTML = '';
-            });
-            results.appendChild(row);
-        }
-    } catch (error) {
-        if (error?.name === 'AbortError') return;
-        results.innerHTML = '<div class="cr-target-empty">' + esc(error.message) + '</div>';
-    } finally {
-        if (creativeTargetingControllers[kind] === controller) creativeTargetingControllers[kind] = null;
-    }
-}
-
-function installCreativeTargetSearch(kind) {
-    const {input,results} = creativeTargetSearchElements(kind);
-    if (!input || !results) return;
-    input.addEventListener('input', () => {
-        clearTimeout(creativeTargetingTimers[kind]);
-        creativeTargetingTimers[kind] = setTimeout(() => searchCreativeTargeting(kind), 260);
-    });
-    input.addEventListener('keydown', (event) => {
-        if (event.key === 'Enter') {
-            event.preventDefault();
-            clearTimeout(creativeTargetingTimers[kind]);
-            searchCreativeTargeting(kind);
-        } else if (event.key === 'Escape') {
-            results.classList.remove('open');
-        }
-    });
-    input.addEventListener('focus', () => {
-        if (input.value.trim().length >= 2 && results.innerHTML) results.classList.add('open');
-    });
-}
-
 function setMetaSelectOptions(id, values, options = {}) {
     const el = $(id);
     if (!el) return;
@@ -1367,26 +1257,21 @@ $('presetCarousel').addEventListener('change', function () {
 $('creativeForm').addEventListener('submit', save);
 $('creativeSearch').addEventListener('input', render);
 $('metaFieldSearch')?.addEventListener('input', filterMetaSdkFields);
-installCreativeTargetSearch('geo');
-installCreativeTargetSearch('interests');
-installCreativeTargetSearch('behaviors');
 for (const id of ['mbGeo','mbInterests','mbBehaviors']) {
     $(id)?.addEventListener('change', () => {
         hydrateCreativeTargetingSelections();
     });
 }
 
-const audienceEstimateIds = [
-    'mbObjective','mbDestinationType','mbOptimizationGoal','mbConversionEvent','mbCustomConversionId','mbPixelId',
+const creativeConfigIds = [
+    'mbObjective','mbDestinationType','mbOptimizationGoal','mbConversionEvent',
     'mbAgeMin','mbAgeMax','mbGender','mbLocales','mbGeo','mbExcludedGeo',
-    'mbInterests','mbBehaviors','mbCustomAudiences','mbExcludedCustomAudiences',
-    'mbFlexibleSpec','mbExclusions','mbUserOs','mbUserDevice'
+    'mbInterests','mbBehaviors','mbFlexibleSpec','mbExclusions','mbUserOs','mbUserDevice'
 ];
-for (const id of audienceEstimateIds) {
+for (const id of creativeConfigIds) {
     const el = $(id);
     if (!el) continue;
     el.addEventListener(el.tagName === 'SELECT' ? 'change' : 'input', () => {
-        scheduleAudienceEstimate();
         if (id === 'mbObjective' || id === 'mbOptimizationGoal') schedulePlacementCapabilities(0);
     });
 }
