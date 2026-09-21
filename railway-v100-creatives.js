@@ -14,9 +14,9 @@ let placementCapabilitiesTimer = null;
 let placementCapabilitiesSeq = 0;
 let metaPlacementOptions = {};
 let pendingPlacementTargeting = null;
-const creativeTargetingSelections = {geo:[], interests:[], behaviors:[]};
-const creativeTargetingTimers = {geo:0, interests:0, behaviors:0};
-const creativeTargetingControllers = {geo:null, interests:null, behaviors:null};
+const creativeTargetingSelections = {geo:[], excludedGeo:[], interests:[], behaviors:[]};
+const creativeTargetingTimers = {geo:0, excludedGeo:0, interests:0, behaviors:0};
+const creativeTargetingControllers = {geo:null, excludedGeo:null, interests:null, behaviors:null};
 const coveredMetaFields = {
     campaign: new Set(['name','objective','buying_type','special_ad_categories','bid_strategy','daily_budget','lifetime_budget','spend_cap','start_time','stop_time','status']),
     adset: new Set(['name','optimization_goal','billing_event','bid_strategy','bid_amount','destination_type','daily_budget','lifetime_budget','start_time','end_time','attribution_spec','promoted_object','is_dynamic_creative','is_incremental_attribution_enabled','status']),
@@ -559,7 +559,7 @@ function creativeTargetLabel(kind, item) {
 }
 
 function renderCreativeTargetPills(kind) {
-    const ids = {geo:'mbGeoPills', interests:'mbInterestPills', behaviors:'mbBehaviorPills'};
+    const ids = {geo:'mbGeoPills', excludedGeo:'mbExcludedGeoPills', interests:'mbInterestPills', behaviors:'mbBehaviorPills'};
     const box = $(ids[kind]);
     if (!box) return;
     const rows = creativeTargetingSelections[kind] || [];
@@ -586,12 +586,14 @@ function renderCreativeTargetPills(kind) {
     }
 }
 
-function geoSpecFromCreativeSelections() {
+function geoSpecFromRows(rows) {
     const spec = {};
     const countries = [];
     const regions = [];
     const cities = [];
-    for (const item of creativeTargetingSelections.geo || []) {
+    const zips = [];
+    const geoMarkets = [];
+    for (const item of rows || []) {
         const type = String(item?.type || '').toLowerCase();
         if (type === 'country') {
             const code = String(item?.country_code || item?.key || '').trim();
@@ -606,17 +608,27 @@ function geoSpecFromCreativeSelections() {
             if (Number.isFinite(Number(item?.radius)) && Number(item.radius) > 0) row.radius = Number(item.radius);
             if (item?.distance_unit) row.distance_unit = item.distance_unit;
             cities.push(row);
+        } else if (type === 'zip') {
+            const key = String(item?.key || '').trim();
+            if (key && !zips.some((row) => String(row.key) === key)) zips.push({key});
+        } else if (type === 'geo_market') {
+            const key = String(item?.key || '').trim();
+            if (key && !geoMarkets.some((row) => String(row.key) === key)) geoMarkets.push({key});
         }
     }
     if (countries.length) spec.countries = countries;
     if (regions.length) spec.regions = regions;
     if (cities.length) spec.cities = cities;
+    if (zips.length) spec.zips = zips;
+    if (geoMarkets.length) spec.geo_markets = geoMarkets;
     return spec;
 }
 
 function syncCreativeTargetingRaw(kind) {
     if (kind === 'geo') {
-        $('mbGeo').value = stringify(geoSpecFromCreativeSelections());
+        $('mbGeo').value = stringify(geoSpecFromRows(creativeTargetingSelections.geo));
+    } else if (kind === 'excludedGeo') {
+        $('mbExcludedGeo').value = stringify(geoSpecFromRows(creativeTargetingSelections.excludedGeo));
     } else if (kind === 'interests') {
         $('mbInterests').value = stringify((creativeTargetingSelections.interests || []).map((row) => ({
             id:String(row.id || ''), name:String(row.name || row.id || '')
@@ -630,6 +642,7 @@ function syncCreativeTargetingRaw(kind) {
 
 function hydrateCreativeTargetingSelections() {
     creativeTargetingSelections.geo = [];
+    creativeTargetingSelections.excludedGeo = [];
     creativeTargetingSelections.interests = [];
     creativeTargetingSelections.behaviors = [];
 
@@ -647,6 +660,25 @@ function hydrateCreativeTargetingSelections() {
     } catch {}
 
     try {
+        const geo = parseJsonField('mbExcludedGeo', {});
+        for (const code of Array.isArray(geo?.countries) ? geo.countries : []) {
+            creativeTargetingSelections.excludedGeo.push({type:'country', key:String(code), country_code:String(code), name:String(code)});
+        }
+        for (const row of Array.isArray(geo?.regions) ? geo.regions : []) {
+            if (row && typeof row === 'object' && row.key !== undefined) creativeTargetingSelections.excludedGeo.push({type:'region', ...row});
+        }
+        for (const row of Array.isArray(geo?.cities) ? geo.cities : []) {
+            if (row && typeof row === 'object' && row.key !== undefined) creativeTargetingSelections.excludedGeo.push({type:'city', ...row});
+        }
+        for (const row of Array.isArray(geo?.zips) ? geo.zips : []) {
+            if (row && typeof row === 'object' && row.key !== undefined) creativeTargetingSelections.excludedGeo.push({type:'zip', ...row});
+        }
+        for (const row of Array.isArray(geo?.geo_markets) ? geo.geo_markets : []) {
+            if (row && typeof row === 'object' && row.key !== undefined) creativeTargetingSelections.excludedGeo.push({type:'geo_market', ...row});
+        }
+    } catch {}
+
+    try {
         const interests = parseJsonField('mbInterests', []);
         if (Array.isArray(interests)) creativeTargetingSelections.interests = interests.filter((row) => row && (row.id || typeof row === 'string')).map((row) => typeof row === 'string' ? {id:row,name:row} : row);
     } catch {}
@@ -657,6 +689,7 @@ function hydrateCreativeTargetingSelections() {
     } catch {}
 
     renderCreativeTargetPills('geo');
+    renderCreativeTargetPills('excludedGeo');
     renderCreativeTargetPills('interests');
     renderCreativeTargetPills('behaviors');
 }
@@ -669,6 +702,123 @@ function addCreativeTarget(kind, item) {
         syncCreativeTargetingRaw(kind);
         renderCreativeTargetPills(kind);
     }
+}
+
+function creativeTargetSearchConfig(kind) {
+    return {
+        geo:{input:'mbGeoSearch', results:'mbGeoResults', apiType:'locations'},
+        excludedGeo:{input:'mbExcludedGeoSearch', results:'mbExcludedGeoResults', apiType:'locations'},
+        interests:{input:'mbInterestSearch', results:'mbInterestResults', apiType:'interests'},
+        behaviors:{input:'mbBehaviorSearch', results:'mbBehaviorResults', apiType:'behaviors'}
+    }[kind];
+}
+
+function closeCreativeTargetResults(kind) {
+    const cfg = creativeTargetSearchConfig(kind);
+    const box = cfg ? $(cfg.results) : null;
+    if (!box) return;
+    box.classList.remove('open');
+    box.innerHTML = '';
+}
+
+function renderCreativeTargetResults(kind, items) {
+    const cfg = creativeTargetSearchConfig(kind);
+    const box = cfg ? $(cfg.results) : null;
+    if (!box) return;
+    box.innerHTML = '';
+    if (!items.length) {
+        box.innerHTML = '<div class="cr-target-empty">Ничего не найдено</div>';
+        box.classList.add('open');
+        return;
+    }
+    for (const item of items) {
+        const row = document.createElement('div');
+        row.className = 'cr-target-result';
+        const label = creativeTargetLabel(kind === 'excludedGeo' ? 'geo' : kind, item);
+        row.innerHTML = '<div>' + esc(label.main) + '</div>' + (label.meta ? '<small>' + esc(label.meta) + '</small>' : '');
+        row.addEventListener('click', () => {
+            addCreativeTarget(kind, item);
+            const input = $(cfg.input);
+            if (input) input.value = '';
+            closeCreativeTargetResults(kind);
+        });
+        box.appendChild(row);
+    }
+    box.classList.add('open');
+}
+
+async function searchCreativeTargeting(kind) {
+    const cfg = creativeTargetSearchConfig(kind);
+    if (!cfg) return;
+    const input = $(cfg.input);
+    const results = $(cfg.results);
+    const query = String(input?.value || '').trim();
+
+    clearTimeout(creativeTargetingTimers[kind]);
+    creativeTargetingControllers[kind]?.abort();
+    creativeTargetingControllers[kind] = null;
+
+    if (query.length < 2) {
+        if (results) {
+            results.classList.remove('open');
+            results.innerHTML = '';
+        }
+        return;
+    }
+
+    const controller = new AbortController();
+    creativeTargetingControllers[kind] = controller;
+    if (results) {
+        results.innerHTML = '<div class="cr-target-empty">Ищу в Meta…</div>';
+        results.classList.add('open');
+    }
+
+    const params = new URLSearchParams();
+    params.set('type', cfg.apiType);
+    params.set('q', query);
+    params.set('limit', '25');
+
+    try {
+        const data = await api('ajax/metaTargetingSearch.php', {
+            method:'POST',
+            headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8'},
+            body:params.toString(),
+            signal:controller.signal
+        });
+        if (creativeTargetingControllers[kind] !== controller) return;
+        const rows = Array.isArray(data) ? data
+            : Array.isArray(data?.data) ? data.data
+            : Array.isArray(data?.items) ? data.items
+            : [];
+        renderCreativeTargetResults(kind, rows);
+    } catch (error) {
+        if (error?.name === 'AbortError') return;
+        if (creativeTargetingControllers[kind] !== controller) return;
+        if (results) {
+            results.innerHTML = '<div class="cr-target-empty">Meta: ' + esc(error.message) + '</div>';
+            results.classList.add('open');
+        }
+    } finally {
+        if (creativeTargetingControllers[kind] === controller) creativeTargetingControllers[kind] = null;
+    }
+}
+
+function installCreativeTargetSearch(kind) {
+    const cfg = creativeTargetSearchConfig(kind);
+    const input = cfg ? $(cfg.input) : null;
+    if (!input) return;
+    input.addEventListener('input', () => {
+        clearTimeout(creativeTargetingTimers[kind]);
+        creativeTargetingTimers[kind] = setTimeout(() => searchCreativeTargeting(kind), 240);
+    });
+    input.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            clearTimeout(creativeTargetingTimers[kind]);
+            searchCreativeTargeting(kind);
+        }
+        if (event.key === 'Escape') closeCreativeTargetResults(kind);
+    });
 }
 
 function setMetaSelectOptions(id, values, options = {}) {
@@ -1413,7 +1563,11 @@ $('presetCarousel').addEventListener('change', function () {
 $('creativeForm').addEventListener('submit', save);
 $('creativeSearch').addEventListener('input', render);
 $('metaFieldSearch')?.addEventListener('input', filterMetaSdkFields);
-for (const id of ['mbGeo','mbInterests','mbBehaviors']) {
+installCreativeTargetSearch('geo');
+installCreativeTargetSearch('excludedGeo');
+installCreativeTargetSearch('interests');
+installCreativeTargetSearch('behaviors');
+for (const id of ['mbGeo','mbExcludedGeo','mbInterests','mbBehaviors']) {
     $(id)?.addEventListener('change', () => {
         hydrateCreativeTargetingSelections();
     });
