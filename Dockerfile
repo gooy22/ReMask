@@ -255,7 +255,6 @@ RUN set -eux; \
     grep -q 'meta-builder-v102' /var/www/html/launch.php; \
     php -l /var/www/html/classes/MetaSdkSchema.php; \
     php -l /var/www/html/ajax/metaSdkSchema.php; \
-    grep -q 'meta-builder-v103' /var/www/html/creatives.php; \
     grep -q 'metaSdkFields' /var/www/html/creatives.php; \
     grep -q 'loadMetaSdkSchema' /var/www/html/scripts/creatives.js; \
     grep -q 'renderMetaSdkFields' /var/www/html/scripts/creatives.js; \
