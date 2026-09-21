@@ -144,7 +144,7 @@ RUN set -eux; \
     grep -q 'REMASK_LANGUAGE_SEARCH_V1' /var/www/html/classes/MetaAdsService.php; \
     grep -q "'type' => 'adlocale'" /var/www/html/classes/MetaAdsService.php; \
     grep -q "'limit' => 1000" /var/www/html/classes/MetaAdsService.php; \
-    grep -q 'All Meta locale transports failed' /var/www/html/ajax/metaTargetingSearch.php; \
+    grep -q 'No Meta locale transport candidate is available' /var/www/html/ajax/metaTargetingSearch.php; \
     grep -q "'language', 'languages', 'locale', 'locales'" /var/www/html/ajax/metaTargetingSearch.php; \
     grep -q 'REMASK_AUDIENCE_LANGUAGES_V1' /var/www/html/scripts/launch.js; \
     grep -q 'languageQuery' /var/www/html/scripts/launch.js; \
