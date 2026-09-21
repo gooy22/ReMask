@@ -81,7 +81,7 @@ async def lifespan(app: FastAPI):
     await asyncio.gather(smoke_task,return_exceptions=True)
     await pool.stop()
 
-app=FastAPI(title='ReMask Python Worker',version='0.2.0',lifespan=lifespan)
+app=FastAPI(title='ReMask Python Worker',version='0.3.0',lifespan=lifespan)
 
 @app.get('/health',response_model=HealthResponse)
 async def health() -> HealthResponse:
