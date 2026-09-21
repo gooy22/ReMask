@@ -15,7 +15,7 @@ if(strpos($src,'REMASK_ACCOUNTLESS_TARGETING_V1')===false){
     if(strpos($src,$reqAnchor)!==false && strpos($src,'AccountStoreFactory.php')===false){
         $src=str_replace(
             $reqAnchor,
-            $reqAnchor."\nrequire_once __DIR__ . '/../classes/AccountStoreFactory.php';\nrequire_once __DIR__ . '/../classes/FbAccount.php';",
+            $reqAnchor."\nrequire_once __DIR__ . '/../classes/AccountStoreFactory.php';\nrequire_once __DIR__ . '/../classes/FbAccount.php';\nrequire_once __DIR__ . '/../classes/MetaEndpoint.php';",
             $src,
             $n
         );
@@ -33,15 +33,63 @@ if(strpos($src,'REMASK_ACCOUNTLESS_TARGETING_V1')===false){
     $match=$m[0][0];
     $replacement=$match."\n".
 "    /* REMASK_ACCOUNTLESS_TARGETING_V1 */\n".
+"    /* REMASK_ACCOUNTLESS_TRANSPORT_POOL_V2 */\n".
 "    if (\$profile === '') {\n".
 "        \$store = AccountStoreFactory::create(ACCOUNTSFILENAME);\n".
+"        \$stored = [];\n".
 "        foreach ((array)\$store->deserialize() as \$candidate) {\n".
 "            if (!\$candidate instanceof FbAccount) continue;\n".
-"            if (trim((string)\$candidate->name) === '') continue;\n".
-"            \$profile = (string)\$candidate->name;\n".
-"            break;\n".
+"            \$candidateName = trim((string)\$candidate->name);\n".
+"            if (\$candidateName === '' || trim((string)\$candidate->token) === '') continue;\n".
+"            \$stored[\$candidateName] = \$candidate;\n".
 "        }\n".
-"        if (\$profile === '') throw new RuntimeException('No stored Meta profile is available for targeting search.');\n".
+"        if (\$stored === []) throw new RuntimeException('No stored Meta profile is available for targeting search.');\n".
+"\n".
+"        \$dataRoot = rtrim((string)(getenv('REMASK_DATA_DIR') ?: '/var/lib/remask'), '/');\n".
+"        \$transportCacheDir = \$dataRoot . '/meta-cache';\n".
+"        if (!is_dir(\$transportCacheDir)) @mkdir(\$transportCacheDir, 0770, true);\n".
+"        \$transportCacheFile = \$transportCacheDir . '/creative-targeting-transport.json';\n".
+"        \$transportCache = is_file(\$transportCacheFile)\n".
+"            ? json_decode((string)@file_get_contents(\$transportCacheFile), true)\n".
+"            : [];\n".
+"        if (!is_array(\$transportCache)) \$transportCache = [];\n".
+"\n".
+"        \$orderedNames = [];\n".
+"        \$cachedName = trim((string)(\$transportCache['profile'] ?? ''));\n".
+"        \$cachedAt = (int)(\$transportCache['verified_at'] ?? 0);\n".
+"        if (\$cachedName !== '' && isset(\$stored[\$cachedName]) && (time() - \$cachedAt) < 30) {\n".
+"            \$orderedNames[] = \$cachedName;\n".
+"        }\n".
+"        foreach (\$stored as \$candidateName => \$candidate) {\n".
+"            if (\$candidate->proxy === null && !in_array(\$candidateName, \$orderedNames, true)) {\n".
+"                \$orderedNames[] = \$candidateName;\n".
+"            }\n".
+"        }\n".
+"        foreach (array_keys(\$stored) as \$candidateName) {\n".
+"            if (!in_array(\$candidateName, \$orderedNames, true)) \$orderedNames[] = \$candidateName;\n".
+"        }\n".
+"\n".
+"        \$transportErrors = [];\n".
+"        foreach (\$orderedNames as \$candidateName) {\n".
+"            try {\n".
+"                if (\$candidateName !== \$cachedName || (time() - \$cachedAt) >= 30) {\n".
+"                    MetaEndpoint::cachedPreflight(\$candidateName, true);\n".
+"                    @file_put_contents(\$transportCacheFile, json_encode([\n".
+"                        'profile' => \$candidateName,\n".
+"                        'verified_at' => time(),\n".
+"                    ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));\n".
+"                }\n".
+"                \$profile = \$candidateName;\n".
+"                break;\n".
+"            } catch (Throwable \$transportError) {\n".
+"                \$message = trim((string)\$transportError->getMessage());\n".
+"                if (\$message !== '') \$transportErrors[] = \$candidateName . ': ' . \$message;\n".
+"            }\n".
+"        }\n".
+"        if (\$profile === '') {\n".
+"            \$last = \$transportErrors !== [] ? end(\$transportErrors) : 'no usable transport';\n".
+"            throw new RuntimeException('No working Meta profile transport for targeting search. ' . \$last);\n".
+"        }\n".
 "    }";
     $src=preg_replace($profilePattern,$replacement,$src,1,$count) ?? $src;
     if($count!==1){fwrite(STDERR,"[creative-targeting-v109] profile patch count=$count\n");exit(374);}
@@ -81,4 +129,4 @@ PHP_CODE;
 
     file_put_contents($endpoint,$src);
 }
-fwrite(STDERR,"[creative-targeting-v109] hidden Meta transport + accountless Behaviors context enabled\n");
+fwrite(STDERR,"[creative-targeting-v109] working-profile transport pool + accountless Behaviors context enabled\n");
