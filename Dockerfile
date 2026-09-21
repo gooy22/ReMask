@@ -52,6 +52,7 @@ COPY railway-language-targeting-v116-overlay.php /tmp/railway-language-targeting
 COPY railway-selection-persistence-overlay.php /tmp/railway-selection-persistence-overlay.php
 COPY railway-profile-error-fix-overlay.php /tmp/railway-profile-error-fix-overlay.php
 COPY railway-python-worker-bridge-overlay.php /tmp/railway-python-worker-bridge-overlay.php
+COPY railway-python-worker-jobs-overlay.php /tmp/railway-python-worker-jobs-overlay.php
 COPY docker-start.sh /tmp/docker-start.sh
 
 RUN set -eux; \
@@ -124,6 +125,9 @@ RUN set -eux; \
     php -l /var/www/html/ajax/pythonProfileContext.php; \
     grep -q 'X-Remask-Internal-Key' /var/www/html/ajax/pythonProfileContext.php; \
     grep -q 'REMASK_INTERNAL_KEY' /var/www/html/ajax/pythonProfileContext.php; \
+    php -l /var/www/html/ajax/pythonWorkerJobs.php; \
+    grep -q 'REMASK_PYTHON_WORKER_URL' /var/www/html/ajax/pythonWorkerJobs.php; \
+    grep -q 'retry-failed' /var/www/html/ajax/pythonWorkerJobs.php; \
     php -l /var/www/html/ajax/metaHierarchy.php; \
     php -l /var/www/html/bin/remask-worker.php; \
     php -l /var/www/html/ajax/metaWorkerStatus.php; \
