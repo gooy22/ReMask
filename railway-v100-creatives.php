@@ -278,12 +278,12 @@ require_once __DIR__ . '/checkpassword.php';
           <div class="cr-placement-toolbar">
             <div>
               <div class="cr-section-title" style="margin:0">Платформы и места показа</div>
-              <div id="placementCapabilitiesStatus" class="cr-hint">SDK fallback · выбери reference RK для live Meta placements.</div>
+              <div id="placementCapabilitiesStatus" class="cr-hint">Выбери FB-профиль и reference RK — placements загрузятся напрямую из Meta.</div>
             </div>
             <button id="refreshPlacements" type="button" class="cr-btn">ОБНОВИТЬ PLACEMENTS</button>
           </div>
 
-          <div id="placementPlatformGrid" class="cr-placement-grid">
+          <div id="placementPlatformGrid" class="cr-placement-grid" style="display:none">
             <div class="cr-placement-card" data-placement-card="facebook">
               <div class="cr-placement-card-head"><label class="cr-check"><input type="checkbox" data-publisher="facebook"> Facebook</label><label class="cr-check cr-placement-all"><input type="checkbox" data-position-all="facebook_positions" checked> Все доступные</label></div>
               <div id="placementFacebookOptions" class="cr-placement-options" data-position-container="facebook_positions"></div>
@@ -310,7 +310,7 @@ require_once __DIR__ . '/checkpassword.php';
             </div>
           </div>
 
-          <div class="cr-placement-devices">
+          <div id="placementDevices" class="cr-placement-devices" style="display:none">
             <div class="cr-section-title" style="margin:0 0 8px">Devices</div>
             <div id="placementDeviceOptions" class="cr-placement-options cr-placement-options-inline" data-device-container></div>
           </div>
