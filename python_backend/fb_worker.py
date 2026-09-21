@@ -131,7 +131,7 @@ class WebSessionManager:
             except aiohttp.ClientError as exc:
                 raise AuthenticationError(f"Network error while fetching Ads Manager: {exc.__class__.__name__}") from exc
 
-            match = re.search(r"""["']token[#']\s*:\s*["']([^"']+)["']""", html, flags=re.IGNORECASE)
+            match = re.search(r"""["']token["']\s*:\s*["']([^"']+)["']""", html, flags=re.IGNORECASE)
             if match and match.group(1).strip():
                 self._csrf_token = match.group(1).strip()
                 log.info("[%s] fb_dtsg token extracted successfully", self.profile.name)
