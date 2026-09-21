@@ -190,7 +190,7 @@ final class MetaSdkSchema
                     'playable_asset_id'=>'string','portrait_customizations'=>'map','product_set_id'=>'string',
                     'product_suggestion_settings'=>'map','recommender_settings'=>'map','regional_regulation_disclaimer_spec'=>'map',
                     'source_facebook_post_id'=>'string','source_instagram_media_id'=>'string','template_url'=>'string',
-                    'template_url_spec'=>'string','thumbnail_url'=>'string','title'=>'string','url_tags'=>'string',
+                    'template_url_spec'=>'string','thumbnail_url'=>'string','title'=>'string','url_tags'=>'string','video_id'=>'string',
                     'use_page_actor_override'=>'bool','wamo_whatsapp_identity_spec'=>'map',
                 ],
                 'enums'=>[],
@@ -251,6 +251,79 @@ final class MetaSdkSchema
                     'publisher_platforms'=>['facebook','instagram','messenger','audience_network','threads','whatsapp'],
                 ],
             ],
+        ];
+    }
+
+    public static function creativeCallToActionTypes(): array
+    {
+        // Official AdCreative.CallToActionType enum from facebook/facebook-python-business-sdk.
+        return [
+            'ADD_TO_CART','APPLY_NOW','ASK_ABOUT_SERVICES','ASK_A_QUESTION','ASK_FOR_MORE_INFO','ASK_US',
+            'AUDIO_CALL','BOOK_A_CONSULTATION','BOOK_NOW','BOOK_TRAVEL','BROWSE_SHOP','BUY','BUY_NOW',
+            'BUY_TICKETS','BUY_VIA_MESSAGE','CALL','CALL_ME','CALL_NOW','CHAT_NOW','CHAT_WITH_US','CONFIRM',
+            'CONTACT','CONTACT_US','DONATE','DONATE_NOW','DOWNLOAD','EVENT_RSVP','FIND_A_GROUP','FIND_OUT_MORE',
+            'FIND_YOUR_GROUPS','FOLLOW_NEWS_STORYLINE','FOLLOW_PAGE','FOLLOW_USER','GET_A_QUOTE','GET_DETAILS',
+            'GET_DIRECTIONS','GET_IN_TOUCH','GET_OFFER','GET_OFFER_VIEW','GET_PROMOTIONS','GET_QUOTE',
+            'GET_SHOWTIMES','GET_STARTED','INQUIRE_NOW','INSTALL_APP','INSTALL_MOBILE_APP','JOIN_CHANNEL',
+            'JOIN_LIVE_VIDEO','LEARN_MORE','LIKE_PAGE','LISTEN_MUSIC','LISTEN_NOW','MAKE_AN_APPOINTMENT',
+            'MESSAGE_PAGE','MOBILE_DOWNLOAD','NO_BUTTON','OPEN_INSTANT_APP','OPEN_LINK','ORDER_NOW','PAY_TO_ACCESS',
+            'PLAY_GAME','PLAY_GAME_ON_FACEBOOK','PURCHASE_GIFT_CARDS','RAISE_MONEY','RECORD_NOW','REFER_FRIENDS',
+            'REQUEST_TIME','SAY_THANKS','SEE_MORE','SEE_SHOP','SELL_NOW','SEND_A_GIFT','SEND_GIFT_MONEY',
+            'SEND_UPDATES','SHARE','SHOP_NOW','SHOP_WITH_AI','SIGN_UP','SOTTO_SUBSCRIBE','START_A_CHAT',
+            'START_ORDER','SUBSCRIBE','SWIPE_UP_PRODUCT','SWIPE_UP_SHOP','TRY_DEMO','TRY_ON_WITH_AI','UPDATE_APP',
+            'USE_APP','USE_MOBILE_APP','VIDEO_ANNOTATION','VIDEO_CALL','VIEW_CART','VIEW_CHANNEL','VIEW_IN_CART',
+            'VIEW_PRODUCT','VISIT_PAGES_FEED','VISIT_WEBSITE','WATCH_LIVE_VIDEO','WATCH_MORE','WATCH_VIDEO',
+            'WHATSAPP_MESSAGE','WOODHENGE_SUPPORT',
+        ];
+    }
+
+    public static function promotedObjectCustomEventTypes(): array
+    {
+        // Official AdPromotedObject.CustomEventType enum.
+        return [
+            'ACHIEVEMENT_UNLOCKED','ADD_PAYMENT_INFO','ADD_TO_CART','ADD_TO_WISHLIST','AD_IMPRESSION',
+            'COMPLETE_REGISTRATION','CONTACT','CONTENT_VIEW','CUSTOMIZE_PRODUCT','D2_RETENTION','D7_RETENTION',
+            'DONATE','FIND_LOCATION','INITIATED_CHECKOUT','LEAD','LEVEL_ACHIEVED','LISTING_INTERACTION',
+            'MESSAGING_CONVERSATION_STARTED_7D','OTHER','PURCHASE','RATE','SCHEDULE','SEARCH',
+            'SERVICE_BOOKING_REQUEST','SPENT_CREDITS','START_TRIAL','SUBMIT_APPLICATION','SUBSCRIBE',
+            'TUTORIAL_COMPLETION',
+        ];
+    }
+
+    public static function adPreviewFormats(): array
+    {
+        // Official AdPreview.AdFormat enum from facebook/facebook-python-business-sdk.
+        return [
+            'AUDIENCE_NETWORK_INSTREAM_VIDEO','AUDIENCE_NETWORK_INSTREAM_VIDEO_MOBILE',
+            'AUDIENCE_NETWORK_OUTSTREAM_VIDEO','AUDIENCE_NETWORK_REWARDED_VIDEO',
+            'BIZ_DISCO_FEED_MOBILE','DESKTOP_FEED_STANDARD','FACEBOOK_IFU_REELS_MOBILE',
+            'FACEBOOK_PROFILE_FEED_DESKTOP','FACEBOOK_PROFILE_FEED_MOBILE',
+            'FACEBOOK_PROFILE_REELS_MOBILE','FACEBOOK_REELS_BANNER',
+            'FACEBOOK_REELS_BANNER_DESKTOP','FACEBOOK_REELS_BANNER_FEED_ANDROID',
+            'FACEBOOK_REELS_BANNER_FEED_ANDROID_LARGE','FACEBOOK_REELS_BANNER_FULLSCREEN_IOS',
+            'FACEBOOK_REELS_BANNER_FULLSCREEN_MOBILE','FACEBOOK_REELS_MOBILE',
+            'FACEBOOK_REELS_POSTLOOP','FACEBOOK_REELS_POSTLOOP_FEED',
+            'FACEBOOK_REELS_SIMILAR_PRODUCTS_MOBILE','FACEBOOK_REELS_STICKER',
+            'FACEBOOK_STORY_MOBILE','FACEBOOK_STORY_STICKER_MOBILE',
+            'INSTAGRAM_EXPLORE_CONTEXTUAL','INSTAGRAM_EXPLORE_GRID_HOME',
+            'INSTAGRAM_EXPLORE_IMMERSIVE','INSTAGRAM_FEED_WEB','INSTAGRAM_FEED_WEB_M_SITE',
+            'INSTAGRAM_LEAD_GEN_MULTI_SUBMIT_ADS','INSTAGRAM_PROFILE_FEED',
+            'INSTAGRAM_PROFILE_REELS','INSTAGRAM_REELS','INSTAGRAM_REELS_OVERLAY',
+            'INSTAGRAM_REELS_WEB','INSTAGRAM_REELS_WEB_M_SITE','INSTAGRAM_SEARCH_CHAIN',
+            'INSTAGRAM_SEARCH_GRID','INSTAGRAM_STANDARD','INSTAGRAM_STORY',
+            'INSTAGRAM_STORY_EFFECT_TRAY','INSTAGRAM_STORY_WEB','INSTAGRAM_STORY_WEB_M_SITE',
+            'INSTANT_ARTICLE_RECIRCULATION_AD','INSTANT_ARTICLE_STANDARD',
+            'INSTREAM_BANNER_DESKTOP','INSTREAM_BANNER_FEED_IOS','INSTREAM_BANNER_FULLSCREEN_IOS',
+            'INSTREAM_BANNER_FULLSCREEN_MOBILE','INSTREAM_BANNER_IMMERSIVE_MOBILE',
+            'INSTREAM_BANNER_MOBILE','INSTREAM_VIDEO_DESKTOP','INSTREAM_VIDEO_FULLSCREEN_IOS',
+            'INSTREAM_VIDEO_FULLSCREEN_MOBILE','INSTREAM_VIDEO_IMAGE','INSTREAM_VIDEO_IMMERSIVE_MOBILE',
+            'INSTREAM_VIDEO_MOBILE','JOB_BROWSER_DESKTOP','JOB_BROWSER_MOBILE','MARKETPLACE_MOBILE',
+            'MESSENGER_MOBILE_INBOX_MEDIA','MESSENGER_MOBILE_STORY_MEDIA','MOBILE_BANNER',
+            'MOBILE_FEED_BASIC','MOBILE_FEED_STANDARD','MOBILE_FULLWIDTH','MOBILE_INTERSTITIAL',
+            'MOBILE_MEDIUM_RECTANGLE','MOBILE_NATIVE','RIGHT_COLUMN_STANDARD',
+            'SUGGESTED_VIDEO_DESKTOP','SUGGESTED_VIDEO_FULLSCREEN_MOBILE',
+            'SUGGESTED_VIDEO_IMMERSIVE_MOBILE','SUGGESTED_VIDEO_MOBILE',
+            'WATCH_FEED_HOME','WATCH_FEED_MOBILE','WHATSAPP_STATUS_MEDIA',
         ];
     }
 

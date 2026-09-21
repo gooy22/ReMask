@@ -18,6 +18,30 @@ function cl100_format(string $value): string {
     }
     return $value;
 }
+function cl100_meta_media_ref(array $record): array {
+    $asset = is_array($record['meta_asset'] ?? null) ? $record['meta_asset'] : [];
+    $type = strtolower(trim((string)($asset['type'] ?? '')));
+    $value = trim((string)($asset['value'] ?? ''));
+    if (in_array($type, ['image','video','creative'], true) && $value !== '') {
+        return [
+            'type' => $type,
+            'value' => $value,
+            'name' => trim((string)($asset['name'] ?? '')),
+            'preview_url' => trim((string)($asset['preview_url'] ?? '')),
+            'preview_type' => strtolower(trim((string)($asset['preview_type'] ?? ''))),
+        ];
+    }
+    $builder = is_array($record['meta_builder'] ?? null) ? $record['meta_builder'] : [];
+    $existing = is_array($builder['existing_media'] ?? null) ? $builder['existing_media'] : [];
+    $image = trim((string)($existing['image_hash'] ?? ''));
+    if ($image !== '') return ['type'=>'image','value'=>$image,'name'=>'Meta image','preview_url'=>''];
+    $video = trim((string)($existing['video_id'] ?? ''));
+    if ($video !== '') return ['type'=>'video','value'=>$video,'name'=>'Meta video','preview_url'=>''];
+    $creativeId = trim((string)($existing['creative_id'] ?? ''));
+    if ($creativeId !== '') return ['type'=>'creative','value'=>$creativeId,'name'=>'Meta creative','preview_url'=>''];
+    return [];
+}
+
 function cl100_media_ids(array $record): array {
     $ids = [];
     $single = trim((string)($record['media_library_id'] ?? ''));
@@ -48,8 +72,24 @@ function cl100_public_items(CreativePresetStore $store, $library): array {
         if ($format === 'SINGLE') {
             $id = trim((string)($row['media_library_id'] ?? ''));
             $row['media'] = $id !== '' ? $library->get($id) : null;
-            $row['missing_media'] = $row['media'] === null;
-            $row['preview_url'] = 'ajax/creativePreview.php?id=' . rawurlencode((string)$row['id']) . '&v=' . rawurlencode((string)($row['updated_at'] ?? ''));
+            $metaMedia = cl100_meta_media_ref($row);
+            if ($row['media'] === null && $metaMedia !== []) {
+                $row['media'] = [
+                    'id' => 'meta:' . $metaMedia['value'],
+                    'original_name' => $metaMedia['name'] !== '' ? $metaMedia['name'] : ('Meta ' . $metaMedia['type']),
+                    'media_type' => in_array(($metaMedia['preview_type'] ?? ''), ['image','video'], true)
+                        ? $metaMedia['preview_type']
+                        : ($metaMedia['type'] === 'video' ? 'video' : 'image'),
+                    'source' => 'meta',
+                ];
+                $row['missing_media'] = false;
+                $row['preview_url'] = $metaMedia['preview_url'];
+            } else {
+                $row['missing_media'] = $row['media'] === null;
+                $row['preview_url'] = $row['media'] !== null
+                    ? 'ajax/creativePreview.php?id=' . rawurlencode((string)$row['id']) . '&v=' . rawurlencode((string)($row['updated_at'] ?? ''))
+                    : '';
+            }
         } elseif ($format === 'CAROUSEL') {
             $cards = [];
             foreach (array_values((array)($row['carousel'] ?? [])) as $index => $card) {
@@ -141,7 +181,27 @@ try {
             'carousel' => [],
             'instagram_media_id' => '',
             'meta_builder' => $metaBuilder,
+            'meta_asset' => [],
         ];
+        $metaAssetRaw = trim((string)($_POST['meta_asset'] ?? ''));
+        if ($metaAssetRaw !== '') {
+            $metaAsset = json_decode($metaAssetRaw, true, 512, JSON_THROW_ON_ERROR);
+            if (!is_array($metaAsset)) throw new InvalidArgumentException('meta_asset must be a JSON object.');
+            $metaType = strtolower(trim((string)($metaAsset['type'] ?? '')));
+            $metaValue = trim((string)($metaAsset['value'] ?? ''));
+            if (!in_array($metaType, ['image','video','creative'], true) || $metaValue === '') {
+                throw new InvalidArgumentException('meta_asset must contain image/video/creative type and value.');
+            }
+            $record['meta_asset'] = [
+                'type' => $metaType,
+                'value' => $metaValue,
+                'name' => substr(trim((string)($metaAsset['name'] ?? '')), 0, 500),
+                'preview_url' => substr(trim((string)($metaAsset['preview_url'] ?? '')), 0, 2000),
+                'preview_type' => in_array(strtolower(trim((string)($metaAsset['preview_type'] ?? ''))), ['image','video'], true)
+                    ? strtolower(trim((string)($metaAsset['preview_type'] ?? '')))
+                    : '',
+            ];
+        }
 
         if ($format === 'SINGLE') {
             $upload = isset($_FILES['media']) && is_array($_FILES['media']) ? $_FILES['media'] : null;
@@ -152,7 +212,9 @@ try {
             } elseif ($current && strtoupper((string)($current['format'] ?? 'SINGLE')) === 'SINGLE') {
                 $record['media_library_id'] = trim((string)($current['media_library_id'] ?? ''));
             }
-            if ($record['media_library_id'] === '') throw new InvalidArgumentException('Select image or video.');
+            if ($record['media_library_id'] === '' && cl100_meta_media_ref($record) === []) {
+                throw new InvalidArgumentException('Select uploaded media or an existing Meta image/video.');
+            }
         } elseif ($format === 'CAROUSEL') {
             $cardsRaw = trim((string)($_POST['carousel_cards'] ?? ''));
             $cardsMeta = $cardsRaw !== '' ? json_decode($cardsRaw, true, 512, JSON_THROW_ON_ERROR) : [];

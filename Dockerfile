@@ -43,6 +43,7 @@ COPY railway-meta-official-fields.php /tmp/railway-meta-official-fields.php
 COPY railway-meta-builder-v102-overlay.php /tmp/railway-meta-builder-v102-overlay.php
 COPY railway-v102-MetaSdkSchema.php /tmp/remask-v102-MetaSdkSchema.php
 COPY railway-meta-schema-ui-v103-overlay.php /tmp/railway-meta-schema-ui-v103-overlay.php
+COPY railway-creative-capabilities-v105-overlay.php /tmp/railway-creative-capabilities-v105-overlay.php
 COPY railway-selection-persistence-overlay.php /tmp/railway-selection-persistence-overlay.php
 COPY railway-profile-error-fix-overlay.php /tmp/railway-profile-error-fix-overlay.php
 COPY docker-start.sh /tmp/docker-start.sh
@@ -91,6 +92,8 @@ RUN set -eux; \
     php -l /tmp/remask-v102-MetaSdkSchema.php; \
     php -l /tmp/railway-meta-schema-ui-v103-overlay.php; \
     php /tmp/railway-meta-schema-ui-v103-overlay.php; \
+    php -l /tmp/railway-creative-capabilities-v105-overlay.php; \
+    php /tmp/railway-creative-capabilities-v105-overlay.php; \
     php /tmp/railway-selection-persistence-overlay.php; \
     php /tmp/railway-profile-error-fix-overlay.php; \
     php -r '$allowedRaw=["/var/www/html/classes/MetaApiClient.php"=>true,"/var/www/html/classes/FbRequests.php"=>true,"/var/www/html/classes/ProxyHealthService.php"=>true]; $allowedLegacy=["/var/www/html/ajax/payUnsettled.php"=>true,"/var/www/html/ajax/policyAppeal.php"=>true,"/var/www/html/ajax/disapproveAppeal.php"=>true]; $violations=[]; foreach(["/var/www/html/ajax","/var/www/html/classes","/var/www/html/bin"] as $root){$it=new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root,FilesystemIterator::SKIP_DOTS)); foreach($it as $fi){if(!$fi->isFile()||$fi->getExtension()!=="php")continue;$path=$fi->getPathname();$s=file_get_contents($path);if((str_contains($s,"graph.facebook.com")||str_contains($s,"curl_init("))&&!isset($allowedRaw[$path]))$violations[]="raw-meta-transport:".$path;if($fi->getFilename()!=="FbRequests.php"&&preg_match("/new\\s+FbRequests\\s*\\(/",$s)&&!isset($allowedLegacy[$path]))$violations[]="legacy-fbrequests-ref:".$path;}} if($violations){fwrite(STDERR,"Meta transport invariant failed: ".implode(", ",$violations)."\\n");exit(91);} fwrite(STDERR,"[transport-invariant] canonical Graph transport enforced; legacy browser transport limited to payment/appeal endpoints\\n");'; \
@@ -104,6 +107,11 @@ RUN set -eux; \
     php -l /var/www/html/bin/remask-worker.php; \
     php -l /var/www/html/ajax/metaWorkerStatus.php; \
     php -l /var/www/html/ajax/metaJobRetry.php; \
+    php -l /var/www/html/ajax/metaCreativeCapabilities.php; \
+    php -l /var/www/html/ajax/metaAudienceEstimate.php; \
+    php -l /var/www/html/ajax/metaCreativePreview.php; \
+    grep -q 'REMASK_CREATIVE_CAPABILITIES_V1' /var/www/html/classes/MetaAdsService.php; \
+    grep -q 'delivery_estimate' /var/www/html/classes/MetaAdsService.php; \
     grep -q 'REMASK_SYNC_ERROR_CLASSIFIER_V1' /var/www/html/scripts/workspace.js; \
     grep -q 'Meta request timeout after' /var/www/html/scripts/workspace.js; \
     grep -Fq "\$('workspaceActions').disabled=n===0;" /var/www/html/scripts/workspace.js; \
@@ -183,8 +191,53 @@ RUN set -eux; \
     grep -q 'REMASK_META_BUILDER_BUDGET_V1' /var/www/html/scripts/launch.js; \
     php -l /var/www/html/classes/MetaOfficialFields.php; \
     test -f /var/www/html/classes/MetaOfficialFields.php; \
-    grep -q 'ONLINE_GAMBLING_AND_GAMING' /var/www/html/creatives.php; \
-    grep -q 'STORE_VISITS' /var/www/html/creatives.php; \
+    grep -q 'ONLINE_GAMBLING_AND_GAMING' /var/www/html/classes/MetaSdkSchema.php; \
+    grep -q 'STORE_VISITS' /var/www/html/classes/MetaSdkSchema.php; \
+    grep -q 'metaProfileContext' /var/www/html/creatives.php; \
+    grep -q 'metaAccountContext' /var/www/html/creatives.php; \
+    grep -q 'audienceEstimateValue' /var/www/html/creatives.php; \
+    grep -q 'mbGeoSearch' /var/www/html/creatives.php; \
+    grep -q 'mbInterestSearch' /var/www/html/creatives.php; \
+    grep -q 'mbBehaviorSearch' /var/www/html/creatives.php; \
+    grep -q 'searchCreativeTargeting' /var/www/html/scripts/creatives.js; \
+    grep -q 'populatePrimaryMetaControls' /var/www/html/scripts/creatives.js; \
+    grep -q 'metaCreativeCapabilities.php' /var/www/html/scripts/creatives.js; \
+    grep -q 'metaAudienceEstimate.php' /var/www/html/scripts/creatives.js; \
+    grep -q 'metaCreativePreview.php' /var/www/html/scripts/creatives.js; \
+    grep -q 'metaPreviewFormat' /var/www/html/creatives.php; \
+    grep -q 'generateMetaPreview' /var/www/html/scripts/creatives.js; \
+    grep -q 'generateCreativePreview' /var/www/html/classes/MetaAdsService.php; \
+    grep -q 'generatepreviews' /var/www/html/classes/MetaAdsService.php; \
+    grep -q 'adPreviewFormats' /var/www/html/classes/MetaSdkSchema.php; \
+    grep -q 'creativeCallToActionTypes' /var/www/html/classes/MetaSdkSchema.php; \
+    grep -q 'promotedObjectCustomEventTypes' /var/www/html/classes/MetaSdkSchema.php; \
+    grep -q 'constrainTargetingCheckboxes' /var/www/html/scripts/creatives.js; \
+    grep -q 'listConnectedInstagramAccounts' /var/www/html/classes/MetaAdsService.php; \
+    grep -q 'listConversionGoals' /var/www/html/classes/MetaAdsService.php; \
+    grep -q 'connected_instagram_accounts' /var/www/html/ajax/metaCreativeCapabilities.php; \
+    grep -q 'conversion_goals' /var/www/html/ajax/metaCreativeCapabilities.php; \
+    grep -q 'liveOptimizationGoals' /var/www/html/scripts/creatives.js; \
+    grep -q 'publisher_platforms' /var/www/html/classes/MetaSdkSchema.php; \
+    grep -q 'device_platforms' /var/www/html/classes/MetaSdkSchema.php; \
+    grep -q 'async function loadMetaContext' /var/www/html/scripts/creatives.js; \
+    ! grep -q 'async async function' /var/www/html/scripts/creatives.js; \
+    grep -q 'mbCustomConversionId' /var/www/html/creatives.php; \
+    grep -q 'mbCustomConversionOptions' /var/www/html/creatives.php; \
+    grep -q 'mbInstagramOptions' /var/www/html/creatives.php; \
+    grep -q 'custom_conversion_id' /var/www/html/scripts/creatives.js; \
+    grep -q 'metaExistingMedia' /var/www/html/creatives.php; \
+    grep -q 'selectedMetaExistingMedia' /var/www/html/scripts/creatives.js; \
+    grep -q 'creative.image_hash' /var/www/html/scripts/creatives.js; \
+    grep -q 'creative.video_id' /var/www/html/scripts/creatives.js; \
+    grep -q 'listCreativeImages' /var/www/html/classes/MetaAdsService.php; \
+    grep -q 'listCreativeVideos' /var/www/html/classes/MetaAdsService.php; \
+    grep -q 'cl100_meta_media_ref' /var/www/html/ajax/creativeLibrary.php; \
+    grep -q 'existing_media' /var/www/html/classes/MetaOfficialFields.php; \
+    grep -q 'existing_creative_id' /var/www/html/classes/MetaOfficialFields.php; \
+    php -r 'require "/var/www/html/classes/MetaOfficialFields.php"; $base=["campaign"=>[],"adset"=>["targeting"=>[]],"creative"=>[],"ad"=>[]]; foreach([["image_hash"=>"abcDEF_123"],["video_id"=>"123456"],["creative_id"=>"987654"]] as $m){$p=MetaOfficialFields::applyBuilderToPayload($base,["existing_media"=>$m]);$c=$p["creative"]; if(isset($m["image_hash"])&&($c["existing_image_hash"]??"")!==$m["image_hash"])exit(71); if(isset($m["video_id"])&&($c["existing_video_id"]??"")!==$m["video_id"])exit(72); if(isset($m["creative_id"])&&($c["existing_creative_id"]??"")!==$m["creative_id"])exit(73);}'; \
+    grep -q 'Meta Ad Creatives' /var/www/html/scripts/creatives.js; \
+    grep -q 'ad_creatives' /var/www/html/ajax/metaCreativeCapabilities.php; \
+    grep -q "'video_id'" /var/www/html/classes/MetaOfficialFields.php; \
     grep -q 'meta-builder-v102' /var/www/html/launch.php; \
     php -l /var/www/html/classes/MetaSdkSchema.php; \
     php -l /var/www/html/ajax/metaSdkSchema.php; \
@@ -245,12 +298,12 @@ RUN set -eux; \
     [ -f /var/www/html/launch.php ]; \
     cp /tmp/docker-start.sh /var/www/html/docker-start.sh; \
     mkdir -p /var/www/html/bin; \
-    mkdir -p /var/www/html/bin; \
     [ -f /var/lib/remask/accounts.json ] || printf '[]\n' > /var/lib/remask/accounts.json; \
     [ -f /var/lib/remask/bundles.json ] || printf '[]\n' > /var/lib/remask/bundles.json; \
     chown -R www-data:www-data /var/lib/remask /var/www/html; \
     chmod 700 /var/lib/remask; \
     chmod +x /var/www/html/docker-start.sh;
+
 
 ENV REMASK_META_CACHE_TTL=1800 \
     META_GRAPH_API_VERSION=v26.0 \
