@@ -243,7 +243,16 @@ require_once __DIR__ . '/checkpassword.php';
           <div class="span-3 cr-field"><label>Age min</label><input id="mbAgeMin" type="number" min="13" max="65" class="form-control" value="18"></div>
           <div class="span-3 cr-field"><label>Age max</label><input id="mbAgeMax" type="number" min="13" max="65" class="form-control" value="65"></div>
           <div class="span-3 cr-field"><label>Gender</label><select id="mbGender" class="form-control"><option value="">All</option><option value="1">Male</option><option value="2">Female</option></select></div>
-          <div class="span-3 cr-field"><label>Locales IDs</label><input id="mbLocales" class="form-control" placeholder="6,24"></div>
+          <div class="span-6 cr-target-box" data-targeting data-remask-languages="1">
+            <label>Языки аудитории</label>
+            <div class="cr-target-input">
+              <input id="mbLanguageSearch" class="form-control" autocomplete="off" placeholder="Начни вводить язык — от 2 символов">
+              <div id="mbLanguageResults" class="cr-target-results"></div>
+            </div>
+            <div id="mbLanguagePills" class="cr-target-pills"></div>
+            <input id="mbLocales" type="hidden" value="">
+            <div class="cr-hint">Показывать рекламу людям, использующим выбранные языки. Список загружается из Meta.</div>
+          </div>
           <div class="span-6 cr-target-box" data-targeting>
             <label>GEO</label>
             <div class="cr-target-input">
