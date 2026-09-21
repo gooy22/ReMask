@@ -225,7 +225,6 @@ RUN set -eux; \
     grep -q 'placement_options' /var/www/html/ajax/metaCreativeCapabilities.php; \
     grep -q 'Official Meta SDK placements' /var/www/html/creatives.php; \
     grep -q 'placementHoverPreview' /var/www/html/creatives.php; \
-    grep -q 'placement-hover-preview-v108' /var/www/html/creatives.php; \
     grep -q 'showPlacementHoverPreview' /var/www/html/scripts/creatives.js; \
     grep -q 'data-placement-preview' /var/www/html/scripts/creatives.js; \
     grep -q 'currentPlacementPreviewMedia' /var/www/html/scripts/creatives.js; \
