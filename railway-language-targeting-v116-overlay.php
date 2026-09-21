@@ -30,14 +30,53 @@ PHP_CODE;
     /* REMASK_LANGUAGE_SEARCH_V1 */
     public function searchLocales(string $query, int $limit = 25): array
     {
-        $query = trim($query);
-        if ($query === '') throw new InvalidArgumentException('Language search query cannot be empty.');
-        return $this->client->get('search', [
+        /*
+         * Meta's current Business SDK lists Audience Languages by calling
+         * /search?type=adlocale&limit=1000, without q and without a locale
+         * parameter. Querying adlocale like adinterest can fail for valid
+         * Ads Manager tokens with "Error loading application".
+         */
+        $response = $this->client->get('search', [
             'type' => 'adlocale',
-            'q' => $query,
-            'locale' => 'ru_RU',
-            'limit' => min(max($limit, 1), 100),
+            'limit' => 1000,
         ]);
+
+        $rows = is_array($response['data'] ?? null) ? $response['data'] : [];
+        $query = trim($query);
+        if ($query !== '') {
+            $needle = strtolower($query);
+            $aliases = [
+                'рус' => 'russian', 'рос' => 'russian',
+                'укра' => 'ukrainian', 'укр' => 'ukrainian',
+                'англ' => 'english',
+                'нем' => 'german',
+                'фран' => 'french',
+                'исп' => 'spanish',
+                'поль' => 'polish',
+                'рум' => 'romanian',
+                'итал' => 'italian',
+                'порту' => 'portuguese',
+                'тур' => 'turkish',
+                'араб' => 'arabic',
+            ];
+            foreach ($aliases as $prefix => $english) {
+                if (str_starts_with($needle, $prefix)) {
+                    $needle = $english;
+                    break;
+                }
+            }
+            $rows = array_values(array_filter($rows, static function ($row) use ($needle) {
+                if (!is_array($row)) return false;
+                $name = strtolower(trim((string)($row['name'] ?? '')));
+                $key = trim((string)($row['key'] ?? $row['id'] ?? ''));
+                return ($name !== '' && str_contains($name, $needle))
+                    || ($key !== '' && $key === $needle);
+            }));
+        }
+
+        $response['data'] = array_slice($rows, 0, min(max($limit, 1), 100));
+        unset($response['paging']);
+        return $response;
     }
 
 PHP_CODE;
@@ -55,7 +94,24 @@ if(strpos($endpoint,'public function searchLocales(')===false){
     $wrapperMethod=<<<'PHP_CODE'
         public function searchLocales(string $query, int $limit = 25): array
         {
-            return $this->run(fn($s) => $s->searchLocales($query, $limit));
+            /*
+             * Locale discovery is a distinct Meta /search capability.
+             * Do not poison the generic targeting transport cache when only
+             * adlocale fails for a profile.
+             */
+            $errors = [];
+            foreach ($this->candidates as $profile) {
+                try {
+                    $real = MetaEndpoint::serviceForAccountName($profile);
+                    $result = $real->searchLocales($query, $limit);
+                    $this->cacheSuccess($profile);
+                    return is_array($result) ? $result : [];
+                } catch (Throwable $e) {
+                    $errors[] = $profile . ': ' . trim((string)$e->getMessage());
+                }
+            }
+            $last = $errors !== [] ? end($errors) : 'no candidate transports';
+            throw new RuntimeException('All Meta locale transports failed. ' . $last);
         }
 
 PHP_CODE;
@@ -277,7 +333,7 @@ if(strpos($generic,"input?.id === 'languageQuery'")===false){
 
 $php=preg_replace(
     '#<script src="scripts/launch\.js(?:\?[^"]*)?" type="module"></script>#',
-    '<script src="scripts/launch.js?v=20260921-languages-v116" type="module"></script>',
+    '<script src="scripts/launch.js?v=20260921-languages-v117" type="module"></script>',
     $php,1,$lc
 ) ?? $php;
 if($lc!==1){fwrite(STDERR,"[languages-v116] launch cache bust failed\n");exit(447);}
@@ -291,17 +347,17 @@ $creativePhp=file_get_contents($creativePhpPath);
 if($creativePhp===false){fwrite(STDERR,"[languages-v116] creative php read failed\n");exit(448);}
 $creativePhp=preg_replace(
     '#<script src="scripts/creatives\.js(?:\?[^"]*)?"></script>#',
-    '<script src="scripts/creatives.js?v=20260921-languages-v116"></script>',
+    '<script src="scripts/creatives.js?v=20260921-languages-v117"></script>',
     $creativePhp,1,$cc
 ) ?? $creativePhp;
 if($cc!==1){
     $creativePhp=preg_replace(
         '#<script src="scripts/creatives\.js(?:\?[^"]*)?" type="module"></script>#',
-        '<script src="scripts/creatives.js?v=20260921-languages-v116" type="module"></script>',
+        '<script src="scripts/creatives.js?v=20260921-languages-v117" type="module"></script>',
         $creativePhp,1,$cc2
     ) ?? $creativePhp;
     if($cc2!==1){fwrite(STDERR,"[languages-v116] creative cache bust failed\n");exit(449);}
 }
 file_put_contents($creativePhpPath,$creativePhp);
 
-fwrite(STDERR,"[languages-v116] Meta audience language targeting ready in Creative + Launch\n");
+fwrite(STDERR,"[languages-v117] Meta audience language targeting uses official adlocale list flow\n");
