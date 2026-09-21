@@ -33,3 +33,5 @@ account-targeting-v118-marker-fix f1e95a16c110c2a0cefcceb1221804a6612fb843
 targeting-global-rollback-v119 f69df10777b40e7db35379e22a7d80ecf384b26e
 targeting-global-rollback-v119-assert c4c855ec34457a8d4ee367f76325c6baea6d9cc6
 targeting-global-rollback-v119-marker 086939d102322abd1b8c306227e550c4c0e435bf
+
+python-worker-bridge-v120 4b039e7584f022ea7b72a2bb024a06f6c1bec57c
