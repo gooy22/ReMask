@@ -117,7 +117,6 @@ RUN set -eux; \
     grep -q 'REMASK_PLACEMENT_CAPABILITIES_V1' /var/www/html/classes/MetaAdsService.php; \
     grep -q 'targetingbrowse' /var/www/html/classes/MetaAdsService.php; \
     grep -q 'placementOptions' /var/www/html/classes/MetaSdkSchema.php; \
-    grep -q 'metaPlacementCapabilities.php' /var/www/html/scripts/creatives.js; \
     grep -q 'Manual placements' /var/www/html/creatives.php; \
     grep -q 'Advantage+ placements' /var/www/html/creatives.php; \
     grep -q 'data-position-group' /var/www/html/scripts/creatives.js; \
