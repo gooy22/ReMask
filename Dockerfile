@@ -54,6 +54,8 @@ COPY railway-profile-error-fix-overlay.php /tmp/railway-profile-error-fix-overla
 COPY railway-python-worker-bridge-overlay.php /tmp/railway-python-worker-bridge-overlay.php
 COPY railway-python-worker-jobs-overlay.php /tmp/railway-python-worker-jobs-overlay.php
 COPY railway-python-worker-state-overlay.php /tmp/railway-python-worker-state-overlay.php
+COPY railway-python-worker-ui-overlay.php /tmp/railway-python-worker-ui-overlay.php
+COPY railway-python-worker-ui.js /tmp/railway-python-worker-ui.js
 COPY docker-start.sh /tmp/docker-start.sh
 
 RUN set -eux; \
@@ -139,6 +141,11 @@ RUN set -eux; \
     php -l /var/www/html/ajax/pythonWorkerState.php; \
     grep -q 'python-worker-jobs' /var/www/html/ajax/pythonWorkerState.php; \
     grep -q 'RAW_PAYMENT_DATA_REJECTED' /var/www/html/ajax/pythonWorkerState.php; \
+    php -l /var/www/html/workspace.php; \
+    grep -q 'REMASK_PYTHON_WORKER_PANEL_V1' /var/www/html/workspace.php; \
+    grep -q 'REMASK_PYTHON_WORKER_UI_V1' /var/www/html/scripts/workspace.js; \
+    grep -q 'pythonWorkerJobs.php' /var/www/html/scripts/workspace.js; \
+    grep -q 'Retry Failed' /var/www/html/workspace.php; \
     php -l /var/www/html/ajax/metaHierarchy.php; \
     php -l /var/www/html/bin/remask-worker.php; \
     php -l /var/www/html/ajax/metaWorkerStatus.php; \
