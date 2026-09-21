@@ -48,6 +48,7 @@ COPY railway-creative-capabilities-v105-overlay.php /tmp/railway-creative-capabi
 COPY railway-placement-capabilities-v106-overlay.php /tmp/railway-placement-capabilities-v106-overlay.php
 COPY railway-launch-full-meta-v113-overlay.php /tmp/railway-launch-full-meta-v113-overlay.php
 COPY railway-launch-meta-editors-v114-overlay.php /tmp/railway-launch-meta-editors-v114-overlay.php
+COPY railway-language-targeting-v116-overlay.php /tmp/railway-language-targeting-v116-overlay.php
 COPY railway-selection-persistence-overlay.php /tmp/railway-selection-persistence-overlay.php
 COPY railway-profile-error-fix-overlay.php /tmp/railway-profile-error-fix-overlay.php
 COPY docker-start.sh /tmp/docker-start.sh
@@ -108,6 +109,8 @@ RUN set -eux; \
     php /tmp/railway-profile-error-fix-overlay.php; \
     php -l /tmp/railway-launch-meta-editors-v114-overlay.php; \
     php /tmp/railway-launch-meta-editors-v114-overlay.php; \
+    php -l /tmp/railway-language-targeting-v116-overlay.php; \
+    php /tmp/railway-language-targeting-v116-overlay.php; \
     php -r '$allowedRaw=["/var/www/html/classes/MetaApiClient.php"=>true,"/var/www/html/classes/FbRequests.php"=>true,"/var/www/html/classes/ProxyHealthService.php"=>true]; $allowedLegacy=["/var/www/html/ajax/payUnsettled.php"=>true,"/var/www/html/ajax/policyAppeal.php"=>true,"/var/www/html/ajax/disapproveAppeal.php"=>true]; $violations=[]; foreach(["/var/www/html/ajax","/var/www/html/classes","/var/www/html/bin"] as $root){$it=new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root,FilesystemIterator::SKIP_DOTS)); foreach($it as $fi){if(!$fi->isFile()||$fi->getExtension()!=="php")continue;$path=$fi->getPathname();$s=file_get_contents($path);if((str_contains($s,"graph.facebook.com")||str_contains($s,"curl_init("))&&!isset($allowedRaw[$path]))$violations[]="raw-meta-transport:".$path;if($fi->getFilename()!=="FbRequests.php"&&preg_match("/new\\s+FbRequests\\s*\\(/",$s)&&!isset($allowedLegacy[$path]))$violations[]="legacy-fbrequests-ref:".$path;}} if($violations){fwrite(STDERR,"Meta transport invariant failed: ".implode(", ",$violations)."\\n");exit(91);} fwrite(STDERR,"[transport-invariant] canonical Graph transport enforced; legacy browser transport limited to payment/appeal endpoints\\n");'; \
     php -l /var/www/html/classes/RemaskProxy.php; \
     php -l /var/www/html/classes/MetaApiClient.php; \
@@ -138,6 +141,14 @@ RUN set -eux; \
     grep -q 'remaskCurrentMetaBuilderForJob' /var/www/html/scripts/launch.js; \
     grep -q 'meta-editors-v114' /var/www/html/launch.php; \
     grep -q 'REMASK_META_VISUAL_EDITORS_V1' /var/www/html/scripts/launch.js; \
+    grep -q 'REMASK_LANGUAGE_SEARCH_V1' /var/www/html/classes/MetaAdsService.php; \
+    grep -q "'language', 'languages', 'locale', 'locales'" /var/www/html/ajax/metaTargetingSearch.php; \
+    grep -q 'REMASK_AUDIENCE_LANGUAGES_V1' /var/www/html/scripts/launch.js; \
+    grep -q 'languageQuery' /var/www/html/scripts/launch.js; \
+    grep -q 'mbLanguageSearch' /var/www/html/creatives.php; \
+    grep -q 'languages:{input' /var/www/html/scripts/creatives.js; \
+    grep -q 'languages-v116' /var/www/html/launch.php; \
+    grep -q 'languages-v116' /var/www/html/creatives.php; \
     grep -q 'rmMetaVisualModal' /var/www/html/launch.php; \
     grep -q 'meta-editors-v114' /var/www/html/launch.php; \
     grep -Fq "kind === 'geo' || kind === 'excludedGeo'" /var/www/html/scripts/creatives.js; \
