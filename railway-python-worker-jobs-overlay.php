@@ -119,8 +119,34 @@ try {
             if (!is_array($tasks)) continue;
             foreach ($tasks as $ti => $taskRow) {
                 if (!is_array($taskRow)) continue;
+
+                // Dynamic fields are forwarded as-is, but private Facebook
+                // browser-session routing is explicitly not accepted here.
+                foreach (['doc_id','fb_dtsg'] as $forbiddenKey) {
+                    if (array_key_exists($forbiddenKey, $taskRow)) {
+                        rmx_pwj_out([
+                            'ok'=>false,
+                            'error'=>'PRIVATE_SESSION_ROUTE_NOT_ALLOWED',
+                            'message'=>'Private Facebook browser-session fields are not supported by the worker bridge.',
+                        ], 400);
+                    }
+                }
+
+                if (isset($taskRow['route'])) {
+                    $route = trim((string)$taskRow['route']);
+                    if ($route === '' || str_contains($route, '://') || !preg_match('/^[A-Za-z0-9._-]{1,120}$/', $route)) {
+                        rmx_pwj_out(['ok'=>false,'error'=>'INVALID_TASK_ROUTE'], 400);
+                    }
+                    $profiles[$pi]['tasks'][$ti]['route'] = $route;
+                }
+
                 if (!array_key_exists('payload', $taskRow) || $taskRow['payload'] === []) {
                     $profiles[$pi]['tasks'][$ti]['payload'] = (object)[];
+                }
+                if (!array_key_exists('variables', $taskRow) || $taskRow['variables'] === []) {
+                    $profiles[$pi]['tasks'][$ti]['variables'] = (object)[];
+                } elseif (!is_array($taskRow['variables'])) {
+                    rmx_pwj_out(['ok'=>false,'error'=>'TASK_VARIABLES_MUST_BE_OBJECT'], 400);
                 }
             }
         }
