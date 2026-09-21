@@ -1277,8 +1277,28 @@ function buildMetaBuilder() {
     }));
 
     let targeting = deepMerge(parseJsonField('mbAdvancedTargeting', {}), sdkFields.targeting);
-    const publisherPlatforms = selectedValues('[data-publisher]', 'data-publisher');
-    const devicePlatforms = selectedValues('[data-device-platform]', 'data-device-platform');
+    const manualPlacements = placementMode() === 'manual';
+    const publisherPlatforms = manualPlacements ? selectedValues('[data-publisher]', 'data-publisher') : [];
+    const devicePlatforms = manualPlacements ? selectedValues('[data-device-platform]', 'data-device-platform') : [];
+    const placementSpec = manualPlacements ? compactObject({
+        publisher_platforms: publisherPlatforms,
+        facebook_positions: placementGroupUsesAll('facebook_positions') ? undefined : selectedPlacementValues('facebook_positions'),
+        instagram_positions: placementGroupUsesAll('instagram_positions') ? undefined : selectedPlacementValues('instagram_positions'),
+        messenger_positions: placementGroupUsesAll('messenger_positions') ? undefined : selectedPlacementValues('messenger_positions'),
+        audience_network_positions: placementGroupUsesAll('audience_network_positions') ? undefined : selectedPlacementValues('audience_network_positions'),
+        threads_positions: placementGroupUsesAll('threads_positions') ? undefined : selectedPlacementValues('threads_positions'),
+        whatsapp_positions: placementGroupUsesAll('whatsapp_positions') ? undefined : selectedPlacementValues('whatsapp_positions'),
+        device_platforms: devicePlatforms,
+    }) : {};
+
+    // Advantage+ placements means no manual placement restriction at all.
+    if (!manualPlacements) {
+        for (const key of [
+            'publisher_platforms','facebook_positions','instagram_positions','messenger_positions',
+            'audience_network_positions','threads_positions','whatsapp_positions','device_platforms'
+        ]) delete targeting[key];
+    }
+
     targeting = deepMerge(targeting, compactObject({
         age_min: numericValue('mbAgeMin'),
         age_max: numericValue('mbAgeMax'),
@@ -1292,14 +1312,7 @@ function buildMetaBuilder() {
         excluded_custom_audiences: idsToAudience($('mbExcludedCustomAudiences').value),
         flexible_spec: parseJsonField('mbFlexibleSpec', undefined),
         exclusions: parseJsonField('mbExclusions', undefined),
-        publisher_platforms: publisherPlatforms,
-        facebook_positions: csvStrings($('mbFacebookPositions').value),
-        instagram_positions: csvStrings($('mbInstagramPositions').value),
-        messenger_positions: csvStrings($('mbMessengerPositions').value),
-        audience_network_positions: csvStrings($('mbAudienceNetworkPositions').value),
-        threads_positions: csvStrings($('mbThreadsPositions').value),
-        whatsapp_positions: csvStrings($('mbWhatsappPositions').value),
-        device_platforms: devicePlatforms,
+        ...placementSpec,
         user_os: csvStrings($('mbUserOs').value),
         user_device: csvStrings($('mbUserDevice').value),
     }));
@@ -1393,14 +1406,8 @@ function populateMetaBuilder(builder) {
     $('mbExcludedCustomAudiences').value = (targeting.excluded_custom_audiences || []).map((x) => x.id || x).join(',');
     $('mbFlexibleSpec').value = stringify(targeting.flexible_spec);
     $('mbExclusions').value = stringify(targeting.exclusions);
-    setCheckboxValues('[data-publisher]', 'data-publisher', targeting.publisher_platforms || ['facebook','instagram']);
-    setCheckboxValues('[data-device-platform]', 'data-device-platform', targeting.device_platforms || ['mobile','desktop']);
-    $('mbFacebookPositions').value = (targeting.facebook_positions || []).join(',');
-    $('mbInstagramPositions').value = (targeting.instagram_positions || []).join(',');
-    $('mbMessengerPositions').value = (targeting.messenger_positions || []).join(',');
-    $('mbAudienceNetworkPositions').value = (targeting.audience_network_positions || []).join(',');
-    $('mbThreadsPositions').value = (targeting.threads_positions || []).join(',');
-    $('mbWhatsappPositions').value = (targeting.whatsapp_positions || []).join(',');
+    pendingPlacementTargeting = targeting;
+    renderPlacementOptions(metaPlacementOptions, targeting);
     $('mbUserOs').value = (targeting.user_os || []).join(',');
     $('mbUserDevice').value = (targeting.user_device || []).join(',');
 
@@ -1500,8 +1507,9 @@ function resetBuilderDefaults() {
     $('mbAgeMin').value = '18';
     $('mbAgeMax').value = '65';
     $('mbAdStatus').value = 'PAUSED';
-    setCheckboxValues('[data-publisher]', 'data-publisher', ['facebook','instagram']);
-    setCheckboxValues('[data-device-platform]', 'data-device-platform', ['mobile','desktop']);
+    setPlacementMode('auto');
+    setCheckboxValues('[data-publisher]', 'data-publisher', []);
+    setCheckboxValues('[data-device-platform]', 'data-device-platform', []);
 }
 function openEditor(item = null) {
     clearObjectUrls();
