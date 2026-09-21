@@ -151,7 +151,43 @@ function renderCreativeLibraryStatus() {
     if (format === 'SINGLE') detail = item.media?.original_name || '';
     else if (format === 'CAROUSEL') detail = ((item.carousel || []).length || 0) + ' cards';
     else detail = 'Instagram ' + (item.instagram_media_id || '');
-    status.textContent = 'Библиотека: ' + (item.name || item.id) + ' · ' + format + (detail ? ' · ' + detail : '');
+
+    const builder = item.meta_builder || {};
+    const targeting = builder.targeting || {};
+    const countGeo = (spec) => {
+        spec = spec && typeof spec === 'object' ? spec : {};
+        return ['countries','regions','cities','zips','geo_markets']
+            .reduce((sum, key) => sum + (Array.isArray(spec[key]) ? spec[key].length : 0), 0);
+    };
+    const directInterests = Array.isArray(targeting.interests) ? targeting.interests.length : 0;
+    const directBehaviors = Array.isArray(targeting.behaviors) ? targeting.behaviors.length : 0;
+    const flex = Array.isArray(targeting.flexible_spec) ? targeting.flexible_spec : [];
+    const flexInterests = flex.reduce((sum, row) => sum + (Array.isArray(row?.interests) ? row.interests.length : 0), 0);
+    const flexBehaviors = flex.reduce((sum, row) => sum + (Array.isArray(row?.behaviors) ? row.behaviors.length : 0), 0);
+    const placementKeys = [
+        'publisher_platforms','facebook_positions','instagram_positions','messenger_positions',
+        'audience_network_positions','threads_positions','whatsapp_positions','device_platforms'
+    ];
+    const manualPlacements = placementKeys.some((key) => Array.isArray(targeting[key]) && targeting[key].length);
+    const budget = builder.campaign?.daily_budget ? 'Campaign daily ' + builder.campaign.daily_budget
+        : builder.campaign?.lifetime_budget ? 'Campaign lifetime ' + builder.campaign.lifetime_budget
+        : builder.adset?.daily_budget ? 'Ad Set daily ' + builder.adset.daily_budget
+        : builder.adset?.lifetime_budget ? 'Ad Set lifetime ' + builder.adset.lifetime_budget
+        : '';
+
+    const meta = [];
+    const geoCount = countGeo(targeting.geo_locations);
+    const excludedGeoCount = countGeo(targeting.excluded_geo_locations);
+    if (geoCount) meta.push('GEO ' + geoCount);
+    if (excludedGeoCount) meta.push('Excluded GEO ' + excludedGeoCount);
+    if (directInterests + flexInterests) meta.push('Interests ' + (directInterests + flexInterests));
+    if (directBehaviors + flexBehaviors) meta.push('Behaviors ' + (directBehaviors + flexBehaviors));
+    if (manualPlacements) meta.push('Manual placements');
+    if (budget) meta.push(budget);
+
+    status.textContent = 'Библиотека: ' + (item.name || item.id) + ' · ' + format +
+        (detail ? ' · ' + detail : '') + (meta.length ? ' · ' + meta.join(' · ') : '');
+    status.title = builder && Object.keys(builder).length ? JSON.stringify(builder) : '';
     $('media').value = '';
     $('media').disabled = format === 'SINGLE';
 }
@@ -200,6 +236,39 @@ function applyCreativeLibrarySelection() {
     const targeting = metaBuilder.targeting || {};
     const identity = metaBuilder.identity || {};
     const ad = metaBuilder.ad || {};
+
+    const geoRowsFromSpec = (spec) => {
+        spec = spec && typeof spec === 'object' ? spec : {};
+        const rows = [];
+        for (const code of Array.isArray(spec.countries) ? spec.countries : []) {
+            rows.push({type:'country', key:String(code), country_code:String(code), name:String(code)});
+        }
+        for (const row of Array.isArray(spec.regions) ? spec.regions : []) {
+            if (row && typeof row === 'object') rows.push({type:'region', ...row});
+        }
+        for (const row of Array.isArray(spec.cities) ? spec.cities : []) {
+            if (row && typeof row === 'object') rows.push({type:'city', ...row});
+        }
+        for (const row of Array.isArray(spec.zips) ? spec.zips : []) {
+            if (row && typeof row === 'object') rows.push({type:'zip', ...row});
+        }
+        for (const row of Array.isArray(spec.geo_markets) ? spec.geo_markets : []) {
+            if (row && typeof row === 'object') rows.push({type:'geo_market', ...row});
+        }
+        return rows;
+    };
+    const flex = Array.isArray(targeting.flexible_spec) ? targeting.flexible_spec : [];
+    const flexInterests = flex.flatMap((row) => Array.isArray(row?.interests) ? row.interests : []);
+    const flexBehaviors = flex.flatMap((row) => Array.isArray(row?.behaviors) ? row.behaviors : []);
+
+    state.geo = geoRowsFromSpec(targeting.geo_locations);
+    state.interests = Array.isArray(targeting.interests) ? targeting.interests : flexInterests;
+    state.behaviors = Array.isArray(targeting.behaviors) ? targeting.behaviors : flexBehaviors;
+    renderPills($('selectedGeo'), state.geo, 'geo');
+    renderPills($('selectedInterests'), state.interests, 'interests');
+    if (typeof ensureBehaviorTargetingUi === 'function') ensureBehaviorTargetingUi();
+    if ($('selectedBehaviors')) renderPills($('selectedBehaviors'), state.behaviors, 'behaviors');
+
     const setIfExists = (id, value) => {
         const el = $(id);
         if (!el || value === undefined || value === null || value === '') return;
@@ -229,7 +298,13 @@ function applyCreativeLibrarySelection() {
     if (identity.instagram_actor_id && hasOptionValue($('instagram'), String(identity.instagram_actor_id))) $('instagram').value = String(identity.instagram_actor_id);
     if (adset.promoted_object?.pixel_id && hasOptionValue($('pixel'), String(adset.promoted_object.pixel_id))) $('pixel').value = String(adset.promoted_object.pixel_id);
     if (adset.promoted_object?.custom_event_type && hasOptionValue($('conversionEvent'), String(adset.promoted_object.custom_event_type))) $('conversionEvent').value = String(adset.promoted_object.custom_event_type);
-    if (Array.isArray(targeting.publisher_platforms) && targeting.publisher_platforms.length) setIfExists('placementMode', 'MANUAL');
+    const presetPlacementKeys = [
+        'publisher_platforms','facebook_positions','instagram_positions','messenger_positions',
+        'audience_network_positions','threads_positions','whatsapp_positions','device_platforms'
+    ];
+    if (presetPlacementKeys.some((key) => Array.isArray(targeting[key]) && targeting[key].length)) {
+        setIfExists('placementMode', 'MANUAL');
+    }
 
     renderCreativeFormat();
     if (format === 'CAROUSEL') renderSavedCarouselPreset(item.carousel || []);
@@ -304,7 +379,7 @@ $launchPhp = file_get_contents($launchPhpPath);
 if ($launchPhp === false) { fwrite(STDERR, "[creative-v100] could not read launch.php\n"); exit(296); }
 $launchPhp = preg_replace(
     '#<script src="scripts/launch\\.js(?:\\?[^"]*)?" type="module"></script>#',
-    '<script src="scripts/launch.js?v=20260919-creative-complete-v100" type="module"></script>',
+    '<script src="scripts/launch.js?v=20260921-creative-handoff-v110" type="module"></script>',
     $launchPhp,
     1,
     $cacheCount
