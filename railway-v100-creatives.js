@@ -946,6 +946,7 @@ async function loadMetaContext(profile = '', accountId = '', refresh = false) {
         status.textContent = warning ? (source + ' · ' + warning) : (source + ' · capabilities готовы');
     }
     persistMetaContext();
+    if (profile && accountId) schedulePlacementCapabilities(80);
     return data;
 }
 
@@ -1780,17 +1781,46 @@ const audienceEstimateIds = [
     'mbObjective','mbDestinationType','mbOptimizationGoal','mbConversionEvent','mbCustomConversionId','mbPixelId',
     'mbAgeMin','mbAgeMax','mbGender','mbLocales','mbGeo','mbExcludedGeo',
     'mbInterests','mbBehaviors','mbCustomAudiences','mbExcludedCustomAudiences',
-    'mbFlexibleSpec','mbExclusions','mbFacebookPositions','mbInstagramPositions',
-    'mbMessengerPositions','mbAudienceNetworkPositions','mbThreadsPositions',
-    'mbWhatsappPositions','mbUserOs','mbUserDevice'
+    'mbFlexibleSpec','mbExclusions','mbUserOs','mbUserDevice'
 ];
 for (const id of audienceEstimateIds) {
     const el = $(id);
     if (!el) continue;
-    el.addEventListener(el.tagName === 'SELECT' ? 'change' : 'input', () => scheduleAudienceEstimate());
+    el.addEventListener(el.tagName === 'SELECT' ? 'change' : 'input', () => {
+        scheduleAudienceEstimate();
+        if (id === 'mbObjective' || id === 'mbOptimizationGoal') schedulePlacementCapabilities();
+    });
 }
-document.querySelectorAll('[data-publisher],[data-device-platform]').forEach((el) => {
-    el.addEventListener('change', () => scheduleAudienceEstimate());
+
+document.querySelectorAll('input[name="placementMode"]').forEach((el) => {
+    el.addEventListener('change', () => {
+        setPlacementMode(placementMode());
+        scheduleAudienceEstimate(80);
+    });
+});
+
+document.querySelectorAll('[data-publisher]').forEach((el) => {
+    el.addEventListener('change', () => {
+        syncPlacementCardStates();
+        scheduleAudienceEstimate(80);
+    });
+});
+
+document.addEventListener('change', (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement)) return;
+    if (target.hasAttribute('data-position-all')) {
+        syncPlacementCardStates();
+        scheduleAudienceEstimate(80);
+        return;
+    }
+    if (target.hasAttribute('data-position-group') || target.hasAttribute('data-device-platform')) {
+        scheduleAudienceEstimate(80);
+    }
+});
+
+$('refreshPlacements')?.addEventListener('click', () => {
+    loadPlacementCapabilities(true);
 });
 $('refreshCreatives').addEventListener('click', () => load().catch((error) => alert(error.message)));
 $('creativeGrid').addEventListener('click', (event) => {
@@ -1807,3 +1837,4 @@ loadMetaSdkSchema().catch((error) => {
     const statusEl = $('metaSchemaStatus');
     if (statusEl) statusEl.textContent = 'SDK-схема недоступна: ' + error.message;
 });
+loadPlacementCapabilities(false);
