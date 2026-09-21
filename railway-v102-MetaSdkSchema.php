@@ -254,6 +254,40 @@ final class MetaSdkSchema
         ];
     }
 
+    public static function placementOptions(): array
+    {
+        // Manual placement targeting values. Live account/objective-specific
+        // availability is refreshed from Meta targetingbrowse; this is the
+        // SDK-compatible fallback used before that request completes.
+        return [
+            'publisher_platforms' => [
+                'facebook','instagram','messenger','audience_network','threads','whatsapp',
+            ],
+            'facebook_positions' => [
+                'feed','right_hand_column','marketplace','video_feeds','story','search',
+                'instream_video','facebook_reels','facebook_reels_overlay','profile_feed','notification',
+            ],
+            'instagram_positions' => [
+                'stream','story','explore','explore_home','reels','profile_feed','ig_search','profile_reels',
+            ],
+            'messenger_positions' => [
+                'messenger_home','sponsored_messages','story',
+            ],
+            'audience_network_positions' => [
+                'classic','rewarded_video',
+            ],
+            'threads_positions' => [
+                'threads_stream',
+            ],
+            'whatsapp_positions' => [
+                'status',
+            ],
+            'device_platforms' => [
+                'mobile','desktop','connected_tv',
+            ],
+        ];
+    }
+
     public static function creativeCallToActionTypes(): array
     {
         // Official AdCreative.CallToActionType enum from facebook/facebook-python-business-sdk.
