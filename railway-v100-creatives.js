@@ -50,8 +50,20 @@ async function api(url, options = {}) {
     try { json = JSON.parse(raw); }
     catch { throw new Error('Invalid JSON (' + response.status + ')'); }
     if (!response.ok || json.ok === false) {
-        const error = json.error || json;
-        throw new Error(error.message || ('HTTP ' + response.status));
+        const raw = json.error || json || {};
+        const error = (raw && typeof raw === 'object') ? raw : {message:String(raw || '')};
+        const bits = [error.message || ('HTTP ' + response.status)];
+        if (error.type) bits.push('type=' + String(error.type));
+        if (error.code !== undefined && error.code !== null && error.code !== '') bits.push('code=' + String(error.code));
+        const subcode = error.subcode ?? error.error_subcode;
+        if (subcode !== undefined && subcode !== null && subcode !== '') bits.push('subcode=' + String(subcode));
+        if (error.error_user_title || error.user_title) bits.push(String(error.error_user_title || error.user_title));
+        if (error.error_user_msg || error.user_message) bits.push(String(error.error_user_msg || error.user_message));
+        if (error.fbtrace_id) bits.push('fbtrace_id=' + String(error.fbtrace_id));
+        const err = new Error(bits.join(' · '));
+        err.meta = error;
+        err.httpStatus = response.status;
+        throw err;
     }
     return json.data;
 }
