@@ -51,6 +51,7 @@ COPY railway-launch-meta-editors-v114-overlay.php /tmp/railway-launch-meta-edito
 COPY railway-language-targeting-v116-overlay.php /tmp/railway-language-targeting-v116-overlay.php
 COPY railway-selection-persistence-overlay.php /tmp/railway-selection-persistence-overlay.php
 COPY railway-profile-error-fix-overlay.php /tmp/railway-profile-error-fix-overlay.php
+COPY railway-python-worker-bridge-overlay.php /tmp/railway-python-worker-bridge-overlay.php
 COPY docker-start.sh /tmp/docker-start.sh
 
 RUN set -eux; \
@@ -107,6 +108,8 @@ RUN set -eux; \
     php /tmp/railway-launch-full-meta-v113-overlay.php; \
     php /tmp/railway-selection-persistence-overlay.php; \
     php /tmp/railway-profile-error-fix-overlay.php; \
+    php -l /tmp/railway-python-worker-bridge-overlay.php; \
+    php /tmp/railway-python-worker-bridge-overlay.php; \
     php -l /tmp/railway-launch-meta-editors-v114-overlay.php; \
     php /tmp/railway-launch-meta-editors-v114-overlay.php; \
     php -l /tmp/railway-language-targeting-v116-overlay.php; \
@@ -118,6 +121,9 @@ RUN set -eux; \
     php -l /var/www/html/classes/MetaEndpoint.php; \
     php -l /var/www/html/ajax/checkAccount.php; \
     php -l /var/www/html/ajax/metaProfileManager.php; \
+    php -l /var/www/html/ajax/pythonProfileContext.php; \
+    grep -q 'X-Remask-Internal-Key' /var/www/html/ajax/pythonProfileContext.php; \
+    grep -q 'REMASK_INTERNAL_KEY' /var/www/html/ajax/pythonProfileContext.php; \
     php -l /var/www/html/ajax/metaHierarchy.php; \
     php -l /var/www/html/bin/remask-worker.php; \
     php -l /var/www/html/ajax/metaWorkerStatus.php; \
