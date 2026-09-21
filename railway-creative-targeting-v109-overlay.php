@@ -46,6 +46,39 @@ if(strpos($src,'REMASK_ACCOUNTLESS_TARGETING_V1')===false){
     $src=preg_replace($profilePattern,$replacement,$src,1,$count) ?? $src;
     if($count!==1){fwrite(STDERR,"[creative-targeting-v109] profile patch count=$count\n");exit(374);}
 
+    if(strpos($src,'REMASK_ACCOUNTLESS_BEHAVIOR_ACCOUNT_V1')===false){
+        $serviceAnchor='$service = MetaEndpoint::serviceForAccountName($profile);';
+        if(strpos($src,$serviceAnchor)===false){
+            fwrite(STDERR,"[creative-targeting-v109] service anchor missing\n");
+            exit(375);
+        }
+        $serviceReplacement=<<<'PHP_CODE'
+$service = MetaEndpoint::serviceForAccountName($profile);
+
+/* REMASK_ACCOUNTLESS_BEHAVIOR_ACCOUNT_V1 */
+$remaskTargetingType = strtolower(trim((string)($input['type'] ?? '')));
+if (in_array($remaskTargetingType, ['behavior','behaviors'], true)
+    && trim((string)($input['account_id'] ?? '')) === '') {
+    $accountRows = $service->listAdAccounts(1);
+    $behaviorAccountId = '';
+    foreach ((array)($accountRows['data'] ?? []) as $row) {
+        if (!is_array($row)) continue;
+        $candidate = preg_replace('/^act_/i', '', trim((string)($row['id'] ?? ''))) ?? '';
+        if ($candidate !== '' && preg_match('/^\\d+$/', $candidate)) {
+            $behaviorAccountId = $candidate;
+            break;
+        }
+    }
+    if ($behaviorAccountId === '') {
+        throw new RuntimeException('No Meta ad account is available for Behaviors search.');
+    }
+    $input['account_id'] = $behaviorAccountId;
+}
+PHP_CODE;
+        $src=str_replace($serviceAnchor,$serviceReplacement,$src,$serviceCount);
+        if($serviceCount!==1){fwrite(STDERR,"[creative-targeting-v109] behavior account patch count=$serviceCount\n");exit(376);}
+    }
+
     file_put_contents($endpoint,$src);
 }
-fwrite(STDERR,"[creative-targeting-v109] hidden Meta transport enabled for Creative targeting search\n");
+fwrite(STDERR,"[creative-targeting-v109] hidden Meta transport + accountless Behaviors context enabled\n");
