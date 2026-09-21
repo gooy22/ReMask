@@ -94,8 +94,23 @@ require_once __DIR__ . '/checkpassword.php';
 .cr-modal-foot{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;border-top:1px solid #343a45;background:#20242b}
 .cr-status{font-size:12px;color:#8993a3;min-height:18px}.cr-status.bad{color:#ff8f8f}.cr-status.ok{color:#69d99b}
 .cr-sdk-groups{display:grid;gap:10px}.cr-sdk-group{border:1px solid #343a45;border-radius:8px;background:#1d2128;overflow:hidden}.cr-sdk-group>summary{cursor:pointer;padding:10px 12px;color:#dbe0e8;font-size:12px;font-weight:700;list-style:none;display:flex;justify-content:space-between;align-items:center}.cr-sdk-group>summary::-webkit-details-marker{display:none}.cr-sdk-count{font-size:10px;color:#7f8898;font-weight:600}.cr-sdk-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;padding:0 12px 12px}.cr-sdk-field{min-width:0}.cr-sdk-field label{display:flex!important;justify-content:space-between;gap:8px;margin-bottom:5px!important}.cr-sdk-type{font-size:9px;color:#70798a;font-weight:500}.cr-sdk-field textarea{min-height:72px!important;height:72px!important}.cr-raw-json{margin-top:12px;border-top:1px solid #343a45;padding-top:10px}.cr-raw-json>summary{cursor:pointer;color:#9aa3b2;font-size:12px;font-weight:700;margin-bottom:10px}.cr-sdk-hidden{display:none!important}
+.cr-placement-mode{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-bottom:14px}
+.cr-placement-mode-option{display:flex;gap:9px;align-items:flex-start;border:1px solid #38414d;background:#1a1f26;border-radius:9px;padding:11px 12px;cursor:pointer}
+.cr-placement-mode-option input{margin-top:3px}.cr-placement-mode-option span{display:flex;flex-direction:column;gap:3px}.cr-placement-mode-option b{font-size:12px;color:#e3e7ed}.cr-placement-mode-option small{font-size:10px;color:#7f8999;line-height:1.35}
+.cr-placement-manual{border-top:1px solid #343a45;padding-top:12px}
+.cr-placement-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px}
+.cr-placement-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.cr-placement-card{border:1px solid #343d49;background:#191e25;border-radius:9px;padding:10px;min-width:0}
+.cr-placement-card.disabled{opacity:.45}.cr-placement-card-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding-bottom:8px;border-bottom:1px solid #2e3641}
+.cr-placement-all{font-size:10px!important;color:#8f99aa!important}
+.cr-placement-options{display:flex;flex-wrap:wrap;gap:7px 9px;padding-top:9px}
+.cr-placement-options .cr-check{border:1px solid #303945;background:#20262e;border-radius:7px;padding:6px 8px;font-size:11px}
+.cr-placement-options .cr-check input{accent-color:#3d79f2}
+.cr-placement-options-inline{padding-top:0}
+.cr-placement-devices{margin-top:12px;border:1px solid #343d49;background:#191e25;border-radius:9px;padding:10px}
+.cr-placement-live{color:#63d69b}.cr-placement-fallback{color:#d4a55d}
 .cr-foot-actions{display:flex;gap:8px}
-@media(max-width:820px){.cr-meta-context{grid-template-columns:1fr}.cr-audience-estimate{grid-template-columns:1fr}.cr-audience-estimate-state{text-align:left}.span-8,.span-6,.span-4,.span-3{grid-column:span 12}.cr-media-row{grid-template-columns:1fr}.cr-carousel-row{grid-template-columns:44px 1fr}.cr-carousel-row .form-control{grid-column:span 2}}
+@media(max-width:820px){.cr-meta-context{grid-template-columns:1fr}.cr-placement-mode,.cr-placement-grid{grid-template-columns:1fr}.cr-audience-estimate{grid-template-columns:1fr}.cr-audience-estimate-state{text-align:left}.span-8,.span-6,.span-4,.span-3{grid-column:span 12}.cr-media-row{grid-template-columns:1fr}.cr-carousel-row{grid-template-columns:44px 1fr}.cr-carousel-row .form-control{grid-column:span 2}}
 </style>
 </head>
 <body class="app-shell">
@@ -247,31 +262,67 @@ require_once __DIR__ . '/checkpassword.php';
 
       <section class="cr-panel" data-panel="placements">
         <div class="cr-section-title">Placements / Devices</div>
-        <div class="cr-checkrow">
-          <label class="cr-check"><input type="checkbox" data-publisher="facebook" checked> Facebook</label>
-          <label class="cr-check"><input type="checkbox" data-publisher="instagram" checked> Instagram</label>
-          <label class="cr-check"><input type="checkbox" data-publisher="messenger"> Messenger</label>
-          <label class="cr-check"><input type="checkbox" data-publisher="audience_network"> Audience Network</label>
-          <label class="cr-check"><input type="checkbox" data-publisher="threads"> Threads</label>
-          <label class="cr-check"><input type="checkbox" data-publisher="whatsapp"> WhatsApp</label>
+
+        <div class="cr-placement-mode">
+          <label class="cr-placement-mode-option">
+            <input type="radio" name="placementMode" value="auto" checked>
+            <span><b>Advantage+ placements</b><small>Meta сама выбирает все доступные места показа для текущей воронки.</small></span>
+          </label>
+          <label class="cr-placement-mode-option">
+            <input type="radio" name="placementMode" value="manual">
+            <span><b>Manual placements</b><small>Ручной выбор платформ и конкретных мест показа как в Ads Manager.</small></span>
+          </label>
         </div>
-        <div class="cr-form-grid">
-          <div class="span-6 cr-field"><label>Facebook positions</label><input id="mbFacebookPositions" class="form-control" placeholder="feed,story,video_feeds,marketplace"></div>
-          <div class="span-6 cr-field"><label>Instagram positions</label><input id="mbInstagramPositions" class="form-control" placeholder="stream,story,reels,explore"></div>
-          <div class="span-6 cr-field"><label>Messenger positions</label><input id="mbMessengerPositions" class="form-control" placeholder="messenger_home,sponsored_messages"></div>
-          <div class="span-6 cr-field"><label>Audience Network positions</label><input id="mbAudienceNetworkPositions" class="form-control" placeholder="classic,rewarded_video"></div>
-          <div class="span-6 cr-field"><label>Threads positions</label><input id="mbThreadsPositions" class="form-control"></div>
-          <div class="span-6 cr-field"><label>WhatsApp positions</label><input id="mbWhatsappPositions" class="form-control"></div>
+
+        <div id="manualPlacements" class="cr-placement-manual" style="display:none">
+          <div class="cr-placement-toolbar">
+            <div>
+              <div class="cr-section-title" style="margin:0">Платформы и места показа</div>
+              <div id="placementCapabilitiesStatus" class="cr-hint">SDK fallback · выбери reference RK для live Meta placements.</div>
+            </div>
+            <button id="refreshPlacements" type="button" class="cr-btn">ОБНОВИТЬ PLACEMENTS</button>
+          </div>
+
+          <div id="placementPlatformGrid" class="cr-placement-grid">
+            <div class="cr-placement-card" data-placement-card="facebook">
+              <div class="cr-placement-card-head"><label class="cr-check"><input type="checkbox" data-publisher="facebook"> Facebook</label><label class="cr-check cr-placement-all"><input type="checkbox" data-position-all="facebook_positions" checked> Все доступные</label></div>
+              <div id="placementFacebookOptions" class="cr-placement-options" data-position-container="facebook_positions"></div>
+            </div>
+            <div class="cr-placement-card" data-placement-card="instagram">
+              <div class="cr-placement-card-head"><label class="cr-check"><input type="checkbox" data-publisher="instagram"> Instagram</label><label class="cr-check cr-placement-all"><input type="checkbox" data-position-all="instagram_positions" checked> Все доступные</label></div>
+              <div id="placementInstagramOptions" class="cr-placement-options" data-position-container="instagram_positions"></div>
+            </div>
+            <div class="cr-placement-card" data-placement-card="messenger">
+              <div class="cr-placement-card-head"><label class="cr-check"><input type="checkbox" data-publisher="messenger"> Messenger</label><label class="cr-check cr-placement-all"><input type="checkbox" data-position-all="messenger_positions" checked> Все доступные</label></div>
+              <div id="placementMessengerOptions" class="cr-placement-options" data-position-container="messenger_positions"></div>
+            </div>
+            <div class="cr-placement-card" data-placement-card="audience_network">
+              <div class="cr-placement-card-head"><label class="cr-check"><input type="checkbox" data-publisher="audience_network"> Audience Network</label><label class="cr-check cr-placement-all"><input type="checkbox" data-position-all="audience_network_positions" checked> Все доступные</label></div>
+              <div id="placementAudienceNetworkOptions" class="cr-placement-options" data-position-container="audience_network_positions"></div>
+            </div>
+            <div class="cr-placement-card" data-placement-card="threads">
+              <div class="cr-placement-card-head"><label class="cr-check"><input type="checkbox" data-publisher="threads"> Threads</label><label class="cr-check cr-placement-all"><input type="checkbox" data-position-all="threads_positions" checked> Все доступные</label></div>
+              <div id="placementThreadsOptions" class="cr-placement-options" data-position-container="threads_positions"></div>
+            </div>
+            <div class="cr-placement-card" data-placement-card="whatsapp">
+              <div class="cr-placement-card-head"><label class="cr-check"><input type="checkbox" data-publisher="whatsapp"> WhatsApp</label><label class="cr-check cr-placement-all"><input type="checkbox" data-position-all="whatsapp_positions" checked> Все доступные</label></div>
+              <div id="placementWhatsappOptions" class="cr-placement-options" data-position-container="whatsapp_positions"></div>
+            </div>
+          </div>
+
+          <div class="cr-placement-devices">
+            <div class="cr-section-title" style="margin:0 0 8px">Devices</div>
+            <div id="placementDeviceOptions" class="cr-placement-options cr-placement-options-inline" data-device-container></div>
+          </div>
         </div>
-        <div class="cr-checkrow">
-          <label class="cr-check"><input type="checkbox" data-device-platform="mobile" checked> Mobile</label>
-          <label class="cr-check"><input type="checkbox" data-device-platform="desktop" checked> Desktop</label>
-          <label class="cr-check"><input type="checkbox" data-device-platform="connected_tv"> Connected TV</label>
-        </div>
-        <div class="cr-form-grid">
-          <div class="span-6 cr-field"><label>User OS</label><input id="mbUserOs" class="form-control" placeholder="Android,iOS"></div>
-          <div class="span-6 cr-field"><label>User devices</label><input id="mbUserDevice" class="form-control" placeholder="Galaxy S24,iPhone"></div>
-        </div>
+
+        <details class="cr-raw-targeting" style="margin-top:12px">
+          <summary>Дополнительное device targeting</summary>
+          <div class="cr-form-grid">
+            <div class="span-6 cr-field"><label>User OS</label><input id="mbUserOs" class="form-control" placeholder="Android,iOS"></div>
+            <div class="span-6 cr-field"><label>User devices</label><input id="mbUserDevice" class="form-control" placeholder="Galaxy S24,iPhone"></div>
+          </div>
+        </details>
       </section>
 
       <section class="cr-panel" data-panel="identity">
