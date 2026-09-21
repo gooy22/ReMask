@@ -114,6 +114,8 @@ RUN set -eux; \
     php /tmp/railway-python-worker-bridge-overlay.php; \
     php -l /tmp/railway-python-worker-jobs-overlay.php; \
     php /tmp/railway-python-worker-jobs-overlay.php; \
+    php -l /tmp/railway-python-worker-state-overlay.php; \
+    php /tmp/railway-python-worker-state-overlay.php; \
     php -l /tmp/railway-launch-meta-editors-v114-overlay.php; \
     php /tmp/railway-launch-meta-editors-v114-overlay.php; \
     php -l /tmp/railway-language-targeting-v116-overlay.php; \
