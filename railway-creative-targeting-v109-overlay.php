@@ -89,7 +89,7 @@ if(strpos($src,'REMASK_ACCOUNTLESS_TARGETING_V1')===false){
     $src=preg_replace($profilePattern,$replacement,$src,1,$count) ?? $src;
     if($count!==1){fwrite(STDERR,"[creative-targeting-v109] profile patch count=$count\n");exit(374);}
 
-    if(strpos($src,'REMASK_ACCOUNTLESS_TARGETING_ACCOUNT_V2')===false){
+    if(strpos($src,'REMASK_ACCOUNTLESS_BEHAVIOR_ACCOUNT_V3')===false){
         $serviceAnchor='$service = MetaEndpoint::serviceForAccountName($profile);';
         if(strpos($src,$serviceAnchor)===false){
             fwrite(STDERR,"[creative-targeting-v109] service anchor missing\n");
@@ -156,7 +156,7 @@ if (!empty($remaskAccountlessTargeting)) {
 
         private function run(callable $fn): array
         {
-            $errors = [];
+            $lastError = null;
             foreach ($this->candidates as $profile) {
                 try {
                     $real = MetaEndpoint::serviceForAccountName($profile);
@@ -164,13 +164,13 @@ if (!empty($remaskAccountlessTargeting)) {
                     $this->cacheSuccess($profile);
                     return is_array($result) ? $result : [];
                 } catch (Throwable $e) {
-                    $errors[] = $profile . ': ' . trim((string)$e->getMessage());
+                    $lastError = $e;
                     if (!self::retryable($e)) throw $e;
                     $this->cacheFailure($profile);
                 }
             }
-            $last = $errors !== [] ? end($errors) : 'no candidate transports';
-            throw new RuntimeException('All Meta targeting transports failed. ' . $last);
+            if ($lastError instanceof Throwable) throw $lastError;
+            throw new RuntimeException('No Meta targeting transport candidate is available.');
         }
 
         public function searchAccountTargeting(string $accountId, string $query, array $whitelistedTypes, int $limit = 25, ?string $limitType = null): array
@@ -204,12 +204,7 @@ if (!empty($remaskAccountlessTargeting)) {
 
 /* REMASK_ACCOUNTLESS_TARGETING_ACCOUNT_V2 */
 $remaskTargetingType = strtolower(trim((string)($input['type'] ?? '')));
-$remaskAccountScopedTypes = [
-    'interest','interests','behavior','behaviors',
-    'language','languages','locale','locales',
-    'location','locations','geo'
-];
-if (in_array($remaskTargetingType, $remaskAccountScopedTypes, true)
+if (in_array($remaskTargetingType, ['behavior','behaviors'], true)
     && trim((string)($input['account_id'] ?? '')) === '') {
     $accountRows = $service->listAdAccounts(1);
     $targetingAccountId = '';
@@ -222,7 +217,7 @@ if (in_array($remaskTargetingType, $remaskAccountScopedTypes, true)
         }
     }
     if ($targetingAccountId === '') {
-        throw new RuntimeException('No Meta ad account is available for targeting search.');
+        throw new RuntimeException('No Meta ad account is available for Behaviors search.');
     }
     $input['account_id'] = $targetingAccountId;
 }
@@ -233,4 +228,4 @@ PHP_CODE;
 
     file_put_contents($endpoint,$src);
 }
-fwrite(STDERR,"[creative-targeting-v109] real-call targeting failover + account-scoped targeting context enabled\n");
+fwrite(STDERR,"[creative-targeting-v109] real-call targeting failover + behavior-only account context enabled\n");
