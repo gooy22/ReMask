@@ -7,9 +7,14 @@ JobStatus = Literal['QUEUED','RUNNING','SUCCESS','FAILED','PARTIAL']
 TaskStatus = Literal['QUEUED','RUNNING','SUCCESS','FAILED']
 
 class TaskInput(BaseModel):
-    model_config = ConfigDict(extra='forbid')
+    # Dynamic task contract: known fields stay typed, unknown JSON-compatible
+    # fields are accepted and persisted with the task.
+    model_config = ConfigDict(extra='allow')
+
     action: str = Field(min_length=1, max_length=80)
     payload: dict[str, Any] = Field(default_factory=dict)
+    route: str | None = Field(default=None, min_length=1, max_length=120)
+    variables: dict[str, Any] = Field(default_factory=dict)
     idempotency_key: str | None = Field(default=None, max_length=160)
 
 class ProfileJobInput(BaseModel):
