@@ -115,6 +115,32 @@ def _official_safe_to_web_fallback(exc: GraphApiError) -> bool:
     return False
 
 
+def _find_existing_business(
+    businesses: list[dict[str, Any]],
+    *,
+    business_name: str,
+    page_id: str,
+) -> str:
+    expected_name = str(business_name or "").strip().casefold()
+    expected_page = str(page_id or "").strip()
+
+    matches: list[str] = []
+    for row in businesses:
+        if not isinstance(row, dict):
+            continue
+        row_name = str(row.get("name") or "").strip().casefold()
+        row_page = str(row.get("primary_page_id") or "").strip()
+        row_id = str(row.get("id") or "").strip()
+
+        if not row_id or row_name != expected_name:
+            continue
+        if expected_page and row_page and row_page != expected_page:
+            continue
+        matches.append(row_id)
+
+    return matches[0] if len(matches) == 1 else ""
+
+
 def _official_terminal_error(exc: GraphApiError) -> BusinessCreateError:
     text = _text(exc)
     diagnostic = _graph_diag(exc)
@@ -190,49 +216,148 @@ async def create_business_resilient(
     clean_page = str(page_id or "").strip()
 
     # Route A: official Business Management API.
-    # For ReMask we deliberately require an actual Fan Page for this route,
-    # matching the page-backed Business creation contract and the user's flow.
+    #
+    # Do not attempt the mutation merely because a Page ID was supplied.
+    # First prove that this exact token can see the selected Page. That avoids
+    # misleading official calls when Pages are visible only to the browser
+    # session but not to the saved Ads/Graph token.
     if clean_page and str(getattr(session.context, "access_token", "") or "").strip():
+        graph = await session.graph_api()
+        official_page_visible = False
+
         try:
-            graph = await session.graph_api()
-            business_id = await graph.create_business(
-                name=business_name,
-                primary_page_id=clean_page,
-                vertical=vertical,
-                email=user_email,
-                timezone_id=timezone_id,
+            visible_pages = await graph.list_pages()
+            official_page_visible = any(
+                str(page.get("id") or "").strip() == clean_page
+                for page in visible_pages
+                if isinstance(page, dict)
             )
-            return BusinessCreateResult(
-                business_id=business_id,
-                transport="official_graph_api",
-                primary_page_id=clean_page,
-                diagnostics=diagnostics,
-            )
-        except GraphMutationUncertain as exc:
             diagnostics.append(
                 {
                     "transport": "official_graph_api",
-                    "result": "unknown",
-                    "message": str(exc),
+                    "stage": "page_visibility",
+                    "page_id": clean_page,
+                    "visible": official_page_visible,
+                    "pages_count": len(visible_pages),
                 }
             )
-            raise BusinessCreateError(
-                "CREATE_RESULT_UNKNOWN",
-                (
-                    "Official create-business request may have reached Meta, "
-                    "so ReMask will not retry through another mutation. "
-                    "Sync Business Managers before retrying. "
-                    + str(exc)
-                ),
-                retryable=False,
-                diagnostics=diagnostics,
-            ) from exc
         except GraphApiError as exc:
-            diagnostics.append(_graph_diag(exc))
-            if not _official_safe_to_web_fallback(exc):
-                terminal = _official_terminal_error(exc)
-                terminal.diagnostics = diagnostics
-                raise terminal from exc
+            diagnostics.append(
+                {
+                    **_graph_diag(exc),
+                    "stage": "page_visibility",
+                }
+            )
+
+        if official_page_visible:
+            try:
+                existing = await graph.list_businesses()
+                existing_id = _find_existing_business(
+                    existing,
+                    business_name=business_name,
+                    page_id=clean_page,
+                )
+                if existing_id:
+                    diagnostics.append(
+                        {
+                            "transport": "official_graph_api",
+                            "stage": "precreate_dedup",
+                            "result": "existing_business_reused",
+                            "business_id": existing_id,
+                        }
+                    )
+                    return BusinessCreateResult(
+                        business_id=existing_id,
+                        transport="official_graph_api_reused",
+                        primary_page_id=clean_page,
+                        diagnostics=diagnostics,
+                    )
+            except GraphApiError as exc:
+                diagnostics.append(
+                    {
+                        **_graph_diag(exc),
+                        "stage": "precreate_dedup",
+                    }
+                )
+
+            try:
+                business_id = await graph.create_business(
+                    name=business_name,
+                    primary_page_id=clean_page,
+                    vertical=vertical,
+                    email=user_email,
+                    timezone_id=timezone_id,
+                )
+                return BusinessCreateResult(
+                    business_id=business_id,
+                    transport="official_graph_api",
+                    primary_page_id=clean_page,
+                    diagnostics=diagnostics,
+                )
+            except GraphMutationUncertain as exc:
+                diagnostics.append(
+                    {
+                        "transport": "official_graph_api",
+                        "stage": "create",
+                        "result": "unknown",
+                        "message": str(exc),
+                    }
+                )
+
+                # The POST may already have succeeded. Verify before doing
+                # anything else; never fall through to a second mutation.
+                try:
+                    existing = await graph.list_businesses()
+                    existing_id = _find_existing_business(
+                        existing,
+                        business_name=business_name,
+                        page_id=clean_page,
+                    )
+                    if existing_id:
+                        diagnostics.append(
+                            {
+                                "transport": "official_graph_api",
+                                "stage": "verify_after_unknown",
+                                "result": "created_business_found",
+                                "business_id": existing_id,
+                            }
+                        )
+                        return BusinessCreateResult(
+                            business_id=existing_id,
+                            transport="official_graph_api_verified",
+                            primary_page_id=clean_page,
+                            diagnostics=diagnostics,
+                        )
+                except GraphApiError as verify_exc:
+                    diagnostics.append(
+                        {
+                            **_graph_diag(verify_exc),
+                            "stage": "verify_after_unknown",
+                        }
+                    )
+
+                raise BusinessCreateError(
+                    "CREATE_RESULT_UNKNOWN",
+                    (
+                        "Official create-business request may have reached Meta, "
+                        "but ReMask could not verify the result. Sync Business "
+                        "Managers before retrying; automatic fallback is blocked "
+                        "to prevent duplicate BMs."
+                    ),
+                    retryable=False,
+                    diagnostics=diagnostics,
+                ) from exc
+            except GraphApiError as exc:
+                diagnostics.append(
+                    {
+                        **_graph_diag(exc),
+                        "stage": "create",
+                    }
+                )
+                if not _official_safe_to_web_fallback(exc):
+                    terminal = _official_terminal_error(exc)
+                    terminal.diagnostics = diagnostics
+                    raise terminal from exc
 
     # Route B: current Facebook Business web flow over the same profile
     # cookies/proxy. This includes the current scope-selector mutation and the
