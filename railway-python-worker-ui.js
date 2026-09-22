@@ -1,4 +1,4 @@
-/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 REMASK_PYTHON_WORKER_UI_V140 REMASK_PYTHON_WORKER_UI_V141 REMASK_PYTHON_WORKER_UI_V142 REMASK_PYTHON_WORKER_UI_V143 REMASK_PYTHON_WORKER_UI_V144 REMASK_PYTHON_WORKER_UI_V145 REMASK_PYTHON_WORKER_UI_V146 REMASK_PYTHON_WORKER_UI_V147 REMASK_PYTHON_WORKER_UI_V148 REMASK_PYTHON_WORKER_UI_V149 REMASK_PYTHON_WORKER_UI_V150 */
+/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 REMASK_PYTHON_WORKER_UI_V140 REMASK_PYTHON_WORKER_UI_V141 REMASK_PYTHON_WORKER_UI_V142 REMASK_PYTHON_WORKER_UI_V143 REMASK_PYTHON_WORKER_UI_V144 REMASK_PYTHON_WORKER_UI_V145 REMASK_PYTHON_WORKER_UI_V146 REMASK_PYTHON_WORKER_UI_V147 REMASK_PYTHON_WORKER_UI_V148 REMASK_PYTHON_WORKER_UI_V149 REMASK_PYTHON_WORKER_UI_V150 REMASK_PYTHON_WORKER_UI_V151 */
 const restoredPythonWorkerJobId = localStorage.getItem('remask_python_worker_job_v1') || '';
 
 const pythonWorkerUiState = {
@@ -104,10 +104,10 @@ function pythonWorkerSelectionRefresh() {
       profiles.length
         ? (
             pythonWorkerUiState.workerOnline === true
-              ? 'Worker UI v150 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
-              : 'Worker UI v150 · Выбрано FB-профилей: ' + profiles.length + '. Жду READY от worker.'
+              ? 'Worker UI v151 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
+              : 'Worker UI v151 · Выбрано FB-профилей: ' + profiles.length + '. Жду READY от worker.'
           )
-        : 'Worker UI v150 · Выберите FB-профили в Workspace.'
+        : 'Worker UI v151 · Выберите FB-профили в Workspace.'
     );
   }
 }
@@ -186,22 +186,23 @@ async function pythonWorkerProfilePreflight(profileId) {
   const routes = preflight.bm_routes && typeof preflight.bm_routes === 'object'
     ? preflight.bm_routes
     : {};
+  const hasPages =
+    Array.isArray(preflight.pages) &&
+    preflight.pages.length > 0;
   const graphReady =
     routes.official_graph_api === true ||
     (
       graph.ready === true &&
-      Array.isArray(preflight.pages) &&
-      preflight.pages.length > 0
+      hasPages &&
+      graph.business_management_granted !== false
     );
   const webReady =
-    routes.web_page_backed_candidate === true ||
-    routes.web_scope_selector_candidate === true ||
-    (
-      preflight.fb_dtsg_present === true &&
-      preflight.actor_present === true
-    );
+    routes.web_page_backed_candidate === true &&
+    hasPages &&
+    preflight.fb_dtsg_present === true &&
+    preflight.actor_present === true;
 
-  if (preflight.bm_route_ready === false || (!graphReady && !webReady)) {
+  if (!graphReady && !webReady) {
     const reasons = [];
     if (graph.identity_error || graph.error) {
       reasons.push('Graph API: ' + String(graph.identity_error || graph.error));
@@ -553,7 +554,8 @@ async function pythonWorkerStartBusiness(bmName, options) {
       const profileKey = String(profileId);
       const config = rowConfig[profileKey] || {};
       const businessParams = {
-        name: String(config.name || cleanName).trim()
+        name: String(config.name || cleanName).trim(),
+        require_page_backed: true
       };
 
       const pageId = String(config.page_id || '').trim();
