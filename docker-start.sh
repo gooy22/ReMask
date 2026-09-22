@@ -13,17 +13,49 @@ export REMASK_BUNDLE_STORAGE_DIR="${REMASK_BUNDLE_STORAGE_DIR:-$DATA_DIR/bundles
 export REMASK_META_CACHE_DIR="${REMASK_META_CACHE_DIR:-$DATA_DIR/meta-cache}"
 export REMASK_META_USAGE_FILE="${REMASK_META_USAGE_FILE:-$DATA_DIR/meta-usage.json}"
 export REMASK_JOB_MEDIA_DIR="${REMASK_JOB_MEDIA_DIR:-$DATA_DIR/job-media}"
+export REMASK_MEDIA_LIBRARY_DIR="${REMASK_MEDIA_LIBRARY_DIR:-$DATA_DIR/media-library}"
+export REMASK_CREATIVE_PRESET_DIR="${REMASK_CREATIVE_PRESET_DIR:-$DATA_DIR/creative-presets}"
+export REMASK_PYTHON_STATE_DIR="${REMASK_PYTHON_STATE_DIR:-$DATA_DIR/python-worker-jobs}"
+export REMASK_JOB_DB="${REMASK_JOB_DB:-$DATA_DIR/python-worker/jobs.sqlite3}"
 
 mkdir -p \
   "$DATA_DIR" \
   "$REMASK_JOB_STORAGE_DIR" \
   "$REMASK_BUNDLE_STORAGE_DIR" \
   "$REMASK_META_CACHE_DIR" \
-  "$REMASK_JOB_MEDIA_DIR"
+  "$REMASK_JOB_MEDIA_DIR" \
+  "$REMASK_MEDIA_LIBRARY_DIR" \
+  "$REMASK_CREATIVE_PRESET_DIR" \
+  "$REMASK_PYTHON_STATE_DIR" \
+  "$(dirname "$REMASK_JOB_DB")"
 
 touch "$REMASK_ACCOUNTS_FILE" "$REMASK_META_USAGE_FILE"
 [ -s "$REMASK_ACCOUNTS_FILE" ] || printf '[]\n' > "$REMASK_ACCOUNTS_FILE"
 [ -s "$REMASK_META_USAGE_FILE" ] || printf '{}\n' > "$REMASK_META_USAGE_FILE"
+
+# Keep legacy runtime paths volume-backed too. Older ReMask classes may still
+# reference /var/www/html/accounts.json or bundles.json directly.
+persist_legacy_file() {
+  local legacy="$1"
+  local target="$2"
+  local initial="$3"
+
+  mkdir -p "$(dirname "$target")"
+
+  if [ ! -s "$target" ]; then
+    if [ -f "$legacy" ] && [ ! -L "$legacy" ] && [ -s "$legacy" ]; then
+      cp "$legacy" "$target"
+    else
+      printf '%s\n' "$initial" > "$target"
+    fi
+  fi
+
+  rm -f "$legacy"
+  ln -s "$target" "$legacy"
+}
+
+persist_legacy_file "$ROOT/accounts.json" "$REMASK_ACCOUNTS_FILE" '[]'
+persist_legacy_file "$ROOT/bundles.json" "$DATA_DIR/bundles.json" '[]'
 
 rm -rf "$ROOT/health"
 printf '%s\n' '{"ok":true,"service":"remask"}' > "$ROOT/health"
