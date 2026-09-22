@@ -147,6 +147,8 @@ RUN set -eux; \
     test -x /opt/remask-venv/bin/uvicorn; \
     test -f /opt/remask-python/main.py; \
     php -l /var/www/html/ajax/pythonWorkerJobs.php; \
+    php -l /var/www/html/ajax/pythonWorkerPages.php; \
+    grep -q 'pythonWorkerOpenOwnBmModal' /var/www/html/scripts/workspace.js; \
     grep -q 'REMASK_PYTHON_WORKER_URL' /var/www/html/ajax/pythonWorkerJobs.php; \
     grep -q 'retry-failed' /var/www/html/ajax/pythonWorkerJobs.php; \
     grep -q 'internalAuthorized' /var/www/html/ajax/pythonWorkerJobs.php; \
@@ -157,7 +159,7 @@ RUN set -eux; \
     php -l /var/www/html/workspace.php; \
     grep -q 'REMASK_PYTHON_WORKER_PANEL_V1' /var/www/html/workspace.php; \
     grep -q 'REMASK_PYTHON_WORKER_UI_V1' /var/www/html/scripts/workspace.js; \
-    grep -q 'REMASK_PYTHON_WORKER_UI_V134' /var/www/html/scripts/workspace.js; \
+    grep -q 'REMASK_PYTHON_WORKER_UI_V136' /var/www/html/scripts/workspace.js; \
     grep -q 'pythonWorkerJobs.php' /var/www/html/scripts/workspace.js; \
     grep -q 'Retry Failed' /var/www/html/workspace.php; \
     php -l /var/www/html/ajax/metaHierarchy.php; \
@@ -388,6 +390,7 @@ RUN set -eux; \
     if [ ! -f /var/www/html/health/index.php ]; then printf '%s\n' '<?php http_response_code(200); header("Content-Type: application/json"); echo json_encode(["ok"=>true,"service":"remask","rev"=>getenv("REMASK_DEPLOY_REV")]);' > /var/www/html/health/index.php; fi; \
     [ -f /var/www/html/index.php ]; \
     [ -f /var/www/html/launch.php ]; \
+    bash -n /tmp/docker-start.sh; \
     cp /tmp/docker-start.sh /var/www/html/docker-start.sh; \
     mkdir -p /var/www/html/bin; \
     [ -f /var/lib/remask/accounts.json ] || printf '[]\n' > /var/lib/remask/accounts.json; \
