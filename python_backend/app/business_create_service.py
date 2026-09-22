@@ -211,9 +211,18 @@ async def create_business_resilient(
     vertical: str = "ADVERTISING",
     timezone_id: int | None = None,
     explicit_doc_id: str | None = None,
+    require_page_backed: bool = False,
 ) -> BusinessCreateResult:
     diagnostics: list[dict[str, Any]] = []
     clean_page = str(page_id or "").strip()
+
+    if require_page_backed and not clean_page:
+        raise BusinessCreateError(
+            "PRIMARY_PAGE_REQUIRED",
+            "Page-backed Business creation requires a selected Fan Page.",
+            retryable=False,
+            diagnostics=diagnostics,
+        )
 
     # Route A: official Business Management API.
     #
@@ -421,12 +430,26 @@ async def create_business_resilient(
             user_last_name=user_last_name,
             profile_display_name=profile_display_name,
             vertical=vertical,
+            allow_scope_selector_fallback=not require_page_backed,
         )
 
         page_was_in_mutation = (
             web_result.candidate.variables_mode == "legacy_primary_page_v1"
             and bool(clean_page)
         )
+
+        if require_page_backed and not page_was_in_mutation:
+            raise BusinessCreateError(
+                "PAGE_BACKED_BM_ROUTE_UNAVAILABLE",
+                (
+                    "Facebook Business was not created because the available "
+                    "web mutation does not carry primary_page_id. ReMask "
+                    "refuses to report success without the selected Fan Page."
+                ),
+                retryable=False,
+                diagnostics=diagnostics,
+            )
+
         transport = (
             "facebook_web_graphql_page_backed"
             if page_was_in_mutation
@@ -490,6 +513,24 @@ async def create_business_resilient(
                 )
             )
         )
+
+        if (
+            require_page_backed
+            and (
+                "no usable page-backed create_bm mutation" in text
+                or "refusing non-page fallback" in text
+            )
+        ):
+            raise BusinessCreateError(
+                "PAGE_BACKED_BM_ROUTE_UNAVAILABLE",
+                (
+                    "Meta's current Page-backed Business creation mutation "
+                    "could not be resolved for this profile. The selected Fan "
+                    "Page was not ignored and no scope-selector BM was created."
+                ),
+                retryable=False,
+                diagnostics=diagnostics,
+            ) from exc
 
         if (
             not str(user_email or "").strip()
