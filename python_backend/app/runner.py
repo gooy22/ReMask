@@ -112,21 +112,46 @@ class WorkerPool:
                                 result=await self.registry.execute(action,session,task['payload'])
                             await self.store.set_task_success(task['id'],result)
                         except ProvisioningError as exc:
-                            await self.store.set_task_failed(task['id'],exc.code,str(exc))
+                            await self.store.set_task_failed(
+                                task['id'],
+                                exc.code,
+                                str(exc),
+                                retryable=bool(exc.retryable),
+                            )
                             break
                         except ProxyCheckError as exc:
-                            await self.store.set_task_failed(task['id'],'PROXY_DEAD',str(exc))
+                            await self.store.set_task_failed(
+                                task['id'],
+                                'PROXY_DEAD',
+                                str(exc),
+                                retryable=True,
+                            )
                             break
                         except RoutePolicyError as exc:
-                            await self.store.set_task_failed(task['id'],'ROUTE_POLICY',str(exc))
+                            await self.store.set_task_failed(
+                                task['id'],
+                                'ROUTE_POLICY',
+                                str(exc),
+                                retryable=False,
+                            )
                             break
                         except Exception as exc:
-                            await self.store.set_task_failed(task['id'],'TASK_FAILED',str(exc))
+                            await self.store.set_task_failed(
+                                task['id'],
+                                'TASK_FAILED',
+                                str(exc),
+                                retryable=False,
+                            )
                             break
             except ProfileContextError as exc:
                 if tasks:
                     first=next((t for t in tasks if t['status']!='SUCCESS'),tasks[0])
-                    await self.store.set_task_failed(first['id'],'PROFILE_CONTEXT_ERROR',str(exc))
+                    await self.store.set_task_failed(
+                        first['id'],
+                        'PROFILE_CONTEXT_ERROR',
+                        str(exc),
+                        retryable=False,
+                    )
             finally:
                 await self.store.finalize_item(item_id)
                 if self.mirror and self.mirror.enabled:
