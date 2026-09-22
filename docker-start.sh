@@ -5,6 +5,7 @@ ROOT="/var/www/html"
 PORT_VALUE="${PORT:-80}"
 DATA_DIR="${REMASK_DATA_DIR:-${RAILWAY_VOLUME_MOUNT_PATH:-/var/lib/remask}}"
 WORKER_INTERVAL="${REMASK_WORKER_INTERVAL_SECONDS:-15}"
+PYTHON_WORKER_PORT="${REMASK_LOCAL_WORKER_PORT:-8081}"
 
 export REMASK_DATA_DIR="$DATA_DIR"
 export REMASK_ACCOUNTS_FILE="${REMASK_ACCOUNTS_FILE:-$DATA_DIR/accounts.json}"
@@ -17,6 +18,20 @@ export REMASK_MEDIA_LIBRARY_DIR="${REMASK_MEDIA_LIBRARY_DIR:-$DATA_DIR/media-lib
 export REMASK_CREATIVE_PRESET_DIR="${REMASK_CREATIVE_PRESET_DIR:-$DATA_DIR/creative-presets}"
 export REMASK_PYTHON_STATE_DIR="${REMASK_PYTHON_STATE_DIR:-$DATA_DIR/python-worker-jobs}"
 export REMASK_JOB_DB="${REMASK_JOB_DB:-$DATA_DIR/python-worker/jobs.sqlite3}"
+
+if [ -z "${REMASK_INTERNAL_KEY:-}" ]; then
+  export REMASK_INTERNAL_KEY="$(/opt/remask-venv/bin/python -c 'import secrets; print(secrets.token_hex(24))')"
+fi
+if [ -z "${REMASK_WORKER_API_KEY:-}" ]; then
+  export REMASK_WORKER_API_KEY="$(/opt/remask-venv/bin/python -c 'import secrets; print(secrets.token_hex(24))')"
+fi
+
+if [ "${REMASK_USE_EXTERNAL_PYTHON_WORKER:-0}" != "1" ]; then
+  export REMASK_PYTHON_WORKER_URL="http://127.0.0.1:$PYTHON_WORKER_PORT"
+  export REMASK_PROFILE_RESOLVER_URL="http://127.0.0.1/ajax/pythonProfileContext.php"
+  export REMASK_STATE_URL="http://127.0.0.1/ajax/pythonWorkerState.php"
+  export REMASK_JOB_BRIDGE_URL="http://127.0.0.1/ajax/pythonWorkerJobs.php"
+fi
 
 mkdir -p \
   "$DATA_DIR" \
@@ -74,6 +89,22 @@ if [ "${REMASK_JOB_EXECUTION_MODE:-browser}" = "background" ] && [ -f "$ROOT/bin
     done
   ) &
   echo "$!" > "$DATA_DIR/worker.pid" || true
+fi
+
+if [ "${REMASK_USE_EXTERNAL_PYTHON_WORKER:-0}" != "1" ]; then
+  (
+    cd /opt/remask-python
+    exec /opt/remask-venv/bin/uvicorn main:app --host 127.0.0.1 --port "$PYTHON_WORKER_PORT" --workers 1
+  ) >> "$DATA_DIR/python-worker.log" 2>&1 &
+  PYTHON_WORKER_PID="$!"
+  echo "$PYTHON_WORKER_PID" > "$DATA_DIR/python-worker.pid"
+
+  sleep 1
+  if ! kill -0 "$PYTHON_WORKER_PID" 2>/dev/null; then
+    echo "Embedded Python worker failed to start" >&2
+    tail -n 120 "$DATA_DIR/python-worker.log" >&2 || true
+    exit 31
+  fi
 fi
 
 a2dismod -f mpm_event mpm_worker 2>/dev/null || true
