@@ -101,10 +101,25 @@ class ProfileResolver:
         if not isinstance(cookies, dict) or not user_agent:
             raise ProfileContextError("profile resolver returned incomplete context")
 
+        cookie_map = {str(k): str(v) for k, v in cookies.items()}
+        missing_auth_cookies = [
+            key for key in ("c_user", "xs")
+            if not str(cookie_map.get(key) or "").strip()
+        ]
+        if missing_auth_cookies:
+            raise ProfileContextError(
+                "profile resolver returned no logged-in Facebook session: missing "
+                + ", ".join(missing_auth_cookies)
+            )
+
+        proxy = str(payload.get("proxy") or "").strip() or None
+        if not proxy:
+            raise ProfileContextError("profile proxy is not configured")
+
         return ProfileContext(
             profile_id=profile_id,
-            cookies={str(k): str(v) for k, v in cookies.items()},
-            proxy=payload.get("proxy"),
+            cookies=cookie_map,
+            proxy=proxy,
             user_agent=user_agent,
         )
 
