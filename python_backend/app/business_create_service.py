@@ -199,253 +199,27 @@ def _official_terminal_error(exc: GraphApiError) -> BusinessCreateError:
     )
 
 
-async def create_business_resilient(
+async def _create_business_via_web(
     session: Any,
     *,
     business_name: str,
-    page_id: str,
-    user_email: str = "",
-    user_first_name: str = "",
-    user_last_name: str = "",
-    profile_display_name: str = "",
-    vertical: str = "ADVERTISING",
-    timezone_id: int | None = None,
-    explicit_doc_id: str | None = None,
-    require_page_backed: bool = False,
+    clean_page: str,
+    user_email: str,
+    user_first_name: str,
+    user_last_name: str,
+    profile_display_name: str,
+    vertical: str,
+    explicit_doc_id: str | None,
+    require_page_backed: bool,
+    diagnostics: list[dict[str, Any]],
 ) -> BusinessCreateResult:
-    diagnostics: list[dict[str, Any]] = []
-    clean_page = str(page_id or "").strip()
+    """
+    Create a Business through the authenticated Facebook browser session.
 
-    if require_page_backed and not clean_page:
-        raise BusinessCreateError(
-            "PRIMARY_PAGE_REQUIRED",
-            "Page-backed Business creation requires a selected Fan Page.",
-            retryable=False,
-            diagnostics=diagnostics,
-        )
-
-    # Route A: official Business Management API.
-    #
-    # Do not attempt the mutation merely because a Page ID was supplied.
-    # First prove that this exact token can see the selected Page. That avoids
-    # misleading official calls when Pages are visible only to the browser
-    # session but not to the saved Ads/Graph token.
-    if clean_page and str(getattr(session.context, "access_token", "") or "").strip():
-        graph = await session.graph_api()
-        official_page_visible = False
-        official_graph_blocked = False
-        saved_page_visible = any(
-            str(page.get("id") or "").strip() == clean_page
-            for page in (getattr(session.context, "pages", None) or [])
-            if isinstance(page, dict)
-        )
-
-        try:
-            visible_pages = await graph.list_pages()
-            official_page_visible = any(
-                str(page.get("id") or "").strip() == clean_page
-                for page in visible_pages
-                if isinstance(page, dict)
-            )
-            diagnostics.append(
-                {
-                    "transport": "official_graph_api",
-                    "stage": "page_visibility",
-                    "page_id": clean_page,
-                    "visible": official_page_visible,
-                    "saved_profile_visible": saved_page_visible,
-                    "pages_count": len(visible_pages),
-                }
-            )
-        except GraphApiError as exc:
-            diagnostics.append(
-                {
-                    **_graph_diag(exc),
-                    "stage": "page_visibility",
-                }
-            )
-            if exc.code == 190 or exc.http_status == 401:
-                official_graph_blocked = True
-                diagnostics.append(
-                    {
-                        "transport": "official_graph_api",
-                        "stage": "route_selection",
-                        "result": "skip_official_create",
-                        "reason": "saved access token is not usable for Graph API",
-                    }
-                )
-
-        if (official_page_visible or saved_page_visible) and not official_graph_blocked:
-            if saved_page_visible and not official_page_visible:
-                diagnostics.append(
-                    {
-                        "transport": "official_graph_api",
-                        "stage": "page_visibility",
-                        "page_id": clean_page,
-                        "result": "using_saved_profile_page_reference",
-                    }
-                )
-
-            official_permissions: dict[str, str] = {}
-            try:
-                official_permissions = await graph.list_permissions()
-                diagnostics.append(
-                    {
-                        "transport": "official_graph_api",
-                        "stage": "permissions",
-                        "business_management": official_permissions.get(
-                            "business_management",
-                            "",
-                        ),
-                        "pages_show_list": official_permissions.get(
-                            "pages_show_list",
-                            "",
-                        ),
-                        "ads_management": official_permissions.get(
-                            "ads_management",
-                            "",
-                        ),
-                    }
-                )
-            except GraphApiError as exc:
-                diagnostics.append(
-                    {
-                        **_graph_diag(exc),
-                        "stage": "permissions",
-                    }
-                )
-
-            business_management_status = official_permissions.get(
-                "business_management"
-            )
-            official_create_allowed = (
-                business_management_status in (None, "", "granted")
-            )
-
-            if not official_create_allowed:
-                diagnostics.append(
-                    {
-                        "transport": "official_graph_api",
-                        "stage": "create",
-                        "result": "skipped",
-                        "reason": (
-                            "business_management permission is not granted"
-                        ),
-                    }
-                )
-            else:
-                try:
-                    existing = await graph.list_businesses()
-                    existing_id = _find_existing_business(
-                        existing,
-                        business_name=business_name,
-                        page_id=clean_page,
-                    )
-                    if existing_id:
-                        diagnostics.append(
-                            {
-                                "transport": "official_graph_api",
-                                "stage": "precreate_dedup",
-                                "result": "existing_business_reused",
-                                "business_id": existing_id,
-                            }
-                        )
-                        return BusinessCreateResult(
-                            business_id=existing_id,
-                            transport="official_graph_api_reused",
-                            primary_page_id=clean_page,
-                            diagnostics=diagnostics,
-                        )
-                except GraphApiError as exc:
-                    diagnostics.append(
-                        {
-                            **_graph_diag(exc),
-                            "stage": "precreate_dedup",
-                        }
-                    )
-
-                try:
-                    business_id = await graph.create_business(
-                        name=business_name,
-                        primary_page_id=clean_page,
-                        vertical=vertical,
-                        email=user_email,
-                        timezone_id=timezone_id,
-                    )
-                    return BusinessCreateResult(
-                        business_id=business_id,
-                        transport="official_graph_api",
-                        primary_page_id=clean_page,
-                        diagnostics=diagnostics,
-                    )
-                except GraphMutationUncertain as exc:
-                    diagnostics.append(
-                        {
-                            "transport": "official_graph_api",
-                            "stage": "create",
-                            "result": "unknown",
-                            "message": str(exc),
-                        }
-                    )
-
-                    # The POST may already have succeeded. Verify before doing
-                    # anything else; never fall through to a second mutation.
-                    try:
-                        existing = await graph.list_businesses()
-                        existing_id = _find_existing_business(
-                            existing,
-                            business_name=business_name,
-                            page_id=clean_page,
-                        )
-                        if existing_id:
-                            diagnostics.append(
-                                {
-                                    "transport": "official_graph_api",
-                                    "stage": "verify_after_unknown",
-                                    "result": "created_business_found",
-                                    "business_id": existing_id,
-                                }
-                            )
-                            return BusinessCreateResult(
-                                business_id=existing_id,
-                                transport="official_graph_api_verified",
-                                primary_page_id=clean_page,
-                                diagnostics=diagnostics,
-                            )
-                    except GraphApiError as verify_exc:
-                        diagnostics.append(
-                            {
-                                **_graph_diag(verify_exc),
-                                "stage": "verify_after_unknown",
-                            }
-                        )
-
-                    raise BusinessCreateError(
-                        "CREATE_RESULT_UNKNOWN",
-                        (
-                            "Official create-business request may have reached Meta, "
-                            "but ReMask could not verify the result. Sync Business "
-                            "Managers before retrying; automatic fallback is blocked "
-                            "to prevent duplicate BMs."
-                        ),
-                        retryable=False,
-                        diagnostics=diagnostics,
-                    ) from exc
-                except GraphApiError as exc:
-                    diagnostics.append(
-                        {
-                            **_graph_diag(exc),
-                            "stage": "create",
-                        }
-                    )
-                    if not _official_safe_to_web_fallback(exc):
-                        terminal = _official_terminal_error(exc)
-                        terminal.diagnostics = diagnostics
-                        raise terminal from exc
-
-    # Route B: current Facebook Business web flow over the same profile
-    # cookies/proxy. This includes the current scope-selector mutation and the
-    # legacy Page-backed mutation from the doc_id registry.
+    This is the primary Add BM route: the same profile cookies/proxy are used
+    to obtain actor_id + fb_dtsg and execute the current persisted mutation
+    selected from the runtime doc_id registry.
+    """
     try:
         controller = await session.facebook_controller()
         web_result = await controller.create_business_manager_detailed(
@@ -469,9 +243,8 @@ async def create_business_resilient(
             raise BusinessCreateError(
                 "PAGE_BACKED_BM_ROUTE_UNAVAILABLE",
                 (
-                    "Facebook Business was not created because the available "
-                    "web mutation does not carry primary_page_id. ReMask "
-                    "refuses to report success without the selected Fan Page."
+                    "Facebook Business was not created because the resolved "
+                    "private mutation does not carry primary_page_id."
                 ),
                 retryable=False,
                 diagnostics=diagnostics,
@@ -502,6 +275,7 @@ async def create_business_resilient(
             primary_page_id=clean_page if page_was_in_mutation else "",
             diagnostics=diagnostics,
         )
+
     except AuthenticationError as exc:
         diagnostics.append(
             {
@@ -516,6 +290,7 @@ async def create_business_resilient(
             retryable=False,
             diagnostics=diagnostics,
         ) from exc
+
     except RemoteRequestError as exc:
         diagnostics.append(
             {
@@ -551,9 +326,9 @@ async def create_business_resilient(
             raise BusinessCreateError(
                 "PAGE_BACKED_BM_ROUTE_UNAVAILABLE",
                 (
-                    "Meta's current Page-backed Business creation mutation "
-                    "could not be resolved for this profile. The selected Fan "
-                    "Page was not ignored and no scope-selector BM was created."
+                    "The current Facebook Page-backed CREATE_BM mutation could "
+                    "not be resolved. No official CREATE was sent and the "
+                    "selected Fan Page was not ignored."
                 ),
                 retryable=False,
                 diagnostics=diagnostics,
@@ -566,19 +341,17 @@ async def create_business_resilient(
             raise BusinessCreateError(
                 "BUSINESS_EMAIL_REQUIRED",
                 (
-                    "The official Page-backed route is unavailable for this "
-                    "profile and the current Facebook web creation mutation "
-                    "requires a Business email. Provide BUSINESS.user_email "
-                    "and start a new Add BM job."
+                    "The resolved Facebook web mutation requires a Business "
+                    "email. Provide BUSINESS.user_email and start a new Add BM job."
                 ),
                 retryable=False,
                 diagnostics=diagnostics,
             ) from exc
 
         if result_may_be_unknown:
-            # A private mutation may already have been committed by Meta.
-            # If the official read-side is available, use it only to verify the
-            # outcome. Never issue a second CREATE automatically.
+            # The private POST may already have reached Meta. Use the official
+            # API only as a read-side verification if it is available; never
+            # issue another CREATE automatically.
             try:
                 if str(getattr(session.context, "access_token", "") or "").strip():
                     graph = await session.graph_api()
@@ -615,14 +388,110 @@ async def create_business_resilient(
                 "CREATE_RESULT_UNKNOWN",
                 (
                     "Private Facebook Business mutation may have succeeded, but "
-                    "its response was lost. ReMask will not send another CREATE "
-                    "until Business Managers are synced, preventing duplicates."
+                    "its response was lost. ReMask will not send a second CREATE "
+                    "until Business Managers are synced."
                 ),
                 retryable=False,
                 diagnostics=diagnostics,
             ) from exc
 
         raise
+
+
+async def create_business_resilient(
+    session: Any,
+    *,
+    business_name: str,
+    page_id: str,
+    user_email: str = "",
+    user_first_name: str = "",
+    user_last_name: str = "",
+    profile_display_name: str = "",
+    vertical: str = "ADVERTISING",
+    timezone_id: int | None = None,
+    explicit_doc_id: str | None = None,
+    require_page_backed: bool = False,
+) -> BusinessCreateResult:
+    diagnostics: list[dict[str, Any]] = []
+    clean_page = str(page_id or "").strip()
+
+    if require_page_backed and not clean_page:
+        raise BusinessCreateError(
+            "PRIMARY_PAGE_REQUIRED",
+            "Page-backed Business creation requires a selected Fan Page.",
+            retryable=False,
+            diagnostics=diagnostics,
+        )
+
+    # ReMask Add BM is a browser-session workflow. When a Fan Page is selected,
+    # use the private Facebook web mutation FIRST: cookies/proxy -> actor_id ->
+    # fb_dtsg -> current Page-backed doc_id -> CREATE_BM. Do not send an
+    # official Graph CREATE before this path.
+    if clean_page:
+        diagnostics.append(
+            {
+                "transport": "facebook_web_graphql",
+                "stage": "route_selection",
+                "result": "primary",
+                "reason": "selected Fan Page uses private Page-backed BM flow",
+            }
+        )
+        return await _create_business_via_web(
+            session,
+            business_name=business_name,
+            clean_page=clean_page,
+            user_email=user_email,
+            user_first_name=user_first_name,
+            user_last_name=user_last_name,
+            profile_display_name=profile_display_name,
+            vertical=vertical,
+            explicit_doc_id=explicit_doc_id,
+            require_page_backed=require_page_backed,
+            diagnostics=diagnostics,
+        )
+
+    # No Fan Page was supplied. Keep the official route only for legacy callers
+    # that explicitly opt out of Page-backed Add BM.
+    if str(getattr(session.context, "access_token", "") or "").strip():
+        graph = await session.graph_api()
+        try:
+            official_permissions = await graph.list_permissions()
+        except GraphApiError as exc:
+            diagnostics.append(
+                {
+                    **_graph_diag(exc),
+                    "stage": "permissions",
+                }
+            )
+            official_permissions = {}
+
+        if official_permissions.get("business_management") == "granted":
+            # The official API implementation itself requires a primary Page,
+            # so without one there is nothing safe to submit here.
+            diagnostics.append(
+                {
+                    "transport": "official_graph_api",
+                    "stage": "create",
+                    "result": "skipped",
+                    "reason": "official create requires a primary Page ID",
+                }
+            )
+
+    # Final legacy fallback is the scope-selector private mutation. This is not
+    # used by normal Add BM because that flow always selects a Fan Page.
+    return await _create_business_via_web(
+        session,
+        business_name=business_name,
+        clean_page="",
+        user_email=user_email,
+        user_first_name=user_first_name,
+        user_last_name=user_last_name,
+        profile_display_name=profile_display_name,
+        vertical=vertical,
+        explicit_doc_id=explicit_doc_id,
+        require_page_backed=False,
+        diagnostics=diagnostics,
+    )
 
 
 __all__ = [
