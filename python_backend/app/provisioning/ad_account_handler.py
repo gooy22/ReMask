@@ -9,6 +9,7 @@ from fb_worker import (
     ProxyError,
 )
 from .models import ProvisioningError
+from .meta_errors import classify_meta_request_error
 
 log = logging.getLogger("remask_worker")
 
@@ -80,24 +81,22 @@ async def ad_account_handler(
         raise ProvisioningError("SESSION_EXPIRED", f"FB Session expired: {exc}", retryable=False)
         
     except RemoteRequestError as exc:
-        exc_msg = str(exc).lower()
-        
-        # Ювелирный разбор ошибок, убрали слишком размытый "can't create"
-        if any(k in exc_msg for k in ["limit", "max account", "account count"]):
-            err_code = "AD_ACCOUNT_LIMIT_REACHED"
-            is_retry = False
-        elif any(k in exc_msg for k in ["policy", "ban", "restrict", "403", "disabled"]):
-            err_code = "ACCOUNT_RESTRICTED"
-            is_retry = False
-        elif any(k in exc_msg for k in ["timeout", "connect", "disconnect", "500", "502", "503", "network"]):
-            err_code = "REMOTE_TIMEOUT"
-            is_retry = True
-        else:
-            err_code = "INVALID_RESULT"
-            is_retry = False
-            
-        log.error(f"[{profile_id}] Сбой GraphQL Meta. Код: {err_code}. Ошибка: {exc}")
-        raise ProvisioningError(err_code, f"Meta request failure: {exc}", retryable=is_retry)
+        err_code, is_retry, diagnostic = classify_meta_request_error(
+            exc,
+            entity="AD_ACCOUNT",
+        )
+        log.error(
+            "[%s] AD_ACCOUNT GraphQL failed code=%s retryable=%s %s",
+            profile_id,
+            err_code,
+            is_retry,
+            diagnostic,
+        )
+        raise ProvisioningError(
+            err_code,
+            diagnostic,
+            retryable=is_retry,
+        ) from exc
         
     except ProxyError as exc:
         raise ProvisioningError("PROXY_DEAD", f"Proxy failure: {exc}", retryable=True)
