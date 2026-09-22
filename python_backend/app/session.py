@@ -11,6 +11,7 @@ from fb_worker import (
     FacebookWebSession,
     WebProfile,
 )
+from .facebook_graph_api import FacebookGraphApi
 
 
 class ProfileContextError(RuntimeError):
@@ -27,6 +28,7 @@ class ProfileContext:
     cookies: dict[str, str]
     proxy: str | None
     user_agent: str
+    access_token: str = ""
     display_name: str = ""
     email: str = ""
     first_name: str = ""
@@ -125,6 +127,7 @@ class ProfileResolver:
             cookies=cookie_map,
             proxy=proxy,
             user_agent=user_agent,
+            access_token=str(payload.get("access_token") or "").strip(),
             display_name=str(payload.get("display_name") or profile_id).strip(),
             email=str(payload.get("email") or "").strip(),
             first_name=str(payload.get("first_name") or "").strip(),
@@ -152,6 +155,8 @@ class MetaSession:
         self._session_lock = asyncio.Lock()
         self._facebook_session: FacebookWebSession | None = None
         self._facebook_lock = asyncio.Lock()
+        self._graph_api: FacebookGraphApi | None = None
+        self._graph_lock = asyncio.Lock()
 
     async def _get_session(self) -> aiohttp.ClientSession:
         session = self._session
@@ -212,7 +217,33 @@ class MetaSession:
     async def facebook_controller(self) -> BusinessLogicController:
         return BusinessLogicController(await self.facebook_web())
 
+    async def graph_api(self) -> FacebookGraphApi:
+        current = self._graph_api
+        if current is not None:
+            return current
+
+        async with self._graph_lock:
+            current = self._graph_api
+            if current is None:
+                if not self.context.access_token:
+                    raise ProfileContextError(
+                        "profile access token is not configured"
+                    )
+                current = FacebookGraphApi(
+                    access_token=self.context.access_token,
+                    proxy=self.context.proxy,
+                    user_agent=self.context.user_agent,
+                    timeout_seconds=max(15, int(self.timeout.total or 15)),
+                )
+                self._graph_api = current
+            return current
+
     async def close(self) -> None:
+        async with self._graph_lock:
+            if self._graph_api is not None:
+                await self._graph_api.close()
+                self._graph_api = None
+
         async with self._facebook_lock:
             if self._facebook_session is not None:
                 await self._facebook_session.close()
