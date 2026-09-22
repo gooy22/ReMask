@@ -496,11 +496,10 @@ async def discover_current_scope_selector_create_candidate(
         session,
         friendly_name="useBusinessCreationMutationMutation",
         entry_urls=[
+            "https://www.facebook.com/",
             "https://business.facebook.com/latest/home",
-            "https://business.facebook.com/latest/settings",
-            "https://business.facebook.com/latest/overview",
         ],
-        max_scripts_per_entry=max_scripts,
+        max_scripts_per_entry=0,
     )
     if discovered is None:
         return None
@@ -618,7 +617,7 @@ async def discover_current_set_primary_page_candidate(
                 f"business_info?business_id={clean_business_id}"
             ),
         ],
-        max_scripts_per_entry=max_scripts,
+        max_scripts_per_entry=0,
     )
     if discovered is None:
         return None
@@ -657,6 +656,9 @@ async def set_business_primary_page(
 
     bootstrap = await session.bootstrap()
     actor_id = _clean(getattr(bootstrap, "actor_id", ""))
+    profile_id = _clean(
+        getattr(getattr(session, "profile", None), "name", "")
+    ) or "<unknown-profile>"
     if not actor_id:
         raise DocIdMutationError(
             "Facebook actor_id is unavailable for primary Page attachment"
@@ -724,17 +726,20 @@ async def set_business_primary_page(
                 payload,
                 str(exc),
             )
+            stale = _candidate_is_stale_or_schema_mismatch(
+                payload,
+                str(exc),
+            )
             record_result(
                 "SET_PRIMARY_PAGE",
                 candidate,
                 success=False,
                 reason=reason,
+                profile_id=profile_id,
+                stale_failure=stale,
             )
 
-            if _candidate_is_stale_or_schema_mismatch(
-                payload,
-                str(exc),
-            ):
+            if stale:
                 failures.append(reason)
                 continue
 
@@ -751,17 +756,20 @@ async def set_business_primary_page(
                 response,
                 "SET_PRIMARY_PAGE returned GraphQL errors",
             )
+            stale = _candidate_is_stale_or_schema_mismatch(
+                response,
+                "",
+            )
             record_result(
                 "SET_PRIMARY_PAGE",
                 candidate,
                 success=False,
                 reason=reason,
+                profile_id=profile_id,
+                stale_failure=stale,
             )
 
-            if _candidate_is_stale_or_schema_mismatch(
-                response,
-                "",
-            ):
+            if stale:
                 failures.append(reason)
                 continue
 
@@ -776,6 +784,7 @@ async def set_business_primary_page(
             candidate,
             success=True,
             response_path="data",
+            profile_id=profile_id,
         )
         return candidate
 
