@@ -401,6 +401,8 @@ async def _create_business_via_web(
                 "no usable create_bm doc_id candidate",
                 "no create_bm doc_id candidates",
                 "no current page-backed create_bm mutation",
+                "no current create_bm doc_id was found",
+                "no usable create_bm candidate completed successfully",
                 "no usable set_primary_page mutation",
             )
         ):
