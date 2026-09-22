@@ -8,6 +8,7 @@ import os
 import re
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlsplit
 
 import aiohttp
 
@@ -92,11 +93,9 @@ class FacebookWebSession:
     Все приватные GraphQL-запросы проходят через этот объект.
     """
 
-    ADS_MANAGER_URL = (
-        "https://adsmanager.facebook.com/adsmanager/manage/campaigns"
-    )
+    ADS_MANAGER_URL = "https://business.facebook.com/latest/home"
 
-    GRAPHQL_URL = "https://www.facebook.com/api/graphql/"
+    GRAPHQL_URL = "https://business.facebook.com/api/graphql/"
 
     def __init__(
         self,
@@ -511,9 +510,12 @@ class FacebookWebSession:
                 separators=(",", ":"),
             ),
             "__a": "1",
+            "__aaid": "0",
+            "server_timestamps": "true",
         }
 
         if bootstrap.actor_id:
+            form["av"] = bootstrap.actor_id
             form["__user"] = bootstrap.actor_id
 
         if bootstrap.lsd:
@@ -525,13 +527,33 @@ class FacebookWebSession:
         if friendly_name:
             form["fb_api_req_friendly_name"] = friendly_name
 
+        endpoint_parts = urlsplit(endpoint)
+        origin = (
+            f"{endpoint_parts.scheme}://{endpoint_parts.netloc}"
+            if endpoint_parts.scheme and endpoint_parts.netloc
+            else "https://business.facebook.com"
+        )
+        referer = (
+            self.ADS_MANAGER_URL
+            if "business.facebook.com" in endpoint_parts.netloc
+            else origin + "/"
+        )
+
         headers = {
             "User-Agent": self.profile.user_agent,
-            "Accept": "application/json,text/plain,*/*",
+            "Accept": "*/*",
             "Content-Type": "application/x-www-form-urlencoded",
-            "Origin": "https://www.facebook.com",
-            "Referer": self.ADS_MANAGER_URL,
+            "Origin": origin,
+            "Referer": referer,
         }
+
+        comet_req = str(os.getenv("REMASK_FB_COMET_REQ") or "").strip()
+        if comet_req:
+            form["__comet_req"] = comet_req
+
+        asbd_id = str(os.getenv("REMASK_FB_ASBD_ID") or "").strip()
+        if asbd_id:
+            headers["X-ASBD-ID"] = asbd_id
 
         if bootstrap.lsd:
             headers["X-FB-LSD"] = bootstrap.lsd
@@ -805,84 +827,59 @@ class BusinessLogicController:
         name: str,
         page_id: str | None = None,
         doc_id: str | None = None,
+        *,
+        user_email: str = "",
+        user_first_name: str = "",
+        user_last_name: str = "",
+        profile_display_name: str = "",
+        vertical: str = "ADVERTISING",
     ) -> str:
-
         clean_name = str(name or "").strip()
         clean_page_id = str(page_id or "").strip()
 
         if not clean_name:
-            raise ValueError(
-                "Business Manager name is required"
-            )
+            raise ValueError("Business Manager name is required")
 
-        if not clean_page_id:
-            raise ValueError(
-                "Primary Page ID is required"
-            )
-
-        variables = {
-            "input": {
-                "name": clean_name,
-                "vertical": "ADVERTISING",
-                "primary_page_id": clean_page_id,
-                "client_mutation_id": "1",
-            }
-        }
-
-        response = await self.execute_operation(
-            "CREATE_BM",
-            variables,
-            doc_id=doc_id,
+        from app.facebook_business_create import (
+            DocIdMutationError,
+            create_business_with_docids,
         )
 
-        data = response.get("data")
-
-        if not isinstance(data, dict):
-            raise RemoteRequestError(
-                "CREATE_BM returned no data. Meta response: "
-                f"{self._diagnostic(response)}",
-                meta_payload=response,
+        try:
+            result = await create_business_with_docids(
+                self.session,
+                business_name=clean_name,
+                page_id=clean_page_id,
+                user_email=str(user_email or "").strip(),
+                user_first_name=str(user_first_name or "").strip(),
+                user_last_name=str(user_last_name or "").strip(),
+                profile_display_name=str(
+                    profile_display_name
+                    or self.session.profile.name
+                    or ""
+                ).strip(),
+                vertical=str(vertical or "ADVERTISING").strip(),
+                explicit_doc_id=doc_id,
             )
-
-        create_payload = data.get(
-            "business_manager_create"
-        )
-
-        if not isinstance(create_payload, dict):
+        except DocIdMutationError as exc:
             raise RemoteRequestError(
-                "CREATE_BM response has no "
-                "business_manager_create. Meta response: "
-                f"{self._diagnostic(response)}",
-                meta_payload=response,
-            )
-
-        business = create_payload.get("business")
-
-        if not isinstance(business, dict):
-            raise RemoteRequestError(
-                "CREATE_BM response has no business object. "
-                f"Meta response: {self._diagnostic(response)}",
-                meta_payload=response,
-            )
-
-        business_id = str(
-            business.get("id") or ""
-        ).strip()
-
-        if not business_id:
-            raise RemoteRequestError(
-                "CREATE_BM returned empty Business ID. "
-                f"Meta response: {self._diagnostic(response)}",
-                meta_payload=response,
-            )
+                str(exc),
+                meta_payload=exc.payload,
+            ) from exc
 
         log.info(
-            "[%s] Business Manager created id=%s",
+            "[%s] Business Manager created id=%s doc_id=%s "
+            "friendly_name=%s mode=%s source=%s response_path=%s",
             self.session.profile.name,
-            business_id,
+            result.business_id,
+            result.candidate.doc_id,
+            result.candidate.friendly_name or "-",
+            result.candidate.variables_mode,
+            result.candidate.source,
+            result.response_path,
         )
 
-        return business_id
+        return result.business_id
 
     # ------------------------------------------------------------------
     # Ad Account
