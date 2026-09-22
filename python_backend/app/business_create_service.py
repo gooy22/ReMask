@@ -134,7 +134,7 @@ def _find_existing_business(
 
         if not row_id or row_name != expected_name:
             continue
-        if expected_page and row_page and row_page != expected_page:
+        if expected_page and row_page != expected_page:
             continue
         matches.append(row_id)
 
