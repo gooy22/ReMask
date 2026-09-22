@@ -372,11 +372,22 @@ async def register_facebook_docid(
     payload: dict = Body(...),
 ):
     clean_operation=str(operation or '').strip().upper()
-    if clean_operation != 'CREATE_BM':
+    if clean_operation not in {'CREATE_BM','LIST_PAGES'}:
         raise HTTPException(
             status_code=400,
-            detail='only CREATE_BM registry updates are enabled',
+            detail='supported doc_id operations: CREATE_BM, LIST_PAGES',
         )
+
+    default_endpoint=(
+        'https://business.facebook.com/api/graphql/'
+        if clean_operation == 'CREATE_BM'
+        else 'https://www.facebook.com/api/graphql/'
+    )
+    default_mode=(
+        'scope_selector_business_creation_v1'
+        if clean_operation == 'CREATE_BM'
+        else 'account_quality_user_pages_v1'
+    )
 
     try:
         candidate=upsert_candidate(
@@ -385,11 +396,11 @@ async def register_facebook_docid(
             friendly_name=str(payload.get('friendly_name') or '').strip(),
             endpoint_url=str(
                 payload.get('endpoint_url')
-                or 'https://business.facebook.com/api/graphql/'
+                or default_endpoint
             ).strip(),
             variables_mode=str(
                 payload.get('variables_mode')
-                or 'scope_selector_business_creation_v1'
+                or default_mode
             ).strip(),
             source=str(payload.get('source') or 'manual_capture').strip(),
             priority=int(payload.get('priority') or 7500),
