@@ -50,7 +50,7 @@ function rmx_pwj_input(): array {
     return $input;
 }
 
-function rmx_pwj_worker_request(string $method, string $path, ?array $payload = null): array {
+function rmx_pwj_worker_request(string $method, string $path, ?array $payload = null, int $timeoutSeconds = 20): array {
     $base = rtrim(trim((string)(getenv('REMASK_PYTHON_WORKER_URL') ?: 'http://127.0.0.1:8081')), '/');
 
     $url = $base . '/' . ltrim($path, '/');
@@ -67,7 +67,7 @@ function rmx_pwj_worker_request(string $method, string $path, ?array $payload = 
     $http = [
         'method' => strtoupper($method),
         'header' => implode("\r\n", $headers) . "\r\n",
-        'timeout' => 20,
+        'timeout' => max(2, min($timeoutSeconds, 90)),
         'ignore_errors' => true,
         'follow_location' => 0,
     ];
@@ -118,7 +118,9 @@ try {
 
         $result = rmx_pwj_worker_request(
             'POST',
-            '/api/v1/profiles/' . rawurlencode($profileId) . '/preflight'
+            '/api/v1/profiles/' . rawurlencode($profileId) . '/preflight',
+            null,
+            60
         );
         rmx_pwj_out(['ok'=>true,'preflight'=>$result]);
     }
