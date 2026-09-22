@@ -20,7 +20,7 @@ if(strpos($settings,'REMASK_CREATIVE_LIBRARY_V1')===false){
     $settings .= <<<'PHP_CODE'
 
 /* REMASK_CREATIVE_LIBRARY_V1 */
-if (!defined('REMASK_MEDIA_LIBRARY_DIR')) define('REMASK_MEDIA_LIBRARY_DIR', '/var/lib/remask/media-library');
+if (!defined('REMASK_MEDIA_LIBRARY_DIR')) define('REMASK_MEDIA_LIBRARY_DIR', getenv('REMASK_MEDIA_LIBRARY_DIR') ?: (rtrim((string)(getenv('REMASK_DATA_DIR') ?: (getenv('RAILWAY_VOLUME_MOUNT_PATH') ?: '/var/lib/remask')), '/') . '/media-library'));
 if (!defined('REMASK_MEDIA_LIBRARY_MAX_BYTES')) define('REMASK_MEDIA_LIBRARY_MAX_BYTES', 157286400);
 
 PHP_CODE;
@@ -38,7 +38,8 @@ final class CreativePresetStore
 
     public function __construct(?string $root = null)
     {
-        $this->root = rtrim($root ?: '/var/lib/remask/creative-presets', '/');
+        $dataRoot = rtrim((string)(getenv('REMASK_DATA_DIR') ?: (getenv('RAILWAY_VOLUME_MOUNT_PATH') ?: '/var/lib/remask')), '/');
+        $this->root = rtrim($root ?: (getenv('REMASK_CREATIVE_PRESET_DIR') ?: ($dataRoot . '/creative-presets')), '/');
         $this->indexFile = $this->root . '/index.json';
         if (!is_dir($this->root) && !@mkdir($this->root, 0700, true) && !is_dir($this->root)) {
             throw new RuntimeException('Could not create Creative Library directory.');
@@ -206,7 +207,7 @@ function creative_library_items(CreativePresetStore $store, MediaLibraryStoreInt
 
 try {
     $library = MediaLibraryStoreFactory::create(REMASK_MEDIA_LIBRARY_DIR, REMASK_MEDIA_LIBRARY_MAX_BYTES);
-    $store = new CreativePresetStore('/var/lib/remask/creative-presets');
+    $store = new CreativePresetStore(getenv('REMASK_CREATIVE_PRESET_DIR') ?: (rtrim((string)(getenv('REMASK_DATA_DIR') ?: (getenv('RAILWAY_VOLUME_MOUNT_PATH') ?: '/var/lib/remask')), '/') . '/creative-presets'));
     $action = strtolower(trim((string)($_REQUEST['action'] ?? 'list')));
 
     if ($action === 'list') {
@@ -316,7 +317,7 @@ require_once __DIR__ . '/../classes/CreativePresetStore.php';
 
 try {
     $id = trim((string)($_GET['id'] ?? ''));
-    $store = new CreativePresetStore('/var/lib/remask/creative-presets');
+    $store = new CreativePresetStore(getenv('REMASK_CREATIVE_PRESET_DIR') ?: (rtrim((string)(getenv('REMASK_DATA_DIR') ?: (getenv('RAILWAY_VOLUME_MOUNT_PATH') ?: '/var/lib/remask')), '/') . '/creative-presets'));
     $row = $store->get($id);
     if ($row === null) throw new RuntimeException('Creative not found.');
     $library = MediaLibraryStoreFactory::create(REMASK_MEDIA_LIBRARY_DIR, REMASK_MEDIA_LIBRARY_MAX_BYTES);
