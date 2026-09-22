@@ -490,6 +490,36 @@ def _extract_page_backed_create_docid(
     return best[1], best[2]
 
 
+async def discover_current_scope_selector_create_candidate(
+    session: Any,
+    *,
+    max_scripts: int = 32,
+) -> DocIdCandidate | None:
+    discovered = await discover_persisted_query(
+        session,
+        friendly_name="useBusinessCreationMutationMutation",
+        entry_urls=[
+            "https://business.facebook.com/latest/home",
+            "https://business.facebook.com/latest/settings",
+            "https://business.facebook.com/latest/overview",
+        ],
+        max_scripts_per_entry=max_scripts,
+    )
+    if discovered is None:
+        return None
+
+    return upsert_candidate(
+        "CREATE_BM",
+        doc_id=discovered.doc_id,
+        friendly_name="useBusinessCreationMutationMutation",
+        endpoint_url="https://business.facebook.com/api/graphql/",
+        variables_mode="scope_selector_business_creation_v1",
+        source=f"runtime_{discovered.source_kind}",
+        priority=9_700,
+        observed_at=str(int(time.time())),
+    )
+
+
 async def discover_current_page_backed_create_candidate(
     session: Any,
     *,
@@ -579,6 +609,192 @@ async def discover_current_page_backed_create_candidate(
             )
 
     return None
+
+
+async def discover_current_set_primary_page_candidate(
+    session: Any,
+    *,
+    business_id: str,
+    max_scripts: int = 32,
+) -> DocIdCandidate | None:
+    clean_business_id = _clean(business_id)
+    if not clean_business_id:
+        return None
+
+    discovered = await discover_persisted_query(
+        session,
+        friendly_name="BizKitSettingsUpdateBusinessBasicInfoMutation",
+        entry_urls=[
+            (
+                "https://business.facebook.com/latest/settings/"
+                f"business_info?business_id={clean_business_id}"
+            ),
+        ],
+        max_scripts_per_entry=max_scripts,
+    )
+    if discovered is None:
+        return None
+
+    return upsert_candidate(
+        "SET_PRIMARY_PAGE",
+        doc_id=discovered.doc_id,
+        friendly_name="BizKitSettingsUpdateBusinessBasicInfoMutation",
+        endpoint_url="https://business.facebook.com/api/graphql/",
+        variables_mode="bizkit_settings_update_business_basic_info_v1",
+        source=f"runtime_{discovered.source_kind}",
+        priority=9_700,
+        observed_at=str(int(time.time())),
+    )
+
+
+async def set_business_primary_page(
+    session: Any,
+    *,
+    business_id: str,
+    business_name: str,
+    page_id: str,
+) -> DocIdCandidate:
+    clean_business_id = _clean(business_id)
+    clean_business_name = _clean(business_name)
+    clean_page = _clean(page_id)
+
+    if not clean_business_id:
+        raise DocIdMutationError(
+            "business_id is required for primary Page attachment"
+        )
+    if not clean_page:
+        raise DocIdMutationError(
+            "page_id is required for primary Page attachment"
+        )
+
+    bootstrap = await session.bootstrap()
+    actor_id = _clean(getattr(bootstrap, "actor_id", ""))
+    if not actor_id:
+        raise DocIdMutationError(
+            "Facebook actor_id is unavailable for primary Page attachment"
+        )
+
+    runtime_candidate: DocIdCandidate | None = None
+    try:
+        runtime_candidate = await asyncio.wait_for(
+            discover_current_set_primary_page_candidate(
+                session,
+                business_id=clean_business_id,
+            ),
+            timeout=25.0,
+        )
+    except Exception:
+        runtime_candidate = None
+
+    candidates = list_candidates("SET_PRIMARY_PAGE")
+    if runtime_candidate is not None:
+        candidates = [
+            runtime_candidate,
+            *[
+                candidate
+                for candidate in candidates
+                if (
+                    candidate.doc_id != runtime_candidate.doc_id
+                    or candidate.variables_mode
+                    != runtime_candidate.variables_mode
+                )
+            ],
+        ]
+
+    if not candidates:
+        raise DocIdMutationError(
+            "No SET_PRIMARY_PAGE mutation candidate is available"
+        )
+
+    failures: list[str] = []
+    for candidate in candidates:
+        variables = {
+            "input": {
+                "client_mutation_id": uuid.uuid4().hex[:16],
+                "actor_id": actor_id,
+                "business_id": clean_business_id,
+                "business_name": clean_business_name,
+                "primary_page_id": clean_page,
+                "entry_point": "BUSINESS_MANAGER_BUSINESS_INFO",
+            }
+        }
+
+        try:
+            response = await session.graphql(
+                candidate.doc_id,
+                variables,
+                friendly_name=candidate.friendly_name,
+                endpoint_url=candidate.endpoint_url,
+            )
+        except Exception as exc:
+            payload = getattr(exc, "meta_payload", None)
+            if not isinstance(payload, dict):
+                payload = {}
+
+            reason = _diagnostic(
+                candidate,
+                payload,
+                str(exc),
+            )
+            record_result(
+                "SET_PRIMARY_PAGE",
+                candidate,
+                success=False,
+                reason=reason,
+            )
+
+            if _candidate_is_stale_or_schema_mismatch(
+                payload,
+                str(exc),
+            ):
+                failures.append(reason)
+                continue
+
+            raise DocIdMutationError(
+                reason,
+                payload=payload,
+                candidate=candidate,
+            ) from exc
+
+        response_errors = _errors(response)
+        if response_errors:
+            reason = _diagnostic(
+                candidate,
+                response,
+                "SET_PRIMARY_PAGE returned GraphQL errors",
+            )
+            record_result(
+                "SET_PRIMARY_PAGE",
+                candidate,
+                success=False,
+                reason=reason,
+            )
+
+            if _candidate_is_stale_or_schema_mismatch(
+                response,
+                "",
+            ):
+                failures.append(reason)
+                continue
+
+            raise DocIdMutationError(
+                reason,
+                payload=response,
+                candidate=candidate,
+            )
+
+        record_result(
+            "SET_PRIMARY_PAGE",
+            candidate,
+            success=True,
+            response_path="data",
+        )
+        return candidate
+
+    raise DocIdMutationError(
+        "No usable SET_PRIMARY_PAGE mutation is available. "
+        + " || ".join(failures[-4:])
+    )
 
 
 async def create_business_with_docids(
