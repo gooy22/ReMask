@@ -166,15 +166,16 @@ async def discover_persisted_query(
         return None
 
     cache_key = clean_name
+    ttl = max(0, int(cache_ttl_seconds))
     now = time.monotonic()
     cached = _DISCOVERY_CACHE.get(cache_key)
-    if cached and now - cached[0] <= max(30, int(cache_ttl_seconds)):
+    if ttl > 0 and cached and now - cached[0] <= ttl:
         return cached[1]
 
     async with _discovery_lock(cache_key):
         now = time.monotonic()
         cached = _DISCOVERY_CACHE.get(cache_key)
-        if cached and now - cached[0] <= max(30, int(cache_ttl_seconds)):
+        if ttl > 0 and cached and now - cached[0] <= ttl:
             return cached[1]
 
         for entry_url in entry_urls:
@@ -209,7 +210,8 @@ async def discover_persisted_query(
                     source_url=final_url,
                     source_kind="html",
                 )
-                _DISCOVERY_CACHE[cache_key] = (time.monotonic(), result)
+                if ttl > 0:
+                    _DISCOVERY_CACHE[cache_key] = (time.monotonic(), result)
                 return result
 
             header_blob = "\n".join(
@@ -227,7 +229,8 @@ async def discover_persisted_query(
                     source_url=final_url,
                     source_kind="response_headers",
                 )
-                _DISCOVERY_CACHE[cache_key] = (time.monotonic(), result)
+                if ttl > 0:
+                    _DISCOVERY_CACHE[cache_key] = (time.monotonic(), result)
                 return result
 
         return None
