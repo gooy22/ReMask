@@ -1,4 +1,4 @@
-/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 REMASK_PYTHON_WORKER_UI_V140 REMASK_PYTHON_WORKER_UI_V141 REMASK_PYTHON_WORKER_UI_V142 REMASK_PYTHON_WORKER_UI_V143 REMASK_PYTHON_WORKER_UI_V144 REMASK_PYTHON_WORKER_UI_V145 REMASK_PYTHON_WORKER_UI_V146 REMASK_PYTHON_WORKER_UI_V147 REMASK_PYTHON_WORKER_UI_V148 REMASK_PYTHON_WORKER_UI_V149 REMASK_PYTHON_WORKER_UI_V150 REMASK_PYTHON_WORKER_UI_V151 REMASK_PYTHON_WORKER_UI_V152 REMASK_PYTHON_WORKER_UI_V153 REMASK_PYTHON_WORKER_UI_V154 REMASK_PYTHON_WORKER_UI_V155 REMASK_PYTHON_WORKER_UI_V156 */
+/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 REMASK_PYTHON_WORKER_UI_V140 REMASK_PYTHON_WORKER_UI_V141 REMASK_PYTHON_WORKER_UI_V142 REMASK_PYTHON_WORKER_UI_V143 REMASK_PYTHON_WORKER_UI_V144 REMASK_PYTHON_WORKER_UI_V145 REMASK_PYTHON_WORKER_UI_V146 REMASK_PYTHON_WORKER_UI_V147 REMASK_PYTHON_WORKER_UI_V148 REMASK_PYTHON_WORKER_UI_V149 REMASK_PYTHON_WORKER_UI_V150 REMASK_PYTHON_WORKER_UI_V151 REMASK_PYTHON_WORKER_UI_V152 REMASK_PYTHON_WORKER_UI_V153 REMASK_PYTHON_WORKER_UI_V154 REMASK_PYTHON_WORKER_UI_V155 REMASK_PYTHON_WORKER_UI_V156 REMASK_PYTHON_WORKER_UI_V157 */
 const restoredPythonWorkerJobId = localStorage.getItem('remask_python_worker_job_v1') || '';
 
 const pythonWorkerUiState = {
@@ -104,10 +104,10 @@ function pythonWorkerSelectionRefresh() {
       profiles.length
         ? (
             pythonWorkerUiState.workerOnline === true
-              ? 'Worker UI v156 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
-              : 'Worker UI v156 · Выбрано FB-профилей: ' + profiles.length + '. Жду READY от worker.'
+              ? 'Worker UI v157 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
+              : 'Worker UI v157 · Выбрано FB-профилей: ' + profiles.length + '. Жду READY от worker.'
           )
-        : 'Worker UI v156 · Выберите FB-профили в Workspace.'
+        : 'Worker UI v157 · Выберите FB-профили в Workspace.'
     );
   }
 }
@@ -722,6 +722,11 @@ async function pythonWorkerStartBusiness(bmName, options) {
       ).trim();
       if (businessEmail) businessParams.user_email = businessEmail;
 
+      const manualDocId = String(
+        config.manual_doc_id || ''
+      ).trim();
+      if (manualDocId) businessParams.manual_doc_id = manualDocId;
+
       return {
         profile_id: profileKey,
         tasks: [
@@ -1084,12 +1089,25 @@ async function pythonWorkerOpenOwnBmModal() {
     businessEmail.placeholder = 'Business email для web fallback (необязательно)';
 
     const emailHint = document.createElement('small');
-    emailHint.textContent = 'Нужен только если официальный Page-backed маршрут недоступен.';
+    emailHint.textContent = 'Нужен для private scope-selector Business creation.';
+
+    const manualDocId = document.createElement('input');
+    manualDocId.type = 'text';
+    manualDocId.className = 'pwbm-manual';
+    manualDocId.placeholder = 'Manual CREATE_BM doc_id (необязательно)';
+    manualDocId.inputMode = 'numeric';
+    manualDocId.maxLength = 40;
+
+    const docIdHint = document.createElement('small');
+    docIdHint.textContent =
+      'Используется только если dynamic discovery из HTML/headers ничего не нашёл.';
 
     nameField.appendChild(name);
     nameField.appendChild(nameHint);
     nameField.appendChild(businessEmail);
     nameField.appendChild(emailHint);
+    nameField.appendChild(manualDocId);
+    nameField.appendChild(docIdHint);
 
     const pageField = document.createElement('div');
     pageField.className = 'pwbm-field';
@@ -1124,6 +1142,8 @@ async function pythonWorkerOpenOwnBmModal() {
       name: name,
       businessEmail: businessEmail,
       emailHint: emailHint,
+      manualDocId: manualDocId,
+      docIdHint: docIdHint,
       page: page,
       manualPage: manualPage,
       pageHint: pageHint,
@@ -1177,10 +1197,15 @@ async function pythonWorkerOpenOwnBmModal() {
       const selectedPage = cfg
         ? String(cfg.page.value || cfg.manualPage.value || '').trim()
         : '';
+      const manualDocId = cfg
+        ? String(cfg.manualDocId.value || '').trim()
+        : '';
+      const manualDocIdValid = !manualDocId || /^\d{5,40}$/.test(manualDocId);
       return cfg &&
         cfg.preflightReady === true &&
         String(cfg.name.value || '').trim() &&
-        selectedPage;
+        selectedPage &&
+        manualDocIdValid;
     });
 
     create.disabled = pythonWorkerUiState.busy || !allLoaded || !allReady;
@@ -1215,6 +1240,15 @@ async function pythonWorkerOpenOwnBmModal() {
     const cfg = rows[profileId];
     cfg.name.addEventListener('input', refreshReadyState);
     cfg.businessEmail.addEventListener('input', refreshReadyState);
+    cfg.manualDocId.addEventListener('input', function() {
+      const value = String(cfg.manualDocId.value || '').trim();
+      const valid = !value || /^\d{5,40}$/.test(value);
+      cfg.docIdHint.className = valid ? '' : 'error';
+      cfg.docIdHint.textContent = valid
+        ? 'Используется только если dynamic discovery из HTML/headers ничего не нашёл.'
+        : 'doc_id должен содержать только 5-40 цифр.';
+      refreshReadyState();
+    });
     cfg.page.addEventListener('change', function() {
       if (String(cfg.page.value || '').trim()) cfg.manualPage.value = '';
       refreshReadyState();
@@ -1366,7 +1400,8 @@ async function pythonWorkerOpenOwnBmModal() {
       configs[profileId] = {
         name: String(cfg.name.value || '').trim(),
         page_id: String(cfg.page.value || cfg.manualPage.value || '').trim(),
-        user_email: String(cfg.businessEmail.value || '').trim()
+        user_email: String(cfg.businessEmail.value || '').trim(),
+        manual_doc_id: String(cfg.manualDocId.value || '').trim()
       };
     }
 
