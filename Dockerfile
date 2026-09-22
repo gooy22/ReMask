@@ -166,6 +166,9 @@ RUN set -eux; \
     grep -q 'discover_pages_via_web' /opt/remask-python/app/facebook_page_discovery.py; \
     grep -q 'discover_persisted_query' /opt/remask-python/app/facebook_query_discovery.py; \
     grep -q 'BUSINESS_EMAIL_REQUIRED' /opt/remask-python/app/business_create_service.py; \
+    grep -q 'retryable INTEGER NOT NULL DEFAULT 0' /opt/remask-python/app/store.py; \
+    grep -q 'retryable=bool(exc.retryable)' /opt/remask-python/app/runner.py; \
+    grep -q 'hasRetryableFailed' /var/www/html/scripts/workspace.js; \
     grep -q 'businessEmail' /var/www/html/scripts/workspace.js; \
     grep -q "'pages_source':pages_source" /opt/remask-python/main.py; \
     grep -q "LIST_PAGES" /var/www/html/ajax/pythonWorkerJobs.php; \
@@ -182,7 +185,7 @@ RUN set -eux; \
     php -l /var/www/html/workspace.php; \
     grep -q 'REMASK_PYTHON_WORKER_PANEL_V1' /var/www/html/workspace.php; \
     grep -q 'REMASK_PYTHON_WORKER_UI_V1' /var/www/html/scripts/workspace.js; \
-    grep -q 'REMASK_PYTHON_WORKER_UI_V146' /var/www/html/scripts/workspace.js; \
+    grep -q 'REMASK_PYTHON_WORKER_UI_V147' /var/www/html/scripts/workspace.js; \
     grep -q 'pythonWorkerJobs.php' /var/www/html/scripts/workspace.js; \
     grep -q 'Retry Failed' /var/www/html/workspace.php; \
     php -l /var/www/html/ajax/metaHierarchy.php; \
