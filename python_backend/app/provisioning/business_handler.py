@@ -92,12 +92,19 @@ async def business_handler(
     explicit_doc_id = str(params.get("doc_id") or "").strip() or None
 
     raw_require_page_backed = params.get("require_page_backed")
-    if isinstance(raw_require_page_backed, bool):
+    if raw_require_page_backed is None:
+        # ReMask Add BM is Fan-Page-backed by default. A caller must opt out
+        # explicitly if it intentionally wants a non-Page Business flow.
+        require_page_backed = True
+    elif isinstance(raw_require_page_backed, bool):
         require_page_backed = raw_require_page_backed
     else:
-        require_page_backed = str(
-            raw_require_page_backed if raw_require_page_backed is not None else ""
-        ).strip().lower() in {"1", "true", "yes", "on"}
+        require_page_backed = str(raw_require_page_backed).strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
 
     if require_page_backed and not page_id:
         raise ProvisioningError(
