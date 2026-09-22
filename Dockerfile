@@ -32,12 +32,12 @@ RUN /opt/remask-venv/bin/python -m compileall -q /opt/remask-python \
     && grep -q 'SET_PRIMARY_PAGE' /opt/remask-python/app/facebook_docids.py \
     && /opt/remask-venv/bin/python -m unittest -q tests.test_fb_worker_bootstrap tests.test_business_private_first tests.test_business_docid_discovery tests.test_business_two_step tests.test_v14_docid_policy \
     && /opt/remask-venv/bin/python -c "from app.facebook_page_discovery import discover_pages_from_browser_html,_extract_pages_from_browser_document; p=_extract_pages_from_browser_document('{\"__typename\":\"Page\",\"id\":\"123456789\",\"name\":\"Demo Page\",\"category\":\"Local business\"}'); assert p and p[0]['id']=='123456789' and p[0]['name']=='Demo Page'; assert callable(discover_pages_from_browser_html)" \
-    && /opt/remask-venv/bin/python -c "from pathlib import Path; s=Path('/opt/remask-python/app/facebook_query_discovery.py').read_text(); d=s[s.index('async def discover_persisted_query'):]; assert 'script_url' not in d; assert 'fetch_text_with_headers' in d" \
+    && /opt/remask-venv/bin/python -c "import inspect; from app.facebook_query_discovery import discover_persisted_query; d=inspect.getsource(discover_persisted_query); assert 'extract_script_urls' not in d; assert 'script_url' not in d; assert 'fetch_text_with_headers' in d" \
     && grep -q 'manual_doc_id' /opt/remask-python/app/provisioning/business_handler.py \
     && grep -q '3_cross_profile_stale_failures' /opt/remask-python/app/facebook_docids.py \
     && grep -q 'fetch_text_with_headers' /opt/remask-python/fb_worker.py \
     && grep -q 'default_doc_id=None' /opt/remask-python/fb_worker.py \
-    && echo "[bm-v14.2] HTML/header discovery + UI manual override + 3-profile cache invalidation passed"
+    && echo "[bm-v14.3] HTML/header-only discovery + UI manual override + 3-profile cache invalidation passed"
 
 COPY .deploy/clean-preview-valid/runtime.b64.* /tmp/remask-parts/
 COPY railway-persistence-overlay.php /tmp/railway-persistence-overlay.php
