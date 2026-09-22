@@ -42,28 +42,7 @@ class DocIdCandidate:
 
 
 STATIC_CANDIDATES: dict[str, list[DocIdCandidate]] = {
-    "CREATE_BM": [
-        DocIdCandidate(
-            operation="CREATE_BM",
-            doc_id="10024830640911292",
-            friendly_name="useBusinessCreationMutationMutation",
-            endpoint_url="https://business.facebook.com/api/graphql/",
-            variables_mode="scope_selector_business_creation_v1",
-            source="community_observed_business_creation",
-            priority=200,
-            observed_at="2025",
-        ),
-        DocIdCandidate(
-            operation="CREATE_BM",
-            doc_id="739201948201938",
-            friendly_name="BusinessManagerCreateMutation",
-            endpoint_url="https://business.facebook.com/api/graphql/",
-            variables_mode="legacy_primary_page_v1",
-            source="remask_legacy",
-            priority=100,
-            observed_at="legacy",
-        ),
-    ],
+    "CREATE_BM": [],
     "SET_PRIMARY_PAGE": [
         DocIdCandidate(
             operation="SET_PRIMARY_PAGE",
@@ -331,6 +310,25 @@ def list_candidates(operation: str) -> list[DocIdCandidate]:
         store = _load_store_unlocked()
         stats = store.get("results") if isinstance(store, dict) else {}
 
+    def is_disabled(candidate: DocIdCandidate) -> bool:
+        operation_stats = (
+            stats.get(key, {})
+            if isinstance(stats, dict)
+            else {}
+        )
+        row = (
+            operation_stats.get(candidate.doc_id, {})
+            if isinstance(operation_stats, dict)
+            else {}
+        )
+        return bool(row.get("disabled")) if isinstance(row, dict) else False
+
+    results = [
+        candidate
+        for candidate in results
+        if not is_disabled(candidate)
+    ]
+
     def score(candidate: DocIdCandidate) -> tuple[int, int, int]:
         operation_stats = (
             stats.get(key, {})
@@ -416,8 +414,19 @@ def record_result(
     success: bool,
     reason: str = "",
     response_path: str = "",
+    profile_id: str = "",
+    stale_failure: bool = False,
 ) -> None:
+    """
+    Record candidate health.
+
+    A stale/schema signal is allowed to invalidate a cached doc_id only after
+    the same candidate fails on three distinct Facebook profiles without an
+    intervening success. Repeated failures from one frozen/restricted profile
+    therefore cannot poison the shared cache.
+    """
     key = _clean_operation(operation)
+    clean_profile = str(profile_id or "").strip()
 
     with _STORE_LOCK:
         store = _load_store_unlocked()
@@ -436,6 +445,10 @@ def record_result(
                 "variables_mode": candidate.variables_mode,
                 "endpoint_url": candidate.endpoint_url,
                 "source": candidate.source,
+                "consecutive_stale_failures": 0,
+                "stale_failure_profiles": [],
+                "disabled": False,
+                "disabled_reason": "",
             },
         )
 
@@ -443,9 +456,50 @@ def record_result(
         if success:
             row["success_count"] = int(row.get("success_count") or 0) + 1
             row["last_success_at"] = now
+            row["consecutive_stale_failures"] = 0
+            row["stale_failure_profiles"] = []
+            row["disabled"] = False
+            row["disabled_reason"] = ""
         else:
             row["failure_count"] = int(row.get("failure_count") or 0) + 1
             row["last_failure_at"] = now
+
+            if stale_failure and clean_profile:
+                raw_profiles = row.get("stale_failure_profiles")
+                profiles = (
+                    [str(value) for value in raw_profiles if str(value).strip()]
+                    if isinstance(raw_profiles, list)
+                    else []
+                )
+
+                if clean_profile not in profiles:
+                    profiles.append(clean_profile)
+
+                # Keep only the current post-success stale sequence.
+                profiles = profiles[-3:]
+                row["stale_failure_profiles"] = profiles
+                row["consecutive_stale_failures"] = len(profiles)
+
+                if len(set(profiles)) >= 3:
+                    row["disabled"] = True
+                    row["disabled_reason"] = (
+                        "3_cross_profile_stale_failures"
+                    )
+
+                    candidates = store.setdefault("candidates", {})
+                    rows = candidates.get(key)
+                    if isinstance(rows, list):
+                        candidates[key] = [
+                            item
+                            for item in rows
+                            if not (
+                                isinstance(item, dict)
+                                and str(item.get("doc_id") or "")
+                                == candidate.doc_id
+                                and str(item.get("variables_mode") or "")
+                                == candidate.variables_mode
+                            )
+                        ]
 
         row["last_reason"] = str(reason or "")[:2000]
         row["last_response_path"] = str(response_path or "")[:300]
