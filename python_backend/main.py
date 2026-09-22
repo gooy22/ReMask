@@ -114,6 +114,11 @@ async def ready():
         'profiles_visible':len(profiles),
         'profile_resolver':'ok',
         'db_path':str(DB_PATH),
+        'revision':str(
+            os.getenv('RAILWAY_GIT_COMMIT_SHA')
+            or os.getenv('REMASK_DEPLOY_REV')
+            or ''
+        )[:12],
     }
 
 @app.post('/api/v1/jobs',response_model=JobAccepted,dependencies=[Depends(require_key)])
