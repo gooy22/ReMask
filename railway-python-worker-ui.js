@@ -1,4 +1,4 @@
-/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 */
+/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 */
 const restoredPythonWorkerJobId = localStorage.getItem('remask_python_worker_job_v1') || '';
 
 const pythonWorkerUiState = {
@@ -70,8 +70,8 @@ function pythonWorkerSelectionRefresh() {
     pythonWorkerSetText(
       'pythonPwStatus',
       profiles.length
-        ? 'Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
-        : 'Выберите FB-профили в Workspace.'
+        ? 'Worker UI v133 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
+        : 'Worker UI v133 · Выберите FB-профили в Workspace.'
     );
   }
 }
@@ -269,12 +269,6 @@ function pythonWorkerResolveBmName(button) {
       '#bm_name_input_field, #bm_name, .js-bm-name-input'
     );
     if (input) value = String(input.value || '').trim();
-  }
-
-  if (!value) {
-    const prompted = window.prompt('Имя нового Business Manager:', 'ReMask_BM_New');
-    if (prompted === null) return '';
-    value = String(prompted).trim();
   }
 
   return value;
