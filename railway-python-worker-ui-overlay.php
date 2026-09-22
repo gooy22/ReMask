@@ -5,6 +5,77 @@
 $phpPath = '/var/www/html/workspace.php';
 $jsPath = '/var/www/html/scripts/workspace.js';
 $addonPath = '/tmp/railway-python-worker-ui.js';
+$pagesEndpointPath = '/var/www/html/ajax/pythonWorkerPages.php';
+
+$pagesEndpoint = <<<'PHP_PAGES'
+<?php
+declare(strict_types=1);
+
+ini_set('display_errors', '0');
+ini_set('html_errors', '0');
+ini_set('log_errors', '1');
+error_reporting(E_ALL);
+
+ob_start();
+require_once __DIR__ . '/../settings.php';
+require_once __DIR__ . '/../checkpassword.php';
+require_once __DIR__ . '/../classes/MetaEndpoint.php';
+while (ob_get_level() > 0) { @ob_end_clean(); }
+
+header('Content-Type: application/json; charset=utf-8');
+header('Cache-Control: no-store, max-age=0');
+
+function rmx_pwp_out(array $payload, int $status = 200): void {
+    http_response_code($status);
+    echo json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    exit;
+}
+
+try {
+    $raw = (string)file_get_contents('php://input');
+    $input = $_POST;
+    if ($raw !== '') {
+        $json = json_decode($raw, true);
+        if (is_array($json)) $input = array_replace($input, $json);
+    }
+
+    $profile = trim((string)($input['profile'] ?? $_GET['profile'] ?? ''));
+    if ($profile === '') {
+        rmx_pwp_out(['ok'=>false,'error'=>'PROFILE_REQUIRED'], 400);
+    }
+
+    $result = MetaEndpoint::cachedAsset($profile, 'pages', '', true);
+    $rows = is_array($result['data'] ?? null) ? $result['data'] : [];
+    $pages = [];
+
+    foreach ($rows as $row) {
+        if (!is_array($row)) continue;
+        $id = trim((string)($row['id'] ?? ''));
+        if ($id === '') continue;
+        $pages[] = [
+            'id' => $id,
+            'name' => trim((string)($row['name'] ?? $id)),
+            'category' => trim((string)($row['category'] ?? '')),
+        ];
+    }
+
+    rmx_pwp_out([
+        'ok' => true,
+        'profile' => $profile,
+        'pages' => $pages,
+        'count' => count($pages),
+    ]);
+} catch (Throwable $e) {
+    error_log('[python-worker-pages] ' . get_class($e) . ': ' . $e->getMessage());
+    $detail = ['message'=>$e->getMessage(), 'type'=>get_class($e)];
+    if (method_exists($e, 'toArray')) {
+        try { $detail = array_replace($detail, (array)$e->toArray()); } catch (Throwable) {}
+    }
+    rmx_pwp_out(['ok'=>false,'error'=>'PAGES_LOAD_FAILED','detail'=>$detail], 502);
+}
+PHP_PAGES;
+
+file_put_contents($pagesEndpointPath, $pagesEndpoint);
 
 $php = file_get_contents($phpPath);
 $js = file_get_contents($jsPath);
