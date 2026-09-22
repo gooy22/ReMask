@@ -419,6 +419,22 @@ async def create_business_resilient(
             )
         )
 
+        if (
+            not str(user_email or "").strip()
+            and "requires user_email" in text
+        ):
+            raise BusinessCreateError(
+                "BUSINESS_EMAIL_REQUIRED",
+                (
+                    "The official Page-backed route is unavailable for this "
+                    "profile and the current Facebook web creation mutation "
+                    "requires a Business email. Provide BUSINESS.user_email "
+                    "and start a new Add BM job."
+                ),
+                retryable=False,
+                diagnostics=diagnostics,
+            ) from exc
+
         if result_may_be_unknown:
             # A private mutation may already have been committed by Meta.
             # If the official read-side is available, use it only to verify the
