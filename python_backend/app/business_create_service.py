@@ -233,6 +233,11 @@ async def create_business_resilient(
     if clean_page and str(getattr(session.context, "access_token", "") or "").strip():
         graph = await session.graph_api()
         official_page_visible = False
+        saved_page_visible = any(
+            str(page.get("id") or "").strip() == clean_page
+            for page in (getattr(session.context, "pages", None) or [])
+            if isinstance(page, dict)
+        )
 
         try:
             visible_pages = await graph.list_pages()
@@ -247,6 +252,7 @@ async def create_business_resilient(
                     "stage": "page_visibility",
                     "page_id": clean_page,
                     "visible": official_page_visible,
+                    "saved_profile_visible": saved_page_visible,
                     "pages_count": len(visible_pages),
                 }
             )
@@ -258,7 +264,17 @@ async def create_business_resilient(
                 }
             )
 
-        if official_page_visible:
+        if official_page_visible or saved_page_visible:
+            if saved_page_visible and not official_page_visible:
+                diagnostics.append(
+                    {
+                        "transport": "official_graph_api",
+                        "stage": "page_visibility",
+                        "page_id": clean_page,
+                        "result": "using_saved_profile_page_reference",
+                    }
+                )
+
             official_permissions: dict[str, str] = {}
             try:
                 official_permissions = await graph.list_permissions()
