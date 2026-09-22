@@ -6,6 +6,12 @@ from typing import Any
 
 import aiohttp
 
+from fb_worker import (
+    BusinessLogicController,
+    FacebookWebSession,
+    WebProfile,
+)
+
 
 class ProfileContextError(RuntimeError):
     pass
@@ -121,6 +127,8 @@ class MetaSession:
         self.pool_size = max(1, pool_size)
         self._session: aiohttp.ClientSession | None = None
         self._session_lock = asyncio.Lock()
+        self._facebook_session: FacebookWebSession | None = None
+        self._facebook_lock = asyncio.Lock()
 
     async def _get_session(self) -> aiohttp.ClientSession:
         session = self._session
@@ -155,7 +163,38 @@ class MetaSession:
         session = await self._get_session()
         return await session.request(method, url, **kwargs)
 
+    async def facebook_web(self) -> FacebookWebSession:
+        current = self._facebook_session
+        if current is not None:
+            return current
+
+        async with self._facebook_lock:
+            current = self._facebook_session
+            if current is None:
+                profile = WebProfile(
+                    name=self.context.profile_id,
+                    cookies=dict(self.context.cookies),
+                    proxy=self.context.proxy,
+                    user_agent=self.context.user_agent,
+                )
+                current = FacebookWebSession(
+                    profile,
+                    timeout_seconds=max(15, int(self.timeout.total or 15)),
+                    pool_size=self.pool_size,
+                )
+                await current.__aenter__()
+                self._facebook_session = current
+            return current
+
+    async def facebook_controller(self) -> BusinessLogicController:
+        return BusinessLogicController(await self.facebook_web())
+
     async def close(self) -> None:
+        async with self._facebook_lock:
+            if self._facebook_session is not None:
+                await self._facebook_session.close()
+                self._facebook_session = None
+
         async with self._session_lock:
             if self._session is not None and not self._session.closed:
                 await self._session.close()
