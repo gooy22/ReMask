@@ -61,8 +61,18 @@ class ProfileResolver:
                 async with client.get(self.url, params={"action": "list"}) as response:
                     payload = await response.json(content_type=None)
                     if response.status >= 400 or not isinstance(payload, dict):
+                        detail = ""
+                        if isinstance(payload, dict):
+                            raw_detail = payload.get("detail")
+                            if isinstance(raw_detail, dict):
+                                detail = str(raw_detail.get("message") or "").strip()
+                            elif raw_detail is not None:
+                                detail = str(raw_detail).strip()
+                            if not detail:
+                                detail = str(payload.get("error") or "").strip()
+                        suffix = f": {detail}" if detail else ""
                         raise ProfileContextError(
-                            f"profile resolver list HTTP {response.status}"
+                            f"profile resolver list HTTP {response.status}{suffix}"
                         )
         except asyncio.TimeoutError as exc:
             raise ProfileContextError("profile resolver list timeout") from exc
@@ -93,8 +103,18 @@ class ProfileResolver:
                 ) as response:
                     payload = await response.json(content_type=None)
                     if response.status >= 400 or not isinstance(payload, dict):
+                        detail = ""
+                        if isinstance(payload, dict):
+                            raw_detail = payload.get("detail")
+                            if isinstance(raw_detail, dict):
+                                detail = str(raw_detail.get("message") or "").strip()
+                            elif raw_detail is not None:
+                                detail = str(raw_detail).strip()
+                            if not detail:
+                                detail = str(payload.get("error") or "").strip()
+                        suffix = f": {detail}" if detail else ""
                         raise ProfileContextError(
-                            f"profile resolver HTTP {response.status}"
+                            f"profile resolver HTTP {response.status}{suffix}"
                         )
         except asyncio.TimeoutError as exc:
             raise ProfileContextError("profile resolver timeout") from exc
