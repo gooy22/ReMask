@@ -127,6 +127,7 @@ if (strpos($php, 'REMASK_PYTHON_WORKER_PANEL_V1') === false) {
 #pythonWorkerPanel .pw-FAILED{background:#7f3f46}
 #pythonWorkerPanel .pw-PARTIAL{background:#806626}
 #pythonWorkerPanel .pw-error{max-width:460px;white-space:pre-wrap;word-break:break-word;color:#d4a4a8}
+#pythonWorkerPanel .pw-result{max-width:460px;white-space:pre-wrap;word-break:break-word;color:#9fe3b2}
 @media(max-width:900px){#pythonWorkerPanel .pw-meta{grid-template-columns:repeat(2,minmax(90px,1fr))}}
 </style>
 <section id="pythonWorkerPanel">
@@ -153,7 +154,7 @@ if (strpos($php, 'REMASK_PYTHON_WORKER_PANEL_V1') === false) {
   <div id="pythonPwJob" class="pw-job"></div>
   <div class="pw-table-wrap">
     <table>
-      <thead><tr><th>FB profile</th><th>Status</th><th>Step</th><th>Error</th></tr></thead>
+      <thead><tr><th>FB profile</th><th>Status</th><th>Step</th><th>Result / Error</th></tr></thead>
       <tbody id="pythonPwRows"><tr><td colspan="4">Нет активного Job.</td></tr></tbody>
     </table>
   </div>
@@ -168,7 +169,7 @@ HTML;
 
     $php = preg_replace(
         '#scripts/workspace\.js(?:\?[^"\']*)?#',
-        'scripts/workspace.js?v=20260922-python-worker-ui-v151',
+        'scripts/workspace.js?v=20260922-python-worker-ui-v152',
         $php,
         1,
         $scriptCount
@@ -190,7 +191,7 @@ if ($workerPos === false) {
 
 $php = preg_replace(
     '#scripts/workspace\.js(?:\?[^"\']*)?#',
-    'scripts/workspace.js?v=20260922-python-worker-ui-v151',
+    'scripts/workspace.js?v=20260922-python-worker-ui-v152',
     $php,
     1
 ) ?? $php;
