@@ -1,4 +1,4 @@
-/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 REMASK_PYTHON_WORKER_UI_V140 REMASK_PYTHON_WORKER_UI_V141 REMASK_PYTHON_WORKER_UI_V142 REMASK_PYTHON_WORKER_UI_V143 */
+/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 REMASK_PYTHON_WORKER_UI_V140 REMASK_PYTHON_WORKER_UI_V141 REMASK_PYTHON_WORKER_UI_V142 REMASK_PYTHON_WORKER_UI_V143 REMASK_PYTHON_WORKER_UI_V144 */
 const restoredPythonWorkerJobId = localStorage.getItem('remask_python_worker_job_v1') || '';
 
 const pythonWorkerUiState = {
@@ -76,10 +76,10 @@ function pythonWorkerSelectionRefresh() {
       profiles.length
         ? (
             pythonWorkerUiState.workerOnline === true
-              ? 'Worker UI v143 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
-              : 'Worker UI v143 · Выбрано FB-профилей: ' + profiles.length + '. Жду READY от worker.'
+              ? 'Worker UI v144 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
+              : 'Worker UI v144 · Выбрано FB-профилей: ' + profiles.length + '. Жду READY от worker.'
           )
-        : 'Worker UI v143 · Выберите FB-профили в Workspace.'
+        : 'Worker UI v144 · Выберите FB-профили в Workspace.'
     );
   }
 }
@@ -151,8 +151,22 @@ async function pythonWorkerProfilePreflight(profileId) {
   if (!preflight || preflight.ok !== true) {
     throw new Error('Profile preflight returned no READY result.');
   }
-  if (!preflight.fb_dtsg_present || !preflight.actor_present) {
-    throw new Error('Facebook bootstrap incomplete: fb_dtsg/actor missing.');
+
+  const graph = preflight.graph_api && typeof preflight.graph_api === 'object'
+    ? preflight.graph_api
+    : {};
+  const graphReady = graph.ready === true && Array.isArray(preflight.pages) && preflight.pages.length > 0;
+  const webReady = preflight.fb_dtsg_present === true && preflight.actor_present === true;
+
+  if (!graphReady && !webReady) {
+    const reasons = [];
+    if (graph.error) reasons.push('Graph API: ' + String(graph.error));
+    if (preflight.web_error) reasons.push('Web session: ' + String(preflight.web_error));
+    throw new Error(
+      reasons.length
+        ? reasons.join(' · ')
+        : 'Нет рабочего маршрута создания BM: Graph API/Page и web session недоступны.'
+    );
   }
 
   return preflight;
@@ -610,6 +624,50 @@ async function pythonWorkerLoadPages(profileId) {
   return Array.isArray(data.pages) ? data.pages : [];
 }
 
+function pythonWorkerApplyPages(cfg, pages, sourceLabel) {
+  const list = Array.isArray(pages) ? pages : [];
+  cfg.page.textContent = '';
+
+  if (!list.length) {
+    const empty = document.createElement('option');
+    empty.value = '';
+    empty.textContent = 'Meta вернула 0 Pages';
+    cfg.page.appendChild(empty);
+    cfg.error = 'Meta вернула 0 Pages';
+    cfg.pageHint.className = 'error';
+    cfg.pageHint.textContent =
+      'Meta вернула 0 Pages. Введи Primary Page ID вручную.';
+    cfg.page.disabled = false;
+    cfg.loaded = true;
+    return;
+  }
+
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = 'Выбери Primary Page';
+  cfg.page.appendChild(placeholder);
+
+  for (const item of list) {
+    const option = document.createElement('option');
+    option.value = String(item.id || '');
+    option.textContent =
+      String(item.name || item.id || 'Page') +
+      ' — ' +
+      String(item.id || '');
+    cfg.page.appendChild(option);
+  }
+
+  cfg.page.value = String(list[0].id || '');
+  cfg.page.disabled = false;
+  cfg.loaded = true;
+  cfg.error = '';
+  cfg.pageHint.className = '';
+  cfg.pageHint.textContent =
+    'Pages: ' + list.length +
+    ' · источник: ' + String(sourceLabel || 'Meta') +
+    ' · первая выбрана автоматически.';
+}
+
 function pythonWorkerEnsureBmModalStyle() {
   if (document.getElementById('pythonWorkerBmModalStyle')) return;
 
@@ -854,70 +912,68 @@ async function pythonWorkerOpenOwnBmModal() {
       refreshReadyState();
     });
 
-    pythonWorkerProfilePreflight(profileId).then(function(result) {
+    pythonWorkerProfilePreflight(profileId).then(async function(result) {
       cfg.preflightReady = true;
       cfg.preflightError = '';
+
+      const graph = result.graph_api && typeof result.graph_api === 'object'
+        ? result.graph_api
+        : {};
+      const graphPages = Array.isArray(result.pages) ? result.pages : [];
+      const graphReady = graph.ready === true;
+      const webReady = result.fb_dtsg_present === true && result.actor_present === true;
+
       cfg.sessionHint.className = 'pwbm-session ok';
+      if (graphReady && graphPages.length) {
+        cfg.sessionHint.textContent =
+          'BM route: OFFICIAL · Pages ' + graphPages.length +
+          ' · proxy ' + String(result.proxy_exit_ip || '?') +
+          ' · ' + String(result.proxy_latency_ms || 0) + ' ms';
+        pythonWorkerApplyPages(cfg, graphPages, 'Graph API /me/accounts');
+        refreshReadyState();
+        return;
+      }
+
       cfg.sessionHint.textContent =
-        'FB session: READY · proxy ' +
-        String(result.proxy_exit_ip || '?') +
-        ' · ' +
-        String(result.proxy_latency_ms || 0) +
-        ' ms';
+        (webReady ? 'BM route: WEB GraphQL' : 'BM route: OFFICIAL без Pages') +
+        ' · proxy ' + String(result.proxy_exit_ip || '?') +
+        ' · ' + String(result.proxy_latency_ms || 0) + ' ms';
+
+      try {
+        const pages = await pythonWorkerLoadPages(profileId);
+        pythonWorkerApplyPages(cfg, pages, 'ReMask Page cache');
+      } catch (error) {
+        cfg.page.textContent = '';
+        const failed = document.createElement('option');
+        failed.value = '';
+        failed.textContent = 'Ошибка загрузки Pages';
+        cfg.page.appendChild(failed);
+        cfg.page.disabled = true;
+        cfg.loaded = true;
+        cfg.error = String((error && error.message) || error);
+        cfg.pageHint.className = 'error';
+        cfg.pageHint.textContent =
+          'Pages не загрузились: ' + cfg.error +
+          '. Можно ввести Primary Page ID вручную.';
+      }
+
       refreshReadyState();
     }).catch(function(error) {
       cfg.preflightReady = false;
       cfg.preflightError = String((error && error.message) || error);
       cfg.sessionHint.className = 'pwbm-session error';
-      cfg.sessionHint.textContent = 'FB session: ' + cfg.preflightError;
-      refreshReadyState();
-    });
+      cfg.sessionHint.textContent = 'BM preflight: ' + cfg.preflightError;
 
-    pythonWorkerLoadPages(profileId).then(function(pages) {
-      cfg.page.textContent = '';
-
-      if (!pages.length) {
-        const empty = document.createElement('option');
-        empty.value = '';
-        empty.textContent = 'Meta вернула 0 Pages';
-        cfg.page.appendChild(empty);
-        cfg.error = 'Meta вернула 0 Pages';
-        cfg.pageHint.className = 'error';
-        cfg.pageHint.textContent = 'Meta вернула 0 Pages. Введи Primary Page ID вручную.';
-      } else {
-        const placeholder = document.createElement('option');
-        placeholder.value = '';
-        placeholder.textContent = 'Выбери Primary Page';
-        cfg.page.appendChild(placeholder);
-
-        for (const item of pages) {
-          const option = document.createElement('option');
-          option.value = String(item.id || '');
-          option.textContent = String(item.name || item.id || 'Page') + ' — ' + String(item.id || '');
-          cfg.page.appendChild(option);
-        }
-
-        cfg.page.value = String(pages[0].id || '');
-        cfg.pageHint.textContent = 'Pages: ' + pages.length + '. Первая выбрана автоматически.';
-      }
-
-      cfg.page.disabled = false;
-      cfg.loaded = true;
-      refreshReadyState();
-    }).catch(function(error) {
       cfg.page.textContent = '';
       const failed = document.createElement('option');
       failed.value = '';
-      failed.textContent = 'Ошибка загрузки Pages';
+      failed.textContent = 'Preflight не пройден';
       cfg.page.appendChild(failed);
       cfg.page.disabled = true;
       cfg.loaded = true;
-      cfg.error = String((error && error.message) || error);
-      cfg.pageHint.className = 'error';
-      cfg.pageHint.textContent =
-        'Pages не загрузились: ' + cfg.error + '. Можно ввести Primary Page ID вручную.';
       refreshReadyState();
     });
+;
   }
 
   create.addEventListener('click', function() {
