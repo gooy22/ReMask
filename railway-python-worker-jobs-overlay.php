@@ -123,6 +123,45 @@ try {
         rmx_pwj_out(['ok'=>true,'preflight'=>$result]);
     }
 
+    if ($action === 'docids') {
+        $operation = trim((string)($input['operation'] ?? $_GET['operation'] ?? ''));
+        $path = '/api/v1/facebook/docids';
+        if ($operation !== '') {
+            $path .= '?operation=' . rawurlencode(strtoupper($operation));
+        }
+        $result = rmx_pwj_worker_request('GET', $path);
+        rmx_pwj_out(['ok'=>true,'registry'=>$result]);
+    }
+
+    if ($action === 'register_docid') {
+        $operation = strtoupper(trim((string)($input['operation'] ?? 'CREATE_BM')));
+        if ($operation !== 'CREATE_BM') {
+            rmx_pwj_out(['ok'=>false,'error'=>'UNSUPPORTED_DOCID_OPERATION'], 400);
+        }
+
+        $docId = trim((string)($input['doc_id'] ?? ''));
+        if (!preg_match('/^\d{5,40}$/', $docId)) {
+            rmx_pwj_out(['ok'=>false,'error'=>'INVALID_DOC_ID'], 400);
+        }
+
+        $candidate = [
+            'doc_id' => $docId,
+            'friendly_name' => trim((string)($input['friendly_name'] ?? '')),
+            'variables_mode' => trim((string)($input['variables_mode'] ?? 'scope_selector_business_creation_v1')),
+            'endpoint_url' => trim((string)($input['endpoint_url'] ?? 'https://business.facebook.com/api/graphql/')),
+            'source' => trim((string)($input['source'] ?? 'manual_ui')),
+            'priority' => (int)($input['priority'] ?? 7500),
+            'observed_at' => trim((string)($input['observed_at'] ?? '')),
+        ];
+
+        $result = rmx_pwj_worker_request(
+            'POST',
+            '/api/v1/facebook/docids/' . rawurlencode($operation),
+            $candidate
+        );
+        rmx_pwj_out(['ok'=>true,'registry'=>$result]);
+    }
+
     if ($action === 'create') {
         $profiles = $input['profiles'] ?? null;
         if (!is_array($profiles) || $profiles === []) {
