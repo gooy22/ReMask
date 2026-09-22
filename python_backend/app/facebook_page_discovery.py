@@ -600,6 +600,183 @@ async def discover_current_list_pages_docid(
     )
 
 
+def _browser_source_variants(source: str) -> list[str]:
+    raw = str(source or "")
+    variants = [raw]
+
+    entity_decoded = html_lib.unescape(raw)
+    if entity_decoded not in variants:
+        variants.append(entity_decoded)
+
+    def decode_ascii_unicode(match: re.Match[str]) -> str:
+        codepoint = int(match.group(1), 16)
+        return chr(codepoint) if codepoint <= 0x7F else match.group(0)
+
+    js_decoded = re.sub(
+        r'\\u([0-9a-fA-F]{4})',
+        decode_ascii_unicode,
+        entity_decoded,
+    )
+    js_decoded = re.sub(
+        r'\\x([0-9a-fA-F]{2})',
+        lambda match: chr(int(match.group(1), 16)),
+        js_decoded,
+    )
+    js_decoded = (
+        js_decoded
+        .replace(r'\\/', '/')
+        .replace(r'\\"', '"')
+        .replace(r"\\'", "'")
+    )
+    if js_decoded not in variants:
+        variants.append(js_decoded)
+
+    return variants
+
+
+def _extract_pages_from_browser_document(source: str) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+
+    id_patterns = (
+        r"""["']page_id["']\s*:\s*["']?(\d{5,25})["']?""",
+        r"""["']pageID["']\s*:\s*["']?(\d{5,25})["']?""",
+        r"""["']pageId["']\s*:\s*["']?(\d{5,25})["']?""",
+    )
+    generic_id_pattern = r"""["']id["']\s*:\s*["'](\d{5,25})["']"""
+    name_patterns = (
+        r"""["']name["']\s*:\s*["']([^"']{1,240})["']""",
+        r"""["']page_name["']\s*:\s*["']([^"']{1,240})["']""",
+        r"""["']pageName["']\s*:\s*["']([^"']{1,240})["']""",
+    )
+    category_pattern = r"""["']category["']\s*:\s*["']([^"']{1,160})["']"""
+
+    for text in _browser_source_variants(source):
+        marker_matches = list(
+            re.finditer(
+                r"""page_id|pageID|pageId|__typename["']?\s*:\s*["']Page["']""",
+                text,
+                flags=re.IGNORECASE,
+            )
+        )
+
+        for marker in marker_matches:
+            left = max(0, marker.start() - 1800)
+            right = min(len(text), marker.end() + 2600)
+            window = text[left:right]
+
+            page_id = ""
+            for pattern in id_patterns:
+                match = re.search(pattern, window, flags=re.IGNORECASE)
+                if match:
+                    page_id = _clean(match.group(1))
+                    break
+
+            if not page_id and re.search(
+                r"""__typename["']?\s*:\s*["']Page["']""",
+                window,
+                flags=re.IGNORECASE,
+            ):
+                match = re.search(
+                    generic_id_pattern,
+                    window,
+                    flags=re.IGNORECASE,
+                )
+                if match:
+                    page_id = _clean(match.group(1))
+
+            if not page_id:
+                continue
+
+            page_name = ""
+            for pattern in name_patterns:
+                match = re.search(pattern, window, flags=re.IGNORECASE)
+                if match:
+                    page_name = html_lib.unescape(_clean(match.group(1)))
+                    break
+
+            if not page_name:
+                continue
+
+            category = ""
+            category_match = re.search(
+                category_pattern,
+                window,
+                flags=re.IGNORECASE,
+            )
+            if category_match:
+                category = html_lib.unescape(_clean(category_match.group(1)))
+
+            rows.append({
+                "id": page_id,
+                "name": page_name,
+                "category": category,
+            })
+
+    return _dedupe_pages(rows)
+
+
+async def discover_pages_from_browser_html(
+    session: Any,
+) -> PageDiscoveryResult:
+    entry_urls = (
+        "https://www.facebook.com/pages/?category=your_pages",
+        "https://www.facebook.com/pages/?category=your_pages&ref=bookmarks",
+        "https://www.facebook.com/pages/",
+        "https://business.facebook.com/latest/settings/pages",
+    )
+
+    diagnostics: list[str] = []
+
+    for entry_url in entry_urls:
+        try:
+            status, document, final_url = await session.fetch_text(
+                entry_url,
+                max_bytes=4_000_000,
+            )
+        except Exception as exc:
+            diagnostics.append(
+                f"{entry_url}: fetch error {exc.__class__.__name__}"
+            )
+            continue
+
+        lower_url = str(final_url or "").lower()
+        lower_body = str(document or "").lower()
+        if (
+            "/login" in lower_url
+            or "/checkpoint" in lower_url
+            or "login_form" in lower_body
+        ):
+            diagnostics.append(
+                f"{entry_url}: login/checkpoint redirect"
+            )
+            continue
+
+        if status >= 400:
+            diagnostics.append(
+                f"{entry_url}: HTTP {status}"
+            )
+            continue
+
+        pages = _extract_pages_from_browser_document(document)
+        diagnostics.append(
+            f"{entry_url}: HTTP {status} final={final_url} "
+            f"bytes={len(document)} pages={len(pages)}"
+        )
+
+        if pages:
+            return PageDiscoveryResult(
+                pages=pages,
+                source="facebook_browser_pages_html",
+                candidate=None,
+                diagnostics=diagnostics[-8:],
+            )
+
+    raise PageDiscoveryError(
+        "Authenticated Facebook Pages surfaces returned no parseable Fan Pages. "
+        + " || ".join(diagnostics[-8:])
+    )
+
+
 async def discover_pages_via_web(
     session: Any,
     *,
