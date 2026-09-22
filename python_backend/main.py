@@ -126,8 +126,23 @@ async def create_job(request: CreateJobRequest) -> JobAccepted:
         except MirrorError as exc:
             log.error('persistent job mirror save failed job=%s: %s',job_id,exc)
     if created:
-        await pool.enqueue_job(job_id)
-    return JobAccepted(job_id=job_id,status=(view or {'status':'QUEUED'})['status'],items_total=(view or {'items_total':len(request.profiles)})['items_total'])
+        enqueued=await pool.enqueue_job(job_id)
+    else:
+        enqueued=0
+
+    log.info(
+        'job accepted id=%s created=%s profiles=%d enqueued=%d',
+        job_id,
+        created,
+        len(request.profiles),
+        enqueued,
+    )
+
+    return JobAccepted(
+        job_id=job_id,
+        status=(view or {'status':'QUEUED'})['status'],
+        items_total=(view or {'items_total':len(request.profiles)})['items_total'],
+    )
 
 @app.get('/api/v1/jobs/{job_id}',dependencies=[Depends(require_key)])
 async def get_job(job_id: str):
