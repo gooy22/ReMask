@@ -248,8 +248,19 @@ async def profile_preflight(profile_id: str):
                     })
 
                 if graph_state['identity_ready']:
-                    try:
-                        permissions=await graph.list_permissions()
+                    permissions_result, pages_result, businesses_result = (
+                        await asyncio.gather(
+                            graph.list_permissions(),
+                            graph.list_pages(),
+                            graph.list_businesses(),
+                            return_exceptions=True,
+                        )
+                    )
+
+                    if isinstance(permissions_result, Exception):
+                        graph_state['permissions_error']=str(permissions_result)
+                    else:
+                        permissions=permissions_result
                         graph_state.update({
                             'permissions_ready':True,
                             'permissions':permissions,
@@ -263,29 +274,26 @@ async def profile_preflight(profile_id: str):
                                 permissions.get('ads_management') == 'granted'
                             ),
                         })
-                    except GraphApiError as exc:
-                        graph_state['permissions_error']=str(exc)
 
-                    try:
-                        pages=await graph.list_pages()
+                    if isinstance(pages_result, Exception):
+                        graph_state['pages_error']=str(pages_result)
+                        if isinstance(pages_result, GraphApiError):
+                            if graph_state['error_code'] is None:
+                                graph_state['error_code']=pages_result.code
+                                graph_state['error_subcode']=pages_result.subcode
+                    else:
                         graph_state.update({
                             'pages_ready':True,
-                            'pages':pages,
+                            'pages':pages_result,
                         })
-                    except GraphApiError as exc:
-                        graph_state['pages_error']=str(exc)
-                        if graph_state['error_code'] is None:
-                            graph_state['error_code']=exc.code
-                            graph_state['error_subcode']=exc.subcode
 
-                    try:
-                        businesses=await graph.list_businesses()
+                    if isinstance(businesses_result, Exception):
+                        graph_state['businesses_error']=str(businesses_result)
+                    else:
                         graph_state.update({
                             'businesses_ready':True,
-                            'businesses':businesses,
+                            'businesses':businesses_result,
                         })
-                    except GraphApiError as exc:
-                        graph_state['businesses_error']=str(exc)
 
             private_pages_state={
                 'ready':False,
@@ -301,7 +309,7 @@ async def profile_preflight(profile_id: str):
                 try:
                     private_result=await asyncio.wait_for(
                         discover_pages_via_web(facebook),
-                        timeout=20.0,
+                        timeout=35.0,
                     )
                     private_pages_state.update({
                         'ready':True,
