@@ -5,9 +5,12 @@ import asyncio
 import re
 
 from fb_worker import (
-    AuthenticationError,
     RemoteRequestError,
     ProxyError,
+)
+from ..business_create_service import (
+    BusinessCreateError,
+    create_business_resilient,
 )
 from .models import ProvisioningError
 from .meta_errors import classify_meta_request_error
@@ -82,6 +85,18 @@ async def business_handler(
     vertical = str(params.get("vertical") or "ADVERTISING").strip().upper()
     explicit_doc_id = str(params.get("doc_id") or "").strip() or None
 
+    raw_timezone = params.get("timezone_id")
+    timezone_id = None
+    if raw_timezone not in (None, "", "None"):
+        try:
+            timezone_id = int(raw_timezone)
+        except (TypeError, ValueError) as exc:
+            raise ProvisioningError(
+                "INVALID_INPUT",
+                "BUSINESS.timezone_id must be an integer when provided",
+                retryable=False,
+            ) from exc
+
     log.info(
         "[%s] BUSINESS start name=%s primary_page_id=%s email_present=%s "
         "identity_name_present=%s explicit_doc_id=%s key=%s",
@@ -95,34 +110,56 @@ async def business_handler(
     )
 
     try:
-        controller = await session.facebook_controller()
-        bm_id = await controller.create_business_manager(
-            name=bm_name,
+        result = await create_business_resilient(
+            session,
+            business_name=bm_name,
             page_id=page_id,
-            doc_id=explicit_doc_id,
             user_email=user_email,
             user_first_name=user_first_name,
             user_last_name=user_last_name,
             profile_display_name=display_name,
             vertical=vertical,
+            timezone_id=timezone_id,
+            explicit_doc_id=explicit_doc_id,
         )
 
-        if not bm_id:
+        if not result.business_id:
             raise ProvisioningError(
                 "INVALID_RESULT",
                 "Facebook returned empty Business ID",
                 retryable=False,
             )
 
+        log.info(
+            "[%s] BUSINESS success id=%s transport=%s primary_page_id=%s",
+            profile_id,
+            result.business_id,
+            result.transport,
+            result.primary_page_id or "<none>",
+        )
+
         return {
-            "business_id": str(bm_id),
-            "transport": "facebook_web_graphql",
-            "primary_page_id": page_id,
+            "business_id": str(result.business_id),
+            "transport": result.transport,
+            "primary_page_id": result.primary_page_id,
+            "diagnostics": result.diagnostics,
         }
-            
-    except AuthenticationError as exc:
-        raise ProvisioningError("SESSION_EXPIRED", f"FB Session expired: {exc}", retryable=False)
-        
+
+    except BusinessCreateError as exc:
+        log.error(
+            "[%s] BUSINESS create failed code=%s retryable=%s message=%s diagnostics=%s",
+            profile_id,
+            exc.code,
+            exc.retryable,
+            str(exc),
+            exc.diagnostics,
+        )
+        raise ProvisioningError(
+            exc.code,
+            str(exc),
+            retryable=exc.retryable,
+        ) from exc
+
     except RemoteRequestError as exc:
         err_code, is_retry, diagnostic = classify_meta_request_error(
             exc,
