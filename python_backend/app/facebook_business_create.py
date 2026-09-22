@@ -353,6 +353,7 @@ async def create_business_with_docids(
     profile_display_name: str = "",
     vertical: str = "ADVERTISING",
     explicit_doc_id: str | None = None,
+    allow_scope_selector_fallback: bool = True,
 ) -> CreateBusinessResult:
     bootstrap = await session.bootstrap()
     actor_id = _clean(getattr(bootstrap, "actor_id", ""))
@@ -361,6 +362,13 @@ async def create_business_with_docids(
         list_candidates("CREATE_BM"),
         page_id=page_id,
     )
+
+    if not allow_scope_selector_fallback:
+        candidates = [
+            candidate
+            for candidate in candidates
+            if candidate_requirements(candidate).get("page_id") is True
+        ]
 
     if explicit_doc_id:
         explicit = _clean(explicit_doc_id)
@@ -371,6 +379,12 @@ async def create_business_with_docids(
         ]
 
         if not candidates:
+            if not allow_scope_selector_fallback:
+                raise DocIdMutationError(
+                    "Explicit CREATE_BM doc_id is not registered as a Page-backed "
+                    "mutation; refusing non-Page fallback"
+                )
+
             # An explicit caller-provided doc_id is allowed even when it is not
             # yet in the registry. Use the current scope-selector contract.
             from .facebook_docids import DocIdCandidate
@@ -543,12 +557,13 @@ async def create_business_with_docids(
             discovery_specs.append(
                 ("BusinessManagerCreateMutation", "legacy_primary_page_v1")
             )
-        discovery_specs.append(
-            (
-                "useBusinessCreationMutationMutation",
-                "scope_selector_business_creation_v1",
+        if allow_scope_selector_fallback:
+            discovery_specs.append(
+                (
+                    "useBusinessCreationMutationMutation",
+                    "scope_selector_business_creation_v1",
+                )
             )
-        )
 
         for friendly_name, variables_mode in discovery_specs:
             discovered = await discover_persisted_query(
@@ -591,6 +606,7 @@ async def create_business_with_docids(
                     profile_display_name=profile_display_name,
                     vertical=vertical,
                     explicit_doc_id=refreshed.doc_id,
+                    allow_scope_selector_fallback=allow_scope_selector_fallback,
                 )
 
     details = []
@@ -599,6 +615,12 @@ async def create_business_with_docids(
     if stale_failures:
         details.append(
             "stale_candidates=" + " || ".join(stale_failures)
+        )
+
+    if not allow_scope_selector_fallback:
+        raise DocIdMutationError(
+            "No usable Page-backed CREATE_BM mutation is available. "
+            + " ".join(details)
         )
 
     raise DocIdMutationError(
