@@ -2,6 +2,7 @@ from __future__ import annotations
 from typing import Any
 import logging
 import asyncio
+import re
 
 from fb_worker import (
     AuthenticationError,
@@ -29,9 +30,19 @@ async def business_handler(
     idempotency_key = kwargs.get("idempotency_key") or f"{profile_id}:BUSINESS"
     
     # 1. СТРОГАЯ НОРМАЛИЗАЦИЯ ИМЕНИ БМ И ЗАЩИТА ОТ ПРОБЕЛОВ
-    bm_name = str(params.get("name") or params.get("bm_name") or f"BM_{profile_id}").strip()
+    bm_name = str(params.get("name") or params.get("bm_name") or "").strip()
     if not bm_name:
-        raise ProvisioningError("INVALID_INPUT", "BUSINESS.name is required and cannot be empty", retryable=False)
+        raise ProvisioningError(
+            "INVALID_INPUT",
+            "BUSINESS.name is required and cannot be empty",
+            retryable=False,
+        )
+    if len(bm_name) > 255:
+        raise ProvisioningError(
+            "INVALID_INPUT",
+            "BUSINESS.name is too long",
+            retryable=False,
+        )
 
     # 2. ИЗВЛЕЧЕНИЕ И ОЧИСТКА PAGE_ID ИЗ FRONTEND PAYLOAD
     page_id_raw = params.get("page_id") or params.get("primary_page_id")
@@ -40,6 +51,12 @@ async def business_handler(
         raise ProvisioningError(
             "PRIMARY_PAGE_REQUIRED",
             "BUSINESS.page_id is required for Business Manager creation",
+            retryable=False,
+        )
+    if not re.fullmatch(r"\d{5,30}", page_id):
+        raise ProvisioningError(
+            "INVALID_PRIMARY_PAGE",
+            "BUSINESS.page_id must be a numeric Facebook Page ID",
             retryable=False,
         )
 
