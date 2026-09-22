@@ -110,6 +110,19 @@ try {
         rmx_pwj_out(['ok'=>true,'worker'=>$health]);
     }
 
+    if ($action === 'preflight') {
+        $profileId = trim((string)($input['profile_id'] ?? ''));
+        if ($profileId === '' || strlen($profileId) > 160) {
+            rmx_pwj_out(['ok'=>false,'error'=>'INVALID_PROFILE_ID'], 400);
+        }
+
+        $result = rmx_pwj_worker_request(
+            'POST',
+            '/api/v1/profiles/' . rawurlencode($profileId) . '/preflight'
+        );
+        rmx_pwj_out(['ok'=>true,'preflight'=>$result]);
+    }
+
     if ($action === 'create') {
         $profiles = $input['profiles'] ?? null;
         if (!is_array($profiles) || $profiles === []) {
