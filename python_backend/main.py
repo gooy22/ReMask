@@ -377,6 +377,14 @@ async def profile_preflight(profile_id: str):
                 )
             )
 
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.exception('profile preflight failed profile=%s: %s', clean_profile, exc)
+        raise HTTPException(
+            status_code=502,
+            detail=f'PROFILE_PREFLIGHT_FAILED: {exc}',
+        ) from exc
 
     bm_candidates=[]
     for candidate in list_candidates('CREATE_BM'):
