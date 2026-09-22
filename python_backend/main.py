@@ -15,6 +15,10 @@ from app.session import ProfileContextError, ProfileSession, ProxyCheckError
 from app.store import JobStore
 from app.facebook_business_create import candidate_requirements
 from app.facebook_graph_api import GraphApiError
+from app.facebook_page_discovery import (
+    PageDiscoveryError,
+    discover_pages_via_web,
+)
 from app.facebook_docids import (
     list_candidates,
     registry_view,
@@ -204,33 +208,111 @@ async def profile_preflight(profile_id: str):
             graph_state={
                 'ready':False,
                 'token_present':bool(str(context.access_token or '').strip()),
+                'identity_ready':False,
+                'pages_ready':False,
+                'businesses_ready':False,
                 'user_id':'',
                 'name':'',
                 'pages':[],
                 'businesses':[],
                 'error':'',
+                'identity_error':'',
+                'pages_error':'',
+                'businesses_error':'',
                 'error_code':None,
                 'error_subcode':None,
             }
+
             if graph_state['token_present']:
                 try:
                     graph=await profile_session.graph_api()
                     identity=await graph.identity()
-                    pages=await graph.list_pages()
-                    businesses=await graph.list_businesses()
                     graph_state.update({
                         'ready':True,
+                        'identity_ready':True,
                         'user_id':identity.user_id,
                         'name':identity.name,
-                        'pages':pages,
-                        'businesses':businesses,
                     })
                 except GraphApiError as exc:
                     graph_state.update({
                         'error':str(exc),
+                        'identity_error':str(exc),
                         'error_code':exc.code,
                         'error_subcode':exc.subcode,
                     })
+
+                if graph_state['identity_ready']:
+                    try:
+                        pages=await graph.list_pages()
+                        graph_state.update({
+                            'pages_ready':True,
+                            'pages':pages,
+                        })
+                    except GraphApiError as exc:
+                        graph_state['pages_error']=str(exc)
+                        if graph_state['error_code'] is None:
+                            graph_state['error_code']=exc.code
+                            graph_state['error_subcode']=exc.subcode
+
+                    try:
+                        businesses=await graph.list_businesses()
+                        graph_state.update({
+                            'businesses_ready':True,
+                            'businesses':businesses,
+                        })
+                    except GraphApiError as exc:
+                        graph_state['businesses_error']=str(exc)
+
+            private_pages_state={
+                'ready':False,
+                'pages':[],
+                'source':'',
+                'doc_id':'',
+                'friendly_name':'',
+                'error':'',
+                'diagnostics':[],
+            }
+
+            if not graph_state['pages'] and web_state['ready']:
+                try:
+                    private_result=await asyncio.wait_for(
+                        discover_pages_via_web(facebook),
+                        timeout=20.0,
+                    )
+                    private_pages_state.update({
+                        'ready':True,
+                        'pages':private_result.pages,
+                        'source':private_result.source,
+                        'doc_id':(
+                            private_result.candidate.doc_id
+                            if private_result.candidate is not None
+                            else ''
+                        ),
+                        'friendly_name':(
+                            private_result.candidate.friendly_name
+                            if private_result.candidate is not None
+                            else ''
+                        ),
+                        'diagnostics':private_result.diagnostics[-8:],
+                    })
+                except (PageDiscoveryError, asyncio.TimeoutError) as exc:
+                    private_pages_state['error']=str(exc)
+
+            selected_pages=(
+                graph_state['pages']
+                if graph_state['pages']
+                else private_pages_state['pages']
+            )
+            pages_source=(
+                'official_graph_api'
+                if graph_state['pages']
+                else (
+                    private_pages_state['source']
+                    if private_pages_state['pages']
+                    else ''
+                )
+            )
+
 
     bm_candidates=[]
     for candidate in list_candidates('CREATE_BM'):
@@ -257,8 +339,10 @@ async def profile_preflight(profile_id: str):
         'jazoest_present':web_state['jazoest_present'],
         'web_error':web_state['error'],
         'graph_api':graph_state,
-        'pages':graph_state['pages'],
-        'pages_count':len(graph_state['pages']),
+        'private_pages':private_pages_state,
+        'pages':selected_pages,
+        'pages_count':len(selected_pages),
+        'pages_source':pages_source,
         'businesses':graph_state['businesses'],
         'businesses_count':len(graph_state['businesses']),
         'email_present':bool(str(context.email or '').strip()),
@@ -267,8 +351,11 @@ async def profile_preflight(profile_id: str):
         'display_name_present':bool(str(context.display_name or '').strip()),
         'create_bm_candidates':bm_candidates,
         'bm_route_ready':bool(
-            graph_state['ready'] and graph_state['pages']
-            or web_state['ready']
+            selected_pages
+            and (
+                graph_state['identity_ready']
+                or web_state['ready']
+            )
         ),
     }
 
