@@ -3,12 +3,18 @@ FROM php:8.4-apache
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libcurl4-openssl-dev libpq-dev xz-utils ca-certificates \
+    && apt-get install -y --no-install-recommends libcurl4-openssl-dev libpq-dev xz-utils ca-certificates python3 python3-venv \
     && docker-php-ext-install curl pdo_pgsql \
     && a2enmod rewrite headers \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /var/www/html
+
+COPY python_backend/requirements.txt /tmp/remask-python-requirements.txt
+RUN python3 -m venv /opt/remask-venv \
+    && /opt/remask-venv/bin/pip install --no-cache-dir -r /tmp/remask-python-requirements.txt
+COPY python_backend /opt/remask-python
+RUN /opt/remask-venv/bin/python -m compileall -q /opt/remask-python
 
 COPY .deploy/clean-preview-valid/runtime.b64.* /tmp/remask-parts/
 COPY railway-persistence-overlay.php /tmp/railway-persistence-overlay.php
@@ -138,6 +144,8 @@ RUN set -eux; \
     grep -q 'X-Remask-Internal-Key' /var/www/html/ajax/pythonProfileContext.php; \
     grep -q 'REMASK_INTERNAL_KEY' /var/www/html/ajax/pythonProfileContext.php; \
     grep -q "'action' => 'list'\|'action'] ?? .*'resolve'" /var/www/html/ajax/pythonProfileContext.php || grep -q "action === 'list'" /var/www/html/ajax/pythonProfileContext.php; \
+    test -x /opt/remask-venv/bin/uvicorn; \
+    test -f /opt/remask-python/main.py; \
     php -l /var/www/html/ajax/pythonWorkerJobs.php; \
     grep -q 'REMASK_PYTHON_WORKER_URL' /var/www/html/ajax/pythonWorkerJobs.php; \
     grep -q 'retry-failed' /var/www/html/ajax/pythonWorkerJobs.php; \
