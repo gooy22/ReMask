@@ -1,4 +1,4 @@
-/* REMASK_PYTHON_WORKER_UI_V1 */
+/* REMASK_PYTHON_WORKER_UI_V2 */
 const restoredPythonWorkerJobId = localStorage.getItem('remask_python_worker_job_v1') || '';
 
 const pythonWorkerUiState = {
