@@ -25,6 +25,7 @@ require_once __DIR__ . '/../settings.php';
 require_once __DIR__ . '/../classes/RemaskProxy.php';
 require_once __DIR__ . '/../classes/FbAccount.php';
 require_once __DIR__ . '/../classes/AccountStoreFactory.php';
+require_once __DIR__ . '/../classes/MetaEndpoint.php';
 
 header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store, max-age=0');
@@ -124,6 +125,62 @@ function rmx_py_saved_pages(FbAccount $account): array {
     return $pages;
 }
 
+function rmx_py_profile_pages(FbAccount $account, string $profile): array {
+    $pages = rmx_py_saved_pages($account);
+    $seen = [];
+    foreach ($pages as $row) {
+        $id = trim((string)($row['id'] ?? ''));
+        if ($id !== '') $seen[$id] = true;
+    }
+
+    try {
+        $cached = MetaEndpoint::peekCachedAsset($profile, 'pages', '');
+        foreach ((array)($cached['data'] ?? []) as $row) {
+            if (!is_array($row)) continue;
+            $id = trim((string)($row['id'] ?? ''));
+            if ($id === '' || !ctype_digit($id) || isset($seen[$id])) continue;
+
+            $businessId = '';
+            $business = $row['business'] ?? null;
+            if (is_array($business)) {
+                $businessId = trim((string)($business['id'] ?? ''));
+            } elseif (is_scalar($business)) {
+                $businessId = trim((string)$business);
+            }
+
+            $tasks = [];
+            foreach ((array)($row['tasks'] ?? []) as $task) {
+                if (is_scalar($task)) $tasks[] = (string)$task;
+            }
+
+            $pages[] = [
+                'id' => $id,
+                'name' => trim((string)($row['name'] ?? $id)) ?: $id,
+                'category' => trim((string)($row['category'] ?? '')),
+                'tasks' => $tasks,
+                'business_id' => $businessId,
+                'is_owned' => array_key_exists('is_owned', $row) ? (bool)$row['is_owned'] : null,
+            ];
+            $seen[$id] = true;
+        }
+    } catch (Throwable $e) {
+        error_log(
+            '[python-profile-context] Page cache lookup failed profile_hash='
+            . substr(hash('sha256', $profile), 0, 12)
+            . ' error=' . get_class($e)
+        );
+    }
+
+    usort($pages, static function(array $a, array $b): int {
+        $aBound = trim((string)($a['business_id'] ?? '')) !== '' ? 1 : 0;
+        $bBound = trim((string)($b['business_id'] ?? '')) !== '' ? 1 : 0;
+        if ($aBound !== $bBound) return $aBound <=> $bBound;
+        return strcasecmp((string)($a['name'] ?? ''), (string)($b['name'] ?? ''));
+    });
+
+    return $pages;
+}
+
 function rmx_py_public_identity(FbAccount $account, string $profile): array {
     $vars = get_object_vars($account);
 
@@ -218,7 +275,7 @@ try {
         'email' => $identity['email'],
         'first_name' => $identity['first_name'],
         'last_name' => $identity['last_name'],
-        'pages' => rmx_py_saved_pages($account),
+        'pages' => rmx_py_profile_pages($account, $profile),
     ]);
 } catch (Throwable $e) {
     error_log('[python-profile-context] ' . get_class($e) . ': ' . $e->getMessage());
