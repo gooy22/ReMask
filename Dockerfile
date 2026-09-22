@@ -175,8 +175,10 @@ RUN set -eux; \
     php -l /var/www/html/workspace.php; \
     grep -q 'REMASK_PYTHON_WORKER_PANEL_V1' /var/www/html/workspace.php; \
     grep -q 'REMASK_PYTHON_WORKER_UI_V1' /var/www/html/scripts/workspace.js; \
-    grep -q 'REMASK_PYTHON_WORKER_UI_V155' /var/www/html/scripts/workspace.js; \
+    grep -q 'REMASK_PYTHON_WORKER_UI_V156' /var/www/html/scripts/workspace.js; \
     grep -q 'pythonWorkerCsrf' /var/www/html/scripts/workspace.js; \
+    grep -q 'pythonWorkerLoadPages(profileId, csrfRetried)' /var/www/html/scripts/workspace.js; \
+    grep -q "'X-REMASK-CSRF': csrf" /var/www/html/scripts/workspace.js; \
     grep -q 'X-REMASK-CSRF' /var/www/html/scripts/workspace.js; \
     grep -q "action === 'csrf'" /var/www/html/ajax/pythonWorkerJobs.php; \
     grep -q 'remask_csrf_token' /var/www/html/ajax/pythonWorkerJobs.php; \
