@@ -353,7 +353,7 @@ class FacebookWebSession:
         # The endpoint is dedicated to DTSG, so a generic token field here is
         # safe as a final parser fallback.
         match = re.search(
-            r"""["']token["']\\s*:\\s*["']([^"']+)["']""",
+            r"""["']token["']\s*:\s*["']([^"']+)["']""",
             body,
             flags=re.IGNORECASE | re.DOTALL,
         )
