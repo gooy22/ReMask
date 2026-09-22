@@ -299,7 +299,7 @@ async def create_business_resilient(
                 )
             else:
                 try:
-                        existing = await graph.list_businesses()
+                    existing = await graph.list_businesses()
                     existing_id = _find_existing_business(
                         existing,
                         business_name=business_name,
