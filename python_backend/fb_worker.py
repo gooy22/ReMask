@@ -883,7 +883,7 @@ class BusinessLogicController:
     # Business Manager
     # ------------------------------------------------------------------
 
-    async def create_business_manager(
+    async def create_business_manager_detailed(
         self,
         name: str,
         page_id: str | None = None,
@@ -894,7 +894,7 @@ class BusinessLogicController:
         user_last_name: str = "",
         profile_display_name: str = "",
         vertical: str = "ADVERTISING",
-    ) -> str:
+    ):
         clean_name = str(name or "").strip()
         clean_page_id = str(page_id or "").strip()
 
@@ -940,6 +940,30 @@ class BusinessLogicController:
             result.response_path,
         )
 
+        return result
+
+    async def create_business_manager(
+        self,
+        name: str,
+        page_id: str | None = None,
+        doc_id: str | None = None,
+        *,
+        user_email: str = "",
+        user_first_name: str = "",
+        user_last_name: str = "",
+        profile_display_name: str = "",
+        vertical: str = "ADVERTISING",
+    ) -> str:
+        result = await self.create_business_manager_detailed(
+            name=name,
+            page_id=page_id,
+            doc_id=doc_id,
+            user_email=user_email,
+            user_first_name=user_first_name,
+            user_last_name=user_last_name,
+            profile_display_name=profile_display_name,
+            vertical=vertical,
+        )
         return result.business_id
 
     # ------------------------------------------------------------------
