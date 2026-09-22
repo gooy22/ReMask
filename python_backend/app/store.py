@@ -61,6 +61,7 @@ class JobStore:
                 result_json TEXT,
                 error_code TEXT,
                 error_message TEXT,
+                retryable INTEGER NOT NULL DEFAULT 0,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL,
                 UNIQUE(item_id, position)
