@@ -1,4 +1,4 @@
-/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 REMASK_PYTHON_WORKER_UI_V140 REMASK_PYTHON_WORKER_UI_V141 REMASK_PYTHON_WORKER_UI_V142 REMASK_PYTHON_WORKER_UI_V143 REMASK_PYTHON_WORKER_UI_V144 REMASK_PYTHON_WORKER_UI_V145 REMASK_PYTHON_WORKER_UI_V146 REMASK_PYTHON_WORKER_UI_V147 REMASK_PYTHON_WORKER_UI_V148 */
+/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 REMASK_PYTHON_WORKER_UI_V140 REMASK_PYTHON_WORKER_UI_V141 REMASK_PYTHON_WORKER_UI_V142 REMASK_PYTHON_WORKER_UI_V143 REMASK_PYTHON_WORKER_UI_V144 REMASK_PYTHON_WORKER_UI_V145 REMASK_PYTHON_WORKER_UI_V146 REMASK_PYTHON_WORKER_UI_V147 REMASK_PYTHON_WORKER_UI_V148 REMASK_PYTHON_WORKER_UI_V149 */
 const restoredPythonWorkerJobId = localStorage.getItem('remask_python_worker_job_v1') || '';
 
 const pythonWorkerUiState = {
@@ -104,10 +104,10 @@ function pythonWorkerSelectionRefresh() {
       profiles.length
         ? (
             pythonWorkerUiState.workerOnline === true
-              ? 'Worker UI v148 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
-              : 'Worker UI v148 · Выбрано FB-профилей: ' + profiles.length + '. Жду READY от worker.'
+              ? 'Worker UI v149 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
+              : 'Worker UI v149 · Выбрано FB-профилей: ' + profiles.length + '. Жду READY от worker.'
           )
-        : 'Worker UI v148 · Выберите FB-профили в Workspace.'
+        : 'Worker UI v149 · Выберите FB-профили в Workspace.'
     );
   }
 }
@@ -183,17 +183,42 @@ async function pythonWorkerProfilePreflight(profileId) {
   const graph = preflight.graph_api && typeof preflight.graph_api === 'object'
     ? preflight.graph_api
     : {};
-  const graphReady = graph.ready === true && Array.isArray(preflight.pages) && preflight.pages.length > 0;
-  const webReady = preflight.fb_dtsg_present === true && preflight.actor_present === true;
+  const routes = preflight.bm_routes && typeof preflight.bm_routes === 'object'
+    ? preflight.bm_routes
+    : {};
+  const graphReady =
+    routes.official_graph_api === true ||
+    (
+      graph.ready === true &&
+      Array.isArray(preflight.pages) &&
+      preflight.pages.length > 0
+    );
+  const webReady =
+    routes.web_page_backed_candidate === true ||
+    routes.web_scope_selector_candidate === true ||
+    (
+      preflight.fb_dtsg_present === true &&
+      preflight.actor_present === true
+    );
 
-  if (!graphReady && !webReady) {
+  if (preflight.bm_route_ready === false || (!graphReady && !webReady)) {
     const reasons = [];
-    if (graph.error) reasons.push('Graph API: ' + String(graph.error));
-    if (preflight.web_error) reasons.push('Web session: ' + String(preflight.web_error));
+    if (graph.identity_error || graph.error) {
+      reasons.push('Graph API: ' + String(graph.identity_error || graph.error));
+    }
+    if (graph.pages_error) {
+      reasons.push('Pages API: ' + String(graph.pages_error));
+    }
+    if (preflight.web_error) {
+      reasons.push('Web session: ' + String(preflight.web_error));
+    }
+    if (preflight.private_pages && preflight.private_pages.error) {
+      reasons.push('Web Pages: ' + String(preflight.private_pages.error));
+    }
     throw new Error(
       reasons.length
         ? reasons.join(' · ')
-        : 'Нет рабочего маршрута создания BM: Graph API/Page и web session недоступны.'
+        : 'Нет рабочего маршрута создания BM для этого FB-профиля.'
     );
   }
 
@@ -658,7 +683,22 @@ async function pythonWorkerLoadPages(profileId) {
 }
 
 function pythonWorkerApplyPages(cfg, pages, sourceLabel) {
-  const list = Array.isArray(pages) ? pages : [];
+  const list = (Array.isArray(pages) ? pages : [])
+    .filter(function(item) {
+      return item && String(item.id || '').trim();
+    })
+    .slice()
+    .sort(function(a, b) {
+      const aBusiness = String((a && a.business_id) || '').trim();
+      const bBusiness = String((b && b.business_id) || '').trim();
+      if (!!aBusiness !== !!bBusiness) return aBusiness ? 1 : -1;
+      return String((a && a.name) || '').localeCompare(
+        String((b && b.name) || ''),
+        undefined,
+        {sensitivity: 'base'}
+      );
+    });
+
   cfg.page.textContent = '';
 
   if (!list.length) {
@@ -680,26 +720,63 @@ function pythonWorkerApplyPages(cfg, pages, sourceLabel) {
   placeholder.textContent = 'Выбери Primary Page';
   cfg.page.appendChild(placeholder);
 
+  let pagesAlreadyInBusiness = 0;
+  let restrictedPages = 0;
+
   for (const item of list) {
     const option = document.createElement('option');
-    option.value = String(item.id || '');
+    const pageId = String(item.id || '').trim();
+    const businessId = String(item.business_id || '').trim();
+    const restriction =
+      item.advertising_restriction_info &&
+      typeof item.advertising_restriction_info === 'object'
+        ? item.advertising_restriction_info
+        : {};
+    const restricted = restriction.is_restricted === true;
+
+    if (businessId) pagesAlreadyInBusiness += 1;
+    if (restricted) restrictedPages += 1;
+
+    option.value = pageId;
+
+    let suffix = '';
+    if (businessId) suffix += ' · уже в BM ' + businessId;
+    if (restricted) suffix += ' · restricted';
+
     option.textContent =
-      String(item.name || item.id || 'Page') +
+      String(item.name || pageId || 'Page') +
       ' — ' +
-      String(item.id || '');
+      pageId +
+      suffix;
+
     cfg.page.appendChild(option);
   }
 
-  cfg.page.value = String(list[0].id || '');
+  const preferred = list.find(function(item) {
+    return !String((item && item.business_id) || '').trim();
+  }) || list[0];
+
+  cfg.page.value = String((preferred && preferred.id) || '');
   cfg.page.disabled = false;
   cfg.loaded = true;
   cfg.error = '';
   cfg.pageHint.className = '';
+
+  const warnings = [];
+  if (pagesAlreadyInBusiness) {
+    warnings.push('уже привязаны к BM: ' + pagesAlreadyInBusiness);
+  }
+  if (restrictedPages) {
+    warnings.push('restricted: ' + restrictedPages);
+  }
+
   cfg.pageHint.textContent =
     'Pages: ' + list.length +
     ' · источник: ' + String(sourceLabel || 'Meta') +
-    ' · первая выбрана автоматически.';
+    (warnings.length ? ' · ' + warnings.join(' · ') : '') +
+    ' · по умолчанию выбрана Page без известного владельца BM.';
 }
+
 
 function pythonWorkerEnsureBmModalStyle() {
   if (document.getElementById('pythonWorkerBmModalStyle')) return;
@@ -966,61 +1043,93 @@ async function pythonWorkerOpenOwnBmModal() {
       const graph = result.graph_api && typeof result.graph_api === 'object'
         ? result.graph_api
         : {};
+      const routes = result.bm_routes && typeof result.bm_routes === 'object'
+        ? result.bm_routes
+        : {};
       const discoveredPages = Array.isArray(result.pages) ? result.pages : [];
       const pagesSource = String(result.pages_source || '').trim();
       const officialPages = pagesSource === 'official_graph_api';
-      const privatePages = pagesSource === 'facebook_web_graphql';
-      const webReady = result.fb_dtsg_present === true && result.actor_present === true;
+      const browserPages = pagesSource.indexOf('facebook_web_') === 0;
+      const webReady =
+        result.fb_dtsg_present === true &&
+        result.actor_present === true;
 
       cfg.sessionHint.className = 'pwbm-session ok';
+
       if (result.email_present === true) {
-        cfg.emailHint.textContent = 'В профиле уже есть Business/login email для web fallback.';
+        cfg.emailHint.textContent =
+          'Business/login email уже сохранён в профиле.';
+      } else if (routes.web_scope_selector_candidate === true) {
+        cfg.emailHint.textContent =
+          'Email понадобится только если Page-backed route окажется устаревшим и Meta переключит создание на scope-selector.';
       } else {
         cfg.emailHint.textContent =
-          'В профиле email не найден. Поле нужно только если ReMask перейдёт на современный web fallback.';
+          'Email для текущего Page-backed маршрута не требуется.';
       }
 
-      if (discoveredPages.length) {
-        if (officialPages) {
-          cfg.sessionHint.textContent =
-            'BM route: OFFICIAL · Fan Pages ' + discoveredPages.length +
-            ' · proxy ' + String(result.proxy_exit_ip || '?') +
-            ' · ' + String(result.proxy_latency_ms || 0) + ' ms';
-          pythonWorkerApplyPages(
-            cfg,
-            discoveredPages,
-            'Graph API /me/accounts'
+      let routeLabel = 'UNKNOWN';
+      if (routes.official_graph_api === true) {
+        routeLabel = 'OFFICIAL PAGE-BACKED';
+      } else if (routes.web_page_backed_candidate === true) {
+        routeLabel = 'WEB PAGE-BACKED';
+      } else if (routes.web_scope_selector_candidate === true) {
+        routeLabel = 'WEB SCOPE-SELECTOR';
+      } else if (webReady) {
+        routeLabel = 'WEB SESSION';
+      }
+
+      const graphNotes = [];
+      if (graph.token_present === true) {
+        if (graph.permissions_ready === true) {
+          graphNotes.push(
+            'pages_show_list=' +
+            (graph.pages_show_list_granted === true ? 'YES' : 'NO')
           );
-        } else if (privatePages) {
-          cfg.sessionHint.textContent =
-            'BM route: WEB fallback · Fan Pages ' + discoveredPages.length +
-            ' · proxy ' + String(result.proxy_exit_ip || '?') +
-            ' · ' + String(result.proxy_latency_ms || 0) + ' ms';
-          pythonWorkerApplyPages(
-            cfg,
-            discoveredPages,
-            'Facebook web session'
+          graphNotes.push(
+            'business_management=' +
+            (graph.business_management_granted === true ? 'YES' : 'NO')
           );
-        } else {
-          cfg.sessionHint.textContent =
-            'BM route: READY · Fan Pages ' + discoveredPages.length +
-            ' · proxy ' + String(result.proxy_exit_ip || '?') +
-            ' · ' + String(result.proxy_latency_ms || 0) + ' ms';
-          pythonWorkerApplyPages(
-            cfg,
-            discoveredPages,
-            pagesSource || 'Meta'
+        } else if (graph.identity_error || graph.error) {
+          graphNotes.push(
+            'Graph token=' +
+            String(graph.identity_error || graph.error).slice(0, 160)
+          );
+        } else if (graph.permissions_error) {
+          graphNotes.push(
+            'permissions=' + String(graph.permissions_error).slice(0, 160)
           );
         }
+      } else {
+        graphNotes.push('Graph token=нет');
+      }
+
+      cfg.sessionHint.textContent =
+        'BM route: ' + routeLabel +
+        ' · Fan Pages ' + discoveredPages.length +
+        ' · proxy ' + String(result.proxy_exit_ip || '?') +
+        ' · ' + String(result.proxy_latency_ms || 0) + ' ms' +
+        (graphNotes.length ? ' · ' + graphNotes.join(' · ') : '');
+
+      if (discoveredPages.length) {
+        let sourceLabel = pagesSource || 'Meta';
+        if (officialPages) sourceLabel = 'Graph API /me/accounts';
+        else if (pagesSource === 'facebook_web_graphql') {
+          sourceLabel = 'Facebook web GraphQL';
+        } else if (pagesSource === 'facebook_web_html') {
+          sourceLabel = 'Facebook browser Pages HTML';
+        } else if (browserPages) {
+          sourceLabel = 'Facebook browser session';
+        }
+
+        pythonWorkerApplyPages(
+          cfg,
+          discoveredPages,
+          sourceLabel
+        );
 
         refreshReadyState();
         return;
       }
-
-      cfg.sessionHint.textContent =
-        (webReady ? 'BM route: WEB fallback · Pages ещё не найдены' : 'BM route: Pages не найдены') +
-        ' · proxy ' + String(result.proxy_exit_ip || '?') +
-        ' · ' + String(result.proxy_latency_ms || 0) + ' ms';
 
       try {
         const pages = await pythonWorkerLoadPages(profileId);
