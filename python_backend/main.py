@@ -87,7 +87,34 @@ app=FastAPI(title='ReMask Python Worker',version='0.4.0',lifespan=lifespan)
 
 @app.get('/health',response_model=HealthResponse)
 async def health() -> HealthResponse:
-    return HealthResponse(ok=True,service='remask-python-worker',queued_items=await store.queue_count(),worker_concurrency=CONCURRENCY)
+    return HealthResponse(
+        ok=True,
+        service='remask-python-worker',
+        queued_items=await store.queue_count(),
+        worker_concurrency=CONCURRENCY,
+    )
+
+@app.get('/ready',dependencies=[Depends(require_key)])
+async def ready():
+    try:
+        profiles=await pool.resolver.list_profiles()
+    except Exception as exc:
+        log.error('readiness failed: profile resolver unavailable: %s',exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f'profile resolver unavailable: {exc}',
+        ) from exc
+
+    return {
+        'ok':True,
+        'service':'remask-python-worker',
+        'ready':True,
+        'queued_items':await store.queue_count(),
+        'worker_concurrency':CONCURRENCY,
+        'profiles_visible':len(profiles),
+        'profile_resolver':'ok',
+        'db_path':str(DB_PATH),
+    }
 
 @app.post('/api/v1/jobs',response_model=JobAccepted,dependencies=[Depends(require_key)])
 async def create_job(request: CreateJobRequest) -> JobAccepted:
