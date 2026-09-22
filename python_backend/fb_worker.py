@@ -160,9 +160,6 @@ class WebSessionManager:
                     "User-Agent": self.profile.user_agent,
                 }
             ) as response:
-                if response.status >= 400: 
-                    raise RemoteRequestError(f"HTTP Error {response.status}")
-                
                 try:
                     payload = await response.json(content_type=None)
                 except (json.JSONDecodeError, ValueError) as json_err:
