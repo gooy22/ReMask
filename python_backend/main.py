@@ -14,6 +14,7 @@ from app.runner import WorkerPool
 from app.session import ProfileContextError, ProfileSession, ProxyCheckError
 from app.store import JobStore
 from app.facebook_business_create import candidate_requirements
+from app.facebook_graph_api import GraphApiError
 from app.facebook_docids import (
     list_candidates,
     registry_view,
@@ -163,48 +164,113 @@ async def profile_preflight(profile_id: str):
 
     try:
         context=await pool.resolver.resolve(clean_profile)
-        async with ProfileSession(context) as profile_session:
-            proxy_result=await profile_session.proxy_check()
-            facebook=await profile_session.facebook_web()
-            bootstrap=await facebook.bootstrap()
-
-        bm_candidates=[]
-        for candidate in list_candidates('CREATE_BM'):
-            bm_candidates.append({
-                'doc_id':candidate.doc_id,
-                'friendly_name':candidate.friendly_name,
-                'variables_mode':candidate.variables_mode,
-                'source':candidate.source,
-                'priority':candidate.priority,
-                'requirements':candidate_requirements(candidate),
-            })
-
-        return {
-            'ok':True,
-            'profile_id':clean_profile,
-            'profile_context':'ok',
-            'proxy':'ok',
-            'proxy_exit_ip':str(proxy_result.get('exit_ip') or ''),
-            'proxy_latency_ms':int(proxy_result.get('latency_ms') or 0),
-            'facebook_session':'ok',
-            'actor_present':bool(bootstrap.actor_id),
-            'fb_dtsg_present':bool(bootstrap.fb_dtsg),
-            'lsd_present':bool(bootstrap.lsd),
-            'jazoest_present':bool(bootstrap.jazoest),
-            'email_present':bool(str(context.email or '').strip()),
-            'first_name_present':bool(str(context.first_name or '').strip()),
-            'last_name_present':bool(str(context.last_name or '').strip()),
-            'display_name_present':bool(str(context.display_name or '').strip()),
-            'create_bm_candidates':bm_candidates,
-        }
     except ProfileContextError as exc:
-        raise HTTPException(status_code=422,detail=f'PROFILE_CONTEXT_ERROR: {exc}') from exc
-    except ProxyCheckError as exc:
-        raise HTTPException(status_code=422,detail=f'PROXY_DEAD: {exc}') from exc
-    except AuthenticationError as exc:
-        raise HTTPException(status_code=422,detail=f'SESSION_EXPIRED: {exc}') from exc
-    except RemoteRequestError as exc:
-        raise HTTPException(status_code=502,detail=f'FACEBOOK_WEB_ERROR: {exc}') from exc
+        raise HTTPException(
+            status_code=422,
+            detail=f'PROFILE_CONTEXT_ERROR: {exc}',
+        ) from exc
+
+    try:
+        async with ProfileSession(context) as profile_session:
+            try:
+                proxy_result=await profile_session.proxy_check()
+            except ProxyCheckError as exc:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f'PROXY_DEAD: {exc}',
+                ) from exc
+
+            web_state={
+                'ready':False,
+                'actor_present':False,
+                'fb_dtsg_present':False,
+                'lsd_present':False,
+                'jazoest_present':False,
+                'error':'',
+            }
+            try:
+                facebook=await profile_session.facebook_web()
+                bootstrap=await facebook.bootstrap()
+                web_state.update({
+                    'ready':True,
+                    'actor_present':bool(bootstrap.actor_id),
+                    'fb_dtsg_present':bool(bootstrap.fb_dtsg),
+                    'lsd_present':bool(bootstrap.lsd),
+                    'jazoest_present':bool(bootstrap.jazoest),
+                })
+            except (AuthenticationError, RemoteRequestError) as exc:
+                web_state['error']=str(exc)
+
+            graph_state={
+                'ready':False,
+                'token_present':bool(str(context.access_token or '').strip()),
+                'user_id':'',
+                'name':'',
+                'pages':[],
+                'businesses':[],
+                'error':'',
+                'error_code':None,
+                'error_subcode':None,
+            }
+            if graph_state['token_present']:
+                try:
+                    graph=await profile_session.graph_api()
+                    identity=await graph.identity()
+                    pages=await graph.list_pages()
+                    businesses=await graph.list_businesses()
+                    graph_state.update({
+                        'ready':True,
+                        'user_id':identity.user_id,
+                        'name':identity.name,
+                        'pages':pages,
+                        'businesses':businesses,
+                    })
+                except GraphApiError as exc:
+                    graph_state.update({
+                        'error':str(exc),
+                        'error_code':exc.code,
+                        'error_subcode':exc.subcode,
+                    })
+
+    bm_candidates=[]
+    for candidate in list_candidates('CREATE_BM'):
+        bm_candidates.append({
+            'doc_id':candidate.doc_id,
+            'friendly_name':candidate.friendly_name,
+            'variables_mode':candidate.variables_mode,
+            'source':candidate.source,
+            'priority':candidate.priority,
+            'requirements':candidate_requirements(candidate),
+        })
+
+    return {
+        'ok':True,
+        'profile_id':clean_profile,
+        'profile_context':'ok',
+        'proxy':'ok',
+        'proxy_exit_ip':str(proxy_result.get('exit_ip') or ''),
+        'proxy_latency_ms':int(proxy_result.get('latency_ms') or 0),
+        'facebook_session':'ok' if web_state['ready'] else 'unavailable',
+        'actor_present':web_state['actor_present'],
+        'fb_dtsg_present':web_state['fb_dtsg_present'],
+        'lsd_present':web_state['lsd_present'],
+        'jazoest_present':web_state['jazoest_present'],
+        'web_error':web_state['error'],
+        'graph_api':graph_state,
+        'pages':graph_state['pages'],
+        'pages_count':len(graph_state['pages']),
+        'businesses':graph_state['businesses'],
+        'businesses_count':len(graph_state['businesses']),
+        'email_present':bool(str(context.email or '').strip()),
+        'first_name_present':bool(str(context.first_name or '').strip()),
+        'last_name_present':bool(str(context.last_name or '').strip()),
+        'display_name_present':bool(str(context.display_name or '').strip()),
+        'create_bm_candidates':bm_candidates,
+        'bm_route_ready':bool(
+            graph_state['ready'] and graph_state['pages']
+            or web_state['ready']
+        ),
+    }
 
 @app.get('/api/v1/facebook/docids',dependencies=[Depends(require_key)])
 async def facebook_docids(operation: str | None = None):
