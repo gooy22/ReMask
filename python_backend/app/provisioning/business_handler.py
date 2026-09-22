@@ -9,6 +9,7 @@ from fb_worker import (
     ProxyError,
 )
 from .models import ProvisioningError
+from .meta_errors import classify_meta_request_error
 
 log = logging.getLogger("remask_worker")
 
@@ -74,32 +75,22 @@ async def business_handler(
         raise ProvisioningError("SESSION_EXPIRED", f"FB Session expired: {exc}", retryable=False)
         
     except RemoteRequestError as exc:
-        exc_msg = str(exc).lower()
-        
-        if any(k in exc_msg for k in ['"code":190', "oauth", "session expired", "checkpoint"]):
-            err_code = "SESSION_EXPIRED"
-            is_retry = False
-        elif any(k in exc_msg for k in ['"code":4', '"code":17', "rate limit", "too many calls"]):
-            err_code = "RATE_LIMITED"
-            is_retry = True
-        elif any(k in exc_msg for k in ["permission", "not authorized", "insufficient permission"]):
-            err_code = "PERMISSION_DENIED"
-            is_retry = False
-        elif any(k in exc_msg for k in ["limit", "max business", "reached maximum"]):
-            err_code = "BUSINESS_LIMIT_REACHED"
-            is_retry = False
-        elif any(k in exc_msg for k in ["policy", "ban", "restrict", "403", "disabled"]):
-            err_code = "ACCOUNT_RESTRICTED"
-            is_retry = False
-        elif any(k in exc_msg for k in ["timeout", "connect", "disconnect", "500", "502", "503", "network"]):
-            err_code = "REMOTE_TIMEOUT"
-            is_retry = True
-        else:
-            err_code = "META_UNKNOWN_ERROR"
-            is_retry = False
-            
-        log.error(f"[{profile_id}] Сбой БМ GraphQL. Код: {err_code}. Ошибка: {exc}")
-        raise ProvisioningError(err_code, f"Meta request failure: {exc}", retryable=is_retry)
+        err_code, is_retry, diagnostic = classify_meta_request_error(
+            exc,
+            entity="BUSINESS",
+        )
+        log.error(
+            "[%s] BUSINESS GraphQL failed code=%s retryable=%s %s",
+            profile_id,
+            err_code,
+            is_retry,
+            diagnostic,
+        )
+        raise ProvisioningError(
+            err_code,
+            diagnostic,
+            retryable=is_retry,
+        ) from exc
         
     except ProxyError as exc:
         raise ProvisioningError("PROXY_DEAD", f"Proxy failure: {exc}", retryable=True)
