@@ -273,14 +273,14 @@ class FacebookWebSession:
 
         js_decoded = (
             entity_decoded
-            .replace(r'\\u0022', '"')
-            .replace(r'\\u0027', "'")
-            .replace(r'\\u003C', '<')
-            .replace(r'\\u003E', '>')
-            .replace(r'\\u0026', '&')
-            .replace(r'\\/', '/')
-            .replace(r'\\"', '"')
-            .replace(r"\\'", "'")
+            .replace(r'\u0022', '"')
+            .replace(r'\u0027', "'")
+            .replace(r'\u003C', '<')
+            .replace(r'\u003E', '>')
+            .replace(r'\u0026', '&')
+            .replace(r'\/', '/')
+            .replace(r'\"', '"')
+            .replace(r"\'", "'")
         )
         if js_decoded not in variants:
             variants.append(js_decoded)
