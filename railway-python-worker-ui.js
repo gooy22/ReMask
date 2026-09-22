@@ -582,6 +582,7 @@ function pythonWorkerBmRowConfig(dialog, profiles, fallbackName) {
 
     let name = String(fallbackName || '').trim();
     let pageId = '';
+    let manualDocId = '';
 
     if (row) {
       const rowInputs = Array.from(row.querySelectorAll('input'));
@@ -595,10 +596,24 @@ function pythonWorkerBmRowConfig(dialog, profiles, fallbackName) {
         ].join(' ');
         if (type === 'email' || type === 'hidden' || type === 'checkbox' || type === 'radio') return false;
         if (/email|почт/i.test(key)) return false;
+        if (/manual.?doc|doc.?id/i.test(key)) return false;
         return type === 'text' || type === 'search' || type === '';
       });
       if (nameInput && String(nameInput.value || '').trim()) {
         name = String(nameInput.value || '').trim();
+      }
+
+      const manualDocInput = rowInputs.find(function(input) {
+        const key = [
+          input.name || '',
+          input.id || '',
+          input.className || '',
+          input.placeholder || ''
+        ].join(' ');
+        return /manual.?doc|doc.?id/i.test(key);
+      });
+      if (manualDocInput) {
+        manualDocId = String(manualDocInput.value || '').trim();
       }
 
       const rowSelect = Array.from(row.querySelectorAll('select')).find(function(select) {
@@ -618,7 +633,8 @@ function pythonWorkerBmRowConfig(dialog, profiles, fallbackName) {
 
     result[profile] = {
       name: name,
-      page_id: pageId
+      page_id: pageId,
+      manual_doc_id: manualDocId
     };
   });
 
@@ -1224,10 +1240,12 @@ async function pythonWorkerOpenOwnBmModal() {
         const cfg = rows[profileId];
         if (!cfg) return true;
         const effectivePage = String(cfg.page.value || cfg.manualPage.value || '').trim();
+        const manualDocId = String(cfg.manualDocId.value || '').trim();
         return (
           cfg.preflightReady !== true ||
           !String(cfg.name.value || '').trim() ||
-          !effectivePage
+          !effectivePage ||
+          (manualDocId && !/^\d{5,40}$/.test(manualDocId))
         );
       });
       status.textContent = failed.length
