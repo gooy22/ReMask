@@ -1,4 +1,4 @@
-/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 REMASK_PYTHON_WORKER_UI_V140 REMASK_PYTHON_WORKER_UI_V141 */
+/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 REMASK_PYTHON_WORKER_UI_V140 REMASK_PYTHON_WORKER_UI_V141 REMASK_PYTHON_WORKER_UI_V142 */
 const restoredPythonWorkerJobId = localStorage.getItem('remask_python_worker_job_v1') || '';
 
 const pythonWorkerUiState = {
@@ -76,10 +76,10 @@ function pythonWorkerSelectionRefresh() {
       profiles.length
         ? (
             pythonWorkerUiState.workerOnline === true
-              ? 'Worker UI v141 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
-              : 'Worker UI v141 · Выбрано FB-профилей: ' + profiles.length + '. Жду READY от worker.'
+              ? 'Worker UI v142 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
+              : 'Worker UI v142 · Выбрано FB-профилей: ' + profiles.length + '. Жду READY от worker.'
           )
-        : 'Worker UI v141 · Выберите FB-профили в Workspace.'
+        : 'Worker UI v142 · Выберите FB-профили в Workspace.'
     );
   }
 }
@@ -119,6 +119,7 @@ async function pythonWorkerHealthCheck() {
     const concurrency = Number(worker.worker_concurrency || 0);
     const profilesVisible = Number(worker.profiles_visible || 0);
     const revision = String(worker.revision || '').trim();
+    const volumeMounted = worker.volume_mounted === true;
 
     pythonWorkerUiState.workerOnline = true;
     el.dataset.state = 'online';
@@ -126,6 +127,7 @@ async function pythonWorkerHealthCheck() {
       'Worker: READY' +
       (revision ? ' · rev ' + revision : '') +
       ' · профили ' + profilesVisible +
+      ' · volume ' + (volumeMounted ? 'YES' : 'NO') +
       ' · очередь ' + queued +
       ' · concurrency ' + concurrency;
     pythonWorkerSelectionRefresh();
