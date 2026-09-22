@@ -894,6 +894,7 @@ class BusinessLogicController:
         user_last_name: str = "",
         profile_display_name: str = "",
         vertical: str = "ADVERTISING",
+        allow_scope_selector_fallback: bool = True,
     ):
         clean_name = str(name or "").strip()
         clean_page_id = str(page_id or "").strip()
@@ -921,6 +922,7 @@ class BusinessLogicController:
                 ).strip(),
                 vertical=str(vertical or "ADVERTISING").strip(),
                 explicit_doc_id=doc_id,
+                allow_scope_selector_fallback=allow_scope_selector_fallback,
             )
         except DocIdMutationError as exc:
             raise RemoteRequestError(
