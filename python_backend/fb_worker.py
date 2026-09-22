@@ -326,6 +326,112 @@ class FacebookWebSession:
 
         return ""
 
+    @staticmethod
+    def _parse_dtsg_refresh_response(source: str) -> str:
+        body = str(source or "").strip()
+        for prefix in ("for (;;);", "while(1);"):
+            if body.startswith(prefix):
+                body = body[len(prefix):].lstrip()
+
+        if not body:
+            return ""
+
+        try:
+            decoded: Any = json.loads(body)
+        except (json.JSONDecodeError, ValueError):
+            return ""
+
+        def token_from(node: Any, depth: int = 0) -> str:
+            if depth > 4:
+                return ""
+
+            if isinstance(node, dict):
+                token = node.get("token")
+                if isinstance(token, (str, int)):
+                    value = str(token).strip()
+                    if value:
+                        return value
+
+                for key in ("payload", "data"):
+                    if key not in node:
+                        continue
+                    value = token_from(node.get(key), depth + 1)
+                    if value:
+                        return value
+
+            if isinstance(node, str):
+                nested = node.strip()
+                if nested.startswith("{") or nested.startswith("["):
+                    try:
+                        return token_from(json.loads(nested), depth + 1)
+                    except (json.JSONDecodeError, ValueError):
+                        return ""
+
+            return ""
+
+        return token_from(decoded)
+
+    async def _refresh_dtsg(self) -> tuple[str, str, list[str]]:
+        session = await self._ensure_session()
+        attempts: list[str] = []
+
+        refresh_urls = (
+            "https://www.facebook.com/ajax/dtsg/?__a=true",
+            "https://m.facebook.com/ajax/dtsg/?__ajax__=true",
+        )
+
+        for refresh_url in refresh_urls:
+            try:
+                async with session.get(
+                    refresh_url,
+                    proxy=self.profile.proxy,
+                    headers={
+                        "Accept": "application/json,text/plain,*/*",
+                        "Accept-Language": "en-US,en;q=0.9",
+                        "Cache-Control": "no-cache",
+                        "Pragma": "no-cache",
+                        "Referer": "https://www.facebook.com/",
+                        "Sec-Fetch-Dest": "empty",
+                        "Sec-Fetch-Mode": "cors",
+                        "Sec-Fetch-Site": "same-origin",
+                        "X-Requested-With": "XMLHttpRequest",
+                    },
+                    allow_redirects=True,
+                ) as response:
+                    raw = await response.text()
+                    final_url = str(response.url)
+                    lower_url = final_url.lower()
+                    lower_body = raw.lower()
+
+                    if (
+                        "/login" in lower_url
+                        or "/checkpoint" in lower_url
+                        or "login_form" in lower_body
+                    ):
+                        attempts.append(
+                            f"{refresh_url}: login/checkpoint final={final_url}"
+                        )
+                        continue
+
+                    token = self._parse_dtsg_refresh_response(raw)
+                    if token:
+                        return token, final_url, attempts
+
+                    attempts.append(
+                        f"{refresh_url}: HTTP {response.status} "
+                        f"final={final_url} bytes={len(raw)} no token"
+                    )
+
+            except asyncio.TimeoutError:
+                attempts.append(f"{refresh_url}: timeout")
+            except aiohttp.ClientError as exc:
+                attempts.append(
+                    f"{refresh_url}: network {exc.__class__.__name__}"
+                )
+
+        return "", "", attempts
+
+
     async def bootstrap(
         self,
         *,
@@ -457,11 +563,23 @@ class FacebookWebSession:
                     continue
 
             if not fb_dtsg:
-                detail = " | ".join(attempts[-6:]) or "no bootstrap response"
+                refreshed_dtsg, refreshed_url, refresh_attempts = (
+                    await self._refresh_dtsg()
+                )
+                attempts.extend(refresh_attempts)
+                if refreshed_dtsg:
+                    fb_dtsg = refreshed_dtsg
+                    body = ""
+                    bootstrap_source = "facebook_dtsg_refresh"
+                    final_url = refreshed_url
+
+            if not fb_dtsg:
+                detail = " | ".join(attempts[-10:]) or "no bootstrap response"
                 raise AuthenticationError(
                     "Facebook browser session has no usable fb_dtsg. "
-                    "The saved cookies may be expired/incomplete, or Facebook "
-                    "returned a bootstrap shape that does not expose the token. "
+                    "HTML bootstrap and /ajax/dtsg refresh both failed. "
+                    "The saved cookies may be expired/incomplete or the "
+                    "profile browser identity may not match the saved session. "
                     f"Attempts: {detail}"
                 )
 
