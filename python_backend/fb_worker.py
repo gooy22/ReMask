@@ -418,6 +418,67 @@ class FacebookWebSession:
     def invalidate_bootstrap(self) -> None:
         self._bootstrap = None
 
+    async def fetch_text(
+        self,
+        url: str,
+        *,
+        max_bytes: int = 4_000_000,
+        referer: str | None = None,
+    ) -> tuple[int, str, str]:
+        target = str(url or "").strip()
+        if not target:
+            raise RemoteRequestError("fetch_text URL is required")
+
+        parts = urlsplit(target)
+        hostname = str(parts.hostname or "").lower()
+        allowed = (
+            hostname == "facebook.com"
+            or hostname.endswith(".facebook.com")
+            or hostname == "fbcdn.net"
+            or hostname.endswith(".fbcdn.net")
+        )
+        if parts.scheme != "https" or not allowed:
+            raise RemoteRequestError(
+                f"fetch_text blocked unsupported host: {hostname or '<empty>'}"
+            )
+
+        session = await self._ensure_session()
+        headers = {
+            "User-Agent": self.profile.user_agent,
+            "Accept": "*/*",
+        }
+        if referer:
+            headers["Referer"] = referer
+
+        try:
+            async with session.get(
+                target,
+                proxy=self.profile.proxy,
+                headers=headers,
+                allow_redirects=True,
+            ) as response:
+                raw = await response.content.read(max(1, int(max_bytes)) + 1)
+                if len(raw) > max_bytes:
+                    raw = raw[:max_bytes]
+
+                charset = response.charset or "utf-8"
+                try:
+                    body = raw.decode(charset, errors="replace")
+                except LookupError:
+                    body = raw.decode("utf-8", errors="replace")
+
+                return response.status, body, str(response.url)
+
+        except asyncio.TimeoutError as exc:
+            raise RemoteRequestError(
+                f"Facebook fetch timeout: {target}"
+            ) from exc
+        except aiohttp.ClientError as exc:
+            raise RemoteRequestError(
+                "Facebook fetch network failure: "
+                f"{exc.__class__.__name__}"
+            ) from exc
+
     async def extract_csrf_token(self) -> str:
         """
         Backward-compatible API.
