@@ -7,7 +7,6 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 
-from app.bridge import JobBridgeClient, JobBridgeError
 from app.mirror import MirrorError, SnapshotMirror
 from app.models import CreateJobRequest, HealthResponse, JobAccepted, RetryResponse
 from app.runner import WorkerPool
@@ -27,7 +26,6 @@ INTERNAL_KEY=os.getenv('REMASK_INTERNAL_KEY')
 store=JobStore(DB_PATH)
 mirror=SnapshotMirror(STATE_URL,INTERNAL_KEY)
 pool=WorkerPool(store,mirror,CONCURRENCY)
-bridge=JobBridgeClient(os.getenv('REMASK_JOB_BRIDGE_URL'),INTERNAL_KEY)
 SMOKE_ON_START=str(os.getenv('REMASK_E2E_SMOKE_ON_START','0')).strip().lower() in {'1','true','yes','on'}
 
 async def run_startup_smoke() -> None:
@@ -44,23 +42,48 @@ async def run_startup_smoke() -> None:
         if not profile_id:
             log.error('e2e smoke aborted: selected profile has no profile_id')
             return
-        key=f'e2e-v02-proxy-check-{profile_id}'
-        job_id=await bridge.create_proxy_check_job(profile_id,key)
-        log.info('e2e smoke created via PHP bridge job=%s profile=%s',job_id,profile_id)
+        key=f'e2e-v03-proxy-check-{profile_id}'
+        request=CreateJobRequest.model_validate({
+            'profiles':[{
+                'profile_id':profile_id,
+                'tasks':[{
+                    'action':'proxy_check',
+                    'payload':{},
+                    'idempotency_key':key,
+                }],
+            }],
+            'idempotency_key':key,
+        })
+        job_id,created=await store.create_job(request)
+        if created:
+            await pool.enqueue_job(job_id)
+        log.info(
+            'e2e smoke created locally job=%s profile=%s created=%s',
+            job_id,
+            profile_id,
+            created,
+        )
+
         terminal={'SUCCESS','FAILED','PARTIAL'}
         last_status=''
         for _ in range(90):
-            job=await bridge.get_job(job_id)
-            last_status=str(job.get('status') or '')
+            job=await store.job_view(job_id)
+            last_status=str((job or {}).get('status') or '')
             if last_status in terminal:
-                items=job.get('items') or []
+                items=(job or {}).get('items') or []
                 item=items[0] if isinstance(items,list) and items else {}
                 error_code=item.get('error_code') if isinstance(item,dict) else None
-                log.info('e2e smoke terminal job=%s status=%s item_error=%s',job_id,last_status,error_code or '')
+                log.info(
+                    'e2e smoke terminal job=%s status=%s item_error=%s',
+                    job_id,
+                    last_status,
+                    error_code or '',
+                )
                 return
             await asyncio.sleep(0.5)
+
         log.error('e2e smoke timeout job=%s last_status=%s',job_id,last_status)
-    except (JobBridgeError, Exception) as exc:
+    except Exception as exc:
         log.exception('e2e smoke failed: %s',exc)
 
 async def require_key(x_remask_worker_key: str | None = Header(default=None)) -> None:
