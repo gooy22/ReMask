@@ -250,64 +250,56 @@ async def create_business_resilient(
             )
 
         if official_page_visible:
+            official_permissions: dict[str, str] = {}
             try:
-                existing = await graph.list_businesses()
-                existing_id = _find_existing_business(
-                    existing,
-                    business_name=business_name,
-                    page_id=clean_page,
+                official_permissions = await graph.list_permissions()
+                diagnostics.append(
+                    {
+                        "transport": "official_graph_api",
+                        "stage": "permissions",
+                        "business_management": official_permissions.get(
+                            "business_management",
+                            "",
+                        ),
+                        "pages_show_list": official_permissions.get(
+                            "pages_show_list",
+                            "",
+                        ),
+                        "ads_management": official_permissions.get(
+                            "ads_management",
+                            "",
+                        ),
+                    }
                 )
-                if existing_id:
-                    diagnostics.append(
-                        {
-                            "transport": "official_graph_api",
-                            "stage": "precreate_dedup",
-                            "result": "existing_business_reused",
-                            "business_id": existing_id,
-                        }
-                    )
-                    return BusinessCreateResult(
-                        business_id=existing_id,
-                        transport="official_graph_api_reused",
-                        primary_page_id=clean_page,
-                        diagnostics=diagnostics,
-                    )
             except GraphApiError as exc:
                 diagnostics.append(
                     {
                         **_graph_diag(exc),
-                        "stage": "precreate_dedup",
+                        "stage": "permissions",
                     }
                 )
 
-            try:
-                business_id = await graph.create_business(
-                    name=business_name,
-                    primary_page_id=clean_page,
-                    vertical=vertical,
-                    email=user_email,
-                    timezone_id=timezone_id,
-                )
-                return BusinessCreateResult(
-                    business_id=business_id,
-                    transport="official_graph_api",
-                    primary_page_id=clean_page,
-                    diagnostics=diagnostics,
-                )
-            except GraphMutationUncertain as exc:
+            business_management_status = official_permissions.get(
+                "business_management"
+            )
+            official_create_allowed = (
+                business_management_status in (None, "", "granted")
+            )
+
+            if not official_create_allowed:
                 diagnostics.append(
                     {
                         "transport": "official_graph_api",
                         "stage": "create",
-                        "result": "unknown",
-                        "message": str(exc),
+                        "result": "skipped",
+                        "reason": (
+                            "business_management permission is not granted"
+                        ),
                     }
                 )
-
-                # The POST may already have succeeded. Verify before doing
-                # anything else; never fall through to a second mutation.
+            else:
                 try:
-                    existing = await graph.list_businesses()
+                        existing = await graph.list_businesses()
                     existing_id = _find_existing_business(
                         existing,
                         business_name=business_name,
@@ -317,47 +309,103 @@ async def create_business_resilient(
                         diagnostics.append(
                             {
                                 "transport": "official_graph_api",
-                                "stage": "verify_after_unknown",
-                                "result": "created_business_found",
+                                "stage": "precreate_dedup",
+                                "result": "existing_business_reused",
                                 "business_id": existing_id,
                             }
                         )
                         return BusinessCreateResult(
                             business_id=existing_id,
-                            transport="official_graph_api_verified",
+                            transport="official_graph_api_reused",
                             primary_page_id=clean_page,
                             diagnostics=diagnostics,
                         )
-                except GraphApiError as verify_exc:
+                except GraphApiError as exc:
                     diagnostics.append(
                         {
-                            **_graph_diag(verify_exc),
-                            "stage": "verify_after_unknown",
+                            **_graph_diag(exc),
+                            "stage": "precreate_dedup",
                         }
                     )
 
-                raise BusinessCreateError(
-                    "CREATE_RESULT_UNKNOWN",
-                    (
-                        "Official create-business request may have reached Meta, "
-                        "but ReMask could not verify the result. Sync Business "
-                        "Managers before retrying; automatic fallback is blocked "
-                        "to prevent duplicate BMs."
-                    ),
-                    retryable=False,
-                    diagnostics=diagnostics,
-                ) from exc
-            except GraphApiError as exc:
-                diagnostics.append(
-                    {
-                        **_graph_diag(exc),
-                        "stage": "create",
-                    }
-                )
-                if not _official_safe_to_web_fallback(exc):
-                    terminal = _official_terminal_error(exc)
-                    terminal.diagnostics = diagnostics
-                    raise terminal from exc
+                try:
+                    business_id = await graph.create_business(
+                        name=business_name,
+                        primary_page_id=clean_page,
+                        vertical=vertical,
+                        email=user_email,
+                        timezone_id=timezone_id,
+                    )
+                    return BusinessCreateResult(
+                        business_id=business_id,
+                        transport="official_graph_api",
+                        primary_page_id=clean_page,
+                        diagnostics=diagnostics,
+                    )
+                except GraphMutationUncertain as exc:
+                    diagnostics.append(
+                        {
+                            "transport": "official_graph_api",
+                            "stage": "create",
+                            "result": "unknown",
+                            "message": str(exc),
+                        }
+                    )
+
+                    # The POST may already have succeeded. Verify before doing
+                    # anything else; never fall through to a second mutation.
+                    try:
+                        existing = await graph.list_businesses()
+                        existing_id = _find_existing_business(
+                            existing,
+                            business_name=business_name,
+                            page_id=clean_page,
+                        )
+                        if existing_id:
+                            diagnostics.append(
+                                {
+                                    "transport": "official_graph_api",
+                                    "stage": "verify_after_unknown",
+                                    "result": "created_business_found",
+                                    "business_id": existing_id,
+                                }
+                            )
+                            return BusinessCreateResult(
+                                business_id=existing_id,
+                                transport="official_graph_api_verified",
+                                primary_page_id=clean_page,
+                                diagnostics=diagnostics,
+                            )
+                    except GraphApiError as verify_exc:
+                        diagnostics.append(
+                            {
+                                **_graph_diag(verify_exc),
+                                "stage": "verify_after_unknown",
+                            }
+                        )
+
+                    raise BusinessCreateError(
+                        "CREATE_RESULT_UNKNOWN",
+                        (
+                            "Official create-business request may have reached Meta, "
+                            "but ReMask could not verify the result. Sync Business "
+                            "Managers before retrying; automatic fallback is blocked "
+                            "to prevent duplicate BMs."
+                        ),
+                        retryable=False,
+                        diagnostics=diagnostics,
+                    ) from exc
+                except GraphApiError as exc:
+                    diagnostics.append(
+                        {
+                            **_graph_diag(exc),
+                            "stage": "create",
+                        }
+                    )
+                    if not _official_safe_to_web_fallback(exc):
+                        terminal = _official_terminal_error(exc)
+                        terminal.diagnostics = diagnostics
+                        raise terminal from exc
 
     # Route B: current Facebook Business web flow over the same profile
     # cookies/proxy. This includes the current scope-selector mutation and the
