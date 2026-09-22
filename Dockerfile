@@ -171,7 +171,11 @@ RUN set -eux; \
     php -l /var/www/html/workspace.php; \
     grep -q 'REMASK_PYTHON_WORKER_PANEL_V1' /var/www/html/workspace.php; \
     grep -q 'REMASK_PYTHON_WORKER_UI_V1' /var/www/html/scripts/workspace.js; \
-    grep -q 'REMASK_PYTHON_WORKER_UI_V143' /var/www/html/scripts/workspace.js; \
+    grep -q 'REMASK_PYTHON_WORKER_UI_V155' /var/www/html/scripts/workspace.js; \
+    grep -q 'pythonWorkerCsrf' /var/www/html/scripts/workspace.js; \
+    grep -q 'X-REMASK-CSRF' /var/www/html/scripts/workspace.js; \
+    grep -q "action === 'csrf'" /var/www/html/ajax/pythonWorkerJobs.php; \
+    grep -q 'remask_csrf_token' /var/www/html/ajax/pythonWorkerJobs.php; \
     grep -q 'pythonWorkerJobs.php' /var/www/html/scripts/workspace.js; \
     grep -q 'Retry Failed' /var/www/html/workspace.php; \
     php -l /var/www/html/ajax/metaHierarchy.php; \
