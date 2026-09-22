@@ -448,10 +448,7 @@ async def discover_pages_via_web(
         if (
             not try_runtime_discovery
             or first_result.candidate is None
-            or (
-                first_result.candidate.priority >= 5_000
-                and "runtime_" in first_result.candidate.source
-            )
+            or first_result.candidate.priority >= 5_000
         ):
             return first_result
     except PageDiscoveryError as exc:
