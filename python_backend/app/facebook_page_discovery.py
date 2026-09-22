@@ -13,7 +13,10 @@ from .facebook_docids import (
     record_result,
     upsert_candidate,
 )
-from .facebook_query_discovery import discover_persisted_query
+from .facebook_query_discovery import (
+    discover_persisted_query,
+    extract_script_urls,
+)
 
 
 class PageDiscoveryError(RuntimeError):
@@ -536,6 +539,125 @@ async def list_pages_via_private_graphql(
     )
 
 
+def _extract_page_query_near_markers(
+    source: str,
+) -> tuple[str, str]:
+    text = str(source or "")
+    if "pages_can_administer" not in text or "assetOwnerId" not in text:
+        return "", ""
+
+    best: tuple[int, str, str] | None = None
+    for marker in re.finditer("pages_can_administer", text):
+        left = max(0, marker.start() - 7000)
+        right = min(len(text), marker.end() + 7000)
+        window = text[left:right]
+
+        if "assetOwnerId" not in window:
+            continue
+
+        doc_matches = list(
+            re.finditer(
+                r'(?:"|\')?(?:doc_id|docID|id)(?:"|\')?\s*[:=]\s*'
+                r'(?:"|\')([0-9]{5,40})(?:"|\')',
+                window,
+                flags=re.IGNORECASE,
+            )
+        )
+        if not doc_matches:
+            continue
+
+        friendly = ""
+        friendly_patterns = (
+            r'fb_api_req_friendly_name(?:"|\')?\s*[:=]\s*["\']([^"\']+Query)["\']',
+            r'["\']name["\']\s*:\s*["\']([^"\']+Query)["\']',
+            r'["\']([^"\']*(?:Page|Pages)[^"\']*Query)["\']',
+        )
+        for pattern in friendly_patterns:
+            match = re.search(pattern, window, flags=re.IGNORECASE)
+            if match:
+                friendly = _clean(match.group(1))
+                break
+
+        for doc_match in doc_matches:
+            absolute = left + doc_match.start(1)
+            distance = abs(absolute - marker.start())
+            candidate = (distance, doc_match.group(1), friendly)
+            if best is None or candidate[0] < best[0]:
+                best = candidate
+
+    if best is None:
+        return "", ""
+    return best[1], best[2]
+
+
+async def discover_current_list_pages_docid_by_marker(
+    session: Any,
+    *,
+    max_scripts: int = 32,
+) -> DocIdCandidate | None:
+    entry_urls = (
+        "https://www.facebook.com/accountquality/?landing_page=insights",
+        "https://www.facebook.com/pages/?category=your_pages",
+        "https://www.facebook.com/pages/?category=your_pages&ref=bookmarks",
+    )
+
+    for entry_url in entry_urls:
+        try:
+            status, document, final_url = await session.fetch_text(
+                entry_url,
+                max_bytes=3_000_000,
+            )
+        except Exception:
+            continue
+
+        if status >= 400:
+            continue
+
+        doc_id, friendly = _extract_page_query_near_markers(document)
+        if doc_id:
+            return upsert_candidate(
+                "LIST_PAGES",
+                doc_id=doc_id,
+                friendly_name=friendly,
+                endpoint_url="https://www.facebook.com/api/graphql/",
+                variables_mode="account_quality_user_pages_v1",
+                source="runtime_marker_html",
+                priority=8_400,
+                observed_at=str(int(time.time())),
+            )
+
+        scripts = extract_script_urls(document, final_url)
+        for script_url in scripts[:max(1, int(max_scripts))]:
+            try:
+                script_status, body, _ = await session.fetch_text(
+                    script_url,
+                    max_bytes=2_000_000,
+                    referer=final_url,
+                )
+            except Exception:
+                continue
+
+            if script_status >= 400:
+                continue
+
+            doc_id, friendly = _extract_page_query_near_markers(body)
+            if not doc_id:
+                continue
+
+            return upsert_candidate(
+                "LIST_PAGES",
+                doc_id=doc_id,
+                friendly_name=friendly,
+                endpoint_url="https://www.facebook.com/api/graphql/",
+                variables_mode="account_quality_user_pages_v1",
+                source="runtime_marker_javascript_bundle",
+                priority=8_400,
+                observed_at=str(int(time.time())),
+            )
+
+    return None
+
+
 async def discover_current_list_pages_docid(
     session: Any,
     *,
@@ -553,18 +675,21 @@ async def discover_current_list_pages_docid(
         max_scripts_per_entry=max_scripts,
     )
 
-    if discovered is None:
-        return None
+    if discovered is not None:
+        return upsert_candidate(
+            "LIST_PAGES",
+            doc_id=discovered.doc_id,
+            friendly_name=friendly_name,
+            endpoint_url="https://www.facebook.com/api/graphql/",
+            variables_mode="account_quality_user_pages_v1",
+            source=f"runtime_{discovered.source_kind}",
+            priority=8_500,
+            observed_at=str(int(time.time())),
+        )
 
-    return upsert_candidate(
-        "LIST_PAGES",
-        doc_id=discovered.doc_id,
-        friendly_name=friendly_name,
-        endpoint_url="https://www.facebook.com/api/graphql/",
-        variables_mode="account_quality_user_pages_v1",
-        source=f"runtime_{discovered.source_kind}",
-        priority=8_500,
-        observed_at=str(int(time.time())),
+    return await discover_current_list_pages_docid_by_marker(
+        session,
+        max_scripts=max(24, int(max_scripts)),
     )
 
 
@@ -630,5 +755,6 @@ __all__ = [
     "discover_pages_via_web",
     "discover_pages_from_browser_html",
     "discover_current_list_pages_docid",
+    "discover_current_list_pages_docid_by_marker",
     "list_pages_via_private_graphql",
 ]
