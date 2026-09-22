@@ -256,7 +256,19 @@ try {
     $account = $store->getAccountByName($profile);
     if (!$account instanceof FbAccount) rmx_py_out(['ok'=>false,'error'=>'PROFILE_NOT_FOUND'], 404);
 
-    $ua = trim((string)(getenv('REMASK_PYTHON_USER_AGENT') ?: ''));
+    $ua = '';
+    $accountVars = get_object_vars($account);
+    foreach (['user_agent','userAgent','ua','browser_user_agent','browserUserAgent'] as $uaKey) {
+        if (!array_key_exists($uaKey, $accountVars) || !is_scalar($accountVars[$uaKey])) continue;
+        $candidateUa = trim((string)$accountVars[$uaKey]);
+        if ($candidateUa !== '') {
+            $ua = $candidateUa;
+            break;
+        }
+    }
+    if ($ua === '') {
+        $ua = trim((string)(getenv('REMASK_PYTHON_USER_AGENT') ?: ''));
+    }
     if ($ua === '') {
         $ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
             . '(KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36';
