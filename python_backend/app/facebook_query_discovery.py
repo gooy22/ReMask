@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import html
 import re
+import time
 from dataclasses import dataclass
 from urllib.parse import urljoin
 from typing import Any
@@ -13,6 +15,18 @@ class PersistedQueryDiscovery:
     friendly_name: str
     source_url: str
     source_kind: str
+
+
+_DISCOVERY_LOCKS: dict[str, asyncio.Lock] = {}
+_DISCOVERY_CACHE: dict[str, tuple[float, PersistedQueryDiscovery]] = {}
+
+
+def _discovery_lock(key: str) -> asyncio.Lock:
+    current = _DISCOVERY_LOCKS.get(key)
+    if current is None:
+        current = asyncio.Lock()
+        _DISCOVERY_LOCKS[key] = current
+    return current
 
 
 def extract_script_urls(document: str, base_url: str) -> list[str]:
@@ -95,64 +109,85 @@ async def discover_persisted_query(
     max_scripts_per_entry: int = 18,
     document_max_bytes: int = 2_000_000,
     script_max_bytes: int = 1_500_000,
+    cache_ttl_seconds: int = 600,
 ) -> PersistedQueryDiscovery | None:
-    for entry_url in entry_urls:
-        try:
-            status, document, final_url = await session.fetch_text(
-                entry_url,
-                max_bytes=document_max_bytes,
-            )
-        except Exception:
-            continue
+    clean_name = str(friendly_name or "").strip()
+    if not clean_name:
+        return None
 
-        if status >= 400:
-            continue
+    cache_key = clean_name
+    now = time.monotonic()
+    cached = _DISCOVERY_CACHE.get(cache_key)
+    if cached and now - cached[0] <= max(30, int(cache_ttl_seconds)):
+        return cached[1]
 
-        direct = extract_doc_id_near_friendly_name(
-            document,
-            friendly_name,
-        )
-        if direct:
-            return PersistedQueryDiscovery(
-                doc_id=direct,
-                friendly_name=friendly_name,
-                source_url=final_url,
-                source_kind="html",
-            )
+    async with _discovery_lock(cache_key):
+        now = time.monotonic()
+        cached = _DISCOVERY_CACHE.get(cache_key)
+        if cached and now - cached[0] <= max(30, int(cache_ttl_seconds)):
+            return cached[1]
 
-        script_urls = extract_script_urls(
-            document,
-            final_url,
-        )
-
-        for script_url in script_urls[:max(1, max_scripts_per_entry)]:
+        for entry_url in entry_urls:
             try:
-                script_status, body, resolved_url = await session.fetch_text(
-                    script_url,
-                    max_bytes=script_max_bytes,
-                    referer=final_url,
+                status, document, final_url = await session.fetch_text(
+                    entry_url,
+                    max_bytes=document_max_bytes,
                 )
             except Exception:
                 continue
 
-            if script_status >= 400 or friendly_name not in body:
+            if status >= 400:
                 continue
 
-            doc_id = extract_doc_id_near_friendly_name(
-                body,
-                friendly_name,
+            direct = extract_doc_id_near_friendly_name(
+                document,
+                clean_name,
             )
-            if not doc_id:
-                continue
+            if direct:
+                result = PersistedQueryDiscovery(
+                    doc_id=direct,
+                    friendly_name=clean_name,
+                    source_url=final_url,
+                    source_kind="html",
+                )
+                _DISCOVERY_CACHE[cache_key] = (time.monotonic(), result)
+                return result
 
-            return PersistedQueryDiscovery(
-                doc_id=doc_id,
-                friendly_name=friendly_name,
-                source_url=resolved_url,
-                source_kind="javascript_bundle",
+            script_urls = extract_script_urls(
+                document,
+                final_url,
             )
 
-    return None
+            for script_url in script_urls[:max(1, max_scripts_per_entry)]:
+                try:
+                    script_status, body, resolved_url = await session.fetch_text(
+                        script_url,
+                        max_bytes=script_max_bytes,
+                        referer=final_url,
+                    )
+                except Exception:
+                    continue
+
+                if script_status >= 400 or clean_name not in body:
+                    continue
+
+                doc_id = extract_doc_id_near_friendly_name(
+                    body,
+                    clean_name,
+                )
+                if not doc_id:
+                    continue
+
+                result = PersistedQueryDiscovery(
+                    doc_id=doc_id,
+                    friendly_name=clean_name,
+                    source_url=resolved_url,
+                    source_kind="javascript_bundle",
+                )
+                _DISCOVERY_CACHE[cache_key] = (time.monotonic(), result)
+                return result
+
+        return None
 
 
 __all__ = [
