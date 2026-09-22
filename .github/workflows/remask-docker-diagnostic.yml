@@ -13,3 +13,25 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build ReMask image
         run: docker build --progress=plain -t remask-diagnostic .
+      - name: Start container
+        run: |
+          docker run -d --name remask-diagnostic-run -p 18080:80             -e PORT=80             -e REMASK_E2E_SMOKE_ON_START=0             remask-diagnostic
+      - name: Verify runtime health
+        run: |
+          set -e
+          ok=0
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:18080/health >/tmp/remask-health.json; then
+              ok=1
+              break
+            fi
+            sleep 1
+          done
+          cat /tmp/remask-health.json 2>/dev/null || true
+          if [ "$ok" != "1" ]; then
+            docker logs --tail 250 remask-diagnostic-run || true
+            exit 1
+          fi
+      - name: Container logs
+        if: always()
+        run: docker logs --tail 120 remask-diagnostic-run || true
