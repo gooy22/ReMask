@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from app.facebook_business_create import (
+    _extract_page_backed_create_docid,
     _prefer_page_backed_candidates,
     build_create_business_variables,
     candidate_requirements,
@@ -150,6 +151,31 @@ class BusinessCandidateOrderingTests(unittest.TestCase):
             page_id="123456789012345",
         )
         self.assertEqual(ordered[0].variables_mode, "legacy_primary_page_v1")
+
+    def test_live_bundle_marker_can_find_page_backed_doc_id(self) -> None:
+        source = """
+        relayOperation = {
+          name: "BusinessManagerCreateMutation",
+          params: {id: "9876543210123456"},
+          variables: {
+            input: {
+              name: businessName,
+              primary_page_id: selectedPageId,
+              vertical: "ADVERTISING"
+            }
+          }
+        };
+        """
+        doc_id, friendly = _extract_page_backed_create_docid(source)
+        self.assertEqual(doc_id, "9876543210123456")
+        self.assertIn("Business", friendly)
+
+    def test_unrelated_doc_id_without_primary_page_is_rejected(self) -> None:
+        doc_id, friendly = _extract_page_backed_create_docid(
+            'name:"BusinessSomethingMutation",params:{id:"123456789"}'
+        )
+        self.assertEqual(doc_id, "")
+        self.assertEqual(friendly, "")
 
     def test_page_backed_contract_really_carries_primary_page(self) -> None:
         candidate = DocIdCandidate(
