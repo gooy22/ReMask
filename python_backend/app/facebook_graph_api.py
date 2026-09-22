@@ -252,23 +252,39 @@ class FacebookGraphApi:
 
     async def list_pages(self, *, max_pages: int = 10) -> list[dict[str, Any]]:
         await self.identity()
-        result: list[dict[str, Any]] = []
-        seen: set[str] = set()
-        next_url: str | None = None
 
-        for _ in range(max(1, min(int(max_pages), 20))):
-            if next_url:
-                payload = await self._request("GET", next_url)
-            else:
-                payload = await self._request(
+        field_sets = (
+            "id,name,category,tasks",
+            "id,name,category",
+            "id,name",
+        )
+        first_payload: dict[str, Any] | None = None
+        last_error: GraphApiError | None = None
+
+        for fields in field_sets:
+            try:
+                first_payload = await self._request(
                     "GET",
                     "me/accounts",
                     params={
-                        "fields": "id,name,category,tasks",
+                        "fields": fields,
                         "limit": "100",
                     },
                 )
+                break
+            except GraphApiError as exc:
+                last_error = exc
+                continue
 
+        if first_payload is None:
+            assert last_error is not None
+            raise last_error
+
+        result: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        payload = first_payload
+
+        for _ in range(max(1, min(int(max_pages), 20))):
             rows = payload.get("data")
             if isinstance(rows, list):
                 for row in rows:
@@ -294,13 +310,16 @@ class FacebookGraphApi:
             paging = payload.get("paging")
             if not isinstance(paging, dict):
                 break
+
             candidate = str(paging.get("next") or "").strip()
             if not candidate:
                 break
+
             parts = urlsplit(candidate)
             if parts.scheme != "https" or parts.hostname != "graph.facebook.com":
                 break
-            next_url = candidate
+
+            payload = await self._request("GET", candidate)
 
         return result
 
