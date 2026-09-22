@@ -15,10 +15,7 @@ from .facebook_docids import (
     record_result,
     upsert_candidate,
 )
-from .facebook_query_discovery import (
-    discover_persisted_query,
-    extract_script_urls,
-)
+from .facebook_query_discovery import discover_persisted_query
 
 
 class DocIdMutationError(RuntimeError):
@@ -523,17 +520,22 @@ async def discover_current_scope_selector_create_candidate(
 async def discover_current_page_backed_create_candidate(
     session: Any,
     *,
-    max_scripts: int = 32,
+    max_scripts: int = 0,
 ) -> DocIdCandidate | None:
+    """
+    v14 legacy discovery path.
+
+    Only initial Facebook HTML and response headers are inspected. JavaScript
+    bundles are never downloaded by the worker.
+    """
     exact = await discover_persisted_query(
         session,
         friendly_name="BusinessManagerCreateMutation",
         entry_urls=[
+            "https://www.facebook.com/",
             "https://business.facebook.com/latest/home",
-            "https://business.facebook.com/latest/settings",
-            "https://business.facebook.com/latest/overview",
         ],
-        max_scripts_per_entry=max_scripts,
+        max_scripts_per_entry=0,
     )
 
     if exact is not None:
@@ -548,52 +550,38 @@ async def discover_current_page_backed_create_candidate(
             observed_at=str(int(time.time())),
         )
 
-    entry_urls = (
+    for entry_url in (
+        "https://www.facebook.com/",
         "https://business.facebook.com/latest/home",
-        "https://business.facebook.com/latest/settings",
-        "https://business.facebook.com/latest/overview",
-    )
-
-    for entry_url in entry_urls:
+    ):
         try:
-            status, document, final_url = await session.fetch_text(
-                entry_url,
-                max_bytes=3_500_000,
-            )
+            if hasattr(session, "fetch_text_with_headers"):
+                status, document, _, headers = await session.fetch_text_with_headers(
+                    entry_url,
+                    max_bytes=3_500_000,
+                )
+            else:
+                status, document, _ = await session.fetch_text(
+                    entry_url,
+                    max_bytes=3_500_000,
+                )
+                headers = {}
         except Exception:
             continue
 
         if status >= 400:
             continue
 
-        doc_id, friendly = _extract_page_backed_create_docid(document)
-        if doc_id:
-            return upsert_candidate(
-                "CREATE_BM",
-                doc_id=doc_id,
-                friendly_name=friendly or "BusinessManagerCreateMutation",
-                endpoint_url="https://business.facebook.com/api/graphql/",
-                variables_mode="legacy_primary_page_v1",
-                source="runtime_page_backed_marker_html",
-                priority=9_400,
-                observed_at=str(int(time.time())),
-            )
+        header_blob = "\n".join(
+            f"{key}: {value}"
+            for key, value in dict(headers or {}).items()
+        )
 
-        scripts = extract_script_urls(document, final_url)
-        for script_url in scripts[:max(1, int(max_scripts))]:
-            try:
-                script_status, body, _ = await session.fetch_text(
-                    script_url,
-                    max_bytes=2_000_000,
-                    referer=final_url,
-                )
-            except Exception:
-                continue
-
-            if script_status >= 400:
-                continue
-
-            doc_id, friendly = _extract_page_backed_create_docid(body)
+        for source, source_kind in (
+            (document, "html_marker"),
+            (header_blob, "response_headers_marker"),
+        ):
+            doc_id, friendly = _extract_page_backed_create_docid(source)
             if not doc_id:
                 continue
 
@@ -603,7 +591,7 @@ async def discover_current_page_backed_create_candidate(
                 friendly_name=friendly or "BusinessManagerCreateMutation",
                 endpoint_url="https://business.facebook.com/api/graphql/",
                 variables_mode="legacy_primary_page_v1",
-                source="runtime_page_backed_marker_javascript_bundle",
+                source=f"runtime_{source_kind}",
                 priority=9_400,
                 observed_at=str(int(time.time())),
             )
@@ -812,122 +800,107 @@ async def create_business_with_docids(
 ) -> CreateBusinessResult:
     bootstrap = await session.bootstrap()
     actor_id = _clean(getattr(bootstrap, "actor_id", ""))
-
-    runtime_page_candidate: DocIdCandidate | None = None
-    runtime_scope_candidate: DocIdCandidate | None = None
+    profile_id = _clean(
+        getattr(getattr(session, "profile", None), "name", "")
+    ) or "<unknown-profile>"
     has_page = bool(_clean(page_id))
+    manual_doc_id = _clean(explicit_doc_id)
 
-    if has_page and not explicit_doc_id:
-        if allow_scope_selector_fallback:
-            # Normal Add BM path: create the Business with the current
-            # scope-selector mutation, then attach the selected Fan Page in a
-            # separate mutation. Do not mix in the obsolete one-shot Page
-            # creation contract.
-            try:
-                runtime_scope_candidate = await asyncio.wait_for(
-                    discover_current_scope_selector_create_candidate(session),
-                    timeout=30.0,
-                )
-            except Exception:
-                runtime_scope_candidate = None
-        else:
-            # Legacy strict mode remains available only for explicit callers.
-            try:
-                runtime_page_candidate = await asyncio.wait_for(
-                    discover_current_page_backed_create_candidate(session),
-                    timeout=30.0,
-                )
-            except Exception:
-                runtime_page_candidate = None
-
-    candidates = list_candidates("CREATE_BM")
-
-    if has_page and allow_scope_selector_fallback:
-        candidates = [
-            candidate
-            for candidate in candidates
-            if (
-                candidate.variables_mode
-                == "scope_selector_business_creation_v1"
-                and candidate.source != "remask_legacy"
+    runtime_candidate: DocIdCandidate | None = None
+    if allow_scope_selector_fallback:
+        try:
+            runtime_candidate = await asyncio.wait_for(
+                discover_current_scope_selector_create_candidate(session),
+                timeout=20.0,
             )
+        except Exception:
+            runtime_candidate = None
+    elif has_page:
+        try:
+            runtime_candidate = await asyncio.wait_for(
+                discover_current_page_backed_create_candidate(session),
+                timeout=20.0,
+            )
+        except Exception:
+            runtime_candidate = None
+
+    cached_candidates = list_candidates("CREATE_BM")
+
+    if allow_scope_selector_fallback:
+        cached_candidates = [
+            candidate
+            for candidate in cached_candidates
+            if candidate.variables_mode
+            == "scope_selector_business_creation_v1"
+        ]
+    elif has_page:
+        cached_candidates = [
+            candidate
+            for candidate in cached_candidates
+            if candidate_requirements(candidate).get("page_id") is True
         ]
 
-        if runtime_scope_candidate is not None:
-            candidates = [
-                runtime_scope_candidate,
-                *[
-                    candidate
-                    for candidate in candidates
-                    if (
-                        candidate.doc_id != runtime_scope_candidate.doc_id
-                        or candidate.variables_mode
-                        != runtime_scope_candidate.variables_mode
-                    )
-                ],
-            ]
+    ordered: list[DocIdCandidate] = []
 
-    elif has_page and not allow_scope_selector_fallback:
-        candidates = [
-            candidate
-            for candidate in _prefer_page_backed_candidates(
-                candidates,
-                page_id=page_id,
+    # 1) Dynamic discovery from the initial Facebook HTML/headers.
+    if runtime_candidate is not None:
+        ordered.append(runtime_candidate)
+
+    # 2) Manual Job override only when dynamic discovery returned nothing.
+    if runtime_candidate is None and manual_doc_id:
+        if not re.fullmatch(r"\d{5,40}", manual_doc_id):
+            raise DocIdMutationError(
+                "BUSINESS.manual_doc_id must contain 5-40 digits"
             )
-            if (
-                candidate_requirements(candidate).get("page_id") is True
-                and candidate.source != "remask_legacy"
+
+        ordered.append(
+            DocIdCandidate(
+                operation="CREATE_BM",
+                doc_id=manual_doc_id,
+                friendly_name=(
+                    "useBusinessCreationMutationMutation"
+                    if allow_scope_selector_fallback
+                    else "BusinessManagerCreateMutation"
+                ),
+                endpoint_url="https://business.facebook.com/api/graphql/",
+                variables_mode=(
+                    "scope_selector_business_creation_v1"
+                    if allow_scope_selector_fallback
+                    else "legacy_primary_page_v1"
+                ),
+                source="job_manual",
+                priority=20_000,
+                observed_at="runtime",
             )
-        ]
+        )
 
-        if runtime_page_candidate is not None and all(
-            candidate.doc_id != runtime_page_candidate.doc_id
-            or candidate.variables_mode != runtime_page_candidate.variables_mode
-            for candidate in candidates
-        ):
-            candidates.insert(0, runtime_page_candidate)
+    # 3) Shared persisted/env cache is the final automatic source.
+    ordered.extend(cached_candidates)
 
-    if explicit_doc_id:
-        explicit = _clean(explicit_doc_id)
-        candidates = [
-            candidate
-            for candidate in candidates
-            if candidate.doc_id == explicit
-        ]
-
-        if not candidates:
-            if not allow_scope_selector_fallback:
-                raise DocIdMutationError(
-                    "Explicit CREATE_BM doc_id is not registered as a Page-backed "
-                    "mutation; refusing non-Page fallback"
-                )
-
-            # An explicit caller-provided doc_id is allowed even when it is not
-            # yet in the registry. Use the current scope-selector contract.
-            from .facebook_docids import DocIdCandidate
-
-            candidates = [
-                DocIdCandidate(
-                    operation="CREATE_BM",
-                    doc_id=explicit,
-                    friendly_name="useBusinessCreationMutationMutation",
-                    endpoint_url="https://business.facebook.com/api/graphql/",
-                    variables_mode="scope_selector_business_creation_v1",
-                    source="explicit_call",
-                    priority=20_000,
-                    observed_at="runtime",
-                )
-            ]
+    candidates: list[DocIdCandidate] = []
+    seen: set[tuple[str, str, str]] = set()
+    for candidate in ordered:
+        key = (
+            candidate.doc_id,
+            candidate.variables_mode,
+            candidate.endpoint_url,
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append(candidate)
 
     if not candidates:
-        if _clean(page_id) and not allow_scope_selector_fallback:
-            raise DocIdMutationError(
-                "No current Page-backed CREATE_BM mutation was discovered. "
-                "The legacy static doc_id is disabled because Facebook rejected "
-                "it with generic error 1357054. No CREATE request was sent."
-            )
+        manual_hint = (
+            " Provide parameters.BUSINESS.manual_doc_id to run a manual "
+            "candidate."
+            if not manual_doc_id
+            else ""
+        )
         raise DocIdMutationError(
-            "No CREATE_BM doc_id candidates are configured"
+            "No current CREATE_BM doc_id was found in Facebook initial HTML "
+            "or response headers, and no usable cached candidate exists."
+            + manual_hint
         )
 
     skipped: list[str] = []
@@ -978,35 +951,51 @@ async def create_business_with_docids(
             if not isinstance(payload, dict):
                 payload = {}
 
-            if _candidate_is_stale_or_schema_mismatch(
+            stale = _candidate_is_stale_or_schema_mismatch(
                 payload,
                 str(exc),
-            ):
-                reason = _diagnostic(
-                    candidate,
-                    payload,
-                    str(exc),
-                )
-                record_result(
-                    "CREATE_BM",
-                    candidate,
-                    success=False,
-                    reason=reason,
-                )
+            )
+            reason = _diagnostic(
+                candidate,
+                payload,
+                str(exc),
+            )
+            record_result(
+                "CREATE_BM",
+                candidate,
+                success=False,
+                reason=reason,
+                profile_id=profile_id,
+                stale_failure=stale,
+            )
+
+            if stale:
                 stale_failures.append(reason)
                 continue
-
             raise
 
         business_id, response_path = extract_business_id(response)
         response_errors = _errors(response)
 
         if business_id:
+            if candidate.source == "job_manual":
+                upsert_candidate(
+                    "CREATE_BM",
+                    doc_id=candidate.doc_id,
+                    friendly_name=candidate.friendly_name,
+                    endpoint_url=candidate.endpoint_url,
+                    variables_mode=candidate.variables_mode,
+                    source="manual_success",
+                    priority=8_800,
+                    observed_at=str(int(time.time())),
+                )
+
             record_result(
                 "CREATE_BM",
                 candidate,
                 success=True,
                 response_path=response_path,
+                profile_id=profile_id,
             )
             return CreateBusinessResult(
                 business_id=business_id,
@@ -1015,9 +1004,6 @@ async def create_business_with_docids(
                 response_path=response_path,
             )
 
-        # A response with data may mean the mutation executed but our parser no
-        # longer recognizes the shape. Never auto-retry another mutation in that
-        # situation because that could create a duplicate Business.
         data = response.get("data")
         if isinstance(data, dict) and data:
             reason = _diagnostic(
@@ -1030,6 +1016,7 @@ async def create_business_with_docids(
                 candidate,
                 success=False,
                 reason=reason,
+                profile_id=profile_id,
             )
             raise DocIdMutationError(
                 reason,
@@ -1038,35 +1025,35 @@ async def create_business_with_docids(
                 stale_candidate=False,
             )
 
-        if response_errors and _candidate_is_stale_or_schema_mismatch(
-            response,
-            "",
-        ):
-            reason = _diagnostic(
-                candidate,
+        stale = bool(
+            response_errors
+            and _candidate_is_stale_or_schema_mismatch(
                 response,
-                "stale doc_id or variables schema",
+                "",
             )
-            record_result(
-                "CREATE_BM",
-                candidate,
-                success=False,
-                reason=reason,
-            )
-            stale_failures.append(reason)
-            continue
-
+        )
         reason = _diagnostic(
             candidate,
             response,
-            "CREATE_BM returned no Business ID",
+            (
+                "stale doc_id or variables schema"
+                if stale
+                else "CREATE_BM returned no Business ID"
+            ),
         )
         record_result(
             "CREATE_BM",
             candidate,
             success=False,
             reason=reason,
+            profile_id=profile_id,
+            stale_failure=stale,
         )
+
+        if stale:
+            stale_failures.append(reason)
+            continue
+
         raise DocIdMutationError(
             reason,
             payload=response,
@@ -1074,72 +1061,7 @@ async def create_business_with_docids(
             stale_candidate=False,
         )
 
-    if stale_failures and not explicit_doc_id:
-        discovery_specs: list[tuple[str, str]] = []
-        if _clean(page_id) and not allow_scope_selector_fallback:
-            discovery_specs.append(
-                ("BusinessManagerCreateMutation", "legacy_primary_page_v1")
-            )
-        if allow_scope_selector_fallback:
-            discovery_specs.append(
-                (
-                    "useBusinessCreationMutationMutation",
-                    "scope_selector_business_creation_v1",
-                )
-            )
-
-        for friendly_name, variables_mode in discovery_specs:
-            if variables_mode == "legacy_primary_page_v1":
-                refreshed = await discover_current_page_backed_create_candidate(
-                    session,
-                    max_scripts=32,
-                )
-                if refreshed is None:
-                    continue
-            else:
-                discovered = await discover_persisted_query(
-                    session,
-                    friendly_name=friendly_name,
-                    entry_urls=[
-                        "https://business.facebook.com/latest/home",
-                        "https://business.facebook.com/latest/settings",
-                        "https://business.facebook.com/latest/overview",
-                    ],
-                    max_scripts_per_entry=28,
-                )
-                if discovered is None:
-                    continue
-
-                refreshed = upsert_candidate(
-                    "CREATE_BM",
-                    doc_id=discovered.doc_id,
-                    friendly_name=friendly_name,
-                    endpoint_url="https://business.facebook.com/api/graphql/",
-                    variables_mode=variables_mode,
-                    source=f"runtime_{discovered.source_kind}",
-                    priority=8_500,
-                    observed_at=str(int(time.time())),
-                )
-
-            if all(
-                candidate.doc_id != refreshed.doc_id
-                or candidate.variables_mode != refreshed.variables_mode
-                for candidate in candidates
-            ):
-                return await create_business_with_docids(
-                    session,
-                    business_name=business_name,
-                    page_id=page_id,
-                    user_email=user_email,
-                    user_first_name=user_first_name,
-                    user_last_name=user_last_name,
-                    profile_display_name=profile_display_name,
-                    vertical=vertical,
-                    explicit_doc_id=refreshed.doc_id,
-                    allow_scope_selector_fallback=allow_scope_selector_fallback,
-                )
-
-    details = []
+    details: list[str] = []
     if skipped:
         details.append("skipped=" + " || ".join(skipped))
     if stale_failures:
@@ -1147,13 +1069,8 @@ async def create_business_with_docids(
             "stale_candidates=" + " || ".join(stale_failures)
         )
 
-    if not allow_scope_selector_fallback:
-        raise DocIdMutationError(
-            "No usable current Page-backed CREATE_BM mutation is available. "
-            "Legacy static doc_id was not used. "
-            + " ".join(details)
-        )
-
     raise DocIdMutationError(
-        "No usable CREATE_BM doc_id candidate. " + " ".join(details)
+        "No usable CREATE_BM candidate completed successfully. "
+        + " ".join(details)
     )
+
