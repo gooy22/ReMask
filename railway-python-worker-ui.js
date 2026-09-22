@@ -1,4 +1,4 @@
-/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 */
+/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 */
 const restoredPythonWorkerJobId = localStorage.getItem('remask_python_worker_job_v1') || '';
 
 const pythonWorkerUiState = {
@@ -71,8 +71,8 @@ function pythonWorkerSelectionRefresh() {
     pythonWorkerSetText(
       'pythonPwStatus',
       profiles.length
-        ? 'Worker UI v136 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
-        : 'Worker UI v136 · Выберите FB-профили в Workspace.'
+        ? 'Worker UI v137 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
+        : 'Worker UI v137 · Выберите FB-профили в Workspace.'
     );
   }
 }
@@ -594,6 +594,7 @@ function pythonWorkerEnsureBmModalStyle() {
     '#pythonWorkerBmModal .pwbm-row:last-child{border-bottom:0}',
     '#pythonWorkerBmModal .pwbm-profile{font-size:12px;font-weight:600;padding-top:9px;word-break:break-word}',
     '#pythonWorkerBmModal input,#pythonWorkerBmModal select{width:100%;min-height:38px;background:#1b1f25;border:1px solid #414a58;color:#e6ebf2;border-radius:7px;padding:7px 9px}',
+    '#pythonWorkerBmModal .pwbm-manual{margin-top:7px}',
     '#pythonWorkerBmModal .pwbm-field small{display:block;margin-top:5px;color:#8f99a8;font-size:11px}',
     '#pythonWorkerBmModal .pwbm-field small.error{color:#ff8f96}',
     '#pythonWorkerBmModal .pwbm-footer{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 18px;border-top:1px solid #343b46}',
@@ -683,15 +684,25 @@ async function pythonWorkerOpenOwnBmModal() {
 
     const pageField = document.createElement('div');
     pageField.className = 'pwbm-field';
+
     const page = document.createElement('select');
     page.disabled = true;
     const loading = document.createElement('option');
     loading.value = '';
     loading.textContent = 'Загружаю Pages…';
     page.appendChild(loading);
+
+    const manualPage = document.createElement('input');
+    manualPage.type = 'text';
+    manualPage.className = 'pwbm-manual';
+    manualPage.placeholder = 'Или введи Primary Page ID вручную';
+    manualPage.inputMode = 'numeric';
+
     const pageHint = document.createElement('small');
     pageHint.textContent = 'Primary Page: загрузка…';
+
     pageField.appendChild(page);
+    pageField.appendChild(manualPage);
     pageField.appendChild(pageHint);
 
     row.appendChild(profile);
@@ -703,6 +714,7 @@ async function pythonWorkerOpenOwnBmModal() {
       row: row,
       name: name,
       page: page,
+      manualPage: manualPage,
       pageHint: pageHint,
       loaded: false,
       error: ''
@@ -748,10 +760,12 @@ async function pythonWorkerOpenOwnBmModal() {
     });
     const allReady = profiles.every(function(profileId) {
       const cfg = rows[profileId];
+      const selectedPage = cfg
+        ? String(cfg.page.value || cfg.manualPage.value || '').trim()
+        : '';
       return cfg &&
-        !cfg.error &&
         String(cfg.name.value || '').trim() &&
-        String(cfg.page.value || '').trim();
+        selectedPage;
     });
 
     create.disabled = pythonWorkerUiState.busy || !allLoaded || !allReady;
@@ -760,7 +774,10 @@ async function pythonWorkerOpenOwnBmModal() {
       status.textContent = 'Загружаю Primary Pages…';
     } else {
       const failed = profiles.filter(function(profileId) {
-        return rows[profileId] && rows[profileId].error;
+        const cfg = rows[profileId];
+        if (!cfg) return true;
+        const effectivePage = String(cfg.page.value || cfg.manualPage.value || '').trim();
+        return !String(cfg.name.value || '').trim() || !effectivePage;
       });
       status.textContent = failed.length
         ? 'Не готовы профили: ' + failed.join(', ')
@@ -771,7 +788,14 @@ async function pythonWorkerOpenOwnBmModal() {
   for (const profileId of profiles) {
     const cfg = rows[profileId];
     cfg.name.addEventListener('input', refreshReadyState);
-    cfg.page.addEventListener('change', refreshReadyState);
+    cfg.page.addEventListener('change', function() {
+      if (String(cfg.page.value || '').trim()) cfg.manualPage.value = '';
+      refreshReadyState();
+    });
+    cfg.manualPage.addEventListener('input', function() {
+      if (String(cfg.manualPage.value || '').trim()) cfg.page.value = '';
+      refreshReadyState();
+    });
 
     pythonWorkerLoadPages(profileId).then(function(pages) {
       cfg.page.textContent = '';
@@ -783,7 +807,7 @@ async function pythonWorkerOpenOwnBmModal() {
         cfg.page.appendChild(empty);
         cfg.error = 'Meta вернула 0 Pages';
         cfg.pageHint.className = 'error';
-        cfg.pageHint.textContent = cfg.error;
+        cfg.pageHint.textContent = 'Meta вернула 0 Pages. Введи Primary Page ID вручную.';
       } else {
         const placeholder = document.createElement('option');
         placeholder.value = '';
@@ -814,7 +838,8 @@ async function pythonWorkerOpenOwnBmModal() {
       cfg.loaded = true;
       cfg.error = String((error && error.message) || error);
       cfg.pageHint.className = 'error';
-      cfg.pageHint.textContent = cfg.error;
+      cfg.pageHint.textContent =
+        'Pages не загрузились: ' + cfg.error + '. Можно ввести Primary Page ID вручную.';
       refreshReadyState();
     });
   }
@@ -827,7 +852,7 @@ async function pythonWorkerOpenOwnBmModal() {
       const cfg = rows[profileId];
       configs[profileId] = {
         name: String(cfg.name.value || '').trim(),
-        page_id: String(cfg.page.value || '').trim()
+        page_id: String(cfg.page.value || cfg.manualPage.value || '').trim()
       };
     }
 
