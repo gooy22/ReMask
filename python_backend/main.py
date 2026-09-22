@@ -11,7 +11,9 @@ from app.bridge import JobBridgeClient, JobBridgeError
 from app.mirror import MirrorError, SnapshotMirror
 from app.models import CreateJobRequest, HealthResponse, JobAccepted, RetryResponse
 from app.runner import WorkerPool
+from app.session import ProfileContextError, ProfileSession, ProxyCheckError
 from app.store import JobStore
+from fb_worker import AuthenticationError, RemoteRequestError
 
 logging.basicConfig(level=os.getenv('LOG_LEVEL','INFO'),format='%(asctime)s [%(levelname)s] %(name)s: %(message)s')
 log=logging.getLogger('remask.python_api')
@@ -122,6 +124,41 @@ async def ready():
         'volume_mounted':bool(str(os.getenv('RAILWAY_VOLUME_MOUNT_PATH') or '').strip()),
         'volume_path':str(os.getenv('RAILWAY_VOLUME_MOUNT_PATH') or ''),
     }
+
+@app.post('/api/v1/profiles/{profile_id}/preflight',dependencies=[Depends(require_key)])
+async def profile_preflight(profile_id: str):
+    clean_profile=str(profile_id or '').strip()
+    if not clean_profile:
+        raise HTTPException(status_code=400,detail='profile_id is required')
+
+    try:
+        context=await pool.resolver.resolve(clean_profile)
+        async with ProfileSession(context) as profile_session:
+            proxy_result=await profile_session.proxy_check()
+            facebook=await profile_session.facebook_web()
+            bootstrap=await facebook.bootstrap()
+
+        return {
+            'ok':True,
+            'profile_id':clean_profile,
+            'profile_context':'ok',
+            'proxy':'ok',
+            'proxy_exit_ip':str(proxy_result.get('exit_ip') or ''),
+            'proxy_latency_ms':int(proxy_result.get('latency_ms') or 0),
+            'facebook_session':'ok',
+            'actor_present':bool(bootstrap.actor_id),
+            'fb_dtsg_present':bool(bootstrap.fb_dtsg),
+            'lsd_present':bool(bootstrap.lsd),
+            'jazoest_present':bool(bootstrap.jazoest),
+        }
+    except ProfileContextError as exc:
+        raise HTTPException(status_code=422,detail=f'PROFILE_CONTEXT_ERROR: {exc}') from exc
+    except ProxyCheckError as exc:
+        raise HTTPException(status_code=422,detail=f'PROXY_DEAD: {exc}') from exc
+    except AuthenticationError as exc:
+        raise HTTPException(status_code=422,detail=f'SESSION_EXPIRED: {exc}') from exc
+    except RemoteRequestError as exc:
+        raise HTTPException(status_code=502,detail=f'FACEBOOK_WEB_ERROR: {exc}') from exc
 
 @app.post('/api/v1/jobs',response_model=JobAccepted,dependencies=[Depends(require_key)])
 async def create_job(request: CreateJobRequest) -> JobAccepted:
