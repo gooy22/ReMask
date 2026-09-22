@@ -14,7 +14,9 @@ COPY python_backend/requirements.txt /tmp/remask-python-requirements.txt
 RUN python3 -m venv /opt/remask-venv \
     && /opt/remask-venv/bin/pip install --no-cache-dir -r /tmp/remask-python-requirements.txt
 COPY python_backend /opt/remask-python
-RUN /opt/remask-venv/bin/python -m compileall -q /opt/remask-python
+RUN /opt/remask-venv/bin/python -m compileall -q /opt/remask-python \
+    && grep -q 'class FacebookWebSession' /opt/remask-python/fb_worker.py \
+    && grep -q 'WebSessionManager = FacebookWebSession' /opt/remask-python/fb_worker.py
 
 COPY .deploy/clean-preview-valid/runtime.b64.* /tmp/remask-parts/
 COPY railway-persistence-overlay.php /tmp/railway-persistence-overlay.php
