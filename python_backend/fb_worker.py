@@ -281,78 +281,98 @@ class FacebookWebSession:
 
             session = await self._ensure_session()
 
-            try:
-                async with session.get(
-                    self.ADS_MANAGER_URL,
-                    proxy=self.profile.proxy,
-                    headers={
-                        "Accept": (
-                            "text/html,application/xhtml+xml,"
-                            "application/xml;q=0.9,*/*;q=0.8"
-                        ),
-                    },
-                    allow_redirects=True,
-                ) as response:
+            token_patterns = [
+                (
+                    r'"DTSGInitialData".{0,2500}?'
+                    r'"token"\s*:\s*"([^"]+)"'
+                ),
+                (
+                    r'name=["\']fb_dtsg["\']'
+                    r'[^>]*value=["\']([^"\']+)["\']'
+                ),
+                (
+                    r'["\']fb_dtsg["\']'
+                    r'\s*[:=]\s*["\']([^"\']+)["\']'
+                ),
+            ]
 
-                    body = await response.text()
-
-                    if response.status >= 400:
-                        raise AuthenticationError(
-                            "Ads Manager bootstrap returned "
-                            f"HTTP {response.status}"
-                        )
-
-                    final_url = str(response.url)
-
-            except AuthenticationError:
-                raise
-
-            except asyncio.TimeoutError as exc:
-                raise AuthenticationError(
-                    "Timeout while loading Ads Manager bootstrap"
-                ) from exc
-
-            except aiohttp.ClientError as exc:
-                raise AuthenticationError(
-                    "Network error while loading Ads Manager: "
-                    f"{exc.__class__.__name__}"
-                ) from exc
-
-            # Checkpoint/login detection.
-            lower_url = final_url.lower()
-            lower_body = body.lower()
-
-            if (
-                "/login" in lower_url
-                or "/checkpoint" in lower_url
-                or "login_form" in lower_body
-            ):
-                raise AuthenticationError(
-                    "Facebook session redirected to login/checkpoint"
-                )
-
-            fb_dtsg = self._first_match(
-                body,
-                [
-                    (
-                        r'"DTSGInitialData".{0,2500}?'
-                        r'"token"\s*:\s*"([^"]+)"'
-                    ),
-                    (
-                        r'name=["\']fb_dtsg["\']'
-                        r'[^>]*value=["\']([^"\']+)["\']'
-                    ),
-                    (
-                        r'["\']fb_dtsg["\']'
-                        r'\s*[:=]\s*["\']([^"\']+)["\']'
-                    ),
-                ],
+            bootstrap_urls = (
+                "https://business.facebook.com/latest/home",
+                self.ADS_MANAGER_URL,
+                "https://www.facebook.com/",
             )
 
+            body = ""
+            final_url = ""
+            bootstrap_source = ""
+            fb_dtsg = ""
+            attempts: list[str] = []
+
+            for bootstrap_url in bootstrap_urls:
+                try:
+                    async with session.get(
+                        bootstrap_url,
+                        proxy=self.profile.proxy,
+                        headers={
+                            "Accept": (
+                                "text/html,application/xhtml+xml,"
+                                "application/xml;q=0.9,*/*;q=0.8"
+                            ),
+                        },
+                        allow_redirects=True,
+                    ) as response:
+                        candidate_body = await response.text()
+                        candidate_url = str(response.url)
+
+                        if response.status >= 500:
+                            attempts.append(
+                                f"{bootstrap_url}: HTTP {response.status}"
+                            )
+                            continue
+
+                        lower_url = candidate_url.lower()
+                        lower_body = candidate_body.lower()
+
+                        if (
+                            "/login" in lower_url
+                            or "/checkpoint" in lower_url
+                            or "login_form" in lower_body
+                        ):
+                            attempts.append(
+                                f"{bootstrap_url}: login/checkpoint"
+                            )
+                            continue
+
+                        candidate_dtsg = self._first_match(
+                            candidate_body,
+                            token_patterns,
+                        )
+                        if not candidate_dtsg:
+                            attempts.append(
+                                f"{bootstrap_url}: authenticated page but no fb_dtsg"
+                            )
+                            continue
+
+                        body = candidate_body
+                        final_url = candidate_url
+                        bootstrap_source = bootstrap_url
+                        fb_dtsg = candidate_dtsg
+                        break
+
+                except asyncio.TimeoutError:
+                    attempts.append(f"{bootstrap_url}: timeout")
+                    continue
+                except aiohttp.ClientError as exc:
+                    attempts.append(
+                        f"{bootstrap_url}: network {exc.__class__.__name__}"
+                    )
+                    continue
+
             if not fb_dtsg:
+                detail = " | ".join(attempts[-6:]) or "no bootstrap response"
                 raise AuthenticationError(
-                    "fb_dtsg was not found in Facebook bootstrap. "
-                    "Session may be expired or checkpointed."
+                    "Facebook browser session did not expose fb_dtsg on any "
+                    f"bootstrap surface: {detail}"
                 )
 
             lsd = self._first_match(
@@ -390,9 +410,8 @@ class FacebookWebSession:
             ).strip()
 
             if not actor_id:
-                log.warning(
-                    "[%s] Facebook actor_id was not found in cookies",
-                    self.profile.name,
+                raise AuthenticationError(
+                    "Facebook actor_id is missing from c_user/i_user cookies"
                 )
 
             bootstrap = FacebookBootstrap(
@@ -405,12 +424,14 @@ class FacebookWebSession:
             self._bootstrap = bootstrap
 
             log.info(
-                "[%s] FB bootstrap ready "
-                "actor=%s lsd=%s jazoest=%s",
+                "[%s] FB bootstrap ready actor=%s lsd=%s jazoest=%s "
+                "source=%s final_url=%s",
                 self.profile.name,
-                actor_id or "<unknown>",
+                actor_id,
                 "yes" if lsd else "no",
                 "yes" if jazoest else "no",
+                bootstrap_source,
+                final_url,
             )
 
             return bootstrap
