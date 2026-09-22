@@ -209,14 +209,20 @@ async def profile_preflight(profile_id: str):
                 'ready':False,
                 'token_present':bool(str(context.access_token or '').strip()),
                 'identity_ready':False,
+                'permissions_ready':False,
                 'pages_ready':False,
                 'businesses_ready':False,
                 'user_id':'',
                 'name':'',
+                'permissions':{},
+                'pages_show_list_granted':None,
+                'business_management_granted':None,
+                'ads_management_granted':None,
                 'pages':[],
                 'businesses':[],
                 'error':'',
                 'identity_error':'',
+                'permissions_error':'',
                 'pages_error':'',
                 'businesses_error':'',
                 'error_code':None,
@@ -242,6 +248,24 @@ async def profile_preflight(profile_id: str):
                     })
 
                 if graph_state['identity_ready']:
+                    try:
+                        permissions=await graph.list_permissions()
+                        graph_state.update({
+                            'permissions_ready':True,
+                            'permissions':permissions,
+                            'pages_show_list_granted':(
+                                permissions.get('pages_show_list') == 'granted'
+                            ),
+                            'business_management_granted':(
+                                permissions.get('business_management') == 'granted'
+                            ),
+                            'ads_management_granted':(
+                                permissions.get('ads_management') == 'granted'
+                            ),
+                        })
+                    except GraphApiError as exc:
+                        graph_state['permissions_error']=str(exc)
+
                     try:
                         pages=await graph.list_pages()
                         graph_state.update({
@@ -298,10 +322,16 @@ async def profile_preflight(profile_id: str):
                 except (PageDiscoveryError, asyncio.TimeoutError) as exc:
                     private_pages_state['error']=str(exc)
 
-            selected_pages=(
+            selected_pages=list(
                 graph_state['pages']
                 if graph_state['pages']
                 else private_pages_state['pages']
+            )
+            selected_pages.sort(
+                key=lambda page: (
+                    1 if str(page.get('business_id') or '').strip() else 0,
+                    str(page.get('name') or '').casefold(),
+                )
             )
             pages_source=(
                 'official_graph_api'
@@ -324,6 +354,29 @@ async def profile_preflight(profile_id: str):
             'priority':candidate.priority,
             'requirements':candidate_requirements(candidate),
         })
+
+    has_page_backed_candidate=any(
+        bool(row.get('requirements',{}).get('page_id'))
+        for row in bm_candidates
+    )
+    has_scope_selector_candidate=any(
+        bool(row.get('requirements',{}).get('email'))
+        for row in bm_candidates
+    )
+    official_route_ready=bool(
+        graph_state['identity_ready']
+        and selected_pages
+        and graph_state.get('business_management_granted') is not False
+    )
+    web_page_backed_candidate=bool(
+        web_state['ready']
+        and selected_pages
+        and has_page_backed_candidate
+    )
+    web_scope_selector_candidate=bool(
+        web_state['ready']
+        and has_scope_selector_candidate
+    )
 
     return {
         'ok':True,
@@ -350,12 +403,15 @@ async def profile_preflight(profile_id: str):
         'last_name_present':bool(str(context.last_name or '').strip()),
         'display_name_present':bool(str(context.display_name or '').strip()),
         'create_bm_candidates':bm_candidates,
+        'bm_routes':{
+            'official_graph_api':official_route_ready,
+            'web_page_backed_candidate':web_page_backed_candidate,
+            'web_scope_selector_candidate':web_scope_selector_candidate,
+        },
         'bm_route_ready':bool(
-            selected_pages
-            and (
-                graph_state['identity_ready']
-                or web_state['ready']
-            )
+            official_route_ready
+            or web_page_backed_candidate
+            or web_scope_selector_candidate
         ),
     }
 
