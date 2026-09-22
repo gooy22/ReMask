@@ -695,13 +695,20 @@ class FacebookWebSession:
     def invalidate_bootstrap(self) -> None:
         self._bootstrap = None
 
-    async def fetch_text(
+    async def fetch_text_with_headers(
         self,
         url: str,
         *,
         max_bytes: int = 4_000_000,
         referer: str | None = None,
-    ) -> tuple[int, str, str]:
+    ) -> tuple[int, str, str, dict[str, str]]:
+        """
+        Fetch one Facebook HTML/document response through the profile proxy.
+
+        v14 discovery intentionally exposes response headers together with the
+        initial HTML so persisted-query metadata can be discovered without
+        downloading Facebook JavaScript bundles.
+        """
         target = str(url or "").strip()
         if not target:
             raise RemoteRequestError("fetch_text URL is required")
@@ -720,18 +727,18 @@ class FacebookWebSession:
             )
 
         session = await self._ensure_session()
-        headers = {
+        request_headers = {
             "User-Agent": self.profile.user_agent,
-            "Accept": "*/*",
+            "Accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
         }
         if referer:
-            headers["Referer"] = referer
+            request_headers["Referer"] = referer
 
         try:
             async with session.get(
                 target,
                 proxy=self.profile.proxy,
-                headers=headers,
+                headers=request_headers,
                 allow_redirects=True,
             ) as response:
                 raw = await response.content.read(max(1, int(max_bytes)) + 1)
@@ -744,7 +751,17 @@ class FacebookWebSession:
                 except LookupError:
                     body = raw.decode("utf-8", errors="replace")
 
-                return response.status, body, str(response.url)
+                response_headers = {
+                    str(key): str(value)
+                    for key, value in response.headers.items()
+                }
+
+                return (
+                    response.status,
+                    body,
+                    str(response.url),
+                    response_headers,
+                )
 
         except asyncio.TimeoutError as exc:
             raise RemoteRequestError(
@@ -755,6 +772,20 @@ class FacebookWebSession:
                 "Facebook fetch network failure: "
                 f"{exc.__class__.__name__}"
             ) from exc
+
+    async def fetch_text(
+        self,
+        url: str,
+        *,
+        max_bytes: int = 4_000_000,
+        referer: str | None = None,
+    ) -> tuple[int, str, str]:
+        status, body, final_url, _ = await self.fetch_text_with_headers(
+            url,
+            max_bytes=max_bytes,
+            referer=referer,
+        )
+        return status, body, final_url
 
     async def extract_csrf_token(self) -> str:
         """
