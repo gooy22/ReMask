@@ -1,4 +1,4 @@
-/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 */
+/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 */
 const restoredPythonWorkerJobId = localStorage.getItem('remask_python_worker_job_v1') || '';
 
 const pythonWorkerUiState = {
@@ -70,8 +70,8 @@ function pythonWorkerSelectionRefresh() {
     pythonWorkerSetText(
       'pythonPwStatus',
       profiles.length
-        ? 'Worker UI v135 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
-        : 'Worker UI v135 · Выберите FB-профили в Workspace.'
+        ? 'Worker UI v136 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
+        : 'Worker UI v136 · Выберите FB-профили в Workspace.'
     );
   }
 }
@@ -409,25 +409,29 @@ async function pythonWorkerRefreshSuccessfulProfiles(items) {
 }
 
 async function pythonWorkerStartBusiness(bmName, options) {
-  const profiles = pythonWorkerSelectedProfiles();
+  const explicitProfiles = options && Array.isArray(options.profiles)
+    ? options.profiles.map(function(value) { return String(value || '').trim(); }).filter(Boolean)
+    : [];
+  const profiles = explicitProfiles.length ? explicitProfiles : pythonWorkerSelectedProfiles();
   if (!profiles.length || pythonWorkerUiState.busy) return;
 
   const cleanName = String(bmName || '').trim();
-  if (!cleanName) return;
-
+  const explicitConfig = options && options.configs && typeof options.configs === 'object'
+    ? options.configs
+    : null;
   const dialog = options && options.dialog ? options.dialog : null;
-  if (!dialog) {
-    throw new Error('Add BM request not sent: Primary Page form is not open.');
-  }
+  const rowConfig = explicitConfig || pythonWorkerBmRowConfig(dialog, profiles, cleanName);
 
-  const rowConfig = pythonWorkerBmRowConfig(dialog, profiles, cleanName);
-  const missingPrimaryPage = profiles.filter(function(profileId) {
+  const invalid = profiles.filter(function(profileId) {
     const cfg = rowConfig[String(profileId)] || {};
-    return !String(cfg.page_id || '').trim();
+    return !String(cfg.name || cleanName || '').trim() || !String(cfg.page_id || '').trim();
   });
 
-  if (missingPrimaryPage.length) {
-    throw new Error('Add BM request not sent: Primary Page is required.');
+  if (invalid.length) {
+    throw new Error(
+      'Add BM request not sent: для каждого профиля нужны название BM и Primary Page. Проблема: ' +
+      invalid.join(', ')
+    );
   }
 
   pythonWorkerUiState.busy = true;
@@ -505,6 +509,7 @@ async function pythonWorkerStartBusiness(bmName, options) {
       'Add BM: ' + ((error && error.message) || error)
     );
     console.error('[ReMask Worker UI] Add BM launch failed:', error);
+    throw error;
   }
 }
 
@@ -540,54 +545,300 @@ function pythonWorkerFindLegacyBmTrigger() {
   return candidates.find(pythonWorkerVisible) || candidates[0] || null;
 }
 
-async function pythonWorkerStartProvisioning() {
+async function pythonWorkerLoadPages(profileId) {
+  const response = await fetch('ajax/pythonWorkerPages.php', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+    body: JSON.stringify({profile: String(profileId || '').trim()})
+  });
+
+  let data = null;
+  try {
+    data = await response.json();
+  } catch (_) {
+    throw new Error('Pages endpoint returned invalid JSON (HTTP ' + response.status + ').');
+  }
+
+  if (!response.ok || !(data && data.ok)) {
+    const detail = data && data.detail && typeof data.detail === 'object'
+      ? (data.detail.message || JSON.stringify(data.detail))
+      : '';
+    throw new Error(
+      String(detail || (data && data.error) || ('Pages HTTP ' + response.status))
+    );
+  }
+
+  return Array.isArray(data.pages) ? data.pages : [];
+}
+
+function pythonWorkerEnsureBmModalStyle() {
+  if (document.getElementById('pythonWorkerBmModalStyle')) return;
+
+  const style = document.createElement('style');
+  style.id = 'pythonWorkerBmModalStyle';
+  style.textContent = [
+    '#pythonWorkerBmModal{position:fixed;inset:0;z-index:10050;background:rgba(5,8,12,.72);display:flex;align-items:center;justify-content:center;padding:24px}',
+    '#pythonWorkerBmModal .pwbm-card{width:min(920px,96vw);max-height:88vh;overflow:auto;background:#20242b;border:1px solid #3a424f;border-radius:12px;box-shadow:0 24px 70px rgba(0,0,0,.45)}',
+    '#pythonWorkerBmModal .pwbm-head{display:flex;align-items:center;justify-content:space-between;padding:16px 18px;border-bottom:1px solid #343b46}',
+    '#pythonWorkerBmModal .pwbm-title{font-size:16px;font-weight:700}',
+    '#pythonWorkerBmModal .pwbm-close{border:0;background:transparent;color:#aeb7c4;font-size:22px;cursor:pointer}',
+    '#pythonWorkerBmModal .pwbm-body{padding:16px 18px}',
+    '#pythonWorkerBmModal .pwbm-note{font-size:12px;color:#9aa4b2;margin-bottom:12px}',
+    '#pythonWorkerBmModal .pwbm-row{display:grid;grid-template-columns:minmax(130px,.7fr) minmax(170px,1fr) minmax(260px,1.4fr);gap:10px;align-items:start;padding:12px 0;border-bottom:1px solid #303640}',
+    '#pythonWorkerBmModal .pwbm-row:last-child{border-bottom:0}',
+    '#pythonWorkerBmModal .pwbm-profile{font-size:12px;font-weight:600;padding-top:9px;word-break:break-word}',
+    '#pythonWorkerBmModal input,#pythonWorkerBmModal select{width:100%;min-height:38px;background:#1b1f25;border:1px solid #414a58;color:#e6ebf2;border-radius:7px;padding:7px 9px}',
+    '#pythonWorkerBmModal .pwbm-field small{display:block;margin-top:5px;color:#8f99a8;font-size:11px}',
+    '#pythonWorkerBmModal .pwbm-field small.error{color:#ff8f96}',
+    '#pythonWorkerBmModal .pwbm-footer{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 18px;border-top:1px solid #343b46}',
+    '#pythonWorkerBmModal .pwbm-status{font-size:12px;color:#aeb7c4;white-space:pre-wrap}',
+    '#pythonWorkerBmModal .pwbm-actions{display:flex;gap:8px}',
+    '@media(max-width:760px){#pythonWorkerBmModal .pwbm-row{grid-template-columns:1fr}}'
+  ].join('');
+  document.head.appendChild(style);
+}
+
+function pythonWorkerCloseOwnBmModal() {
+  const modal = document.getElementById('pythonWorkerBmModal');
+  if (modal) modal.remove();
+}
+
+async function pythonWorkerOpenOwnBmModal() {
   const profiles = pythonWorkerSelectedProfiles();
   if (!profiles.length) {
-    pythonWorkerSetText('pythonPwStatus', 'Запрос НЕ отправлен: сначала выбери FB-профиль.');
+    pythonWorkerSetText('pythonPwStatus', 'Сначала выбери хотя бы один FB-профиль.');
     return;
   }
 
-  pythonWorkerSetText(
-    'pythonPwStatus',
-    'Открываю Add BM для ' + profiles.length + ' FB-профилей…'
-  );
+  pythonWorkerEnsureBmModalStyle();
+  pythonWorkerCloseOwnBmModal();
 
-  const existingDialog = pythonWorkerFindBmDialog(null);
-  if (existingDialog) {
-    pythonWorkerEnhanceBmDialog();
-    pythonWorkerSetText(
-      'pythonPwStatus',
-      'Форма Add BM открыта. Укажи название и Primary Page, затем нажми «Создать BM».'
-    );
-    return;
+  const modal = document.createElement('div');
+  modal.id = 'pythonWorkerBmModal';
+
+  const card = document.createElement('div');
+  card.className = 'pwbm-card';
+
+  const head = document.createElement('div');
+  head.className = 'pwbm-head';
+
+  const title = document.createElement('div');
+  title.className = 'pwbm-title';
+  title.textContent = 'Добавить Business Manager · ' + profiles.length + ' проф.';
+
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'pwbm-close';
+  close.setAttribute('aria-label', 'Закрыть');
+  close.textContent = '×';
+  close.addEventListener('click', pythonWorkerCloseOwnBmModal);
+
+  head.appendChild(title);
+  head.appendChild(close);
+
+  const body = document.createElement('div');
+  body.className = 'pwbm-body';
+
+  const note = document.createElement('div');
+  note.className = 'pwbm-note';
+  note.textContent = 'Pages загружаются из текущего профиля. Для каждого профиля укажи отдельное название BM и Primary Page.';
+  body.appendChild(note);
+
+  const rows = {};
+  for (let index = 0; index < profiles.length; index++) {
+    const profileId = profiles[index];
+
+    const row = document.createElement('div');
+    row.className = 'pwbm-row';
+    row.dataset.profile = profileId;
+
+    const profile = document.createElement('div');
+    profile.className = 'pwbm-profile';
+    profile.textContent = profileId;
+
+    const nameField = document.createElement('div');
+    nameField.className = 'pwbm-field';
+    const name = document.createElement('input');
+    name.type = 'text';
+    name.value = 'ReMask_BM_' + (index + 1);
+    name.placeholder = 'Название Business Manager';
+    const nameHint = document.createElement('small');
+    nameHint.textContent = 'Название BM';
+    nameField.appendChild(name);
+    nameField.appendChild(nameHint);
+
+    const pageField = document.createElement('div');
+    pageField.className = 'pwbm-field';
+    const page = document.createElement('select');
+    page.disabled = true;
+    const loading = document.createElement('option');
+    loading.value = '';
+    loading.textContent = 'Загружаю Pages…';
+    page.appendChild(loading);
+    const pageHint = document.createElement('small');
+    pageHint.textContent = 'Primary Page: загрузка…';
+    pageField.appendChild(page);
+    pageField.appendChild(pageHint);
+
+    row.appendChild(profile);
+    row.appendChild(nameField);
+    row.appendChild(pageField);
+    body.appendChild(row);
+
+    rows[profileId] = {
+      row: row,
+      name: name,
+      page: page,
+      pageHint: pageHint,
+      loaded: false,
+      error: ''
+    };
   }
 
-  const trigger = pythonWorkerFindLegacyBmTrigger();
-  if (!trigger) {
-    pythonWorkerSetText(
-      'pythonPwStatus',
-      'Запрос НЕ отправлен: не найдена кнопка открытия Add BM. Открой Add BM через меню выбранного FB-профиля.'
-    );
-    return;
-  }
+  const footer = document.createElement('div');
+  footer.className = 'pwbm-footer';
 
-  trigger.click();
+  const status = document.createElement('div');
+  status.className = 'pwbm-status';
+  status.textContent = 'Загружаю Primary Pages…';
 
-  setTimeout(function() {
-    const dialog = pythonWorkerFindBmDialog(null);
-    if (dialog) {
-      pythonWorkerEnhanceBmDialog();
-      pythonWorkerSetText(
-        'pythonPwStatus',
-        'Форма Add BM открыта. Укажи название и Primary Page, затем нажми «Создать BM».'
-      );
+  const actions = document.createElement('div');
+  actions.className = 'pwbm-actions';
+
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.className = 'btn btn-secondary';
+  cancel.textContent = 'Отмена';
+  cancel.addEventListener('click', pythonWorkerCloseOwnBmModal);
+
+  const create = document.createElement('button');
+  create.type = 'button';
+  create.className = 'btn btn-primary';
+  create.textContent = 'Создать BM';
+  create.disabled = true;
+
+  actions.appendChild(cancel);
+  actions.appendChild(create);
+  footer.appendChild(status);
+  footer.appendChild(actions);
+
+  card.appendChild(head);
+  card.appendChild(body);
+  card.appendChild(footer);
+  modal.appendChild(card);
+  document.body.appendChild(modal);
+
+  const refreshReadyState = function() {
+    const allLoaded = profiles.every(function(profileId) {
+      return rows[profileId] && rows[profileId].loaded;
+    });
+    const allReady = profiles.every(function(profileId) {
+      const cfg = rows[profileId];
+      return cfg &&
+        !cfg.error &&
+        String(cfg.name.value || '').trim() &&
+        String(cfg.page.value || '').trim();
+    });
+
+    create.disabled = pythonWorkerUiState.busy || !allLoaded || !allReady;
+
+    if (!allLoaded) {
+      status.textContent = 'Загружаю Primary Pages…';
     } else {
-      pythonWorkerSetText(
-        'pythonPwStatus',
-        'Запрос НЕ отправлен: форма Add BM не открылась. Открой её через меню выбранного FB-профиля.'
-      );
+      const failed = profiles.filter(function(profileId) {
+        return rows[profileId] && rows[profileId].error;
+      });
+      status.textContent = failed.length
+        ? 'Не готовы профили: ' + failed.join(', ')
+        : 'Готово к отправке Job: ' + profiles.length + '.';
     }
-  }, 150);
+  };
+
+  for (const profileId of profiles) {
+    const cfg = rows[profileId];
+    cfg.name.addEventListener('input', refreshReadyState);
+    cfg.page.addEventListener('change', refreshReadyState);
+
+    pythonWorkerLoadPages(profileId).then(function(pages) {
+      cfg.page.textContent = '';
+
+      if (!pages.length) {
+        const empty = document.createElement('option');
+        empty.value = '';
+        empty.textContent = 'Meta вернула 0 Pages';
+        cfg.page.appendChild(empty);
+        cfg.error = 'Meta вернула 0 Pages';
+        cfg.pageHint.className = 'error';
+        cfg.pageHint.textContent = cfg.error;
+      } else {
+        const placeholder = document.createElement('option');
+        placeholder.value = '';
+        placeholder.textContent = 'Выбери Primary Page';
+        cfg.page.appendChild(placeholder);
+
+        for (const item of pages) {
+          const option = document.createElement('option');
+          option.value = String(item.id || '');
+          option.textContent = String(item.name || item.id || 'Page') + ' — ' + String(item.id || '');
+          cfg.page.appendChild(option);
+        }
+
+        cfg.page.value = String(pages[0].id || '');
+        cfg.pageHint.textContent = 'Pages: ' + pages.length + '. Первая выбрана автоматически.';
+      }
+
+      cfg.page.disabled = false;
+      cfg.loaded = true;
+      refreshReadyState();
+    }).catch(function(error) {
+      cfg.page.textContent = '';
+      const failed = document.createElement('option');
+      failed.value = '';
+      failed.textContent = 'Ошибка загрузки Pages';
+      cfg.page.appendChild(failed);
+      cfg.page.disabled = true;
+      cfg.loaded = true;
+      cfg.error = String((error && error.message) || error);
+      cfg.pageHint.className = 'error';
+      cfg.pageHint.textContent = cfg.error;
+      refreshReadyState();
+    });
+  }
+
+  create.addEventListener('click', function() {
+    if (create.disabled) return;
+
+    const configs = {};
+    for (const profileId of profiles) {
+      const cfg = rows[profileId];
+      configs[profileId] = {
+        name: String(cfg.name.value || '').trim(),
+        page_id: String(cfg.page.value || '').trim()
+      };
+    }
+
+    create.disabled = true;
+    cancel.disabled = true;
+    status.textContent = 'Отправляю Job в локальный Python worker…';
+
+    pythonWorkerStartBusiness('', {
+      profiles: profiles,
+      configs: configs
+    }).then(function() {
+      pythonWorkerCloseOwnBmModal();
+    }).catch(function(error) {
+      cancel.disabled = false;
+      refreshReadyState();
+      status.textContent = 'Ошибка: ' + String((error && error.message) || error);
+    });
+  });
+
+  refreshReadyState();
+}
+
+async function pythonWorkerStartProvisioning() {
+  return pythonWorkerOpenOwnBmModal();
 }
 
 async function pythonWorkerPoll() {
