@@ -44,27 +44,53 @@ async def business_handler(
             retryable=False,
         )
 
-    # 2. ИЗВЛЕЧЕНИЕ И ОЧИСТКА PAGE_ID ИЗ FRONTEND PAYLOAD
+    # Primary Page is optional for the current Business creation flow.
+    # It is still used by the legacy fallback mutation when available.
     page_id_raw = params.get("page_id") or params.get("primary_page_id")
     page_id = str(page_id_raw).strip() if page_id_raw is not None else ""
-    if not page_id or page_id.lower() == "none":
-        raise ProvisioningError(
-            "PRIMARY_PAGE_REQUIRED",
-            "BUSINESS.page_id is required for Business Manager creation",
-            retryable=False,
-        )
-    if not re.fullmatch(r"\d{5,30}", page_id):
+    if page_id.lower() == "none":
+        page_id = ""
+    if page_id and not re.fullmatch(r"\d{5,30}", page_id):
         raise ProvisioningError(
             "INVALID_PRIMARY_PAGE",
             "BUSINESS.page_id must be a numeric Facebook Page ID",
             retryable=False,
         )
 
+    user_email = str(
+        params.get("user_email")
+        or params.get("email")
+        or getattr(context, "email", "")
+        or ""
+    ).strip()
+    user_first_name = str(
+        params.get("user_first_name")
+        or params.get("first_name")
+        or getattr(context, "first_name", "")
+        or ""
+    ).strip()
+    user_last_name = str(
+        params.get("user_last_name")
+        or params.get("last_name")
+        or getattr(context, "last_name", "")
+        or ""
+    ).strip()
+    display_name = str(
+        getattr(context, "display_name", "")
+        or profile_id
+    ).strip()
+    vertical = str(params.get("vertical") or "ADVERTISING").strip().upper()
+    explicit_doc_id = str(params.get("doc_id") or "").strip() or None
+
     log.info(
-        "[%s] BUSINESS start name=%s primary_page_id=%s key=%s",
+        "[%s] BUSINESS start name=%s primary_page_id=%s email_present=%s "
+        "identity_name_present=%s explicit_doc_id=%s key=%s",
         profile_id,
         bm_name,
-        page_id,
+        page_id or "<none>",
+        bool(user_email),
+        bool(user_first_name or user_last_name or display_name),
+        explicit_doc_id or "<registry>",
         idempotency_key,
     )
 
@@ -73,6 +99,12 @@ async def business_handler(
         bm_id = await controller.create_business_manager(
             name=bm_name,
             page_id=page_id,
+            doc_id=explicit_doc_id,
+            user_email=user_email,
+            user_first_name=user_first_name,
+            user_last_name=user_last_name,
+            profile_display_name=display_name,
+            vertical=vertical,
         )
 
         if not bm_id:
