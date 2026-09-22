@@ -324,11 +324,19 @@ class FacebookGraphApi:
             if not business_id:
                 continue
             primary = row.get("primary_page")
+            primary_page = primary if isinstance(primary, dict) else None
+            primary_page_id = ""
+            if isinstance(primary, dict):
+                primary_page_id = str(primary.get("id") or "").strip()
+            elif isinstance(primary, (str, int)):
+                primary_page_id = str(primary).strip()
+
             output.append(
                 {
                     "id": business_id,
                     "name": str(row.get("name") or business_id).strip(),
-                    "primary_page": primary if isinstance(primary, dict) else None,
+                    "primary_page": primary_page,
+                    "primary_page_id": primary_page_id,
                 }
             )
         return output
