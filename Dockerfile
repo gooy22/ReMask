@@ -36,7 +36,8 @@ RUN /opt/remask-venv/bin/python -m compileall -q /opt/remask-python \
     && grep -q 'manual_doc_id' /opt/remask-python/app/provisioning/business_handler.py \
     && grep -q '3_cross_profile_stale_failures' /opt/remask-python/app/facebook_docids.py \
     && grep -q 'fetch_text_with_headers' /opt/remask-python/fb_worker.py \
-    && echo "[bm-v14] HTML/header discovery + manual override + cross-profile cache policy passed"
+    && grep -q 'default_doc_id=None' /opt/remask-python/fb_worker.py \
+    && echo "[bm-v14.1] HTML/header discovery + manual override + 3-profile cache invalidation passed"
 
 COPY .deploy/clean-preview-valid/runtime.b64.* /tmp/remask-parts/
 COPY railway-persistence-overlay.php /tmp/railway-persistence-overlay.php
