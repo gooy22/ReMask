@@ -814,28 +814,66 @@ async def create_business_with_docids(
     actor_id = _clean(getattr(bootstrap, "actor_id", ""))
 
     runtime_page_candidate: DocIdCandidate | None = None
+    runtime_scope_candidate: DocIdCandidate | None = None
+    has_page = bool(_clean(page_id))
 
-    # Strict Add BM must use a current Page-backed mutation. Discovery is
-    # read-only; if it cannot resolve a current mutation we refuse to fire the
-    # known-old remask_legacy doc_id.
-    if _clean(page_id) and not allow_scope_selector_fallback and not explicit_doc_id:
-        try:
-            runtime_page_candidate = await asyncio.wait_for(
-                discover_current_page_backed_create_candidate(session),
-                timeout=30.0,
-            )
-        except Exception:
-            runtime_page_candidate = None
+    if has_page and not explicit_doc_id:
+        if allow_scope_selector_fallback:
+            # Normal Add BM path: create the Business with the current
+            # scope-selector mutation, then attach the selected Fan Page in a
+            # separate mutation. Do not mix in the obsolete one-shot Page
+            # creation contract.
+            try:
+                runtime_scope_candidate = await asyncio.wait_for(
+                    discover_current_scope_selector_create_candidate(session),
+                    timeout=30.0,
+                )
+            except Exception:
+                runtime_scope_candidate = None
+        else:
+            # Legacy strict mode remains available only for explicit callers.
+            try:
+                runtime_page_candidate = await asyncio.wait_for(
+                    discover_current_page_backed_create_candidate(session),
+                    timeout=30.0,
+                )
+            except Exception:
+                runtime_page_candidate = None
 
-    candidates = _prefer_page_backed_candidates(
-        list_candidates("CREATE_BM"),
-        page_id=page_id,
-    )
+    candidates = list_candidates("CREATE_BM")
 
-    if not allow_scope_selector_fallback:
+    if has_page and allow_scope_selector_fallback:
         candidates = [
             candidate
             for candidate in candidates
+            if (
+                candidate.variables_mode
+                == "scope_selector_business_creation_v1"
+                and candidate.source != "remask_legacy"
+            )
+        ]
+
+        if runtime_scope_candidate is not None:
+            candidates = [
+                runtime_scope_candidate,
+                *[
+                    candidate
+                    for candidate in candidates
+                    if (
+                        candidate.doc_id != runtime_scope_candidate.doc_id
+                        or candidate.variables_mode
+                        != runtime_scope_candidate.variables_mode
+                    )
+                ],
+            ]
+
+    elif has_page and not allow_scope_selector_fallback:
+        candidates = [
+            candidate
+            for candidate in _prefer_page_backed_candidates(
+                candidates,
+                page_id=page_id,
+            )
             if (
                 candidate_requirements(candidate).get("page_id") is True
                 and candidate.source != "remask_legacy"
