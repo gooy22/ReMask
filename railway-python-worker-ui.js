@@ -1,4 +1,4 @@
-/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 REMASK_PYTHON_WORKER_UI_V140 REMASK_PYTHON_WORKER_UI_V141 REMASK_PYTHON_WORKER_UI_V142 */
+/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 REMASK_PYTHON_WORKER_UI_V140 REMASK_PYTHON_WORKER_UI_V141 REMASK_PYTHON_WORKER_UI_V142 REMASK_PYTHON_WORKER_UI_V143 */
 const restoredPythonWorkerJobId = localStorage.getItem('remask_python_worker_job_v1') || '';
 
 const pythonWorkerUiState = {
@@ -76,10 +76,10 @@ function pythonWorkerSelectionRefresh() {
       profiles.length
         ? (
             pythonWorkerUiState.workerOnline === true
-              ? 'Worker UI v142 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
-              : 'Worker UI v142 · Выбрано FB-профилей: ' + profiles.length + '. Жду READY от worker.'
+              ? 'Worker UI v143 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
+              : 'Worker UI v143 · Выбрано FB-профилей: ' + profiles.length + '. Жду READY от worker.'
           )
-        : 'Worker UI v142 · Выберите FB-профили в Workspace.'
+        : 'Worker UI v143 · Выберите FB-профили в Workspace.'
     );
   }
 }
@@ -139,6 +139,23 @@ async function pythonWorkerHealthCheck() {
     pythonWorkerSelectionRefresh();
     return false;
   }
+}
+
+async function pythonWorkerProfilePreflight(profileId) {
+  const data = await pythonWorkerBridge({
+    action: 'preflight',
+    profile_id: String(profileId || '').trim()
+  });
+
+  const preflight = data && data.preflight ? data.preflight : null;
+  if (!preflight || preflight.ok !== true) {
+    throw new Error('Profile preflight returned no READY result.');
+  }
+  if (!preflight.fb_dtsg_present || !preflight.actor_present) {
+    throw new Error('Facebook bootstrap incomplete: fb_dtsg/actor missing.');
+  }
+
+  return preflight;
 }
 
 function pythonWorkerCurrentStep(item) {
@@ -609,6 +626,9 @@ function pythonWorkerEnsureBmModalStyle() {
     '#pythonWorkerBmModal .pwbm-row{display:grid;grid-template-columns:minmax(130px,.7fr) minmax(170px,1fr) minmax(260px,1.4fr);gap:10px;align-items:start;padding:12px 0;border-bottom:1px solid #303640}',
     '#pythonWorkerBmModal .pwbm-row:last-child{border-bottom:0}',
     '#pythonWorkerBmModal .pwbm-profile{font-size:12px;font-weight:600;padding-top:9px;word-break:break-word}',
+    '#pythonWorkerBmModal .pwbm-session{display:block;margin-top:6px;font-size:11px;font-weight:400;color:#8f99a8}',
+    '#pythonWorkerBmModal .pwbm-session.ok{color:#82d99c}',
+    '#pythonWorkerBmModal .pwbm-session.error{color:#ff8f96}',
     '#pythonWorkerBmModal input,#pythonWorkerBmModal select{width:100%;min-height:38px;background:#1b1f25;border:1px solid #414a58;color:#e6ebf2;border-radius:7px;padding:7px 9px}',
     '#pythonWorkerBmModal .pwbm-manual{margin-top:7px}',
     '#pythonWorkerBmModal .pwbm-field small{display:block;margin-top:5px;color:#8f99a8;font-size:11px}',
@@ -688,6 +708,11 @@ async function pythonWorkerOpenOwnBmModal() {
     profile.className = 'pwbm-profile';
     profile.textContent = profileId;
 
+    const sessionHint = document.createElement('span');
+    sessionHint.className = 'pwbm-session';
+    sessionHint.textContent = 'FB session: проверяю…';
+    profile.appendChild(sessionHint);
+
     const nameField = document.createElement('div');
     nameField.className = 'pwbm-field';
     const name = document.createElement('input');
@@ -733,7 +758,10 @@ async function pythonWorkerOpenOwnBmModal() {
       page: page,
       manualPage: manualPage,
       pageHint: pageHint,
+      sessionHint: sessionHint,
       loaded: false,
+      preflightReady: false,
+      preflightError: '',
       error: ''
     };
   }
@@ -781,20 +809,32 @@ async function pythonWorkerOpenOwnBmModal() {
         ? String(cfg.page.value || cfg.manualPage.value || '').trim()
         : '';
       return cfg &&
+        cfg.preflightReady === true &&
         String(cfg.name.value || '').trim() &&
         selectedPage;
     });
 
     create.disabled = pythonWorkerUiState.busy || !allLoaded || !allReady;
 
-    if (!allLoaded) {
+    const allPreflightFinished = profiles.every(function(profileId) {
+      const cfg = rows[profileId];
+      return cfg && (cfg.preflightReady === true || String(cfg.preflightError || '').trim());
+    });
+
+    if (!allPreflightFinished) {
+      status.textContent = 'Проверяю FB session / proxy…';
+    } else if (!allLoaded) {
       status.textContent = 'Загружаю Primary Pages…';
     } else {
       const failed = profiles.filter(function(profileId) {
         const cfg = rows[profileId];
         if (!cfg) return true;
         const effectivePage = String(cfg.page.value || cfg.manualPage.value || '').trim();
-        return !String(cfg.name.value || '').trim() || !effectivePage;
+        return (
+          cfg.preflightReady !== true ||
+          !String(cfg.name.value || '').trim() ||
+          !effectivePage
+        );
       });
       status.textContent = failed.length
         ? 'Не готовы профили: ' + failed.join(', ')
@@ -811,6 +851,25 @@ async function pythonWorkerOpenOwnBmModal() {
     });
     cfg.manualPage.addEventListener('input', function() {
       if (String(cfg.manualPage.value || '').trim()) cfg.page.value = '';
+      refreshReadyState();
+    });
+
+    pythonWorkerProfilePreflight(profileId).then(function(result) {
+      cfg.preflightReady = true;
+      cfg.preflightError = '';
+      cfg.sessionHint.className = 'pwbm-session ok';
+      cfg.sessionHint.textContent =
+        'FB session: READY · proxy ' +
+        String(result.proxy_exit_ip || '?') +
+        ' · ' +
+        String(result.proxy_latency_ms || 0) +
+        ' ms';
+      refreshReadyState();
+    }).catch(function(error) {
+      cfg.preflightReady = false;
+      cfg.preflightError = String((error && error.message) || error);
+      cfg.sessionHint.className = 'pwbm-session error';
+      cfg.sessionHint.textContent = 'FB session: ' + cfg.preflightError;
       refreshReadyState();
     });
 
