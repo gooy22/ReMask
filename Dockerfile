@@ -151,7 +151,7 @@ RUN set -eux; \
     test -x /opt/remask-venv/bin/uvicorn; \
     test -f /opt/remask-python/main.py; \
     grep -q 'async def facebook_web' /opt/remask-python/app/session.py; \
-    grep -q 'await session.facebook_controller()' /opt/remask-python/app/provisioning/business_handler.py; \
+    grep -q 'create_business_resilient' /opt/remask-python/app/provisioning/business_handler.py; \
     grep -q 'await session.facebook_controller()' /opt/remask-python/app/provisioning/ad_account_handler.py; \
     grep -q 'classify_meta_request_error' /opt/remask-python/app/provisioning/meta_errors.py; \
     grep -q "@app.get('/ready'" /opt/remask-python/main.py; \
