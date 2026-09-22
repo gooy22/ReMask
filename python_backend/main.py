@@ -67,6 +67,7 @@ async def require_key(x_remask_worker_key: str | None = Header(default=None)) ->
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await store.init()
+    await pool.provisioning_state.init()
     if mirror.enabled:
         try:
             snapshots=await mirror.load_jobs()
@@ -81,7 +82,7 @@ async def lifespan(app: FastAPI):
     await asyncio.gather(smoke_task,return_exceptions=True)
     await pool.stop()
 
-app=FastAPI(title='ReMask Python Worker',version='0.3.0',lifespan=lifespan)
+app=FastAPI(title='ReMask Python Worker',version='0.4.0',lifespan=lifespan)
 
 @app.get('/health',response_model=HealthResponse)
 async def health() -> HealthResponse:

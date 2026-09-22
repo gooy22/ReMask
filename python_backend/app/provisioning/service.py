@@ -1,0 +1,225 @@
+from __future__ import annotations
+
+import asyncio
+from typing import Any
+
+import aiohttp
+
+from ..session import MetaSession, ProfileContext, ProxyCheckError
+from .models import ENTITY_RESULT_KEYS, ProvisioningError, ProvisioningStep
+from .proxy import ProxyChecker
+from .state import ProvisioningStateStore
+from .transport import ProvisioningTransport, TransportError
+
+
+class ProvisioningService:
+    def __init__(
+        self,
+        state: ProvisioningStateStore,
+        transport: ProvisioningTransport | None = None,
+    ) -> None:
+        self.state = state
+        self.transport = transport or ProvisioningTransport()
+
+    async def run(
+        self,
+        *,
+        item_id: str,
+        profile_id: str,
+        context: ProfileContext,
+        session: MetaSession,
+        payload: dict[str, Any],
+        task_idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        steps = self._parse_steps(payload.get("steps"))
+        parameters = payload.get("parameters") or {}
+        if not isinstance(parameters, dict):
+            raise ProvisioningError("INVALID_INPUT", "parameters must be an object")
+
+        scope_key = str(
+            payload.get("scope_key")
+            or task_idempotency_key
+            or "default"
+        ).strip() or "default"
+
+        completed: list[dict[str, Any]] = []
+
+        for step in steps:
+            prior = await self.state.step(item_id, step)
+            if prior and prior.get("status") == "SUCCESS":
+                completed.append(
+                    {
+                        "step": step.value,
+                        "status": "SUCCESS",
+                        "skipped": True,
+                        "result": prior.get("result") or {},
+                    }
+                )
+                continue
+
+            snapshot = await self.state.snapshot(profile_id, scope_key)
+            entity_key = ENTITY_RESULT_KEYS.get(step)
+            existing_id = getattr(snapshot, entity_key, None) if entity_key else None
+
+            if existing_id:
+                result = {entity_key: existing_id, "reused": True}
+                await self.state.complete(
+                    item_id, profile_id, scope_key, step, result
+                )
+                completed.append(
+                    {
+                        "step": step.value,
+                        "status": "SUCCESS",
+                        "skipped": True,
+                        "result": result,
+                    }
+                )
+                continue
+
+            await self.state.set_running(item_id, profile_id, scope_key, step)
+
+            try:
+                if step is ProvisioningStep.PROXY_CHECK:
+                    result = await ProxyChecker(
+                        context.proxy,
+                        context.user_agent,
+                    ).check()
+                else:
+                    step_params = parameters.get(step.value)
+                    if step_params is None:
+                        step_params = parameters.get(step.value.lower(), {})
+                    if not isinstance(step_params, dict):
+                        raise ProvisioningError(
+                            "INVALID_INPUT",
+                            f"parameters.{step.value} must be an object",
+                        )
+
+                    state = snapshot.as_dict()
+                    step_key = (
+                        f"{task_idempotency_key}:{step.value}"
+                        if task_idempotency_key
+                        else f"{profile_id}:{scope_key}:{step.value}"
+                    )
+
+                    if step is ProvisioningStep.BUSINESS:
+                        result = await self.transport.business(
+                            profile_id=profile_id,
+                            params=step_params,
+                            state=state,
+                            idempotency_key=step_key,
+                        )
+                    elif step is ProvisioningStep.AD_ACCOUNT:
+                        result = await self.transport.ad_account(
+                            profile_id=profile_id,
+                            params=step_params,
+                            state=state,
+                            idempotency_key=step_key,
+                        )
+                    else:
+                        result = await self.transport.funding(
+                            profile_id=profile_id,
+                            params=step_params,
+                            state=state,
+                            idempotency_key=step_key,
+                        )
+
+                if not isinstance(result, dict):
+                    raise ProvisioningError(
+                        "INVALID_RESULT",
+                        f"{step.value} returned a non-object result",
+                    )
+                if entity_key and not str(result.get(entity_key) or "").strip():
+                    raise ProvisioningError(
+                        "INVALID_RESULT",
+                        f"{step.value} result is missing {entity_key}",
+                    )
+
+                await self.state.complete(
+                    item_id, profile_id, scope_key, step, result
+                )
+                completed.append(
+                    {
+                        "step": step.value,
+                        "status": "SUCCESS",
+                        "skipped": False,
+                        "result": result,
+                    }
+                )
+            except Exception as exc:
+                error = self._classify(exc)
+                await self.state.fail(
+                    item_id,
+                    profile_id,
+                    scope_key,
+                    step,
+                    error.code,
+                    str(error),
+                )
+                raise error from exc
+
+        final_state = await self.state.snapshot(profile_id, scope_key)
+        return {
+            "profile_id": profile_id,
+            "scope_key": scope_key,
+            "steps": completed,
+            "state": final_state.as_dict(),
+        }
+
+    @staticmethod
+    def _parse_steps(raw: Any) -> list[ProvisioningStep]:
+        if raw is None:
+            return [
+                ProvisioningStep.PROXY_CHECK,
+                ProvisioningStep.BUSINESS,
+                ProvisioningStep.AD_ACCOUNT,
+                ProvisioningStep.FUNDING,
+            ]
+        if not isinstance(raw, list) or not raw:
+            raise ProvisioningError("INVALID_INPUT", "steps must be a non-empty array")
+
+        output: list[ProvisioningStep] = []
+        seen: set[ProvisioningStep] = set()
+        for value in raw:
+            try:
+                step = ProvisioningStep(str(value).strip().upper())
+            except ValueError as exc:
+                raise ProvisioningError(
+                    "INVALID_INPUT",
+                    f"unsupported provisioning step: {value}",
+                ) from exc
+            if step not in seen:
+                output.append(step)
+                seen.add(step)
+        return output
+
+    @staticmethod
+    def _classify(exc: Exception) -> ProvisioningError:
+        if isinstance(exc, ProvisioningError):
+            return exc
+        if isinstance(exc, TransportError):
+            return ProvisioningError(exc.code, str(exc), retryable=exc.retryable)
+        if isinstance(exc, ProxyCheckError):
+            return ProvisioningError("PROXY_DEAD", str(exc), retryable=True)
+        if isinstance(exc, asyncio.TimeoutError):
+            return ProvisioningError(
+                "REMOTE_TIMEOUT",
+                "remote request timeout",
+                retryable=True,
+            )
+        if isinstance(exc, aiohttp.ClientResponseError):
+            if exc.status == 429:
+                return ProvisioningError("RATE_LIMITED", str(exc), retryable=True)
+            if exc.status in {401, 403}:
+                return ProvisioningError("SESSION_EXPIRED", str(exc))
+            return ProvisioningError(
+                "REMOTE_HTTP_ERROR",
+                str(exc),
+                retryable=exc.status >= 500,
+            )
+        if isinstance(exc, aiohttp.ClientError):
+            return ProvisioningError(
+                "REMOTE_NETWORK_ERROR",
+                f"network error: {exc.__class__.__name__}",
+                retryable=True,
+            )
+        return ProvisioningError("TASK_FAILED", str(exc))
