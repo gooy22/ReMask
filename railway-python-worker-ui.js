@@ -1,4 +1,4 @@
-/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 REMASK_PYTHON_WORKER_UI_V140 REMASK_PYTHON_WORKER_UI_V141 REMASK_PYTHON_WORKER_UI_V142 REMASK_PYTHON_WORKER_UI_V143 REMASK_PYTHON_WORKER_UI_V144 REMASK_PYTHON_WORKER_UI_V145 REMASK_PYTHON_WORKER_UI_V146 REMASK_PYTHON_WORKER_UI_V147 */
+/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 REMASK_PYTHON_WORKER_UI_V140 REMASK_PYTHON_WORKER_UI_V141 REMASK_PYTHON_WORKER_UI_V142 REMASK_PYTHON_WORKER_UI_V143 REMASK_PYTHON_WORKER_UI_V144 REMASK_PYTHON_WORKER_UI_V145 REMASK_PYTHON_WORKER_UI_V146 REMASK_PYTHON_WORKER_UI_V147 REMASK_PYTHON_WORKER_UI_V148 */
 const restoredPythonWorkerJobId = localStorage.getItem('remask_python_worker_job_v1') || '';
 
 const pythonWorkerUiState = {
@@ -36,6 +36,24 @@ function pythonWorkerEl(id) {
 function pythonWorkerSetText(id, value) {
   const el = pythonWorkerEl(id);
   if (el) el.textContent = String(value == null ? '' : value);
+}
+
+async function pythonWorkerMapLimit(items, limit, worker) {
+  const source = Array.isArray(items) ? items.slice() : [];
+  const concurrency = Math.max(1, Math.min(Number(limit) || 1, source.length || 1));
+  let index = 0;
+
+  async function run() {
+    while (true) {
+      const current = index++;
+      if (current >= source.length) return;
+      await worker(source[current], current);
+    }
+  }
+
+  const runners = [];
+  for (let i = 0; i < concurrency; i++) runners.push(run());
+  await Promise.all(runners);
 }
 
 function pythonWorkerSelectionRefresh() {
@@ -86,10 +104,10 @@ function pythonWorkerSelectionRefresh() {
       profiles.length
         ? (
             pythonWorkerUiState.workerOnline === true
-              ? 'Worker UI v147 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
-              : 'Worker UI v147 · Выбрано FB-профилей: ' + profiles.length + '. Жду READY от worker.'
+              ? 'Worker UI v148 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
+              : 'Worker UI v148 · Выбрано FB-профилей: ' + profiles.length + '. Жду READY от worker.'
           )
-        : 'Worker UI v147 · Выберите FB-профили в Workspace.'
+        : 'Worker UI v148 · Выберите FB-профили в Workspace.'
     );
   }
 }
@@ -928,7 +946,7 @@ async function pythonWorkerOpenOwnBmModal() {
     }
   };
 
-  for (const profileId of profiles) {
+  pythonWorkerMapLimit(profiles, 8, async function(profileId) {
     const cfg = rows[profileId];
     cfg.name.addEventListener('input', refreshReadyState);
     cfg.businessEmail.addEventListener('input', refreshReadyState);
@@ -941,7 +959,7 @@ async function pythonWorkerOpenOwnBmModal() {
       refreshReadyState();
     });
 
-    pythonWorkerProfilePreflight(profileId).then(async function(result) {
+    return pythonWorkerProfilePreflight(profileId).then(async function(result) {
       cfg.preflightReady = true;
       cfg.preflightError = '';
 
@@ -1038,8 +1056,9 @@ async function pythonWorkerOpenOwnBmModal() {
       cfg.loaded = true;
       refreshReadyState();
     });
-;
-  }
+  }).catch(function(error) {
+    console.error('[ReMask Worker UI] preflight pool failed:', error);
+  });
 
   create.addEventListener('click', function() {
     if (create.disabled) return;
