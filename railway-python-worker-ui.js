@@ -1,4 +1,4 @@
-/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 REMASK_PYTHON_WORKER_UI_V140 REMASK_PYTHON_WORKER_UI_V141 REMASK_PYTHON_WORKER_UI_V142 REMASK_PYTHON_WORKER_UI_V143 REMASK_PYTHON_WORKER_UI_V144 REMASK_PYTHON_WORKER_UI_V145 REMASK_PYTHON_WORKER_UI_V146 REMASK_PYTHON_WORKER_UI_V147 REMASK_PYTHON_WORKER_UI_V148 REMASK_PYTHON_WORKER_UI_V149 */
+/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 REMASK_PYTHON_WORKER_UI_V140 REMASK_PYTHON_WORKER_UI_V141 REMASK_PYTHON_WORKER_UI_V142 REMASK_PYTHON_WORKER_UI_V143 REMASK_PYTHON_WORKER_UI_V144 REMASK_PYTHON_WORKER_UI_V145 REMASK_PYTHON_WORKER_UI_V146 REMASK_PYTHON_WORKER_UI_V147 REMASK_PYTHON_WORKER_UI_V148 REMASK_PYTHON_WORKER_UI_V149 REMASK_PYTHON_WORKER_UI_V150 */
 const restoredPythonWorkerJobId = localStorage.getItem('remask_python_worker_job_v1') || '';
 
 const pythonWorkerUiState = {
@@ -104,10 +104,10 @@ function pythonWorkerSelectionRefresh() {
       profiles.length
         ? (
             pythonWorkerUiState.workerOnline === true
-              ? 'Worker UI v149 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
-              : 'Worker UI v149 · Выбрано FB-профилей: ' + profiles.length + '. Жду READY от worker.'
+              ? 'Worker UI v150 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
+              : 'Worker UI v150 · Выбрано FB-профилей: ' + profiles.length + '. Жду READY от worker.'
           )
-        : 'Worker UI v149 · Выберите FB-профили в Workspace.'
+        : 'Worker UI v150 · Выберите FB-профили в Workspace.'
     );
   }
 }
@@ -754,17 +754,17 @@ function pythonWorkerApplyPages(cfg, pages, sourceLabel) {
 
   const preferred = list.find(function(item) {
     return !String((item && item.business_id) || '').trim();
-  }) || list[0];
+  }) || null;
 
   cfg.page.value = String((preferred && preferred.id) || '');
   cfg.page.disabled = false;
   cfg.loaded = true;
   cfg.error = '';
-  cfg.pageHint.className = '';
+  cfg.pageHint.className = preferred ? '' : 'error';
 
   const warnings = [];
   if (pagesAlreadyInBusiness) {
-    warnings.push('уже привязаны к BM: ' + pagesAlreadyInBusiness);
+    warnings.push('уже показывают владельца BM: ' + pagesAlreadyInBusiness);
   }
   if (restrictedPages) {
     warnings.push('restricted: ' + restrictedPages);
@@ -774,7 +774,11 @@ function pythonWorkerApplyPages(cfg, pages, sourceLabel) {
     'Pages: ' + list.length +
     ' · источник: ' + String(sourceLabel || 'Meta') +
     (warnings.length ? ' · ' + warnings.join(' · ') : '') +
-    ' · по умолчанию выбрана Page без известного владельца BM.';
+    (
+      preferred
+        ? ' · выбрана Page без известного владельца BM.'
+        : ' · свободная Page не определена автоматически; выбери вручную.'
+    );
 }
 
 
