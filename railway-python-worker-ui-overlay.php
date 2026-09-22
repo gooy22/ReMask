@@ -22,6 +22,12 @@ if (strpos($php, 'REMASK_PYTHON_WORKER_PANEL_V1') === false) {
 #pythonWorkerPanel .pw-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap}
 #pythonWorkerPanel .pw-title{font-size:16px;font-weight:700}
 #pythonWorkerPanel .pw-sub{font-size:12px;color:#9aa4b2;margin-top:3px}
+#pythonWorkerPanel .pw-health{display:inline-flex;align-items:center;gap:6px;margin-top:7px;font-size:11px;color:#9aa4b2}
+#pythonWorkerPanel .pw-health::before{content:'';width:7px;height:7px;border-radius:50%;background:#6b7280;display:inline-block}
+#pythonWorkerPanel .pw-health[data-state="online"]{color:#9fe3b2}
+#pythonWorkerPanel .pw-health[data-state="online"]::before{background:#3fbf73}
+#pythonWorkerPanel .pw-health[data-state="offline"]{color:#ff9a9a}
+#pythonWorkerPanel .pw-health[data-state="offline"]::before{background:#e85d68}
 #pythonWorkerPanel .pw-actions{display:flex;gap:8px;flex-wrap:wrap}
 #pythonWorkerPanel .pw-actions button{min-height:34px}
 #pythonWorkerPanel .pw-meta{display:grid;grid-template-columns:repeat(5,minmax(90px,1fr));gap:8px;margin-top:14px}
@@ -50,7 +56,8 @@ if (strpos($php, 'REMASK_PYTHON_WORKER_PANEL_V1') === false) {
   <div class="pw-head">
     <div>
       <div class="pw-title">Mass provisioning</div>
-      <div class="pw-sub">Выбранные FB-профили → Job → worker queue → profile context → proxy_check → persistent state.</div>
+      <div class="pw-sub">Выбранные FB-профили → Job → worker queue → profile context → proxy_check → private GraphQL.</div>
+      <div id="pythonPwWorkerHealth" class="pw-health" data-state="checking">Worker: проверяю…</div>
     </div>
     <div class="pw-actions">
       <button id="pythonProvisionStart" type="button" class="btn btn-primary" disabled>Запустить provisioning</button>
@@ -84,7 +91,7 @@ HTML;
 
     $php = preg_replace(
         '#scripts/workspace\.js(?:\?[^"\']*)?#',
-        'scripts/workspace.js?v=20260922-python-worker-ui-v134',
+        'scripts/workspace.js?v=20260922-python-worker-ui-v135',
         $php,
         1,
         $scriptCount
@@ -106,7 +113,7 @@ if ($workerPos === false) {
 
 $php = preg_replace(
     '#scripts/workspace\.js(?:\?[^"\']*)?#',
-    'scripts/workspace.js?v=20260922-python-worker-ui-v134',
+    'scripts/workspace.js?v=20260922-python-worker-ui-v135',
     $php,
     1
 ) ?? $php;
