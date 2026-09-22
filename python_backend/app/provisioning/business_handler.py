@@ -2,6 +2,7 @@ from __future__ import annotations
 from typing import Any
 import logging
 import asyncio
+import os
 
 from fb_worker import (
     WebProfile, 
@@ -68,16 +69,26 @@ async def business_handler(
         async with WebSessionManager(profile_obj) as боевая_сессия:
             controller = BusinessLogicController(боевая_сессия)
             
-            bm_id = await controller.create_business_manager(
-                name=bm_name,
-                page_id=page_id,
-            )
+            doc_id = str(os.getenv("REMASK_BM_DOC_ID") or "").strip()
+            if doc_id:
+                bm_id = await controller.create_business_manager(
+                    name=bm_name,
+                    page_id=page_id,
+                    doc_id=doc_id,
+                )
+            else:
+                bm_id = await controller.create_business_manager(
+                    name=bm_name,
+                    page_id=page_id,
+                )
             
             if not bm_id:
                 raise ProvisioningError("INVALID_RESULT", "Facebook returned empty Business ID", retryable=False)
                 
             return {
-                "business_id": str(bm_id)
+                "business_id": str(bm_id),
+                "transport": "facebook_web_graphql",
+                "primary_page_id": page_id,
             }
             
     except AuthenticationError as exc:
@@ -86,7 +97,16 @@ async def business_handler(
     except RemoteRequestError as exc:
         exc_msg = str(exc).lower()
         
-        if any(k in exc_msg for k in ["limit", "max business", "reached maximum"]):
+        if any(k in exc_msg for k in ['"code":190', "oauth", "session expired", "checkpoint"]):
+            err_code = "SESSION_EXPIRED"
+            is_retry = False
+        elif any(k in exc_msg for k in ['"code":4', '"code":17', "rate limit", "too many calls"]):
+            err_code = "RATE_LIMITED"
+            is_retry = True
+        elif any(k in exc_msg for k in ["permission", "not authorized", "insufficient permission"]):
+            err_code = "PERMISSION_DENIED"
+            is_retry = False
+        elif any(k in exc_msg for k in ["limit", "max business", "reached maximum"]):
             err_code = "BUSINESS_LIMIT_REACHED"
             is_retry = False
         elif any(k in exc_msg for k in ["policy", "ban", "restrict", "403", "disabled"]):
@@ -96,7 +116,6 @@ async def business_handler(
             err_code = "REMOTE_TIMEOUT"
             is_retry = True
         else:
-            # СОХРАНЯЕМ СИСТЕМНЫЙ МАРКЕР ДЛЯ ТОЧНОЙ ОТЛАДКИ ПО ТРЕБОВАНИЮ БОТА
             err_code = "META_UNKNOWN_ERROR"
             is_retry = False
             
