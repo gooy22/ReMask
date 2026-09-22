@@ -121,9 +121,45 @@ PY
   done
 
   if [ "$WORKER_HEALTH_OK" != "1" ]; then
-    echo "Embedded Python worker failed HTTP health check" >&2
+    echo "Embedded Python worker failed initial HTTP health check; keeping web service online and starting watchdog" >&2
     tail -n 160 "$DATA_DIR/python-worker.log" >&2 || true
-    exit 31
+
+    (
+      while true; do
+        if /opt/remask-venv/bin/python - "$PYTHON_WORKER_PORT" <<'PY'
+import sys
+import urllib.request
+
+port = int(sys.argv[1])
+try:
+    with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=1.0) as response:
+        raise SystemExit(0 if response.status == 200 else 1)
+except Exception:
+    raise SystemExit(1)
+PY
+        then
+          sleep 5
+          continue
+        fi
+
+        CURRENT_PID=""
+        if [ -f "$DATA_DIR/python-worker.pid" ]; then
+          CURRENT_PID="$(cat "$DATA_DIR/python-worker.pid" 2>/dev/null || true)"
+        fi
+
+        if [ -z "$CURRENT_PID" ] || ! kill -0 "$CURRENT_PID" 2>/dev/null; then
+          echo "[$(date -u +%FT%TZ)] restarting embedded Python worker" >> "$DATA_DIR/python-worker.log"
+          (
+            cd /opt/remask-python
+            exec /opt/remask-venv/bin/uvicorn main:app --host 127.0.0.1 --port "$PYTHON_WORKER_PORT" --workers 1
+          ) >> "$DATA_DIR/python-worker.log" 2>&1 &
+          echo "$!" > "$DATA_DIR/python-worker.pid"
+        fi
+
+        sleep 5
+      done
+    ) &
+    echo "$!" > "$DATA_DIR/python-worker-watchdog.pid" || true
   fi
 fi
 
