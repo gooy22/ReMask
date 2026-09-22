@@ -29,8 +29,7 @@ mkdir -p \
   "$REMASK_PYTHON_STATE_DIR" \
   "$(dirname "$REMASK_JOB_DB")"
 
-touch "$REMASK_ACCOUNTS_FILE" "$REMASK_META_USAGE_FILE"
-[ -s "$REMASK_ACCOUNTS_FILE" ] || printf '[]\n' > "$REMASK_ACCOUNTS_FILE"
+touch "$REMASK_META_USAGE_FILE"
 [ -s "$REMASK_META_USAGE_FILE" ] || printf '{}\n' > "$REMASK_META_USAGE_FILE"
 
 # Keep legacy runtime paths volume-backed too. Older ReMask classes may still
@@ -55,6 +54,9 @@ persist_legacy_file() {
 }
 
 persist_legacy_file "$ROOT/accounts.json" "$REMASK_ACCOUNTS_FILE" '[]'
+if [ -d "$ROOT/data" ]; then
+  persist_legacy_file "$ROOT/data/accounts.json" "$REMASK_ACCOUNTS_FILE" '[]'
+fi
 persist_legacy_file "$ROOT/bundles.json" "$DATA_DIR/bundles.json" '[]'
 
 rm -rf "$ROOT/health"
