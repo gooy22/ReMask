@@ -2,15 +2,11 @@ from __future__ import annotations
 from typing import Any
 import logging
 import asyncio
-import os
 
 from fb_worker import (
-    WebProfile, 
-    WebSessionManager, 
-    BusinessLogicController,
     AuthenticationError,
     RemoteRequestError,
-    ProxyError
+    ProxyError,
 )
 from .models import ProvisioningError
 
@@ -31,10 +27,6 @@ async def business_handler(
         
     idempotency_key = kwargs.get("idempotency_key") or f"{profile_id}:BUSINESS"
     
-    cookies = dict(context.cookies)
-    proxy = context.proxy
-    user_agent = context.user_agent
-
     # 1. СТРОГАЯ НОРМАЛИЗАЦИЯ ИМЕНИ БМ И ЗАЩИТА ОТ ПРОБЕЛОВ
     bm_name = str(params.get("name") or params.get("bm_name") or f"BM_{profile_id}").strip()
     if not bm_name:
@@ -58,38 +50,25 @@ async def business_handler(
         idempotency_key,
     )
 
-    profile_obj = WebProfile(
-        name=profile_id,
-        cookies=cookies,
-        proxy=proxy,
-        user_agent=user_agent
-    )
-    
     try:
-        async with WebSessionManager(profile_obj) as боевая_сессия:
-            controller = BusinessLogicController(боевая_сессия)
-            
-            doc_id = str(os.getenv("REMASK_BM_DOC_ID") or "").strip()
-            if doc_id:
-                bm_id = await controller.create_business_manager(
-                    name=bm_name,
-                    page_id=page_id,
-                    doc_id=doc_id,
-                )
-            else:
-                bm_id = await controller.create_business_manager(
-                    name=bm_name,
-                    page_id=page_id,
-                )
-            
-            if not bm_id:
-                raise ProvisioningError("INVALID_RESULT", "Facebook returned empty Business ID", retryable=False)
-                
-            return {
-                "business_id": str(bm_id),
-                "transport": "facebook_web_graphql",
-                "primary_page_id": page_id,
-            }
+        controller = await session.facebook_controller()
+        bm_id = await controller.create_business_manager(
+            name=bm_name,
+            page_id=page_id,
+        )
+
+        if not bm_id:
+            raise ProvisioningError(
+                "INVALID_RESULT",
+                "Facebook returned empty Business ID",
+                retryable=False,
+            )
+
+        return {
+            "business_id": str(bm_id),
+            "transport": "facebook_web_graphql",
+            "primary_page_id": page_id,
+        }
             
     except AuthenticationError as exc:
         raise ProvisioningError("SESSION_EXPIRED", f"FB Session expired: {exc}", retryable=False)
