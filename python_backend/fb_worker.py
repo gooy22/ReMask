@@ -97,6 +97,25 @@ class FacebookWebSession:
 
     GRAPHQL_URL = "https://business.facebook.com/api/graphql/"
 
+    FB_DTSG_PATTERNS = (
+        (
+            r'["\']DTSGInitialData["\'].{0,12000}?'
+            r'["\']token["\']\s*:\s*["\']([^"\']+)["\']'
+        ),
+        (
+            r'\[\s*["\']DTSGInitialData["\']\s*,\s*\[\]\s*,\s*\{'
+            r'.{0,4000}?["\']token["\']\s*:\s*["\']([^"\']+)["\']'
+        ),
+        (
+            r'name=["\']fb_dtsg["\']'
+            r'[^>]*value=["\']([^"\']+)["\']'
+        ),
+        (
+            r'["\']fb_dtsg["\']'
+            r'\s*[:=]\s*["\']([^"\']+)["\']'
+        ),
+    )
+
     def __init__(
         self,
         profile: WebProfile,
@@ -308,24 +327,7 @@ class FacebookWebSession:
 
             session = await self._ensure_session()
 
-            token_patterns = [
-                (
-                    r'["\']DTSGInitialData["\'].{0,12000}?'
-                    r'["\']token["\']\s*:\s*["\']([^"\']+)["\']'
-                ),
-                (
-                    r'\[\s*["\']DTSGInitialData["\']\s*,\s*\[\]\s*,\s*\{'
-                    r'.{0,4000}?["\']token["\']\s*:\s*["\']([^"\']+)["\']'
-                ),
-                (
-                    r'name=["\']fb_dtsg["\']'
-                    r'[^>]*value=["\']([^"\']+)["\']'
-                ),
-                (
-                    r'["\']fb_dtsg["\']'
-                    r'\s*[:=]\s*["\']([^"\']+)["\']'
-                ),
-            ]
+            token_patterns = list(self.FB_DTSG_PATTERNS)
 
             bootstrap_urls = (
                 self.ADS_MANAGER_URL,
