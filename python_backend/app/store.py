@@ -44,6 +44,7 @@ class JobStore:
                 attempt INTEGER NOT NULL DEFAULT 0,
                 error_code TEXT,
                 error_message TEXT,
+                retryable INTEGER NOT NULL DEFAULT 0,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL,
                 UNIQUE(job_id, profile_id)
@@ -67,6 +68,19 @@ class JobStore:
             CREATE INDEX IF NOT EXISTS idx_items_status ON job_items(status);
             CREATE INDEX IF NOT EXISTS idx_tasks_item ON job_tasks(item_id, position);
             ''')
+
+            # Forward-compatible migration for databases created before
+            # retryability became first-class state.
+            for table in ("job_items", "job_tasks"):
+                columns = {
+                    str(row["name"])
+                    for row in con.execute(f"PRAGMA table_info({table})").fetchall()
+                }
+                if "retryable" not in columns:
+                    con.execute(
+                        f"ALTER TABLE {table} "
+                        "ADD COLUMN retryable INTEGER NOT NULL DEFAULT 0"
+                    )
 
     async def create_job(self, request: Any) -> tuple[str, bool]:
         return await asyncio.to_thread(self._create_job_sync, request)
@@ -141,18 +155,28 @@ class JobStore:
             return out
 
     async def set_item_running(self, item_id: str) -> None:
-        await asyncio.to_thread(self._execute, "UPDATE job_items SET status='RUNNING',attempt=attempt+1,error_code=NULL,error_message=NULL,updated_at=? WHERE id=?", (_now(),item_id))
+        await asyncio.to_thread(self._execute, "UPDATE job_items SET status='RUNNING',attempt=attempt+1,error_code=NULL,error_message=NULL,retryable=0,updated_at=? WHERE id=?", (_now(),item_id))
 
     async def set_task_running(self, task_id: str) -> None:
-        await asyncio.to_thread(self._execute, "UPDATE job_tasks SET status='RUNNING',attempt=attempt+1,error_code=NULL,error_message=NULL,updated_at=? WHERE id=?", (_now(),task_id))
+        await asyncio.to_thread(self._execute, "UPDATE job_tasks SET status='RUNNING',attempt=attempt+1,error_code=NULL,error_message=NULL,retryable=0,updated_at=? WHERE id=?", (_now(),task_id))
 
     async def set_task_success(self, task_id: str, result: dict[str, Any]) -> None:
-        await asyncio.to_thread(self._execute, "UPDATE job_tasks SET status='SUCCESS',result_json=?,updated_at=? WHERE id=?",
+        await asyncio.to_thread(self._execute, "UPDATE job_tasks SET status='SUCCESS',result_json=?,retryable=0,updated_at=? WHERE id=?",
                                 (json.dumps(result,separators=(',',':')),_now(),task_id))
 
-    async def set_task_failed(self, task_id: str, code: str, message: str) -> None:
-        await asyncio.to_thread(self._execute, "UPDATE job_tasks SET status='FAILED',error_code=?,error_message=?,updated_at=? WHERE id=?",
-                                (code,message[:1000],_now(),task_id))
+    async def set_task_failed(
+        self,
+        task_id: str,
+        code: str,
+        message: str,
+        *,
+        retryable: bool = False,
+    ) -> None:
+        await asyncio.to_thread(
+            self._execute,
+            "UPDATE job_tasks SET status='FAILED',error_code=?,error_message=?,retryable=?,updated_at=? WHERE id=?",
+            (code, message[:1000], 1 if retryable else 0, _now(), task_id),
+        )
 
     async def finalize_item(self, item_id: str) -> None:
         await asyncio.to_thread(self._finalize_item_sync, item_id)
@@ -160,12 +184,19 @@ class JobStore:
     def _finalize_item_sync(self, item_id: str) -> None:
         now=_now()
         with self._connect() as con:
-            rows=con.execute('SELECT status,error_code,error_message FROM job_tasks WHERE item_id=?', (item_id,)).fetchall()
+            rows=con.execute(
+                'SELECT status,error_code,error_message,retryable FROM job_tasks WHERE item_id=?',
+                (item_id,),
+            ).fetchall()
             failed=[r for r in rows if r['status']=='FAILED']
             status='FAILED' if failed else 'SUCCESS'
             code=failed[0]['error_code'] if failed else None
             msg=failed[0]['error_message'] if failed else None
-            con.execute('UPDATE job_items SET status=?,error_code=?,error_message=?,updated_at=? WHERE id=?', (status,code,msg,now,item_id))
+            retryable=1 if any(bool(r['retryable']) for r in failed) else 0
+            con.execute(
+                'UPDATE job_items SET status=?,error_code=?,error_message=?,retryable=?,updated_at=? WHERE id=?',
+                (status,code,msg,retryable,now,item_id),
+            )
             row=con.execute('SELECT job_id FROM job_items WHERE id=?', (item_id,)).fetchone()
             if row:
                 self._refresh_job_sync(con, str(row['job_id']))
@@ -194,9 +225,11 @@ class JobStore:
             items=[]
             for ir in con.execute('SELECT * FROM job_items WHERE job_id=? ORDER BY created_at', (job_id,)).fetchall():
                 item=dict(ir)
+                item['retryable']=bool(item.get('retryable'))
                 tasks=[]
                 for tr in con.execute('SELECT * FROM job_tasks WHERE item_id=? ORDER BY position', (item['id'],)).fetchall():
                     t=dict(tr)
+                    t['retryable']=bool(t.get('retryable'))
                     t['payload']=json.loads(t.pop('payload_json'))
                     if t.get('result_json'):
                         t['result']=json.loads(t['result_json'])
@@ -344,13 +377,26 @@ class JobStore:
     def _retry_failed_sync(self, job_id: str) -> int:
         now=_now()
         with self._connect() as con:
-            rows=con.execute("SELECT id FROM job_items WHERE job_id=? AND status='FAILED'", (job_id,)).fetchall()
+            rows=con.execute(
+                "SELECT id FROM job_items WHERE job_id=? AND status='FAILED' AND retryable=1",
+                (job_id,),
+            ).fetchall()
             ids=[str(r['id']) for r in rows]
             for item_id in ids:
-                con.execute("UPDATE job_items SET status='QUEUED',error_code=NULL,error_message=NULL,updated_at=? WHERE id=?", (now,item_id))
-                con.execute("UPDATE job_tasks SET status='QUEUED',error_code=NULL,error_message=NULL,updated_at=? WHERE item_id=? AND status='FAILED'", (now,item_id))
+                con.execute(
+                    "UPDATE job_items SET status='QUEUED',error_code=NULL,error_message=NULL,retryable=0,updated_at=? WHERE id=?",
+                    (now,item_id),
+                )
+                con.execute(
+                    "UPDATE job_tasks SET status='QUEUED',error_code=NULL,error_message=NULL,retryable=0,updated_at=? "
+                    "WHERE item_id=? AND status='FAILED' AND retryable=1",
+                    (now,item_id),
+                )
             if ids:
-                con.execute("UPDATE jobs SET status='QUEUED',updated_at=? WHERE id=?", (now,job_id))
+                con.execute(
+                    "UPDATE jobs SET status='QUEUED',updated_at=? WHERE id=?",
+                    (now,job_id),
+                )
             return len(ids)
 
     async def queue_count(self) -> int:
