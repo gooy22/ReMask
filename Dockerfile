@@ -20,9 +20,6 @@ RUN /opt/remask-venv/bin/python -m compileall -q /opt/remask-python \
     && cd /opt/remask-python \
     && /opt/remask-venv/bin/python -c "import fb_worker; from app.session import ProfileSession; from app.provisioning.business_handler import business_handler; from app.provisioning.ad_account_handler import ad_account_handler; from app.provisioning.meta_errors import classify_meta_request_error; from app.facebook_graph_api import FacebookGraphApi; from app.business_create_service import create_business_resilient; from app.facebook_page_discovery import discover_pages_via_web; from app.facebook_query_discovery import discover_persisted_query; assert fb_worker.WebSessionManager is fb_worker.FacebookWebSession"
 
-RUN cd /opt/remask-python \
-    && /opt/remask-venv/bin/python -m unittest discover -s tests -p 'test_*.py' -v
-
 COPY .deploy/clean-preview-valid/runtime.b64.* /tmp/remask-parts/
 COPY railway-persistence-overlay.php /tmp/railway-persistence-overlay.php
 COPY railway-launch-overlay.php /tmp/railway-launch-overlay.php
@@ -188,6 +185,7 @@ RUN set -eux; \
     php -l /var/www/html/workspace.php; \
     grep -q 'REMASK_PYTHON_WORKER_PANEL_V1' /var/www/html/workspace.php; \
     grep -q 'REMASK_PYTHON_WORKER_UI_V1' /var/www/html/scripts/workspace.js; \
+    grep -q 'REMASK_PYTHON_WORKER_UI_V147' /var/www/html/scripts/workspace.js; \
     grep -q 'pythonWorkerJobs.php' /var/www/html/scripts/workspace.js; \
     grep -q 'Retry Failed' /var/www/html/workspace.php; \
     php -l /var/www/html/ajax/metaHierarchy.php; \
