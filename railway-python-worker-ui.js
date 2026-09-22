@@ -1,11 +1,15 @@
 /* REMASK_PYTHON_WORKER_UI_V1 */
+const restoredPythonWorkerJobId = localStorage.getItem('remask_python_worker_job_v1') || '';
+
 const pythonWorkerUiState = {
-  jobId: localStorage.getItem('remask_python_worker_job_v1') || '',
+  jobId: restoredPythonWorkerJobId,
   job: null,
-  busy: false,
+  busy: restoredPythonWorkerJobId !== '',
   pollTimer: null,
   polling: false
 };
+
+window.pythonWorkerUiState = pythonWorkerUiState;
 
 function pythonWorkerSelectedProfiles() {
   try {
@@ -36,17 +40,37 @@ function pythonWorkerSetText(id, value) {
 function pythonWorkerSelectionRefresh() {
   const profiles = pythonWorkerSelectedProfiles();
   const start = pythonWorkerEl('pythonProvisionStart');
+
   if (start) {
     start.disabled = pythonWorkerUiState.busy || profiles.length === 0;
     start.textContent = profiles.length
-      ? 'Запустить provisioning (' + profiles.length + ')'
-      : 'Запустить provisioning';
+      ? 'Add BM (' + profiles.length + ')'
+      : 'Add BM';
   }
+
+  document
+    .querySelectorAll('.js-btn-add-bm, #btn_add_bm, .js-python-add-bm')
+    .forEach(function(btn) {
+      btn.disabled = pythonWorkerUiState.busy;
+      btn.classList.toggle('is-loading', pythonWorkerUiState.busy);
+    });
+
+  const retry = pythonWorkerEl('pythonProvisionRetry');
+  if (retry) {
+    const items = pythonWorkerUiState.job && Array.isArray(pythonWorkerUiState.job.items)
+      ? pythonWorkerUiState.job.items
+      : [];
+    const hasFailed = items.some(function(item) {
+      return item && String(item.status || '').toUpperCase() === 'FAILED';
+    });
+    retry.disabled = pythonWorkerUiState.busy || !pythonWorkerUiState.jobId || !hasFailed;
+  }
+
   if (!pythonWorkerUiState.jobId && !pythonWorkerUiState.busy) {
     pythonWorkerSetText(
       'pythonPwStatus',
       profiles.length
-        ? 'Готово к запуску: ' + profiles.length + ' FB-профилей. Worker pipeline: profile context → proxy_check.'
+        ? 'Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
         : 'Выберите FB-профили в Workspace.'
     );
   }
@@ -74,6 +98,25 @@ async function pythonWorkerBridge(payload) {
 }
 
 function pythonWorkerCurrentStep(item) {
+  const steps = Array.isArray(item && item.provisioning_steps)
+    ? item.provisioning_steps
+    : [];
+
+  const runningStep = steps.find(function(step) {
+    return step && String(step.status || '').toUpperCase() === 'RUNNING';
+  });
+  if (runningStep) return String(runningStep.step || 'RUNNING');
+
+  const failedStep = steps.find(function(step) {
+    return step && String(step.status || '').toUpperCase() === 'FAILED';
+  });
+  if (failedStep) return String(failedStep.step || 'FAILED');
+
+  if (steps.length) {
+    const lastStep = steps[steps.length - 1];
+    if (lastStep && lastStep.step) return String(lastStep.step);
+  }
+
   const tasks = Array.isArray(item && item.tasks) ? item.tasks : [];
   const running = tasks.find(function(t){ return t && t.status === 'RUNNING'; });
   if (running) return String(running.action || 'RUNNING');
@@ -169,53 +212,119 @@ function pythonWorkerSchedulePoll(delay) {
   }, ms);
 }
 
-async function pythonWorkerPoll() {
-  if (!pythonWorkerUiState.jobId || pythonWorkerUiState.polling) return;
-  pythonWorkerUiState.polling = true;
-  try {
-    const data = await pythonWorkerBridge({
-      action: 'status',
-      job_id: pythonWorkerUiState.jobId
-    });
-    const job = data.job;
-    if (!job || typeof job !== 'object') throw new Error('Worker bridge returned no job.');
-    pythonWorkerRenderJob(job);
+function pythonWorkerResolveBmName(button) {
+  let value = '';
 
-    const status = String(job.status || '').toUpperCase();
-    if (['SUCCESS', 'FAILED', 'PARTIAL'].indexOf(status) === -1) {
-      pythonWorkerSchedulePoll(900);
-    }
+  if (button && button.dataset && button.dataset.bmName) {
+    value = String(button.dataset.bmName).trim();
+  }
+
+  if (!value) {
+    const input = document.querySelector(
+      '#bm_name_input_field, #bm_name, .js-bm-name-input'
+    );
+    if (input) value = String(input.value || '').trim();
+  }
+
+  if (!value) {
+    const prompted = window.prompt('Имя нового Business Manager:', 'ReMask_BM_New');
+    if (prompted === null) return '';
+    value = String(prompted).trim();
+  }
+
+  return value;
+}
+
+async function pythonWorkerRefreshProfile(profileId) {
+  if (typeof apiJson !== 'function' || typeof post !== 'function') {
+    return false;
+  }
+
+  try {
+    const data = await apiJson(
+      'ajax/metaHierarchy.php',
+      post({
+        action: 'sync_profile',
+        profile: profileId
+      })
+    );
+
+    if (typeof applySnapshot === 'function') applySnapshot(data);
+    if (typeof render === 'function') render();
+    return true;
   } catch (error) {
-    pythonWorkerSetText('pythonPwStatus', 'Ошибка чтения Job: ' + ((error && error.message) || error));
-    pythonWorkerSchedulePoll(3000);
-  } finally {
-    pythonWorkerUiState.polling = false;
-    pythonWorkerSelectionRefresh();
+    console.error('[ReMask Worker UI] sync_profile failed for ' + profileId + ':', error);
+    return false;
   }
 }
 
-async function pythonWorkerStartProvisioning() {
+async function pythonWorkerRefreshSuccessfulProfiles(items) {
+  const profiles = Array.from(new Set(
+    (Array.isArray(items) ? items : [])
+      .filter(function(item) {
+        return item && String(item.status || '').toUpperCase() === 'SUCCESS';
+      })
+      .map(function(item) {
+        return String(item.profile_id || '').trim();
+      })
+      .filter(Boolean)
+  ));
+
+  let needsReload = false;
+
+  for (const profileId of profiles) {
+    const ok = await pythonWorkerRefreshProfile(profileId);
+    if (!ok) needsReload = true;
+  }
+
+  if (needsReload && profiles.length) {
+    setTimeout(function() {
+      window.location.reload();
+    }, 800);
+  }
+}
+
+async function pythonWorkerStartBusiness(bmName) {
   const profiles = pythonWorkerSelectedProfiles();
   if (!profiles.length || pythonWorkerUiState.busy) return;
 
+  const cleanName = String(bmName || '').trim();
+  if (!cleanName) return;
+
   pythonWorkerUiState.busy = true;
   pythonWorkerSelectionRefresh();
-  pythonWorkerSetText('pythonPwStatus', 'Создаю bulk Job для ' + profiles.length + ' FB-профилей...');
+  pythonWorkerSetText(
+    'pythonPwStatus',
+    'Создаю Add BM Job для ' + profiles.length + ' FB-профилей...'
+  );
 
   try {
-    const idempotency = 'workspace-provision-' + Date.now() + '-' + Math.random().toString(16).slice(2);
-    const payloadProfiles = profiles.map(function(profileId) {
+    const nonce = Date.now() + '-' + Math.random().toString(16).slice(2);
+
+    const payloadProfiles = profiles.map(function(profileId, index) {
       return {
-        profile_id: profileId,
+        profile_id: String(profileId),
         tasks: [
-          {action: 'proxy_check', payload: {}}
+          {
+            action: 'provisioning',
+            idempotency_key: 'add-bm-' + nonce + '-' + index,
+            payload: {
+              steps: ['PROXY_CHECK', 'BUSINESS'],
+              scope_key: 'add-bm-' + nonce,
+              parameters: {
+                BUSINESS: {
+                  name: cleanName
+                }
+              }
+            }
+          }
         ]
       };
     });
 
     const data = await pythonWorkerBridge({
       action: 'create',
-      idempotency_key: idempotency,
+      idempotency_key: 'workspace-add-bm-' + nonce,
       profiles: payloadProfiles
     });
 
@@ -224,19 +333,136 @@ async function pythonWorkerStartProvisioning() {
 
     pythonWorkerUiState.jobId = jobId;
     localStorage.setItem('remask_python_worker_job_v1', jobId);
+
     pythonWorkerSetText('pythonPwJob', 'Job: ' + jobId);
-    pythonWorkerSetText('pythonPwStatus', 'Bulk Job создан. Ожидаю worker...');
-    await pythonWorkerPoll();
+    pythonWorkerSetText('pythonPwStatus', 'Создание Business Manager запущено...');
+
+    pythonWorkerPoll().catch(function(error) {
+      pythonWorkerSetText(
+        'pythonPwStatus',
+        'Ошибка polling: ' + ((error && error.message) || error)
+      );
+    });
   } catch (error) {
-    pythonWorkerSetText('pythonPwStatus', 'Не удалось создать Job: ' + ((error && error.message) || error));
-  } finally {
     pythonWorkerUiState.busy = false;
     pythonWorkerSelectionRefresh();
+    pythonWorkerSetText(
+      'pythonPwStatus',
+      'Add BM: ' + ((error && error.message) || error)
+    );
+    console.error('[ReMask Worker UI] Add BM launch failed:', error);
   }
 }
 
+async function pythonWorkerStartProvisioning() {
+  const start = pythonWorkerEl('pythonProvisionStart');
+  const bmName = pythonWorkerResolveBmName(start);
+  if (!bmName) return;
+  return pythonWorkerStartBusiness(bmName);
+}
+
+async function pythonWorkerPoll() {
+  if (!pythonWorkerUiState.jobId || pythonWorkerUiState.polling) return;
+
+  pythonWorkerUiState.polling = true;
+
+  try {
+    const data = await pythonWorkerBridge({
+      action: 'status',
+      job_id: pythonWorkerUiState.jobId
+    });
+
+    const job = data && data.job;
+    if (!job || typeof job !== 'object') {
+      throw new Error('Worker bridge returned no job.');
+    }
+
+    pythonWorkerRenderJob(job);
+
+    const items = Array.isArray(job.items) ? job.items : [];
+    const runningSteps = [];
+
+    for (const item of items) {
+      const steps = Array.isArray(item && item.provisioning_steps)
+        ? item.provisioning_steps
+        : [];
+      const running = steps.find(function(step) {
+        return step && String(step.status || '').toUpperCase() === 'RUNNING';
+      });
+      if (running && running.step) runningSteps.push(String(running.step));
+    }
+
+    if (runningSteps.length) {
+      pythonWorkerSetText(
+        'pythonPwStatus',
+        'Выполняется: ' + Array.from(new Set(runningSteps)).join(', ')
+      );
+    }
+
+    const status = String(job.status || '').toUpperCase();
+    const terminal = ['SUCCESS', 'FAILED', 'PARTIAL'].indexOf(status) !== -1;
+
+    if (!terminal) {
+      pythonWorkerSchedulePoll(1000);
+      return;
+    }
+
+    if (pythonWorkerUiState.pollTimer) {
+      clearTimeout(pythonWorkerUiState.pollTimer);
+      pythonWorkerUiState.pollTimer = null;
+    }
+
+    pythonWorkerUiState.busy = false;
+
+    if (status === 'SUCCESS') {
+      pythonWorkerSetText('pythonPwStatus', 'Business Manager успешно создан.');
+      await pythonWorkerRefreshSuccessfulProfiles(items);
+
+      pythonWorkerUiState.jobId = '';
+      localStorage.removeItem('remask_python_worker_job_v1');
+    } else {
+      const errors = items
+        .filter(function(item) {
+          return item && String(item.status || '').toUpperCase() === 'FAILED';
+        })
+        .map(function(item) {
+          return [item.profile_id, item.error_code, item.error_message]
+            .filter(Boolean)
+            .join(': ');
+        });
+
+      pythonWorkerSetText(
+        'pythonPwStatus',
+        status === 'PARTIAL'
+          ? 'Часть BM создана. Ошибки: ' + (errors.join(' · ') || 'неизвестная ошибка')
+          : 'Создание BM завершилось ошибкой: ' + (errors.join(' · ') || 'неизвестная ошибка')
+      );
+
+      if (status === 'PARTIAL') {
+        await pythonWorkerRefreshSuccessfulProfiles(items);
+      }
+
+      // FAILED/PARTIAL job_id сохраняем для Retry Failed.
+      localStorage.setItem('remask_python_worker_job_v1', pythonWorkerUiState.jobId);
+    }
+
+    pythonWorkerSelectionRefresh();
+  } catch (error) {
+    pythonWorkerSetText(
+      'pythonPwStatus',
+      'Ошибка чтения Job: ' + ((error && error.message) || error)
+    );
+    pythonWorkerSchedulePoll(3000);
+  } finally {
+    pythonWorkerUiState.polling = false;
+  }
+}
+
+window.pythonWorkerStartBusiness = pythonWorkerStartBusiness;
+
 async function pythonWorkerRetryFailed() {
   if (!pythonWorkerUiState.jobId || pythonWorkerUiState.busy) return;
+
   pythonWorkerUiState.busy = true;
   pythonWorkerSelectionRefresh();
   pythonWorkerSetText('pythonPwStatus', 'Повторно ставлю FAILED JobItem в очередь...');
@@ -246,37 +472,91 @@ async function pythonWorkerRetryFailed() {
       action: 'retry_failed',
       job_id: pythonWorkerUiState.jobId
     });
+
     const requeued = Number((data && data.result && data.result.requeued) || 0);
-    pythonWorkerSetText('pythonPwStatus', 'Retry Failed: возвращено в очередь ' + requeued + '.');
-    await pythonWorkerPoll();
+
+    if (requeued <= 0) {
+      pythonWorkerUiState.busy = false;
+      pythonWorkerSelectionRefresh();
+      pythonWorkerSetText('pythonPwStatus', 'Нет FAILED элементов для повторного запуска.');
+      return;
+    }
+
+    pythonWorkerSetText(
+      'pythonPwStatus',
+      'Retry Failed: возвращено в очередь ' + requeued + '.'
+    );
+
+    pythonWorkerPoll().catch(function(error) {
+      pythonWorkerSetText(
+        'pythonPwStatus',
+        'Retry Failed polling error: ' + ((error && error.message) || error)
+      );
+    });
   } catch (error) {
-    pythonWorkerSetText('pythonPwStatus', 'Retry Failed error: ' + ((error && error.message) || error));
-  } finally {
     pythonWorkerUiState.busy = false;
     pythonWorkerSelectionRefresh();
+    pythonWorkerSetText(
+      'pythonPwStatus',
+      'Retry Failed error: ' + ((error && error.message) || error)
+    );
   }
 }
 
 function pythonWorkerInitUi() {
   const start = pythonWorkerEl('pythonProvisionStart');
   const retry = pythonWorkerEl('pythonProvisionRetry');
-  if (!start || !retry) return;
 
-  start.addEventListener('click', function() {
-    pythonWorkerStartProvisioning().catch(function(error) {
-      pythonWorkerSetText('pythonPwStatus', String((error && error.message) || error));
+  if (start) {
+    start.addEventListener('click', function(event) {
+      event.preventDefault();
+      pythonWorkerStartProvisioning().catch(function(error) {
+        pythonWorkerSetText(
+          'pythonPwStatus',
+          String((error && error.message) || error)
+        );
+      });
     });
-  });
+  }
 
-  retry.addEventListener('click', function() {
-    pythonWorkerRetryFailed().catch(function(error) {
-      pythonWorkerSetText('pythonPwStatus', String((error && error.message) || error));
+  if (retry) {
+    retry.addEventListener('click', function(event) {
+      event.preventDefault();
+      pythonWorkerRetryFailed().catch(function(error) {
+        pythonWorkerSetText(
+          'pythonPwStatus',
+          String((error && error.message) || error)
+        );
+      });
+    });
+  }
+
+  document.body.addEventListener('click', function(event) {
+    const target = event.target;
+    if (!target || typeof target.closest !== 'function') return;
+
+    const btn = target.closest('.js-btn-add-bm, #btn_add_bm, .js-python-add-bm');
+    if (!btn || btn.id === 'pythonProvisionStart') return;
+
+    event.preventDefault();
+
+    if (pythonWorkerUiState.busy) return;
+
+    const bmName = pythonWorkerResolveBmName(btn);
+    if (!bmName) return;
+
+    pythonWorkerStartBusiness(bmName).catch(function(error) {
+      pythonWorkerSetText(
+        'pythonPwStatus',
+        String((error && error.message) || error)
+      );
     });
   });
 
   document.addEventListener('click', function() {
     setTimeout(pythonWorkerSelectionRefresh, 0);
   }, true);
+
   document.addEventListener('change', function() {
     setTimeout(pythonWorkerSelectionRefresh, 0);
   }, true);
