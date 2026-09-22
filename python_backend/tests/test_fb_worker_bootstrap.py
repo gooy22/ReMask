@@ -65,6 +65,13 @@ class FacebookDtsgBootstrapParserTests(unittest.TestCase):
             "NA_refresh_direct",
         )
 
+    def test_ajax_dtsg_refresh_regex_fallback(self) -> None:
+        source = 'prefix token payload: {"token" : "NA_refresh_fallback"} trailing'
+        self.assertEqual(
+            FacebookWebSession._parse_dtsg_refresh_response(source),
+            "NA_refresh_fallback",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
