@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import html as html_lib
+import json
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -33,8 +36,17 @@ def _normalize_page(row: Any) -> dict[str, Any] | None:
     if not isinstance(row, dict):
         return None
 
-    page_id = _clean(row.get("id"))
-    name = _clean(row.get("name"))
+    page_id = _clean(
+        row.get("id")
+        or row.get("page_id")
+        or row.get("pageID")
+        or row.get("pageId")
+    )
+    name = _clean(
+        row.get("name")
+        or row.get("page_name")
+        or row.get("pageName")
+    )
 
     if not page_id.isdigit() or not name:
         return None
@@ -53,6 +65,19 @@ def _normalize_page(row: Any) -> dict[str, Any] | None:
             if isinstance(item, (str, int))
         ]
 
+    business = row.get("business")
+    if isinstance(business, dict):
+        business_id = _clean(business.get("id"))
+        if business_id:
+            output["business"] = {
+                "id": business_id,
+                "name": _clean(business.get("name")),
+            }
+            output["business_id"] = business_id
+
+    if isinstance(row.get("is_owned"), bool):
+        output["is_owned"] = bool(row.get("is_owned"))
+
     restriction = row.get("advertising_restriction_info")
     if isinstance(restriction, dict):
         output["advertising_restriction_info"] = {
@@ -63,12 +88,97 @@ def _normalize_page(row: Any) -> dict[str, Any] | None:
     return output
 
 
+def _iter_connection_rows(value: Any):
+    if isinstance(value, list):
+        for item in value:
+            if isinstance(item, dict):
+                yield item
+        return
+
+    if not isinstance(value, dict):
+        return
+
+    nodes = value.get("nodes")
+    if isinstance(nodes, list):
+        for item in nodes:
+            if isinstance(item, dict):
+                yield item
+
+    edges = value.get("edges")
+    if isinstance(edges, list):
+        for edge in edges:
+            if not isinstance(edge, dict):
+                continue
+            node = edge.get("node")
+            if isinstance(node, dict):
+                yield node
+
+    data = value.get("data")
+    if isinstance(data, list):
+        for item in data:
+            if isinstance(item, dict):
+                yield item
+
+
+def _page_like(row: dict[str, Any]) -> bool:
+    typename = _clean(
+        row.get("__typename")
+        or row.get("type")
+        or row.get("entity_type")
+    ).lower()
+
+    if typename and "page" in typename and "business" not in typename:
+        return True
+
+    page_hint_keys = {
+        "page_id",
+        "pageID",
+        "pageId",
+        "category",
+        "tasks",
+        "advertising_restriction_info",
+        "is_owned",
+        "can_post",
+        "followers_count",
+        "fan_count",
+    }
+    return any(key in row for key in page_hint_keys)
+
+
+def _dedupe_pages(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    index: dict[str, int] = {}
+
+    for raw in rows:
+        page = _normalize_page(raw)
+        if not page:
+            continue
+
+        page_id = page["id"]
+        if page_id not in index:
+            index[page_id] = len(output)
+            output.append(page)
+            continue
+
+        existing = output[index[page_id]]
+        # Merge richer representations of the same Page.
+        for key, value in page.items():
+            if key not in existing or existing.get(key) in ("", None, [], {}):
+                existing[key] = value
+
+    return output
+
+
 def _extract_known_page_lists(payload: dict[str, Any]) -> list[dict[str, Any]]:
     paths = (
         ("data", "userData", "pages_can_administer"),
         ("data", "user", "pages_can_administer"),
         ("data", "viewer", "pages_can_administer"),
         ("data", "pages_can_administer"),
+        ("data", "userData", "pages"),
+        ("data", "user", "pages"),
+        ("data", "viewer", "pages"),
+        ("data", "pages"),
     )
 
     def get_path(path: tuple[str, ...]) -> Any:
@@ -79,24 +189,160 @@ def _extract_known_page_lists(payload: dict[str, Any]) -> list[dict[str, Any]]:
             node = node.get(key)
         return node
 
-    output: list[dict[str, Any]] = []
-    seen: set[str] = set()
+    candidates: list[dict[str, Any]] = []
 
     for path in paths:
-        rows = get_path(path)
-        if not isinstance(rows, list):
+        value = get_path(path)
+        for row in _iter_connection_rows(value):
+            candidates.append(row)
+
+    # Relay shapes change often. As a conservative fallback, recursively scan
+    # only objects that have a numeric id/name AND Page-specific evidence.
+    stack: list[Any] = [payload.get("data")]
+    seen_objects: set[int] = set()
+
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            object_id = id(node)
+            if object_id in seen_objects:
+                continue
+            seen_objects.add(object_id)
+
+            if _page_like(node):
+                candidates.append(node)
+
+            for child in node.values():
+                if isinstance(child, (dict, list)):
+                    stack.append(child)
+
+        elif isinstance(node, list):
+            for child in node:
+                if isinstance(child, (dict, list)):
+                    stack.append(child)
+
+    return _dedupe_pages(candidates)
+
+
+def _extract_pages_from_html(document: str) -> list[dict[str, Any]]:
+    source = html_lib.unescape(str(document or "")).replace("\\/", "/")
+    candidates: list[dict[str, Any]] = []
+
+    script_patterns = (
+        r'<script[^>]*type=["\']application/json["\'][^>]*>(.*?)</script>',
+        r'<script[^>]*data-sjs[^>]*>(.*?)</script>',
+    )
+
+    decoded = 0
+    for pattern in script_patterns:
+        for match in re.finditer(
+            pattern,
+            source,
+            flags=re.IGNORECASE | re.DOTALL,
+        ):
+            body = html_lib.unescape(match.group(1)).strip()
+            if body.startswith("for (;;);"):
+                body = body[len("for (;;);"):].lstrip()
+            if not body or body[0] not in "[{":
+                continue
+
+            try:
+                payload = json.loads(body)
+            except (json.JSONDecodeError, ValueError):
+                continue
+
+            decoded += 1
+            if isinstance(payload, dict):
+                candidates.extend(_extract_known_page_lists(payload))
+            elif isinstance(payload, list):
+                for item in payload:
+                    if isinstance(item, dict):
+                        candidates.extend(_extract_known_page_lists(item))
+
+            if decoded >= 250:
+                break
+        if decoded >= 250:
+            break
+
+    # Some Facebook bootstraps serialize page objects inside non-JSON script
+    # wrappers. Do not take arbitrary numeric ids: require an explicit Page
+    # typename close to id+name.
+    typename_pattern = re.compile(
+        r'\{[^{}]{0,2500}?"__typename"\s*:\s*"(?P<type>[^"]*Page[^"]*)"'
+        r'[^{}]{0,2500}?\}',
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    for match in typename_pattern.finditer(source):
+        fragment = match.group(0)
+        id_match = re.search(
+            r'"(?:id|page_id|pageID|pageId)"\s*:\s*"?(\d{5,30})"?',
+            fragment,
+        )
+        name_match = re.search(
+            r'"(?:name|page_name|pageName)"\s*:\s*"([^"]{1,300})"',
+            fragment,
+        )
+        if not id_match or not name_match:
+            continue
+        candidates.append(
+            {
+                "id": id_match.group(1),
+                "name": html_lib.unescape(name_match.group(1)),
+                "__typename": match.group("type"),
+            }
+        )
+
+    return _dedupe_pages(candidates)
+
+
+async def discover_pages_from_browser_html(
+    session: Any,
+) -> PageDiscoveryResult:
+    diagnostics: list[str] = []
+    urls = (
+        "https://www.facebook.com/pages/?category=your_pages",
+        "https://www.facebook.com/pages/?category=your_pages&ref=bookmarks",
+        "https://www.facebook.com/pages/?category=your_pages&nav_ref=bookmarks",
+    )
+
+    for url in urls:
+        try:
+            status, document, final_url = await session.fetch_text(
+                url,
+                max_bytes=5_000_000,
+            )
+        except Exception as exc:
+            diagnostics.append(f"{url}: fetch failed: {exc}")
             continue
 
-        for row in rows:
-            page = _normalize_page(row)
-            if not page:
-                continue
-            if page["id"] in seen:
-                continue
-            seen.add(page["id"])
-            output.append(page)
+        lowered_url = str(final_url or "").lower()
+        if "login" in lowered_url or "checkpoint" in lowered_url:
+            diagnostics.append(
+                f"{url}: redirected to login/checkpoint"
+            )
+            continue
 
-    return output
+        if status >= 400:
+            diagnostics.append(f"{url}: HTTP {status}")
+            continue
+
+        pages = _extract_pages_from_html(document)
+        if pages:
+            return PageDiscoveryResult(
+                pages=pages,
+                source="facebook_web_html",
+                candidate=None,
+                diagnostics=diagnostics,
+            )
+
+        diagnostics.append(
+            f"{url}: authenticated HTML contained no recognized Page objects"
+        )
+
+    raise PageDiscoveryError(
+        "Browser-session Page HTML discovery returned no Pages. "
+        + " || ".join(diagnostics[-8:])
+    )
 
 
 def _errors(payload: dict[str, Any]) -> list[Any]:
@@ -327,50 +573,62 @@ async def discover_pages_via_web(
     *,
     try_runtime_discovery: bool = True,
 ) -> PageDiscoveryResult:
+    diagnostics: list[str] = []
     first_result: PageDiscoveryResult | None = None
-    first_error: PageDiscoveryError | None = None
 
     try:
         first_result = await list_pages_via_private_graphql(session)
+        diagnostics.extend(first_result.diagnostics)
         if first_result.pages:
             return first_result
-
-        # An empty result from an old community-observed query is not enough to
-        # conclude that the Facebook profile really has no Pages. The user may
-        # have Pages while this particular persisted query is stale or changed.
-        if (
-            not try_runtime_discovery
-            or first_result.candidate is None
-            or first_result.candidate.priority >= 5_000
-        ):
-            return first_result
     except PageDiscoveryError as exc:
-        first_error = exc
-        if not try_runtime_discovery:
-            raise
+        diagnostics.append(str(exc))
 
-    candidate = await discover_current_list_pages_docid(session)
-    if candidate is None:
-        if first_result is not None:
-            return first_result
-        assert first_error is not None
-        raise PageDiscoveryError(
-            f"{first_error}; current LIST_PAGES doc_id was not discoverable"
-        ) from first_error
+    if try_runtime_discovery:
+        try:
+            candidate = await discover_current_list_pages_docid(session)
+        except Exception as exc:
+            candidate = None
+            diagnostics.append(f"LIST_PAGES runtime discovery failed: {exc}")
 
-    refreshed = await list_pages_via_private_graphql(session)
-    if refreshed.pages:
-        return refreshed
+        if candidate is not None:
+            try:
+                refreshed = await list_pages_via_private_graphql(session)
+                diagnostics.extend(refreshed.diagnostics)
+                if refreshed.pages:
+                    return refreshed
+                first_result = refreshed
+            except PageDiscoveryError as exc:
+                diagnostics.append(str(exc))
 
-    # If the freshly discovered current query itself returns zero Pages, that
-    # is much stronger evidence than the legacy candidate and can be preserved.
-    return refreshed
+    # The 2023 Account Quality persisted query is only one historical route.
+    # A real FB profile can still have Pages even when that query is stale,
+    # renamed, or its Relay response shape changed. Fall back to the actual
+    # authenticated browser Pages surface before concluding "0 Pages".
+    try:
+        html_result = await discover_pages_from_browser_html(session)
+        html_result.diagnostics = (
+            diagnostics + html_result.diagnostics
+        )[-12:]
+        return html_result
+    except PageDiscoveryError as exc:
+        diagnostics.append(str(exc))
+
+    if first_result is not None:
+        first_result.diagnostics = diagnostics[-12:]
+        return first_result
+
+    raise PageDiscoveryError(
+        "No browser-session Fan Pages were discoverable. "
+        + " || ".join(diagnostics[-12:])
+    )
 
 
 __all__ = [
     "PageDiscoveryError",
     "PageDiscoveryResult",
     "discover_pages_via_web",
+    "discover_pages_from_browser_html",
     "discover_current_list_pages_docid",
     "list_pages_via_private_graphql",
 ]
