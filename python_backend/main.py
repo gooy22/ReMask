@@ -16,7 +16,8 @@ from app.store import JobStore
 logging.basicConfig(level=os.getenv('LOG_LEVEL','INFO'),format='%(asctime)s [%(levelname)s] %(name)s: %(message)s')
 log=logging.getLogger('remask.python_api')
 
-DB_PATH=os.getenv('REMASK_JOB_DB','/var/lib/remask-python/jobs.sqlite3')
+DATA_ROOT=os.getenv('REMASK_DATA_DIR') or os.getenv('RAILWAY_VOLUME_MOUNT_PATH') or '/var/lib/remask'
+DB_PATH=os.getenv('REMASK_JOB_DB',os.path.join(DATA_ROOT,'python-worker','jobs.sqlite3'))
 CONCURRENCY=int(os.getenv('REMASK_WORKER_CONCURRENCY','30'))
 API_KEY=os.getenv('REMASK_WORKER_API_KEY')
 STATE_URL=os.getenv('REMASK_STATE_URL')
