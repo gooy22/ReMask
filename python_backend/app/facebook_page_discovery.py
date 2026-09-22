@@ -434,19 +434,47 @@ async def discover_pages_via_web(
     *,
     try_runtime_discovery: bool = True,
 ) -> PageDiscoveryResult:
+    first_result: PageDiscoveryResult | None = None
+    first_error: PageDiscoveryError | None = None
+
     try:
-        return await list_pages_via_private_graphql(session)
-    except PageDiscoveryError as first_error:
+        first_result = await list_pages_via_private_graphql(session)
+        if first_result.pages:
+            return first_result
+
+        # An empty result from an old community-observed query is not enough to
+        # conclude that the Facebook profile really has no Pages. The user may
+        # have Pages while this particular persisted query is stale or changed.
+        if (
+            not try_runtime_discovery
+            or first_result.candidate is None
+            or (
+                first_result.candidate.priority >= 5_000
+                and "runtime_" in first_result.candidate.source
+            )
+        ):
+            return first_result
+    except PageDiscoveryError as exc:
+        first_error = exc
         if not try_runtime_discovery:
             raise
 
-        candidate = await discover_current_list_pages_docid(session)
-        if candidate is None:
-            raise PageDiscoveryError(
-                f"{first_error}; current LIST_PAGES doc_id was not discoverable"
-            ) from first_error
+    candidate = await discover_current_list_pages_docid(session)
+    if candidate is None:
+        if first_result is not None:
+            return first_result
+        assert first_error is not None
+        raise PageDiscoveryError(
+            f"{first_error}; current LIST_PAGES doc_id was not discoverable"
+        ) from first_error
 
-        return await list_pages_via_private_graphql(session)
+    refreshed = await list_pages_via_private_graphql(session)
+    if refreshed.pages:
+        return refreshed
+
+    # If the freshly discovered current query itself returns zero Pages, that
+    # is much stronger evidence than the legacy candidate and can be preserved.
+    return refreshed
 
 
 __all__ = [
