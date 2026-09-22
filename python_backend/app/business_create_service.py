@@ -403,6 +403,69 @@ async def create_business_resilient(
                 "payload": exc.meta_payload,
             }
         )
+
+        text = _text(exc)
+        result_may_be_unknown = (
+            not exc.meta_payload
+            and any(
+                token in text
+                for token in (
+                    "timeout",
+                    "network failure",
+                    "connection",
+                    "non-json",
+                    "empty response",
+                )
+            )
+        )
+
+        if result_may_be_unknown:
+            # A private mutation may already have been committed by Meta.
+            # If the official read-side is available, use it only to verify the
+            # outcome. Never issue a second CREATE automatically.
+            try:
+                if str(getattr(session.context, "access_token", "") or "").strip():
+                    graph = await session.graph_api()
+                    existing = await graph.list_businesses()
+                    existing_id = _find_existing_business(
+                        existing,
+                        business_name=business_name,
+                        page_id=clean_page,
+                    )
+                    if existing_id:
+                        diagnostics.append(
+                            {
+                                "transport": "facebook_web_graphql",
+                                "stage": "verify_after_unknown",
+                                "result": "created_business_found",
+                                "business_id": existing_id,
+                            }
+                        )
+                        return BusinessCreateResult(
+                            business_id=existing_id,
+                            transport="facebook_web_graphql_verified",
+                            primary_page_id=clean_page,
+                            diagnostics=diagnostics,
+                        )
+            except GraphApiError as verify_exc:
+                diagnostics.append(
+                    {
+                        **_graph_diag(verify_exc),
+                        "stage": "verify_web_after_unknown",
+                    }
+                )
+
+            raise BusinessCreateError(
+                "CREATE_RESULT_UNKNOWN",
+                (
+                    "Private Facebook Business mutation may have succeeded, but "
+                    "its response was lost. ReMask will not send another CREATE "
+                    "until Business Managers are synced, preventing duplicates."
+                ),
+                retryable=False,
+                diagnostics=diagnostics,
+            ) from exc
+
         raise
 
 
