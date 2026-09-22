@@ -44,8 +44,14 @@ try {
         rmx_pwp_out(['ok'=>false,'error'=>'PROFILE_REQUIRED'], 400);
     }
 
-    $result = MetaEndpoint::cachedAsset($profile, 'pages', '', true);
+    $result = MetaEndpoint::peekCachedAsset($profile, 'pages', '');
     $rows = is_array($result['data'] ?? null) ? $result['data'] : [];
+
+    if ($rows === []) {
+        $result = MetaEndpoint::cachedAsset($profile, 'pages', '', false);
+        $rows = is_array($result['data'] ?? null) ? $result['data'] : [];
+    }
+
     $pages = [];
 
     foreach ($rows as $row) {
@@ -162,7 +168,7 @@ HTML;
 
     $php = preg_replace(
         '#scripts/workspace\.js(?:\?[^"\']*)?#',
-        'scripts/workspace.js?v=20260922-python-worker-ui-v136',
+        'scripts/workspace.js?v=20260922-python-worker-ui-v139',
         $php,
         1,
         $scriptCount
@@ -184,7 +190,7 @@ if ($workerPos === false) {
 
 $php = preg_replace(
     '#scripts/workspace\.js(?:\?[^"\']*)?#',
-    'scripts/workspace.js?v=20260922-python-worker-ui-v136',
+    'scripts/workspace.js?v=20260922-python-worker-ui-v139',
     $php,
     1
 ) ?? $php;
