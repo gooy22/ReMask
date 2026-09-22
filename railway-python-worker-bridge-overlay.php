@@ -279,7 +279,14 @@ try {
     ]);
 } catch (Throwable $e) {
     error_log('[python-profile-context] ' . get_class($e) . ': ' . $e->getMessage());
-    rmx_py_out(['ok'=>false,'error'=>'PROFILE_CONTEXT_FAILED'], 500);
+    rmx_py_out([
+        'ok'=>false,
+        'error'=>'PROFILE_CONTEXT_FAILED',
+        'detail'=>[
+            'type'=>get_class($e),
+            'message'=>$e->getMessage(),
+        ],
+    ], 500);
 }
 PHP_CODE;
 
