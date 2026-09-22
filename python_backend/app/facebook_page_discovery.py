@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-import html
-import re
 import time
 from dataclasses import dataclass, field
 from typing import Any
-from urllib.parse import urljoin
 
 from .facebook_docids import (
     DocIdCandidate,
@@ -13,6 +10,7 @@ from .facebook_docids import (
     record_result,
     upsert_candidate,
 )
+from .facebook_query_discovery import discover_persisted_query
 
 
 class PageDiscoveryError(RuntimeError):
@@ -292,141 +290,36 @@ async def list_pages_via_private_graphql(
     )
 
 
-def _script_urls(document: str, base_url: str) -> list[str]:
-    normalized = html.unescape(document or "").replace("\\/", "/")
-    found: list[str] = []
-
-    patterns = (
-        r'<script[^>]+src=["\']([^"\']+\.js[^"\']*)["\']',
-        r'["\'](https://[^"\']+\.js[^"\']*)["\']',
-    )
-
-    seen: set[str] = set()
-    for pattern in patterns:
-        for match in re.finditer(pattern, normalized, flags=re.IGNORECASE):
-            raw = html.unescape(match.group(1)).replace("\\/", "/")
-            url = urljoin(base_url, raw)
-            if url in seen:
-                continue
-            if not (
-                "facebook.com" in url
-                or "fbcdn.net" in url
-            ):
-                continue
-            seen.add(url)
-            found.append(url)
-
-    return found
-
-
-def _doc_id_near_friendly_name(
-    source: str,
-    friendly_name: str,
-) -> str:
-    if not source or friendly_name not in source:
-        return ""
-
-    best: tuple[int, str] | None = None
-    start = 0
-
-    while True:
-        index = source.find(friendly_name, start)
-        if index < 0:
-            break
-
-        left = max(0, index - 2500)
-        right = min(len(source), index + len(friendly_name) + 2500)
-        window = source[left:right]
-
-        patterns = (
-            r'(?:"|\')?(?:doc_id|docID|id)(?:"|\')?\s*[:=]\s*(?:"|\')([0-9]{5,40})(?:"|\')',
-            r'params\s*:\s*\{.{0,1200}?id\s*:\s*["\']([0-9]{5,40})["\']',
-        )
-
-        for pattern in patterns:
-            for match in re.finditer(
-                pattern,
-                window,
-                flags=re.IGNORECASE | re.DOTALL,
-            ):
-                value = match.group(1)
-                absolute = left + match.start(1)
-                distance = abs(absolute - index)
-
-                if best is None or distance < best[0]:
-                    best = (distance, value)
-
-        start = index + len(friendly_name)
-
-    return best[1] if best else ""
-
-
 async def discover_current_list_pages_docid(
     session: Any,
     *,
     max_scripts: int = 18,
 ) -> DocIdCandidate | None:
     friendly_name = "AccountQualityUserPagesWrapper_UserPageQuery"
-    entry_url = "https://www.facebook.com/accountquality/?landing_page=insights"
 
-    status, document, final_url = await session.fetch_text(
-        entry_url,
-        max_bytes=2_000_000,
+    discovered = await discover_persisted_query(
+        session,
+        friendly_name=friendly_name,
+        entry_urls=[
+            "https://www.facebook.com/accountquality/?landing_page=insights",
+            "https://www.facebook.com/pages/?category=your_pages",
+        ],
+        max_scripts_per_entry=max_scripts,
     )
 
-    if status >= 400:
+    if discovered is None:
         return None
 
-    direct = _doc_id_near_friendly_name(
-        document,
-        friendly_name,
+    return upsert_candidate(
+        "LIST_PAGES",
+        doc_id=discovered.doc_id,
+        friendly_name=friendly_name,
+        endpoint_url="https://www.facebook.com/api/graphql/",
+        variables_mode="account_quality_user_pages_v1",
+        source=f"runtime_{discovered.source_kind}",
+        priority=8_500,
+        observed_at=str(int(time.time())),
     )
-
-    if direct:
-        return upsert_candidate(
-            "LIST_PAGES",
-            doc_id=direct,
-            friendly_name=friendly_name,
-            endpoint_url="https://www.facebook.com/api/graphql/",
-            variables_mode="account_quality_user_pages_v1",
-            source="runtime_account_quality_html",
-            priority=8_500,
-            observed_at=str(int(time.time())),
-        )
-
-    for script_url in _script_urls(document, final_url)[:max(1, max_scripts)]:
-        try:
-            script_status, body, _ = await session.fetch_text(
-                script_url,
-                max_bytes=1_500_000,
-                referer=final_url,
-            )
-        except Exception:
-            continue
-
-        if script_status >= 400 or friendly_name not in body:
-            continue
-
-        doc_id = _doc_id_near_friendly_name(
-            body,
-            friendly_name,
-        )
-
-        if not doc_id:
-            continue
-
-        return upsert_candidate(
-            "LIST_PAGES",
-            doc_id=doc_id,
-            friendly_name=friendly_name,
-            endpoint_url="https://www.facebook.com/api/graphql/",
-            variables_mode="account_quality_user_pages_v1",
-            source="runtime_account_quality_bundle",
-            priority=8_500,
-            observed_at=str(int(time.time())),
-        )
-
-    return None
 
 
 async def discover_pages_via_web(
