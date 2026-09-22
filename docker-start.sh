@@ -99,10 +99,30 @@ if [ "${REMASK_USE_EXTERNAL_PYTHON_WORKER:-0}" != "1" ]; then
   PYTHON_WORKER_PID="$!"
   echo "$PYTHON_WORKER_PID" > "$DATA_DIR/python-worker.pid"
 
-  sleep 1
-  if ! kill -0 "$PYTHON_WORKER_PID" 2>/dev/null; then
-    echo "Embedded Python worker failed to start" >&2
-    tail -n 120 "$DATA_DIR/python-worker.log" >&2 || true
+  WORKER_HEALTH_OK=0
+  for _ in $(seq 1 40); do
+    if ! kill -0 "$PYTHON_WORKER_PID" 2>/dev/null; then
+      break
+    fi
+    if /opt/remask-venv/bin/python - "$PYTHON_WORKER_PORT" <<'PY'
+import sys
+import urllib.request
+
+port = int(sys.argv[1])
+with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=0.5) as response:
+    if response.status != 200:
+        raise SystemExit(1)
+PY
+    then
+      WORKER_HEALTH_OK=1
+      break
+    fi
+    sleep 0.25
+  done
+
+  if [ "$WORKER_HEALTH_OK" != "1" ]; then
+    echo "Embedded Python worker failed HTTP health check" >&2
+    tail -n 160 "$DATA_DIR/python-worker.log" >&2 || true
     exit 31
   fi
 fi
