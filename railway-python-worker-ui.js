@@ -1,4 +1,4 @@
-/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 */
+/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 */
 const restoredPythonWorkerJobId = localStorage.getItem('remask_python_worker_job_v1') || '';
 
 const pythonWorkerUiState = {
@@ -399,7 +399,19 @@ async function pythonWorkerStartBusiness(bmName, options) {
   if (!cleanName) return;
 
   const dialog = options && options.dialog ? options.dialog : null;
+  if (!dialog) {
+    throw new Error('Add BM request not sent: Primary Page form is not open.');
+  }
+
   const rowConfig = pythonWorkerBmRowConfig(dialog, profiles, cleanName);
+  const missingPrimaryPage = profiles.filter(function(profileId) {
+    const cfg = rowConfig[String(profileId)] || {};
+    return !String(cfg.page_id || '').trim();
+  });
+
+  if (missingPrimaryPage.length) {
+    throw new Error('Add BM request not sent: Primary Page is required.');
+  }
 
   pythonWorkerUiState.busy = true;
   pythonWorkerSelectionRefresh();
@@ -439,11 +451,19 @@ async function pythonWorkerStartBusiness(bmName, options) {
       };
     });
 
+    pythonWorkerSetText(
+      'pythonPwStatus',
+      'POST /ajax/pythonWorkerJobs.php → создаю Job…'
+    );
+    pythonWorkerSetText('pythonPwJob', 'Запрос отправляется…');
+
     const data = await pythonWorkerBridge({
       action: 'create',
       idempotency_key: 'workspace-add-bm-' + nonce,
       profiles: payloadProfiles
     });
+
+    pythonWorkerSetText('pythonPwStatus', 'Worker bridge ответил. Читаю Job ID…');
 
     const jobId = String((data && data.job && data.job.job_id) || '').trim();
     if (!jobId) throw new Error('Worker did not return job_id.');
@@ -471,11 +491,86 @@ async function pythonWorkerStartBusiness(bmName, options) {
   }
 }
 
+function pythonWorkerVisible(el) {
+  if (!el) return false;
+  if (el.disabled) return false;
+  const style = window.getComputedStyle ? window.getComputedStyle(el) : null;
+  if (style && (style.display === 'none' || style.visibility === 'hidden')) return false;
+  return !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+}
+
+function pythonWorkerFindLegacyBmTrigger() {
+  const selectors = '.js-btn-add-bm, #btn_add_bm, .js-python-add-bm';
+  const exact = Array.from(document.querySelectorAll(selectors)).filter(function(el) {
+    return el.id !== 'pythonProvisionStart' && !el.hasAttribute('data-python-worker-create-bm');
+  });
+
+  const visibleExact = exact.find(pythonWorkerVisible);
+  if (visibleExact) return visibleExact;
+  if (exact.length) return exact[0];
+
+  const candidates = Array.from(
+    document.querySelectorAll('button, a, [role="button"], [data-action]')
+  ).filter(function(el) {
+    if (el.id === 'pythonProvisionStart') return false;
+    if (el.hasAttribute('data-python-worker-create-bm')) return false;
+    const label = String(el.textContent || el.value || el.getAttribute('aria-label') || '')
+      .replace(/\\s+/g, ' ')
+      .trim();
+    return /^(Добавить\\s*(?:BM|Business Manager)|Add\\s*(?:BM|Business Manager))$/i.test(label);
+  });
+
+  return candidates.find(pythonWorkerVisible) || candidates[0] || null;
+}
+
 async function pythonWorkerStartProvisioning() {
-  const start = pythonWorkerEl('pythonProvisionStart');
-  const bmName = pythonWorkerResolveBmName(start);
-  if (!bmName) return;
-  return pythonWorkerStartBusiness(bmName);
+  const profiles = pythonWorkerSelectedProfiles();
+  if (!profiles.length) {
+    pythonWorkerSetText('pythonPwStatus', 'Запрос НЕ отправлен: сначала выбери FB-профиль.');
+    return;
+  }
+
+  pythonWorkerSetText(
+    'pythonPwStatus',
+    'Открываю Add BM для ' + profiles.length + ' FB-профилей…'
+  );
+
+  const existingDialog = pythonWorkerFindBmDialog(null);
+  if (existingDialog) {
+    pythonWorkerEnhanceBmDialog();
+    pythonWorkerSetText(
+      'pythonPwStatus',
+      'Форма Add BM открыта. Укажи название и Primary Page, затем нажми «Создать BM».'
+    );
+    return;
+  }
+
+  const trigger = pythonWorkerFindLegacyBmTrigger();
+  if (!trigger) {
+    pythonWorkerSetText(
+      'pythonPwStatus',
+      'Запрос НЕ отправлен: не найдена кнопка открытия Add BM. Открой Add BM через меню выбранного FB-профиля.'
+    );
+    return;
+  }
+
+  trigger.click();
+
+  setTimeout(function() {
+    const dialog = pythonWorkerFindBmDialog(null);
+    if (dialog) {
+      pythonWorkerEnhanceBmDialog();
+      pythonWorkerSetText(
+        'pythonPwStatus',
+        'Форма Add BM открыта. Укажи название и Primary Page, затем нажми «Создать BM».'
+      );
+    } else {
+      pythonWorkerSetText(
+        'pythonPwStatus',
+        'Запрос НЕ отправлен: форма Add BM не открылась. Открой её через меню выбранного FB-профиля.'
+      );
+    }
+  }, 150);
 }
 
 async function pythonWorkerPoll() {
@@ -739,28 +834,6 @@ function pythonWorkerInitUi() {
       });
     });
   }
-
-  document.body.addEventListener('click', function(event) {
-    const target = event.target;
-    if (!target || typeof target.closest !== 'function') return;
-
-    const btn = target.closest('.js-btn-add-bm, #btn_add_bm, .js-python-add-bm');
-    if (!btn || btn.id === 'pythonProvisionStart') return;
-
-    event.preventDefault();
-
-    if (pythonWorkerUiState.busy) return;
-
-    const bmName = pythonWorkerResolveBmName(btn);
-    if (!bmName) return;
-
-    pythonWorkerStartBusiness(bmName).catch(function(error) {
-      pythonWorkerSetText(
-        'pythonPwStatus',
-        String((error && error.message) || error)
-      );
-    });
-  });
 
   document.addEventListener('click', function() {
     setTimeout(pythonWorkerSelectionRefresh, 0);
