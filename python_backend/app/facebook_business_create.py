@@ -224,6 +224,25 @@ def candidate_requirements(
     }
 
 
+def _prefer_page_backed_candidates(
+    candidates: list[DocIdCandidate],
+    *,
+    page_id: str,
+) -> list[DocIdCandidate]:
+    if not _clean(page_id):
+        return candidates
+
+    # The user explicitly selected a Fan Page. Prefer a mutation contract that
+    # actually carries primary_page_id. Keep the original registry ordering
+    # within each group, so previous-success/priority scoring still matters.
+    return sorted(
+        candidates,
+        key=lambda candidate: (
+            0 if candidate_requirements(candidate).get("page_id") else 1
+        ),
+    )
+
+
 def build_create_business_variables(
     candidate: DocIdCandidate,
     *,
@@ -338,7 +357,10 @@ async def create_business_with_docids(
     bootstrap = await session.bootstrap()
     actor_id = _clean(getattr(bootstrap, "actor_id", ""))
 
-    candidates = list_candidates("CREATE_BM")
+    candidates = _prefer_page_backed_candidates(
+        list_candidates("CREATE_BM"),
+        page_id=page_id,
+    )
 
     if explicit_doc_id:
         explicit = _clean(explicit_doc_id)
@@ -516,23 +538,39 @@ async def create_business_with_docids(
         )
 
     if stale_failures and not explicit_doc_id:
-        discovered = await discover_persisted_query(
-            session,
-            friendly_name="useBusinessCreationMutationMutation",
-            entry_urls=[
-                "https://business.facebook.com/latest/home",
-                "https://business.facebook.com/latest/settings",
-            ],
-            max_scripts_per_entry=18,
+        discovery_specs: list[tuple[str, str]] = []
+        if _clean(page_id):
+            discovery_specs.append(
+                ("BusinessManagerCreateMutation", "legacy_primary_page_v1")
+            )
+        discovery_specs.append(
+            (
+                "useBusinessCreationMutationMutation",
+                "scope_selector_business_creation_v1",
+            )
         )
 
-        if discovered is not None:
+        for friendly_name, variables_mode in discovery_specs:
+            discovered = await discover_persisted_query(
+                session,
+                friendly_name=friendly_name,
+                entry_urls=[
+                    "https://business.facebook.com/latest/home",
+                    "https://business.facebook.com/latest/settings",
+                    "https://business.facebook.com/latest/overview",
+                ],
+                max_scripts_per_entry=28,
+            )
+
+            if discovered is None:
+                continue
+
             refreshed = upsert_candidate(
                 "CREATE_BM",
                 doc_id=discovered.doc_id,
-                friendly_name="useBusinessCreationMutationMutation",
+                friendly_name=friendly_name,
                 endpoint_url="https://business.facebook.com/api/graphql/",
-                variables_mode="scope_selector_business_creation_v1",
+                variables_mode=variables_mode,
                 source=f"runtime_{discovered.source_kind}",
                 priority=8_500,
                 observed_at=str(int(time.time())),
@@ -540,6 +578,7 @@ async def create_business_with_docids(
 
             if all(
                 candidate.doc_id != refreshed.doc_id
+                or candidate.variables_mode != refreshed.variables_mode
                 for candidate in candidates
             ):
                 return await create_business_with_docids(
