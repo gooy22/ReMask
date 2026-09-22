@@ -54,7 +54,8 @@ function rmx_pws_has_forbidden_key(mixed $value): bool {
 }
 
 function rmx_pws_dir(): string {
-    $dir = '/var/lib/remask/python-worker-jobs';
+    $dataDir = rtrim((string)(getenv('REMASK_DATA_DIR') ?: (getenv('RAILWAY_VOLUME_MOUNT_PATH') ?: '/var/lib/remask')), '/');
+    $dir = rtrim((string)(getenv('REMASK_PYTHON_STATE_DIR') ?: ($dataDir . '/python-worker-jobs')), '/');
     if (!is_dir($dir) && !mkdir($dir, 0700, true) && !is_dir($dir)) {
         throw new RuntimeException('STATE_DIR_CREATE_FAILED');
     }
