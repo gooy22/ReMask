@@ -51,8 +51,7 @@ function rmx_pwj_input(): array {
 }
 
 function rmx_pwj_worker_request(string $method, string $path, ?array $payload = null): array {
-    $base = rtrim(trim((string)(getenv('REMASK_PYTHON_WORKER_URL') ?: '')), '/');
-    if ($base === '') throw new RuntimeException('PYTHON_WORKER_NOT_CONFIGURED');
+    $base = rtrim(trim((string)(getenv('REMASK_PYTHON_WORKER_URL') ?: 'http://127.0.0.1:8081')), '/');
 
     $url = $base . '/' . ltrim($path, '/');
     $headers = ['Accept: application/json'];
@@ -105,6 +104,11 @@ function rmx_pwj_worker_request(string $method, string $path, ?array $payload = 
 try {
     $input = rmx_pwj_input();
     $action = strtolower(trim((string)($input['action'] ?? 'status')));
+
+    if ($action === 'health') {
+        $health = rmx_pwj_worker_request('GET', '/health');
+        rmx_pwj_out(['ok'=>true,'worker'=>$health]);
+    }
 
     if ($action === 'create') {
         $profiles = $input['profiles'] ?? null;
