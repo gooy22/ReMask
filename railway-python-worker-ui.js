@@ -1,4 +1,4 @@
-/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 */
+/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 REMASK_PYTHON_WORKER_UI_V140 */
 const restoredPythonWorkerJobId = localStorage.getItem('remask_python_worker_job_v1') || '';
 
 const pythonWorkerUiState = {
@@ -43,7 +43,10 @@ function pythonWorkerSelectionRefresh() {
   const start = pythonWorkerEl('pythonProvisionStart');
 
   if (start) {
-    start.disabled = pythonWorkerUiState.busy || profiles.length === 0 || pythonWorkerUiState.workerOnline === false;
+    start.disabled =
+      pythonWorkerUiState.busy ||
+      profiles.length === 0 ||
+      pythonWorkerUiState.workerOnline !== true;
     start.textContent = profiles.length
       ? 'Add BM (' + profiles.length + ')'
       : 'Add BM';
@@ -71,8 +74,12 @@ function pythonWorkerSelectionRefresh() {
     pythonWorkerSetText(
       'pythonPwStatus',
       profiles.length
-        ? 'Worker UI v139 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
-        : 'Worker UI v139 · Выберите FB-профили в Workspace.'
+        ? (
+            pythonWorkerUiState.workerOnline === true
+              ? 'Worker UI v140 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
+              : 'Worker UI v140 · Выбрано FB-профилей: ' + profiles.length + '. Жду READY от worker.'
+          )
+        : 'Worker UI v140 · Выберите FB-профили в Workspace.'
     );
   }
 }
@@ -615,12 +622,13 @@ function pythonWorkerCloseOwnBmModal() {
 }
 
 async function pythonWorkerOpenOwnBmModal() {
-  if (pythonWorkerUiState.workerOnline === false) {
+  if (pythonWorkerUiState.workerOnline !== true) {
     pythonWorkerSetText(
       'pythonPwStatus',
-      'Add BM недоступен: локальный Python worker OFFLINE. Смотри индикатор Worker.'
+      'Add BM недоступен: worker ещё не READY. Смотри индикатор Worker.'
     );
-    return;
+    await pythonWorkerHealthCheck();
+    if (pythonWorkerUiState.workerOnline !== true) return;
   }
 
   const profiles = pythonWorkerSelectedProfiles();
