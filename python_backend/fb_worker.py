@@ -186,23 +186,59 @@ class BusinessLogicController:
         self.session = session
         self.graphql_url = "https://www.facebook.com/api/graphql/"
 
-    async def create_business_manager(self, name: str, doc_id: str = "739201948201938") -> str:
-        variables = {"input": {"name": name, "vertical": "ADVERTISING", "client_mutation_id": "1"}}
-        response = await self.session.send_post_request(self.graphql_url, doc_id, variables)
-        
+    async def create_business_manager(
+        self,
+        name: str,
+        page_id: str | None = None,
+        doc_id: str = "739201948201938",
+    ) -> str:
+        variables = {
+            "input": {
+                "name": str(name).strip(),
+                "vertical": "ADVERTISING",
+                "client_mutation_id": "1",
+            }
+        }
+
+        clean_page_id = str(page_id).strip() if page_id is not None else ""
+        if clean_page_id and clean_page_id.lower() != "none":
+            variables["input"]["primary_page_id"] = clean_page_id
+
+        response = await self.session.send_post_request(
+            self.graphql_url,
+            doc_id,
+            variables,
+        )
+
         if not isinstance(response, dict):
-            raise RemoteRequestError("BM creation returned unexpected response type")
+            raise RemoteRequestError(
+                "BM creation returned unexpected response type"
+            )
 
         data = response.get("data", {})
         errors = response.get("errors", [])
 
-        bm_data = data.get("business_manager_create", {}).get("business", {}) if isinstance(data, dict) else {}
+        bm_data = (
+            data.get("business_manager_create", {}).get("business", {})
+            if isinstance(data, dict)
+            else {}
+        )
         bm_id = bm_data.get("id") if isinstance(bm_data, dict) else None
 
         if errors or not bm_id:
-            err_msg = json.dumps(errors, ensure_ascii=False)
-            log.error("[%s] BM creation failed: %s", self.session.profile.name, err_msg)
-            raise RemoteRequestError(f"Failed to create BM. Meta response: {err_msg}")
+            diagnostic = json.dumps(
+                errors if errors else response,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            log.error(
+                "[%s] BM creation failed: %s",
+                self.session.profile.name,
+                diagnostic,
+            )
+            raise RemoteRequestError(
+                f"Failed to create BM. Meta response: {diagnostic}"
+            )
 
         return str(bm_id)
 
