@@ -91,6 +91,21 @@ async def business_handler(
     vertical = str(params.get("vertical") or "ADVERTISING").strip().upper()
     explicit_doc_id = str(params.get("doc_id") or "").strip() or None
 
+    raw_require_page_backed = params.get("require_page_backed")
+    if isinstance(raw_require_page_backed, bool):
+        require_page_backed = raw_require_page_backed
+    else:
+        require_page_backed = str(
+            raw_require_page_backed if raw_require_page_backed is not None else ""
+        ).strip().lower() in {"1", "true", "yes", "on"}
+
+    if require_page_backed and not page_id:
+        raise ProvisioningError(
+            "PRIMARY_PAGE_REQUIRED",
+            "Add BM requires a Fan Page for page-backed creation",
+            retryable=False,
+        )
+
     raw_timezone = params.get("timezone_id")
     timezone_id = None
     if raw_timezone not in (None, "", "None"):
@@ -105,13 +120,14 @@ async def business_handler(
 
     log.info(
         "[%s] BUSINESS start name=%s primary_page_id=%s email_present=%s "
-        "identity_name_present=%s explicit_doc_id=%s key=%s",
+        "identity_name_present=%s explicit_doc_id=%s page_backed=%s key=%s",
         profile_id,
         bm_name,
         page_id or "<none>",
         bool(user_email),
         bool(user_first_name or user_last_name or display_name),
         explicit_doc_id or "<registry>",
+        require_page_backed,
         idempotency_key,
     )
 
@@ -127,6 +143,7 @@ async def business_handler(
             vertical=vertical,
             timezone_id=timezone_id,
             explicit_doc_id=explicit_doc_id,
+            require_page_backed=require_page_backed,
         )
 
         if not result.business_id:
