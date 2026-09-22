@@ -42,8 +42,8 @@ class FacebookDtsgBootstrapParserTests(unittest.TestCase):
 
     def test_unicode_escaped_init_payload(self) -> None:
         source = (
-            r'[\\u0022DTSGInitData\\u0022,[],'
-            r'{\\u0022token\\u0022:\\u0022NA_unicode_token\\u0022}]'
+            r'[\u0022DTSGInitData\u0022,[],'
+            r'{\u0022token\u0022:\u0022NA_unicode_token\u0022}]'
         )
         self.assertEqual(self.extract(source), "NA_unicode_token")
 
