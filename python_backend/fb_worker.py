@@ -190,13 +190,20 @@ class BusinessLogicController:
         variables = {"input": {"name": name, "vertical": "ADVERTISING", "client_mutation_id": "1"}}
         response = await self.session.send_post_request(self.graphql_url, doc_id, variables)
         
+        if not isinstance(response, dict):
+            raise RemoteRequestError("BM creation returned unexpected response type")
+
         data = response.get("data", {})
+        errors = response.get("errors", [])
+
         bm_data = data.get("business_manager_create", {}).get("business", {}) if isinstance(data, dict) else {}
-        bm_id = bm_data.get("id")
-        
-        if response.get("errors") or not bm_id:
-            log.error("[%s] Business Manager creation failed", self.session.profile.name)
-            raise RemoteRequestError("Failed to create BM")
+        bm_id = bm_data.get("id") if isinstance(bm_data, dict) else None
+
+        if errors or not bm_id:
+            err_msg = json.dumps(errors, ensure_ascii=False)
+            log.error("[%s] BM creation failed: %s", self.session.profile.name, err_msg)
+            raise RemoteRequestError(f"Failed to create BM. Meta response: {err_msg}")
+
         return str(bm_id)
 
     async def create_ad_account(
