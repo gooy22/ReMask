@@ -254,6 +254,7 @@ class FacebookGraphApi:
         await self.identity()
 
         field_sets = (
+            "id,name,category,tasks,business,is_owned",
             "id,name,category,tasks",
             "id,name,category",
             "id,name",
@@ -294,18 +295,28 @@ class FacebookGraphApi:
                     if not page_id or page_id in seen:
                         continue
                     seen.add(page_id)
-                    result.append(
-                        {
-                            "id": page_id,
-                            "name": str(row.get("name") or page_id).strip(),
-                            "category": str(row.get("category") or "").strip(),
-                            "tasks": [
-                                str(x)
-                                for x in (row.get("tasks") or [])
-                                if isinstance(x, (str, int))
-                            ],
-                        }
-                    )
+                    normalized = {
+                        "id": page_id,
+                        "name": str(row.get("name") or page_id).strip(),
+                        "category": str(row.get("category") or "").strip(),
+                        "tasks": [
+                            str(x)
+                            for x in (row.get("tasks") or [])
+                            if isinstance(x, (str, int))
+                        ],
+                    }
+                    business = row.get("business")
+                    if isinstance(business, dict):
+                        business_id = str(business.get("id") or "").strip()
+                        if business_id:
+                            normalized["business"] = {
+                                "id": business_id,
+                                "name": str(business.get("name") or "").strip(),
+                            }
+                            normalized["business_id"] = business_id
+                    if isinstance(row.get("is_owned"), bool):
+                        normalized["is_owned"] = bool(row.get("is_owned"))
+                    result.append(normalized)
 
             paging = payload.get("paging")
             if not isinstance(paging, dict):
