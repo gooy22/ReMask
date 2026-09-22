@@ -13,6 +13,11 @@ from .facebook_graph_api import (
     GraphMutationUncertain,
 )
 
+from .facebook_business_create import (
+    DocIdMutationError,
+    set_business_primary_page,
+)
+
 
 class BusinessCreateError(RuntimeError):
     def __init__(
@@ -222,6 +227,17 @@ async def _create_business_via_web(
     """
     try:
         controller = await session.facebook_controller()
+        if require_page_backed and not str(user_email or "").strip():
+            raise BusinessCreateError(
+                "BUSINESS_EMAIL_REQUIRED",
+                (
+                    "The current private Business creation flow requires an "
+                    "email before the selected Fan Page can be attached."
+                ),
+                retryable=False,
+                diagnostics=diagnostics,
+            )
+
         web_result = await controller.create_business_manager_detailed(
             name=business_name,
             page_id=clean_page,
@@ -231,7 +247,7 @@ async def _create_business_via_web(
             user_last_name=user_last_name,
             profile_display_name=profile_display_name,
             vertical=vertical,
-            allow_scope_selector_fallback=not require_page_backed,
+            allow_scope_selector_fallback=True,
         )
 
         page_was_in_mutation = (
@@ -239,21 +255,62 @@ async def _create_business_via_web(
             and bool(clean_page)
         )
 
+        primary_page_attached_after_create = False
+
         if require_page_backed and not page_was_in_mutation:
-            raise BusinessCreateError(
-                "PAGE_BACKED_BM_ROUTE_UNAVAILABLE",
-                (
-                    "Facebook Business was not created because the resolved "
-                    "private mutation does not carry primary_page_id."
-                ),
-                retryable=False,
-                diagnostics=diagnostics,
-            )
+            try:
+                attach_candidate = await set_business_primary_page(
+                    controller.session,
+                    business_id=web_result.business_id,
+                    business_name=business_name,
+                    page_id=clean_page,
+                )
+                primary_page_attached_after_create = True
+                diagnostics.append(
+                    {
+                        "transport": "facebook_web_graphql",
+                        "stage": "set_primary_page",
+                        "result": "success",
+                        "business_id": web_result.business_id,
+                        "page_id": clean_page,
+                        "doc_id": attach_candidate.doc_id,
+                        "friendly_name": attach_candidate.friendly_name,
+                        "source": attach_candidate.source,
+                    }
+                )
+            except DocIdMutationError as exc:
+                diagnostics.append(
+                    {
+                        "transport": "facebook_web_graphql",
+                        "stage": "set_primary_page",
+                        "result": "failed_after_business_created",
+                        "business_id": web_result.business_id,
+                        "page_id": clean_page,
+                        "message": str(exc),
+                        "payload": exc.payload,
+                    }
+                )
+                raise BusinessCreateError(
+                    "BUSINESS_CREATED_PAGE_ATTACH_FAILED",
+                    (
+                        f"Business {web_result.business_id} was created, but "
+                        "the selected Fan Page could not be set as primary. "
+                        "Do not repeat CREATE automatically; sync Business "
+                        "Managers first. Page attach error: "
+                        + str(exc)
+                    ),
+                    retryable=False,
+                    diagnostics=diagnostics,
+                ) from exc
 
         transport = (
             "facebook_web_graphql_page_backed"
             if page_was_in_mutation
-            else "facebook_web_graphql_scope_selector"
+            else (
+                "facebook_web_graphql_scope_selector_plus_primary_page"
+                if primary_page_attached_after_create
+                else "facebook_web_graphql_scope_selector"
+            )
         )
         diagnostics.append(
             {
@@ -272,7 +329,11 @@ async def _create_business_via_web(
         return BusinessCreateResult(
             business_id=web_result.business_id,
             transport=transport,
-            primary_page_id=clean_page if page_was_in_mutation else "",
+            primary_page_id=(
+                clean_page
+                if page_was_in_mutation or primary_page_attached_after_create
+                else ""
+            ),
             diagnostics=diagnostics,
         )
 
@@ -329,6 +390,25 @@ async def _create_business_via_web(
                     "The current Facebook Page-backed CREATE_BM mutation could "
                     "not be resolved. No official CREATE was sent and the "
                     "selected Fan Page was not ignored."
+                ),
+                retryable=False,
+                diagnostics=diagnostics,
+            ) from exc
+
+        if any(
+            token in text
+            for token in (
+                "no usable create_bm doc_id candidate",
+                "no create_bm doc_id candidates",
+                "no current page-backed create_bm mutation",
+                "no usable set_primary_page mutation",
+            )
+        ):
+            raise BusinessCreateError(
+                "CREATE_BM_MUTATION_NOT_DISCOVERED",
+                (
+                    "ReMask could not resolve the current Facebook private "
+                    "Business mutation from this profile session."
                 ),
                 retryable=False,
                 diagnostics=diagnostics,
@@ -433,7 +513,7 @@ async def create_business_resilient(
                 "transport": "facebook_web_graphql",
                 "stage": "route_selection",
                 "result": "primary",
-                "reason": "selected Fan Page uses private Page-backed BM flow",
+                "reason": "selected Fan Page uses private create + primary Page attach flow",
             }
         )
         return await _create_business_via_web(
