@@ -33,6 +33,7 @@ class ProfileContext:
     email: str = ""
     first_name: str = ""
     last_name: str = ""
+    pages: list[dict[str, Any]] | None = None
 
 
 class ProfileResolver:
@@ -132,6 +133,12 @@ class ProfileResolver:
             email=str(payload.get("email") or "").strip(),
             first_name=str(payload.get("first_name") or "").strip(),
             last_name=str(payload.get("last_name") or "").strip(),
+            pages=[
+                row
+                for row in (payload.get("pages") or [])
+                if isinstance(row, dict)
+                and str(row.get("id") or "").strip().isdigit()
+            ],
         )
 
 
