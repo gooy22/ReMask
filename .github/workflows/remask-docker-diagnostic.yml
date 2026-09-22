@@ -1,0 +1,15 @@
+name: ReMask Docker Diagnostic
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  docker-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build ReMask image
+        run: docker build --progress=plain -t remask-diagnostic .
