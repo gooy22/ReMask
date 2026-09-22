@@ -620,40 +620,101 @@ async function pythonWorkerRetryFailed() {
   }
 }
 
-function pythonWorkerInitUi() {
-  const start = pythonWorkerEl('pythonProvisionStart');
-  const retry = pythonWorkerEl('pythonProvisionRetry');
+function pythonWorkerSetBmDialogStatus(dialog, text, isError) {
+  if (!dialog) return;
+  let el = dialog.querySelector('[data-python-worker-bm-status]');
+  if (!el) {
+    el = document.createElement('div');
+    el.setAttribute('data-python-worker-bm-status', '1');
+    el.style.marginTop = '10px';
+    el.style.fontSize = '12px';
+    el.style.whiteSpace = 'pre-wrap';
+    const footer = dialog.querySelector('.modal-footer');
+    (footer ? footer.parentElement : dialog).appendChild(el);
+  }
+  el.style.color = isError ? '#ff7b7b' : '#83dd99';
+  el.textContent = String(text || '');
+}
 
-  document.addEventListener('click', function(event) {
-    const target = event.target;
-    if (!target || typeof target.closest !== 'function') return;
+function pythonWorkerEnhanceBmDialog() {
+  const dialog = pythonWorkerFindBmDialog(null);
+  if (!dialog || dialog.getAttribute('data-python-worker-bm-bound') === '1') return;
 
-    const button = target.closest('button, input[type="button"], input[type="submit"]');
-    if (!button) return;
+  const candidates = Array.from(
+    dialog.querySelectorAll('button, input[type="button"], input[type="submit"], a, [role="button"]')
+  );
 
-    const dialog = pythonWorkerFindBmDialog(button);
-    if (!dialog) return;
+  const oldButton = candidates.find(function(el) {
+    const label = String(el.textContent || el.value || '').replace(/\s+/g, ' ').trim();
+    return /Создать\s*BM|Create\s*BM|Создать\s*Business Manager|Create\s*Business Manager/i.test(label);
+  });
 
-    const label = String(button.textContent || button.value || '').trim();
-    if (!/^(Создать\s*BM|Create\s*BM|Создать\s*Business Manager|Create\s*Business Manager)$/i.test(label)) {
+  if (!oldButton || !oldButton.parentNode) return;
+
+  const cleanButton = oldButton.cloneNode(true);
+  cleanButton.type = 'button';
+  cleanButton.removeAttribute('onclick');
+  cleanButton.setAttribute('data-python-worker-create-bm', '1');
+
+  oldButton.parentNode.replaceChild(cleanButton, oldButton);
+
+  cleanButton.addEventListener('click', function(event) {
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+
+    if (pythonWorkerUiState.busy) {
+      pythonWorkerSetBmDialogStatus(dialog, 'BM Job уже выполняется…', false);
       return;
     }
 
-    event.preventDefault();
-    event.stopImmediatePropagation();
+    const bmName = pythonWorkerResolveBmName(cleanButton);
+    if (!bmName) {
+      pythonWorkerSetBmDialogStatus(dialog, 'Укажи название Business Manager.', true);
+      return;
+    }
 
-    if (pythonWorkerUiState.busy) return;
+    const profiles = pythonWorkerSelectedProfiles();
+    if (!profiles.length) {
+      pythonWorkerSetBmDialogStatus(dialog, 'Не выбран FB-профиль для Add BM.', true);
+      return;
+    }
 
-    const bmName = pythonWorkerResolveBmName(button);
-    if (!bmName) return;
+    const rowConfig = pythonWorkerBmRowConfig(dialog, profiles, bmName);
+    const missing = profiles.filter(function(profileId) {
+      const cfg = rowConfig[String(profileId)] || {};
+      return !String(cfg.page_id || '').trim();
+    });
+
+    if (missing.length) {
+      pythonWorkerSetBmDialogStatus(
+        dialog,
+        'Для выбранного профиля не определён Primary Page.',
+        true
+      );
+      return;
+    }
+
+    cleanButton.disabled = true;
+    pythonWorkerSetBmDialogStatus(dialog, 'Создаю Business Manager через Python worker…', false);
 
     pythonWorkerStartBusiness(bmName, {dialog: dialog}).catch(function(error) {
-      pythonWorkerSetText(
-        'pythonPwStatus',
-        String((error && error.message) || error)
+      cleanButton.disabled = false;
+      pythonWorkerSetBmDialogStatus(
+        dialog,
+        String((error && error.message) || error),
+        true
       );
     });
   }, true);
+
+  dialog.setAttribute('data-python-worker-bm-bound', '1');
+  pythonWorkerSetBmDialogStatus(dialog, 'Add BM подключён к Python worker.', false);
+}
+
+function pythonWorkerInitUi() {
+  const start = pythonWorkerEl('pythonProvisionStart');
+  const retry = pythonWorkerEl('pythonProvisionRetry');
 
   if (start) {
     start.addEventListener('click', function(event) {
@@ -710,6 +771,11 @@ function pythonWorkerInitUi() {
   }, true);
 
   pythonWorkerSelectionRefresh();
+  pythonWorkerEnhanceBmDialog();
+
+  new MutationObserver(function() {
+    pythonWorkerEnhanceBmDialog();
+  }).observe(document.documentElement, {childList: true, subtree: true});
 
   if (pythonWorkerUiState.jobId) {
     pythonWorkerSetText('pythonPwStatus', 'Восстанавливаю последний Job...');
