@@ -1,4 +1,4 @@
-/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 REMASK_PYTHON_WORKER_UI_V140 REMASK_PYTHON_WORKER_UI_V141 REMASK_PYTHON_WORKER_UI_V142 REMASK_PYTHON_WORKER_UI_V143 REMASK_PYTHON_WORKER_UI_V144 REMASK_PYTHON_WORKER_UI_V145 REMASK_PYTHON_WORKER_UI_V146 REMASK_PYTHON_WORKER_UI_V147 REMASK_PYTHON_WORKER_UI_V148 REMASK_PYTHON_WORKER_UI_V149 REMASK_PYTHON_WORKER_UI_V150 REMASK_PYTHON_WORKER_UI_V151 */
+/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 REMASK_PYTHON_WORKER_UI_V140 REMASK_PYTHON_WORKER_UI_V141 REMASK_PYTHON_WORKER_UI_V142 REMASK_PYTHON_WORKER_UI_V143 REMASK_PYTHON_WORKER_UI_V144 REMASK_PYTHON_WORKER_UI_V145 REMASK_PYTHON_WORKER_UI_V146 REMASK_PYTHON_WORKER_UI_V147 REMASK_PYTHON_WORKER_UI_V148 REMASK_PYTHON_WORKER_UI_V149 REMASK_PYTHON_WORKER_UI_V150 REMASK_PYTHON_WORKER_UI_V151 REMASK_PYTHON_WORKER_UI_V152 */
 const restoredPythonWorkerJobId = localStorage.getItem('remask_python_worker_job_v1') || '';
 
 const pythonWorkerUiState = {
@@ -104,10 +104,10 @@ function pythonWorkerSelectionRefresh() {
       profiles.length
         ? (
             pythonWorkerUiState.workerOnline === true
-              ? 'Worker UI v151 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
-              : 'Worker UI v151 · Выбрано FB-профилей: ' + profiles.length + '. Жду READY от worker.'
+              ? 'Worker UI v152 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
+              : 'Worker UI v152 · Выбрано FB-профилей: ' + profiles.length + '. Жду READY от worker.'
           )
-        : 'Worker UI v151 · Выберите FB-профили в Workspace.'
+        : 'Worker UI v152 · Выберите FB-профили в Workspace.'
     );
   }
 }
@@ -257,6 +257,34 @@ function pythonWorkerCurrentStep(item) {
   return success ? String(success.action || 'SUCCESS') : '—';
 }
 
+function pythonWorkerBusinessResult(item) {
+  const steps = Array.isArray(item && item.provisioning_steps)
+    ? item.provisioning_steps
+    : [];
+
+  const business = steps.find(function(step) {
+    return (
+      step &&
+      String(step.step || '').toUpperCase() === 'BUSINESS' &&
+      String(step.status || '').toUpperCase() === 'SUCCESS'
+    );
+  });
+
+  if (!business || !business.result || typeof business.result !== 'object') {
+    return null;
+  }
+
+  const result = business.result;
+  const businessId = String(result.business_id || '').trim();
+  if (!businessId) return null;
+
+  return {
+    business_id: businessId,
+    transport: String(result.transport || '').trim(),
+    primary_page_id: String(result.primary_page_id || '').trim()
+  };
+}
+
 function pythonWorkerRenderJob(job) {
   pythonWorkerUiState.job = job;
   const items = Array.isArray(job && job.items) ? job.items : [];
@@ -318,7 +346,27 @@ function pythonWorkerRenderJob(job) {
         const errorParts = [];
         if (item && item.error_code) errorParts.push(item.error_code);
         if (item && item.error_message) errorParts.push(item.error_message);
-        errorTd.textContent = errorParts.length ? errorParts.join(': ') : '—';
+
+        if (errorParts.length) {
+          errorTd.textContent = errorParts.join(': ');
+        } else {
+          const businessResult = pythonWorkerBusinessResult(item);
+          if (businessResult) {
+            const resultParts = [
+              'BM ' + businessResult.business_id
+            ];
+            if (businessResult.primary_page_id) {
+              resultParts.push('FP ' + businessResult.primary_page_id);
+            }
+            if (businessResult.transport) {
+              resultParts.push(businessResult.transport);
+            }
+            errorTd.className = 'pw-result';
+            errorTd.textContent = resultParts.join(' · ');
+          } else {
+            errorTd.textContent = '—';
+          }
+        }
 
         tr.appendChild(profileTd);
         tr.appendChild(statusTd);
@@ -500,18 +548,14 @@ async function pythonWorkerRefreshSuccessfulProfiles(items) {
       .filter(Boolean)
   ));
 
-  let needsReload = false;
+  const unconfirmed = [];
 
   for (const profileId of profiles) {
     const ok = await pythonWorkerRefreshProfile(profileId);
-    if (!ok) needsReload = true;
+    if (!ok) unconfirmed.push(profileId);
   }
 
-  if (needsReload && profiles.length) {
-    setTimeout(function() {
-      window.location.reload();
-    }, 800);
-  }
+  return unconfirmed;
 }
 
 async function pythonWorkerStartBusiness(bmName, options) {
@@ -1265,8 +1309,17 @@ async function pythonWorkerPoll() {
     pythonWorkerUiState.busy = false;
 
     if (status === 'SUCCESS') {
-      pythonWorkerSetText('pythonPwStatus', 'Business Manager успешно создан.');
-      await pythonWorkerRefreshSuccessfulProfiles(items);
+      const unconfirmed = await pythonWorkerRefreshSuccessfulProfiles(items);
+      pythonWorkerSetText(
+        'pythonPwStatus',
+        unconfirmed.length
+          ? (
+              'BM создан. ID сохранён в Job. Обычный Meta inventory sync не ' +
+              'подтвердил профили: ' + unconfirmed.join(', ') +
+              '. Это не отменяет успешный CREATE.'
+            )
+          : 'Business Manager создан и подтверждён Workspace sync.'
+      );
 
       pythonWorkerUiState.jobId = '';
       localStorage.removeItem('remask_python_worker_job_v1');
@@ -1292,7 +1345,15 @@ async function pythonWorkerPoll() {
       );
 
       if (status === 'PARTIAL') {
-        await pythonWorkerRefreshSuccessfulProfiles(items);
+        const unconfirmed = await pythonWorkerRefreshSuccessfulProfiles(items);
+        if (unconfirmed.length) {
+          pythonWorkerSetText(
+            'pythonPwStatus',
+            'Часть BM создана. Успешные BM ID сохранены в Job; Meta inventory ' +
+            'sync не подтвердил: ' + unconfirmed.join(', ') +
+            '. Ошибки остальных: ' + (errors.join(' · ') || 'неизвестная ошибка')
+          );
+        }
       }
 
       // FAILED/PARTIAL job_id сохраняем для Retry Failed.
