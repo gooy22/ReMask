@@ -244,24 +244,51 @@ class FacebookWebSession:
     # ------------------------------------------------------------------
 
     @staticmethod
+    def _match_sources(source: str) -> list[str]:
+        raw = str(source or "")
+        variants = [raw]
+
+        entity_decoded = html.unescape(raw)
+        if entity_decoded not in variants:
+            variants.append(entity_decoded)
+
+        js_decoded = (
+            entity_decoded
+            .replace(r'\\u0022', '"')
+            .replace(r'\\u0027', "'")
+            .replace(r'\\u003C', '<')
+            .replace(r'\\u003E', '>')
+            .replace(r'\\u0026', '&')
+            .replace(r'\\/', '/')
+            .replace(r'\\"', '"')
+            .replace(r"\\'", "'")
+        )
+        if js_decoded not in variants:
+            variants.append(js_decoded)
+
+        return variants
+
+    @classmethod
     def _first_match(
+        cls,
         source: str,
         patterns: list[str],
     ) -> str:
-        for pattern in patterns:
-            match = re.search(
-                pattern,
-                source,
-                flags=re.IGNORECASE | re.DOTALL,
-            )
+        for candidate_source in cls._match_sources(source):
+            for pattern in patterns:
+                match = re.search(
+                    pattern,
+                    candidate_source,
+                    flags=re.IGNORECASE | re.DOTALL,
+                )
 
-            if match:
-                value = html.unescape(
-                    str(match.group(1) or "")
-                ).strip()
+                if match:
+                    value = html.unescape(
+                        str(match.group(1) or "")
+                    ).strip()
 
-                if value:
-                    return value
+                    if value:
+                        return value
 
         return ""
 
@@ -283,8 +310,12 @@ class FacebookWebSession:
 
             token_patterns = [
                 (
-                    r'"DTSGInitialData".{0,2500}?'
-                    r'"token"\s*:\s*"([^"]+)"'
+                    r'["\']DTSGInitialData["\'].{0,12000}?'
+                    r'["\']token["\']\s*:\s*["\']([^"\']+)["\']'
+                ),
+                (
+                    r'\[\s*["\']DTSGInitialData["\']\s*,\s*\[\]\s*,\s*\{'
+                    r'.{0,4000}?["\']token["\']\s*:\s*["\']([^"\']+)["\']'
                 ),
                 (
                     r'name=["\']fb_dtsg["\']'
@@ -297,9 +328,12 @@ class FacebookWebSession:
             ]
 
             bootstrap_urls = (
-                "https://business.facebook.com/latest/home",
                 self.ADS_MANAGER_URL,
+                "https://business.facebook.com/latest/settings",
+                "https://business.facebook.com/latest/overview",
                 "https://www.facebook.com/",
+                "https://www.facebook.com/me",
+                "https://www.facebook.com/settings",
             )
 
             body = ""
@@ -348,9 +382,23 @@ class FacebookWebSession:
                             token_patterns,
                         )
                         if not candidate_dtsg:
-                            attempts.append(
-                                f"{bootstrap_url}: authenticated page but no fb_dtsg"
+                            normalized_sources = self._match_sources(candidate_body)
+                            has_dtsg_marker = any(
+                                (
+                                    "DTSGInitialData" in source
+                                    or 'name="fb_dtsg"' in source
+                                    or "name='fb_dtsg'" in source
+                                )
+                                for source in normalized_sources
                             )
+                            if has_dtsg_marker:
+                                attempts.append(
+                                    f"{bootstrap_url}: DTSG marker present but token format was not parsed"
+                                )
+                            else:
+                                attempts.append(
+                                    f"{bootstrap_url}: no DTSGInitialData; Facebook session is likely expired or incomplete"
+                                )
                             continue
 
                         body = candidate_body
@@ -371,8 +419,10 @@ class FacebookWebSession:
             if not fb_dtsg:
                 detail = " | ".join(attempts[-6:]) or "no bootstrap response"
                 raise AuthenticationError(
-                    "Facebook browser session did not expose fb_dtsg on any "
-                    f"bootstrap surface: {detail}"
+                    "Facebook browser session has no usable fb_dtsg. "
+                    "The saved cookies may be expired/incomplete, or Facebook "
+                    "returned a bootstrap shape that does not expose the token. "
+                    f"Attempts: {detail}"
                 )
 
             lsd = self._first_match(
