@@ -155,6 +155,9 @@ RUN set -eux; \
     grep -q 'await session.facebook_controller()' /opt/remask-python/app/provisioning/ad_account_handler.py; \
     grep -q 'classify_meta_request_error' /opt/remask-python/app/provisioning/meta_errors.py; \
     grep -q "@app.get('/ready'" /opt/remask-python/main.py; \
+    grep -q "profile_preflight" /opt/remask-python/main.py; \
+    grep -q "action === 'preflight'" /var/www/html/ajax/pythonWorkerJobs.php; \
+    grep -q 'pythonWorkerProfilePreflight' /var/www/html/scripts/workspace.js; \
     php -l /var/www/html/ajax/pythonWorkerJobs.php; \
     php -l /var/www/html/ajax/pythonWorkerPages.php; \
     grep -q 'pythonWorkerOpenOwnBmModal' /var/www/html/scripts/workspace.js; \
@@ -168,7 +171,7 @@ RUN set -eux; \
     php -l /var/www/html/workspace.php; \
     grep -q 'REMASK_PYTHON_WORKER_PANEL_V1' /var/www/html/workspace.php; \
     grep -q 'REMASK_PYTHON_WORKER_UI_V1' /var/www/html/scripts/workspace.js; \
-    grep -q 'REMASK_PYTHON_WORKER_UI_V142' /var/www/html/scripts/workspace.js; \
+    grep -q 'REMASK_PYTHON_WORKER_UI_V143' /var/www/html/scripts/workspace.js; \
     grep -q 'pythonWorkerJobs.php' /var/www/html/scripts/workspace.js; \
     grep -q 'Retry Failed' /var/www/html/workspace.php; \
     php -l /var/www/html/ajax/metaHierarchy.php; \
