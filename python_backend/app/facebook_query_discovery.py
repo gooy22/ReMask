@@ -56,47 +56,89 @@ def extract_script_urls(document: str, base_url: str) -> list[str]:
     return found
 
 
+def _source_variants(source: str) -> list[str]:
+    raw = str(source or "")
+    variants = [raw]
+
+    entity_decoded = html.unescape(raw)
+    if entity_decoded not in variants:
+        variants.append(entity_decoded)
+
+    def decode_ascii_unicode(match: re.Match[str]) -> str:
+        value = int(match.group(1), 16)
+        return chr(value) if value <= 0x7F else match.group(0)
+
+    decoded = re.sub(
+        r"\\u([0-9a-fA-F]{4})",
+        decode_ascii_unicode,
+        entity_decoded,
+    )
+    decoded = re.sub(
+        r"\\x([0-9a-fA-F]{2})",
+        lambda match: chr(int(match.group(1), 16)),
+        decoded,
+    )
+    decoded = (
+        decoded
+        .replace(r"\\/", "/")
+        .replace(r'\\"', '"')
+        .replace(r"\\'", "'")
+    )
+    if decoded not in variants:
+        variants.append(decoded)
+
+    return variants
+
+
 def extract_doc_id_near_friendly_name(
     source: str,
     friendly_name: str,
 ) -> str:
-    if not source or not friendly_name or friendly_name not in source:
+    clean_name = str(friendly_name or "").strip()
+    if not source or not clean_name:
         return ""
 
+    aliases = (
+        clean_name,
+        f"{clean_name}_facebookRelayOperation",
+    )
     best: tuple[int, str] | None = None
-    start = 0
 
-    while True:
-        index = source.find(friendly_name, start)
-        if index < 0:
-            break
+    for candidate_source in _source_variants(source):
+        for alias in aliases:
+            start = 0
+            while True:
+                index = candidate_source.find(alias, start)
+                if index < 0:
+                    break
 
-        left = max(0, index - 3000)
-        right = min(
-            len(source),
-            index + len(friendly_name) + 3000,
-        )
-        window = source[left:right]
+                left = max(0, index - 5000)
+                right = min(
+                    len(candidate_source),
+                    index + len(alias) + 5000,
+                )
+                window = candidate_source[left:right]
 
-        patterns = (
-            r'(?:"|\')?(?:doc_id|docID|id)(?:"|\')?\s*[:=]\s*(?:"|\')([0-9]{5,40})(?:"|\')',
-            r'params\s*:\s*\{.{0,1500}?id\s*:\s*["\']([0-9]{5,40})["\']',
-        )
+                patterns = (
+                    r'(?:"|\')?(?:doc_id|docID|queryID|query_id|id)'
+                    r'(?:"|\')?\s*[:=]\s*(?:"|\')([0-9]{5,40})(?:"|\')',
+                    r'params\s*:\s*\{.{0,2500}?id\s*:\s*["\']([0-9]{5,40})["\']',
+                    r'["\'](?:doc_id|id)["\']\s*,\s*["\']([0-9]{5,40})["\']',
+                )
 
-        for pattern in patterns:
-            for match in re.finditer(
-                pattern,
-                window,
-                flags=re.IGNORECASE | re.DOTALL,
-            ):
-                value = match.group(1)
-                absolute = left + match.start(1)
-                distance = abs(absolute - index)
+                for pattern in patterns:
+                    for match in re.finditer(
+                        pattern,
+                        window,
+                        flags=re.IGNORECASE | re.DOTALL,
+                    ):
+                        value = match.group(1)
+                        absolute = left + match.start(1)
+                        distance = abs(absolute - index)
+                        if best is None or distance < best[0]:
+                            best = (distance, value)
 
-                if best is None or distance < best[0]:
-                    best = (distance, value)
-
-        start = index + len(friendly_name)
+                start = index + len(alias)
 
     return best[1] if best else ""
 
