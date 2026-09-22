@@ -27,6 +27,10 @@ class ProfileContext:
     cookies: dict[str, str]
     proxy: str | None
     user_agent: str
+    display_name: str = ""
+    email: str = ""
+    first_name: str = ""
+    last_name: str = ""
 
 
 class ProfileResolver:
@@ -121,6 +125,10 @@ class ProfileResolver:
             cookies=cookie_map,
             proxy=proxy,
             user_agent=user_agent,
+            display_name=str(payload.get("display_name") or profile_id).strip(),
+            email=str(payload.get("email") or "").strip(),
+            first_name=str(payload.get("first_name") or "").strip(),
+            last_name=str(payload.get("last_name") or "").strip(),
         )
 
 
