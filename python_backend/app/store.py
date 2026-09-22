@@ -200,6 +200,17 @@ class JobStore:
                     t.pop('result_json',None)
                     tasks.append(t)
                 item['tasks']=tasks
+                provisioning_steps=[]
+                for pr in con.execute(
+                    'SELECT * FROM provisioning_steps WHERE item_id=? ORDER BY created_at,step',
+                    (item['id'],),
+                ).fetchall():
+                    p=dict(pr)
+                    if p.get('result_json'):
+                        p['result']=json.loads(p['result_json'])
+                    p.pop('result_json',None)
+                    provisioning_steps.append(p)
+                item['provisioning_steps']=provisioning_steps
                 items.append(item)
             data=dict(job)
             data['items']=items
@@ -266,6 +277,61 @@ class JobStore:
                              int(task.get('attempt') or 0), json.dumps(result, separators=(',', ':')) if result is not None else None,
                              task.get('error_code'), task.get('error_message'), tcreated, tupdated),
                         )
+                    for pstep in item.get('provisioning_steps') or []:
+                        if not isinstance(pstep, dict):
+                            continue
+                        step = str(pstep.get('step') or '').strip().upper()
+                        if step not in {'PROXY_CHECK','BUSINESS','AD_ACCOUNT','FUNDING'}:
+                            continue
+                        scope_key = str(pstep.get('scope_key') or 'default').strip() or 'default'
+                        presult = pstep.get('result') if isinstance(pstep.get('result'), dict) else None
+                        pcreated = int(pstep.get('created_at') or icreated)
+                        pupdated = int(pstep.get('updated_at') or iupdated)
+                        pstatus = str(pstep.get('status') or 'QUEUED')
+                        con.execute(
+                            """INSERT INTO provisioning_steps(
+                                   item_id,profile_id,scope_key,step,status,attempt,result_json,
+                                   error_code,error_message,created_at,updated_at
+                               ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+                               ON CONFLICT(item_id,step) DO UPDATE SET
+                                   profile_id=excluded.profile_id,scope_key=excluded.scope_key,
+                                   status=excluded.status,attempt=excluded.attempt,
+                                   result_json=excluded.result_json,error_code=excluded.error_code,
+                                   error_message=excluded.error_message,created_at=excluded.created_at,
+                                   updated_at=excluded.updated_at""",
+                            (
+                                item_id, profile_id, scope_key, step, pstatus,
+                                int(pstep.get('attempt') or 0),
+                                json.dumps(presult, separators=(',', ':')) if presult is not None else None,
+                                pstep.get('error_code'), pstep.get('error_message'),
+                                pcreated, pupdated,
+                            ),
+                        )
+                        result_key = {
+                            'BUSINESS': 'business_id',
+                            'AD_ACCOUNT': 'ad_account_id',
+                            'FUNDING': 'funding_source_id',
+                        }.get(step)
+                        result_value = str((presult or {}).get(result_key) or '').strip() if result_key else ''
+                        if pstatus == 'SUCCESS' and result_key and result_value:
+                            con.execute(
+                                """INSERT INTO provisioning_entities(
+                                       profile_id,scope_key,business_id,ad_account_id,funding_source_id,
+                                       created_at,updated_at
+                                   ) VALUES(?,?,?,?,?,?,?)
+                                   ON CONFLICT(profile_id,scope_key) DO NOTHING""",
+                                (profile_id, scope_key, None, None, None, pcreated, pupdated),
+                            )
+                            column = {
+                                'business_id': 'business_id',
+                                'ad_account_id': 'ad_account_id',
+                                'funding_source_id': 'funding_source_id',
+                            }[result_key]
+                            con.execute(
+                                f"UPDATE provisioning_entities SET {column}=?,updated_at=? "
+                                "WHERE profile_id=? AND scope_key=?",
+                                (result_value, pupdated, profile_id, scope_key),
+                            )
                 imported += 1
         return imported
 

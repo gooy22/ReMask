@@ -7,6 +7,7 @@ from collections import defaultdict
 from typing import Any, Awaitable, Callable
 
 from .mirror import MirrorError, SnapshotMirror
+from .provisioning import ProvisioningError, ProvisioningService, ProvisioningStateStore
 from .session import ProfileResolver, ProfileSession, ProfileContextError, ProxyCheckError
 from .store import JobStore
 
@@ -37,11 +38,14 @@ class WorkerPool:
         self.queue: asyncio.Queue[str]=asyncio.Queue()
         self.profile_locks: defaultdict[str,asyncio.Lock]=defaultdict(asyncio.Lock)
         self.registry=TaskRegistry()
+        self.provisioning_state=ProvisioningStateStore(str(store.path))
+        self.provisioning=ProvisioningService(self.provisioning_state)
         self.registry.register('proxy_check',_proxy_check)
         self.resolver=ProfileResolver(os.getenv('REMASK_PROFILE_RESOLVER_URL'),os.getenv('REMASK_INTERNAL_KEY'))
         self._workers: list[asyncio.Task[None]]=[]
 
     async def start(self) -> None:
+        await self.provisioning_state.init()
         recovered=await self.store.recover()
         for item_id in recovered:
             await self.queue.put(item_id)
@@ -91,8 +95,22 @@ class WorkerPool:
                             continue
                         await self.store.set_task_running(task['id'])
                         try:
-                            result=await self.registry.execute(str(task['action']),session,task['payload'])
+                            action=str(task['action'])
+                            if action=='provisioning':
+                                result=await self.provisioning.run(
+                                    item_id=item_id,
+                                    profile_id=profile_id,
+                                    context=context,
+                                    session=session,
+                                    payload=task['payload'],
+                                    task_idempotency_key=task.get('idempotency_key'),
+                                )
+                            else:
+                                result=await self.registry.execute(action,session,task['payload'])
                             await self.store.set_task_success(task['id'],result)
+                        except ProvisioningError as exc:
+                            await self.store.set_task_failed(task['id'],exc.code,str(exc))
+                            break
                         except ProxyCheckError as exc:
                             await self.store.set_task_failed(task['id'],'PROXY_DEAD',str(exc))
                             break
