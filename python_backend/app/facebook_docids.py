@@ -64,6 +64,18 @@ STATIC_CANDIDATES: dict[str, list[DocIdCandidate]] = {
             observed_at="legacy",
         ),
     ],
+    "LIST_PAGES": [
+        DocIdCandidate(
+            operation="LIST_PAGES",
+            doc_id="5196344227155252",
+            friendly_name="AccountQualityUserPagesWrapper_UserPageQuery",
+            endpoint_url="https://www.facebook.com/api/graphql/",
+            variables_mode="account_quality_user_pages_v1",
+            source="community_observed_account_quality_2023",
+            priority=25,
+            observed_at="2023",
+        ),
+    ],
 }
 
 
@@ -165,47 +177,77 @@ def _candidate_from_mapping(
 
 
 def _env_candidates(operation: str) -> list[DocIdCandidate]:
-    if operation != "CREATE_BM":
-        return []
-
     output: list[DocIdCandidate] = []
 
-    primary = str(os.getenv("REMASK_DOC_ID_CREATE_BM") or "").strip()
-    legacy_primary = str(os.getenv("REMASK_BM_DOC_ID") or "").strip()
-    doc_id = primary or legacy_primary
+    if operation == "CREATE_BM":
+        primary = str(os.getenv("REMASK_DOC_ID_CREATE_BM") or "").strip()
+        legacy_primary = str(os.getenv("REMASK_BM_DOC_ID") or "").strip()
+        doc_id = primary or legacy_primary
 
-    if doc_id:
-        output.append(
-            DocIdCandidate(
-                operation=operation,
-                doc_id=_clean_doc_id(doc_id),
-                friendly_name=str(
-                    os.getenv("REMASK_CREATE_BM_FRIENDLY_NAME")
-                    or "useBusinessCreationMutationMutation"
-                ).strip(),
-                endpoint_url=str(
-                    os.getenv("REMASK_CREATE_BM_GRAPHQL_URL")
-                    or "https://business.facebook.com/api/graphql/"
-                ).strip(),
-                variables_mode=str(
-                    os.getenv("REMASK_CREATE_BM_VARIABLES_MODE")
-                    or "scope_selector_business_creation_v1"
-                ).strip(),
-                source="environment",
-                priority=10_000,
-                observed_at="runtime",
+        if doc_id:
+            output.append(
+                DocIdCandidate(
+                    operation=operation,
+                    doc_id=_clean_doc_id(doc_id),
+                    friendly_name=str(
+                        os.getenv("REMASK_CREATE_BM_FRIENDLY_NAME")
+                        or "useBusinessCreationMutationMutation"
+                    ).strip(),
+                    endpoint_url=str(
+                        os.getenv("REMASK_CREATE_BM_GRAPHQL_URL")
+                        or "https://business.facebook.com/api/graphql/"
+                    ).strip(),
+                    variables_mode=str(
+                        os.getenv("REMASK_CREATE_BM_VARIABLES_MODE")
+                        or "scope_selector_business_creation_v1"
+                    ).strip(),
+                    source="environment",
+                    priority=10_000,
+                    observed_at="runtime",
+                )
             )
-        )
 
-    raw_candidates = str(
-        os.getenv("REMASK_DOC_ID_CREATE_BM_CANDIDATES_JSON") or ""
-    ).strip()
+        raw_candidates = str(
+            os.getenv("REMASK_DOC_ID_CREATE_BM_CANDIDATES_JSON") or ""
+        ).strip()
+
+    elif operation == "LIST_PAGES":
+        doc_id = str(os.getenv("REMASK_DOC_ID_LIST_PAGES") or "").strip()
+
+        if doc_id:
+            output.append(
+                DocIdCandidate(
+                    operation=operation,
+                    doc_id=_clean_doc_id(doc_id),
+                    friendly_name=str(
+                        os.getenv("REMASK_LIST_PAGES_FRIENDLY_NAME")
+                        or "AccountQualityUserPagesWrapper_UserPageQuery"
+                    ).strip(),
+                    endpoint_url=str(
+                        os.getenv("REMASK_LIST_PAGES_GRAPHQL_URL")
+                        or "https://www.facebook.com/api/graphql/"
+                    ).strip(),
+                    variables_mode=str(
+                        os.getenv("REMASK_LIST_PAGES_VARIABLES_MODE")
+                        or "account_quality_user_pages_v1"
+                    ).strip(),
+                    source="environment",
+                    priority=10_000,
+                    observed_at="runtime",
+                )
+            )
+
+        raw_candidates = str(
+            os.getenv("REMASK_DOC_ID_LIST_PAGES_CANDIDATES_JSON") or ""
+        ).strip()
+    else:
+        return []
 
     if raw_candidates:
         parsed = json.loads(raw_candidates)
         if not isinstance(parsed, list):
             raise ValueError(
-                "REMASK_DOC_ID_CREATE_BM_CANDIDATES_JSON must be a JSON list"
+                f"{operation} doc_id candidates env must be a JSON list"
             )
 
         for index, item in enumerate(parsed):
@@ -405,7 +447,7 @@ def record_result(
 
 def registry_view(operation: str | None = None) -> dict[str, Any]:
     operations = [_clean_operation(operation)] if operation else sorted(
-        set(STATIC_CANDIDATES) | {"CREATE_BM"}
+        set(STATIC_CANDIDATES) | {"CREATE_BM", "LIST_PAGES"}
     )
 
     with _STORE_LOCK:
