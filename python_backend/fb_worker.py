@@ -99,20 +99,28 @@ class FacebookWebSession:
 
     FB_DTSG_PATTERNS = (
         (
-            r'["\']DTSGInitialData["\'].{0,12000}?'
-            r'["\']token["\']\s*:\s*["\']([^"\']+)["\']'
+            r'["\\']DTSG(?:Initial|Init)Data["\\'].{0,16000}?'
+            r'["\\']token["\\']\\s*:\\s*["\\']([^"\\']+)["\\']'
         ),
         (
-            r'\[\s*["\']DTSGInitialData["\']\s*,\s*\[\]\s*,\s*\{'
-            r'.{0,4000}?["\']token["\']\s*:\s*["\']([^"\']+)["\']'
+            r'\\[\\s*["\\']DTSG(?:Initial|Init)Data["\\']\\s*,\\s*\\[\\]\\s*,\\s*\\{'
+            r'.{0,6000}?["\\']token["\\']\\s*:\\s*["\\']([^"\\']+)["\\']'
         ),
         (
-            r'name=["\']fb_dtsg["\']'
-            r'[^>]*value=["\']([^"\']+)["\']'
+            r'["\\']dtsg["\\']\\s*:\\s*\\{.{0,800}?'
+            r'["\\']token["\\']\\s*:\\s*["\\']([^"\\']+)["\\']'
         ),
         (
-            r'["\']fb_dtsg["\']'
-            r'\s*[:=]\s*["\']([^"\']+)["\']'
+            r'\\{\\s*["\\']name["\\']\\s*:\\s*["\\']fb_dtsg["\\']'
+            r'.{0,600}?["\\']value["\\']\\s*:\\s*["\\']([^"\\']+)["\\']'
+        ),
+        (
+            r'name=["\\']fb_dtsg["\\']'
+            r'[^>]*value=["\\']([^"\\']+)["\\']'
+        ),
+        (
+            r'["\\']fb_dtsg["\\']'
+            r'\\s*[:=]\\s*["\\']([^"\\']+)["\\']'
         ),
     )
 
@@ -271,16 +279,25 @@ class FacebookWebSession:
         if entity_decoded not in variants:
             variants.append(entity_decoded)
 
+        def decode_ascii_unicode(match: re.Match[str]) -> str:
+            codepoint = int(match.group(1), 16)
+            return chr(codepoint) if codepoint <= 0x7F else match.group(0)
+
+        js_decoded = re.sub(
+            r'\\u([0-9a-fA-F]{4})',
+            decode_ascii_unicode,
+            entity_decoded,
+        )
+        js_decoded = re.sub(
+            r'\\x([0-9a-fA-F]{2})',
+            lambda match: chr(int(match.group(1), 16)),
+            js_decoded,
+        )
         js_decoded = (
-            entity_decoded
-            .replace(r'\u0022', '"')
-            .replace(r'\u0027', "'")
-            .replace(r'\u003C', '<')
-            .replace(r'\u003E', '>')
-            .replace(r'\u0026', '&')
-            .replace(r'\/', '/')
-            .replace(r'\"', '"')
-            .replace(r"\'", "'")
+            js_decoded
+            .replace(r'\\/', '/')
+            .replace(r'\\"', '"')
+            .replace(r"\\'", "'")
         )
         if js_decoded not in variants:
             variants.append(js_decoded)
@@ -333,9 +350,14 @@ class FacebookWebSession:
                 self.ADS_MANAGER_URL,
                 "https://business.facebook.com/latest/settings",
                 "https://business.facebook.com/latest/overview",
+                "https://www.facebook.com/adsmanager/manage/campaigns",
+                "https://www.facebook.com/marketplace/",
                 "https://www.facebook.com/",
                 "https://www.facebook.com/me",
                 "https://www.facebook.com/settings",
+                "https://m.facebook.com/",
+                "https://mbasic.facebook.com/",
+                "https://mbasic.facebook.com/profile.php",
             )
 
             body = ""
@@ -352,8 +374,16 @@ class FacebookWebSession:
                         headers={
                             "Accept": (
                                 "text/html,application/xhtml+xml,"
-                                "application/xml;q=0.9,*/*;q=0.8"
+                                "application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
                             ),
+                            "Accept-Language": "en-US,en;q=0.9",
+                            "Cache-Control": "no-cache",
+                            "Pragma": "no-cache",
+                            "Sec-Fetch-Dest": "document",
+                            "Sec-Fetch-Mode": "navigate",
+                            "Sec-Fetch-Site": "none",
+                            "Sec-Fetch-User": "?1",
+                            "Upgrade-Insecure-Requests": "1",
                         },
                         allow_redirects=True,
                     ) as response:
@@ -385,21 +415,31 @@ class FacebookWebSession:
                         )
                         if not candidate_dtsg:
                             normalized_sources = self._match_sources(candidate_body)
-                            has_dtsg_marker = any(
-                                (
-                                    "DTSGInitialData" in source
-                                    or 'name="fb_dtsg"' in source
-                                    or "name='fb_dtsg'" in source
+                            marker_names = [
+                                marker
+                                for marker in (
+                                    "DTSGInitialData",
+                                    "DTSGInitData",
+                                    '"fb_dtsg"',
+                                    'name="fb_dtsg"',
+                                    "name='fb_dtsg'",
+                                    "CurrentUserInitialData",
                                 )
-                                for source in normalized_sources
+                                if any(marker in source for source in normalized_sources)
+                            ]
+                            surface = (
+                                f"HTTP {response.status} final={candidate_url} "
+                                f"bytes={len(candidate_body)}"
                             )
-                            if has_dtsg_marker:
+                            if marker_names:
                                 attempts.append(
-                                    f"{bootstrap_url}: DTSG marker present but token format was not parsed"
+                                    f"{bootstrap_url}: {surface} markers="
+                                    + ",".join(marker_names)
+                                    + " but no usable fb_dtsg was parsed"
                                 )
                             else:
                                 attempts.append(
-                                    f"{bootstrap_url}: no DTSGInitialData; Facebook session is likely expired or incomplete"
+                                    f"{bootstrap_url}: {surface} no DTSG marker"
                                 )
                             continue
 
