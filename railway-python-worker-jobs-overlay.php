@@ -135,7 +135,7 @@ try {
 
     if ($action === 'register_docid') {
         $operation = strtoupper(trim((string)($input['operation'] ?? 'CREATE_BM')));
-        if ($operation !== 'CREATE_BM') {
+        if (!in_array($operation, ['CREATE_BM','LIST_PAGES'], true)) {
             rmx_pwj_out(['ok'=>false,'error'=>'UNSUPPORTED_DOCID_OPERATION'], 400);
         }
 
@@ -144,11 +144,18 @@ try {
             rmx_pwj_out(['ok'=>false,'error'=>'INVALID_DOC_ID'], 400);
         }
 
+        $defaultMode = $operation === 'LIST_PAGES'
+            ? 'account_quality_user_pages_v1'
+            : 'scope_selector_business_creation_v1';
+        $defaultEndpoint = $operation === 'LIST_PAGES'
+            ? 'https://www.facebook.com/api/graphql/'
+            : 'https://business.facebook.com/api/graphql/';
+
         $candidate = [
             'doc_id' => $docId,
             'friendly_name' => trim((string)($input['friendly_name'] ?? '')),
-            'variables_mode' => trim((string)($input['variables_mode'] ?? 'scope_selector_business_creation_v1')),
-            'endpoint_url' => trim((string)($input['endpoint_url'] ?? 'https://business.facebook.com/api/graphql/')),
+            'variables_mode' => trim((string)($input['variables_mode'] ?? $defaultMode)),
+            'endpoint_url' => trim((string)($input['endpoint_url'] ?? $defaultEndpoint)),
             'source' => trim((string)($input['source'] ?? 'manual_ui')),
             'priority' => (int)($input['priority'] ?? 7500),
             'observed_at' => trim((string)($input['observed_at'] ?? '')),
