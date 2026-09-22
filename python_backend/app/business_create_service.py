@@ -233,6 +233,7 @@ async def create_business_resilient(
     if clean_page and str(getattr(session.context, "access_token", "") or "").strip():
         graph = await session.graph_api()
         official_page_visible = False
+        official_graph_blocked = False
         saved_page_visible = any(
             str(page.get("id") or "").strip() == clean_page
             for page in (getattr(session.context, "pages", None) or [])
@@ -263,8 +264,18 @@ async def create_business_resilient(
                     "stage": "page_visibility",
                 }
             )
+            if exc.code == 190 or exc.http_status == 401:
+                official_graph_blocked = True
+                diagnostics.append(
+                    {
+                        "transport": "official_graph_api",
+                        "stage": "route_selection",
+                        "result": "skip_official_create",
+                        "reason": "saved access token is not usable for Graph API",
+                    }
+                )
 
-        if official_page_visible or saved_page_visible:
+        if (official_page_visible or saved_page_visible) and not official_graph_blocked:
             if saved_page_visible and not official_page_visible:
                 diagnostics.append(
                     {
