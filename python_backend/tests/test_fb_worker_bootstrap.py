@@ -72,6 +72,20 @@ class FacebookDtsgBootstrapParserTests(unittest.TestCase):
             "NA_refresh_fallback",
         )
 
+    def test_ajax_dtsg_nested_string_payload(self) -> None:
+        source = 'for (;;);{"payload":"{\\\"token\\\":\\\"NA_nested_refresh\\\"}"}'
+        self.assertEqual(
+            FacebookWebSession._parse_dtsg_refresh_response(source),
+            "NA_nested_refresh",
+        )
+
+    def test_ajax_dtsg_while_prefix(self) -> None:
+        source = 'while(1);{"data":{"token":"NA_while_refresh"}}'
+        self.assertEqual(
+            FacebookWebSession._parse_dtsg_refresh_response(source),
+            "NA_while_refresh",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
