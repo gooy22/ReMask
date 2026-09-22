@@ -105,8 +105,8 @@ try {
     $input = rmx_pwj_input();
     $action = strtolower(trim((string)($input['action'] ?? 'status')));
 
-    if ($action === 'health') {
-        $health = rmx_pwj_worker_request('GET', '/health');
+    if ($action === 'health' || $action === 'ready') {
+        $health = rmx_pwj_worker_request('GET', '/ready');
         rmx_pwj_out(['ok'=>true,'worker'=>$health]);
     }
 
