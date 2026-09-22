@@ -199,25 +199,50 @@ class BusinessLogicController:
             raise RemoteRequestError("Failed to create BM")
         return str(bm_id)
 
-    async def create_ad_account(self, business_id: str, account_name: str, doc_id: str = "684920184730193") -> str:
+async def create_ad_account(
+        self,
+        business_id: str,
+        account_name: str,
+        doc_id: str = "684920184730193",
+        *,
+        currency: str = "USD",
+        timezone_id: int = 1,
+    ) -> str:
+        """
+        Финальный боевой метод создания РК без хардкода валюты и гео.
+        Безопасен для старых вызовов и полностью поддерживает динамический UI.
+        """
+        currency = str(currency).strip().upper()
+        if not currency:
+            raise ValueError("currency is required")
+
+        try:
+            timezone_id = int(timezone_id)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("timezone_id must be an integer") from exc
+
+        # Формируем JSON-запрос к Meta с динамическими параметрами из админки ReMask
         variables = {
             "input": {
                 "client_mutation_id": "1",
                 "business_id": str(business_id),
-                "name": account_name,
-                "currency": "USD",
-                "timezone_id": 1
+                "name": str(account_name),
+                "currency": currency,
+                "timezone_id": timezone_id,
             }
         }
+
         response = await self.session.send_post_request(self.graphql_url, doc_id, variables)
-        
         data = response.get("data", {})
         acc_data = data.get("ad_account_create", {}).get("ad_account", {}) if isinstance(data, dict) else {}
         account_id = acc_data.get("id")
-        
+
         if response.get("errors") or not account_id:
-            log.error("[%s] Ad Account creation failed", self.session.profile.name)
-            raise RemoteRequestError("Failed to create Ad Account")
+            # Вытаскиваем полный ответ Meta, чтобы хэндлер мог его прочитать и классифицировать
+            err_msg = json.dumps(response.get("errors", []))
+            log.error("[%s] Ad Account creation failed: %s", self.session.profile.name, err_msg)
+            raise RemoteRequestError(f"Failed to create Ad Account. Meta response: {err_msg}")
+
         return str(account_id)
 
     async def link_payment_credential(self, target_id: str, credential_id: str, country: str = "US", zip_code: str = "10001", doc_id: str = "582930491827304") -> bool:
