@@ -106,11 +106,19 @@ async def discover_persisted_query(
     *,
     friendly_name: str,
     entry_urls: list[str],
-    max_scripts_per_entry: int = 18,
-    document_max_bytes: int = 2_000_000,
-    script_max_bytes: int = 1_500_000,
+    max_scripts_per_entry: int = 0,
+    document_max_bytes: int = 3_000_000,
+    script_max_bytes: int = 0,
     cache_ttl_seconds: int = 600,
 ) -> PersistedQueryDiscovery | None:
+    """
+    v14 lightweight persisted-query discovery.
+
+    Only the initial Facebook HTML response and its response headers are
+    inspected. No JavaScript bundle URLs are fetched or parsed. The legacy
+    max_scripts/script_max_bytes arguments remain for call-site compatibility
+    but are intentionally ignored.
+    """
     clean_name = str(friendly_name or "").strip()
     if not clean_name:
         return None
@@ -129,10 +137,19 @@ async def discover_persisted_query(
 
         for entry_url in entry_urls:
             try:
-                status, document, final_url = await session.fetch_text(
-                    entry_url,
-                    max_bytes=document_max_bytes,
-                )
+                if hasattr(session, "fetch_text_with_headers"):
+                    status, document, final_url, headers = (
+                        await session.fetch_text_with_headers(
+                            entry_url,
+                            max_bytes=document_max_bytes,
+                        )
+                    )
+                else:
+                    status, document, final_url = await session.fetch_text(
+                        entry_url,
+                        max_bytes=document_max_bytes,
+                    )
+                    headers = {}
             except Exception:
                 continue
 
@@ -153,36 +170,20 @@ async def discover_persisted_query(
                 _DISCOVERY_CACHE[cache_key] = (time.monotonic(), result)
                 return result
 
-            script_urls = extract_script_urls(
-                document,
-                final_url,
+            header_blob = "\n".join(
+                f"{key}: {value}"
+                for key, value in dict(headers or {}).items()
             )
-
-            for script_url in script_urls[:max(1, max_scripts_per_entry)]:
-                try:
-                    script_status, body, resolved_url = await session.fetch_text(
-                        script_url,
-                        max_bytes=script_max_bytes,
-                        referer=final_url,
-                    )
-                except Exception:
-                    continue
-
-                if script_status >= 400 or clean_name not in body:
-                    continue
-
-                doc_id = extract_doc_id_near_friendly_name(
-                    body,
-                    clean_name,
-                )
-                if not doc_id:
-                    continue
-
+            header_doc_id = extract_doc_id_near_friendly_name(
+                header_blob,
+                clean_name,
+            )
+            if header_doc_id:
                 result = PersistedQueryDiscovery(
-                    doc_id=doc_id,
+                    doc_id=header_doc_id,
                     friendly_name=clean_name,
-                    source_url=resolved_url,
-                    source_kind="javascript_bundle",
+                    source_url=final_url,
+                    source_kind="response_headers",
                 )
                 _DISCOVERY_CACHE[cache_key] = (time.monotonic(), result)
                 return result
