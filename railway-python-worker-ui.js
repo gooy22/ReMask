@@ -112,6 +112,30 @@ function pythonWorkerSelectionRefresh() {
   }
 }
 
+function pythonWorkerErrorText(value, fallback) {
+  if (value == null || value === '') return String(fallback || 'Unknown error');
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+
+  if (value && typeof value === 'object') {
+    if (typeof value.message === 'string' && value.message.trim()) {
+      return value.message.trim();
+    }
+    if (typeof value.detail === 'string' && value.detail.trim()) {
+      return value.detail.trim();
+    }
+    if (value.error != null && value.error !== value) {
+      return pythonWorkerErrorText(value.error, fallback);
+    }
+    try {
+      return JSON.stringify(value);
+    } catch (_) {}
+  }
+
+  return String(fallback || value);
+}
+
 async function pythonWorkerBridge(payload) {
   const response = await fetch('ajax/pythonWorkerJobs.php', {
     method: 'POST',
@@ -128,7 +152,12 @@ async function pythonWorkerBridge(payload) {
   }
 
   if (!response.ok || !(data && data.ok)) {
-    throw new Error(String((data && (data.message || data.error)) || ('Worker bridge HTTP ' + response.status)));
+    throw new Error(
+      pythonWorkerErrorText(
+        data && (data.message != null ? data.message : data.error),
+        'Worker bridge HTTP ' + response.status
+      )
+    );
   }
   return data;
 }
@@ -143,27 +172,55 @@ async function pythonWorkerHealthCheck() {
   try {
     const data = await pythonWorkerBridge({action: 'health'});
     const worker = data && data.worker ? data.worker : {};
-    const queued = Number(worker.queued_items || 0);
-    const concurrency = Number(worker.worker_concurrency || 0);
-    const profilesVisible = Number(worker.profiles_visible || 0);
-    const revision = String(worker.revision || '').trim();
-    const volumeMounted = worker.volume_mounted === true;
+    const readiness = data && data.readiness ? data.readiness : null;
+    const isReady = data && data.ready === true;
+
+    const queued = Number(
+      (readiness && readiness.queued_items) != null
+        ? readiness.queued_items
+        : (worker.queued_items || 0)
+    );
+    const concurrency = Number(
+      (readiness && readiness.worker_concurrency) != null
+        ? readiness.worker_concurrency
+        : (worker.worker_concurrency || 0)
+    );
+    const profilesVisible = Number((readiness && readiness.profiles_visible) || 0);
+    const revision = String((readiness && readiness.revision) || '').trim();
+    const volumeMounted = readiness ? readiness.volume_mounted === true : false;
 
     pythonWorkerUiState.workerOnline = true;
-    el.dataset.state = 'online';
-    el.textContent =
-      'Worker: READY' +
-      (revision ? ' · rev ' + revision : '') +
-      ' · профили ' + profilesVisible +
-      ' · volume ' + (volumeMounted ? 'YES' : 'NO') +
-      ' · очередь ' + queued +
-      ' · concurrency ' + concurrency;
+
+    if (isReady) {
+      el.dataset.state = 'online';
+      el.textContent =
+        'Worker: READY' +
+        (revision ? ' · rev ' + revision : '') +
+        ' · профили ' + profilesVisible +
+        ' · volume ' + (volumeMounted ? 'YES' : 'NO') +
+        ' · очередь ' + queued +
+        ' · concurrency ' + concurrency;
+    } else {
+      el.dataset.state = 'offline';
+      el.textContent =
+        'Worker: ONLINE · resolver ERROR · ' +
+        pythonWorkerErrorText(
+          data && data.readiness_error,
+          'profile resolver is not ready'
+        );
+    }
+
     pythonWorkerSelectionRefresh();
-    return true;
+    return isReady;
   } catch (error) {
     pythonWorkerUiState.workerOnline = false;
     el.dataset.state = 'offline';
-    el.textContent = 'Worker: OFFLINE · ' + String((error && error.message) || error);
+    el.textContent =
+      'Worker: OFFLINE · ' +
+      pythonWorkerErrorText(
+        error && error.message != null ? error.message : error,
+        'health request failed'
+      );
     pythonWorkerSelectionRefresh();
     return false;
   }
