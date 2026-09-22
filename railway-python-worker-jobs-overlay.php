@@ -106,8 +106,24 @@ try {
     $action = strtolower(trim((string)($input['action'] ?? 'status')));
 
     if ($action === 'health' || $action === 'ready') {
-        $health = rmx_pwj_worker_request('GET', '/ready');
-        rmx_pwj_out(['ok'=>true,'worker'=>$health]);
+        $health = rmx_pwj_worker_request('GET', '/health');
+
+        $ready = null;
+        $readinessError = '';
+        try {
+            $ready = rmx_pwj_worker_request('GET', '/ready');
+        } catch (Throwable $readyError) {
+            $readinessError = $readyError->getMessage();
+            error_log('[python-worker-jobs] readiness degraded: ' . $readinessError);
+        }
+
+        rmx_pwj_out([
+            'ok' => true,
+            'worker' => $health,
+            'ready' => is_array($ready) && (($ready['ready'] ?? false) === true),
+            'readiness' => is_array($ready) ? $ready : null,
+            'readiness_error' => $readinessError,
+        ]);
     }
 
     if ($action === 'preflight') {
