@@ -7,6 +7,7 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 
 DATA_ROOT = (
@@ -77,6 +78,24 @@ def _clean_doc_id(value: Any) -> str:
     return doc_id
 
 
+def _clean_endpoint(value: Any) -> str:
+    endpoint = str(
+        value or "https://business.facebook.com/api/graphql/"
+    ).strip()
+    parsed = urlsplit(endpoint)
+    allowed_hosts = {
+        "www.facebook.com",
+        "business.facebook.com",
+        "adsmanager.facebook.com",
+        "graph.facebook.com",
+    }
+    if parsed.scheme != "https" or parsed.hostname not in allowed_hosts:
+        raise ValueError(f"unsupported Facebook GraphQL endpoint: {endpoint!r}")
+    if not parsed.path.startswith("/api/graphql") and parsed.hostname != "graph.facebook.com":
+        raise ValueError(f"unsupported GraphQL path: {parsed.path!r}")
+    return endpoint
+
+
 def _default_store() -> dict[str, Any]:
     return {
         "version": 1,
@@ -133,10 +152,7 @@ def _candidate_from_mapping(
         operation=operation,
         doc_id=_clean_doc_id(raw.get("doc_id")),
         friendly_name=str(raw.get("friendly_name") or "").strip(),
-        endpoint_url=str(
-            raw.get("endpoint_url")
-            or "https://business.facebook.com/api/graphql/"
-        ).strip(),
+        endpoint_url=_clean_endpoint(raw.get("endpoint_url")),
         variables_mode=str(
             raw.get("variables_mode")
             or "scope_selector_business_creation_v1"
@@ -303,7 +319,7 @@ def upsert_candidate(
         operation=key,
         doc_id=_clean_doc_id(doc_id),
         friendly_name=str(friendly_name or "").strip(),
-        endpoint_url=str(endpoint_url or "").strip(),
+        endpoint_url=_clean_endpoint(endpoint_url),
         variables_mode=str(variables_mode or "").strip(),
         source=str(source or "manual_capture").strip(),
         priority=int(priority),
