@@ -1076,7 +1076,7 @@ async def create_business_with_docids(
 
     if stale_failures and not explicit_doc_id:
         discovery_specs: list[tuple[str, str]] = []
-        if _clean(page_id):
+        if _clean(page_id) and not allow_scope_selector_fallback:
             discovery_specs.append(
                 ("BusinessManagerCreateMutation", "legacy_primary_page_v1")
             )
