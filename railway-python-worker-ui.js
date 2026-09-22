@@ -1,4 +1,4 @@
-/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 REMASK_PYTHON_WORKER_UI_V140 REMASK_PYTHON_WORKER_UI_V141 REMASK_PYTHON_WORKER_UI_V142 REMASK_PYTHON_WORKER_UI_V143 REMASK_PYTHON_WORKER_UI_V144 */
+/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 REMASK_PYTHON_WORKER_UI_V140 REMASK_PYTHON_WORKER_UI_V141 REMASK_PYTHON_WORKER_UI_V142 REMASK_PYTHON_WORKER_UI_V143 REMASK_PYTHON_WORKER_UI_V144 REMASK_PYTHON_WORKER_UI_V145 */
 const restoredPythonWorkerJobId = localStorage.getItem('remask_python_worker_job_v1') || '';
 
 const pythonWorkerUiState = {
@@ -76,10 +76,10 @@ function pythonWorkerSelectionRefresh() {
       profiles.length
         ? (
             pythonWorkerUiState.workerOnline === true
-              ? 'Worker UI v144 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
-              : 'Worker UI v144 · Выбрано FB-профилей: ' + profiles.length + '. Жду READY от worker.'
+              ? 'Worker UI v145 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
+              : 'Worker UI v145 · Выбрано FB-профилей: ' + profiles.length + '. Жду READY от worker.'
           )
-        : 'Worker UI v144 · Выберите FB-профили в Workspace.'
+        : 'Worker UI v145 · Выберите FB-профили в Workspace.'
     );
   }
 }
@@ -919,23 +919,52 @@ async function pythonWorkerOpenOwnBmModal() {
       const graph = result.graph_api && typeof result.graph_api === 'object'
         ? result.graph_api
         : {};
-      const graphPages = Array.isArray(result.pages) ? result.pages : [];
-      const graphReady = graph.ready === true;
+      const discoveredPages = Array.isArray(result.pages) ? result.pages : [];
+      const pagesSource = String(result.pages_source || '').trim();
+      const officialPages = pagesSource === 'official_graph_api';
+      const privatePages = pagesSource === 'facebook_web_graphql';
       const webReady = result.fb_dtsg_present === true && result.actor_present === true;
 
       cfg.sessionHint.className = 'pwbm-session ok';
-      if (graphReady && graphPages.length) {
-        cfg.sessionHint.textContent =
-          'BM route: OFFICIAL · Pages ' + graphPages.length +
-          ' · proxy ' + String(result.proxy_exit_ip || '?') +
-          ' · ' + String(result.proxy_latency_ms || 0) + ' ms';
-        pythonWorkerApplyPages(cfg, graphPages, 'Graph API /me/accounts');
+      if (discoveredPages.length) {
+        if (officialPages) {
+          cfg.sessionHint.textContent =
+            'BM route: OFFICIAL · Fan Pages ' + discoveredPages.length +
+            ' · proxy ' + String(result.proxy_exit_ip || '?') +
+            ' · ' + String(result.proxy_latency_ms || 0) + ' ms';
+          pythonWorkerApplyPages(
+            cfg,
+            discoveredPages,
+            'Graph API /me/accounts'
+          );
+        } else if (privatePages) {
+          cfg.sessionHint.textContent =
+            'BM route: WEB fallback · Fan Pages ' + discoveredPages.length +
+            ' · proxy ' + String(result.proxy_exit_ip || '?') +
+            ' · ' + String(result.proxy_latency_ms || 0) + ' ms';
+          pythonWorkerApplyPages(
+            cfg,
+            discoveredPages,
+            'Facebook web session'
+          );
+        } else {
+          cfg.sessionHint.textContent =
+            'BM route: READY · Fan Pages ' + discoveredPages.length +
+            ' · proxy ' + String(result.proxy_exit_ip || '?') +
+            ' · ' + String(result.proxy_latency_ms || 0) + ' ms';
+          pythonWorkerApplyPages(
+            cfg,
+            discoveredPages,
+            pagesSource || 'Meta'
+          );
+        }
+
         refreshReadyState();
         return;
       }
 
       cfg.sessionHint.textContent =
-        (webReady ? 'BM route: WEB GraphQL' : 'BM route: OFFICIAL без Pages') +
+        (webReady ? 'BM route: WEB fallback · Pages ещё не найдены' : 'BM route: Pages не найдены') +
         ' · proxy ' + String(result.proxy_exit_ip || '?') +
         ' · ' + String(result.proxy_latency_ms || 0) + ' ms';
 
