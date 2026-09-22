@@ -34,16 +34,30 @@ async def ad_account_handler(
         raise ProvisioningError("INVALID_RESULT", "Missing business_id context state for RK creation", retryable=False)
         
     # 2. ЖЕСТКАЯ НОРМАЛИЗАЦИЯ И ЗАЩИТА ОТ NONE (Строго по ТЗ твоего бота)
-    rk_name = str(params.get("name") or params.get("rk_name") or f"RK_{profile_id}").strip()
-    
-    # Защита от пустой валюты {"currency": None}
-    currency = params.get("currency")
-    currency = str(currency).strip().upper() if currency not in (None, "", "None") else "USD"
+    rk_name = str(params.get("name") or params.get("rk_name") or "").strip()
+    if not rk_name:
+        raise ProvisioningError(
+            "INVALID_INPUT",
+            "AD_ACCOUNT.name is required",
+            retryable=False,
+        )
 
-    # Защита от пустой таймзоны {"timezone_id": None}
+    currency_raw = params.get("currency")
+    currency = str(currency_raw or "").strip().upper()
+    if not currency:
+        raise ProvisioningError(
+            "INVALID_INPUT",
+            "AD_ACCOUNT.currency is required",
+            retryable=False,
+        )
+
     raw_timezone = params.get("timezone_id")
     if raw_timezone in (None, "", "None"):
-        raw_timezone = 1
+        raise ProvisioningError(
+            "INVALID_INPUT",
+            "AD_ACCOUNT.timezone_id is required",
+            retryable=False,
+        )
 
     try:
         timezone_id = int(raw_timezone)
