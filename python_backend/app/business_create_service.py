@@ -364,7 +364,7 @@ async def create_business_resilient(
     # legacy Page-backed mutation from the doc_id registry.
     try:
         controller = await session.facebook_controller()
-        business_id = await controller.create_business_manager(
+        web_result = await controller.create_business_manager_detailed(
             name=business_name,
             page_id=clean_page,
             doc_id=explicit_doc_id,
@@ -374,10 +374,34 @@ async def create_business_resilient(
             profile_display_name=profile_display_name,
             vertical=vertical,
         )
+
+        page_was_in_mutation = (
+            web_result.candidate.variables_mode == "legacy_primary_page_v1"
+            and bool(clean_page)
+        )
+        transport = (
+            "facebook_web_graphql_page_backed"
+            if page_was_in_mutation
+            else "facebook_web_graphql_scope_selector"
+        )
+        diagnostics.append(
+            {
+                "transport": transport,
+                "stage": "create",
+                "doc_id": web_result.candidate.doc_id,
+                "friendly_name": web_result.candidate.friendly_name,
+                "variables_mode": web_result.candidate.variables_mode,
+                "source": web_result.candidate.source,
+                "response_path": web_result.response_path,
+                "selected_page_id": clean_page,
+                "primary_page_sent_in_mutation": page_was_in_mutation,
+            }
+        )
+
         return BusinessCreateResult(
-            business_id=business_id,
-            transport="facebook_web_graphql",
-            primary_page_id=clean_page,
+            business_id=web_result.business_id,
+            transport=transport,
+            primary_page_id=clean_page if page_was_in_mutation else "",
             diagnostics=diagnostics,
         )
     except AuthenticationError as exc:
