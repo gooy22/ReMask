@@ -70,6 +70,60 @@ function rmx_py_proxy_url(?RemaskProxy $proxy): ?string {
     return $scheme . '://' . $auth . $proxy->ip . ':' . $proxy->port;
 }
 
+function rmx_py_saved_pages(FbAccount $account): array {
+    $vars = get_object_vars($account);
+    $candidates = [];
+
+    foreach (['pages','fan_pages','fanPages'] as $key) {
+        if (isset($vars[$key]) && is_array($vars[$key])) {
+            $candidates[] = $vars[$key];
+        }
+    }
+
+    foreach (['meta_hierarchy','metaHierarchy'] as $key) {
+        $node = $vars[$key] ?? null;
+        if (is_array($node) && isset($node['pages']) && is_array($node['pages'])) {
+            $candidates[] = $node['pages'];
+        }
+    }
+
+    $pages = [];
+    $seen = [];
+    foreach ($candidates as $rows) {
+        foreach ($rows as $row) {
+            if (!is_array($row)) continue;
+            $id = trim((string)($row['id'] ?? $row['page_id'] ?? ''));
+            if ($id === '' || !ctype_digit($id) || isset($seen[$id])) continue;
+
+            $name = trim((string)($row['name'] ?? $row['page_name'] ?? $id));
+            $tasks = [];
+            foreach ((array)($row['tasks'] ?? []) as $task) {
+                if (is_scalar($task)) $tasks[] = (string)$task;
+            }
+
+            $businessId = '';
+            $business = $row['business'] ?? null;
+            if (is_array($business)) {
+                $businessId = trim((string)($business['id'] ?? ''));
+            } elseif (is_scalar($business)) {
+                $businessId = trim((string)$business);
+            }
+
+            $pages[] = [
+                'id' => $id,
+                'name' => $name !== '' ? $name : $id,
+                'category' => trim((string)($row['category'] ?? '')),
+                'tasks' => $tasks,
+                'business_id' => $businessId,
+                'is_owned' => array_key_exists('is_owned', $row) ? (bool)$row['is_owned'] : null,
+            ];
+            $seen[$id] = true;
+        }
+    }
+
+    return $pages;
+}
+
 function rmx_py_public_identity(FbAccount $account, string $profile): array {
     $vars = get_object_vars($account);
 
@@ -164,6 +218,7 @@ try {
         'email' => $identity['email'],
         'first_name' => $identity['first_name'],
         'last_name' => $identity['last_name'],
+        'pages' => rmx_py_saved_pages($account),
     ]);
 } catch (Throwable $e) {
     error_log('[python-profile-context] ' . get_class($e) . ': ' . $e->getMessage());
