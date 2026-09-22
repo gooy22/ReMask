@@ -70,6 +70,49 @@ function rmx_py_proxy_url(?RemaskProxy $proxy): ?string {
     return $scheme . '://' . $auth . $proxy->ip . ':' . $proxy->port;
 }
 
+function rmx_py_public_identity(FbAccount $account, string $profile): array {
+    $vars = get_object_vars($account);
+
+    $pick = static function(array $names) use ($vars): string {
+        foreach ($names as $name) {
+            if (!array_key_exists($name, $vars)) continue;
+            $value = $vars[$name];
+            if (!is_scalar($value)) continue;
+            $text = trim((string)$value);
+            if ($text !== '') return $text;
+        }
+        return '';
+    };
+
+    $email = $pick(['email','user_email','mail','login','username']);
+    if ($email !== '' && filter_var($email, FILTER_VALIDATE_EMAIL) === false) {
+        $email = '';
+    }
+    if ($email === '' && filter_var($profile, FILTER_VALIDATE_EMAIL) !== false) {
+        $email = $profile;
+    }
+
+    $displayName = $pick(['full_name','display_name','fb_name','name']);
+    if ($displayName === '') $displayName = $profile;
+
+    $firstName = $pick(['first_name','firstname','firstName']);
+    $lastName = $pick(['last_name','lastname','lastName']);
+
+    if ($firstName === '' || $lastName === '') {
+        $parts = preg_split('/\s+/u', trim($displayName)) ?: [];
+        $parts = array_values(array_filter($parts, static fn($v): bool => trim((string)$v) !== ''));
+        if ($firstName === '' && count($parts) >= 1) $firstName = (string)$parts[0];
+        if ($lastName === '' && count($parts) >= 2) $lastName = (string)$parts[count($parts)-1];
+    }
+
+    return [
+        'display_name' => $displayName,
+        'email' => $email,
+        'first_name' => $firstName,
+        'last_name' => $lastName,
+    ];
+}
+
 try {
     $expected = trim((string)(getenv('REMASK_INTERNAL_KEY') ?: ''));
     if ($expected === '') rmx_py_out(['ok'=>false,'error'=>'INTERNAL_KEY_NOT_CONFIGURED'], 503);
@@ -107,12 +150,18 @@ try {
             . '(KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36';
     }
 
+    $identity = rmx_py_public_identity($account, $profile);
+
     rmx_py_out([
         'ok' => true,
         'profile_id' => $profile,
         'cookies' => rmx_py_cookie_map($account->cookies),
         'proxy' => rmx_py_proxy_url($account->proxy),
         'user_agent' => $ua,
+        'display_name' => $identity['display_name'],
+        'email' => $identity['email'],
+        'first_name' => $identity['first_name'],
+        'last_name' => $identity['last_name'],
     ]);
 } catch (Throwable $e) {
     error_log('[python-profile-context] ' . get_class($e) . ': ' . $e->getMessage());
