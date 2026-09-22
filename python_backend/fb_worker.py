@@ -99,28 +99,28 @@ class FacebookWebSession:
 
     FB_DTSG_PATTERNS = (
         (
-            r'["\\']DTSG(?:Initial|Init)Data["\\'].{0,16000}?'
-            r'["\\']token["\\']\\s*:\\s*["\\']([^"\\']+)["\\']'
+            r'["\']DTSG(?:Initial|Init)Data["\'].{0,16000}?'
+            r'["\']token["\']\s*:\s*["\']([^"\']+)["\']'
         ),
         (
-            r'\\[\\s*["\\']DTSG(?:Initial|Init)Data["\\']\\s*,\\s*\\[\\]\\s*,\\s*\\{'
-            r'.{0,6000}?["\\']token["\\']\\s*:\\s*["\\']([^"\\']+)["\\']'
+            r'\[\s*["\']DTSG(?:Initial|Init)Data["\']\s*,\s*\[\]\s*,\s*\{'
+            r'.{0,6000}?["\']token["\']\s*:\s*["\']([^"\']+)["\']'
         ),
         (
-            r'["\\']dtsg["\\']\\s*:\\s*\\{.{0,800}?'
-            r'["\\']token["\\']\\s*:\\s*["\\']([^"\\']+)["\\']'
+            r'["\']dtsg["\']\s*:\s*\{.{0,800}?'
+            r'["\']token["\']\s*:\s*["\']([^"\']+)["\']'
         ),
         (
-            r'\\{\\s*["\\']name["\\']\\s*:\\s*["\\']fb_dtsg["\\']'
-            r'.{0,600}?["\\']value["\\']\\s*:\\s*["\\']([^"\\']+)["\\']'
+            r'\{\s*["\']name["\']\s*:\s*["\']fb_dtsg["\']'
+            r'.{0,600}?["\']value["\']\s*:\s*["\']([^"\']+)["\']'
         ),
         (
-            r'name=["\\']fb_dtsg["\\']'
-            r'[^>]*value=["\\']([^"\\']+)["\\']'
+            r'name=["\']fb_dtsg["\']'
+            r'[^>]*value=["\']([^"\']+)["\']'
         ),
         (
-            r'["\\']fb_dtsg["\\']'
-            r'\\s*[:=]\\s*["\\']([^"\\']+)["\\']'
+            r'["\']fb_dtsg["\']'
+            r'\s*[:=]\s*["\']([^"\']+)["\']'
         ),
     )
 
@@ -295,9 +295,9 @@ class FacebookWebSession:
         )
         js_decoded = (
             js_decoded
-            .replace(r'\\/', '/')
-            .replace(r'\\"', '"')
-            .replace(r"\\'", "'")
+            .replace(r'\/', '/')
+            .replace(r'\"', '"')
+            .replace(r"\'", "'")
         )
         if js_decoded not in variants:
             variants.append(js_decoded)
