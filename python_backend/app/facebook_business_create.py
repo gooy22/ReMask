@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import uuid
 from dataclasses import dataclass
 from typing import Any
@@ -10,7 +11,9 @@ from .facebook_docids import (
     DocIdCandidate,
     list_candidates,
     record_result,
+    upsert_candidate,
 )
+from .facebook_query_discovery import discover_persisted_query
 
 
 class DocIdMutationError(RuntimeError):
@@ -511,6 +514,45 @@ async def create_business_with_docids(
             candidate=candidate,
             stale_candidate=False,
         )
+
+    if stale_failures and not explicit_doc_id:
+        discovered = await discover_persisted_query(
+            session,
+            friendly_name="useBusinessCreationMutationMutation",
+            entry_urls=[
+                "https://business.facebook.com/latest/home",
+                "https://business.facebook.com/latest/settings",
+            ],
+            max_scripts_per_entry=18,
+        )
+
+        if discovered is not None:
+            refreshed = upsert_candidate(
+                "CREATE_BM",
+                doc_id=discovered.doc_id,
+                friendly_name="useBusinessCreationMutationMutation",
+                endpoint_url="https://business.facebook.com/api/graphql/",
+                variables_mode="scope_selector_business_creation_v1",
+                source=f"runtime_{discovered.source_kind}",
+                priority=8_500,
+                observed_at=str(int(time.time())),
+            )
+
+            if all(
+                candidate.doc_id != refreshed.doc_id
+                for candidate in candidates
+            ):
+                return await create_business_with_docids(
+                    session,
+                    business_name=business_name,
+                    page_id=page_id,
+                    user_email=user_email,
+                    user_first_name=user_first_name,
+                    user_last_name=user_last_name,
+                    profile_display_name=profile_display_name,
+                    vertical=vertical,
+                    explicit_doc_id=refreshed.doc_id,
+                )
 
     details = []
     if skipped:
