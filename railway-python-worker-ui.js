@@ -5,6 +5,7 @@ const pythonWorkerUiState = {
   jobId: restoredPythonWorkerJobId,
   job: null,
   busy: restoredPythonWorkerJobId !== '',
+  workerOnline: null,
   pollTimer: null,
   polling: false
 };
@@ -42,7 +43,7 @@ function pythonWorkerSelectionRefresh() {
   const start = pythonWorkerEl('pythonProvisionStart');
 
   if (start) {
-    start.disabled = pythonWorkerUiState.busy || profiles.length === 0;
+    start.disabled = pythonWorkerUiState.busy || profiles.length === 0 || pythonWorkerUiState.workerOnline === false;
     start.textContent = profiles.length
       ? 'Add BM (' + profiles.length + ')'
       : 'Add BM';
@@ -110,12 +111,16 @@ async function pythonWorkerHealthCheck() {
     const queued = Number(worker.queued_items || 0);
     const concurrency = Number(worker.worker_concurrency || 0);
 
+    pythonWorkerUiState.workerOnline = true;
     el.dataset.state = 'online';
     el.textContent = 'Worker: ONLINE · очередь ' + queued + ' · concurrency ' + concurrency;
+    pythonWorkerSelectionRefresh();
     return true;
   } catch (error) {
+    pythonWorkerUiState.workerOnline = false;
     el.dataset.state = 'offline';
     el.textContent = 'Worker: OFFLINE · ' + String((error && error.message) || error);
+    pythonWorkerSelectionRefresh();
     return false;
   }
 }
@@ -605,6 +610,14 @@ function pythonWorkerCloseOwnBmModal() {
 }
 
 async function pythonWorkerOpenOwnBmModal() {
+  if (pythonWorkerUiState.workerOnline === false) {
+    pythonWorkerSetText(
+      'pythonPwStatus',
+      'Add BM недоступен: локальный Python worker OFFLINE. Смотри индикатор Worker.'
+    );
+    return;
+  }
+
   const profiles = pythonWorkerSelectedProfiles();
   if (!profiles.length) {
     pythonWorkerSetText('pythonPwStatus', 'Сначала выбери хотя бы один FB-профиль.');
