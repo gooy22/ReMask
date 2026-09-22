@@ -103,7 +103,14 @@ function rmx_pwj_worker_request(string $method, string $path, ?array $payload = 
 
 try {
     $input = rmx_pwj_input();
-    $action = strtolower(trim((string)($input['action'] ?? 'status')));
+    $action = strtolower(trim((string)($input['action'] ?? $_GET['action'] ?? 'status')));
+
+    if ($action === 'csrf') {
+        if (!function_exists('remask_csrf_token')) {
+            rmx_pwj_out(['ok'=>false,'error'=>'CSRF_TOKEN_PROVIDER_UNAVAILABLE'], 500);
+        }
+        rmx_pwj_out(['ok'=>true,'csrf'=>remask_csrf_token()]);
+    }
 
     if ($action === 'health' || $action === 'ready') {
         $health = rmx_pwj_worker_request('GET', '/health');
