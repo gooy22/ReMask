@@ -1,17 +1,24 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi import Body, Depends, FastAPI, Header, HTTPException, status
 
 from app.mirror import MirrorError, SnapshotMirror
 from app.models import CreateJobRequest, HealthResponse, JobAccepted, RetryResponse
 from app.runner import WorkerPool
 from app.session import ProfileContextError, ProfileSession, ProxyCheckError
 from app.store import JobStore
+from app.facebook_business_create import candidate_requirements
+from app.facebook_docids import (
+    list_candidates,
+    registry_view,
+    upsert_candidate,
+)
 from fb_worker import AuthenticationError, RemoteRequestError
 
 logging.basicConfig(level=os.getenv('LOG_LEVEL','INFO'),format='%(asctime)s [%(levelname)s] %(name)s: %(message)s')
@@ -161,6 +168,17 @@ async def profile_preflight(profile_id: str):
             facebook=await profile_session.facebook_web()
             bootstrap=await facebook.bootstrap()
 
+        bm_candidates=[]
+        for candidate in list_candidates('CREATE_BM'):
+            bm_candidates.append({
+                'doc_id':candidate.doc_id,
+                'friendly_name':candidate.friendly_name,
+                'variables_mode':candidate.variables_mode,
+                'source':candidate.source,
+                'priority':candidate.priority,
+                'requirements':candidate_requirements(candidate),
+            })
+
         return {
             'ok':True,
             'profile_id':clean_profile,
@@ -173,6 +191,11 @@ async def profile_preflight(profile_id: str):
             'fb_dtsg_present':bool(bootstrap.fb_dtsg),
             'lsd_present':bool(bootstrap.lsd),
             'jazoest_present':bool(bootstrap.jazoest),
+            'email_present':bool(str(context.email or '').strip()),
+            'first_name_present':bool(str(context.first_name or '').strip()),
+            'last_name_present':bool(str(context.last_name or '').strip()),
+            'display_name_present':bool(str(context.display_name or '').strip()),
+            'create_bm_candidates':bm_candidates,
         }
     except ProfileContextError as exc:
         raise HTTPException(status_code=422,detail=f'PROFILE_CONTEXT_ERROR: {exc}') from exc
@@ -182,6 +205,60 @@ async def profile_preflight(profile_id: str):
         raise HTTPException(status_code=422,detail=f'SESSION_EXPIRED: {exc}') from exc
     except RemoteRequestError as exc:
         raise HTTPException(status_code=502,detail=f'FACEBOOK_WEB_ERROR: {exc}') from exc
+
+@app.get('/api/v1/facebook/docids',dependencies=[Depends(require_key)])
+async def facebook_docids(operation: str | None = None):
+    return {
+        'ok':True,
+        **registry_view(operation),
+    }
+
+@app.post('/api/v1/facebook/docids/{operation}',dependencies=[Depends(require_key)])
+async def register_facebook_docid(
+    operation: str,
+    payload: dict = Body(...),
+):
+    clean_operation=str(operation or '').strip().upper()
+    if clean_operation != 'CREATE_BM':
+        raise HTTPException(
+            status_code=400,
+            detail='only CREATE_BM registry updates are enabled',
+        )
+
+    try:
+        candidate=upsert_candidate(
+            clean_operation,
+            doc_id=str(payload.get('doc_id') or '').strip(),
+            friendly_name=str(payload.get('friendly_name') or '').strip(),
+            endpoint_url=str(
+                payload.get('endpoint_url')
+                or 'https://business.facebook.com/api/graphql/'
+            ).strip(),
+            variables_mode=str(
+                payload.get('variables_mode')
+                or 'scope_selector_business_creation_v1'
+            ).strip(),
+            source=str(payload.get('source') or 'manual_capture').strip(),
+            priority=int(payload.get('priority') or 7500),
+            observed_at=str(payload.get('observed_at') or '').strip(),
+        )
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=400,detail=str(exc)) from exc
+
+    log.info(
+        'doc_id candidate registered operation=%s doc_id=%s friendly=%s mode=%s source=%s',
+        clean_operation,
+        candidate.doc_id,
+        candidate.friendly_name or '-',
+        candidate.variables_mode,
+        candidate.source,
+    )
+
+    return {
+        'ok':True,
+        'candidate':candidate.as_dict(),
+        'registry':registry_view(clean_operation),
+    }
 
 @app.post('/api/v1/jobs',response_model=JobAccepted,dependencies=[Depends(require_key)])
 async def create_job(request: CreateJobRequest) -> JobAccepted:
