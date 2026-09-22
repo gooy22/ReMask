@@ -18,7 +18,9 @@ RUN /opt/remask-venv/bin/python -m compileall -q /opt/remask-python \
     && grep -q 'class FacebookWebSession' /opt/remask-python/fb_worker.py \
     && grep -q 'WebSessionManager = FacebookWebSession' /opt/remask-python/fb_worker.py \
     && grep -q 'FB_DTSG_PATTERNS' /opt/remask-python/fb_worker.py \
-    && grep -q 'DTSG marker present but token format was not parsed' /opt/remask-python/fb_worker.py \
+    && grep -q 'DTSGInitData' /opt/remask-python/fb_worker.py \
+    && grep -q 'mbasic.facebook.com/profile.php' /opt/remask-python/fb_worker.py \
+    && grep -q 'CurrentUserInitialData' /opt/remask-python/fb_worker.py \
     && cd /opt/remask-python \
     && /opt/remask-venv/bin/python -c "import fb_worker; from app.session import ProfileSession; from app.provisioning.business_handler import business_handler; from app.provisioning.ad_account_handler import ad_account_handler; from app.provisioning.meta_errors import classify_meta_request_error; assert fb_worker.WebSessionManager is fb_worker.FacebookWebSession" \
     && /opt/remask-venv/bin/python -m unittest -q tests.test_fb_worker_bootstrap \
@@ -151,6 +153,7 @@ RUN set -eux; \
     php -l /var/www/html/ajax/pythonProfileContext.php; \
     grep -q 'X-Remask-Internal-Key' /var/www/html/ajax/pythonProfileContext.php; \
     grep -q 'REMASK_INTERNAL_KEY' /var/www/html/ajax/pythonProfileContext.php; \
+    grep -q 'browser_user_agent' /var/www/html/ajax/pythonProfileContext.php; \
     grep -q "'action' => 'list'\|'action'] ?? .*'resolve'" /var/www/html/ajax/pythonProfileContext.php || grep -q "action === 'list'" /var/www/html/ajax/pythonProfileContext.php; \
     test -x /opt/remask-venv/bin/uvicorn; \
     test -f /opt/remask-python/main.py; \
