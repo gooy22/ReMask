@@ -79,7 +79,7 @@ async def business_handler(
             err_code = "REMOTE_TIMEOUT"
             is_retry = True
         else:
-            err_code = "INVALID_RESULT"
+            err_code = "META_UNKNOWN_ERROR"
             is_retry = False
             
         log.error(f"[{profile_id}] Сбой БМ GraphQL. Код: {err_code}. Ошибка: {exc}")
