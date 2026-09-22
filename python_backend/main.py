@@ -330,10 +330,32 @@ async def profile_preflight(profile_id: str):
                 except (PageDiscoveryError, asyncio.TimeoutError) as exc:
                     private_pages_state['error']=str(exc)
 
+            saved_pages=[
+                {
+                    'id':str(row.get('id') or '').strip(),
+                    'name':str(row.get('name') or row.get('id') or '').strip(),
+                    'category':str(row.get('category') or '').strip(),
+                    'tasks':[
+                        str(task)
+                        for task in (row.get('tasks') or [])
+                        if isinstance(task,(str,int))
+                    ],
+                    'business_id':str(row.get('business_id') or '').strip(),
+                    'is_owned':row.get('is_owned'),
+                }
+                for row in (context.pages or [])
+                if isinstance(row,dict)
+                and str(row.get('id') or '').strip().isdigit()
+            ]
+
             selected_pages=list(
                 graph_state['pages']
                 if graph_state['pages']
-                else private_pages_state['pages']
+                else (
+                    private_pages_state['pages']
+                    if private_pages_state['pages']
+                    else saved_pages
+                )
             )
             selected_pages.sort(
                 key=lambda page: (
@@ -347,7 +369,11 @@ async def profile_preflight(profile_id: str):
                 else (
                     private_pages_state['source']
                     if private_pages_state['pages']
-                    else ''
+                    else (
+                        'saved_profile_pages'
+                        if saved_pages
+                        else ''
+                    )
                 )
             )
 
@@ -401,6 +427,7 @@ async def profile_preflight(profile_id: str):
         'web_error':web_state['error'],
         'graph_api':graph_state,
         'private_pages':private_pages_state,
+        'saved_pages_count':len(saved_pages),
         'pages':selected_pages,
         'pages_count':len(selected_pages),
         'pages_source':pages_source,
