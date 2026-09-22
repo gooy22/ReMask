@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import re
 import time
@@ -154,7 +155,23 @@ def _candidate_is_stale_or_schema_mismatch(
     payload: dict[str, Any] | None,
     message: str,
 ) -> bool:
-    text = _error_text(payload or {}, message).lower()
+    body = payload or {}
+    text = _error_text(body, message).lower()
+
+    # Facebook generic "request could not be processed" on an old persisted
+    # mutation commonly arrives as 1357054 + isNotCritical=1 with no data.
+    # That is safe to treat as a stale candidate signal for discovery/retry.
+    raw_errors = body.get("errors")
+    if isinstance(raw_errors, list):
+        for error in raw_errors:
+            if not isinstance(error, dict):
+                continue
+            try:
+                code = int(error.get("code"))
+            except (TypeError, ValueError):
+                code = None
+            if code == 1357054 and bool(error.get("isNotCritical")):
+                return True
 
     markers = (
         "persistedquerynotfound",
@@ -346,58 +363,127 @@ def _diagnostic(
     )
 
 
+def _page_backed_source_variants(source: str) -> list[str]:
+    raw = str(source or "")
+    variants = [raw]
+
+    entity_decoded = html.unescape(raw)
+    if entity_decoded not in variants:
+        variants.append(entity_decoded)
+
+    def decode_ascii_unicode(match: re.Match[str]) -> str:
+        value = int(match.group(1), 16)
+        return chr(value) if value <= 0x7F else match.group(0)
+
+    decoded = re.sub(r"\\u([0-9a-fA-F]{4})", decode_ascii_unicode, entity_decoded)
+    decoded = re.sub(
+        r"\\x([0-9a-fA-F]{2})",
+        lambda match: chr(int(match.group(1), 16)),
+        decoded,
+    )
+    decoded = (
+        decoded
+        .replace(r"\/", "/")
+        .replace(r"\"", '"')
+        .replace(r"\'", "'")
+    )
+    if decoded not in variants:
+        variants.append(decoded)
+
+    return variants
+
+
 def _extract_page_backed_create_docid(
     source: str,
 ) -> tuple[str, str]:
-    text = str(source or "")
-    if "primary_page_id" not in text:
-        return "", ""
-
+    """
+    Locate a current Business *creation* persisted query that carries
+    primary_page_id. Avoid update/rename Business mutations which may also
+    mention primary_page_id but operate on an existing business_id.
+    """
     best: tuple[int, str, str] | None = None
-    for marker in re.finditer("primary_page_id", text):
-        left = max(0, marker.start() - 9000)
-        right = min(len(text), marker.end() + 9000)
-        window = text[left:right]
 
-        lower_window = window.lower()
-        if "business" not in lower_window:
+    create_markers = (
+        "businessmanagercreatemutation",
+        "bizkit_create_business",
+        "business_manager_create",
+        "create_business",
+        "businesscreation",
+        "business_creation",
+        "business creation",
+    )
+    update_markers = (
+        "bizkitsettingsupdatebusinessbasicinfomutation",
+        "updatebusiness",
+        "update_business",
+        "businessbasicinfo",
+    )
+
+    for text in _page_backed_source_variants(source):
+        if "primary_page_id" not in text:
             continue
 
-        doc_matches = list(
-            re.finditer(
-                r'(?:"|\')?(?:doc_id|docID|id)(?:"|\')?\s*[:=]\s*'
+        for marker in re.finditer("primary_page_id", text, flags=re.IGNORECASE):
+            left = max(0, marker.start() - 18000)
+            right = min(len(text), marker.end() + 18000)
+            window = text[left:right]
+            lower_window = window.lower()
+
+            if "business" not in lower_window:
+                continue
+            if not any(value in lower_window for value in create_markers):
+                continue
+            if (
+                any(value in lower_window for value in update_markers)
+                and "business_id" in lower_window
+            ):
+                continue
+
+            doc_matches: list[re.Match[str]] = []
+            doc_patterns = (
+                r'(?:"|\')?(?:doc_id|docID)(?:"|\')?\s*[:=]\s*'
                 r'(?:"|\')([0-9]{5,40})(?:"|\')',
-                window,
-                flags=re.IGNORECASE,
+                r'params\s*:\s*\{.{0,3000}?id\s*:\s*["\']([0-9]{5,40})["\']',
+                r'["\']id["\']\s*:\s*["\']([0-9]{5,40})["\']',
             )
-        )
-        if not doc_matches:
-            continue
+            for pattern in doc_patterns:
+                doc_matches.extend(
+                    re.finditer(
+                        pattern,
+                        window,
+                        flags=re.IGNORECASE | re.DOTALL,
+                    )
+                )
+            if not doc_matches:
+                continue
 
-        friendly = ""
-        friendly_patterns = (
-            r'fb_api_req_friendly_name(?:"|\')?\s*[:=]\s*'
-            r'["\']([^"\']*Business[^"\']*Mutation)["\']',
-            r'["\']name["\']\s*:\s*'
-            r'["\']([^"\']*Business[^"\']*Mutation)["\']',
-            r'["\']([^"\']*Business[^"\']*Mutation)["\']',
-        )
-        for pattern in friendly_patterns:
-            friendly_match = re.search(
-                pattern,
-                window,
-                flags=re.IGNORECASE,
+            friendly = ""
+            friendly_patterns = (
+                r'fb_api_req_friendly_name(?:"|\')?\s*[:=]\s*'
+                r'["\']([^"\']*Business[^"\']*(?:Create|Creation)[^"\']*)["\']',
+                r'["\']name["\']\s*:\s*'
+                r'["\']([^"\']*Business[^"\']*(?:Create|Creation)[^"\']*)["\']',
+                r'["\']([^"\']*Business[^"\']*(?:Create|Creation)[^"\']*Mutation)["\']',
             )
-            if friendly_match:
-                friendly = _clean(friendly_match.group(1))
-                break
+            for pattern in friendly_patterns:
+                match = re.search(pattern, window, flags=re.IGNORECASE)
+                if match:
+                    friendly = _clean(match.group(1))
+                    break
 
-        for doc_match in doc_matches:
-            absolute = left + doc_match.start(1)
-            distance = abs(absolute - marker.start())
-            candidate = (distance, doc_match.group(1), friendly)
-            if best is None or candidate[0] < best[0]:
-                best = candidate
+            for doc_match in doc_matches:
+                value = _clean(doc_match.group(1))
+                absolute = left + doc_match.start(1)
+                distance = abs(absolute - marker.start())
+                score = distance
+
+                # Prefer IDs with a nearby creation operation name.
+                if friendly:
+                    score = max(0, score - 4000)
+
+                candidate = (score, value, friendly)
+                if best is None or candidate[0] < best[0]:
+                    best = candidate
 
     if best is None:
         return "", ""
@@ -511,19 +597,19 @@ async def create_business_with_docids(
     bootstrap = await session.bootstrap()
     actor_id = _clean(getattr(bootstrap, "actor_id", ""))
 
-    # In strict Fan Page mode, refresh the Page-backed persisted query before
-    # mutating anything. This avoids relying first on a legacy static doc_id
-    # that may now return only "An unknown error has occurred".
+    runtime_page_candidate: DocIdCandidate | None = None
+
+    # Strict Add BM must use a current Page-backed mutation. Discovery is
+    # read-only; if it cannot resolve a current mutation we refuse to fire the
+    # known-old remask_legacy doc_id.
     if _clean(page_id) and not allow_scope_selector_fallback and not explicit_doc_id:
         try:
-            await asyncio.wait_for(
+            runtime_page_candidate = await asyncio.wait_for(
                 discover_current_page_backed_create_candidate(session),
-                timeout=20.0,
+                timeout=30.0,
             )
         except Exception:
-            # Discovery is read-only and best-effort. The persisted/static
-            # registry remains available as the final fallback.
-            pass
+            runtime_page_candidate = None
 
     candidates = _prefer_page_backed_candidates(
         list_candidates("CREATE_BM"),
@@ -534,8 +620,18 @@ async def create_business_with_docids(
         candidates = [
             candidate
             for candidate in candidates
-            if candidate_requirements(candidate).get("page_id") is True
+            if (
+                candidate_requirements(candidate).get("page_id") is True
+                and candidate.source != "remask_legacy"
+            )
         ]
+
+        if runtime_page_candidate is not None and all(
+            candidate.doc_id != runtime_page_candidate.doc_id
+            or candidate.variables_mode != runtime_page_candidate.variables_mode
+            for candidate in candidates
+        ):
+            candidates.insert(0, runtime_page_candidate)
 
     if explicit_doc_id:
         explicit = _clean(explicit_doc_id)
@@ -570,6 +666,12 @@ async def create_business_with_docids(
             ]
 
     if not candidates:
+        if _clean(page_id) and not allow_scope_selector_fallback:
+            raise DocIdMutationError(
+                "No current Page-backed CREATE_BM mutation was discovered. "
+                "The legacy static doc_id is disabled because Facebook rejected "
+                "it with generic error 1357054. No CREATE request was sent."
+            )
         raise DocIdMutationError(
             "No CREATE_BM doc_id candidates are configured"
         )
@@ -793,7 +895,8 @@ async def create_business_with_docids(
 
     if not allow_scope_selector_fallback:
         raise DocIdMutationError(
-            "No usable Page-backed CREATE_BM mutation is available. "
+            "No usable current Page-backed CREATE_BM mutation is available. "
+            "Legacy static doc_id was not used. "
             + " ".join(details)
         )
 
