@@ -8,6 +8,7 @@ import aiohttp
 from ..session import MetaSession, ProfileContext, ProxyCheckError
 from .models import ENTITY_RESULT_KEYS, ProvisioningError, ProvisioningStep
 from .proxy import ProxyChecker
+from .registry import get_handler
 from .state import ProvisioningStateStore
 from .transport import ProvisioningTransport, TransportError
 
@@ -101,27 +102,14 @@ class ProvisioningService:
                         else f"{profile_id}:{scope_key}:{step.value}"
                     )
 
-                    if step is ProvisioningStep.BUSINESS:
-                        result = await self.transport.business(
-                            profile_id=profile_id,
-                            params=step_params,
-                            state=state,
-                            idempotency_key=step_key,
-                        )
-                    elif step is ProvisioningStep.AD_ACCOUNT:
-                        result = await self.transport.ad_account(
-                            profile_id=profile_id,
-                            params=step_params,
-                            state=state,
-                            idempotency_key=step_key,
-                        )
-                    else:
-                        result = await self.transport.funding(
-                            profile_id=profile_id,
-                            params=step_params,
-                            state=state,
-                            idempotency_key=step_key,
-                        )
+                    handler = get_handler(step.value)
+                    result = await handler(
+                        session,
+                        step_params,
+                        state,
+                        transport=self.transport,
+                        idempotency_key=step_key,
+                    )
 
                 if not isinstance(result, dict):
                     raise ProvisioningError(
