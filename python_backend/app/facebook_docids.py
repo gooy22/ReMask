@@ -461,9 +461,9 @@ def record_result(
             row["disabled"] = False
             row["disabled_reason"] = ""
         else:
-            row["failure_count"] = int(row.get("failure_count") or 0) + 1
             row["last_failure_at"] = now
 
+            count_failure = True
             if stale_failure and clean_profile:
                 raw_profiles = row.get("stale_failure_profiles")
                 profiles = (
@@ -472,7 +472,11 @@ def record_result(
                     else []
                 )
 
-                if clean_profile not in profiles:
+                if clean_profile in profiles:
+                    # Same frozen/restricted profile repeating 1357054 must not
+                    # degrade the shared candidate multiple times.
+                    count_failure = False
+                else:
                     profiles.append(clean_profile)
 
                 # Keep only the current post-success stale sequence.
@@ -500,6 +504,9 @@ def record_result(
                                 == candidate.variables_mode
                             )
                         ]
+
+            if count_failure:
+                row["failure_count"] = int(row.get("failure_count") or 0) + 1
 
         row["last_reason"] = str(reason or "")[:2000]
         row["last_response_path"] = str(response_path or "")[:300]
