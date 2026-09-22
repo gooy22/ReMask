@@ -17,8 +17,11 @@ COPY python_backend /opt/remask-python
 RUN /opt/remask-venv/bin/python -m compileall -q /opt/remask-python \
     && grep -q 'class FacebookWebSession' /opt/remask-python/fb_worker.py \
     && grep -q 'WebSessionManager = FacebookWebSession' /opt/remask-python/fb_worker.py \
+    && grep -q 'FB_DTSG_PATTERNS' /opt/remask-python/fb_worker.py \
+    && grep -q 'DTSG marker present but token format was not parsed' /opt/remask-python/fb_worker.py \
     && cd /opt/remask-python \
-    && /opt/remask-venv/bin/python -c "import fb_worker; from app.session import ProfileSession; from app.provisioning.business_handler import business_handler; from app.provisioning.ad_account_handler import ad_account_handler; from app.provisioning.meta_errors import classify_meta_request_error; assert fb_worker.WebSessionManager is fb_worker.FacebookWebSession"
+    && /opt/remask-venv/bin/python -c "import fb_worker; from app.session import ProfileSession; from app.provisioning.business_handler import business_handler; from app.provisioning.ad_account_handler import ad_account_handler; from app.provisioning.meta_errors import classify_meta_request_error; assert fb_worker.WebSessionManager is fb_worker.FacebookWebSession" \
+    && /opt/remask-venv/bin/python -m unittest -q tests.test_fb_worker_bootstrap
 
 COPY .deploy/clean-preview-valid/runtime.b64.* /tmp/remask-parts/
 COPY railway-persistence-overlay.php /tmp/railway-persistence-overlay.php
