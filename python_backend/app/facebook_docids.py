@@ -64,6 +64,18 @@ STATIC_CANDIDATES: dict[str, list[DocIdCandidate]] = {
             observed_at="legacy",
         ),
     ],
+    "SET_PRIMARY_PAGE": [
+        DocIdCandidate(
+            operation="SET_PRIMARY_PAGE",
+            doc_id="7893672220672612",
+            friendly_name="BizKitSettingsUpdateBusinessBasicInfoMutation",
+            endpoint_url="https://business.facebook.com/api/graphql/",
+            variables_mode="bizkit_settings_update_business_basic_info_v1",
+            source="community_observed_business_info_2025",
+            priority=150,
+            observed_at="2025",
+        ),
+    ],
     "LIST_PAGES": [
         DocIdCandidate(
             operation="LIST_PAGES",
