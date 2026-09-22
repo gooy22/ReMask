@@ -11,6 +11,7 @@ RUN apt-get update \
 WORKDIR /var/www/html
 
 COPY .deploy/clean-preview-valid/runtime.b64.* /tmp/remask-parts/
+COPY railway-persistence-overlay.php /tmp/railway-persistence-overlay.php
 COPY railway-launch-overlay.php /tmp/railway-launch-overlay.php
 COPY railway-launch-job-ui-overlay.php /tmp/railway-launch-job-ui-overlay.php
 COPY railway-launch-flow-overlay.php /tmp/railway-launch-flow-overlay.php
@@ -65,6 +66,8 @@ RUN set -eux; \
     if xz -t /tmp/remask-runtime.archive; then tar -xJf /tmp/remask-runtime.archive -C /var/www/html; \
     elif gzip -t /tmp/remask-runtime.archive; then tar -xzf /tmp/remask-runtime.archive -C /var/www/html; \
     else echo "Unsupported or corrupt ReMask runtime archive" >&2; exit 21; fi; \
+    php -l /tmp/railway-persistence-overlay.php; \
+    php /tmp/railway-persistence-overlay.php; \
     php /tmp/railway-launch-overlay.php; \
     php /tmp/railway-launch-job-ui-overlay.php; \
     php /tmp/railway-launch-flow-overlay.php; \
@@ -342,6 +345,7 @@ RUN set -eux; \
     grep -q 'carousel_media_library_ids' /var/www/html/ajax/metaJobCreate.php; \
     grep -q 'cr-grid' /var/www/html/creatives.php; \
     grep -q 'creativeModal' /var/www/html/creatives.php; \
+    grep -q 'REMASK_PERSISTENCE_ROOT_V1' /var/www/html/settings.php; \
     grep -q 'REMASK_CREATIVE_LIBRARY_V1' /var/www/html/settings.php; \
     grep -q "'creatives.php','fa-images','Креативы'" /var/www/html/menu.php; \
     grep -q 'creativeLibrarySelect' /var/www/html/launch.php; \
