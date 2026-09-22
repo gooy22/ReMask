@@ -29,8 +29,8 @@ fi
 if [ "${REMASK_USE_EXTERNAL_PYTHON_WORKER:-0}" != "1" ]; then
   export REMASK_PYTHON_WORKER_URL="http://127.0.0.1:$PYTHON_WORKER_PORT"
   export REMASK_PROFILE_RESOLVER_URL="http://127.0.0.1/ajax/pythonProfileContext.php"
-  export REMASK_STATE_URL="http://127.0.0.1/ajax/pythonWorkerState.php"
-  export REMASK_JOB_BRIDGE_URL="http://127.0.0.1/ajax/pythonWorkerJobs.php"
+  unset REMASK_STATE_URL
+  unset REMASK_JOB_BRIDGE_URL
 fi
 
 mkdir -p \
