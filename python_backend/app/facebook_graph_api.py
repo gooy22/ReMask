@@ -250,6 +250,27 @@ class FacebookGraphApi:
         )
         return self._identity
 
+    async def list_permissions(self) -> dict[str, str]:
+        await self.identity()
+        payload = await self._request(
+            "GET",
+            "me/permissions",
+            params={"limit": "200"},
+        )
+        rows = payload.get("data")
+        if not isinstance(rows, list):
+            return {}
+
+        output: dict[str, str] = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            name = str(row.get("permission") or "").strip()
+            status = str(row.get("status") or "").strip().lower()
+            if name:
+                output[name] = status
+        return output
+
     async def list_pages(self, *, max_pages: int = 10) -> list[dict[str, Any]]:
         await self.identity()
 
