@@ -326,6 +326,98 @@ class FacebookWebSession:
 
         return ""
 
+    @staticmethod
+    def _parse_dtsg_refresh_response(source: str) -> str:
+        body = str(source or "").strip()
+        if body.startswith("for (;;);"):
+            body = body[len("for (;;);"):].lstrip()
+
+        try:
+            payload = json.loads(body)
+        except (json.JSONDecodeError, ValueError):
+            payload = None
+
+        if isinstance(payload, dict):
+            candidates: list[Any] = [
+                payload.get("token"),
+                (payload.get("payload") or {}).get("token")
+                    if isinstance(payload.get("payload"), dict) else None,
+                (payload.get("data") or {}).get("token")
+                    if isinstance(payload.get("data"), dict) else None,
+            ]
+            for value in candidates:
+                token = str(value or "").strip()
+                if token:
+                    return token
+
+        # The endpoint is dedicated to DTSG, so a generic token field here is
+        # safe as a final parser fallback.
+        match = re.search(
+            r'["\\\']token["\\\']\\s*:\\s*["\\\']([^"\\\']+)["\\\']',
+            body,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        return html.unescape(str(match.group(1) or "")).strip() if match else ""
+
+    async def _fetch_dtsg_refresh_token(
+        self,
+        session: aiohttp.ClientSession,
+        actor_id: str,
+        attempts: list[str],
+    ) -> tuple[str, str]:
+        endpoints = (
+            "https://www.facebook.com/ajax/dtsg/",
+            "https://business.facebook.com/ajax/dtsg/",
+        )
+
+        for endpoint in endpoints:
+            try:
+                async with session.get(
+                    endpoint,
+                    params={"__a": "1", "__user": actor_id},
+                    proxy=self.profile.proxy,
+                    headers={
+                        "Accept": "*/*",
+                        "X-Requested-With": "XMLHttpRequest",
+                        "Referer": "https://www.facebook.com/",
+                    },
+                    allow_redirects=False,
+                ) as response:
+                    raw = await response.text()
+                    location = str(response.headers.get("Location") or "")
+
+                    if response.status in {301, 302, 303, 307, 308}:
+                        attempts.append(
+                            f"{endpoint}: redirect HTTP {response.status} to {location or '<empty>'}"
+                        )
+                        continue
+
+                    if response.status >= 400:
+                        attempts.append(
+                            f"{endpoint}: HTTP {response.status} bytes={len(raw)}"
+                        )
+                        continue
+
+                    token = self._parse_dtsg_refresh_response(raw)
+                    if token:
+                        attempts.append(
+                            f"{endpoint}: refresh token acquired HTTP {response.status}"
+                        )
+                        return token, endpoint
+
+                    preview = re.sub(r"\\s+", " ", raw)[:160]
+                    attempts.append(
+                        f"{endpoint}: HTTP {response.status} no token payload={preview}"
+                    )
+            except asyncio.TimeoutError:
+                attempts.append(f"{endpoint}: timeout")
+            except aiohttp.ClientError as exc:
+                attempts.append(
+                    f"{endpoint}: network {exc.__class__.__name__}"
+                )
+
+        return "", ""
+
     async def bootstrap(
         self,
         *,
@@ -341,6 +433,17 @@ class FacebookWebSession:
                 return self._bootstrap
 
             session = await self._ensure_session()
+
+            actor_id = str(
+                self.profile.cookies.get("c_user")
+                or self.profile.cookies.get("i_user")
+                or ""
+            ).strip()
+
+            if not actor_id:
+                raise AuthenticationError(
+                    "Facebook actor_id is missing from c_user/i_user cookies"
+                )
 
             token_patterns = list(self.FB_DTSG_PATTERNS)
 
@@ -457,11 +560,22 @@ class FacebookWebSession:
                     continue
 
             if not fb_dtsg:
-                detail = " | ".join(attempts[-6:]) or "no bootstrap response"
+                refresh_token, refresh_source = await self._fetch_dtsg_refresh_token(
+                    session,
+                    actor_id,
+                    attempts,
+                )
+                if refresh_token:
+                    fb_dtsg = refresh_token
+                    bootstrap_source = refresh_source
+                    final_url = refresh_source
+
+            if not fb_dtsg:
+                detail = " | ".join(attempts[-8:]) or "no bootstrap response"
                 raise AuthenticationError(
                     "Facebook browser session has no usable fb_dtsg. "
                     "The saved cookies may be expired/incomplete, or Facebook "
-                    "returned a bootstrap shape that does not expose the token. "
+                    "did not expose a DTSG token on page bootstrap or /ajax/dtsg/. "
                     f"Attempts: {detail}"
                 )
 
@@ -492,17 +606,6 @@ class FacebookWebSession:
                     ),
                 ],
             )
-
-            actor_id = str(
-                self.profile.cookies.get("c_user")
-                or self.profile.cookies.get("i_user")
-                or ""
-            ).strip()
-
-            if not actor_id:
-                raise AuthenticationError(
-                    "Facebook actor_id is missing from c_user/i_user cookies"
-                )
 
             bootstrap = FacebookBootstrap(
                 fb_dtsg=fb_dtsg,
