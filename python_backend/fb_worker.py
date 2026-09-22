@@ -329,35 +329,47 @@ class FacebookWebSession:
     @staticmethod
     def _parse_dtsg_refresh_response(source: str) -> str:
         body = str(source or "").strip()
-        if body.startswith("for (;;);"):
-            body = body[len("for (;;);"):].lstrip()
+        for prefix in ("for (;;);", "while(1);"):
+            if body.startswith(prefix):
+                body = body[len(prefix):].lstrip()
+
+        if not body:
+            return ""
 
         try:
-            payload = json.loads(body)
+            decoded: Any = json.loads(body)
         except (json.JSONDecodeError, ValueError):
-            payload = None
+            return ""
 
-        if isinstance(payload, dict):
-            candidates: list[Any] = [
-                payload.get("token"),
-                (payload.get("payload") or {}).get("token")
-                    if isinstance(payload.get("payload"), dict) else None,
-                (payload.get("data") or {}).get("token")
-                    if isinstance(payload.get("data"), dict) else None,
-            ]
-            for value in candidates:
-                token = str(value or "").strip()
-                if token:
-                    return token
+        def token_from(node: Any, depth: int = 0) -> str:
+            if depth > 4:
+                return ""
 
-        # The endpoint is dedicated to DTSG, so a generic token field here is
-        # safe as a final parser fallback.
-        match = re.search(
-            r"""["']token["']\\s*:\\s*["']([^"']+)["']""",
-            body,
-            flags=re.IGNORECASE | re.DOTALL,
-        )
-        return html.unescape(str(match.group(1) or "")).strip() if match else ""
+            if isinstance(node, dict):
+                token = node.get("token")
+                if isinstance(token, (str, int)):
+                    value = str(token).strip()
+                    if value:
+                        return value
+
+                for key in ("payload", "data"):
+                    if key not in node:
+                        continue
+                    value = token_from(node.get(key), depth + 1)
+                    if value:
+                        return value
+
+            if isinstance(node, str):
+                nested = node.strip()
+                if nested.startswith("{") or nested.startswith("["):
+                    try:
+                        return token_from(json.loads(nested), depth + 1)
+                    except (json.JSONDecodeError, ValueError):
+                        return ""
+
+            return ""
+
+        return token_from(decoded)
 
     async def _fetch_dtsg_refresh_token(
         self,
@@ -365,36 +377,62 @@ class FacebookWebSession:
         actor_id: str,
         attempts: list[str],
     ) -> tuple[str, str]:
-        endpoints = (
-            "https://www.facebook.com/ajax/dtsg/",
-            "https://business.facebook.com/ajax/dtsg/",
+        refresh_specs = (
+            (
+                "https://www.facebook.com/ajax/dtsg/",
+                {"__a": "true", "__user": actor_id},
+                "https://www.facebook.com/",
+            ),
+            (
+                "https://m.facebook.com/ajax/dtsg/",
+                {"__ajax__": "true", "__user": actor_id},
+                "https://m.facebook.com/",
+            ),
+            (
+                "https://business.facebook.com/ajax/dtsg/",
+                {"__a": "1", "__user": actor_id},
+                "https://business.facebook.com/",
+            ),
         )
 
-        for endpoint in endpoints:
+        for endpoint, params, referer in refresh_specs:
             try:
                 async with session.get(
                     endpoint,
-                    params={"__a": "1", "__user": actor_id},
+                    params=params,
                     proxy=self.profile.proxy,
                     headers={
-                        "Accept": "*/*",
+                        "Accept": "application/json,text/plain,*/*",
+                        "Accept-Language": "en-US,en;q=0.9",
+                        "Cache-Control": "no-cache",
+                        "Pragma": "no-cache",
+                        "Referer": referer,
+                        "Sec-Fetch-Dest": "empty",
+                        "Sec-Fetch-Mode": "cors",
+                        "Sec-Fetch-Site": "same-origin",
                         "X-Requested-With": "XMLHttpRequest",
-                        "Referer": "https://www.facebook.com/",
                     },
-                    allow_redirects=False,
+                    allow_redirects=True,
                 ) as response:
                     raw = await response.text()
-                    location = str(response.headers.get("Location") or "")
+                    final_url = str(response.url)
+                    lower_url = final_url.lower()
+                    lower_body = raw.lower()
 
-                    if response.status in {301, 302, 303, 307, 308}:
+                    if (
+                        "/login" in lower_url
+                        or "/checkpoint" in lower_url
+                        or "login_form" in lower_body
+                    ):
                         attempts.append(
-                            f"{endpoint}: redirect HTTP {response.status} to {location or '<empty>'}"
+                            f"{endpoint}: login/checkpoint final={final_url}"
                         )
                         continue
 
                     if response.status >= 400:
                         attempts.append(
-                            f"{endpoint}: HTTP {response.status} bytes={len(raw)}"
+                            f"{endpoint}: HTTP {response.status} "
+                            f"final={final_url} bytes={len(raw)}"
                         )
                         continue
 
@@ -403,12 +441,13 @@ class FacebookWebSession:
                         attempts.append(
                             f"{endpoint}: refresh token acquired HTTP {response.status}"
                         )
-                        return token, endpoint
+                        return token, final_url
 
-                    preview = re.sub(r"\\s+", " ", raw)[:160]
                     attempts.append(
-                        f"{endpoint}: HTTP {response.status} no token payload={preview}"
+                        f"{endpoint}: HTTP {response.status} "
+                        f"final={final_url} bytes={len(raw)} no token"
                     )
+
             except asyncio.TimeoutError:
                 attempts.append(f"{endpoint}: timeout")
             except aiohttp.ClientError as exc:
@@ -465,6 +504,8 @@ class FacebookWebSession:
             final_url = ""
             bootstrap_source = ""
             fb_dtsg = ""
+            best_authenticated_body = ""
+            best_authenticated_url = ""
             attempts: list[str] = []
 
             for bootstrap_url in bootstrap_urls:
@@ -509,6 +550,10 @@ class FacebookWebSession:
                                 f"{bootstrap_url}: login/checkpoint"
                             )
                             continue
+
+                        if len(candidate_body) > len(best_authenticated_body):
+                            best_authenticated_body = candidate_body
+                            best_authenticated_url = candidate_url
 
                         candidate_dtsg = self._first_match(
                             candidate_body,
@@ -569,6 +614,8 @@ class FacebookWebSession:
                     fb_dtsg = refresh_token
                     bootstrap_source = refresh_source
                     final_url = refresh_source
+                    if best_authenticated_body:
+                        body = best_authenticated_body
 
             if not fb_dtsg:
                 detail = " | ".join(attempts[-8:]) or "no bootstrap response"
