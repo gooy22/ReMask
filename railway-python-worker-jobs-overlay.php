@@ -160,6 +160,11 @@ try {
         if ($idem !== '') $payload['idempotency_key'] = $idem;
 
         $job = rmx_pwj_worker_request('POST', '/api/v1/jobs', $payload);
+        $jobId = trim((string)($job['job_id'] ?? ''));
+        error_log(
+            '[python-worker-jobs] create accepted job=' . ($jobId !== '' ? $jobId : '<missing>')
+            . ' profiles=' . count($profiles)
+        );
         rmx_pwj_out(['ok'=>true,'job'=>$job]);
     }
 
