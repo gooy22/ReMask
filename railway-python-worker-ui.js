@@ -1,4 +1,4 @@
-/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 */
+/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 */
 const restoredPythonWorkerJobId = localStorage.getItem('remask_python_worker_job_v1') || '';
 
 const pythonWorkerUiState = {
@@ -70,8 +70,8 @@ function pythonWorkerSelectionRefresh() {
     pythonWorkerSetText(
       'pythonPwStatus',
       profiles.length
-        ? 'Worker UI v134 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
-        : 'Worker UI v134 · Выберите FB-профили в Workspace.'
+        ? 'Worker UI v135 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
+        : 'Worker UI v135 · Выберите FB-профили в Workspace.'
     );
   }
 }
@@ -95,6 +95,29 @@ async function pythonWorkerBridge(payload) {
     throw new Error(String((data && (data.message || data.error)) || ('Worker bridge HTTP ' + response.status)));
   }
   return data;
+}
+
+async function pythonWorkerHealthCheck() {
+  const el = pythonWorkerEl('pythonPwWorkerHealth');
+  if (!el) return false;
+
+  el.dataset.state = 'checking';
+  el.textContent = 'Worker: проверяю…';
+
+  try {
+    const data = await pythonWorkerBridge({action: 'health'});
+    const worker = data && data.worker ? data.worker : {};
+    const queued = Number(worker.queued_items || 0);
+    const concurrency = Number(worker.worker_concurrency || 0);
+
+    el.dataset.state = 'online';
+    el.textContent = 'Worker: ONLINE · очередь ' + queued + ' · concurrency ' + concurrency;
+    return true;
+  } catch (error) {
+    el.dataset.state = 'offline';
+    el.textContent = 'Worker: OFFLINE · ' + String((error && error.message) || error);
+    return false;
+  }
 }
 
 function pythonWorkerCurrentStep(item) {
@@ -839,6 +862,10 @@ function pythonWorkerInitUi() {
 
   pythonWorkerSelectionRefresh();
   pythonWorkerEnhanceBmDialog();
+  pythonWorkerHealthCheck().catch(function(){});
+  setInterval(function() {
+    pythonWorkerHealthCheck().catch(function(){});
+  }, 15000);
 
   new MutationObserver(function() {
     pythonWorkerEnhanceBmDialog();
