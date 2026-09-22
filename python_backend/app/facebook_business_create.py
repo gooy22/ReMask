@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
@@ -13,7 +14,10 @@ from .facebook_docids import (
     record_result,
     upsert_candidate,
 )
-from .facebook_query_discovery import discover_persisted_query
+from .facebook_query_discovery import (
+    discover_persisted_query,
+    extract_script_urls,
+)
 
 
 class DocIdMutationError(RuntimeError):
@@ -342,6 +346,155 @@ def _diagnostic(
     )
 
 
+def _extract_page_backed_create_docid(
+    source: str,
+) -> tuple[str, str]:
+    text = str(source or "")
+    if "primary_page_id" not in text:
+        return "", ""
+
+    best: tuple[int, str, str] | None = None
+    for marker in re.finditer("primary_page_id", text):
+        left = max(0, marker.start() - 9000)
+        right = min(len(text), marker.end() + 9000)
+        window = text[left:right]
+
+        lower_window = window.lower()
+        if "business" not in lower_window:
+            continue
+
+        doc_matches = list(
+            re.finditer(
+                r'(?:"|\')?(?:doc_id|docID|id)(?:"|\')?\s*[:=]\s*'
+                r'(?:"|\')([0-9]{5,40})(?:"|\')',
+                window,
+                flags=re.IGNORECASE,
+            )
+        )
+        if not doc_matches:
+            continue
+
+        friendly = ""
+        friendly_patterns = (
+            r'fb_api_req_friendly_name(?:"|\')?\s*[:=]\s*'
+            r'["\']([^"\']*Business[^"\']*Mutation)["\']',
+            r'["\']name["\']\s*:\s*'
+            r'["\']([^"\']*Business[^"\']*Mutation)["\']',
+            r'["\']([^"\']*Business[^"\']*Mutation)["\']',
+        )
+        for pattern in friendly_patterns:
+            friendly_match = re.search(
+                pattern,
+                window,
+                flags=re.IGNORECASE,
+            )
+            if friendly_match:
+                friendly = _clean(friendly_match.group(1))
+                break
+
+        for doc_match in doc_matches:
+            absolute = left + doc_match.start(1)
+            distance = abs(absolute - marker.start())
+            candidate = (distance, doc_match.group(1), friendly)
+            if best is None or candidate[0] < best[0]:
+                best = candidate
+
+    if best is None:
+        return "", ""
+    return best[1], best[2]
+
+
+async def discover_current_page_backed_create_candidate(
+    session: Any,
+    *,
+    max_scripts: int = 32,
+) -> DocIdCandidate | None:
+    exact = await discover_persisted_query(
+        session,
+        friendly_name="BusinessManagerCreateMutation",
+        entry_urls=[
+            "https://business.facebook.com/latest/home",
+            "https://business.facebook.com/latest/settings",
+            "https://business.facebook.com/latest/overview",
+        ],
+        max_scripts_per_entry=max_scripts,
+    )
+
+    if exact is not None:
+        return upsert_candidate(
+            "CREATE_BM",
+            doc_id=exact.doc_id,
+            friendly_name="BusinessManagerCreateMutation",
+            endpoint_url="https://business.facebook.com/api/graphql/",
+            variables_mode="legacy_primary_page_v1",
+            source=f"runtime_{exact.source_kind}",
+            priority=9_500,
+            observed_at=str(int(time.time())),
+        )
+
+    entry_urls = (
+        "https://business.facebook.com/latest/home",
+        "https://business.facebook.com/latest/settings",
+        "https://business.facebook.com/latest/overview",
+    )
+
+    for entry_url in entry_urls:
+        try:
+            status, document, final_url = await session.fetch_text(
+                entry_url,
+                max_bytes=3_500_000,
+            )
+        except Exception:
+            continue
+
+        if status >= 400:
+            continue
+
+        doc_id, friendly = _extract_page_backed_create_docid(document)
+        if doc_id:
+            return upsert_candidate(
+                "CREATE_BM",
+                doc_id=doc_id,
+                friendly_name=friendly or "BusinessManagerCreateMutation",
+                endpoint_url="https://business.facebook.com/api/graphql/",
+                variables_mode="legacy_primary_page_v1",
+                source="runtime_page_backed_marker_html",
+                priority=9_400,
+                observed_at=str(int(time.time())),
+            )
+
+        scripts = extract_script_urls(document, final_url)
+        for script_url in scripts[:max(1, int(max_scripts))]:
+            try:
+                script_status, body, _ = await session.fetch_text(
+                    script_url,
+                    max_bytes=2_000_000,
+                    referer=final_url,
+                )
+            except Exception:
+                continue
+
+            if script_status >= 400:
+                continue
+
+            doc_id, friendly = _extract_page_backed_create_docid(body)
+            if not doc_id:
+                continue
+
+            return upsert_candidate(
+                "CREATE_BM",
+                doc_id=doc_id,
+                friendly_name=friendly or "BusinessManagerCreateMutation",
+                endpoint_url="https://business.facebook.com/api/graphql/",
+                variables_mode="legacy_primary_page_v1",
+                source="runtime_page_backed_marker_javascript_bundle",
+                priority=9_400,
+                observed_at=str(int(time.time())),
+            )
+
+    return None
+
+
 async def create_business_with_docids(
     session: Any,
     *,
@@ -357,6 +510,20 @@ async def create_business_with_docids(
 ) -> CreateBusinessResult:
     bootstrap = await session.bootstrap()
     actor_id = _clean(getattr(bootstrap, "actor_id", ""))
+
+    # In strict Fan Page mode, refresh the Page-backed persisted query before
+    # mutating anything. This avoids relying first on a legacy static doc_id
+    # that may now return only "An unknown error has occurred".
+    if _clean(page_id) and not allow_scope_selector_fallback and not explicit_doc_id:
+        try:
+            await asyncio.wait_for(
+                discover_current_page_backed_create_candidate(session),
+                timeout=20.0,
+            )
+        except Exception:
+            # Discovery is read-only and best-effort. The persisted/static
+            # registry remains available as the final fallback.
+            pass
 
     candidates = _prefer_page_backed_candidates(
         list_candidates("CREATE_BM"),
@@ -566,30 +733,37 @@ async def create_business_with_docids(
             )
 
         for friendly_name, variables_mode in discovery_specs:
-            discovered = await discover_persisted_query(
-                session,
-                friendly_name=friendly_name,
-                entry_urls=[
-                    "https://business.facebook.com/latest/home",
-                    "https://business.facebook.com/latest/settings",
-                    "https://business.facebook.com/latest/overview",
-                ],
-                max_scripts_per_entry=28,
-            )
+            if variables_mode == "legacy_primary_page_v1":
+                refreshed = await discover_current_page_backed_create_candidate(
+                    session,
+                    max_scripts=32,
+                )
+                if refreshed is None:
+                    continue
+            else:
+                discovered = await discover_persisted_query(
+                    session,
+                    friendly_name=friendly_name,
+                    entry_urls=[
+                        "https://business.facebook.com/latest/home",
+                        "https://business.facebook.com/latest/settings",
+                        "https://business.facebook.com/latest/overview",
+                    ],
+                    max_scripts_per_entry=28,
+                )
+                if discovered is None:
+                    continue
 
-            if discovered is None:
-                continue
-
-            refreshed = upsert_candidate(
-                "CREATE_BM",
-                doc_id=discovered.doc_id,
-                friendly_name=friendly_name,
-                endpoint_url="https://business.facebook.com/api/graphql/",
-                variables_mode=variables_mode,
-                source=f"runtime_{discovered.source_kind}",
-                priority=8_500,
-                observed_at=str(int(time.time())),
-            )
+                refreshed = upsert_candidate(
+                    "CREATE_BM",
+                    doc_id=discovered.doc_id,
+                    friendly_name=friendly_name,
+                    endpoint_url="https://business.facebook.com/api/graphql/",
+                    variables_mode=variables_mode,
+                    source=f"runtime_{discovered.source_kind}",
+                    priority=8_500,
+                    observed_at=str(int(time.time())),
+                )
 
             if all(
                 candidate.doc_id != refreshed.doc_id
