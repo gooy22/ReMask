@@ -51,6 +51,20 @@ class FacebookDtsgBootstrapParserTests(unittest.TestCase):
         source = '<input type="hidden" name="fb_dtsg" value="NA_input_token">'
         self.assertEqual(self.extract(source), "NA_input_token")
 
+    def test_ajax_dtsg_refresh_payload(self) -> None:
+        source = 'for (;;);{"payload":{"token":"NA_refresh_token"}}'
+        self.assertEqual(
+            FacebookWebSession._parse_dtsg_refresh_response(source),
+            "NA_refresh_token",
+        )
+
+    def test_ajax_dtsg_refresh_direct_token(self) -> None:
+        source = '{"token":"NA_refresh_direct"}'
+        self.assertEqual(
+            FacebookWebSession._parse_dtsg_refresh_response(source),
+            "NA_refresh_direct",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
