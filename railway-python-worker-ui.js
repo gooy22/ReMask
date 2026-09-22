@@ -1,4 +1,4 @@
-/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 REMASK_PYTHON_WORKER_UI_V140 REMASK_PYTHON_WORKER_UI_V141 REMASK_PYTHON_WORKER_UI_V142 REMASK_PYTHON_WORKER_UI_V143 REMASK_PYTHON_WORKER_UI_V144 REMASK_PYTHON_WORKER_UI_V145 */
+/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 REMASK_PYTHON_WORKER_UI_V140 REMASK_PYTHON_WORKER_UI_V141 REMASK_PYTHON_WORKER_UI_V142 REMASK_PYTHON_WORKER_UI_V143 REMASK_PYTHON_WORKER_UI_V144 REMASK_PYTHON_WORKER_UI_V145 REMASK_PYTHON_WORKER_UI_V146 */
 const restoredPythonWorkerJobId = localStorage.getItem('remask_python_worker_job_v1') || '';
 
 const pythonWorkerUiState = {
@@ -76,10 +76,10 @@ function pythonWorkerSelectionRefresh() {
       profiles.length
         ? (
             pythonWorkerUiState.workerOnline === true
-              ? 'Worker UI v145 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
-              : 'Worker UI v145 · Выбрано FB-профилей: ' + profiles.length + '. Жду READY от worker.'
+              ? 'Worker UI v146 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
+              : 'Worker UI v146 · Выбрано FB-профилей: ' + profiles.length + '. Жду READY от worker.'
           )
-        : 'Worker UI v145 · Выберите FB-профили в Workspace.'
+        : 'Worker UI v146 · Выберите FB-профили в Workspace.'
     );
   }
 }
@@ -506,6 +506,11 @@ async function pythonWorkerStartBusiness(bmName, options) {
       const pageId = String(config.page_id || '').trim();
       if (pageId) businessParams.page_id = pageId;
 
+      const businessEmail = String(
+        config.user_email || config.email || ''
+      ).trim();
+      if (businessEmail) businessParams.user_email = businessEmail;
+
       return {
         profile_id: profileKey,
         tasks: [
@@ -681,7 +686,7 @@ function pythonWorkerEnsureBmModalStyle() {
     '#pythonWorkerBmModal .pwbm-close{border:0;background:transparent;color:#aeb7c4;font-size:22px;cursor:pointer}',
     '#pythonWorkerBmModal .pwbm-body{padding:16px 18px}',
     '#pythonWorkerBmModal .pwbm-note{font-size:12px;color:#9aa4b2;margin-bottom:12px}',
-    '#pythonWorkerBmModal .pwbm-row{display:grid;grid-template-columns:minmax(130px,.7fr) minmax(170px,1fr) minmax(260px,1.4fr);gap:10px;align-items:start;padding:12px 0;border-bottom:1px solid #303640}',
+    '#pythonWorkerBmModal .pwbm-row{display:grid;grid-template-columns:minmax(130px,.7fr) minmax(220px,1.1fr) minmax(260px,1.4fr);gap:10px;align-items:start;padding:12px 0;border-bottom:1px solid #303640}',
     '#pythonWorkerBmModal .pwbm-row:last-child{border-bottom:0}',
     '#pythonWorkerBmModal .pwbm-profile{font-size:12px;font-weight:600;padding-top:9px;word-break:break-word}',
     '#pythonWorkerBmModal .pwbm-session{display:block;margin-top:6px;font-size:11px;font-weight:400;color:#8f99a8}',
@@ -779,8 +784,19 @@ async function pythonWorkerOpenOwnBmModal() {
     name.placeholder = 'Название Business Manager';
     const nameHint = document.createElement('small');
     nameHint.textContent = 'Название BM';
+
+    const businessEmail = document.createElement('input');
+    businessEmail.type = 'email';
+    businessEmail.className = 'pwbm-manual';
+    businessEmail.placeholder = 'Business email для web fallback (необязательно)';
+
+    const emailHint = document.createElement('small');
+    emailHint.textContent = 'Нужен только если официальный Page-backed маршрут недоступен.';
+
     nameField.appendChild(name);
     nameField.appendChild(nameHint);
+    nameField.appendChild(businessEmail);
+    nameField.appendChild(emailHint);
 
     const pageField = document.createElement('div');
     pageField.className = 'pwbm-field';
@@ -813,6 +829,8 @@ async function pythonWorkerOpenOwnBmModal() {
     rows[profileId] = {
       row: row,
       name: name,
+      businessEmail: businessEmail,
+      emailHint: emailHint,
       page: page,
       manualPage: manualPage,
       pageHint: pageHint,
@@ -903,6 +921,7 @@ async function pythonWorkerOpenOwnBmModal() {
   for (const profileId of profiles) {
     const cfg = rows[profileId];
     cfg.name.addEventListener('input', refreshReadyState);
+    cfg.businessEmail.addEventListener('input', refreshReadyState);
     cfg.page.addEventListener('change', function() {
       if (String(cfg.page.value || '').trim()) cfg.manualPage.value = '';
       refreshReadyState();
@@ -926,6 +945,13 @@ async function pythonWorkerOpenOwnBmModal() {
       const webReady = result.fb_dtsg_present === true && result.actor_present === true;
 
       cfg.sessionHint.className = 'pwbm-session ok';
+      if (result.email_present === true) {
+        cfg.emailHint.textContent = 'В профиле уже есть Business/login email для web fallback.';
+      } else {
+        cfg.emailHint.textContent =
+          'В профиле email не найден. Поле нужно только если ReMask перейдёт на современный web fallback.';
+      }
+
       if (discoveredPages.length) {
         if (officialPages) {
           cfg.sessionHint.textContent =
@@ -1013,7 +1039,8 @@ async function pythonWorkerOpenOwnBmModal() {
       const cfg = rows[profileId];
       configs[profileId] = {
         name: String(cfg.name.value || '').trim(),
-        page_id: String(cfg.page.value || cfg.manualPage.value || '').trim()
+        page_id: String(cfg.page.value || cfg.manualPage.value || '').trim(),
+        user_email: String(cfg.businessEmail.value || '').trim()
       };
     }
 
