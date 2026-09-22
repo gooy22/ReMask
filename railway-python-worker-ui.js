@@ -1,4 +1,4 @@
-/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 */
+/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 */
 const restoredPythonWorkerJobId = localStorage.getItem('remask_python_worker_job_v1') || '';
 
 const pythonWorkerUiState = {
@@ -71,8 +71,8 @@ function pythonWorkerSelectionRefresh() {
     pythonWorkerSetText(
       'pythonPwStatus',
       profiles.length
-        ? 'Worker UI v137 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
-        : 'Worker UI v137 · Выберите FB-профили в Workspace.'
+        ? 'Worker UI v138 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
+        : 'Worker UI v138 · Выберите FB-профили в Workspace.'
     );
   }
 }
@@ -110,10 +110,14 @@ async function pythonWorkerHealthCheck() {
     const worker = data && data.worker ? data.worker : {};
     const queued = Number(worker.queued_items || 0);
     const concurrency = Number(worker.worker_concurrency || 0);
+    const profilesVisible = Number(worker.profiles_visible || 0);
 
     pythonWorkerUiState.workerOnline = true;
     el.dataset.state = 'online';
-    el.textContent = 'Worker: ONLINE · очередь ' + queued + ' · concurrency ' + concurrency;
+    el.textContent =
+      'Worker: READY · профили ' + profilesVisible +
+      ' · очередь ' + queued +
+      ' · concurrency ' + concurrency;
     pythonWorkerSelectionRefresh();
     return true;
   } catch (error) {
