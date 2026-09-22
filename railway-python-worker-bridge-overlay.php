@@ -4,10 +4,10 @@
  *
  * Security contract:
  * - requires REMASK_INTERNAL_KEY and X-Remask-Internal-Key;
- * - returns only cookies, proxy URL and User-Agent;
- * - never returns access tokens, fb_dtsg or other account secrets not needed by
- *   the profile-bound HTTP session;
- * - intended to be called over Railway private networking.
+ * - returns profile cookies, saved access token, proxy URL and User-Agent only
+ *   to the authenticated internal worker resolver;
+ * - never exposes this endpoint to browser UI without REMASK_INTERNAL_KEY;
+ * - intended for localhost / Railway private networking only.
  */
 $root = '/var/www/html';
 $target = $root . '/ajax/pythonProfileContext.php';
@@ -133,6 +133,7 @@ try {
                 'profile_id' => $candidate->name,
                 'proxy_configured' => $candidate->proxy !== null,
                 'cookies_present' => is_array($candidate->cookies) && count($candidate->cookies) > 0,
+                'token_present' => trim((string)$candidate->token) !== '',
             ];
         }
         rmx_py_out(['ok'=>true,'profiles'=>$profiles,'count'=>count($profiles)]);
@@ -156,6 +157,7 @@ try {
         'ok' => true,
         'profile_id' => $profile,
         'cookies' => rmx_py_cookie_map($account->cookies),
+        'access_token' => trim((string)$account->token),
         'proxy' => rmx_py_proxy_url($account->proxy),
         'user_agent' => $ua,
         'display_name' => $identity['display_name'],
