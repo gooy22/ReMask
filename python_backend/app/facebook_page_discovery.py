@@ -88,6 +88,19 @@ def _normalize_page(row: Any) -> dict[str, Any] | None:
             "restriction_type": _clean(restriction.get("restriction_type")),
         }
 
+    business = row.get("business")
+    if isinstance(business, dict):
+        business_id = _clean(business.get("id"))
+        if business_id:
+            output["business_id"] = business_id
+    elif isinstance(business, (str, int)):
+        business_id = _clean(business)
+        if business_id:
+            output["business_id"] = business_id
+
+    if isinstance(row.get("is_owned"), bool):
+        output["is_owned"] = bool(row.get("is_owned"))
+
     return output
 
 
@@ -173,179 +186,73 @@ def _dedupe_pages(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _extract_known_page_lists(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    paths = (
+    """
+    Parse both the historical Account Quality response and newer Relay
+    connection shapes (nodes / edges -> node) without treating unrelated
+    numeric-id objects as Pages.
+    """
+    output: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def add(row: Any) -> None:
+        page = _normalize_page(row)
+        if not page:
+            return
+        if page["id"] in seen:
+            return
+        seen.add(page["id"])
+        output.append(page)
+
+    def walk(value: Any, *, in_page_branch: bool = False) -> None:
+        if isinstance(value, list):
+            for child in value:
+                walk(child, in_page_branch=in_page_branch)
+            return
+
+        if not isinstance(value, dict):
+            return
+
+        if in_page_branch:
+            add(value)
+
+        for raw_key, child in value.items():
+            key = str(raw_key or "").lower()
+            next_page_branch = (
+                in_page_branch
+                or "page" in key
+                or key in {"owned_pages", "client_pages"}
+            )
+
+            if key == "node" and in_page_branch:
+                walk(child, in_page_branch=True)
+                continue
+
+            if key in {"nodes", "edges", "data"}:
+                walk(child, in_page_branch=next_page_branch)
+                continue
+
+            walk(child, in_page_branch=next_page_branch)
+
+    # Fast path for the long-lived Account Quality contract.
+    for path in (
         ("data", "userData", "pages_can_administer"),
         ("data", "user", "pages_can_administer"),
         ("data", "viewer", "pages_can_administer"),
         ("data", "pages_can_administer"),
-        ("data", "userData", "pages"),
-        ("data", "user", "pages"),
-        ("data", "viewer", "pages"),
-        ("data", "pages"),
-    )
-
-    def get_path(path: tuple[str, ...]) -> Any:
+    ):
         node: Any = payload
         for key in path:
             if not isinstance(node, dict):
-                return None
-            node = node.get(key)
-        return node
-
-    candidates: list[dict[str, Any]] = []
-
-    for path in paths:
-        value = get_path(path)
-        for row in _iter_connection_rows(value):
-            candidates.append(row)
-
-    # Relay shapes change often. As a conservative fallback, recursively scan
-    # only objects that have a numeric id/name AND Page-specific evidence.
-    stack: list[Any] = [payload]
-    seen_objects: set[int] = set()
-
-    while stack:
-        node = stack.pop()
-        if isinstance(node, dict):
-            object_id = id(node)
-            if object_id in seen_objects:
-                continue
-            seen_objects.add(object_id)
-
-            if _page_like(node):
-                candidates.append(node)
-
-            for child in node.values():
-                if isinstance(child, (dict, list)):
-                    stack.append(child)
-
-        elif isinstance(node, list):
-            for child in node:
-                if isinstance(child, (dict, list)):
-                    stack.append(child)
-
-    return _dedupe_pages(candidates)
-
-
-def _extract_pages_from_html(document: str) -> list[dict[str, Any]]:
-    source = html_lib.unescape(str(document or "")).replace("\\/", "/")
-    candidates: list[dict[str, Any]] = []
-
-    script_patterns = (
-        r'<script[^>]*type=["\']application/json["\'][^>]*>(.*?)</script>',
-        r'<script[^>]*data-sjs[^>]*>(.*?)</script>',
-    )
-
-    decoded = 0
-    for pattern in script_patterns:
-        for match in re.finditer(
-            pattern,
-            source,
-            flags=re.IGNORECASE | re.DOTALL,
-        ):
-            body = html_lib.unescape(match.group(1)).strip()
-            if body.startswith("for (;;);"):
-                body = body[len("for (;;);"):].lstrip()
-            if not body or body[0] not in "[{":
-                continue
-
-            try:
-                payload = json.loads(body)
-            except (json.JSONDecodeError, ValueError):
-                continue
-
-            decoded += 1
-            if isinstance(payload, dict):
-                candidates.extend(_extract_known_page_lists(payload))
-            elif isinstance(payload, list):
-                for item in payload:
-                    if isinstance(item, dict):
-                        candidates.extend(_extract_known_page_lists(item))
-
-            if decoded >= 250:
+                node = None
                 break
-        if decoded >= 250:
-            break
+            node = node.get(key)
+        if isinstance(node, list):
+            for row in node:
+                add(row)
 
-    # Some Facebook bootstraps serialize page objects inside non-JSON script
-    # wrappers. Do not take arbitrary numeric ids: require an explicit Page
-    # typename close to id+name.
-    typename_pattern = re.compile(
-        r'\{[^{}]{0,2500}?"__typename"\s*:\s*"(?P<type>[^"]*Page[^"]*)"'
-        r'[^{}]{0,2500}?\}',
-        flags=re.IGNORECASE | re.DOTALL,
-    )
-    for match in typename_pattern.finditer(source):
-        fragment = match.group(0)
-        id_match = re.search(
-            r'"(?:id|page_id|pageID|pageId)"\s*:\s*"?(\d{5,30})"?',
-            fragment,
-        )
-        name_match = re.search(
-            r'"(?:name|page_name|pageName)"\s*:\s*"([^"]{1,300})"',
-            fragment,
-        )
-        if not id_match or not name_match:
-            continue
-        candidates.append(
-            {
-                "id": id_match.group(1),
-                "name": html_lib.unescape(name_match.group(1)),
-                "__typename": match.group("type"),
-            }
-        )
-
-    return _dedupe_pages(candidates)
-
-
-async def discover_pages_from_browser_html(
-    session: Any,
-) -> PageDiscoveryResult:
-    diagnostics: list[str] = []
-    urls = (
-        "https://www.facebook.com/pages/?category=your_pages",
-        "https://www.facebook.com/pages/?category=your_pages&ref=bookmarks",
-        "https://www.facebook.com/pages/?category=your_pages&nav_ref=bookmarks",
-    )
-
-    for url in urls:
-        try:
-            status, document, final_url = await session.fetch_text(
-                url,
-                max_bytes=5_000_000,
-            )
-        except Exception as exc:
-            diagnostics.append(f"{url}: fetch failed: {exc}")
-            continue
-
-        lowered_url = str(final_url or "").lower()
-        if "login" in lowered_url or "checkpoint" in lowered_url:
-            diagnostics.append(
-                f"{url}: redirected to login/checkpoint"
-            )
-            continue
-
-        if status >= 400:
-            diagnostics.append(f"{url}: HTTP {status}")
-            continue
-
-        pages = _extract_pages_from_html(document)
-        if pages:
-            return PageDiscoveryResult(
-                pages=pages,
-                source="facebook_web_html",
-                candidate=None,
-                diagnostics=diagnostics,
-            )
-
-        diagnostics.append(
-            f"{url}: authenticated HTML contained no recognized Page objects"
-        )
-
-    raise PageDiscoveryError(
-        "Browser-session Page HTML discovery returned no Pages. "
-        + " || ".join(diagnostics[-8:])
-    )
+    # Compatibility path for current/future Relay connection wrappers.
+    walk(payload.get("data"), in_page_branch=False)
+    return output
 
 
 def _errors(payload: dict[str, Any]) -> list[Any]:
