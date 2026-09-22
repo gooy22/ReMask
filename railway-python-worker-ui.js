@@ -795,6 +795,11 @@ function pythonWorkerApplyPages(cfg, pages, sourceLabel) {
       pageId +
       suffix;
 
+    if (businessId) {
+      option.disabled = true;
+      option.dataset.ineligibleReason = 'already_owned_by_business';
+    }
+
     cfg.page.appendChild(option);
   }
 
