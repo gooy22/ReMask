@@ -38,6 +38,7 @@ class PrivateBusinessRouteTests(unittest.IsolatedAsyncioTestCase):
             session,
             business_name="Test Business",
             page_id="123456789",
+            user_email="owner@example.com",
             require_page_backed=True,
         )
         self.assertEqual(result.business_id, "123456789012345")
