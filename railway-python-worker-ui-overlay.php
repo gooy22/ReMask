@@ -84,7 +84,7 @@ HTML;
 
     $php = preg_replace(
         '#scripts/workspace\.js(?:\?[^"\']*)?#',
-        'scripts/workspace.js?v=20260922-python-worker-ui-v133',
+        'scripts/workspace.js?v=20260922-python-worker-ui-v134',
         $php,
         1,
         $scriptCount
@@ -95,13 +95,18 @@ HTML;
     }
 }
 
-if (strpos($js, 'REMASK_PYTHON_WORKER_UI_V2') === false) {
+$workerMarker = '/* REMASK_PYTHON_WORKER_UI_V1';
+$workerPos = strpos($js, $workerMarker);
+
+if ($workerPos === false) {
     $js .= "\n" . $addon . "\n";
+} else {
+    $js = rtrim(substr($js, 0, $workerPos)) . "\n\n" . $addon . "\n";
 }
 
 $php = preg_replace(
     '#scripts/workspace\.js(?:\?[^"\']*)?#',
-    'scripts/workspace.js?v=20260922-python-worker-ui-v133',
+    'scripts/workspace.js?v=20260922-python-worker-ui-v134',
     $php,
     1
 ) ?? $php;
