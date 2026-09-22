@@ -18,7 +18,7 @@ RUN /opt/remask-venv/bin/python -m compileall -q /opt/remask-python \
     && grep -q 'class FacebookWebSession' /opt/remask-python/fb_worker.py \
     && grep -q 'WebSessionManager = FacebookWebSession' /opt/remask-python/fb_worker.py \
     && cd /opt/remask-python \
-    && /opt/remask-venv/bin/python -c "import fb_worker; from app.session import ProfileSession; from app.provisioning.business_handler import business_handler; from app.provisioning.ad_account_handler import ad_account_handler; from app.provisioning.meta_errors import classify_meta_request_error; assert fb_worker.WebSessionManager is fb_worker.FacebookWebSession"
+    && /opt/remask-venv/bin/python -c "import fb_worker; from app.session import ProfileSession; from app.provisioning.business_handler import business_handler; from app.provisioning.ad_account_handler import ad_account_handler; from app.provisioning.meta_errors import classify_meta_request_error; from app.facebook_graph_api import FacebookGraphApi; from app.business_create_service import create_business_resilient; assert fb_worker.WebSessionManager is fb_worker.FacebookWebSession"
 
 COPY .deploy/clean-preview-valid/runtime.b64.* /tmp/remask-parts/
 COPY railway-persistence-overlay.php /tmp/railway-persistence-overlay.php
@@ -158,6 +158,10 @@ RUN set -eux; \
     grep -q "profile_preflight" /opt/remask-python/main.py; \
     grep -q "action === 'preflight'" /var/www/html/ajax/pythonWorkerJobs.php; \
     grep -q 'pythonWorkerProfilePreflight' /var/www/html/scripts/workspace.js; \
+    grep -q 'Graph API /me/accounts' /var/www/html/scripts/workspace.js; \
+    grep -q "'access_token' => trim((string)\$account->token)" /var/www/html/ajax/pythonProfileContext.php; \
+    grep -q 'create_business_resilient' /opt/remask-python/app/provisioning/business_handler.py; \
+    grep -q 'class FacebookGraphApi' /opt/remask-python/app/facebook_graph_api.py; \
     php -l /var/www/html/ajax/pythonWorkerJobs.php; \
     php -l /var/www/html/ajax/pythonWorkerPages.php; \
     grep -q 'pythonWorkerOpenOwnBmModal' /var/www/html/scripts/workspace.js; \
@@ -171,7 +175,7 @@ RUN set -eux; \
     php -l /var/www/html/workspace.php; \
     grep -q 'REMASK_PYTHON_WORKER_PANEL_V1' /var/www/html/workspace.php; \
     grep -q 'REMASK_PYTHON_WORKER_UI_V1' /var/www/html/scripts/workspace.js; \
-    grep -q 'REMASK_PYTHON_WORKER_UI_V143' /var/www/html/scripts/workspace.js; \
+    grep -q 'REMASK_PYTHON_WORKER_UI_V144' /var/www/html/scripts/workspace.js; \
     grep -q 'pythonWorkerJobs.php' /var/www/html/scripts/workspace.js; \
     grep -q 'Retry Failed' /var/www/html/workspace.php; \
     php -l /var/www/html/ajax/metaHierarchy.php; \
