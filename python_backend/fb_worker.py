@@ -365,56 +365,73 @@ class FacebookWebSession:
         actor_id: str,
         attempts: list[str],
     ) -> tuple[str, str]:
-        endpoints = (
-            "https://www.facebook.com/ajax/dtsg/",
-            "https://business.facebook.com/ajax/dtsg/",
+        endpoint_specs = (
+            (
+                "https://www.facebook.com/ajax/dtsg/",
+                "https://www.facebook.com/",
+            ),
+            (
+                "https://business.facebook.com/ajax/dtsg/",
+                "https://business.facebook.com/",
+            ),
         )
 
-        for endpoint in endpoints:
-            try:
-                async with session.get(
-                    endpoint,
-                    params={"__a": "1", "__user": actor_id},
-                    proxy=self.profile.proxy,
-                    headers={
-                        "Accept": "*/*",
-                        "X-Requested-With": "XMLHttpRequest",
-                        "Referer": "https://www.facebook.com/",
-                    },
-                    allow_redirects=False,
-                ) as response:
-                    raw = await response.text()
-                    location = str(response.headers.get("Location") or "")
+        # Facebook's TokenFetcher has used /ajax/dtsg/ for refreshing DTSG.
+        # Deployments have been observed with both __a=true and __a=1, so try
+        # both without changing the profile-bound cookies/proxy/user-agent.
+        for endpoint, referer in endpoint_specs:
+            for a_value in ("true", "1"):
+                try:
+                    async with session.get(
+                        endpoint,
+                        params={"__a": a_value, "__user": actor_id},
+                        proxy=self.profile.proxy,
+                        headers={
+                            "Accept": "*/*",
+                            "Referer": referer,
+                            "Sec-Fetch-Dest": "empty",
+                            "Sec-Fetch-Mode": "cors",
+                            "Sec-Fetch-Site": "same-origin",
+                        },
+                        allow_redirects=False,
+                    ) as response:
+                        raw = await response.text()
+                        location = str(response.headers.get("Location") or "")
 
-                    if response.status in {301, 302, 303, 307, 308}:
+                        if response.status in {301, 302, 303, 307, 308}:
+                            attempts.append(
+                                f"{endpoint}?__a={a_value}: redirect HTTP "
+                                f"{response.status} to {location or '<empty>'}"
+                            )
+                            continue
+
+                        if response.status >= 400:
+                            attempts.append(
+                                f"{endpoint}?__a={a_value}: HTTP "
+                                f"{response.status} bytes={len(raw)}"
+                            )
+                            continue
+
+                        token = self._parse_dtsg_refresh_response(raw)
+                        if token:
+                            attempts.append(
+                                f"{endpoint}?__a={a_value}: refresh token "
+                                f"acquired HTTP {response.status}"
+                            )
+                            return token, f"{endpoint}?__a={a_value}"
+
+                        preview = re.sub(r"\s+", " ", raw)[:160]
                         attempts.append(
-                            f"{endpoint}: redirect HTTP {response.status} to {location or '<empty>'}"
+                            f"{endpoint}?__a={a_value}: HTTP {response.status} "
+                            f"no token payload={preview}"
                         )
-                        continue
-
-                    if response.status >= 400:
-                        attempts.append(
-                            f"{endpoint}: HTTP {response.status} bytes={len(raw)}"
-                        )
-                        continue
-
-                    token = self._parse_dtsg_refresh_response(raw)
-                    if token:
-                        attempts.append(
-                            f"{endpoint}: refresh token acquired HTTP {response.status}"
-                        )
-                        return token, endpoint
-
-                    preview = re.sub(r"\\s+", " ", raw)[:160]
+                except asyncio.TimeoutError:
+                    attempts.append(f"{endpoint}?__a={a_value}: timeout")
+                except aiohttp.ClientError as exc:
                     attempts.append(
-                        f"{endpoint}: HTTP {response.status} no token payload={preview}"
+                        f"{endpoint}?__a={a_value}: network "
+                        f"{exc.__class__.__name__}"
                     )
-            except asyncio.TimeoutError:
-                attempts.append(f"{endpoint}: timeout")
-            except aiohttp.ClientError as exc:
-                attempts.append(
-                    f"{endpoint}: network {exc.__class__.__name__}"
-                )
 
         return "", ""
 
