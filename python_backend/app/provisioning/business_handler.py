@@ -42,10 +42,20 @@ async def business_handler(
     # 2. ИЗВЛЕЧЕНИЕ И ОЧИСТКА PAGE_ID ИЗ FRONTEND PAYLOAD
     page_id_raw = params.get("page_id") or params.get("primary_page_id")
     page_id = str(page_id_raw).strip() if page_id_raw is not None else ""
-    if page_id.lower() == "none":
-        page_id = ""
+    if not page_id or page_id.lower() == "none":
+        raise ProvisioningError(
+            "PRIMARY_PAGE_REQUIRED",
+            "BUSINESS.page_id is required for Business Manager creation",
+            retryable=False,
+        )
 
-    log.info(f"[{profile_id}] BUSINESS start name={bm_name} primary_page_id={page_id or '<none>'} key={idempotency_key}")
+    log.info(
+        "[%s] BUSINESS start name=%s primary_page_id=%s key=%s",
+        profile_id,
+        bm_name,
+        page_id,
+        idempotency_key,
+    )
 
     profile_obj = WebProfile(
         name=profile_id,
@@ -58,15 +68,10 @@ async def business_handler(
         async with WebSessionManager(profile_obj) as боевая_сессия:
             controller = BusinessLogicController(боевая_сессия)
             
-            if page_id:
-                bm_id = await controller.create_business_manager(
-                    name=bm_name,
-                    page_id=page_id,
-                )
-            else:
-                bm_id = await controller.create_business_manager(
-                    name=bm_name,
-                )
+            bm_id = await controller.create_business_manager(
+                name=bm_name,
+                page_id=page_id,
+            )
             
             if not bm_id:
                 raise ProvisioningError("INVALID_RESULT", "Facebook returned empty Business ID", retryable=False)
