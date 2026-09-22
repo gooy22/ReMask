@@ -212,56 +212,11 @@ function pythonWorkerSchedulePoll(delay) {
   }, ms);
 }
 
-function pythonWorkerFindBmDialog(button) {
-  if (button && typeof button.closest === 'function') {
-    const ownDialog = button.closest('[role="dialog"], .modal, .modal-content');
-    if (ownDialog && /Добавить Business Manager/i.test(String(ownDialog.textContent || ''))) {
-      return ownDialog;
-    }
-  }
-
-  const nodes = Array.from(document.querySelectorAll('[role="dialog"], .modal, .modal-content'));
-  return nodes.find(function(node) {
-    return /Добавить Business Manager/i.test(String(node.textContent || ''));
-  }) || null;
-}
-
-function pythonWorkerPrimaryPageSelects(dialog) {
-  if (!dialog) return [];
-
-  return Array.from(dialog.querySelectorAll('select')).filter(function(select) {
-    const optionText = Array.from(select.options || []).map(function(option) {
-      return String(option.textContent || '');
-    }).join(' ');
-
-    const parentText = String((select.parentElement && select.parentElement.textContent) || '');
-    return /Primary Page/i.test(optionText) || /Primary Page/i.test(parentText);
-  });
-}
-
 function pythonWorkerResolveBmName(button) {
   let value = '';
-  const dialog = pythonWorkerFindBmDialog(button);
 
   if (button && button.dataset && button.dataset.bmName) {
     value = String(button.dataset.bmName).trim();
-  }
-
-  if (!value && dialog) {
-    const inputs = Array.from(dialog.querySelectorAll('input'));
-    const candidate = inputs.find(function(input) {
-      const type = String(input.type || 'text').toLowerCase();
-      const key = [
-        input.name || '',
-        input.id || '',
-        input.className || '',
-        input.placeholder || ''
-      ].join(' ');
-      if (type === 'email' || type === 'hidden' || type === 'checkbox' || type === 'radio') return false;
-      if (/email|почт/i.test(key)) return false;
-      return type === 'text' || type === 'search' || type === '';
-    });
-    if (candidate) value = String(candidate.value || '').trim();
   }
 
   if (!value) {
@@ -278,68 +233,6 @@ function pythonWorkerResolveBmName(button) {
   }
 
   return value;
-}
-
-function pythonWorkerBmRowConfig(dialog, profiles, fallbackName) {
-  const result = {};
-  if (!dialog || !Array.isArray(profiles) || !profiles.length) return result;
-
-  const pageSelects = pythonWorkerPrimaryPageSelects(dialog);
-  const tableRows = Array.from(dialog.querySelectorAll('tr'));
-
-  profiles.forEach(function(profileId, index) {
-    const profile = String(profileId || '').trim();
-    let row = tableRows.find(function(candidate) {
-      return profile && String(candidate.textContent || '').indexOf(profile) !== -1;
-    });
-
-    if (!row && pageSelects[index]) {
-      row = pageSelects[index].closest('tr');
-    }
-
-    let name = String(fallbackName || '').trim();
-    let pageId = '';
-
-    if (row) {
-      const rowInputs = Array.from(row.querySelectorAll('input'));
-      const nameInput = rowInputs.find(function(input) {
-        const type = String(input.type || 'text').toLowerCase();
-        const key = [
-          input.name || '',
-          input.id || '',
-          input.className || '',
-          input.placeholder || ''
-        ].join(' ');
-        if (type === 'email' || type === 'hidden' || type === 'checkbox' || type === 'radio') return false;
-        if (/email|почт/i.test(key)) return false;
-        return type === 'text' || type === 'search' || type === '';
-      });
-      if (nameInput && String(nameInput.value || '').trim()) {
-        name = String(nameInput.value || '').trim();
-      }
-
-      const rowSelect = Array.from(row.querySelectorAll('select')).find(function(select) {
-        const optionText = Array.from(select.options || []).map(function(option) {
-          return String(option.textContent || '');
-        }).join(' ');
-        const parentText = String((select.parentElement && select.parentElement.textContent) || '');
-        return /Primary Page/i.test(optionText) || /Primary Page/i.test(parentText);
-      });
-
-      if (rowSelect) pageId = String(rowSelect.value || '').trim();
-    }
-
-    if (!pageId && pageSelects[index]) {
-      pageId = String(pageSelects[index].value || '').trim();
-    }
-
-    result[profile] = {
-      name: name,
-      page_id: pageId
-    };
-  });
-
-  return result;
 }
 
 async function pythonWorkerRefreshProfile(profileId) {
@@ -391,15 +284,12 @@ async function pythonWorkerRefreshSuccessfulProfiles(items) {
   }
 }
 
-async function pythonWorkerStartBusiness(bmName, options) {
+async function pythonWorkerStartBusiness(bmName) {
   const profiles = pythonWorkerSelectedProfiles();
   if (!profiles.length || pythonWorkerUiState.busy) return;
 
   const cleanName = String(bmName || '').trim();
   if (!cleanName) return;
-
-  const dialog = options && options.dialog ? options.dialog : null;
-  const rowConfig = pythonWorkerBmRowConfig(dialog, profiles, cleanName);
 
   pythonWorkerUiState.busy = true;
   pythonWorkerSelectionRefresh();
@@ -412,17 +302,8 @@ async function pythonWorkerStartBusiness(bmName, options) {
     const nonce = Date.now() + '-' + Math.random().toString(16).slice(2);
 
     const payloadProfiles = profiles.map(function(profileId, index) {
-      const profileKey = String(profileId);
-      const config = rowConfig[profileKey] || {};
-      const businessParams = {
-        name: String(config.name || cleanName).trim()
-      };
-
-      const pageId = String(config.page_id || '').trim();
-      if (pageId) businessParams.page_id = pageId;
-
       return {
-        profile_id: profileKey,
+        profile_id: String(profileId),
         tasks: [
           {
             action: 'provisioning',
@@ -431,7 +312,9 @@ async function pythonWorkerStartBusiness(bmName, options) {
               steps: ['PROXY_CHECK', 'BUSINESS'],
               scope_key: 'add-bm-' + nonce,
               parameters: {
-                BUSINESS: businessParams
+                BUSINESS: {
+                  name: cleanName
+                }
               }
             }
           }
@@ -623,37 +506,6 @@ async function pythonWorkerRetryFailed() {
 function pythonWorkerInitUi() {
   const start = pythonWorkerEl('pythonProvisionStart');
   const retry = pythonWorkerEl('pythonProvisionRetry');
-
-  document.addEventListener('click', function(event) {
-    const target = event.target;
-    if (!target || typeof target.closest !== 'function') return;
-
-    const button = target.closest('button, input[type="button"], input[type="submit"]');
-    if (!button) return;
-
-    const dialog = pythonWorkerFindBmDialog(button);
-    if (!dialog) return;
-
-    const label = String(button.textContent || button.value || '').trim();
-    if (!/^(Создать\s*BM|Create\s*BM|Создать\s*Business Manager|Create\s*Business Manager)$/i.test(label)) {
-      return;
-    }
-
-    event.preventDefault();
-    event.stopImmediatePropagation();
-
-    if (pythonWorkerUiState.busy) return;
-
-    const bmName = pythonWorkerResolveBmName(button);
-    if (!bmName) return;
-
-    pythonWorkerStartBusiness(bmName, {dialog: dialog}).catch(function(error) {
-      pythonWorkerSetText(
-        'pythonPwStatus',
-        String((error && error.message) || error)
-      );
-    });
-  }, true);
 
   if (start) {
     start.addEventListener('click', function(event) {
