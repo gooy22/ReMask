@@ -1040,8 +1040,8 @@ class BusinessLogicController:
         "CREATE_BM": GraphQLOperation(
             key="CREATE_BM",
             env_name="REMASK_DOC_ID_CREATE_BM",
-            default_doc_id="739201948201938",
-            friendly_name="BusinessManagerCreateMutation",
+            default_doc_id=None,
+            friendly_name="useBusinessCreationMutationMutation",
         ),
 
         "CREATE_AD_ACCOUNT": GraphQLOperation(
