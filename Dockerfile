@@ -26,7 +26,8 @@ RUN /opt/remask-venv/bin/python -m compileall -q /opt/remask-python \
     && cd /opt/remask-python \
     && /opt/remask-venv/bin/python -c "import fb_worker; from app.session import ProfileSession; from app.provisioning.business_handler import business_handler; from app.provisioning.ad_account_handler import ad_account_handler; from app.provisioning.meta_errors import classify_meta_request_error; assert fb_worker.WebSessionManager is fb_worker.FacebookWebSession" \
     && /opt/remask-venv/bin/python -m unittest -q tests.test_fb_worker_bootstrap \
-    && echo "[dtsg-bootstrap-v8] page + ajax refresh regression tests passed"
+    && /opt/remask-venv/bin/python -c "from app.facebook_page_discovery import discover_pages_from_browser_html,_extract_pages_from_browser_document; p=_extract_pages_from_browser_document('{\"__typename\":\"Page\",\"id\":\"123456789\",\"name\":\"Demo Page\",\"category\":\"Local business\"}'); assert p and p[0]['id']=='123456789' and p[0]['name']=='Demo Page'; assert callable(discover_pages_from_browser_html)" \
+    && echo "[dtsg-bootstrap-v9] DTSG + browser Page fallback tests passed"
 
 COPY .deploy/clean-preview-valid/runtime.b64.* /tmp/remask-parts/
 COPY railway-persistence-overlay.php /tmp/railway-persistence-overlay.php
