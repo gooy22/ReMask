@@ -89,7 +89,17 @@ async def business_handler(
         or profile_id
     ).strip()
     vertical = str(params.get("vertical") or "ADVERTISING").strip().upper()
-    explicit_doc_id = str(params.get("doc_id") or "").strip() or None
+    explicit_doc_id = str(
+        params.get("manual_doc_id")
+        or params.get("doc_id")
+        or ""
+    ).strip() or None
+    if explicit_doc_id and not re.fullmatch(r"\d{5,40}", explicit_doc_id):
+        raise ProvisioningError(
+            "INVALID_INPUT",
+            "BUSINESS.manual_doc_id must contain 5-40 digits",
+            retryable=False,
+        )
 
     raw_require_page_backed = params.get("require_page_backed")
     if raw_require_page_backed is None:
@@ -127,7 +137,7 @@ async def business_handler(
 
     log.info(
         "[%s] BUSINESS start name=%s primary_page_id=%s email_present=%s "
-        "identity_name_present=%s explicit_doc_id=%s page_backed=%s key=%s",
+        "identity_name_present=%s manual_doc_id=%s page_backed=%s key=%s",
         profile_id,
         bm_name,
         page_id or "<none>",
