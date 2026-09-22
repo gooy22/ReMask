@@ -1,4 +1,4 @@
-/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 REMASK_PYTHON_WORKER_UI_V140 REMASK_PYTHON_WORKER_UI_V141 REMASK_PYTHON_WORKER_UI_V142 REMASK_PYTHON_WORKER_UI_V143 REMASK_PYTHON_WORKER_UI_V144 REMASK_PYTHON_WORKER_UI_V145 REMASK_PYTHON_WORKER_UI_V146 REMASK_PYTHON_WORKER_UI_V147 REMASK_PYTHON_WORKER_UI_V148 REMASK_PYTHON_WORKER_UI_V149 REMASK_PYTHON_WORKER_UI_V150 REMASK_PYTHON_WORKER_UI_V151 REMASK_PYTHON_WORKER_UI_V152 REMASK_PYTHON_WORKER_UI_V153 REMASK_PYTHON_WORKER_UI_V154 REMASK_PYTHON_WORKER_UI_V155 */
+/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 REMASK_PYTHON_WORKER_UI_V140 REMASK_PYTHON_WORKER_UI_V141 REMASK_PYTHON_WORKER_UI_V142 REMASK_PYTHON_WORKER_UI_V143 REMASK_PYTHON_WORKER_UI_V144 REMASK_PYTHON_WORKER_UI_V145 REMASK_PYTHON_WORKER_UI_V146 REMASK_PYTHON_WORKER_UI_V147 REMASK_PYTHON_WORKER_UI_V148 REMASK_PYTHON_WORKER_UI_V149 REMASK_PYTHON_WORKER_UI_V150 REMASK_PYTHON_WORKER_UI_V151 REMASK_PYTHON_WORKER_UI_V152 REMASK_PYTHON_WORKER_UI_V153 REMASK_PYTHON_WORKER_UI_V154 REMASK_PYTHON_WORKER_UI_V155 REMASK_PYTHON_WORKER_UI_V156 */
 const restoredPythonWorkerJobId = localStorage.getItem('remask_python_worker_job_v1') || '';
 
 const pythonWorkerUiState = {
@@ -104,10 +104,10 @@ function pythonWorkerSelectionRefresh() {
       profiles.length
         ? (
             pythonWorkerUiState.workerOnline === true
-              ? 'Worker UI v155 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
-              : 'Worker UI v155 · Выбрано FB-профилей: ' + profiles.length + '. Жду READY от worker.'
+              ? 'Worker UI v156 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
+              : 'Worker UI v156 · Выбрано FB-профилей: ' + profiles.length + '. Жду READY от worker.'
           )
-        : 'Worker UI v155 · Выберите FB-профили в Workspace.'
+        : 'Worker UI v156 · Выберите FB-профили в Workspace.'
     );
   }
 }
@@ -813,12 +813,22 @@ function pythonWorkerFindLegacyBmTrigger() {
   return candidates.find(pythonWorkerVisible) || candidates[0] || null;
 }
 
-async function pythonWorkerLoadPages(profileId) {
+async function pythonWorkerLoadPages(profileId, csrfRetried) {
+  const csrf = await pythonWorkerCsrf(false);
+  const payload = {
+    profile: String(profileId || '').trim(),
+    remask_csrf: csrf
+  };
+
   const response = await fetch('ajax/pythonWorkerPages.php', {
     method: 'POST',
     credentials: 'same-origin',
-    headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
-    body: JSON.stringify({profile: String(profileId || '').trim()})
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      'X-REMASK-CSRF': csrf
+    },
+    body: JSON.stringify(payload)
   });
 
   let data = null;
@@ -828,13 +838,24 @@ async function pythonWorkerLoadPages(profileId) {
     throw new Error('Pages endpoint returned invalid JSON (HTTP ' + response.status + ').');
   }
 
+  const detail = data && data.detail && typeof data.detail === 'object'
+    ? (data.detail.message || JSON.stringify(data.detail))
+    : '';
+  const errorText = String(
+    detail || (data && (data.message || data.error)) || ('Pages HTTP ' + response.status)
+  );
+
+  if (
+    response.status === 403 &&
+    csrfRetried !== true &&
+    /csrf/i.test(errorText)
+  ) {
+    await pythonWorkerCsrf(true);
+    return pythonWorkerLoadPages(profileId, true);
+  }
+
   if (!response.ok || !(data && data.ok)) {
-    const detail = data && data.detail && typeof data.detail === 'object'
-      ? (data.detail.message || JSON.stringify(data.detail))
-      : '';
-    throw new Error(
-      String(detail || (data && data.error) || ('Pages HTTP ' + response.status))
-    );
+    throw new Error(errorText);
   }
 
   return Array.isArray(data.pages) ? data.pages : [];
