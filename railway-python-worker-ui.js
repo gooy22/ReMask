@@ -1,4 +1,4 @@
-/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 REMASK_PYTHON_WORKER_UI_V140 REMASK_PYTHON_WORKER_UI_V141 REMASK_PYTHON_WORKER_UI_V142 REMASK_PYTHON_WORKER_UI_V143 REMASK_PYTHON_WORKER_UI_V144 REMASK_PYTHON_WORKER_UI_V145 REMASK_PYTHON_WORKER_UI_V146 */
+/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 REMASK_PYTHON_WORKER_UI_V140 REMASK_PYTHON_WORKER_UI_V141 REMASK_PYTHON_WORKER_UI_V142 REMASK_PYTHON_WORKER_UI_V143 REMASK_PYTHON_WORKER_UI_V144 REMASK_PYTHON_WORKER_UI_V145 REMASK_PYTHON_WORKER_UI_V146 REMASK_PYTHON_WORKER_UI_V147 */
 const restoredPythonWorkerJobId = localStorage.getItem('remask_python_worker_job_v1') || '';
 
 const pythonWorkerUiState = {
@@ -64,10 +64,20 @@ function pythonWorkerSelectionRefresh() {
     const items = pythonWorkerUiState.job && Array.isArray(pythonWorkerUiState.job.items)
       ? pythonWorkerUiState.job.items
       : [];
-    const hasFailed = items.some(function(item) {
-      return item && String(item.status || '').toUpperCase() === 'FAILED';
+    const hasRetryableFailed = items.some(function(item) {
+      if (!item || String(item.status || '').toUpperCase() !== 'FAILED') return false;
+      if (item.retryable === true) return true;
+      const tasks = Array.isArray(item.tasks) ? item.tasks : [];
+      return tasks.some(function(task) {
+        return task &&
+          String(task.status || '').toUpperCase() === 'FAILED' &&
+          task.retryable === true;
+      });
     });
-    retry.disabled = pythonWorkerUiState.busy || !pythonWorkerUiState.jobId || !hasFailed;
+    retry.disabled =
+      pythonWorkerUiState.busy ||
+      !pythonWorkerUiState.jobId ||
+      !hasRetryableFailed;
   }
 
   if (!pythonWorkerUiState.jobId && !pythonWorkerUiState.busy) {
@@ -76,10 +86,10 @@ function pythonWorkerSelectionRefresh() {
       profiles.length
         ? (
             pythonWorkerUiState.workerOnline === true
-              ? 'Worker UI v146 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
-              : 'Worker UI v146 · Выбрано FB-профилей: ' + profiles.length + '. Жду READY от worker.'
+              ? 'Worker UI v147 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
+              : 'Worker UI v147 · Выбрано FB-профилей: ' + profiles.length + '. Жду READY от worker.'
           )
-        : 'Worker UI v146 · Выберите FB-профили в Workspace.'
+        : 'Worker UI v147 · Выберите FB-профили в Workspace.'
     );
   }
 }
@@ -1132,7 +1142,10 @@ async function pythonWorkerPoll() {
           return item && String(item.status || '').toUpperCase() === 'FAILED';
         })
         .map(function(item) {
-          return [item.profile_id, item.error_code, item.error_message]
+          const retryLabel = item.retryable === true
+            ? 'RETRYABLE'
+            : 'NO AUTO-RETRY';
+          return [item.profile_id, item.error_code, retryLabel, item.error_message]
             .filter(Boolean)
             .join(': ');
         });
