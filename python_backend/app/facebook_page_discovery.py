@@ -198,7 +198,7 @@ def _extract_known_page_lists(payload: dict[str, Any]) -> list[dict[str, Any]]:
 
     # Relay shapes change often. As a conservative fallback, recursively scan
     # only objects that have a numeric id/name AND Page-specific evidence.
-    stack: list[Any] = [payload.get("data")]
+    stack: list[Any] = [payload]
     seen_objects: set[int] = set()
 
     while stack:
