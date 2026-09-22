@@ -58,11 +58,15 @@ async def business_handler(
         async with WebSessionManager(profile_obj) as боевая_сессия:
             controller = BusinessLogicController(боевая_сессия)
             
-            # Передаем нормализованное имя и page_id (или None) в executor
-            bm_id = await controller.create_business_manager(
-                name=bm_name, 
-                page_id=page_id or None
-            )
+            if page_id:
+                bm_id = await controller.create_business_manager(
+                    name=bm_name,
+                    page_id=page_id,
+                )
+            else:
+                bm_id = await controller.create_business_manager(
+                    name=bm_name,
+                )
             
             if not bm_id:
                 raise ProvisioningError("INVALID_RESULT", "Facebook returned empty Business ID", retryable=False)
