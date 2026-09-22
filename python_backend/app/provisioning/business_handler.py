@@ -66,6 +66,12 @@ async def business_handler(
         or getattr(context, "email", "")
         or ""
     ).strip()
+    if user_email and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", user_email):
+        raise ProvisioningError(
+            "INVALID_INPUT",
+            "BUSINESS.user_email must be a valid email when provided",
+            retryable=False,
+        )
     user_first_name = str(
         params.get("user_first_name")
         or params.get("first_name")
