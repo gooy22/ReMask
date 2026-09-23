@@ -878,8 +878,8 @@ class FacebookBusinessBrowser:
                         el.innerText || el.textContent || ''
                     ].join(' ').replace(/\\s+/g, ' ').trim();
 
-                    const xs = [20, 52, 88, 124, 160, 192];
-                    const ys = [128, 138, 148, 158, 168, 178, 186];
+                    const xs = [20, 52, 88, 124, 160, 192, 224];
+                    const ys = [128, 138, 148, 158, 168, 178, 186, 194];
                     const seen = new Set();
                     const rows = [];
 
@@ -896,8 +896,8 @@ class FacebookBusinessBrowser:
                                 const tabindex = (el.getAttribute && el.getAttribute('tabindex')) || '';
                                 const tag = el.tagName || '';
 
-                                if (r.x > 225 || r.y < 118 || r.y > 190) continue;
-                                if (r.width < 70 || r.width > 230) continue;
+                                if (r.x > 280 || r.y < 118 || r.y > 198) continue;
+                                if (r.width < 70 || r.width > 280) continue;
                                 if (r.height < 24 || r.height > 90) continue;
                                 if (!text || /^Meta Business Suite$/i.test(text)) continue;
                                 if (/^(Home|Startseite|Start|Главная|Головна)$/i.test(text)) continue;
@@ -910,11 +910,23 @@ class FacebookBusinessBrowser:
                     rows.sort((a,b) => {
                         const ai = a.r.width * a.r.height;
                         const bi = b.r.width * b.r.height;
-                        const ar = a.role === 'button' || a.tag === 'BUTTON' || a.tabindex === '0'
-                            ? -100000 : 0;
-                        const br = b.role === 'button' || b.tag === 'BUTTON' || b.tabindex === '0'
-                            ? -100000 : 0;
-                        return (ar + ai) - (br + bi) || b.r.y - a.r.y;
+                        const aInteractive = (
+                            a.role === 'button' ||
+                            a.tag === 'BUTTON' ||
+                            a.tabindex === '0'
+                        ) ? 1 : 0;
+                        const bInteractive = (
+                            b.role === 'button' ||
+                            b.tag === 'BUTTON' ||
+                            b.tabindex === '0'
+                        ) ? 1 : 0;
+                        if (aInteractive !== bInteractive) {
+                            return bInteractive - aInteractive;
+                        }
+                        // When Meta implements the selector as nested DIVs,
+                        // prefer the largest container in the selector band so
+                        // the synthetic click bubbles through the whole row.
+                        return bi - ai || a.r.y - b.r.y;
                     });
 
                     const compact = rows.slice(0,12).map(row => ({
@@ -940,21 +952,27 @@ class FacebookBusinessBrowser:
                     };
                 }"""
             )
-            if isinstance(probe, dict) and probe.get("clicked"):
-                if await self._wait_for_create_surface():
-                    return True
-
-                # Preserve a compact probe before the larger diagnostic so the
-                # exact clicked selector survives Railway log truncation.
-                diagnostic = await self._diagnostic(
-                    "portfolio_sidebar_selector_open_without_create"
-                )
+            if isinstance(probe, dict):
+                # Always preserve the compact band probe. If no candidate was
+                # clickable this is the only useful evidence of what Meta
+                # actually rendered between the logo and Home.
                 self._last_selector_diagnostic = {
                     "sidebar_probe": probe,
-                    **diagnostic,
                 }
-                await self.page.keyboard.press("Escape")
-                await self.page.wait_for_timeout(120)
+
+                if probe.get("clicked"):
+                    if await self._wait_for_create_surface():
+                        return True
+
+                    diagnostic = await self._diagnostic(
+                        "portfolio_sidebar_selector_open_without_create"
+                    )
+                    self._last_selector_diagnostic = {
+                        "sidebar_probe": probe,
+                        **diagnostic,
+                    }
+                    await self.page.keyboard.press("Escape")
+                    await self.page.wait_for_timeout(120)
         except Exception as exc:
             self._last_selector_diagnostic = {
                 "sidebar_probe_error": f"{exc.__class__.__name__}: {exc}"
