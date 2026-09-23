@@ -2161,9 +2161,11 @@ class FacebookBusinessBrowser:
 
             if not gate_future.done():
                 # A non-GraphQL Meta variant may still have completed the
-                # operation. Verification below is authoritative. If nothing
-                # changed, record that no mutation was observed/sent.
-                if before_submit is not None:
+                # operation. If a FINAL action was clicked, preserve
+                # PAGE_ADD_CLICK_INTENT until verification so retry cannot
+                # blindly submit a second ownership request. Only mark
+                # NOT_SUBMITTED when no final mutation-capable click happened.
+                if before_submit is not None and not page_click_intent_written:
                     await before_submit(
                         {
                             "phase": "PAGE_ADD_NOT_SUBMITTED",
