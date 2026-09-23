@@ -106,16 +106,21 @@ async def run_bm_browser_canary() -> None:
                     business_snapshot=await browser.snapshot_businesses()
                     result=await browser.preflight()
                     form_result=await browser.preflight_create_form()
+                    fill_result=await browser.preflight_fill_create_form()
 
                 log.info(
                     'bm browser canary SUCCESS profile=%s snapshot_businesses=%d '
-                    'create_surface=%s form_ready=%s field_count=%s fields=%s '
+                    'create_surface=%s form_ready=%s field_count=%s '
+                    'dry_fill_name=%s dry_fill_email=%s filled_inputs=%s fields=%s '
                     'url=%s attempted=%d',
                     profile_id,
                     len(business_snapshot),
                     result.create_surface_ready,
                     bool(form_result.get('ready')),
                     int(form_result.get('field_count') or 0),
+                    bool(fill_result.get('name_present')),
+                    bool(fill_result.get('email_present')),
+                    int(fill_result.get('filled_input_count') or 0),
                     json.dumps(form_result.get('fields') or [],ensure_ascii=False)[:4000],
                     str(form_result.get('current_url') or result.current_url),
                     attempted,
