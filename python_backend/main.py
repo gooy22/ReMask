@@ -104,12 +104,17 @@ async def run_bm_browser_canary() -> None:
                 async with ProfileSession(context) as profile_session:
                     browser=await profile_session.facebook_business_browser()
                     result=await browser.preflight()
+                    form_result=await browser.preflight_create_form()
 
                 log.info(
-                    'bm browser canary SUCCESS profile=%s create_surface=%s url=%s attempted=%d',
+                    'bm browser canary SUCCESS profile=%s create_surface=%s form_ready=%s '
+                    'field_count=%s fields=%s url=%s attempted=%d',
                     profile_id,
                     result.create_surface_ready,
-                    result.current_url,
+                    bool(form_result.get('ready')),
+                    int(form_result.get('field_count') or 0),
+                    json.dumps(form_result.get('fields') or [],ensure_ascii=False)[:4000],
+                    str(form_result.get('current_url') or result.current_url),
                     attempted,
                 )
                 return
