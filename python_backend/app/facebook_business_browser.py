@@ -797,6 +797,49 @@ class FacebookBusinessBrowser:
         if await self._has_create_surface():
             return True
 
+        # Live Railway canary on the German Business Suite UI confirms that
+        # the top-left "Meta Business Suite" role=button is the portfolio
+        # selector entry point. A lower combobox is only the current Page
+        # selector and must not be confused with the business selector.
+        try:
+            role_buttons = self.page.locator('[role="button"]')
+            count = min(await role_buttons.count(), 180)
+            for index in range(count):
+                item = role_buttons.nth(index)
+                if not await item.is_visible():
+                    continue
+                text_value = _clean(await item.inner_text(timeout=1000))
+                if text_value.casefold() != "meta business suite":
+                    continue
+                box = await item.bounding_box()
+                if not box:
+                    continue
+                x = float(box.get("x") or 0)
+                y = float(box.get("y") or 0)
+                if x > 260 or y > 130:
+                    continue
+                await item.click(timeout=3000)
+                if await self._wait_for_create_surface():
+                    return True
+                self._last_selector_diagnostic = await self._diagnostic(
+                    "meta_business_suite_selector_open_without_create"
+                )
+                try:
+                    await self.page.keyboard.press("Escape")
+                    await self.page.wait_for_timeout(120)
+                except Exception:
+                    pass
+                break
+        except Exception as exc:
+            self._last_selector_diagnostic = {
+                "meta_business_suite_selector_error":
+                    f"{exc.__class__.__name__}: {exc}"
+            }
+            try:
+                await self.page.keyboard.press("Escape")
+            except Exception:
+                pass
+
         # Current Meta Business Suite places the business/page selector BELOW
         # the Meta Business Suite logo and ABOVE Home/Startseite. The selector
         # is not consistently exposed as a button/aria control, so first locate
