@@ -197,7 +197,8 @@ def candidate_requirements(
         "scope_selector_business_creation_v1",
         "scope_selector_footer_v2",
         "scope_selector_footer_v4",
-        "scope_selector_footer_v5_exact_envelope",
+        "scope_selector_footer_v6_browser_native",
+        "scope_selector_footer_v6_browser_native",
     }:
         return {
             "email": True,
@@ -708,7 +709,7 @@ async def discover_current_scope_selector_create_candidate(
             BUSINESS_GRAPHQL_URL
         ),
         variables_mode=(
-            "scope_selector_footer_v5_exact_envelope"
+            "scope_selector_footer_v6_browser_native"
         ),
         source=(
             "dynamic_html"
@@ -916,9 +917,10 @@ async def create_business_with_docids(
         }
     )
     create_payload_meta = (
-        "payload_version=scope_selector_footer_v5_exact_envelope "
+        "payload_version=scope_selector_footer_v6_browser_native "
+        f"transport=browser_native "
         f"qpl={'captured' if _clean(qpl_join_id) else 'generated_uuid4'} "
-        f"envelope_source={'captured' if captured_envelope else 'bootstrap'} "
+        f"envelope_source={'captured' if captured_envelope else 'browser_or_bootstrap'} "
         f"envelope={','.join(envelope_keys) if envelope_keys else '-'}"
     )
 
@@ -964,7 +966,7 @@ async def create_business_with_docids(
                     BUSINESS_GRAPHQL_URL
                 ),
                 variables_mode=(
-                    "scope_selector_footer_v5_exact_envelope"
+                    "scope_selector_footer_v6_browser_native"
                 ),
                 source="job_manual",
                 priority=19_000,
@@ -1002,7 +1004,22 @@ async def create_business_with_docids(
 
     for candidate in candidates:
         try:
-            response = await session.graphql(
+            browser_graphql = getattr(
+                session,
+                "graphql_browser_native",
+                None,
+            )
+            if not callable(browser_graphql):
+                raise BusinessMutationError(
+                    "CREATE_BM_BROWSER_TRANSPORT_UNAVAILABLE",
+                    (
+                        "CREATE_BM requires browser-native transport, "
+                        "but the current worker does not provide it."
+                    ),
+                    retryable=False,
+                )
+
+            response = await browser_graphql(
                 candidate.doc_id,
                 variables,
                 friendly_name=(
