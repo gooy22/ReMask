@@ -1006,12 +1006,14 @@ class FacebookBusinessBrowser:
         name_present = canary_name in values
         email_present = canary_email in values
         if not name_present or not email_present:
-            diag = await self._diagnostic("create_form_fill_mismatch")
-            diag.update({
+            raw_diag = await self._diagnostic("create_form_fill_mismatch")
+            diag = {
                 "name_present": name_present,
                 "email_present": email_present,
                 "filled_input_count": sum(1 for value in values if value),
-            })
+                "visible_input_count": len(values),
+                **raw_diag,
+            }
             raise BrowserBusinessError(
                 "CREATE_FORM_FILL_FAILED",
                 "Meta form opened, but ReMask could not prove Business name and email were filled correctly.",
@@ -1170,6 +1172,41 @@ class FacebookBusinessBrowser:
                     return True
             except Exception:
                 pass
+
+        # Meta's 2026 creation dialog renders several inputs without
+        # name/aria/placeholder and does not consistently wire <label for=>.
+        # Find a visible label-like text node and fill the nearest ancestor's
+        # visible input through Playwright so React still receives input events.
+        for label in labels:
+            pattern = re.compile(rf"^\\s*{re.escape(label)}\\s*$", re.IGNORECASE)
+            try:
+                text_nodes = self.page.get_by_text(pattern)
+                count = min(await text_nodes.count(), 8)
+            except Exception:
+                count = 0
+
+            for index in range(count):
+                try:
+                    text_node = text_nodes.nth(index)
+                    if not await text_node.is_visible():
+                        continue
+                    nearby = text_node.locator(
+                        'xpath=ancestor::*[.//input and not(self::body)][1]//input'
+                    )
+                    input_count = min(await nearby.count(), 6)
+                    for input_index in range(input_count):
+                        candidate = nearby.nth(input_index)
+                        if not await candidate.is_visible() or not await candidate.is_editable():
+                            continue
+                        candidate_type = _clean(
+                            await candidate.get_attribute("type")
+                        ).lower()
+                        if candidate_type in {"hidden", "checkbox", "radio", "submit", "button"}:
+                            continue
+                        await candidate.fill(value)
+                        return True
+                except Exception:
+                    continue
 
         selector = "input"
         if input_type:
@@ -1333,6 +1370,50 @@ class FacebookBusinessBrowser:
                     email_filled = True
             except Exception:
                 pass
+
+        # Confirmed live 2026 Meta form fallback. The current dialog exposes
+        # four visible text inputs with almost no DOM metadata:
+        #   0 portfolio name, 1 first name, 2 last name, 3 business email.
+        # Only use this positional mapping when the full four-field surface is
+        # present; do not apply it to unrelated/shorter form variants.
+        try:
+            visible_inputs = self.page.locator(
+                'input:visible:not([type="hidden"]):not([type="checkbox"]):not([type="radio"])'
+            )
+            visible_count = await visible_inputs.count()
+            if visible_count >= 4:
+                first_value = _clean(user_first_name)
+                last_value = _clean(user_last_name)
+                if not first_value or not last_value:
+                    name_parts = [
+                        part
+                        for part in re.split(r"\\s+", _clean(profile_display_name))
+                        if part
+                    ]
+                    if not first_value and name_parts:
+                        first_value = name_parts[0]
+                    if not last_value and len(name_parts) > 1:
+                        last_value = " ".join(name_parts[1:])
+
+                if not business_filled:
+                    await visible_inputs.nth(0).fill(business_name)
+                    business_filled = True
+
+                if first_value:
+                    current = _clean(await visible_inputs.nth(1).input_value())
+                    if not current:
+                        await visible_inputs.nth(1).fill(first_value)
+
+                if last_value:
+                    current = _clean(await visible_inputs.nth(2).input_value())
+                    if not current:
+                        await visible_inputs.nth(2).fill(last_value)
+
+                if not email_filled:
+                    await visible_inputs.nth(3).fill(user_email)
+                    email_filled = True
+        except Exception:
+            pass
 
         if not business_filled:
             diag = await self._diagnostic("business_name_field_missing")
