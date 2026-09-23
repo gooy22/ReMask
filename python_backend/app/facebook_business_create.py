@@ -195,7 +195,8 @@ def candidate_requirements(
 ) -> dict[str, bool]:
     if candidate.variables_mode in {
         "scope_selector_business_creation_v1",
-        "scope_selector_footer_v5_exact_envelope",
+        "scope_selector_footer_v2",
+        "scope_selector_footer_v4",
         "scope_selector_footer_v5_exact_envelope",
     }:
         return {
