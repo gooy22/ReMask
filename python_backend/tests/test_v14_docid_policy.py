@@ -8,6 +8,7 @@ from app import facebook_docids
 from app.facebook_business_create import create_business_with_docids
 from app.facebook_docids import (
     DocIdCandidate,
+    classify_cache_failure,
     list_candidates,
     record_result,
     upsert_candidate,
@@ -30,8 +31,9 @@ class HtmlOnlyDiscoveryTests(unittest.IsolatedAsyncioTestCase):
     async def test_discovers_from_initial_html_without_bundle_fetch(self):
         session = _HtmlOnlySession(
             body=(
-                '{"useBusinessCreationMutationMutation_facebookRelayOperation":'
-                '{"id":"9988776655443322"}}'
+                '{"requireLazy":["RelayPrefetchedStreamCache"],'
+                '"__bbox":{"result":{"useBusinessCreationMutationMutation_'
+                'facebookRelayOperation":{"id":"9988776655443322"}}}}'
             )
         )
         result = await discover_persisted_query(
@@ -44,6 +46,39 @@ class HtmlOnlyDiscoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.doc_id, "9988776655443322")
         self.assertEqual(result.source_kind, "html")
         self.assertEqual(session.calls, ["https://www.facebook.com/"])
+
+    async def test_plain_unscoped_object_is_not_accepted_as_html_discovery(self):
+        session = _HtmlOnlySession(
+            body=(
+                '{"useBusinessCreationMutationMutation_facebookRelayOperation":'
+                '{"id":"1111222233334444"}}'
+            )
+        )
+        result = await discover_persisted_query(
+            session,
+            friendly_name="useBusinessCreationMutationMutation",
+            entry_urls=["https://www.facebook.com/"],
+            cache_ttl_seconds=0,
+        )
+        self.assertIsNone(result)
+
+    async def test_discovers_set_primary_page_from_same_relay_block(self):
+        session = _HtmlOnlySession(
+            body=(
+                '{"RelayPrefetchedStreamCache":{"__bbox":{"result":{'
+                '"BizKitSettingsUpdateBusinessBasicInfoMutation_'
+                'facebookRelayOperation":{"id":"7788990011223344"}}}}}'
+            )
+        )
+        result = await discover_persisted_query(
+            session,
+            friendly_name="BizKitSettingsUpdateBusinessBasicInfoMutation",
+            entry_urls=["https://business.facebook.com/latest/home"],
+            cache_ttl_seconds=0,
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(result.doc_id, "7788990011223344")
+        self.assertEqual(result.source_kind, "html")
 
     async def test_discovers_from_response_headers(self):
         session = _HtmlOnlySession(
@@ -96,9 +131,9 @@ class CrossProfileInvalidationTests(unittest.TestCase):
                 "CREATE_BM",
                 candidate,
                 success=False,
-                reason="1357054",
+                reason="1357054 PersistedQueryNotFound",
                 profile_id="profile-1",
-                stale_failure=True,
+                failure_kind="stale_schema",
             )
         ids = [item.doc_id for item in list_candidates("CREATE_BM")]
         self.assertIn(candidate.doc_id, ids)
@@ -110,9 +145,9 @@ class CrossProfileInvalidationTests(unittest.TestCase):
                 "CREATE_BM",
                 candidate,
                 success=False,
-                reason="1357054",
+                reason="1357054 PersistedQueryNotFound",
                 profile_id=profile_id,
-                stale_failure=True,
+                failure_kind="stale_schema",
             )
         self.assertIn(
             candidate.doc_id,
@@ -139,9 +174,9 @@ class CrossProfileInvalidationTests(unittest.TestCase):
                 "CREATE_BM",
                 candidate,
                 success=False,
-                reason="1357054",
+                reason="1357054 PersistedQueryNotFound",
                 profile_id=profile_id,
-                stale_failure=True,
+                failure_kind="stale_schema",
             )
 
         record_result(
@@ -166,6 +201,47 @@ class CrossProfileInvalidationTests(unittest.TestCase):
         )
 
 
+class CacheFailureClassifierTests(unittest.TestCase):
+    def test_top_level_1357054_with_schema_marker_is_stale(self):
+        kind = classify_cache_failure(
+            payload={
+                "error": 1357054,
+                "isNotCritical": 1,
+                "errorDescription": "PersistedQueryNotFound: unknown field",
+            }
+        )
+        self.assertEqual(kind, "stale_schema")
+
+    def test_1357054_without_schema_marker_is_not_stale(self):
+        kind = classify_cache_failure(
+            payload={
+                "error": 1357054,
+                "isNotCritical": 1,
+                "errorDescription": "generic request failure",
+            }
+        )
+        self.assertEqual(kind, "other")
+
+    def test_profile_checkpoint_does_not_poison_candidate(self):
+        kind = classify_cache_failure(
+            payload={
+                "error": 1357054,
+                "errorDescription": "checkpoint required unknown field",
+            }
+        )
+        self.assertEqual(kind, "account")
+
+    def test_rate_limit_does_not_poison_candidate(self):
+        kind = classify_cache_failure(
+            payload={
+                "error": 1357054,
+                "errorDescription": "PersistedQueryNotFound unknown argument",
+            },
+            http_status=429,
+        )
+        self.assertEqual(kind, "network")
+
+
 class _ManualSession:
     def __init__(self):
         self.profile = SimpleNamespace(name="profile-manual")
@@ -186,6 +262,43 @@ class _ManualSession:
 
 
 class ManualFallbackTests(unittest.IsolatedAsyncioTestCase):
+    async def test_failed_manual_docid_is_not_promoted_or_recorded(self):
+        session = _ManualSession()
+
+        async def failed_graphql(doc_id, variables, **kwargs):
+            session.used_doc_ids.append(doc_id)
+            return {
+                "error": 1357054,
+                "isNotCritical": 1,
+                "errorDescription": "PersistedQueryNotFound: unknown argument",
+            }
+
+        session.graphql = failed_graphql
+
+        with patch(
+            "app.facebook_business_create.discover_current_scope_selector_create_candidate",
+            return_value=None,
+        ), patch(
+            "app.facebook_business_create.list_candidates",
+            return_value=[],
+        ), patch(
+            "app.facebook_business_create.upsert_candidate",
+        ) as promote, patch(
+            "app.facebook_business_create.record_result",
+        ) as record:
+            with self.assertRaises(Exception):
+                await create_business_with_docids(
+                    session,
+                    business_name="Test Business",
+                    user_email="owner@example.com",
+                    explicit_doc_id="6655443322110099",
+                    allow_scope_selector_fallback=True,
+                )
+
+        promote.assert_not_called()
+        record.assert_not_called()
+        self.assertEqual(session.used_doc_ids, ["6655443322110099"])
+
     async def test_manual_docid_used_when_dynamic_discovery_empty(self):
         session = _ManualSession()
         with patch(
