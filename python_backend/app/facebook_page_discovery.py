@@ -13,10 +13,7 @@ from .facebook_docids import (
     record_result,
     upsert_candidate,
 )
-from .facebook_query_discovery import (
-    discover_persisted_query,
-    extract_script_urls,
-)
+from .facebook_query_discovery import discover_persisted_query
 
 
 class PageDiscoveryError(RuntimeError):
@@ -500,8 +497,16 @@ def _extract_page_query_near_markers(
 async def discover_current_list_pages_docid_by_marker(
     session: Any,
     *,
-    max_scripts: int = 32,
+    max_scripts: int = 0,
 ) -> DocIdCandidate | None:
+    """
+    Lightweight v14 LIST_PAGES marker discovery.
+
+    Only the initial Facebook HTML document and its response headers are
+    inspected. JavaScript bundle URLs are never followed or downloaded.
+    """
+    del max_scripts
+
     entry_urls = (
         "https://www.facebook.com/accountquality/?landing_page=insights",
         "https://www.facebook.com/pages/?category=your_pages",
@@ -510,10 +515,19 @@ async def discover_current_list_pages_docid_by_marker(
 
     for entry_url in entry_urls:
         try:
-            status, document, final_url = await session.fetch_text(
-                entry_url,
-                max_bytes=3_000_000,
-            )
+            if hasattr(session, "fetch_text_with_headers"):
+                status, document, final_url, headers = (
+                    await session.fetch_text_with_headers(
+                        entry_url,
+                        max_bytes=3_000_000,
+                    )
+                )
+            else:
+                status, document, final_url = await session.fetch_text(
+                    entry_url,
+                    max_bytes=3_000_000,
+                )
+                headers = {}
         except Exception:
             continue
 
@@ -533,31 +547,19 @@ async def discover_current_list_pages_docid_by_marker(
                 observed_at=str(int(time.time())),
             )
 
-        scripts = extract_script_urls(document, final_url)
-        for script_url in scripts[:max(1, int(max_scripts))]:
-            try:
-                script_status, body, _ = await session.fetch_text(
-                    script_url,
-                    max_bytes=2_000_000,
-                    referer=final_url,
-                )
-            except Exception:
-                continue
-
-            if script_status >= 400:
-                continue
-
-            doc_id, friendly = _extract_page_query_near_markers(body)
-            if not doc_id:
-                continue
-
+        header_blob = "\n".join(
+            f"{key}: {value}"
+            for key, value in dict(headers or {}).items()
+        )
+        doc_id, friendly = _extract_page_query_near_markers(header_blob)
+        if doc_id:
             return upsert_candidate(
                 "LIST_PAGES",
                 doc_id=doc_id,
                 friendly_name=friendly,
                 endpoint_url="https://www.facebook.com/api/graphql/",
                 variables_mode="account_quality_user_pages_v1",
-                source="runtime_marker_javascript_bundle",
+                source="runtime_marker_response_headers",
                 priority=8_400,
                 observed_at=str(int(time.time())),
             )
