@@ -1,0 +1,266 @@
+import tempfile
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+
+from app.facebook_business_browser import BrowserBusinessError
+from app.provisioning.business_handler import business_handler
+from app.provisioning.models import ProvisioningError, ProvisioningStep
+from app.provisioning.state import ProvisioningStateStore
+
+
+class _FakeBrowser:
+    def __init__(
+        self,
+        *,
+        snapshot=None,
+        create_id="555666777888999",
+        reconcile_id="",
+        verify_sequence=None,
+    ):
+        self.snapshot = snapshot or {"111111111111111": "Existing"}
+        self.create_id = create_id
+        self.reconcile_id = reconcile_id
+        self.verify_sequence = list(verify_sequence or [False, True])
+        self.create_calls = 0
+        self.reconcile_calls = 0
+        self.add_calls = 0
+        self.verify_calls = 0
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return None
+
+    async def snapshot_businesses(self):
+        return dict(self.snapshot)
+
+    async def create_business(self, **kwargs):
+        self.create_calls += 1
+        callback = kwargs.get("before_submit")
+        if callback:
+            await callback(
+                {
+                    "phase": "CREATE_SUBMITTED",
+                    "business_name": kwargs["business_name"],
+                    "business_ids_before": sorted(self.snapshot),
+                    "submitted_at": 1,
+                }
+            )
+        return SimpleNamespace(
+            business_id=self.create_id,
+            before_ids=sorted(self.snapshot),
+            after_ids=sorted([*self.snapshot, self.create_id]),
+            response_business_id=self.create_id,
+            response_friendly_name="MetaBusinessCreate",
+            recovered=False,
+        )
+
+    async def reconcile_created_business(self, **kwargs):
+        self.reconcile_calls += 1
+        if not self.reconcile_id:
+            raise BrowserBusinessError(
+                "CREATE_RESULT_UNKNOWN",
+                "No unique Business found",
+                retryable=False,
+            )
+        return SimpleNamespace(
+            business_id=self.reconcile_id,
+            before_ids=list(kwargs.get("before_ids") or []),
+            after_ids=sorted(
+                [*(kwargs.get("before_ids") or []), self.reconcile_id]
+            ),
+            response_business_id="",
+            response_friendly_name="",
+            recovered=True,
+        )
+
+    async def verify_page_attached(self, **kwargs):
+        self.verify_calls += 1
+        if self.verify_sequence:
+            return bool(self.verify_sequence.pop(0))
+        return True
+
+    async def add_existing_page(self, **kwargs):
+        self.add_calls += 1
+        callback = kwargs.get("before_submit")
+        if callback:
+            await callback(
+                {
+                    "phase": "PAGE_ADD_SUBMITTED",
+                    "business_id": kwargs["business_id"],
+                    "primary_page_id": kwargs["page_id"],
+                    "page_submitted_at": 2,
+                }
+            )
+        return SimpleNamespace(
+            business_id=kwargs["business_id"],
+            page_id=kwargs["page_id"],
+            already_attached=False,
+        )
+
+
+class _FakeSession:
+    def __init__(self, browser):
+        self.context = SimpleNamespace(
+            profile_id="profile-1",
+            email="owner@example.com",
+            first_name="Owner",
+            last_name="Test",
+            display_name="Owner Test",
+        )
+        self.browser = browser
+
+    def facebook_business_browser(self):
+        return self.browser
+
+
+class BusinessBrowserFlowTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.store = ProvisioningStateStore(
+            str(Path(self.tmp.name) / "state.sqlite3")
+        )
+        await self.store.init()
+        self.item_id = "item-1"
+        self.profile_id = "profile-1"
+        self.scope_key = "scope-1"
+        await self.store.set_running(
+            self.item_id,
+            self.profile_id,
+            self.scope_key,
+            ProvisioningStep.BUSINESS,
+        )
+
+    async def asyncTearDown(self):
+        self.tmp.cleanup()
+
+    async def _run(self, browser, step_state=None):
+        return await business_handler(
+            _FakeSession(browser),
+            {
+                "name": "Test Business",
+                "page_id": "123456789",
+                "user_email": "owner@example.com",
+            },
+            {
+                "profile_id": self.profile_id,
+                "scope_key": self.scope_key,
+            },
+            provisioning_state=self.store,
+            item_id=self.item_id,
+            profile_id=self.profile_id,
+            scope_key=self.scope_key,
+            step_state=step_state,
+        )
+
+    async def test_create_and_page_add_use_one_browser_flow(self):
+        browser = _FakeBrowser(verify_sequence=[False, True])
+        result = await self._run(browser)
+
+        self.assertEqual(result["business_id"], "555666777888999")
+        self.assertEqual(result["primary_page_id"], "123456789")
+        self.assertEqual(result["transport"], "facebook_business_suite_ui")
+        self.assertEqual(browser.create_calls, 1)
+        self.assertEqual(browser.add_calls, 1)
+
+        stored = await self.store.step(
+            self.item_id,
+            ProvisioningStep.BUSINESS,
+        )
+        self.assertEqual(stored["result"]["phase"], "PAGE_CONFIRMED")
+        self.assertEqual(
+            stored["result"]["business_id"],
+            "555666777888999",
+        )
+
+    async def test_create_submitted_retry_reconciles_without_second_create(self):
+        await self.store.checkpoint(
+            self.item_id,
+            self.profile_id,
+            self.scope_key,
+            ProvisioningStep.BUSINESS,
+            {
+                "phase": "CREATE_SUBMITTED",
+                "business_name": "Test Business",
+                "primary_page_id": "123456789",
+                "business_ids_before": ["111111111111111"],
+                "resume_from": "VERIFY_CREATE",
+            },
+        )
+        step_state = await self.store.step(
+            self.item_id,
+            ProvisioningStep.BUSINESS,
+        )
+
+        browser = _FakeBrowser(
+            reconcile_id="555666777888999",
+            verify_sequence=[True],
+        )
+        result = await self._run(browser, step_state=step_state)
+
+        self.assertEqual(result["business_id"], "555666777888999")
+        self.assertEqual(browser.create_calls, 0)
+        self.assertEqual(browser.reconcile_calls, 1)
+        self.assertEqual(browser.add_calls, 0)
+        self.assertTrue(result["resumed"])
+
+    async def test_page_submitted_retry_verifies_without_second_add(self):
+        await self.store.checkpoint(
+            self.item_id,
+            self.profile_id,
+            self.scope_key,
+            ProvisioningStep.BUSINESS,
+            {
+                "phase": "PAGE_ADD_SUBMITTED",
+                "business_id": "555666777888999",
+                "business_name": "Test Business",
+                "primary_page_id": "123456789",
+                "resume_from": "VERIFY_PAGE",
+            },
+        )
+        step_state = await self.store.step(
+            self.item_id,
+            ProvisioningStep.BUSINESS,
+        )
+
+        browser = _FakeBrowser(verify_sequence=[True])
+        result = await self._run(browser, step_state=step_state)
+
+        self.assertEqual(result["business_id"], "555666777888999")
+        self.assertEqual(browser.create_calls, 0)
+        self.assertEqual(browser.add_calls, 0)
+        self.assertTrue(result["page"]["recovered"])
+
+    async def test_unknown_create_is_terminal_and_never_recreated(self):
+        await self.store.checkpoint(
+            self.item_id,
+            self.profile_id,
+            self.scope_key,
+            ProvisioningStep.BUSINESS,
+            {
+                "phase": "CREATE_SUBMITTED",
+                "business_name": "Test Business",
+                "primary_page_id": "123456789",
+                "business_ids_before": ["111111111111111"],
+            },
+        )
+        step_state = await self.store.step(
+            self.item_id,
+            ProvisioningStep.BUSINESS,
+        )
+
+        browser = _FakeBrowser(reconcile_id="")
+
+        with self.assertRaises(ProvisioningError) as raised:
+            await self._run(browser, step_state=step_state)
+
+        self.assertEqual(raised.exception.code, "CREATE_RESULT_UNKNOWN")
+        self.assertFalse(raised.exception.retryable)
+        self.assertEqual(browser.create_calls, 0)
+        self.assertEqual(browser.reconcile_calls, 1)
+
+
+if __name__ == "__main__":
+    unittest.main()
