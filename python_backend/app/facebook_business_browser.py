@@ -521,6 +521,46 @@ class FacebookBusinessBrowser:
                 }).filter(row => row.visible)"""
             )
             result["controls"] = controls[:80]
+            result["top_left_controls"] = sorted(
+                [
+                    row for row in controls
+                    if int(row.get("x") or 0) < 560
+                    and int(row.get("y") or 0) < 360
+                ],
+                key=lambda row: (
+                    int(row.get("y") or 0),
+                    int(row.get("x") or 0),
+                ),
+            )[:80]
+        except Exception:
+            pass
+
+        try:
+            top_left = await self.page.locator(
+                '[role], [aria-label], [tabindex], button, a[href]'
+            ).evaluate_all(
+                """els => els.map(el => {
+                    const r = el.getBoundingClientRect();
+                    const style = window.getComputedStyle(el);
+                    if (!(r.width > 0 && r.height > 0) || style.visibility === "hidden" || style.display === "none") return null;
+                    if (r.x >= 560 || r.y >= 360) return null;
+                    return {
+                        tag: el.tagName,
+                        role: el.getAttribute("role") || "",
+                        text: (el.innerText || el.textContent || "").trim().slice(0, 220),
+                        aria: (el.getAttribute("aria-label") || "").slice(0, 220),
+                        title: (el.getAttribute("title") || "").slice(0, 220),
+                        tabindex: el.getAttribute("tabindex") || "",
+                        haspopup: el.getAttribute("aria-haspopup") || "",
+                        expanded: el.getAttribute("aria-expanded") || "",
+                        x: Math.round(r.x),
+                        y: Math.round(r.y),
+                        w: Math.round(r.width),
+                        h: Math.round(r.height)
+                    };
+                }).filter(Boolean).sort((a,b) => (a.y-b.y) || (a.x-b.x)).slice(0, 140)"""
+            )
+            result["top_left_surface"] = top_left
         except Exception:
             pass
 
