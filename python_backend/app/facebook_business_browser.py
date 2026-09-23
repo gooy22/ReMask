@@ -1146,8 +1146,25 @@ class FacebookBusinessBrowser:
         blocked_posts: list[dict[str, Any]] = []
 
         def request_summary(request: Any) -> dict[str, Any]:
-            raw = _clean(getattr(request, "post_data", ""))
-            parsed = parse_qs(raw, keep_blank_values=True)
+            raw = ""
+            body_decodable = True
+            try:
+                raw_buffer = getattr(request, "post_data_buffer", None)
+                if raw_buffer:
+                    if isinstance(raw_buffer, bytes):
+                        raw = raw_buffer.decode("utf-8")
+                    else:
+                        raw = str(raw_buffer)
+                else:
+                    raw = _clean(getattr(request, "post_data", ""))
+            except (UnicodeDecodeError, UnicodeError):
+                body_decodable = False
+                raw = ""
+            except Exception:
+                body_decodable = False
+                raw = ""
+
+            parsed = parse_qs(raw, keep_blank_values=True) if raw else {}
 
             friendly = _clean(
                 (parsed.get("fb_api_req_friendly_name") or [""])[0]
@@ -1188,6 +1205,7 @@ class FacebookBusinessBrowser:
                 in unquote_plus(raw).casefold(),
                 "contains_canary_email": canary_email.casefold()
                 in unquote_plus(raw).casefold(),
+                "body_decodable": body_decodable,
             }
 
         async def block_meta_posts(route: Any, request: Any) -> None:
@@ -1195,14 +1213,20 @@ class FacebookBusinessBrowser:
                 method = _clean(request.method).upper()
                 host = _clean(urlsplit(_clean(request.url)).hostname).lower()
             except Exception:
-                await route.continue_()
+                try:
+                    await route.continue_()
+                except Exception:
+                    pass
                 return
 
             if method != "POST" or not (
                 host == "facebook.com"
                 or host.endswith(".facebook.com")
             ):
-                await route.continue_()
+                try:
+                    await route.continue_()
+                except Exception:
+                    pass
                 return
 
             summary = request_summary(request)
@@ -1212,7 +1236,10 @@ class FacebookBusinessBrowser:
 
             # During this canary no Meta POST is allowed to leave Chromium.
             # This guarantees the final Create click cannot mutate the account.
-            await route.abort()
+            try:
+                await route.abort()
+            except Exception:
+                return
 
             if not captured.done() and (
                 summary["contains_canary_name"]
