@@ -801,6 +801,39 @@ class FacebookBusinessBrowser:
         if await self._has_create_surface():
             return True
 
+        # Meta sometimes starts Business Suite with only the top logo control
+        # collapsed to ~40px. In that layout the portfolio/page selector row is
+        # not rendered at all, so the geometry probe below can accidentally hit
+        # Home/Notifications. Expand only the narrow logo control; the normal
+        # ~196px "Meta Business Suite" control is NOT the portfolio selector and
+        # must not be clicked.
+        try:
+            role_buttons = self.page.locator('[role="button"]')
+            count = min(await role_buttons.count(), 180)
+            for index in range(count):
+                item = role_buttons.nth(index)
+                if not await item.is_visible():
+                    continue
+                text_value = _clean(await item.inner_text(timeout=1000))
+                if text_value.casefold() != "meta business suite":
+                    continue
+                box = await item.bounding_box()
+                if not box:
+                    continue
+                width = float(box.get("width") or 0)
+                x = float(box.get("x") or 0)
+                y = float(box.get("y") or 0)
+                if x <= 40 and y <= 130 and 0 < width <= 80:
+                    await item.click(timeout=3000)
+                    await self.page.wait_for_timeout(500)
+                    if await self._has_create_surface():
+                        return True
+                break
+        except Exception:
+            # Expansion is a read-only best effort; the direct /reg/ fallback
+            # still exists if Meta renders another sidebar variant.
+            pass
+
         # Current Meta Business Suite places the business/page selector BELOW
         # the Meta Business Suite logo and ABOVE Home/Startseite. Do not walk
         # the complete SPA DOM here: the live Railway canary showed that a
