@@ -2140,6 +2140,184 @@ class FacebookBusinessBrowser:
         except Exception:
             return False
 
+    async def preflight_page_add_form(
+        self,
+        *,
+        business_id: str,
+        page_id: str,
+    ) -> dict[str, Any]:
+        """
+        Open and fill Meta's real Add existing Page dialog, then stop before
+        any final Add/Confirm/Request approval action. Read-only/search
+        requests are allowed; no Page mutation is submitted.
+        """
+        business = _digits(business_id)
+        page = _digits(page_id)
+        if not business or not page:
+            raise BrowserBusinessError(
+                "INVALID_PRIMARY_PAGE",
+                "Business ID and Page ID must be numeric.",
+                retryable=False,
+            )
+
+        if await self.verify_page_attached(
+            business_id=business,
+            page_id=page,
+        ):
+            return {
+                "ready": True,
+                "already_attached": True,
+                "business_id": business,
+                "page_id": page,
+                "current_url": _clean(self.page.url if self.page else ""),
+            }
+
+        await self._goto(self.SETTINGS_PAGES_URL.format(business_id=business))
+
+        if not await self._click_named(self.ADD_NAMES):
+            diag = await self._diagnostic("page_preflight_add_button_missing")
+            raise BrowserBusinessError(
+                "PAGE_ADD_UI_CHANGED",
+                "Meta Business Settings did not expose the Add Page action.",
+                retryable=False,
+                diagnostic=diag,
+            )
+
+        await self.page.wait_for_timeout(500)
+
+        if not await self._click_named(self.ADD_EXISTING_PAGE_NAMES):
+            body = (await self._body_text()).lower()
+            if (
+                "page id" not in body
+                and "page url" not in body
+                and "facebook page" not in body
+            ):
+                diag = await self._diagnostic(
+                    "page_preflight_existing_action_missing"
+                )
+                raise BrowserBusinessError(
+                    "PAGE_ADD_UI_CHANGED",
+                    "Meta Business Settings did not expose Add existing Page.",
+                    retryable=False,
+                    diagnostic=diag,
+                )
+
+        page_filled = await self._fill_first(
+            labels=(
+                "Facebook Page URL or ID",
+                "Page URL or ID",
+                "Page ID",
+                "Facebook Page",
+                "URL или ID Страницы Facebook",
+                "ID Страницы",
+                "URL або ID сторінки Facebook",
+                "ID сторінки",
+                "Facebook-Seiten-URL oder -ID",
+                "Seiten-URL oder -ID",
+                "Seiten-ID",
+                "Facebook-Seite",
+            ),
+            value=page,
+        )
+        if not page_filled:
+            try:
+                inputs = self.page.locator(
+                    'input:not([type]), input[type="text"], input[type="search"]'
+                )
+                for index in range(min(await inputs.count(), 20)):
+                    candidate = inputs.nth(index)
+                    if await candidate.is_visible() and await candidate.is_editable():
+                        await candidate.fill(page)
+                        page_filled = True
+                        break
+            except Exception:
+                pass
+
+        if not page_filled:
+            diag = await self._diagnostic("page_preflight_id_field_missing")
+            raise BrowserBusinessError(
+                "PAGE_ADD_UI_CHANGED",
+                "Meta Page-add dialog did not expose a Page URL/ID field.",
+                retryable=False,
+                diagnostic=diag,
+            )
+
+        await self.page.wait_for_timeout(1200)
+
+        # Selecting a search result is non-mutating. Stop before any
+        # Add/Confirm/Request approval button is clicked.
+        selected = False
+        try:
+            exact = self.page.get_by_text(
+                re.compile(rf"^\s*{re.escape(page)}\s*$")
+            )
+            for index in range(min(await exact.count(), 5)):
+                candidate = exact.nth(index)
+                if not await candidate.is_visible():
+                    continue
+                target = candidate.locator(
+                    'xpath=ancestor-or-self::*[@role="option" or @role="button" or self::button][1]'
+                )
+                if await target.count() and await target.first.is_visible():
+                    await target.first.click()
+                    selected = True
+                    await self.page.wait_for_timeout(450)
+                    break
+        except Exception:
+            pass
+
+        if not selected:
+            try:
+                radios = self.page.get_by_role("radio")
+                visible = []
+                for index in range(min(await radios.count(), 8)):
+                    item = radios.nth(index)
+                    if await item.is_visible() and await item.is_enabled():
+                        visible.append(item)
+                if len(visible) == 1:
+                    if not await visible[0].is_checked():
+                        await visible[0].check()
+                    selected = True
+                    await self.page.wait_for_timeout(250)
+            except Exception:
+                pass
+
+        body = await self._body_text()
+        final_actions = []
+        for label in (
+            "Add Page",
+            "Add Facebook Page",
+            "Confirm",
+            "Request approval",
+            "Добавить Страницу",
+            "Подтвердить",
+            "Додати сторінку",
+            "Підтвердити",
+            "Seite hinzufügen",
+            "Bestätigen",
+        ):
+            try:
+                locator = self.page.get_by_role(
+                    "button",
+                    name=re.compile(rf"^\s*{re.escape(label)}\s*$", re.IGNORECASE),
+                )
+                if await locator.count() and await locator.first.is_visible():
+                    final_actions.append(label)
+            except Exception:
+                continue
+
+        return {
+            "ready": True,
+            "already_attached": False,
+            "business_id": business,
+            "page_id": page,
+            "page_filled": True,
+            "result_selected": selected,
+            "final_actions": final_actions,
+            "page_id_visible": page in body,
+            "current_url": _clean(self.page.url),
+        }
+
     async def add_existing_page(
         self,
         *,
