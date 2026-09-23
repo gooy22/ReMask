@@ -990,41 +990,48 @@ class FacebookBusinessBrowser:
         return False
 
     async def _open_create_entry(self, *, open_form: bool) -> bool:
-        # The Business Suite overview surface is significantly heavier than
-        # HOME and has repeatedly crashed low-memory Railway Chromium. It is
-        # not required for portfolio creation, so keep the production path
-        # deterministic: HOME selector first, then the direct registration
-        # surface below.
-        entry_urls = (self.HOME_URL,)
+        # Keep production on the lightweight Business Suite HOME SPA. The
+        # heavier /overview and /reg surfaces have crashed Chromium on Railway
+        # and are not required when the portfolio selector is available.
+        await self._goto(self.HOME_URL)
 
-        for entry_url in entry_urls:
-            await self._goto(entry_url)
+        if await self._form_ready():
+            return True
+
+        menu_open = await self._try_open_top_left_portfolio_menu()
+        if menu_open:
+            if not open_form:
+                return True
+
+            if await self._click_named(self.CREATE_NAMES):
+                await self._assert_authenticated()
+                if await self._wait_for_form_ready():
+                    return True
+
+        legacy_fallback = _clean(
+            os.getenv("REMASK_BM_LEGACY_NAV_FALLBACK")
+        ).lower() in {"1", "true", "yes", "on"}
+        if not legacy_fallback:
+            return False
+
+        for entry_url in (self.OVERVIEW_URL, self.CREATE_URL):
+            try:
+                await self._goto(entry_url)
+            except BrowserBusinessError as exc:
+                if exc.code == "FACEBOOK_NAVIGATION_FAILED":
+                    continue
+                raise
 
             if await self._form_ready():
                 return True
 
-            menu_open = await self._try_open_top_left_portfolio_menu()
-            if menu_open:
+            if await self._try_open_top_left_portfolio_menu():
                 if not open_form:
                     return True
-
                 if await self._click_named(self.CREATE_NAMES):
                     await self._assert_authenticated()
                     if await self._wait_for_form_ready():
                         return True
-
-        # Legacy/no-portfolio fallback. Existing-portfolio accounts may redirect
-        # this URL back to Home, so it is intentionally last.
-        await self._goto(self.CREATE_URL)
-        if await self._form_ready():
-            return True
-
-        if await self._try_open_top_left_portfolio_menu():
-            if not open_form:
-                return True
-            if await self._click_named(self.CREATE_NAMES):
-                await self._assert_authenticated()
-                return await self._wait_for_form_ready()
 
         return False
 
