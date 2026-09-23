@@ -285,15 +285,15 @@ async def profile_preflight(profile_id: str):
                 'error_code':'',
             }
             try:
-                async with profile_session.facebook_business_browser() as business_browser:
-                    browser_preflight=await business_browser.preflight()
-                    browser_state.update({
-                        'ready':bool(browser_preflight.ready),
-                        'create_surface_ready':bool(browser_preflight.create_surface_ready),
-                        'current_url':browser_preflight.current_url,
-                        'account_id':browser_preflight.account_id,
-                        'diagnostics':list(browser_preflight.diagnostics),
-                    })
+                business_browser=await profile_session.facebook_business_browser()
+                browser_preflight=await business_browser.preflight()
+                browser_state.update({
+                    'ready':bool(browser_preflight.ready),
+                    'create_surface_ready':bool(browser_preflight.create_surface_ready),
+                    'current_url':browser_preflight.current_url,
+                    'account_id':browser_preflight.account_id,
+                    'diagnostics':list(browser_preflight.diagnostics),
+                })
             except BrowserBusinessError as exc:
                 browser_state.update({
                     'error':str(exc),
