@@ -303,32 +303,10 @@ async function pythonWorkerProfilePreflight(profileId) {
     ? preflight.bm_routes
     : {};
 
-  const browserReady =
+  preflight.create_route_ready =
     routes.browser_ui === true &&
     browser.ready === true &&
     browser.create_surface_ready === true;
-
-  if (!browserReady) {
-    const reasons = [];
-    if (browser.error) {
-      reasons.push(
-        (browser.error_code ? String(browser.error_code) + ': ' : '') +
-        String(browser.error)
-      );
-    }
-    if (preflight.web_error) {
-      reasons.push('FB session: ' + String(preflight.web_error));
-    }
-    if (!Array.isArray(preflight.pages) || !preflight.pages.length) {
-      reasons.push('У профиля не найдены доступные Fan Pages.');
-    }
-
-    throw new Error(
-      reasons.length
-        ? reasons.join(' · ')
-        : 'Meta Business creation UI недоступен для этого FB-профиля.'
-    );
-  }
 
   return preflight;
 }
@@ -1141,6 +1119,7 @@ async function pythonWorkerOpenOwnBmModal() {
       sessionHint: sessionHint,
       loaded: false,
       preflightReady: false,
+      createRouteReady: false,
       preflightError: '',
       requiresBusinessEmail: false,
       error: ''
@@ -1198,6 +1177,7 @@ async function pythonWorkerOpenOwnBmModal() {
         /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(businessEmail);
       return cfg &&
         cfg.preflightReady === true &&
+        cfg.createRouteReady === true &&
         String(cfg.name.value || '').trim() &&
         selectedPage &&
         businessEmailValid;
@@ -1222,6 +1202,7 @@ async function pythonWorkerOpenOwnBmModal() {
         const businessEmail = String(cfg.businessEmail.value || '').trim();
         return (
           cfg.preflightReady !== true ||
+          cfg.createRouteReady !== true ||
           !String(cfg.name.value || '').trim() ||
           !effectivePage ||
           (
@@ -1289,15 +1270,34 @@ async function pythonWorkerOpenOwnBmModal() {
           'У профиля нет сохранённого email. Введи Business email перед созданием BM.';
       }
 
-      const routeLabel = routes.browser_ui === true
+      cfg.createRouteReady =
+        result.create_route_ready === true ||
+        (
+          routes.browser_ui === true &&
+          browser.ready === true &&
+          browser.create_surface_ready === true
+        );
+
+      const routeLabel = cfg.createRouteReady
         ? 'META BUSINESS UI'
         : 'UNAVAILABLE';
 
+      cfg.sessionHint.className = cfg.createRouteReady
+        ? 'pwbm-session ok'
+        : 'pwbm-session';
+
       cfg.sessionHint.textContent =
-        'BM route: ' + routeLabel +
+        'FB session: OK · BM route: ' + routeLabel +
         ' · Fan Pages ' + discoveredPages.length +
         ' · proxy ' + String(result.proxy_exit_ip || '?') +
         ' · ' + String(result.proxy_latency_ms || 0) + ' ms' +
+        (
+          !cfg.createRouteReady && browser.error
+            ? ' · ' +
+              (browser.error_code ? String(browser.error_code) + ': ' : '') +
+              String(browser.error)
+            : ''
+        ) +
         (browser.current_url ? ' · ' + String(browser.current_url) : '');
 
       if (discoveredPages.length) {
