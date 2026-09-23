@@ -333,6 +333,22 @@ async def business_handler(
                 retryable=False,
             )
 
+        if page_known_not_sent:
+            checkpoint = await provisioning_state.checkpoint(
+                item_id,
+                profile_id,
+                scope_key,
+                ProvisioningStep.BUSINESS,
+                {
+                    "phase": "CREATE_CONFIRMED",
+                    "resume_from": "PAGE_ADD",
+                    "business_id": business_id,
+                    "business_name": bm_name,
+                    "primary_page_id": page_id,
+                    "page_gate_aborted_before_meta": True,
+                },
+            )
+
         # If a prior Page-add submit was interrupted, verify before doing
         # anything else. We do not blindly click Add again.
         phase = _clean(checkpoint.get("phase")).upper()
