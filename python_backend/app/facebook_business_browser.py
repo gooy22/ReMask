@@ -185,12 +185,17 @@ class FacebookBusinessBrowser:
         "Створити бізнес-портфоліо",
         "Створити бізнес",
         "Створити обліковий запис",
+        "Business-Portfolio erstellen",
+        "Unternehmensportfolio erstellen",
+        "Business erstellen",
+        "Portfolio erstellen",
     )
 
     ADD_NAMES = (
         "Add",
         "Добавить",
         "Додати",
+        "Hinzufügen",
     )
 
     ADD_EXISTING_PAGE_NAMES = (
@@ -201,6 +206,10 @@ class FacebookBusinessBrowser:
         "Добавить Страницу",
         "Додати наявну сторінку Facebook",
         "Додати сторінку",
+        "Bestehende Facebook-Seite hinzufügen",
+        "Vorhandene Facebook-Seite hinzufügen",
+        "Facebook-Seite hinzufügen",
+        "Seite hinzufügen",
     )
 
     def __init__(self, context: Any, *, timeout_seconds: int = 45) -> None:
@@ -563,6 +572,9 @@ class FacebookBusinessBrowser:
                 "электронный адрес компании",
                 "робоча електронна адреса",
                 "електронна адреса компанії",
+                "geschäftliche e-mail-adresse",
+                "geschäftliche email-adresse",
+                "geschäftliche e-mail",
             )
         )
         has_name = any(
@@ -575,6 +587,9 @@ class FacebookBusinessBrowser:
                 "название компании",
                 "назва бізнес-портфоліо",
                 "назва компанії",
+                "business-portfolio-name",
+                "name des business-portfolios",
+                "unternehmensname",
             )
         )
         return has_email and has_name
@@ -659,7 +674,7 @@ class FacebookBusinessBrowser:
         # Current Business Suite exposes the portfolio selector immediately
         # around the "Home" heading on some variants. Restrict this fallback
         # to an ancestor that is itself an interactive control.
-        for home_name in ("Home", "Главная", "Головна"):
+        for home_name in ("Home", "Главная", "Головна", "Startseite", "Start"):
             try:
                 home = self.page.get_by_text(
                     re.compile(rf"^\\s*{re.escape(home_name)}\\s*$", re.IGNORECASE)
@@ -900,6 +915,9 @@ class FacebookBusinessBrowser:
                 "Название компании",
                 "Назва бізнес-портфоліо",
                 "Назва компанії",
+                "Business-Portfolio-Name",
+                "Name des Business-Portfolios",
+                "Unternehmensname",
             ),
             value=business_name,
         )
@@ -919,18 +937,20 @@ class FacebookBusinessBrowser:
                     "Name",
                     "Ваше имя",
                     "Ваше ім'я",
+                    "Dein Name",
+                    "Ihr Name",
                 ),
                 value=display_name,
             )
 
         if user_first_name:
             await self._fill_first(
-                labels=("First name", "Имя", "Ім'я"),
+                labels=("First name", "Имя", "Ім'я", "Vorname"),
                 value=user_first_name,
             )
         if user_last_name:
             await self._fill_first(
-                labels=("Last name", "Фамилия", "Прізвище"),
+                labels=("Last name", "Фамилия", "Прізвище", "Nachname"),
                 value=user_last_name,
             )
 
@@ -943,6 +963,9 @@ class FacebookBusinessBrowser:
                 "Электронный адрес компании",
                 "Робоча електронна адреса",
                 "Електронна адреса компанії",
+                "Geschäftliche E-Mail-Adresse",
+                "Geschäftliche Email-Adresse",
+                "Geschäftliche E-Mail",
             ),
             value=user_email,
             input_type="email",
@@ -1041,7 +1064,7 @@ class FacebookBusinessBrowser:
                 clicked = await self._click_named(self.CREATE_NAMES)
                 if not clicked:
                     clicked = await self._click_named(
-                        ("Create", "Submit", "Continue", "Создать", "Продолжить", "Створити", "Продовжити")
+                        ("Create", "Submit", "Continue", "Создать", "Продолжить", "Створити", "Продовжити", "Erstellen", "Senden", "Weiter")
                     )
                 if not clicked:
                     diag = await self._diagnostic("create_submit_missing")
@@ -1324,6 +1347,10 @@ class FacebookBusinessBrowser:
                 "ID Страницы",
                 "URL або ID сторінки Facebook",
                 "ID сторінки",
+                "Facebook-Seiten-URL oder -ID",
+                "Seiten-URL oder -ID",
+                "Seiten-ID",
+                "Facebook-Seite",
             ),
             value=page,
         )
@@ -1371,7 +1398,7 @@ class FacebookBusinessBrowser:
                 timeout=self.timeout_ms,
             ):
                 clicked = await self._click_named(
-                    ("Add Page", "Add", "Continue", "Добавить Страницу", "Добавить", "Продолжить", "Додати сторінку", "Додати", "Продовжити")
+                    ("Add Page", "Add", "Continue", "Добавить Страницу", "Добавить", "Продолжить", "Додати сторінку", "Додати", "Продовжити", "Seite hinzufügen", "Hinzufügen", "Weiter")
                 )
                 if not clicked:
                     diag = await self._diagnostic("page_add_submit_missing")
