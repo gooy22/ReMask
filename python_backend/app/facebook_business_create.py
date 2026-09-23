@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import re
 import time
@@ -276,6 +277,142 @@ def _candidate_is_stale_or_schema_mismatch(
     )
     return any(marker in text for marker in markers)
 
+
+
+
+def _page_backed_source_variants(source: str) -> list[str]:
+    raw = str(source or "")
+    variants = [raw]
+
+    entity_decoded = html.unescape(raw)
+    if entity_decoded not in variants:
+        variants.append(entity_decoded)
+
+    def decode_ascii_unicode(match: re.Match[str]) -> str:
+        value = int(match.group(1), 16)
+        return chr(value) if value <= 0x7F else match.group(0)
+
+    decoded = re.sub(
+        r"\\u([0-9a-fA-F]{4})",
+        decode_ascii_unicode,
+        entity_decoded,
+    )
+    decoded = re.sub(
+        r"\\x([0-9a-fA-F]{2})",
+        lambda match: chr(int(match.group(1), 16)),
+        decoded,
+    )
+    decoded = (
+        decoded
+        .replace(r"\\/", "/")
+        .replace(r'\\"', '"')
+        .replace(r"\\'", "'")
+    )
+    if decoded not in variants:
+        variants.append(decoded)
+
+    return variants
+
+
+def _extract_page_backed_create_docid(
+    source: str,
+) -> tuple[str, str]:
+    best: tuple[int, str, str] | None = None
+
+    create_markers = (
+        "businessmanagercreatemutation",
+        "bizkit_create_business",
+        "business_manager_create",
+        "create_business",
+        "businesscreation",
+        "business_creation",
+        "business creation",
+    )
+    update_markers = (
+        "bizkitsettingsupdatebusinessbasicinfomutation",
+        "updatebusiness",
+        "update_business",
+        "businessbasicinfo",
+    )
+
+    for text in _page_backed_source_variants(source):
+        if "primary_page_id" not in text:
+            continue
+
+        for marker in re.finditer(
+            "primary_page_id",
+            text,
+            flags=re.IGNORECASE,
+        ):
+            left = max(0, marker.start() - 18000)
+            right = min(len(text), marker.end() + 18000)
+            window = text[left:right]
+            lower_window = window.lower()
+
+            if "business" not in lower_window:
+                continue
+            if not any(value in lower_window for value in create_markers):
+                continue
+            if (
+                any(value in lower_window for value in update_markers)
+                and "business_id" in lower_window
+            ):
+                continue
+
+            doc_matches: list[re.Match[str]] = []
+            doc_patterns = (
+                r'(?:"|\')?(?:doc_id|docID)(?:"|\')?\s*[:=]\s*'
+                r'(?:"|\')([0-9]{5,40})(?:"|\')',
+                r'params\s*:\s*\{.{0,3000}?id\s*:\s*["\']([0-9]{5,40})["\']',
+                r'["\']id["\']\s*:\s*["\']([0-9]{5,40})["\']',
+            )
+            for pattern in doc_patterns:
+                doc_matches.extend(
+                    re.finditer(
+                        pattern,
+                        window,
+                        flags=re.IGNORECASE | re.DOTALL,
+                    )
+                )
+
+            if not doc_matches:
+                continue
+
+            friendly = ""
+            friendly_patterns = (
+                r'fb_api_req_friendly_name(?:"|\')?\s*[:=]\s*'
+                r'["\']([^"\']*Business[^"\']*(?:Create|Creation)[^"\']*)["\']',
+                r'["\']name["\']\s*:\s*'
+                r'["\']([^"\']*Business[^"\']*(?:Create|Creation)[^"\']*)["\']',
+                r'["\']([^"\']*Business[^"\']*(?:Create|Creation)[^"\']*Mutation)["\']',
+            )
+            for pattern in friendly_patterns:
+                match = re.search(
+                    pattern,
+                    window,
+                    flags=re.IGNORECASE,
+                )
+                if match:
+                    friendly = _clean(match.group(1))
+                    break
+
+            for doc_match in doc_matches:
+                value = _clean(doc_match.group(1))
+                absolute = left + doc_match.start(1)
+                distance = abs(absolute - marker.start())
+                score = distance
+
+                if friendly:
+                    score = max(0, score - 4000)
+
+                candidate = (score, value, friendly)
+                if best is None or candidate[0] < best[0]:
+                    best = candidate
+
+    if best is None:
+        return "", ""
+
+    return best[1], best[2]
 
 def _graphql_errors(
     payload: dict[str, Any],
