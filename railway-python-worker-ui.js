@@ -1095,7 +1095,7 @@ async function pythonWorkerOpenOwnBmModal() {
     businessEmail.placeholder = 'Business email (обязателен, если не сохранён в профиле)';
 
     const emailHint = document.createElement('small');
-    emailHint.textContent = 'Нужен для private scope-selector Business creation.';
+    emailHint.textContent = 'Нужен для формы создания Business в Meta Business Suite.';
 
     nameField.appendChild(name);
     nameField.appendChild(nameHint);
@@ -1273,7 +1273,7 @@ async function pythonWorkerOpenOwnBmModal() {
       } else {
         cfg.emailHint.className = 'error';
         cfg.emailHint.textContent =
-          'У профиля нет сохранённого email. Введи Business email перед запуском CREATE.';
+          'У профиля нет сохранённого email. Введи Business email перед созданием BM.';
       }
 
       const routeLabel = routes.browser_ui === true
