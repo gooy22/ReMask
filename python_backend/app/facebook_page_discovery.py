@@ -508,6 +508,8 @@ async def discover_current_list_pages_docid_by_marker(
     del max_scripts
 
     entry_urls = (
+        "https://www.facebook.com/",
+        "https://business.facebook.com/latest/home",
         "https://www.facebook.com/accountquality/?landing_page=insights",
         "https://www.facebook.com/pages/?category=your_pages",
         "https://www.facebook.com/pages/?category=your_pages&ref=bookmarks",
@@ -578,6 +580,8 @@ async def discover_current_list_pages_docid(
         session,
         friendly_name=friendly_name,
         entry_urls=[
+            "https://www.facebook.com/",
+            "https://business.facebook.com/latest/home",
             "https://www.facebook.com/accountquality/?landing_page=insights",
             "https://www.facebook.com/pages/?category=your_pages",
         ],
@@ -721,6 +725,8 @@ async def discover_pages_from_browser_html(
     session: Any,
 ) -> PageDiscoveryResult:
     entry_urls = (
+        "https://www.facebook.com/",
+        "https://business.facebook.com/latest/home",
         "https://www.facebook.com/pages/?category=your_pages",
         "https://www.facebook.com/pages/?category=your_pages&ref=bookmarks",
         "https://www.facebook.com/pages/",
