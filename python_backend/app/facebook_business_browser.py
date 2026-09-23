@@ -346,9 +346,16 @@ class FacebookBusinessBrowser:
             self.page = await self._browser_context.new_page()
             self.page.set_default_timeout(self.timeout_ms)
 
-        except Exception:
+        except BrowserBusinessError:
             await self.close()
             raise
+        except Exception as exc:
+            await self.close()
+            raise BrowserBusinessError(
+                "BROWSER_START_FAILED",
+                f"Profile-bound Chromium failed to start: {exc.__class__.__name__}: {exc}",
+                retryable=True,
+            ) from exc
 
     def _release_semaphore(self) -> None:
         if self._semaphore_acquired:
