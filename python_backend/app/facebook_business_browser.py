@@ -1125,7 +1125,11 @@ class FacebookBusinessBrowser:
 
         return False
 
-    async def discover_managed_pages(self) -> list[dict[str, Any]]:
+    async def discover_managed_pages(
+        self,
+        *,
+        fast: bool = False,
+    ) -> list[dict[str, Any]]:
         """
         Discover Fan Pages from the authenticated browser session.
 
@@ -1136,6 +1140,8 @@ class FacebookBusinessBrowser:
         from .facebook_page_discovery import _extract_pages_from_browser_document
 
         surfaces = (
+            "https://www.facebook.com/pages/?category=your_pages",
+        ) if fast else (
             "https://www.facebook.com/pages/?category=your_pages",
             "https://www.facebook.com/pages/?category=your_pages&ref=bookmarks",
             "https://www.facebook.com/pages/",
