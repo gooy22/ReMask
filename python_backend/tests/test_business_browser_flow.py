@@ -3,10 +3,63 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from app.facebook_business_browser import BrowserBusinessError
+from app.facebook_business_browser import (
+    BrowserBusinessError,
+    FacebookBusinessBrowser,
+)
 from app.provisioning.business_handler import business_handler
 from app.provisioning.models import ProvisioningError, ProvisioningStep
 from app.provisioning.state import ProvisioningStateStore
+
+
+class _FakeRequest:
+    def __init__(self, post_data: str):
+        self.method = "POST"
+        self.url = "https://business.facebook.com/api/graphql/"
+        self.post_data = post_data
+
+
+class BrowserNetworkGateTests(unittest.TestCase):
+    def test_create_gate_matches_real_creation_mutation_shape(self):
+        request = _FakeRequest(
+            "fb_api_req_friendly_name=useBusinessCreationMutationMutation"
+            "&variables=%7B%22input%22%3A%7B%22business_name%22%3A"
+            "%22Test%20Business%22%7D%7D"
+        )
+        self.assertTrue(
+            FacebookBusinessBrowser._request_matches_create(
+                request,
+                "Test Business",
+            )
+        )
+
+    def test_page_gate_matches_mutation_with_business_and_page(self):
+        request = _FakeRequest(
+            "fb_api_req_friendly_name=BizKitSettingsAddPageMutation"
+            "&variables=%7B%22business_id%22%3A%22555666777888999%22%2C"
+            "%22page_id%22%3A%22123456789%22%7D"
+        )
+        self.assertTrue(
+            FacebookBusinessBrowser._request_matches_page_add(
+                request,
+                business_id="555666777888999",
+                page_id="123456789",
+            )
+        )
+
+    def test_page_gate_ignores_non_mutation_search_query(self):
+        request = _FakeRequest(
+            "fb_api_req_friendly_name=BusinessPageSearchQuery"
+            "&variables=%7B%22business_id%22%3A%22555666777888999%22%2C"
+            "%22page_id%22%3A%22123456789%22%7D"
+        )
+        self.assertFalse(
+            FacebookBusinessBrowser._request_matches_page_add(
+                request,
+                business_id="555666777888999",
+                page_id="123456789",
+            )
+        )
 
 
 class _FakeBrowser:
