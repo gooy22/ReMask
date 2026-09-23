@@ -472,6 +472,7 @@ async def profile_preflight(profile_id: str):
             proxy_task=asyncio.create_task(profile_session.proxy_check())
 
             browser_state={
+                'session_ready':False,
                 'ready':False,
                 'create_surface_ready':False,
                 'current_url':'',
@@ -489,6 +490,7 @@ async def profile_preflight(profile_id: str):
                     timeout=50.0,
                 )
                 browser_state.update({
+                    'session_ready':True,
                     'ready':bool(browser_preflight.ready),
                     'create_surface_ready':bool(browser_preflight.create_surface_ready),
                     'current_url':browser_preflight.current_url,
@@ -505,6 +507,11 @@ async def profile_preflight(profile_id: str):
                     'error':str(exc),
                     'error_code':exc.code,
                 })
+                if exc.code == 'BUSINESS_CREATE_UI_UNAVAILABLE':
+                    # Authentication/navigation already succeeded; only the
+                    # Create-BM surface was not recognized. Keep session/Page
+                    # synchronization independent from create-route readiness.
+                    browser_state['session_ready']=True
             browser_ms=int((time.monotonic()-browser_started)*1000)
 
             try:
@@ -536,7 +543,7 @@ async def profile_preflight(profile_id: str):
             pages_source='saved_profile_pages' if saved_pages else ''
 
             pages_ms=0
-            if not saved_pages and browser_state['ready'] and business_browser is not None:
+            if not saved_pages and browser_state['session_ready'] and business_browser is not None:
                 pages_started=time.monotonic()
                 try:
                     discovered_pages=await asyncio.wait_for(
