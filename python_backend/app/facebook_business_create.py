@@ -736,10 +736,7 @@ async def discover_current_set_primary_page_candidate(
             SET_PRIMARY_PAGE_FRIENDLY_NAME
         ),
         entry_urls=[
-            (
-                "https://business.facebook.com/latest/settings/"
-                f"business_info?business_id={clean_business_id}"
-            ),
+            "https://www.facebook.com/",
             "https://business.facebook.com/latest/home",
         ],
         max_scripts_per_entry=0,
@@ -1007,18 +1004,19 @@ async def create_business_with_docids(
                 ),
             )
 
-            record_result(
-                CREATE_BM_OPERATION,
-                candidate,
-                success=False,
-                reason=diagnostic,
-                profile_id=(
-                    clean_profile_id
-                ),
-                failure_kind=(
-                    failure_kind
-                ),
-            )
+            if candidate.source != "job_manual":
+                record_result(
+                    CREATE_BM_OPERATION,
+                    candidate,
+                    success=False,
+                    reason=diagnostic,
+                    profile_id=(
+                        clean_profile_id
+                    ),
+                    failure_kind=(
+                        failure_kind
+                    ),
+                )
 
             diagnostics.append(
                 diagnostic
@@ -1106,17 +1104,21 @@ async def create_business_with_docids(
                 if isinstance(stored_candidate, DocIdCandidate):
                     persisted_candidate = stored_candidate
 
-            record_result(
-                CREATE_BM_OPERATION,
-                persisted_candidate,
-                success=True,
-                response_path=(
-                    response_path
-                ),
-                profile_id=(
-                    clean_profile_id
-                ),
-            )
+            if (
+                candidate.source != "job_manual"
+                or response_path == "data.bizkit_create_business.id"
+            ):
+                record_result(
+                    CREATE_BM_OPERATION,
+                    persisted_candidate,
+                    success=True,
+                    response_path=(
+                        response_path
+                    ),
+                    profile_id=(
+                        clean_profile_id
+                    ),
+                )
 
             return CreateBusinessResult(
                 business_id=(
@@ -1155,18 +1157,19 @@ async def create_business_with_docids(
             ),
         )
 
-        record_result(
-            CREATE_BM_OPERATION,
-            candidate,
-            success=False,
-            reason=diagnostic,
-            profile_id=(
-                clean_profile_id
-            ),
-            failure_kind=(
-                failure_kind
-            ),
-        )
+        if candidate.source != "job_manual":
+            record_result(
+                CREATE_BM_OPERATION,
+                candidate,
+                success=False,
+                reason=diagnostic,
+                profile_id=(
+                    clean_profile_id
+                ),
+                failure_kind=(
+                    failure_kind
+                ),
+            )
 
         diagnostics.append(
             diagnostic
