@@ -934,6 +934,7 @@ class FacebookWebSession:
         *,
         friendly_name: str = "",
         endpoint_url: str | None = None,
+        request_envelope: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
 
         effective_doc_id = str(doc_id or "").strip()
@@ -987,14 +988,30 @@ class FacebookWebSession:
             "__spin_t",
             "__jssesw",
             "__crn",
+            "__req",
+            "__ccg",
+            "dpr",
+            "server_timestamps",
+            "fb_api_caller_class",
         }
         for key, value in (bootstrap.request_context or {}).items():
             if key in allowed_context_keys and str(value or "").strip():
                 form[key] = str(value).strip()
 
-        # Match the browser request envelope without reusing values from a
-        # different profile. __req is request-local, so generate it per session.
-        form["__req"] = self._next_graphql_req()
+        # Exact safe envelope captured from the user's real BizWeb CREATE wins
+        # over values inferred from bootstrap HTML. Authentication fields are
+        # deliberately excluded from allowed_context_keys.
+        for key, value in (
+            request_envelope
+            if isinstance(request_envelope, dict)
+            else {}
+        ).items():
+            clean_key = str(key or "").strip()
+            clean_value = str(value or "").strip()
+            if clean_key in allowed_context_keys and clean_value:
+                form[clean_key] = clean_value[:20000]
+
+        form.setdefault("__req", self._next_graphql_req())
         form.setdefault("dpr", "1")
         form.setdefault("__ccg", "EXCELLENT")
         form.setdefault("__jssesw", "1")
