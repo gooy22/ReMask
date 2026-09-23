@@ -1,3 +1,5 @@
+import uuid
+
 from app.facebook_business_create import _build_create_variables
 
 
@@ -29,10 +31,13 @@ def test_create_variables_match_current_scope_selector_footer_capture():
     )
     assert isinstance(input_data["client_mutation_id"], str)
     assert len(input_data["client_mutation_id"]) == 16
-    assert "qpl_join_id" not in input_data
+
+    qpl = uuid.UUID(input_data["qpl_join_id"])
+    assert qpl.version == 4
+    assert str(qpl) == input_data["qpl_join_id"]
 
 
 def test_captured_qpl_join_id_is_forwarded_exactly():
-    qpl = "captured-qpl-join-id-123"
+    qpl = "11111111-2222-4333-8444-555555555555"
     input_data = _payload(qpl_join_id=qpl)["input"]
     assert input_data["qpl_join_id"] == qpl
