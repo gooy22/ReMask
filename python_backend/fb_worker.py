@@ -6,7 +6,7 @@ import json
 import logging
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -63,6 +63,7 @@ class FacebookBootstrap:
     actor_id: str
     lsd: str = ""
     jazoest: str = ""
+    request_context: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,6 +147,7 @@ class FacebookWebSession:
         self._bootstrap_lock = asyncio.Lock()
 
         self._bootstrap: FacebookBootstrap | None = None
+        self._graphql_request_counter = 0
 
     # ------------------------------------------------------------------
     # aiohttp lifecycle
@@ -473,6 +475,85 @@ class FacebookWebSession:
 
         return "", ""
 
+    @staticmethod
+    def _base36(value: int) -> str:
+        alphabet = "0123456789abcdefghijklmnopqrstuvwxyz"
+        number = max(1, int(value))
+        out = ""
+        while number:
+            number, remainder = divmod(number, 36)
+            out = alphabet[remainder] + out
+        return out or "1"
+
+    def _next_graphql_req(self) -> str:
+        self._graphql_request_counter += 1
+        return self._base36(self._graphql_request_counter)
+
+    @classmethod
+    def _extract_request_context(cls, source: str) -> dict[str, str]:
+        """
+        Extract browser request-envelope metadata from authenticated BizWeb HTML.
+
+        These values are not auth credentials. They mirror the volatile request
+        metadata that Facebook's own BizWeb Relay transport includes around the
+        GraphQL document. Only values actually present in the current profile's
+        bootstrap HTML are reused; nothing account-specific is copied from a
+        different browser/profile.
+        """
+        variants = cls._match_sources(source)
+        keys = (
+            "__aaid",
+            "__bid",
+            "__hs",
+            "__rev",
+            "__s",
+            "__hsi",
+            "__dyn",
+            "__csr",
+            "__comet_req",
+            "__spin_r",
+            "__spin_b",
+            "__spin_t",
+            "__jssesw",
+            "__crn",
+        )
+        aliases = {
+            "__hs": ("haste_session",),
+            "__rev": ("client_revision",),
+            "__hsi": ("hsi",),
+            "__comet_req": ("comet_req",),
+            "__spin_r": ("spin_r", "client_revision"),
+            "__spin_b": ("spin_b",),
+            "__spin_t": ("spin_t",),
+        }
+
+        output: dict[str, str] = {}
+
+        def first_for(names: tuple[str, ...]) -> str:
+            for text in variants:
+                for name in names:
+                    escaped = re.escape(name)
+                    patterns = (
+                        rf'["\']{escaped}["\']\s*[:=]\s*["\']([^"\']{{1,20000}})["\']',
+                        rf'["\']{escaped}["\']\s*[:=]\s*([0-9]{{1,40}})',
+                        rf'name=["\']{escaped}["\'][^>]*value=["\']([^"\']{{1,20000}})["\']',
+                    )
+                    for pattern in patterns:
+                        match = re.search(pattern, text, flags=re.IGNORECASE)
+                        if match:
+                            value = str(match.group(1) or "").strip()
+                            if value:
+                                return value
+            return ""
+
+        for key in keys:
+            names = (key, *aliases.get(key, ()))
+            value = first_for(names)
+            if value:
+                output[key] = value
+
+        return output
+
     async def bootstrap(
         self,
         *,
@@ -670,24 +751,28 @@ class FacebookWebSession:
                 ],
             )
 
+            request_context = self._extract_request_context(body)
+
             bootstrap = FacebookBootstrap(
                 fb_dtsg=fb_dtsg,
                 actor_id=actor_id,
                 lsd=lsd,
                 jazoest=jazoest,
+                request_context=request_context,
             )
 
             self._bootstrap = bootstrap
 
             log.info(
                 "[%s] FB bootstrap ready actor=%s lsd=%s jazoest=%s "
-                "source=%s final_url=%s",
+                "source=%s final_url=%s envelope_keys=%s",
                 self.profile.name,
                 actor_id,
                 "yes" if lsd else "no",
                 "yes" if jazoest else "no",
                 bootstrap_source,
                 final_url,
+                ",".join(sorted(request_context)) or "-",
             )
 
             return bootstrap
@@ -883,6 +968,33 @@ class FacebookWebSession:
             "server_timestamps": "true",
         }
 
+        allowed_context_keys = {
+            "__aaid",
+            "__bid",
+            "__hs",
+            "__rev",
+            "__s",
+            "__hsi",
+            "__dyn",
+            "__csr",
+            "__comet_req",
+            "__spin_r",
+            "__spin_b",
+            "__spin_t",
+            "__jssesw",
+            "__crn",
+        }
+        for key, value in (bootstrap.request_context or {}).items():
+            if key in allowed_context_keys and str(value or "").strip():
+                form[key] = str(value).strip()
+
+        # Match the browser request envelope without reusing values from a
+        # different profile. __req is request-local, so generate it per session.
+        form["__req"] = self._next_graphql_req()
+        form.setdefault("dpr", "1")
+        form.setdefault("__ccg", "EXCELLENT")
+        form.setdefault("__jssesw", "1")
+
         if bootstrap.actor_id:
             form["av"] = bootstrap.actor_id
             form["__user"] = bootstrap.actor_id
@@ -919,6 +1031,8 @@ class FacebookWebSession:
         comet_req = str(os.getenv("REMASK_FB_COMET_REQ") or "").strip()
         if comet_req:
             form["__comet_req"] = comet_req
+        elif "business.facebook.com" in endpoint_parts.netloc:
+            form.setdefault("__comet_req", "11")
 
         asbd_id = str(os.getenv("REMASK_FB_ASBD_ID") or "").strip()
         if asbd_id:
