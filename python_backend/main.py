@@ -56,28 +56,45 @@ async def run_bm_browser_canary() -> None:
     profile_id=''
     try:
         profiles=await pool.resolver.list_profiles()
-        candidate=next(
-            (
-                row for row in profiles
-                if isinstance(row,dict)
-                and str(row.get('profile_id') or '').strip()
-                and bool(row.get('proxy_configured'))
-            ),
-            next(
-                (
-                    row for row in profiles
-                    if isinstance(row,dict)
-                    and str(row.get('profile_id') or '').strip()
-                ),
-                None,
-            ),
+        candidates=[
+            row for row in profiles
+            if isinstance(row,dict)
+            and str(row.get('profile_id') or '').strip()
+        ]
+        candidates.sort(
+            key=lambda row: (
+                0 if bool(row.get('proxy_configured')) else 1,
+                str(row.get('profile_id') or ''),
+            )
         )
-        if not isinstance(candidate,dict):
+
+        if not candidates:
             log.error('bm browser canary aborted: profile resolver returned no profiles')
             return
 
-        profile_id=str(candidate.get('profile_id') or '').strip()
-        context=await pool.resolver.resolve(profile_id)
+        context=None
+        rejected: list[str]=[]
+        for candidate in candidates:
+            candidate_id=str(candidate.get('profile_id') or '').strip()
+            try:
+                resolved=await pool.resolver.resolve(candidate_id)
+            except ProfileContextError as exc:
+                rejected.append(
+                    f"{candidate_id}:{str(exc)[:180]}"
+                )
+                continue
+
+            profile_id=candidate_id
+            context=resolved
+            break
+
+        if context is None:
+            log.error(
+                'bm browser canary aborted: no profile has a usable logged-in '
+                'Facebook session + proxy. rejected=%s',
+                json.dumps(rejected[-12:],ensure_ascii=False),
+            )
+            return
 
         async with ProfileSession(context) as profile_session:
             async with profile_session.facebook_business_browser() as browser:
