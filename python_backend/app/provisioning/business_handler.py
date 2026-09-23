@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 from typing import Any
@@ -405,9 +406,43 @@ async def business_handler(
             exc.retryable,
             exc,
         )
+        try:
+            await provisioning_state.checkpoint(
+                item_id,
+                profile_id,
+                scope_key,
+                ProvisioningStep.BUSINESS,
+                {
+                    "last_browser_error_code": exc.code,
+                    "last_browser_error": str(exc)[:4000],
+                    "last_browser_diagnostic": (
+                        exc.diagnostic
+                        if isinstance(exc.diagnostic, dict)
+                        else {}
+                    ),
+                },
+            )
+        except Exception:
+            log.exception(
+                "[%s] failed to persist BUSINESS browser diagnostic item=%s",
+                profile_id,
+                item_id,
+            )
+
+        diagnostic_suffix = ""
+        if isinstance(exc.diagnostic, dict) and exc.diagnostic:
+            try:
+                diagnostic_suffix = " diagnostic=" + json.dumps(
+                    exc.diagnostic,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )[:5000]
+            except Exception:
+                diagnostic_suffix = ""
+
         raise ProvisioningError(
             exc.code,
-            str(exc),
+            str(exc) + diagnostic_suffix,
             retryable=exc.retryable,
         ) from exc
     except asyncio.TimeoutError as exc:
