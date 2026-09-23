@@ -989,7 +989,12 @@ class FacebookBusinessBrowser:
         return False
 
     async def _open_create_entry(self, *, open_form: bool) -> bool:
-        entry_urls = (self.HOME_URL, self.OVERVIEW_URL)
+        # The Business Suite overview surface is significantly heavier than
+        # HOME and has repeatedly crashed low-memory Railway Chromium. It is
+        # not required for portfolio creation, so keep the production path
+        # deterministic: HOME selector first, then the direct registration
+        # surface below.
+        entry_urls = (self.HOME_URL,)
 
         for entry_url in entry_urls:
             await self._goto(entry_url)
