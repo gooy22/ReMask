@@ -608,8 +608,7 @@ def _build_create_variables(
     }
 
     clean_qpl_join_id = _clean(qpl_join_id)
-    if clean_qpl_join_id:
-        payload["input"]["qpl_join_id"] = clean_qpl_join_id
+    payload["input"]["qpl_join_id"] = clean_qpl_join_id or str(uuid.uuid4())
 
     return payload
 
