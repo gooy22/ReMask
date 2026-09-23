@@ -37,7 +37,7 @@ RUN /opt/remask-venv/bin/python -m compileall -q /opt/remask-python \
     && grep -q '3_cross_profile_stale_failures' /opt/remask-python/app/facebook_docids.py \
     && grep -q 'fetch_text_with_headers' /opt/remask-python/fb_worker.py \
     && grep -q 'default_doc_id=None' /opt/remask-python/fb_worker.py \
-    && echo "[bm-v14.4] Relay-context discovery + atomic resumable BM attach + cross-profile cache passed"
+    && echo "[bm-v14.5] web preflight manual fallback + Relay discovery + resumable BM passed"
 
 COPY .deploy/clean-preview-valid/runtime.b64.* /tmp/remask-parts/
 COPY railway-persistence-overlay.php /tmp/railway-persistence-overlay.php
@@ -194,7 +194,7 @@ RUN set -eux; \
     php -l /var/www/html/workspace.php; \
     grep -q 'REMASK_PYTHON_WORKER_PANEL_V1' /var/www/html/workspace.php; \
     grep -q 'REMASK_PYTHON_WORKER_UI_V1' /var/www/html/scripts/workspace.js; \
-    grep -q 'REMASK_PYTHON_WORKER_UI_V157' /var/www/html/scripts/workspace.js; \
+    grep -q 'REMASK_PYTHON_WORKER_UI_V158' /var/www/html/scripts/workspace.js; \
     grep -q 'manual_doc_id' /var/www/html/scripts/workspace.js; \
     grep -q 'pythonWorkerCsrf' /var/www/html/scripts/workspace.js; \
     grep -q 'pythonWorkerLoadPages(profileId, csrfRetried)' /var/www/html/scripts/workspace.js; \
