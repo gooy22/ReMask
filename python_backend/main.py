@@ -112,7 +112,7 @@ async def run_bm_browser_canary() -> None:
             profile_id or '<unresolved>',
             exc.code,
             str(exc),
-            json.dumps(exc.diagnostic,ensure_ascii=False)[:2000],
+            json.dumps(exc.diagnostic,ensure_ascii=False)[:12000],
         )
     except Exception as exc:
         log.exception(
