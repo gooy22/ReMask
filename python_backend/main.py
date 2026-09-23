@@ -100,6 +100,16 @@ async def run_bm_browser_canary() -> None:
                     result=await browser.preflight()
                     form_result=await browser.preflight_create_form()
                     fill_result=await browser.preflight_fill_create_form()
+                    try:
+                        browser_pages=await browser.discover_managed_pages()
+                    except BrowserBusinessError as page_discovery_exc:
+                        browser_pages=[]
+                        log.warning(
+                            'bm browser page discovery failed profile=%s code=%s detail=%s',
+                            profile_id,
+                            page_discovery_exc.code,
+                            str(page_discovery_exc),
+                        )
                     request_result=await browser.preflight_capture_create_request()
 
                 page_form_result={
@@ -112,6 +122,18 @@ async def run_bm_browser_canary() -> None:
                     if isinstance(row,dict)
                     and str(row.get('id') or '').strip().isdigit()
                 ]
+                known_page_ids={
+                    str(row.get('id') or '').strip()
+                    for row in saved_pages
+                }
+                for row in (browser_pages or []):
+                    if not isinstance(row,dict):
+                        continue
+                    page_id=str(row.get('id') or '').strip()
+                    if not page_id.isdigit() or page_id in known_page_ids:
+                        continue
+                    saved_pages.append(row)
+                    known_page_ids.add(page_id)
                 free_pages=[
                     row for row in saved_pages
                     if not str(row.get('business_id') or '').strip()
@@ -425,6 +447,34 @@ async def profile_preflight(profile_id: str):
                 if isinstance(row,dict)
                 and str(row.get('id') or '').strip().isdigit()
             ]
+            pages_source='saved_profile_pages' if saved_pages else ''
+
+            if not saved_pages and browser_state['ready']:
+                try:
+                    discovered_pages=await business_browser.discover_managed_pages()
+                    saved_pages=[
+                        {
+                            'id':str(row.get('id') or '').strip(),
+                            'name':str(row.get('name') or row.get('id') or '').strip(),
+                            'category':str(row.get('category') or '').strip(),
+                            'tasks':[
+                                str(task)
+                                for task in (row.get('tasks') or [])
+                                if isinstance(task,(str,int))
+                            ],
+                            'business_id':str(row.get('business_id') or '').strip(),
+                            'is_owned':row.get('is_owned'),
+                        }
+                        for row in discovered_pages
+                        if isinstance(row,dict)
+                        and str(row.get('id') or '').strip().isdigit()
+                    ]
+                    if saved_pages:
+                        pages_source='facebook_business_browser'
+                except BrowserBusinessError as exc:
+                    browser_state['page_discovery_error']=str(exc)
+                    browser_state['page_discovery_error_code']=exc.code
+
             saved_pages.sort(
                 key=lambda page: (
                     1 if str(page.get('business_id') or '').strip() else 0,
@@ -481,7 +531,7 @@ async def profile_preflight(profile_id: str):
         'saved_pages_count':len(saved_pages),
         'pages':saved_pages,
         'pages_count':len(saved_pages),
-        'pages_source':'saved_profile_pages' if saved_pages else '',
+        'pages_source':pages_source,
         'businesses':[],
         'businesses_count':0,
         'email_present':bool(str(context.email or '').strip()),

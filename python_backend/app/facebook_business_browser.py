@@ -988,6 +988,73 @@ class FacebookBusinessBrowser:
 
         return False
 
+    async def discover_managed_pages(self) -> list[dict[str, Any]]:
+        """
+        Discover Fan Pages from the authenticated browser session.
+
+        This is read-only and is used when the PHP/profile cache has no Pages.
+        It deliberately inspects Meta's rendered Pages surfaces instead of
+        issuing a reconstructed LIST_PAGES mutation.
+        """
+        from .facebook_page_discovery import _extract_pages_from_browser_document
+
+        surfaces = (
+            "https://www.facebook.com/pages/?category=your_pages",
+            "https://www.facebook.com/pages/?category=your_pages&ref=bookmarks",
+            "https://www.facebook.com/pages/",
+        )
+        merged: dict[str, dict[str, Any]] = {}
+        diagnostics: list[str] = []
+
+        for url in surfaces:
+            try:
+                await self._goto(url)
+                await self.page.wait_for_timeout(1200)
+                document = await self.page.content()
+            except BrowserBusinessError:
+                raise
+            except Exception as exc:
+                diagnostics.append(
+                    f"{url}: {exc.__class__.__name__}: {exc}"
+                )
+                continue
+
+            pages = _extract_pages_from_browser_document(document)
+            diagnostics.append(
+                f"{url}: bytes={len(document)} pages={len(pages)}"
+            )
+            for row in pages:
+                if not isinstance(row, dict):
+                    continue
+                page_id = _digits(row.get("id"))
+                if not page_id:
+                    continue
+                current = merged.get(page_id)
+                if current is None:
+                    merged[page_id] = dict(row)
+                    continue
+                for key, value in row.items():
+                    if key not in current or current.get(key) in ("", None, [], {}):
+                        current[key] = value
+
+            if merged:
+                break
+
+        if not merged:
+            diag = await self._diagnostic("browser_pages_empty")
+            diag["page_discovery"] = diagnostics[-8:]
+            raise BrowserBusinessError(
+                "FAN_PAGES_NOT_DISCOVERED",
+                "Authenticated Facebook browser surfaces returned no parseable Fan Pages.",
+                retryable=False,
+                diagnostic=diag,
+            )
+
+        return sorted(
+            merged.values(),
+            key=lambda row: _clean(row.get("name")).casefold(),
+        )
+
     async def preflight(self) -> BrowserPreflightResult:
         diagnostics: list[str] = []
 
