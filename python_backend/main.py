@@ -100,11 +100,14 @@ async def run_bm_browser_canary() -> None:
                     result=await browser.preflight()
                     form_result=await browser.preflight_create_form()
                     fill_result=await browser.preflight_fill_create_form()
+                    request_result=await browser.preflight_capture_create_request()
 
                 log.info(
                     'bm browser canary SUCCESS profile=%s snapshot_businesses=%d '
                     'create_surface=%s form_ready=%s field_count=%s '
                     'dry_fill_name=%s dry_fill_email=%s filled_inputs=%s fields=%s '
+                    'blocked_create=%s create_friendly=%s create_doc_id=%s '
+                    'create_input_keys=%s blocked_posts=%s '
                     'url=%s attempted=%d',
                     profile_id,
                     len(business_snapshot),
@@ -115,6 +118,14 @@ async def run_bm_browser_canary() -> None:
                     bool(fill_result.get('email_present')),
                     int(fill_result.get('filled_input_count') or 0),
                     json.dumps(form_result.get('fields') or [],ensure_ascii=False)[:4000],
+                    bool(request_result.get('blocked')),
+                    str((request_result.get('request') or {}).get('friendly_name') or ''),
+                    str((request_result.get('request') or {}).get('doc_id') or ''),
+                    json.dumps(
+                        (request_result.get('request') or {}).get('input_keys') or [],
+                        ensure_ascii=False,
+                    )[:4000],
+                    int(request_result.get('blocked_post_count') or 0),
                     str(form_result.get('current_url') or result.current_url),
                     attempted,
                 )
