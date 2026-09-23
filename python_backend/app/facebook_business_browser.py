@@ -437,12 +437,46 @@ class FacebookBusinessBrowser:
                 await self.page.wait_for_timeout(900)
                 await self._assert_authenticated()
                 return _clean(self.page.url)
+
+            except BrowserBusinessError:
+                # Preserve meaningful account/session errors such as
+                # SESSION_EXPIRED and CHECKPOINT_REQUIRED.
+                raise
+
             except Exception as exc:
                 text = f"{exc.__class__.__name__}: {exc}"
+                lower = text.lower()
+
+                interrupted_navigation = (
+                    "net::err_aborted" in lower
+                    or "frame was detached" in lower
+                    or "navigation interrupted" in lower
+                )
+                if interrupted_navigation:
+                    # Meta Business Suite frequently replaces the initial
+                    # document/frame while bootstrapping its SPA. Playwright
+                    # reports ERR_ABORTED even though the replacement page is
+                    # valid. Accept it only after the resulting page proves to
+                    # be alive and authenticated.
+                    try:
+                        await self.page.wait_for_timeout(900)
+                        await self._assert_authenticated()
+                        current_url = _clean(self.page.url)
+                        if (
+                            current_url
+                            and current_url != "about:blank"
+                            and "business.facebook.com" in current_url.lower()
+                        ):
+                            return current_url
+                    except BrowserBusinessError:
+                        raise
+                    except Exception:
+                        pass
+
                 page_crashed = (
-                    "page crashed" in text.lower()
-                    or "targetclosederror" in text.lower()
-                    or "target page, context or browser has been closed" in text.lower()
+                    "page crashed" in lower
+                    or "targetclosederror" in lower
+                    or "target page, context or browser has been closed" in lower
                 )
 
                 if page_crashed and attempt == 0:
