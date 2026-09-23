@@ -63,6 +63,78 @@ class BrowserNetworkGateTests(unittest.TestCase):
         )
 
 
+class BrowserNavigationRecoveryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_err_aborted_is_accepted_when_meta_surface_is_alive(self):
+        class _Page:
+            def __init__(self):
+                self.url = "https://business.facebook.com/latest/home"
+                self.goto_calls = 0
+
+            async def goto(self, *args, **kwargs):
+                self.goto_calls += 1
+                raise Exception(
+                    "Page.goto: net::ERR_ABORTED; maybe frame was detached?"
+                )
+
+            async def wait_for_timeout(self, ms):
+                return None
+
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-nav")
+        )
+        browser.page = _Page()
+        browser._assert_authenticated = AsyncMock(return_value=None)
+        browser._body_text = AsyncMock(return_value="Meta Business Suite")
+        browser._form_ready = AsyncMock(return_value=False)
+        browser._has_create_surface = AsyncMock(return_value=False)
+
+        url = await browser._goto(
+            "https://business.facebook.com/reg/"
+        )
+
+        self.assertEqual(
+            url,
+            "https://business.facebook.com/latest/home",
+        )
+        self.assertEqual(browser.page.goto_calls, 1)
+
+    async def test_err_aborted_retries_once_when_replacement_dom_is_not_ready(self):
+        class _Page:
+            def __init__(self):
+                self.url = "https://business.facebook.com/reg/"
+                self.goto_calls = 0
+
+            async def goto(self, *args, **kwargs):
+                self.goto_calls += 1
+                if self.goto_calls == 1:
+                    raise Exception(
+                        "Page.goto: net::ERR_ABORTED; maybe frame was detached?"
+                    )
+                return None
+
+            async def wait_for_timeout(self, ms):
+                return None
+
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-nav-retry")
+        )
+        browser.page = _Page()
+        browser._assert_authenticated = AsyncMock(return_value=None)
+        browser._body_text = AsyncMock(side_effect=["", "Meta Business Suite"])
+        browser._form_ready = AsyncMock(return_value=False)
+        browser._has_create_surface = AsyncMock(return_value=False)
+
+        url = await browser._goto(
+            "https://business.facebook.com/reg/"
+        )
+
+        self.assertEqual(
+            url,
+            "https://business.facebook.com/reg/",
+        )
+        self.assertEqual(browser.page.goto_calls, 2)
+
+
 class BrowserPageDiscoveryTests(unittest.IsolatedAsyncioTestCase):
     async def test_discovers_pages_from_rendered_browser_surface(self):
         class _RenderedPage:
@@ -89,6 +161,41 @@ class BrowserPageDiscoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(pages[0]["id"], "123456789")
         self.assertEqual(pages[0]["name"], "Demo Fan Page")
         browser._goto.assert_awaited()
+
+    async def test_discovers_pages_from_visible_page_links(self):
+        class _AnchorLocator:
+            async def evaluate_all(self, script):
+                return [
+                    {
+                        "href": "https://www.facebook.com/profile.php?id=123456789",
+                        "text": "Demo Fan Page",
+                    }
+                ]
+
+        class _RenderedPage:
+            async def wait_for_timeout(self, ms):
+                return None
+
+            async def content(self):
+                return "<html><body>No embedded Page JSON</body></html>"
+
+            def locator(self, selector):
+                return _AnchorLocator()
+
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-pages-links")
+        )
+        browser.page = _RenderedPage()
+        browser._goto = AsyncMock(
+            return_value="https://www.facebook.com/pages/?category=your_pages"
+        )
+
+        pages = await browser.discover_managed_pages()
+
+        self.assertEqual(len(pages), 1)
+        self.assertEqual(pages[0]["id"], "123456789")
+        self.assertEqual(pages[0]["name"], "Demo Fan Page")
+        self.assertEqual(pages[0]["source"], "browser_dom_link")
 
 
 class _FakeBrowser:

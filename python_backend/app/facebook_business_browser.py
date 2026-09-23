@@ -421,11 +421,6 @@ class FacebookBusinessBrowser:
             self._profile_lock_acquired = False
         self._profile_lock = None
 
-        if self._profile_lock_acquired and self._profile_lock is not None:
-            self._profile_lock.release()
-            self._profile_lock_acquired = False
-        self._profile_lock = None
-
         self._release_semaphore()
 
     async def _goto(self, url: str) -> str:
@@ -458,25 +453,38 @@ class FacebookBusinessBrowser:
                     or "navigation interrupted" in lower
                 )
                 if interrupted_navigation:
-                    # Meta Business Suite frequently replaces the initial
-                    # document/frame while bootstrapping its SPA. Playwright
-                    # reports ERR_ABORTED even though the replacement page is
-                    # valid. Accept it only after the resulting page proves to
-                    # be alive and authenticated.
+                    # Meta Business Suite is an SPA and may replace/detach the
+                    # document during navigation. Playwright can surface that
+                    # as ERR_ABORTED even though Meta completed the transition.
+                    # No irreversible action happens in _goto(), so a single
+                    # navigation retry is safe if the replacement DOM is not
+                    # ready yet.
                     try:
-                        await self.page.wait_for_timeout(900)
+                        await asyncio.sleep(0.45)
                         await self._assert_authenticated()
                         current_url = _clean(self.page.url)
-                        if (
+                        current_body = await self._body_text()
+                        form_ready = await self._form_ready()
+                        create_surface = await self._has_create_surface()
+                        facebook_surface = (
                             current_url
                             and current_url != "about:blank"
-                            and "business.facebook.com" in current_url.lower()
+                            and "facebook.com" in current_url.lower()
+                        )
+                        if facebook_surface and (
+                            bool(current_body.strip())
+                            or form_ready
+                            or create_surface
                         ):
                             return current_url
                     except BrowserBusinessError:
                         raise
                     except Exception:
                         pass
+
+                    if attempt == 0:
+                        await asyncio.sleep(0.25)
+                        continue
 
                 page_crashed = (
                     "page crashed" in lower
@@ -751,6 +759,32 @@ class FacebookBusinessBrowser:
         )
         return has_email and has_name
 
+    async def _wait_for_create_surface(
+        self,
+        *,
+        timeout_ms: int = 3000,
+        interval_ms: int = 250,
+    ) -> bool:
+        deadline = time.monotonic() + max(0.25, timeout_ms / 1000)
+        while time.monotonic() < deadline:
+            if await self._has_create_surface():
+                return True
+            await self.page.wait_for_timeout(interval_ms)
+        return await self._has_create_surface()
+
+    async def _wait_for_form_ready(
+        self,
+        *,
+        timeout_ms: int = 3500,
+        interval_ms: int = 250,
+    ) -> bool:
+        deadline = time.monotonic() + max(0.25, timeout_ms / 1000)
+        while time.monotonic() < deadline:
+            if await self._form_ready():
+                return True
+            await self.page.wait_for_timeout(interval_ms)
+        return await self._form_ready()
+
     async def _try_open_top_left_portfolio_menu(self) -> bool:
         if self.page is None:
             return False
@@ -856,8 +890,7 @@ class FacebookBusinessBrowser:
                 }"""
             )
             if isinstance(probe, dict) and probe.get("clicked"):
-                await self.page.wait_for_timeout(650)
-                if await self._has_create_surface():
+                if await self._wait_for_create_surface():
                     return True
 
                 # Preserve a compact probe before the larger diagnostic so the
@@ -939,8 +972,7 @@ class FacebookBusinessBrowser:
             seen.add(marker)
             try:
                 await item.click(timeout=2500)
-                await self.page.wait_for_timeout(500)
-                if await self._has_create_surface():
+                if await self._wait_for_create_surface():
                     return True
                 await self.page.keyboard.press("Escape")
                 await self.page.wait_for_timeout(120)
@@ -967,9 +999,8 @@ class FacebookBusinessBrowser:
                     return True
 
                 if await self._click_named(self.CREATE_NAMES):
-                    await self.page.wait_for_timeout(650)
                     await self._assert_authenticated()
-                    if await self._form_ready():
+                    if await self._wait_for_form_ready():
                         return True
 
         # Legacy/no-portfolio fallback. Existing-portfolio accounts may redirect
@@ -982,9 +1013,8 @@ class FacebookBusinessBrowser:
             if not open_form:
                 return True
             if await self._click_named(self.CREATE_NAMES):
-                await self.page.wait_for_timeout(650)
                 await self._assert_authenticated()
-                return await self._form_ready()
+                return await self._wait_for_form_ready()
 
         return False
 
@@ -1020,8 +1050,75 @@ class FacebookBusinessBrowser:
                 continue
 
             pages = _extract_pages_from_browser_document(document)
+
+            # Current Facebook "Your Pages" surfaces may render Page cards as
+            # normal anchors without a parseable Page JSON object. Collect
+            # those visible links too; this is read-only DOM inspection.
+            link_rows: list[dict[str, str]] = []
+            try:
+                link_rows = await self.page.locator(
+                    'main a[href], [role="main"] a[href], a[href]'
+                ).evaluate_all(
+                    """els => els.slice(0, 2500).map(el => ({
+                        href: el.href || '',
+                        text: (
+                            el.innerText
+                            || el.getAttribute('aria-label')
+                            || el.getAttribute('title')
+                            || ''
+                        ).replace(/\\s+/g, ' ').trim()
+                    })).filter(row => row.href && row.text)"""
+                )
+            except Exception as exc:
+                diagnostics.append(
+                    f"{url}: anchor scan {exc.__class__.__name__}"
+                )
+
+            link_pages: list[dict[str, Any]] = []
+            seen_link_ids: set[str] = set()
+            link_patterns = (
+                re.compile(r"[?&](?:page_id|id)=(\d{5,25})(?:&|$)", re.IGNORECASE),
+                re.compile(r"/pages/(?:[^/?#]+/)?(\d{5,25})(?:[/?#]|$)", re.IGNORECASE),
+            )
+            for link_row in link_rows:
+                if not isinstance(link_row, dict):
+                    continue
+                href = _clean(link_row.get("href"))
+                name = _clean(link_row.get("text"))
+                if not href or not name:
+                    continue
+                page_id = ""
+                for pattern in link_patterns:
+                    match = pattern.search(href)
+                    if match:
+                        page_id = _digits(match.group(1))
+                        if page_id:
+                            break
+                if not page_id or page_id in seen_link_ids:
+                    continue
+
+                # Do not treat generic Facebook navigation/profile anchors as
+                # Pages unless this is a Pages surface or the URL itself says
+                # /pages/. All scanned URLs here are explicit Your Pages/Page
+                # surfaces, so this condition remains intentionally narrow.
+                if "/pages/" not in href.lower() and "category=your_pages" not in url.lower():
+                    continue
+
+                seen_link_ids.add(page_id)
+                link_pages.append({
+                    "id": page_id,
+                    "name": name[:240],
+                    "category": "",
+                    "source": "browser_dom_link",
+                })
+
+            if link_pages:
+                pages.extend(link_pages)
+
             diagnostics.append(
-                f"{url}: bytes={len(document)} pages={len(pages)}"
+                f"{url}: bytes={len(document)} "
+                f"json_pages={len(_extract_pages_from_browser_document(document))} "
+                f"link_pages={len(link_pages)} merged_candidates={len(pages)}"
             )
             for row in pages:
                 if not isinstance(row, dict):
