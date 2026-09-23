@@ -1055,8 +1055,8 @@ class FacebookBusinessBrowser:
             link_pages: list[dict[str, Any]] = []
             seen_link_ids: set[str] = set()
             link_patterns = (
-                re.compile(r"[?&](?:page_id|id)=(\\d{5,25})(?:&|$)", re.IGNORECASE),
-                re.compile(r"/pages/(?:[^/?#]+/)?(\\d{5,25})(?:[/?#]|$)", re.IGNORECASE),
+                re.compile(r"[?&](?:page_id|id)=(\d{5,25})(?:&|$)", re.IGNORECASE),
+                re.compile(r"/pages/(?:[^/?#]+/)?(\d{5,25})(?:[/?#]|$)", re.IGNORECASE),
             )
             for link_row in link_rows:
                 if not isinstance(link_row, dict):
