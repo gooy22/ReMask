@@ -120,10 +120,10 @@ class BrowserNavigationRecoveryTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(browser.page.goto_calls, 1)
 
-    async def test_err_aborted_retries_once_when_replacement_dom_is_not_ready(self):
+    async def test_err_aborted_retries_once_when_no_facebook_surface_exists(self):
         class _Page:
             def __init__(self):
-                self.url = "https://business.facebook.com/reg/"
+                self.url = "about:blank"
                 self.goto_calls = 0
 
             async def goto(self, *args, **kwargs):
@@ -132,6 +132,7 @@ class BrowserNavigationRecoveryTests(unittest.IsolatedAsyncioTestCase):
                     raise Exception(
                         "Page.goto: net::ERR_ABORTED; maybe frame was detached?"
                     )
+                self.url = "https://business.facebook.com/reg/"
                 return None
 
             async def wait_for_timeout(self, ms):
@@ -142,7 +143,7 @@ class BrowserNavigationRecoveryTests(unittest.IsolatedAsyncioTestCase):
         )
         browser.page = _Page()
         browser._assert_authenticated = AsyncMock(return_value=None)
-        browser._body_text = AsyncMock(side_effect=["", "Meta Business Suite"])
+        browser._body_text = AsyncMock(return_value="")
         browser._form_ready = AsyncMock(return_value=False)
         browser._has_create_surface = AsyncMock(return_value=False)
 
