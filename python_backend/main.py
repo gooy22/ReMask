@@ -107,15 +107,16 @@ async def run_bm_browser_canary() -> None:
                     'skipped':True,
                     'reason':'no existing Business + free saved Page pair',
                 }
-                free_page=next(
-                    (
-                        row for row in (context.pages or [])
-                        if isinstance(row,dict)
-                        and str(row.get('id') or '').strip().isdigit()
-                        and not str(row.get('business_id') or '').strip()
-                    ),
-                    None,
-                )
+                saved_pages=[
+                    row for row in (context.pages or [])
+                    if isinstance(row,dict)
+                    and str(row.get('id') or '').strip().isdigit()
+                ]
+                free_pages=[
+                    row for row in saved_pages
+                    if not str(row.get('business_id') or '').strip()
+                ]
+                free_page=free_pages[0] if free_pages else None
                 existing_business_id=next(iter(sorted(business_snapshot)), '')
                 if existing_business_id and free_page is not None:
                     async with FacebookBusinessBrowser(context) as page_browser:
@@ -131,6 +132,7 @@ async def run_bm_browser_canary() -> None:
                     'dry_fill_name=%s dry_fill_email=%s filled_inputs=%s fields=%s '
                     'blocked_create=%s create_friendly=%s create_doc_id=%s '
                     'create_input_keys=%s blocked_posts=%s '
+                    'saved_pages=%s free_pages=%s '
                     'page_form_ready=%s page_form_skipped=%s page_already_attached=%s '
                     'page_result_selected=%s page_final_actions=%s '
                     'url=%s attempted=%d',
@@ -151,6 +153,8 @@ async def run_bm_browser_canary() -> None:
                         ensure_ascii=False,
                     )[:4000],
                     int(request_result.get('blocked_post_count') or 0),
+                    len(saved_pages),
+                    len(free_pages),
                     bool(page_form_result.get('ready')),
                     bool(page_form_result.get('skipped')),
                     bool(page_form_result.get('already_attached')),
@@ -162,7 +166,28 @@ async def run_bm_browser_canary() -> None:
                     str(form_result.get('current_url') or result.current_url),
                     attempted,
                 )
-                return
+
+                if not bool(page_form_result.get('skipped')):
+                    return
+
+                rejected.append({
+                    'profile_id':profile_id,
+                    'code':'PAGE_CANARY_PAIR_UNAVAILABLE',
+                    'detail':(
+                        f"businesses={len(business_snapshot)} "
+                        f"saved_pages={len(saved_pages)} "
+                        f"free_pages={len(free_pages)}"
+                    ),
+                })
+                log.info(
+                    'bm browser page canary skipped profile=%s businesses=%d '
+                    'saved_pages=%d free_pages=%d; trying next profile',
+                    profile_id,
+                    len(business_snapshot),
+                    len(saved_pages),
+                    len(free_pages),
+                )
+                continue
 
             except BrowserBusinessError as exc:
                 rejected.append({
