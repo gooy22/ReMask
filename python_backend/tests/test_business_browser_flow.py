@@ -63,6 +63,27 @@ class BrowserNetworkGateTests(unittest.TestCase):
         )
 
 
+class BrowserCreateSurfaceVisibilityTests(unittest.IsolatedAsyncioTestCase):
+    async def test_hidden_create_text_in_body_does_not_count_as_visible_surface(self):
+        class _EmptyLocator:
+            async def count(self):
+                return 0
+
+        class _Page:
+            def get_by_role(self, role, name=None):
+                return _EmptyLocator()
+
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-hidden-create")
+        )
+        browser.page = _Page()
+        browser._body_text = AsyncMock(
+            return_value="Create a business portfolio"
+        )
+
+        self.assertFalse(await browser._has_create_surface())
+
+
 class BrowserNavigationRecoveryTests(unittest.IsolatedAsyncioTestCase):
     async def test_err_aborted_is_accepted_when_meta_surface_is_alive(self):
         class _Page:

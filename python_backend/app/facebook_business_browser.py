@@ -705,8 +705,12 @@ class FacebookBusinessBrowser:
                 except Exception:
                     continue
 
-        body = (await self._body_text()).lower()
-        return any(name.lower() in body for name in self.CREATE_NAMES)
+        # Do not fall back to page-wide body text here. Meta often keeps
+        # menu items mounted but hidden in the SPA DOM; body text can therefore
+        # contain "Create business portfolio" even when there is no visible,
+        # clickable Create action. A false positive here skips opening the
+        # portfolio selector and later makes the form look "unavailable".
+        return False
 
     async def _form_ready(self) -> bool:
         if self.page is None:
