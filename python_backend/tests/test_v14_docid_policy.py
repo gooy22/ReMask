@@ -158,9 +158,9 @@ class CrossProfileInvalidationTests(unittest.TestCase):
             "CREATE_BM",
             candidate,
             success=False,
-            reason="1357054",
+            reason="1357054 PersistedQueryNotFound",
             profile_id="profile-3",
-            stale_failure=True,
+            failure_kind="stale_schema",
         )
         self.assertNotIn(
             candidate.doc_id,
