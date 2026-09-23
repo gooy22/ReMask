@@ -1178,7 +1178,7 @@ class FacebookBusinessBrowser:
         # Find a visible label-like text node and fill the nearest ancestor's
         # visible input through Playwright so React still receives input events.
         for label in labels:
-            pattern = re.compile(rf"^\\s*{re.escape(label)}\\s*$", re.IGNORECASE)
+            pattern = re.compile(rf"^\s*{re.escape(label)}\s*$", re.IGNORECASE)
             try:
                 text_nodes = self.page.get_by_text(pattern)
                 count = min(await text_nodes.count(), 8)
@@ -1387,7 +1387,7 @@ class FacebookBusinessBrowser:
                 if not first_value or not last_value:
                     name_parts = [
                         part
-                        for part in re.split(r"\\s+", _clean(profile_display_name))
+                        for part in re.split(r"\s+", _clean(profile_display_name))
                         if part
                     ]
                     if not first_value and name_parts:
