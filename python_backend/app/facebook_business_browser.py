@@ -1248,6 +1248,7 @@ class FacebookBusinessBrowser:
         names: tuple[str, ...],
         *,
         roles: tuple[str, ...] = ("button", "link", "menuitem"),
+        before_click: Callable[[], Awaitable[None]] | None = None,
     ) -> bool:
         if self.page is None:
             return False
@@ -1261,6 +1262,8 @@ class FacebookBusinessBrowser:
                     for index in range(min(count, 6)):
                         item = locator.nth(index)
                         if await item.is_visible() and await item.is_enabled():
+                            if before_click is not None:
+                                await before_click()
                             await item.click()
                             return True
                 except Exception:
@@ -2041,6 +2044,21 @@ class FacebookBusinessBrowser:
 
             sent = False
             clicked_any = False
+            page_click_intent_written = False
+
+            async def checkpoint_page_click_intent() -> None:
+                nonlocal page_click_intent_written
+                if page_click_intent_written or before_submit is None:
+                    return
+                await before_submit(
+                    {
+                        "phase": "PAGE_ADD_CLICK_INTENT",
+                        "business_id": business,
+                        "primary_page_id": page,
+                        "page_click_intent_at": int(time.time()),
+                    }
+                )
+                page_click_intent_written = True
 
             for _ in range(7):
                 if gate_future.done():
@@ -2100,7 +2118,8 @@ class FacebookBusinessBrowser:
                         "Підтвердити",
                         "Seite hinzufügen",
                         "Bestätigen",
-                    )
+                    ),
+                    before_click=checkpoint_page_click_intent,
                 )
                 if final_clicked:
                     clicked_any = True
