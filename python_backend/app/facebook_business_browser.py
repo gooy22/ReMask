@@ -966,24 +966,71 @@ class FacebookBusinessBrowser:
         # Meta does not switch the current portfolio after creation.
         selector_opened = False
         try:
-            role_buttons = self.page.locator('[role="button"]')
-            count = min(await role_buttons.count(), 180)
-            for index in range(count):
-                item = role_buttons.nth(index)
-                if not await item.is_visible():
-                    continue
-                text_value = _clean(await item.inner_text(timeout=1000))
-                if text_value.casefold() != "meta business suite":
-                    continue
-                box = await item.bounding_box()
-                if not box:
-                    continue
-                if float(box.get("x") or 0) > 260 or float(box.get("y") or 0) > 180:
-                    continue
-                await item.click(timeout=3000)
-                await self.page.wait_for_timeout(500)
-                selector_opened = True
-                break
+            selector_opened = bool(
+                await self.page.evaluate(
+                    """() => {
+                        const visible = (el) => {
+                            const r = el.getBoundingClientRect();
+                            const s = getComputedStyle(el);
+                            return r.width > 0 && r.height > 0
+                                && s.display !== 'none'
+                                && s.visibility !== 'hidden'
+                                && s.pointerEvents !== 'none';
+                        };
+                        const label = (el) => [
+                            el.getAttribute('aria-label') || '',
+                            el.getAttribute('title') || '',
+                            el.innerText || el.textContent || ''
+                        ].join(' ').replace(/\\s+/g, ' ').trim();
+
+                        const all = Array.from(document.querySelectorAll('*'));
+                        const home = all
+                            .filter(visible)
+                            .map(el => ({el, r:el.getBoundingClientRect(), text:label(el)}))
+                            .filter(row =>
+                                row.r.x < 230 &&
+                                row.r.y > 120 &&
+                                row.r.y < 260 &&
+                                /^(Home|Startseite|Start|Главная|Головна)$/i.test(row.text)
+                            )
+                            .sort((a,b) => a.r.y - b.r.y)[0];
+                        const homeY = home ? home.r.y : 205;
+
+                        const rows = all
+                            .filter(visible)
+                            .map(el => ({
+                                el,
+                                r:el.getBoundingClientRect(),
+                                text:label(el),
+                                role:el.getAttribute('role') || '',
+                                tabindex:el.getAttribute('tabindex') || '',
+                                tag:el.tagName
+                            }))
+                            .filter(row => {
+                                const r=row.r;
+                                return r.x <= 220 && r.y >= 118 && r.y < homeY - 2
+                                    && r.width >= 90 && r.width <= 225
+                                    && r.height >= 28 && r.height <= 85
+                                    && row.text
+                                    && !/^Meta Business Suite$/i.test(row.text)
+                                    && !/^(Home|Startseite|Start|Главная|Головна)$/i.test(row.text);
+                            });
+
+                        rows.sort((a,b) => {
+                            const aa=a.r.width*a.r.height;
+                            const ba=b.r.width*b.r.height;
+                            const ap=a.role==='button'||a.tag==='BUTTON'||a.tabindex==='0' ? -100000 : 0;
+                            const bp=b.role==='button'||b.tag==='BUTTON'||b.tabindex==='0' ? -100000 : 0;
+                            return (ap+aa)-(bp+ba) || b.r.y-a.r.y;
+                        });
+                        if (!rows[0]) return false;
+                        rows[0].el.click();
+                        return true;
+                    }"""
+                )
+            )
+            if selector_opened:
+                await self.page.wait_for_timeout(550)
         except Exception:
             selector_opened = False
 
