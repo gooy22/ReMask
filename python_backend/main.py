@@ -228,6 +228,12 @@ async def lifespan(app: FastAPI):
         except MirrorError as exc:
             log.error('persistent job mirror restore failed: %s',exc)
     await pool.start()
+    log.info(
+        'bm browser runtime config canary=%s diagnostics=%s browser_concurrency=%s',
+        BM_CANARY_ON_START,
+        str(os.getenv('REMASK_BM_DIAGNOSTICS') or ''),
+        str(os.getenv('REMASK_BM_BROWSER_CONCURRENCY') or ''),
+    )
     smoke_task=asyncio.create_task(run_startup_smoke(),name='remask-e2e-smoke')
     bm_canary_task=asyncio.create_task(
         run_bm_browser_canary(),
