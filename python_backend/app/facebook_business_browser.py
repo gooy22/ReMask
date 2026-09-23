@@ -1020,8 +1020,75 @@ class FacebookBusinessBrowser:
                 continue
 
             pages = _extract_pages_from_browser_document(document)
+
+            # Current Facebook "Your Pages" surfaces may render Page cards as
+            # normal anchors without a parseable Page JSON object. Collect
+            # those visible links too; this is read-only DOM inspection.
+            link_rows: list[dict[str, str]] = []
+            try:
+                link_rows = await self.page.locator(
+                    'main a[href], [role="main"] a[href], a[href]'
+                ).evaluate_all(
+                    """els => els.slice(0, 2500).map(el => ({
+                        href: el.href || '',
+                        text: (
+                            el.innerText
+                            || el.getAttribute('aria-label')
+                            || el.getAttribute('title')
+                            || ''
+                        ).replace(/\\s+/g, ' ').trim()
+                    })).filter(row => row.href && row.text)"""
+                )
+            except Exception as exc:
+                diagnostics.append(
+                    f"{url}: anchor scan {exc.__class__.__name__}"
+                )
+
+            link_pages: list[dict[str, Any]] = []
+            seen_link_ids: set[str] = set()
+            link_patterns = (
+                re.compile(r"[?&](?:page_id|id)=(\\d{5,25})(?:&|$)", re.IGNORECASE),
+                re.compile(r"/pages/(?:[^/?#]+/)?(\\d{5,25})(?:[/?#]|$)", re.IGNORECASE),
+            )
+            for link_row in link_rows:
+                if not isinstance(link_row, dict):
+                    continue
+                href = _clean(link_row.get("href"))
+                name = _clean(link_row.get("text"))
+                if not href or not name:
+                    continue
+                page_id = ""
+                for pattern in link_patterns:
+                    match = pattern.search(href)
+                    if match:
+                        page_id = _digits(match.group(1))
+                        if page_id:
+                            break
+                if not page_id or page_id in seen_link_ids:
+                    continue
+
+                # Do not treat generic Facebook navigation/profile anchors as
+                # Pages unless this is a Pages surface or the URL itself says
+                # /pages/. All scanned URLs here are explicit Your Pages/Page
+                # surfaces, so this condition remains intentionally narrow.
+                if "/pages/" not in href.lower() and "category=your_pages" not in url.lower():
+                    continue
+
+                seen_link_ids.add(page_id)
+                link_pages.append({
+                    "id": page_id,
+                    "name": name[:240],
+                    "category": "",
+                    "source": "browser_dom_link",
+                })
+
+            if link_pages:
+                pages.extend(link_pages)
+
             diagnostics.append(
-                f"{url}: bytes={len(document)} pages={len(pages)}"
+                f"{url}: bytes={len(document)} "
+                f"json_pages={len(_extract_pages_from_browser_document(document))} "
+                f"link_pages={len(link_pages)} merged_candidates={len(pages)}"
             )
             for row in pages:
                 if not isinstance(row, dict):
