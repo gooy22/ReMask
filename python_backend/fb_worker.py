@@ -1252,6 +1252,45 @@ class BusinessLogicController:
 
         return result
 
+    async def create_business_manager_v2(
+        self,
+        *,
+        params: dict[str, Any],
+        profile_id: str = "",
+    ):
+        """
+        Production wrapper for the v14 resumable BUSINESS flow.
+
+        The controller remains the single high-level entry point while the
+        candidate registry and persisted-query policy stay in
+        app.facebook_business_create.
+        """
+        from app.facebook_business_create import create_business_manager_v2
+
+        return await create_business_manager_v2(
+            self.session,
+            params=params,
+            profile_id=profile_id or self.session.profile.name,
+        )
+
+    async def attach_page_to_business(
+        self,
+        *,
+        business_id: str,
+        business_name: str,
+        page_id: str,
+        profile_id: str = "",
+    ):
+        from app.facebook_business_create import attach_page_to_business
+
+        return await attach_page_to_business(
+            self.session,
+            business_id=business_id,
+            business_name=business_name,
+            page_id=page_id,
+            profile_id=profile_id or self.session.profile.name,
+        )
+
     async def create_business_manager(
         self,
         name: str,
