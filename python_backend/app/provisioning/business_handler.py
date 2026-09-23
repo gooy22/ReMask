@@ -140,6 +140,10 @@ async def business_handler(
         or profile_id
     )
 
+    qpl_join_id = _clean(
+        params.get("qpl_join_id")
+    )
+
     manual_doc_id = _clean(
         params.get("manual_doc_id")
         or params.get("doc_id")
@@ -219,6 +223,7 @@ async def business_handler(
                     "user_first_name": first_name,
                     "user_last_name": last_name,
                     "profile_display_name": display_name,
+                    "qpl_join_id": qpl_join_id,
                     "manual_doc_id": manual_doc_id,
                 },
                 profile_id=profile_id,
