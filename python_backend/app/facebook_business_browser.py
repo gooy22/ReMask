@@ -642,40 +642,129 @@ class FacebookBusinessBrowser:
         if await self._has_create_surface():
             return True
 
-        # Verified against the live 2026 Business Suite UI: the portfolio
-        # selector is a top-left DIV role=button with visible innerText
-        # "Meta Business Suite". Its accessible name is empty in the live DOM,
-        # so get_by_role(name=...) cannot be relied on here.
+        # Current Meta Business Suite places the business/page selector BELOW
+        # the Meta Business Suite logo and ABOVE Home/Startseite. The selector
+        # is not consistently exposed as a button/aria control, so first locate
+        # it geometrically in that narrow left-sidebar band and click the
+        # deepest visible element there. Do not click the Meta Business Suite
+        # logo itself: live canary proved that is a different control.
         try:
-            role_buttons = self.page.locator('[role="button"]')
-            count = min(await role_buttons.count(), 180)
-            for index in range(count):
-                item = role_buttons.nth(index)
-                if not await item.is_visible():
-                    continue
-                text_value = _clean(await item.inner_text(timeout=1000))
-                if text_value.casefold() != "meta business suite":
-                    continue
-                box = await item.bounding_box()
-                if not box:
-                    continue
-                if float(box.get("x") or 0) > 260 or float(box.get("y") or 0) > 180:
-                    continue
-                await item.click(timeout=3000)
-                await self.page.wait_for_timeout(600)
+            probe = await self.page.evaluate(
+                """() => {
+                    const visible = (el) => {
+                        const r = el.getBoundingClientRect();
+                        const s = getComputedStyle(el);
+                        return r.width > 0 && r.height > 0
+                            && s.display !== 'none'
+                            && s.visibility !== 'hidden'
+                            && s.pointerEvents !== 'none';
+                    };
+                    const label = (el) => [
+                        el.getAttribute('aria-label') || '',
+                        el.getAttribute('title') || '',
+                        el.innerText || el.textContent || ''
+                    ].join(' ').replace(/\\s+/g, ' ').trim();
+
+                    const all = Array.from(document.querySelectorAll('*'));
+                    const home = all
+                        .filter(visible)
+                        .map(el => ({el, r: el.getBoundingClientRect(), text: label(el)}))
+                        .filter(row =>
+                            row.r.x < 230 &&
+                            row.r.y > 120 &&
+                            row.r.y < 260 &&
+                            /^(Home|Startseite|Start|Главная|Головна)$/i.test(row.text)
+                        )
+                        .sort((a,b) => a.r.y - b.r.y)[0];
+
+                    const homeY = home ? home.r.y : 205;
+                    const rows = all
+                        .filter(visible)
+                        .map((el, index) => ({
+                            el,
+                            index,
+                            r: el.getBoundingClientRect(),
+                            text: label(el),
+                            role: el.getAttribute('role') || '',
+                            tabindex: el.getAttribute('tabindex') || '',
+                            tag: el.tagName
+                        }))
+                        .filter(row => {
+                            const r = row.r;
+                            if (r.x > 220 || r.y < 118 || r.y >= homeY - 2) return false;
+                            if (r.width < 90 || r.width > 225 || r.height < 28 || r.height > 85) return false;
+                            if (!row.text || /^Meta Business Suite$/i.test(row.text)) return false;
+                            if (/^(Home|Startseite|Start|Главная|Головна)$/i.test(row.text)) return false;
+                            return true;
+                        });
+
+                    // Prefer the smallest/deepest candidate: this is normally
+                    // the current Page/business selector itself rather than a
+                    // large sidebar wrapper.
+                    rows.sort((a,b) => {
+                        const ai = a.r.width * a.r.height;
+                        const bi = b.r.width * b.r.height;
+                        const ar = a.role === 'button' || a.tag === 'BUTTON' || a.tabindex === '0' ? -100000 : 0;
+                        const br = b.role === 'button' || b.tag === 'BUTTON' || b.tabindex === '0' ? -100000 : 0;
+                        return (ar + ai) - (br + bi) || b.r.y - a.r.y;
+                    });
+
+                    const best = rows[0];
+                    if (!best) {
+                        return {
+                            clicked:false,
+                            homeY,
+                            candidates: rows.slice(0,12).map(row => ({
+                                text:row.text, role:row.role, tag:row.tag,
+                                x:Math.round(row.r.x), y:Math.round(row.r.y),
+                                w:Math.round(row.r.width), h:Math.round(row.r.height)
+                            }))
+                        };
+                    }
+
+                    best.el.click();
+                    return {
+                        clicked:true,
+                        homeY,
+                        clickedCandidate:{
+                            text:best.text, role:best.role, tag:best.tag,
+                            x:Math.round(best.r.x), y:Math.round(best.r.y),
+                            w:Math.round(best.r.width), h:Math.round(best.r.height)
+                        },
+                        candidates: rows.slice(0,12).map(row => ({
+                            text:row.text, role:row.role, tag:row.tag,
+                            x:Math.round(row.r.x), y:Math.round(row.r.y),
+                            w:Math.round(row.r.width), h:Math.round(row.r.height)
+                        }))
+                    };
+                }"""
+            )
+            if isinstance(probe, dict) and probe.get("clicked"):
+                await self.page.wait_for_timeout(650)
                 if await self._has_create_surface():
                     return True
-                self._last_selector_diagnostic = await self._diagnostic(
-                    "portfolio_selector_open_without_create"
+
+                # Preserve a compact probe before the larger diagnostic so the
+                # exact clicked selector survives Railway log truncation.
+                diagnostic = await self._diagnostic(
+                    "portfolio_sidebar_selector_open_without_create"
                 )
+                self._last_selector_diagnostic = {
+                    "sidebar_probe": probe,
+                    **diagnostic,
+                }
                 await self.page.keyboard.press("Escape")
-                break
-        except Exception:
+                await self.page.wait_for_timeout(120)
+        except Exception as exc:
+            self._last_selector_diagnostic = {
+                "sidebar_probe_error": f"{exc.__class__.__name__}: {exc}"
+            }
             try:
                 await self.page.keyboard.press("Escape")
             except Exception:
                 pass
 
+        # Structured-menu fallbacks for other Business Suite variants.
         selectors = (
             'button[aria-haspopup="menu"]',
             '[role="button"][aria-haspopup="menu"]',
@@ -702,24 +791,24 @@ class FacebookBusinessBrowser:
 
                     x = float(box.get("x") or 0)
                     y = float(box.get("y") or 0)
-                    if x > 520 or y > 300:
+                    if x > 260 or y < 105 or y > 210:
                         continue
 
-                    text = _clean(await item.inner_text(timeout=1000))
+                    text_value = _clean(await item.inner_text(timeout=1000))
                     aria = _clean(await item.get_attribute("aria-label"))
                     title = _clean(await item.get_attribute("title"))
-                    key = " ".join((text, aria, title)).lower()
+                    key = " ".join((text_value, aria, title)).lower()
+
+                    # Explicitly reject the logo control discovered by canary.
+                    if text_value.casefold() == "meta business suite":
+                        continue
 
                     score = 0
-                    if any(token in key for token in ("business", "portfolio")):
+                    if any(token in key for token in ("business", "portfolio", "asset")):
                         score -= 100
                     if any(token in key for token in ("switch", "select", "account")):
                         score -= 50
-                    if y < 180:
-                        score -= 20
-                    if x < 360:
-                        score -= 10
-
+                    score += int(y)
                     candidates.append((score, y, x, item))
                 except Exception:
                     continue
@@ -727,55 +816,23 @@ class FacebookBusinessBrowser:
         candidates.sort(key=lambda row: (row[0], row[1], row[2]))
 
         seen: set[tuple[int, int]] = set()
-        for _, y, x, item in candidates[:12]:
+        for _, y, x, item in candidates[:10]:
             marker = (round(x), round(y))
             if marker in seen:
                 continue
             seen.add(marker)
-
             try:
                 await item.click(timeout=2500)
-                await self.page.wait_for_timeout(450)
+                await self.page.wait_for_timeout(500)
                 if await self._has_create_surface():
                     return True
                 await self.page.keyboard.press("Escape")
-                await self.page.wait_for_timeout(150)
+                await self.page.wait_for_timeout(120)
             except Exception:
                 try:
                     await self.page.keyboard.press("Escape")
                 except Exception:
                     pass
-
-        # Current Business Suite exposes the portfolio selector immediately
-        # around the "Home" heading on some variants. Restrict this fallback
-        # to an ancestor that is itself an interactive control.
-        for home_name in ("Home", "Главная", "Головна", "Startseite", "Start"):
-            try:
-                home = self.page.get_by_text(
-                    re.compile(rf"^\\s*{re.escape(home_name)}\\s*$", re.IGNORECASE)
-                )
-                count = min(await home.count(), 6)
-            except Exception:
-                continue
-
-            for index in range(count):
-                try:
-                    node = home.nth(index)
-                    interactive = node.locator(
-                        'xpath=ancestor-or-self::*[self::button or @role="button"][1]'
-                    )
-                    if not await interactive.count() or not await interactive.first.is_visible():
-                        continue
-                    box = await interactive.first.bounding_box()
-                    if not box or float(box.get("x") or 0) > 520 or float(box.get("y") or 0) > 300:
-                        continue
-                    await interactive.first.click(timeout=2500)
-                    await self.page.wait_for_timeout(450)
-                    if await self._has_create_surface():
-                        return True
-                    await self.page.keyboard.press("Escape")
-                except Exception:
-                    continue
 
         return False
 
