@@ -1,18 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 from typing import Any
 
-from fb_worker import (
-    AuthenticationError,
-    ProxyError,
-    RemoteRequestError,
-)
-
-from ..facebook_business_create import BusinessMutationError
-from .meta_errors import classify_meta_request_error
+from ..facebook_business_browser import BrowserBusinessError
 from .models import ProvisioningError, ProvisioningStep
 from .state import ProvisioningStateStore
 
@@ -27,7 +21,6 @@ def _clean(value: Any) -> str:
 def _checkpoint_result(step_state: Any) -> dict[str, Any]:
     if not isinstance(step_state, dict):
         return {}
-
     result = step_state.get("result")
     return dict(result) if isinstance(result, dict) else {}
 
@@ -39,10 +32,21 @@ async def business_handler(
     *args: Any,
     **kwargs: Any,
 ) -> dict[str, Any]:
+    """
+    Browser-driven Add BM.
+
+    Important invariants:
+    - Meta's own Business Suite UI submits CREATE and Page-add requests.
+    - ReMask never needs a CREATE_BM doc_id / qpl_join_id / request envelope.
+    - CREATE is checkpointed before the final click.
+    - If a previous attempt reached CREATE_SUBMITTED, retry reconciles first and
+      never blindly submits another CREATE.
+    - The selected Page is attached and verified in the same profile-bound
+      Chromium session.
+    """
     del args
 
     context = session.context
-
     profile_id = _clean(
         kwargs.get("profile_id")
         or state.get("profile_id")
@@ -70,7 +74,6 @@ async def business_handler(
             "BUSINESS item_id is missing",
             retryable=False,
         )
-
     if not profile_id or profile_id.lower() == "none":
         raise ProvisioningError(
             "INVALID_INPUT",
@@ -78,10 +81,7 @@ async def business_handler(
             retryable=False,
         )
 
-    bm_name = _clean(
-        params.get("name")
-        or params.get("bm_name")
-    )
+    bm_name = _clean(params.get("name") or params.get("bm_name"))
     if not bm_name:
         raise ProvisioningError(
             "INVALID_INPUT",
@@ -95,10 +95,7 @@ async def business_handler(
             retryable=False,
         )
 
-    page_id = _clean(
-        params.get("page_id")
-        or params.get("primary_page_id")
-    )
+    page_id = _clean(params.get("page_id") or params.get("primary_page_id"))
     if not re.fullmatch(r"\d{5,30}", page_id):
         raise ProvisioningError(
             "INVALID_PRIMARY_PAGE",
@@ -114,7 +111,7 @@ async def business_handler(
     if not user_email:
         raise ProvisioningError(
             "BUSINESS_EMAIL_REQUIRED",
-            "BUSINESS.user_email is required by current private Business creation flow",
+            "BUSINESS.user_email is required by Meta Business Suite",
             retryable=False,
         )
     if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", user_email):
@@ -140,274 +137,399 @@ async def business_handler(
         or profile_id
     )
 
-    qpl_join_id = _clean(
-        params.get("qpl_join_id")
-    )
-
-    request_envelope = (
-        params.get("request_envelope")
-        if isinstance(params.get("request_envelope"), dict)
-        else {}
-    )
-
-    manual_doc_id = _clean(
-        params.get("manual_doc_id")
-        or params.get("doc_id")
-    )
-    if manual_doc_id and not re.fullmatch(r"\d{5,40}", manual_doc_id):
-        raise ProvisioningError(
-            "INVALID_INPUT",
-            "BUSINESS.manual_doc_id must contain 5-40 digits",
-            retryable=False,
-        )
-
     step_state = kwargs.get("step_state")
     if not isinstance(step_state, dict):
         step_state = await provisioning_state.step(
             item_id,
             ProvisioningStep.BUSINESS,
         )
-
     checkpoint = _checkpoint_result(step_state)
-
-    checkpoint_business_id = _clean(checkpoint.get("business_id"))
-    checkpoint_resume_from = _clean(
-        checkpoint.get("resume_from")
+    prior_error_code = _clean(
+        step_state.get("error_code")
+        if isinstance(step_state, dict)
+        else ""
     ).upper()
 
-    resumed = bool(
-        checkpoint_business_id.isdigit()
-        and checkpoint_resume_from == "ATTACH_PAGE"
+    checkpoint_page = _clean(
+        checkpoint.get("primary_page_id")
+        or checkpoint.get("page_id")
     )
-
-    controller = await session.facebook_controller()
-
-    if resumed:
-        business_id = checkpoint_business_id
-
-        checkpoint_page_id = _clean(
-            checkpoint.get("primary_page_id")
-            or checkpoint.get("page_id")
-        )
-        if checkpoint_page_id and checkpoint_page_id != page_id:
-            raise ProvisioningError(
-                "BUSINESS_CHECKPOINT_MISMATCH",
-                (
-                    f"Saved BUSINESS checkpoint belongs to Page "
-                    f"{checkpoint_page_id}, but retry requested Page {page_id}. "
-                    "CREATE will not be repeated."
-                ),
-                retryable=False,
-            )
-
-        checkpoint_name = _clean(checkpoint.get("business_name"))
-        if checkpoint_name:
-            bm_name = checkpoint_name
-
-        log.warning(
-            "[%s] BUSINESS resume item=%s business_id=%s page_id=%s",
-            profile_id,
-            item_id,
-            business_id,
-            page_id,
-        )
-    else:
-        log.info(
-            "[%s] BUSINESS CREATE item=%s name=%s page=%s manual_doc_id=%s",
-            profile_id,
-            item_id,
-            bm_name,
-            page_id,
-            manual_doc_id or "<none>",
-        )
-
-        try:
-            create_result = await controller.create_business_manager_v2(
-                params={
-                    "name": bm_name,
-                    "user_email": user_email,
-                    "user_first_name": first_name,
-                    "user_last_name": last_name,
-                    "profile_display_name": display_name,
-                    "qpl_join_id": qpl_join_id,
-                    "request_envelope": request_envelope,
-                    "manual_doc_id": manual_doc_id,
-                },
-                profile_id=profile_id,
-            )
-        except BusinessMutationError as exc:
-            raise ProvisioningError(
-                exc.code,
-                str(exc),
-                retryable=exc.retryable,
-            ) from exc
-        except AuthenticationError as exc:
-            raise ProvisioningError(
-                "SESSION_EXPIRED",
-                str(exc),
-                retryable=False,
-            ) from exc
-        except RemoteRequestError as exc:
-            error_code, retryable, diagnostic = classify_meta_request_error(
-                exc,
-                entity="BUSINESS",
-            )
-            raise ProvisioningError(
-                error_code,
-                diagnostic,
-                retryable=retryable,
-            ) from exc
-        except ProxyError as exc:
-            raise ProvisioningError(
-                "PROXY_DEAD",
-                str(exc),
-                retryable=True,
-            ) from exc
-        except asyncio.TimeoutError as exc:
-            raise ProvisioningError(
-                "REMOTE_TIMEOUT",
-                "Facebook BUSINESS create request timeout",
-                retryable=True,
-            ) from exc
-
-        business_id = _clean(create_result.business_id)
-        if not business_id.isdigit():
-            raise ProvisioningError(
-                "INVALID_RESULT",
-                "CREATE_BM returned invalid business_id",
-                retryable=False,
-            )
-
-        checkpoint = {
-            "business_id": business_id,
-            "business_name": bm_name,
-            "primary_page_id": page_id,
-            "resume_from": "ATTACH_PAGE",
-            "create_doc_id": _clean(create_result.candidate.doc_id),
-            "create_friendly_name": _clean(
-                create_result.candidate.friendly_name
+    if checkpoint_page and checkpoint_page != page_id:
+        raise ProvisioningError(
+            "BUSINESS_CHECKPOINT_MISMATCH",
+            (
+                f"Saved BUSINESS checkpoint belongs to Page {checkpoint_page}, "
+                f"but retry requested Page {page_id}. CREATE will not be repeated."
             ),
-            "create_source": _clean(create_result.candidate.source),
-            "create_variables_mode": _clean(
-                create_result.candidate.variables_mode
-            ),
-            "attach_attempts": 0,
-            "last_attach_error": "",
-        }
+            retryable=False,
+        )
 
-        try:
-            checkpoint = await provisioning_state.checkpoint(
-                item_id,
-                profile_id,
-                scope_key,
-                ProvisioningStep.BUSINESS,
-                checkpoint,
-            )
-        except Exception as exc:
-            log.critical(
-                "[%s] BUSINESS created id=%s but atomic checkpoint failed item=%s: %s",
-                profile_id,
-                business_id,
-                item_id,
-                exc,
-            )
-            raise ProvisioningError(
-                "BUSINESS_CREATE_CHECKPOINT_FAILED",
-                (
-                    f"Business {business_id} was created, but the local "
-                    "ATTACH_PAGE checkpoint could not be committed. "
-                    "CREATE must not be retried automatically."
-                ),
-                retryable=False,
-            ) from exc
+    checkpoint_name = _clean(checkpoint.get("business_name"))
+    if checkpoint_name:
+        bm_name = checkpoint_name
+
+    phase = _clean(
+        checkpoint.get("phase")
+        or checkpoint.get("resume_from")
+    ).upper()
+    business_id = _clean(checkpoint.get("business_id"))
+    recovered = False
+
+    # The network gate aborts the Meta request if the atomic SUBMITTED
+    # checkpoint cannot be persisted. In that specific case we know the
+    # irreversible request did NOT reach Meta, so retry may safely submit
+    # again instead of getting stuck forever in CLICK_INTENT.
+    create_known_not_sent = (
+        prior_error_code == "CREATE_CHECKPOINT_FAILED_BEFORE_SEND"
+        and phase == "CREATE_CLICK_INTENT"
+    )
+    page_known_not_sent = (
+        prior_error_code == "PAGE_CHECKPOINT_FAILED_BEFORE_SEND"
+        and phase == "PAGE_ADD_CLICK_INTENT"
+    )
+    if create_known_not_sent:
+        phase = "CREATE_NOT_SUBMITTED"
+    if page_known_not_sent:
+        phase = "CREATE_CONFIRMED"
 
     try:
-        attach_result = await controller.attach_page_to_business(
-            business_id=business_id,
-            business_name=bm_name,
-            page_id=page_id,
-            profile_id=profile_id,
-        )
-    except Exception as exc:
-        attach_attempts = int(checkpoint.get("attach_attempts") or 0) + 1
+        browser = await session.facebook_business_browser()
 
-        try:
+        # Legacy checkpoints produced by the previous GraphQL flow already
+        # contain a created business_id. They are safe to resume at Page attach.
+        if business_id.isdigit():
+            phase = phase or "CREATE_CONFIRMED"
+            log.info(
+                "[%s] BUSINESS resume existing business_id=%s phase=%s page=%s",
+                profile_id,
+                business_id,
+                phase,
+                page_id,
+            )
+
+        elif phase in {
+            "CREATE_SUBMITTED",
+            "CREATE_CLICK_INTENT",
+            "CREATE_PENDING_SUBMIT",
+            "CREATE_RESULT_UNKNOWN",
+        }:
+            before_ids = [
+                str(value)
+                for value in (checkpoint.get("business_ids_before") or [])
+                if str(value).isdigit()
+            ]
+            if not before_ids:
+                raise ProvisioningError(
+                    "CREATE_RESULT_UNKNOWN",
+                    (
+                        "A previous CREATE may have been submitted, but the "
+                        "pre-submit Business snapshot is missing. ReMask will "
+                        "not submit another CREATE automatically."
+                    ),
+                    retryable=False,
+                )
+
+            log.warning(
+                "[%s] BUSINESS reconcile after uncertain CREATE item=%s phase=%s",
+                profile_id,
+                item_id,
+                phase,
+            )
+            recovered_result = await browser.reconcile_created_business(
+                before_ids=before_ids,
+                business_name=bm_name,
+            )
+            business_id = _clean(recovered_result.business_id)
+            recovered = True
             checkpoint = await provisioning_state.checkpoint(
                 item_id,
                 profile_id,
                 scope_key,
                 ProvisioningStep.BUSINESS,
                 {
+                    "phase": "CREATE_CONFIRMED",
+                    "resume_from": "PAGE_ADD",
                     "business_id": business_id,
                     "business_name": bm_name,
                     "primary_page_id": page_id,
-                    "resume_from": "ATTACH_PAGE",
-                    "attach_attempts": attach_attempts,
-                    "last_attach_error": (
-                        f"{exc.__class__.__name__}: {exc}"
-                    )[:4000],
+                    "recovered_after_create_uncertainty": True,
                 },
             )
-        except Exception as checkpoint_exc:
-            log.error(
-                "[%s] failed to persist ATTACH_PAGE failure checkpoint "
-                "item=%s business_id=%s: %s",
+
+        else:
+            before_map = await browser.snapshot_businesses()
+            checkpoint = await provisioning_state.checkpoint(
+                item_id,
+                profile_id,
+                scope_key,
+                ProvisioningStep.BUSINESS,
+                {
+                    "phase": "BUSINESS_SNAPSHOT",
+                    "business_name": bm_name,
+                    "primary_page_id": page_id,
+                    "business_ids_before": sorted(before_map),
+                },
+            )
+
+            async def before_create_submit(patch: dict[str, Any]) -> None:
+                await provisioning_state.checkpoint(
+                    item_id,
+                    profile_id,
+                    scope_key,
+                    ProvisioningStep.BUSINESS,
+                    {
+                        **patch,
+                        "business_name": bm_name,
+                        "primary_page_id": page_id,
+                    },
+                )
+
+            create_result = await browser.create_business(
+                business_name=bm_name,
+                user_email=user_email,
+                user_first_name=first_name,
+                user_last_name=last_name,
+                profile_display_name=display_name,
+                before_snapshot=before_map,
+                before_submit=before_create_submit,
+            )
+            business_id = _clean(create_result.business_id)
+            if not business_id.isdigit():
+                raise ProvisioningError(
+                    "INVALID_RESULT",
+                    "Browser CREATE returned invalid business_id",
+                    retryable=False,
+                )
+
+            checkpoint = await provisioning_state.checkpoint(
+                item_id,
+                profile_id,
+                scope_key,
+                ProvisioningStep.BUSINESS,
+                {
+                    "phase": "CREATE_CONFIRMED",
+                    "resume_from": "PAGE_ADD",
+                    "business_id": business_id,
+                    "business_name": bm_name,
+                    "primary_page_id": page_id,
+                    "business_ids_before": create_result.before_ids,
+                    "business_ids_after": create_result.after_ids,
+                    "create_response_business_id": (
+                        create_result.response_business_id
+                    ),
+                    "create_response_friendly_name": (
+                        create_result.response_friendly_name
+                    ),
+                    "recovered_after_create_uncertainty": bool(
+                        create_result.recovered
+                    ),
+                },
+            )
+
+        if not business_id.isdigit():
+            raise ProvisioningError(
+                "INVALID_RESULT",
+                "BUSINESS has no confirmed business_id",
+                retryable=False,
+            )
+
+        if page_known_not_sent:
+            checkpoint = await provisioning_state.checkpoint(
+                item_id,
+                profile_id,
+                scope_key,
+                ProvisioningStep.BUSINESS,
+                {
+                    "phase": "CREATE_CONFIRMED",
+                    "resume_from": "PAGE_ADD",
+                    "business_id": business_id,
+                    "business_name": bm_name,
+                    "primary_page_id": page_id,
+                    "page_gate_aborted_before_meta": True,
+                },
+            )
+
+        # If a prior Page-add submit was interrupted, verify before doing
+        # anything else. We do not blindly click Add again.
+        phase = _clean(checkpoint.get("phase")).upper()
+        if phase in {"PAGE_ADD_SUBMITTED", "PAGE_ADD_CLICK_INTENT"}:
+            if await browser.verify_page_attached(
+                business_id=business_id,
+                page_id=page_id,
+            ):
+                checkpoint = await provisioning_state.checkpoint(
+                    item_id,
+                    profile_id,
+                    scope_key,
+                    ProvisioningStep.BUSINESS,
+                    {
+                        "phase": "PAGE_CONFIRMED",
+                        "resume_from": "DONE",
+                        "page_recovered_after_uncertainty": True,
+                    },
+                )
+            else:
+                raise ProvisioningError(
+                    "PAGE_ATTACH_RESULT_UNKNOWN",
+                    (
+                        f"Business {business_id} exists, but a previous Page-add "
+                        f"submit for Page {page_id} cannot yet be confirmed. "
+                        "Retry performs verification only; ReMask will not "
+                        "blindly submit the Page-add action again."
+                    ),
+                    retryable=True,
+                )
+
+        if _clean(checkpoint.get("phase")).upper() != "PAGE_CONFIRMED":
+            if await browser.verify_page_attached(
+                business_id=business_id,
+                page_id=page_id,
+            ):
+                checkpoint = await provisioning_state.checkpoint(
+                    item_id,
+                    profile_id,
+                    scope_key,
+                    ProvisioningStep.BUSINESS,
+                    {
+                        "phase": "PAGE_CONFIRMED",
+                        "resume_from": "DONE",
+                        "page_already_attached": True,
+                    },
+                )
+            else:
+                async def before_page_submit(patch: dict[str, Any]) -> None:
+                    await provisioning_state.checkpoint(
+                        item_id,
+                        profile_id,
+                        scope_key,
+                        ProvisioningStep.BUSINESS,
+                        {
+                            **patch,
+                            "business_id": business_id,
+                            "business_name": bm_name,
+                            "primary_page_id": page_id,
+                        },
+                    )
+
+                page_result = await browser.add_existing_page(
+                    business_id=business_id,
+                    page_id=page_id,
+                    before_submit=before_page_submit,
+                )
+
+                checkpoint = await provisioning_state.checkpoint(
+                    item_id,
+                    profile_id,
+                    scope_key,
+                    ProvisioningStep.BUSINESS,
+                    {
+                        "phase": "PAGE_CONFIRMED",
+                        "resume_from": "DONE",
+                        "business_id": business_id,
+                        "business_name": bm_name,
+                        "primary_page_id": page_id,
+                        "page_already_attached": bool(
+                            page_result.already_attached
+                        ),
+                    },
+                )
+
+    except ProvisioningError:
+        raise
+    except BrowserBusinessError as exc:
+        log.warning(
+            "[%s] BUSINESS browser failure item=%s code=%s retryable=%s: %s",
+            profile_id,
+            item_id,
+            exc.code,
+            exc.retryable,
+            exc,
+        )
+        try:
+            await provisioning_state.checkpoint(
+                item_id,
+                profile_id,
+                scope_key,
+                ProvisioningStep.BUSINESS,
+                {
+                    "last_browser_error_code": exc.code,
+                    "last_browser_error": str(exc)[:4000],
+                    "last_browser_diagnostic": (
+                        exc.diagnostic
+                        if isinstance(exc.diagnostic, dict)
+                        else {}
+                    ),
+                },
+            )
+        except Exception:
+            log.exception(
+                "[%s] failed to persist BUSINESS browser diagnostic item=%s",
                 profile_id,
                 item_id,
-                business_id,
-                checkpoint_exc,
             )
 
-        if isinstance(exc, BusinessMutationError):
-            detail = str(exc)
-        elif isinstance(exc, AuthenticationError):
-            detail = f"SESSION_EXPIRED: {exc}"
-        elif isinstance(exc, RemoteRequestError):
-            _, _, detail = classify_meta_request_error(
-                exc,
-                entity="BUSINESS_PAGE_ATTACH",
-            )
-        elif isinstance(exc, ProxyError):
-            detail = f"PROXY_DEAD: {exc}"
-        elif isinstance(exc, asyncio.TimeoutError):
-            detail = "REMOTE_TIMEOUT: Facebook Page attach request timeout"
-        else:
-            detail = f"{exc.__class__.__name__}: {exc}"
+        diagnostic_suffix = ""
+        if isinstance(exc.diagnostic, dict) and exc.diagnostic:
+            try:
+                diagnostic_suffix = " diagnostic=" + json.dumps(
+                    exc.diagnostic,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )[:5000]
+            except Exception:
+                diagnostic_suffix = ""
 
         raise ProvisioningError(
-            "BUSINESS_CREATED_PAGE_ATTACH_FAILED",
-            (
-                f"Business {business_id} already exists and is checkpointed. "
-                f"resume_from=ATTACH_PAGE. Primary Page {page_id} attachment "
-                f"failed: {detail}"
-            ),
+            exc.code,
+            str(exc) + diagnostic_suffix,
+            retryable=exc.retryable,
+        ) from exc
+    except asyncio.TimeoutError as exc:
+        raise ProvisioningError(
+            "REMOTE_TIMEOUT",
+            "Meta Business browser workflow timed out",
+            retryable=True,
+        ) from exc
+    except Exception as exc:
+        log.exception(
+            "[%s] BUSINESS browser workflow crashed item=%s: %s",
+            profile_id,
+            item_id,
+            exc,
+        )
+        raise ProvisioningError(
+            "BUSINESS_BROWSER_FAILED",
+            f"{exc.__class__.__name__}: {exc}",
             retryable=True,
         ) from exc
 
     return {
         "business_id": business_id,
         "primary_page_id": page_id,
+        "phase": "PAGE_CONFIRMED",
         "resume_from": "DONE",
-        "resumed": resumed,
-        "transport": "facebook_web_graphql_scope_selector_plus_primary_page",
+        "resumed": bool(
+            recovered
+            or checkpoint.get("recovered_after_create_uncertainty")
+        ),
+        "transport": "facebook_business_suite_ui",
         "create": {
-            "doc_id": _clean(checkpoint.get("create_doc_id")),
+            "response_business_id": _clean(
+                checkpoint.get("create_response_business_id")
+            ),
             "friendly_name": _clean(
-                checkpoint.get("create_friendly_name")
+                checkpoint.get("create_response_friendly_name")
             ),
-            "variables_mode": _clean(
-                checkpoint.get("create_variables_mode")
+            "recovered": bool(
+                checkpoint.get("recovered_after_create_uncertainty")
             ),
-            "source": _clean(checkpoint.get("create_source")),
         },
-        "attach": {
-            "doc_id": _clean(attach_result.candidate.doc_id),
-            "friendly_name": _clean(
-                attach_result.candidate.friendly_name
+        "page": {
+            "already_attached": bool(
+                checkpoint.get("page_already_attached")
             ),
-            "variables_mode": _clean(
-                attach_result.candidate.variables_mode
+            "recovered": bool(
+                checkpoint.get("page_recovered_after_uncertainty")
             ),
-            "source": _clean(attach_result.candidate.source),
         },
     }

@@ -15,39 +15,19 @@ RUN python3 -m venv /opt/remask-venv \
     && /opt/remask-venv/bin/pip install --no-cache-dir -r /tmp/remask-python-requirements.txt
 COPY python_backend /opt/remask-python
 RUN /opt/remask-venv/bin/python -m compileall -q /opt/remask-python \
-    && grep -q 'class FacebookWebSession' /opt/remask-python/fb_worker.py \
-    && grep -q 'WebSessionManager = FacebookWebSession' /opt/remask-python/fb_worker.py \
-    && grep -q 'FB_DTSG_PATTERNS' /opt/remask-python/fb_worker.py \
-    && grep -q 'DTSGInitData' /opt/remask-python/fb_worker.py \
-    && grep -q 'mbasic.facebook.com/profile.php' /opt/remask-python/fb_worker.py \
-    && grep -q 'CurrentUserInitialData' /opt/remask-python/fb_worker.py \
-    && grep -q '/ajax/dtsg/' /opt/remask-python/fb_worker.py \
-    && grep -q 'm.facebook.com/ajax/dtsg' /opt/remask-python/fb_worker.py \
-    && grep -q 'best_authenticated_body' /opt/remask-python/fb_worker.py \
-    && grep -q '_parse_dtsg_refresh_response' /opt/remask-python/fb_worker.py \
     && cd /opt/remask-python \
-    && /opt/remask-venv/bin/python -c "import fb_worker; from app.session import ProfileSession; from app.provisioning.business_handler import business_handler; from app.provisioning.ad_account_handler import ad_account_handler; from app.provisioning.meta_errors import classify_meta_request_error; assert fb_worker.WebSessionManager is fb_worker.FacebookWebSession" \
-    && grep -q 'discover_current_scope_selector_create_candidate' /opt/remask-python/app/facebook_business_create.py \
-    && grep -q 'set_business_primary_page' /opt/remask-python/app/facebook_business_create.py \
-    && grep -q 'SET_PRIMARY_PAGE' /opt/remask-python/app/facebook_docids.py \
-    && /opt/remask-venv/bin/python -m unittest -q tests.test_fb_worker_bootstrap tests.test_business_private_first tests.test_business_docid_discovery tests.test_business_two_step tests.test_v14_docid_policy tests.test_business_resume_checkpoint tests.test_business_create_variables_capture tests.test_fb_worker_request_envelope tests.test_business_create_exact_envelope \
-    && grep -q 'MBS_BUSINESS_CREATION_IN_SCOPE_SELECTOR_FOOTER' /opt/remask-python/app/facebook_business_create.py \
-    && grep -q 'BIZWEB_SCOPE_SELECTOR_FOOTER_CREATION_BUTTON' /opt/remask-python/app/facebook_business_create.py \
-    && grep -q 'qpl_join_id' /opt/remask-python/app/facebook_business_create.py \
-    && grep -q 'scope_selector_footer_v6_browser_native' /opt/remask-python/app/facebook_business_create.py \
-    && grep -q '__hblp' /opt/remask-python/fb_worker.py \
-    && grep -q '__hsdp' /opt/remask-python/fb_worker.py \
-    && grep -q 'request_envelope' /opt/remask-python/fb_worker.py \
-    && grep -q 'graphql_browser_native' /opt/remask-python/fb_worker.py \
+    && /opt/remask-venv/bin/python -c "import fb_worker; from app.session import ProfileSession; from app.facebook_business_browser import FacebookBusinessBrowser; from app.provisioning.business_handler import business_handler; from app.provisioning.ad_account_handler import ad_account_handler; assert fb_worker.WebSessionManager is fb_worker.FacebookWebSession; assert callable(ProfileSession.facebook_business_browser)" \
+    && /opt/remask-venv/bin/python -m unittest -q tests.test_fb_worker_bootstrap tests.test_business_docid_discovery tests.test_v14_docid_policy tests.test_fb_worker_request_envelope tests.test_business_create_exact_envelope tests.test_business_browser_flow \
+    && grep -q 'class FacebookBusinessBrowser' /opt/remask-python/app/facebook_business_browser.py \
+    && grep -q 'CREATE_SUBMITTED' /opt/remask-python/app/provisioning/business_handler.py \
+    && grep -q 'PAGE_ADD_SUBMITTED' /opt/remask-python/app/provisioning/business_handler.py \
+    && grep -q 'facebook_business_suite_ui' /opt/remask-python/app/provisioning/business_handler.py \
+    && grep -q 'async def reconcile_created_business' /opt/remask-python/app/facebook_business_browser.py \
+    && grep -q 'async def add_existing_page' /opt/remask-python/app/facebook_business_browser.py \
+    && grep -q 'business_suite_ui_v1' /opt/remask-python/main.py \
+    && grep -q 'def facebook_business_browser' /opt/remask-python/app/session.py \
     && /opt/remask-venv/bin/python -c "import playwright; import shutil; assert shutil.which('chromium')" \
-    && grep -q 'scope_selector_footer_v6_browser_native' /opt/remask-python/main.py \
-    && /opt/remask-venv/bin/python -c "from app.facebook_page_discovery import discover_pages_from_browser_html,_extract_pages_from_browser_document; p=_extract_pages_from_browser_document('{\"__typename\":\"Page\",\"id\":\"123456789\",\"name\":\"Demo Page\",\"category\":\"Local business\"}'); assert p and p[0]['id']=='123456789' and p[0]['name']=='Demo Page'; assert callable(discover_pages_from_browser_html)" \
-    && /opt/remask-venv/bin/python -c "import inspect; from app.facebook_query_discovery import discover_persisted_query; d=inspect.getsource(discover_persisted_query); assert 'extract_script_urls' not in d; assert 'script_url' not in d; assert 'fetch_text_with_headers' in d" \
-    && grep -q 'manual_doc_id' /opt/remask-python/app/provisioning/business_handler.py \
-    && grep -q '3_cross_profile_stale_failures' /opt/remask-python/app/facebook_docids.py \
-    && grep -q 'fetch_text_with_headers' /opt/remask-python/fb_worker.py \
-    && grep -q 'default_doc_id=None' /opt/remask-python/fb_worker.py \
-    && echo "[bm-v14.5] web preflight manual fallback + Relay discovery + resumable BM passed"
+    && echo "[bm-browser-v1] Meta Business UI flow + resumable checkpoints passed"
 
 COPY .deploy/clean-preview-valid/runtime.b64.* /tmp/remask-parts/
 COPY railway-persistence-overlay.php /tmp/railway-persistence-overlay.php
@@ -181,7 +161,8 @@ RUN set -eux; \
     test -x /opt/remask-venv/bin/uvicorn; \
     test -f /opt/remask-python/main.py; \
     grep -q 'async def facebook_web' /opt/remask-python/app/session.py; \
-    grep -q 'create_business_manager_v2' /opt/remask-python/app/provisioning/business_handler.py; \
+    grep -q 'def facebook_business_browser' /opt/remask-python/app/session.py; \
+    grep -q 'facebook_business_suite_ui' /opt/remask-python/app/provisioning/business_handler.py; \
     grep -q 'provisioning_state.checkpoint' /opt/remask-python/app/provisioning/business_handler.py; \
     grep -q 'async def checkpoint' /opt/remask-python/app/provisioning/state.py; \
     grep -q 'resume_from' /opt/remask-python/app/provisioning/business_handler.py; \
@@ -205,7 +186,7 @@ RUN set -eux; \
     grep -q 'REMASK_PYTHON_WORKER_PANEL_V1' /var/www/html/workspace.php; \
     grep -q 'REMASK_PYTHON_WORKER_UI_V1' /var/www/html/scripts/workspace.js; \
     grep -q 'REMASK_PYTHON_WORKER_UI_V158' /var/www/html/scripts/workspace.js; \
-    grep -q 'manual_doc_id' /var/www/html/scripts/workspace.js; \
+    ! grep -q 'manual_doc_id' /var/www/html/scripts/workspace.js; \
     grep -q 'pythonWorkerCsrf' /var/www/html/scripts/workspace.js; \
     grep -q 'pythonWorkerLoadPages(profileId, csrfRetried)' /var/www/html/scripts/workspace.js; \
     grep -q "'X-REMASK-CSRF': csrf" /var/www/html/scripts/workspace.js; \

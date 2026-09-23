@@ -250,7 +250,7 @@ class _ManualSession:
     async def bootstrap(self):
         return SimpleNamespace(actor_id="123456789")
 
-    async def graphql(self, doc_id, variables, **kwargs):
+    async def graphql_browser_native(self, doc_id, variables, **kwargs):
         self.used_doc_ids.append(doc_id)
         return {
             "data": {
@@ -273,7 +273,7 @@ class ManualFallbackTests(unittest.IsolatedAsyncioTestCase):
                 "errorDescription": "PersistedQueryNotFound: unknown argument",
             }
 
-        session.graphql = failed_graphql
+        session.graphql_browser_native = failed_graphql
 
         with patch(
             "app.facebook_business_create.discover_current_scope_selector_create_candidate",
