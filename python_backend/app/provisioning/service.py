@@ -103,13 +103,28 @@ class ProvisioningService:
                     )
 
                     handler = get_handler(step.value)
-                    result = await handler(
-                        session,
-                        step_params,
-                        state,
-                        transport=self.transport,
-                        idempotency_key=step_key,
-                    )
+
+                    if step is ProvisioningStep.BUSINESS:
+                        result = await handler(
+                            session,
+                            step_params,
+                            state,
+                            transport=self.transport,
+                            idempotency_key=step_key,
+                            provisioning_state=self.state,
+                            item_id=item_id,
+                            profile_id=profile_id,
+                            scope_key=scope_key,
+                            step_state=prior,
+                        )
+                    else:
+                        result = await handler(
+                            session,
+                            step_params,
+                            state,
+                            transport=self.transport,
+                            idempotency_key=step_key,
+                        )
 
                 if not isinstance(result, dict):
                     raise ProvisioningError(
