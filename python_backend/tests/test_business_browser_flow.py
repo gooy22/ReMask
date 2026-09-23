@@ -65,7 +65,7 @@ class BrowserNetworkGateTests(unittest.TestCase):
 
 
 class BrowserCreateSurfaceVisibilityTests(unittest.IsolatedAsyncioTestCase):
-    async def test_hidden_create_text_in_body_does_not_count_as_visible_surface(self):
+    async def test_mounted_create_text_counts_as_meta_create_surface(self):
         class _EmptyLocator:
             async def count(self):
                 return 0
@@ -82,7 +82,7 @@ class BrowserCreateSurfaceVisibilityTests(unittest.IsolatedAsyncioTestCase):
             return_value="Create a business portfolio"
         )
 
-        self.assertFalse(await browser._has_create_surface())
+        self.assertTrue(await browser._has_create_surface())
 
 
 class BrowserNavigationRecoveryTests(unittest.IsolatedAsyncioTestCase):
