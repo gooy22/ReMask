@@ -1475,6 +1475,8 @@ class FacebookBusinessBrowser:
     async def _submit_create_and_observe(
         self,
         business_name: str,
+        *,
+        before_submit: CheckpointCallback | None = None,
     ) -> tuple[str, str]:
         if self.page is None:
             raise BrowserBusinessError(
@@ -1491,12 +1493,27 @@ class FacebookBusinessBrowser:
                 ),
                 timeout=self.timeout_ms,
             ) as response_info:
+                if before_submit is not None:
+                    await before_submit(
+                        {
+                            "phase": "CREATE_CLICK_INTENT",
+                            "click_intent_at": int(time.time()),
+                        }
+                    )
+
                 clicked = await self._click_named(self.CREATE_NAMES)
                 if not clicked:
                     clicked = await self._click_named(
                         ("Create", "Submit", "Continue", "Создать", "Продолжить", "Створити", "Продовжити", "Erstellen", "Senden", "Weiter")
                     )
                 if not clicked:
+                    if before_submit is not None:
+                        await before_submit(
+                            {
+                                "phase": "CREATE_NOT_SUBMITTED",
+                                "not_submitted_at": int(time.time()),
+                            }
+                        )
                     diag = await self._diagnostic("create_submit_missing")
                     raise BrowserBusinessError(
                         "CREATE_UI_CHANGED",
@@ -1504,6 +1521,25 @@ class FacebookBusinessBrowser:
                         retryable=False,
                         diagnostic=diag,
                     )
+
+                if before_submit is not None:
+                    try:
+                        await before_submit(
+                            {
+                                "phase": "CREATE_SUBMITTED",
+                                "submitted_at": int(time.time()),
+                            }
+                        )
+                    except Exception as exc:
+                        raise BrowserBusinessError(
+                            "CREATE_CHECKPOINT_FAILED_AFTER_CLICK",
+                            (
+                                "Meta Create was clicked, but ReMask could not "
+                                "persist the submitted checkpoint. CREATE must "
+                                "be reconciled before any retry."
+                            ),
+                            retryable=False,
+                        ) from exc
 
             response = await response_info.value
             raw = await response.text()
@@ -1636,17 +1672,21 @@ class FacebookBusinessBrowser:
             profile_display_name=_clean(profile_display_name),
         )
 
-        if before_submit is not None:
+        async def create_checkpoint(patch: dict[str, Any]) -> None:
+            if before_submit is None:
+                return
             await before_submit(
                 {
-                    "phase": "CREATE_SUBMITTED",
+                    **patch,
                     "business_name": name,
                     "business_ids_before": sorted(before_map),
-                    "submitted_at": int(time.time()),
                 }
             )
 
-        response_business_id, friendly = await self._submit_create_and_observe(name)
+        response_business_id, friendly = await self._submit_create_and_observe(
+            name,
+            before_submit=create_checkpoint,
+        )
         await self.page.wait_for_timeout(1800)
 
         # Always verify through current UI state, even if GraphQL response
@@ -1808,16 +1848,6 @@ class FacebookBusinessBrowser:
                 diagnostic=diag,
             )
 
-        if before_submit is not None:
-            await before_submit(
-                {
-                    "phase": "PAGE_ADD_SUBMITTED",
-                    "business_id": business,
-                    "primary_page_id": page,
-                    "page_submitted_at": int(time.time()),
-                }
-            )
-
         try:
             async with self.page.expect_response(
                 lambda response: self._response_matches_page_add(
@@ -1827,10 +1857,29 @@ class FacebookBusinessBrowser:
                 ),
                 timeout=self.timeout_ms,
             ):
+                if before_submit is not None:
+                    await before_submit(
+                        {
+                            "phase": "PAGE_ADD_CLICK_INTENT",
+                            "business_id": business,
+                            "primary_page_id": page,
+                            "page_click_intent_at": int(time.time()),
+                        }
+                    )
+
                 clicked = await self._click_named(
                     ("Add Page", "Add", "Continue", "Добавить Страницу", "Добавить", "Продолжить", "Додати сторінку", "Додати", "Продовжити", "Seite hinzufügen", "Hinzufügen", "Weiter")
                 )
                 if not clicked:
+                    if before_submit is not None:
+                        await before_submit(
+                            {
+                                "phase": "PAGE_ADD_NOT_SUBMITTED",
+                                "business_id": business,
+                                "primary_page_id": page,
+                                "page_not_submitted_at": int(time.time()),
+                            }
+                        )
                     diag = await self._diagnostic("page_add_submit_missing")
                     raise BrowserBusinessError(
                         "PAGE_ADD_UI_CHANGED",
@@ -1838,6 +1887,27 @@ class FacebookBusinessBrowser:
                         retryable=False,
                         diagnostic=diag,
                     )
+
+                if before_submit is not None:
+                    try:
+                        await before_submit(
+                            {
+                                "phase": "PAGE_ADD_SUBMITTED",
+                                "business_id": business,
+                                "primary_page_id": page,
+                                "page_submitted_at": int(time.time()),
+                            }
+                        )
+                    except Exception as exc:
+                        raise BrowserBusinessError(
+                            "PAGE_CHECKPOINT_FAILED_AFTER_CLICK",
+                            (
+                                "Meta Page-add was clicked, but ReMask could not "
+                                "persist the submitted checkpoint. Page state "
+                                "must be verified before any retry."
+                            ),
+                            retryable=False,
+                        ) from exc
         except BrowserBusinessError:
             raise
         except Exception:
