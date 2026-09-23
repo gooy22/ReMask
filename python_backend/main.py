@@ -97,8 +97,8 @@ async def run_bm_browser_canary() -> None:
             return
 
         async with ProfileSession(context) as profile_session:
-            async with profile_session.facebook_business_browser() as browser:
-                result=await browser.preflight()
+            browser=await profile_session.facebook_business_browser()
+            result=await browser.preflight()
 
         log.info(
             'bm browser canary SUCCESS profile=%s create_surface=%s url=%s',
