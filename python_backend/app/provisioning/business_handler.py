@@ -144,6 +144,11 @@ async def business_handler(
             ProvisioningStep.BUSINESS,
         )
     checkpoint = _checkpoint_result(step_state)
+    prior_error_code = _clean(
+        step_state.get("error_code")
+        if isinstance(step_state, dict)
+        else ""
+    ).upper()
 
     checkpoint_page = _clean(
         checkpoint.get("primary_page_id")
@@ -169,6 +174,23 @@ async def business_handler(
     ).upper()
     business_id = _clean(checkpoint.get("business_id"))
     recovered = False
+
+    # The network gate aborts the Meta request if the atomic SUBMITTED
+    # checkpoint cannot be persisted. In that specific case we know the
+    # irreversible request did NOT reach Meta, so retry may safely submit
+    # again instead of getting stuck forever in CLICK_INTENT.
+    create_known_not_sent = (
+        prior_error_code == "CREATE_CHECKPOINT_FAILED_BEFORE_SEND"
+        and phase == "CREATE_CLICK_INTENT"
+    )
+    page_known_not_sent = (
+        prior_error_code == "PAGE_CHECKPOINT_FAILED_BEFORE_SEND"
+        and phase == "PAGE_ADD_CLICK_INTENT"
+    )
+    if create_known_not_sent:
+        phase = "CREATE_NOT_SUBMITTED"
+    if page_known_not_sent:
+        phase = "CREATE_CONFIRMED"
 
     try:
         browser = await session.facebook_business_browser()
@@ -336,9 +358,10 @@ async def business_handler(
                     (
                         f"Business {business_id} exists, but a previous Page-add "
                         f"submit for Page {page_id} cannot yet be confirmed. "
-                        "ReMask will not blindly submit the Page-add action again."
+                        "Retry performs verification only; ReMask will not "
+                        "blindly submit the Page-add action again."
                     ),
-                    retryable=False,
+                    retryable=True,
                 )
 
         if _clean(checkpoint.get("phase")).upper() != "PAGE_CONFIRMED":
