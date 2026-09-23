@@ -26,7 +26,16 @@ if [ -z "${REMASK_WORKER_API_KEY:-}" ]; then
   export REMASK_WORKER_API_KEY="$(/opt/remask-venv/bin/python -c 'import secrets; print(secrets.token_hex(24))')"
 fi
 
-if [ "${REMASK_USE_EXTERNAL_PYTHON_WORKER:-0}" != "1" ]; then
+# Keep the UI and provisioning worker on the same deployed revision by default.
+# An external worker is allowed only when explicitly opted in with the new
+# REMASK_FORCE_EXTERNAL_PYTHON_WORKER flag. This prevents a stale external
+# worker from serving jobs after the web service has already deployed newer code.
+USE_EXTERNAL_PYTHON_WORKER=0
+if [ "${REMASK_FORCE_EXTERNAL_PYTHON_WORKER:-0}" = "1" ]; then
+  USE_EXTERNAL_PYTHON_WORKER=1
+fi
+
+if [ "$USE_EXTERNAL_PYTHON_WORKER" != "1" ]; then
   export REMASK_PYTHON_WORKER_URL="http://127.0.0.1:$PYTHON_WORKER_PORT"
   export REMASK_PROFILE_RESOLVER_URL="http://127.0.0.1/ajax/pythonProfileContext.php"
   unset REMASK_STATE_URL
@@ -91,7 +100,7 @@ if [ "${REMASK_JOB_EXECUTION_MODE:-browser}" = "background" ] && [ -f "$ROOT/bin
   echo "$!" > "$DATA_DIR/worker.pid" || true
 fi
 
-if [ "${REMASK_USE_EXTERNAL_PYTHON_WORKER:-0}" != "1" ]; then
+if [ "$USE_EXTERNAL_PYTHON_WORKER" != "1" ]; then
   (
     cd /opt/remask-python
     exec /opt/remask-venv/bin/uvicorn main:app --host 127.0.0.1 --port "$PYTHON_WORKER_PORT" --workers 1
