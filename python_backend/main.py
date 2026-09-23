@@ -156,6 +156,7 @@ async def ready():
             or os.getenv('REMASK_DEPLOY_REV')
             or ''
         )[:12],
+        'create_bm_payload_version':'scope_selector_footer_v2',
         'volume_mounted':bool(str(os.getenv('RAILWAY_VOLUME_MOUNT_PATH') or '').strip()),
         'volume_path':str(os.getenv('RAILWAY_VOLUME_MOUNT_PATH') or ''),
     }
