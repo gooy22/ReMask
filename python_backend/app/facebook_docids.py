@@ -960,22 +960,17 @@ def _extract_meta_codes(
             value,
             dict,
         ):
-            raw_code = value.get(
-                "code"
-            )
+            for key in ("code", "error"):
+                raw_code = value.get(key)
 
-            try:
-                if raw_code is not None:
-                    codes.add(
-                        int(
-                            raw_code
-                        )
-                    )
-            except (
-                TypeError,
-                ValueError,
-            ):
-                pass
+                if isinstance(raw_code, (dict, list)):
+                    continue
+
+                try:
+                    if raw_code is not None:
+                        codes.add(int(raw_code))
+                except (TypeError, ValueError):
+                    pass
 
             for child in value.values():
                 walk(
@@ -1134,6 +1129,7 @@ def classify_cache_failure(
         "checkpoint",
         "account restricted",
         "account_restricted",
+        "restricted account",
         "temporarily blocked",
         "login required",
         "session expired",
@@ -1144,6 +1140,8 @@ def classify_cache_failure(
         "suspicious activity",
         "confirm your identity",
         "disabled account",
+        "account disabled",
+        "зрд",
     )
 
     if any(
@@ -1162,10 +1160,7 @@ def classify_cache_failure(
         "unknown field",
         "unknown argument",
         "unknown document",
-        "query not found",
-        "unknown query",
-        "document id",
-        "invalid document",
+        "cannot query field",
     )
 
     has_stale_marker = any(
@@ -1209,9 +1204,25 @@ def record_result(
         stale_failure is True
         and not failure_kind
     ):
-        failure_kind = (
-            "stale_schema"
+        compatibility_text = str(reason or "").lower()
+        compatibility_markers = (
+            "persistedquerynotfound",
+            "persisted query not found",
+            "unknown field",
+            "unknown argument",
+            "unknown document",
+            "cannot query field",
         )
+        if (
+            "1357054" in compatibility_text
+            and any(
+                marker in compatibility_text
+                for marker in compatibility_markers
+            )
+        ):
+            failure_kind = "stale_schema"
+        else:
+            failure_kind = "other"
 
     normalized_failure_kind = str(
         failure_kind
