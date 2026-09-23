@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import Body, Depends, FastAPI, Header, HTTPException, status
@@ -466,13 +467,9 @@ async def profile_preflight(profile_id: str):
 
     try:
         async with ProfileSession(context) as profile_session:
-            try:
-                proxy_result=await profile_session.proxy_check()
-            except ProxyCheckError as exc:
-                raise HTTPException(
-                    status_code=422,
-                    detail=f'PROXY_DEAD: {exc}',
-                ) from exc
+            preflight_started=time.monotonic()
+            proxy_started=time.monotonic()
+            proxy_task=asyncio.create_task(profile_session.proxy_check())
 
             browser_state={
                 'ready':False,
@@ -483,9 +480,14 @@ async def profile_preflight(profile_id: str):
                 'error':'',
                 'error_code':'',
             }
+            browser_started=time.monotonic()
+            business_browser=None
             try:
                 business_browser=await profile_session.facebook_business_browser()
-                browser_preflight=await business_browser.preflight()
+                browser_preflight=await asyncio.wait_for(
+                    business_browser.preflight(),
+                    timeout=50.0,
+                )
                 browser_state.update({
                     'ready':bool(browser_preflight.ready),
                     'create_surface_ready':bool(browser_preflight.create_surface_ready),
@@ -493,11 +495,26 @@ async def profile_preflight(profile_id: str):
                     'account_id':browser_preflight.account_id,
                     'diagnostics':list(browser_preflight.diagnostics),
                 })
+            except asyncio.TimeoutError:
+                browser_state.update({
+                    'error':'Business Suite browser preflight exceeded 50 seconds',
+                    'error_code':'BUSINESS_PREFLIGHT_TIMEOUT',
+                })
             except BrowserBusinessError as exc:
                 browser_state.update({
                     'error':str(exc),
                     'error_code':exc.code,
                 })
+            browser_ms=int((time.monotonic()-browser_started)*1000)
+
+            try:
+                proxy_result=await proxy_task
+            except ProxyCheckError as exc:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f'PROXY_DEAD: {exc}',
+                ) from exc
+            proxy_ms=int((time.monotonic()-proxy_started)*1000)
 
             saved_pages=[
                 {
@@ -518,9 +535,14 @@ async def profile_preflight(profile_id: str):
             ]
             pages_source='saved_profile_pages' if saved_pages else ''
 
-            if not saved_pages and browser_state['ready']:
+            pages_ms=0
+            if not saved_pages and browser_state['ready'] and business_browser is not None:
+                pages_started=time.monotonic()
                 try:
-                    discovered_pages=await business_browser.discover_managed_pages()
+                    discovered_pages=await asyncio.wait_for(
+                        business_browser.discover_managed_pages(fast=True),
+                        timeout=28.0,
+                    )
                     saved_pages=[
                         {
                             'id':str(row.get('id') or '').strip(),
@@ -540,9 +562,31 @@ async def profile_preflight(profile_id: str):
                     ]
                     if saved_pages:
                         pages_source='facebook_business_browser'
+                except asyncio.TimeoutError:
+                    browser_state['page_discovery_error']='Fan Page discovery exceeded 28 seconds'
+                    browser_state['page_discovery_error_code']='FAN_PAGES_DISCOVERY_TIMEOUT'
                 except BrowserBusinessError as exc:
                     browser_state['page_discovery_error']=str(exc)
                     browser_state['page_discovery_error_code']=exc.code
+                finally:
+                    pages_ms=int((time.monotonic()-pages_started)*1000)
+
+            total_ms=int((time.monotonic()-preflight_started)*1000)
+            log.info(
+                'bm preflight profile=%s total_ms=%d proxy_ms=%d browser_ms=%d pages_ms=%d '
+                'browser_ready=%s create_ready=%s pages=%d page_source=%s browser_error=%s pages_error=%s',
+                clean_profile,
+                total_ms,
+                proxy_ms,
+                browser_ms,
+                pages_ms,
+                bool(browser_state.get('ready')),
+                bool(browser_state.get('create_surface_ready')),
+                len(saved_pages),
+                pages_source,
+                str(browser_state.get('error_code') or ''),
+                str(browser_state.get('page_discovery_error_code') or ''),
+            )
 
             saved_pages.sort(
                 key=lambda page: (
