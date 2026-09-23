@@ -591,6 +591,7 @@ function pythonWorkerBmRowConfig(dialog, profiles, fallbackName) {
     let name = String(fallbackName || '').trim();
     let pageId = '';
     let manualDocId = '';
+    let qplJoinId = '';
 
     if (row) {
       const rowInputs = Array.from(row.querySelectorAll('input'));
@@ -604,7 +605,7 @@ function pythonWorkerBmRowConfig(dialog, profiles, fallbackName) {
         ].join(' ');
         if (type === 'email' || type === 'hidden' || type === 'checkbox' || type === 'radio') return false;
         if (/email|почт/i.test(key)) return false;
-        if (/manual.?doc|doc.?id/i.test(key)) return false;
+        if (/manual.?doc|doc.?id|qpl.?join/i.test(key)) return false;
         return type === 'text' || type === 'search' || type === '';
       });
       if (nameInput && String(nameInput.value || '').trim()) {
@@ -622,6 +623,19 @@ function pythonWorkerBmRowConfig(dialog, profiles, fallbackName) {
       });
       if (manualDocInput) {
         manualDocId = String(manualDocInput.value || '').trim();
+      }
+
+      const qplInput = rowInputs.find(function(input) {
+        const key = [
+          input.name || '',
+          input.id || '',
+          input.className || '',
+          input.placeholder || ''
+        ].join(' ');
+        return /qpl.?join/i.test(key);
+      });
+      if (qplInput) {
+        qplJoinId = String(qplInput.value || '').trim();
       }
 
       const rowSelect = Array.from(row.querySelectorAll('select')).find(function(select) {
@@ -642,7 +656,8 @@ function pythonWorkerBmRowConfig(dialog, profiles, fallbackName) {
     result[profile] = {
       name: name,
       page_id: pageId,
-      manual_doc_id: manualDocId
+      manual_doc_id: manualDocId,
+      qpl_join_id: qplJoinId
     };
   });
 
@@ -750,6 +765,11 @@ async function pythonWorkerStartBusiness(bmName, options) {
         config.manual_doc_id || ''
       ).trim();
       if (manualDocId) businessParams.manual_doc_id = manualDocId;
+
+      const qplJoinId = String(
+        config.qpl_join_id || ''
+      ).trim();
+      if (qplJoinId) businessParams.qpl_join_id = qplJoinId;
 
       return {
         profile_id: profileKey,
@@ -1126,12 +1146,24 @@ async function pythonWorkerOpenOwnBmModal() {
     docIdHint.textContent =
       'Используется только если dynamic discovery из HTML/headers ничего не нашёл.';
 
+    const qplJoinId = document.createElement('input');
+    qplJoinId.type = 'text';
+    qplJoinId.className = 'pwbm-manual';
+    qplJoinId.placeholder = 'Captured qpl_join_id (необязательно)';
+    qplJoinId.maxLength = 200;
+
+    const qplHint = document.createElement('small');
+    qplHint.textContent =
+      'Не генерируется ReMask. Заполняется только реальным capture, если Meta его требует.';
+
     nameField.appendChild(name);
     nameField.appendChild(nameHint);
     nameField.appendChild(businessEmail);
     nameField.appendChild(emailHint);
     nameField.appendChild(manualDocId);
     nameField.appendChild(docIdHint);
+    nameField.appendChild(qplJoinId);
+    nameField.appendChild(qplHint);
 
     const pageField = document.createElement('div');
     pageField.className = 'pwbm-field';
@@ -1168,6 +1200,8 @@ async function pythonWorkerOpenOwnBmModal() {
       emailHint: emailHint,
       manualDocId: manualDocId,
       docIdHint: docIdHint,
+      qplJoinId: qplJoinId,
+      qplHint: qplHint,
       page: page,
       manualPage: manualPage,
       pageHint: pageHint,
