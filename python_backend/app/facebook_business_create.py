@@ -304,9 +304,9 @@ def _page_backed_source_variants(source: str) -> list[str]:
     )
     decoded = (
         decoded
-        .replace(r"\\/", "/")
-        .replace(r'\\"', '"')
-        .replace(r"\\'", "'")
+        .replace(r"\/", "/")
+        .replace(r'\"', '"')
+        .replace(r"\'", "'")
     )
     if decoded not in variants:
         variants.append(decoded)
