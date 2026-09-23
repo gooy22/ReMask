@@ -8,7 +8,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 import aiohttp
 
@@ -1137,6 +1137,336 @@ class FacebookWebSession:
                 "Facebook GraphQL network failure: "
                 f"{exc.__class__.__name__}"
             ) from exc
+
+    async def graphql_browser_native(
+        self,
+        doc_id: str,
+        variables: dict[str, Any],
+        *,
+        friendly_name: str = "",
+        endpoint_url: str | None = None,
+        request_envelope: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """
+        Send one GraphQL request from a real Chromium page bound to the
+        profile's cookies/proxy/user-agent.
+
+        This is intentionally a single-shot transport: CREATE_BM callers must
+        not fall back to a second CREATE request after an ambiguous response.
+        """
+
+        effective_doc_id = str(doc_id or "").strip()
+        if not effective_doc_id:
+            raise RemoteRequestError("GraphQL doc_id is required")
+        if not isinstance(variables, dict):
+            raise RemoteRequestError("GraphQL variables must be an object")
+
+        endpoint = (
+            str(endpoint_url or self.GRAPHQL_URL).strip()
+            or self.GRAPHQL_URL
+        )
+        endpoint_parts = urlsplit(endpoint)
+        endpoint_origin = (
+            f"{endpoint_parts.scheme}://{endpoint_parts.netloc}"
+            if endpoint_parts.scheme and endpoint_parts.netloc
+            else "https://business.facebook.com"
+        )
+
+        bootstrap = await self.bootstrap()
+
+        try:
+            from playwright.async_api import async_playwright
+        except Exception as exc:
+            raise RemoteRequestError(
+                "Browser-native GraphQL transport is unavailable: Playwright import failed"
+            ) from exc
+
+        proxy_cfg: dict[str, str] | None = None
+        raw_proxy = str(self.profile.proxy or "").strip()
+        if raw_proxy:
+            proxy_url = raw_proxy if "://" in raw_proxy else f"http://{raw_proxy}"
+            proxy_parts = urlsplit(proxy_url)
+            if proxy_parts.hostname and proxy_parts.port:
+                proxy_cfg = {
+                    "server": (
+                        f"{proxy_parts.scheme or 'http'}://"
+                        f"{proxy_parts.hostname}:{proxy_parts.port}"
+                    )
+                }
+                if proxy_parts.username:
+                    proxy_cfg["username"] = unquote(proxy_parts.username)
+                if proxy_parts.password:
+                    proxy_cfg["password"] = unquote(proxy_parts.password)
+
+        browser = None
+        context = None
+        try:
+            async with async_playwright() as playwright:
+                executable_path = str(
+                    os.getenv("REMASK_CHROMIUM_EXECUTABLE")
+                    or "/usr/bin/chromium"
+                ).strip()
+
+                browser = await playwright.chromium.launch(
+                    headless=True,
+                    executable_path=executable_path,
+                    proxy=proxy_cfg,
+                    args=[
+                        "--no-sandbox",
+                        "--disable-dev-shm-usage",
+                        "--disable-background-networking",
+                    ],
+                )
+
+                context = await browser.new_context(
+                    user_agent=self.profile.user_agent,
+                    locale="en-US",
+                    viewport={"width": 1440, "height": 1000},
+                )
+
+                cookies = []
+                for name, value in (self.profile.cookies or {}).items():
+                    clean_name = str(name or "").strip()
+                    clean_value = str(value or "")
+                    if not clean_name or not clean_value:
+                        continue
+                    cookies.append(
+                        {
+                            "name": clean_name,
+                            "value": clean_value,
+                            "domain": ".facebook.com",
+                            "path": "/",
+                            "secure": True,
+                            "httpOnly": False,
+                            "sameSite": "Lax",
+                        }
+                    )
+                if cookies:
+                    await context.add_cookies(cookies)
+
+                page = await context.new_page()
+                await page.goto(
+                    self.ADS_MANAGER_URL,
+                    wait_until="domcontentloaded",
+                    timeout=self.timeout_seconds * 1000,
+                )
+                await page.wait_for_timeout(1200)
+
+                current_url = str(page.url or "")
+                lower_url = current_url.lower()
+                if "/login" in lower_url or "/checkpoint" in lower_url:
+                    raise AuthenticationError(
+                        "Facebook browser transport redirected to login/checkpoint"
+                    )
+
+                rendered_html = await page.content()
+                browser_context = self._extract_request_context(rendered_html)
+
+                envelope: dict[str, str] = {}
+                for source in (
+                    bootstrap.request_context or {},
+                    browser_context,
+                    request_envelope
+                    if isinstance(request_envelope, dict)
+                    else {},
+                ):
+                    for key, value in source.items():
+                        clean_key = str(key or "").strip()
+                        clean_value = str(value or "").strip()
+                        if clean_key and clean_value:
+                            envelope[clean_key] = clean_value[:20000]
+
+                fb_dtsg = ""
+                try:
+                    fb_dtsg = str(
+                        await page.locator('input[name="fb_dtsg"]').first.input_value(
+                            timeout=1000
+                        )
+                        or ""
+                    ).strip()
+                except Exception:
+                    fb_dtsg = ""
+                if not fb_dtsg:
+                    fb_dtsg = self._first_match(
+                        rendered_html,
+                        list(self.FB_DTSG_PATTERNS),
+                    )
+                if not fb_dtsg:
+                    fb_dtsg = bootstrap.fb_dtsg
+
+                lsd = ""
+                try:
+                    lsd = str(
+                        await page.locator('input[name="lsd"]').first.input_value(
+                            timeout=1000
+                        )
+                        or ""
+                    ).strip()
+                except Exception:
+                    lsd = ""
+                if not lsd:
+                    lsd = bootstrap.lsd
+
+                jazoest = ""
+                try:
+                    jazoest = str(
+                        await page.locator('input[name="jazoest"]').first.input_value(
+                            timeout=1000
+                        )
+                        or ""
+                    ).strip()
+                except Exception:
+                    jazoest = ""
+                if not jazoest:
+                    jazoest = bootstrap.jazoest
+
+                form: dict[str, str] = {
+                    "fb_dtsg": fb_dtsg,
+                    "fb_api_caller_class": "RelayModern",
+                    "doc_id": effective_doc_id,
+                    "variables": json.dumps(
+                        variables,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                    "__a": "1",
+                    "__aaid": str(envelope.get("__aaid") or "0"),
+                    "server_timestamps": "true",
+                }
+
+                allowed_context_keys = {
+                    "__aaid",
+                    "__bid",
+                    "__hs",
+                    "__hblp",
+                    "__hsdp",
+                    "__rev",
+                    "__s",
+                    "__hsi",
+                    "__dyn",
+                    "__csr",
+                    "__comet_req",
+                    "__spin_r",
+                    "__spin_b",
+                    "__spin_t",
+                    "__jssesw",
+                    "__crn",
+                    "__req",
+                    "__ccg",
+                    "dpr",
+                    "server_timestamps",
+                    "fb_api_caller_class",
+                }
+                for key, value in envelope.items():
+                    if key in allowed_context_keys and str(value or "").strip():
+                        form[key] = str(value).strip()
+
+                form.setdefault("__req", self._next_graphql_req())
+                form.setdefault("dpr", "1")
+                form.setdefault("__ccg", "EXCELLENT")
+                form.setdefault("__jssesw", "1")
+                form.setdefault("__comet_req", "11")
+
+                if bootstrap.actor_id:
+                    form["av"] = bootstrap.actor_id
+                    form["__user"] = bootstrap.actor_id
+                if lsd:
+                    form["lsd"] = lsd
+                if jazoest:
+                    form["jazoest"] = jazoest
+                if friendly_name:
+                    form["fb_api_req_friendly_name"] = friendly_name
+
+                result = await page.evaluate(
+                    """async ({endpoint, form, friendlyName, lsd}) => {
+                        const body = new URLSearchParams();
+                        for (const [key, value] of Object.entries(form)) {
+                            body.set(key, String(value));
+                        }
+                        const headers = {
+                            "Accept": "*/*",
+                            "Content-Type": "application/x-www-form-urlencoded"
+                        };
+                        if (friendlyName) {
+                            headers["X-FB-Friendly-Name"] = friendlyName;
+                        }
+                        if (lsd) {
+                            headers["X-FB-LSD"] = lsd;
+                        }
+                        const response = await fetch(endpoint, {
+                            method: "POST",
+                            credentials: "include",
+                            headers,
+                            body: body.toString()
+                        });
+                        return {
+                            status: response.status,
+                            text: await response.text(),
+                            url: response.url
+                        };
+                    }""",
+                    {
+                        "endpoint": endpoint,
+                        "form": form,
+                        "friendlyName": friendly_name,
+                        "lsd": lsd,
+                    },
+                )
+
+                status = int((result or {}).get("status") or 0)
+                raw_body = str((result or {}).get("text") or "")
+                payload = self._decode_graphql_body(raw_body)
+
+                if status in {401, 403}:
+                    self.invalidate_bootstrap()
+                    raise AuthenticationError(
+                        f"Facebook browser GraphQL authentication failure HTTP {status}"
+                    )
+                if status >= 400:
+                    raise RemoteRequestError(
+                        f"Meta browser HTTP {status}: "
+                        + json.dumps(
+                            payload,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        )[:4000],
+                        http_status=status,
+                        meta_payload=payload,
+                    )
+
+                log.info(
+                    "[%s] browser GraphQL sent friendly=%s doc_id=%s "
+                    "endpoint_origin=%s envelope_keys=%s",
+                    self.profile.name,
+                    friendly_name or "<none>",
+                    effective_doc_id,
+                    endpoint_origin,
+                    ",".join(sorted(envelope.keys())) or "-",
+                )
+                return payload
+
+        except (AuthenticationError, RemoteRequestError):
+            raise
+        except asyncio.TimeoutError as exc:
+            raise RemoteRequestError(
+                "Facebook browser GraphQL request timeout"
+            ) from exc
+        except Exception as exc:
+            raise RemoteRequestError(
+                "Facebook browser GraphQL transport failure: "
+                f"{exc.__class__.__name__}: {exc}"
+            ) from exc
+        finally:
+            if context is not None:
+                try:
+                    await context.close()
+                except Exception:
+                    pass
+            if browser is not None:
+                try:
+                    await browser.close()
+                except Exception:
+                    pass
 
     async def send_post_request(
         self,
