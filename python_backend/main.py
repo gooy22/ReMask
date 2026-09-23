@@ -13,7 +13,6 @@ from app.models import CreateJobRequest, HealthResponse, JobAccepted, RetryRespo
 from app.runner import WorkerPool
 from app.session import ProfileContextError, ProfileSession, ProxyCheckError
 from app.store import JobStore
-from app.facebook_business_create import candidate_requirements
 from app.facebook_business_browser import BrowserBusinessError
 from app.facebook_graph_api import GraphApiError
 from app.facebook_page_discovery import (
@@ -542,44 +541,6 @@ async def profile_preflight(profile_id: str):
             detail=f'PROFILE_PREFLIGHT_FAILED: {exc}',
         ) from exc
 
-    bm_candidates=[]
-    for candidate in list_candidates('CREATE_BM'):
-        bm_candidates.append({
-            'doc_id':candidate.doc_id,
-            'friendly_name':candidate.friendly_name,
-            'variables_mode':candidate.variables_mode,
-            'source':candidate.source,
-            'priority':candidate.priority,
-            'requirements':candidate_requirements(candidate),
-        })
-
-    has_page_backed_candidate=any(
-        bool(row.get('requirements',{}).get('page_id'))
-        for row in bm_candidates
-    )
-    has_scope_selector_candidate=any(
-        bool(row.get('requirements',{}).get('email'))
-        for row in bm_candidates
-    )
-    official_route_ready=bool(
-        graph_state['identity_ready']
-        and selected_pages
-        and graph_state.get('business_management_granted') is True
-    )
-    web_page_backed_candidate=bool(
-        web_state['ready']
-        and selected_pages
-        and has_page_backed_candidate
-    )
-    web_scope_selector_candidate=bool(
-        web_state['ready']
-        and has_scope_selector_candidate
-    )
-    web_dynamic_or_manual_ready=bool(
-        web_state['ready']
-        and web_state['actor_present']
-        and web_state['fb_dtsg_present']
-    )
     browser_ui_ready=bool(
         browser_state['ready']
         and browser_state['create_surface_ready']
@@ -612,13 +573,13 @@ async def profile_preflight(profile_id: str):
         'first_name_present':bool(str(context.first_name or '').strip()),
         'last_name_present':bool(str(context.last_name or '').strip()),
         'display_name_present':bool(str(context.display_name or '').strip()),
-        'create_bm_candidates':bm_candidates,
+        'create_bm_candidates':[],
         'bm_routes':{
             'browser_ui':browser_ui_ready,
-            'official_graph_api':official_route_ready,
-            'web_page_backed_candidate':web_page_backed_candidate,
-            'web_scope_selector_candidate':web_scope_selector_candidate,
-            'web_dynamic_or_manual':web_dynamic_or_manual_ready,
+            'official_graph_api':False,
+            'web_page_backed_candidate':False,
+            'web_scope_selector_candidate':False,
+            'web_dynamic_or_manual':False,
         },
         'bm_route_ready':browser_ui_ready,
     }
