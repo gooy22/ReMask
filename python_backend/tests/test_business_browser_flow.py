@@ -112,7 +112,7 @@ class _FakeSession:
         )
         self.browser = browser
 
-    def facebook_business_browser(self):
+    async def facebook_business_browser(self):
         return self.browser
 
 
