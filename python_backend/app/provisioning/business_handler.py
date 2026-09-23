@@ -1,226 +1,782 @@
+# python_backend/app/facebook_query_discovery.py
+
 from __future__ import annotations
-from typing import Any
-import logging
+
 import asyncio
+import html
 import re
+import time
+from dataclasses import dataclass
+from typing import Any
 
-from fb_worker import (
-    RemoteRequestError,
-    ProxyError,
+
+@dataclass(
+    frozen=True,
+    slots=True,
 )
-from ..business_create_service import (
-    BusinessCreateError,
-    create_business_resilient,
-)
-from .models import ProvisioningError
-from .meta_errors import classify_meta_request_error
+class PersistedQueryDiscovery:
+    doc_id: str
+    friendly_name: str
+    source_url: str
+    source_kind: str
 
-log = logging.getLogger("remask_worker")
 
-async def business_handler(
-    session: Any,
-    params: dict[str, Any],
-    state: dict[str, Any],
-    *args, **kwargs
-) -> dict[str, Any]:
-    
-    context = session.context
-    profile_id = str(state.get("profile_id") or context.profile_id).strip()
-    
-    if not profile_id or profile_id.lower() == "none":
-        raise ProvisioningError("INVALID_INPUT", "profile_id is missing or invalid", retryable=False)
-        
-    idempotency_key = kwargs.get("idempotency_key") or f"{profile_id}:BUSINESS"
-    
-    # 1. СТРОГАЯ НОРМАЛИЗАЦИЯ ИМЕНИ БМ И ЗАЩИТА ОТ ПРОБЕЛОВ
-    bm_name = str(params.get("name") or params.get("bm_name") or "").strip()
-    if not bm_name:
-        raise ProvisioningError(
-            "INVALID_INPUT",
-            "BUSINESS.name is required and cannot be empty",
-            retryable=False,
-        )
-    if len(bm_name) > 255:
-        raise ProvisioningError(
-            "INVALID_INPUT",
-            "BUSINESS.name is too long",
-            retryable=False,
-        )
+_DISCOVERY_LOCKS: dict[
+    str,
+    asyncio.Lock,
+] = {}
 
-    # Primary Page is optional for the current Business creation flow.
-    # It is still used by the legacy fallback mutation when available.
-    page_id_raw = params.get("page_id") or params.get("primary_page_id")
-    page_id = str(page_id_raw).strip() if page_id_raw is not None else ""
-    if page_id.lower() == "none":
-        page_id = ""
-    if page_id and not re.fullmatch(r"\d{5,30}", page_id):
-        raise ProvisioningError(
-            "INVALID_PRIMARY_PAGE",
-            "BUSINESS.page_id must be a numeric Facebook Page ID",
-            retryable=False,
-        )
+_DISCOVERY_CACHE: dict[
+    str,
+    tuple[
+        float,
+        PersistedQueryDiscovery,
+    ],
+] = {}
 
-    user_email = str(
-        params.get("user_email")
-        or params.get("email")
-        or getattr(context, "email", "")
-        or ""
-    ).strip()
-    if user_email and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", user_email):
-        raise ProvisioningError(
-            "INVALID_INPUT",
-            "BUSINESS.user_email must be a valid email when provided",
-            retryable=False,
-        )
-    user_first_name = str(
-        params.get("user_first_name")
-        or params.get("first_name")
-        or getattr(context, "first_name", "")
-        or ""
-    ).strip()
-    user_last_name = str(
-        params.get("user_last_name")
-        or params.get("last_name")
-        or getattr(context, "last_name", "")
-        or ""
-    ).strip()
-    display_name = str(
-        getattr(context, "display_name", "")
-        or profile_id
-    ).strip()
-    vertical = str(params.get("vertical") or "ADVERTISING").strip().upper()
-    explicit_doc_id = str(
-        params.get("manual_doc_id")
-        or params.get("doc_id")
-        or ""
-    ).strip() or None
-    if explicit_doc_id and not re.fullmatch(r"\d{5,40}", explicit_doc_id):
-        raise ProvisioningError(
-            "INVALID_INPUT",
-            "BUSINESS.manual_doc_id must contain 5-40 digits",
-            retryable=False,
-        )
 
-    raw_require_page_backed = params.get("require_page_backed")
-    if raw_require_page_backed is None:
-        # ReMask Add BM is Fan-Page-backed by default. A caller must opt out
-        # explicitly if it intentionally wants a non-Page Business flow.
-        require_page_backed = True
-    elif isinstance(raw_require_page_backed, bool):
-        require_page_backed = raw_require_page_backed
-    else:
-        require_page_backed = str(raw_require_page_backed).strip().lower() in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }
-
-    if require_page_backed and not page_id:
-        raise ProvisioningError(
-            "PRIMARY_PAGE_REQUIRED",
-            "Add BM requires a Fan Page for page-backed creation",
-            retryable=False,
-        )
-
-    raw_timezone = params.get("timezone_id")
-    timezone_id = None
-    if raw_timezone not in (None, "", "None"):
-        try:
-            timezone_id = int(raw_timezone)
-        except (TypeError, ValueError) as exc:
-            raise ProvisioningError(
-                "INVALID_INPUT",
-                "BUSINESS.timezone_id must be an integer when provided",
-                retryable=False,
-            ) from exc
-
-    log.info(
-        "[%s] BUSINESS start name=%s primary_page_id=%s email_present=%s "
-        "identity_name_present=%s manual_doc_id=%s page_backed=%s key=%s",
-        profile_id,
-        bm_name,
-        page_id or "<none>",
-        bool(user_email),
-        bool(user_first_name or user_last_name or display_name),
-        explicit_doc_id or "<registry>",
-        require_page_backed,
-        idempotency_key,
+def _discovery_lock(
+    key: str,
+) -> asyncio.Lock:
+    current = _DISCOVERY_LOCKS.get(
+        key
     )
 
-    try:
-        result = await create_business_resilient(
-            session,
-            business_name=bm_name,
-            page_id=page_id,
-            user_email=user_email,
-            user_first_name=user_first_name,
-            user_last_name=user_last_name,
-            profile_display_name=display_name,
-            vertical=vertical,
-            timezone_id=timezone_id,
-            explicit_doc_id=explicit_doc_id,
-            require_page_backed=require_page_backed,
-        )
+    if current is None:
+        current = asyncio.Lock()
+        _DISCOVERY_LOCKS[
+            key
+        ] = current
 
-        if not result.business_id:
-            raise ProvisioningError(
-                "INVALID_RESULT",
-                "Facebook returned empty Business ID",
-                retryable=False,
+    return current
+
+
+def _decode_ascii_unicode(
+    match: re.Match[str],
+) -> str:
+    value = int(
+        match.group(
+            1
+        ),
+        16,
+    )
+
+    if (
+        0 <= value <= 0x10FFFF
+    ):
+        try:
+            return chr(
+                value
+            )
+        except ValueError:
+            pass
+
+    return match.group(
+        0
+    )
+
+
+def source_variants(
+    source: str,
+) -> list[str]:
+    raw = str(
+        source
+        or ""
+    )
+
+    variants: list[
+        str
+    ] = []
+
+    def append_unique(
+        value: str,
+    ) -> None:
+        if (
+            value
+            and value not in variants
+        ):
+            variants.append(
+                value
             )
 
-        log.info(
-            "[%s] BUSINESS success id=%s transport=%s primary_page_id=%s",
-            profile_id,
-            result.business_id,
-            result.transport,
-            result.primary_page_id or "<none>",
+    append_unique(
+        raw
+    )
+
+    entity_decoded = html.unescape(
+        raw
+    )
+
+    append_unique(
+        entity_decoded
+    )
+
+    unicode_decoded = re.sub(
+        r"\\u([0-9a-fA-F]{4})",
+        _decode_ascii_unicode,
+        entity_decoded,
+    )
+
+    unicode_decoded = re.sub(
+        r"\\x([0-9a-fA-F]{2})",
+        lambda match: chr(
+            int(
+                match.group(
+                    1
+                ),
+                16,
+            )
+        ),
+        unicode_decoded,
+    )
+
+    unicode_decoded = (
+        unicode_decoded
+        .replace(
+            r"\/",
+            "/",
+        )
+        .replace(
+            r"\\/",
+            "/",
+        )
+        .replace(
+            r"\"",
+            '"',
+        )
+        .replace(
+            r'\\"',
+            '"',
+        )
+        .replace(
+            r"\'",
+            "'",
+        )
+    )
+
+    append_unique(
+        unicode_decoded
+    )
+
+    twice_decoded = html.unescape(
+        unicode_decoded
+    )
+
+    append_unique(
+        twice_decoded
+    )
+
+    return variants
+
+
+def _valid_dtsg_token(
+    token: str,
+) -> bool:
+    value = str(
+        token
+        or ""
+    ).strip()
+
+    if not (
+        8
+        <= len(
+            value
+        )
+        <= 512
+    ):
+        return False
+
+    if re.search(
+        r"[\s<>]",
+        value,
+    ):
+        return False
+
+    if value.lower() in {
+        "null",
+        "none",
+        "undefined",
+        "false",
+        "true",
+    }:
+        return False
+
+    return True
+
+
+def _dtsg_context_valid(
+    window: str,
+) -> bool:
+    lower = str(
+        window
+        or ""
+    ).lower()
+
+    direct_markers = (
+        "dtsginitialdata",
+        "dtsginitdata",
+        "fb_dtsg",
+    )
+
+    relay_markers = (
+        "__bbox",
+        "relayprefetchedstreamcache",
+        "requirelazy",
+        "relay",
+    )
+
+    has_dtsg = any(
+        marker in lower
+        for marker in direct_markers
+    )
+
+    has_relay = any(
+        marker in lower
+        for marker in relay_markers
+    )
+
+    if (
+        "dtsginitialdata"
+        in lower
+        or "dtsginitdata"
+        in lower
+    ):
+        return True
+
+    if (
+        "fb_dtsg"
+        in lower
+        and has_relay
+    ):
+        return True
+
+    return (
+        has_dtsg
+        and has_relay
+    )
+
+
+def extract_csrf_token(
+    document: str,
+) -> str:
+    best: tuple[
+        int,
+        str,
+    ] | None = None
+
+    anchor_patterns = (
+        r"DTSGInitialData",
+        r"DTSGInitData",
+        r"fb_dtsg",
+        r"RelayPrefetchedStreamCache",
+        r"requireLazy",
+        r"__bbox",
+    )
+
+    token_patterns = (
+        (
+            120,
+            r'["\']token["\']\s*:\s*["\']([^"\']+)["\']',
+        ),
+        (
+            140,
+            r'["\']fb_dtsg["\']\s*:\s*["\']([^"\']+)["\']',
+        ),
+        (
+            160,
+            r'["\']name["\']\s*:\s*["\']fb_dtsg["\']'
+            r'.{0,800}?'
+            r'["\']value["\']\s*:\s*["\']([^"\']+)["\']',
+        ),
+        (
+            180,
+            r'name=["\']fb_dtsg["\']'
+            r'[^>]{0,1000}?'
+            r'value=["\']([^"\']+)["\']',
+        ),
+    )
+
+    for source in source_variants(
+        document
+    ):
+        anchors: list[
+            int
+        ] = []
+
+        for pattern in anchor_patterns:
+            for match in re.finditer(
+                pattern,
+                source,
+                flags=re.IGNORECASE,
+            ):
+                anchors.append(
+                    match.start()
+                )
+
+        if not anchors:
+            continue
+
+        for anchor in anchors:
+            left = max(
+                0,
+                anchor - 5000,
+            )
+
+            right = min(
+                len(
+                    source
+                ),
+                anchor + 7000,
+            )
+
+            window = source[
+                left:right
+            ]
+
+            if not _dtsg_context_valid(
+                window
+            ):
+                continue
+
+            for (
+                base_score,
+                pattern,
+            ) in token_patterns:
+                for match in re.finditer(
+                    pattern,
+                    window,
+                    flags=(
+                        re.IGNORECASE
+                        | re.DOTALL
+                    ),
+                ):
+                    token = html.unescape(
+                        str(
+                            match.group(
+                                1
+                            )
+                            or ""
+                        )
+                    ).strip()
+
+                    if not _valid_dtsg_token(
+                        token
+                    ):
+                        continue
+
+                    absolute = (
+                        left
+                        + match.start(
+                            1
+                        )
+                    )
+
+                    distance = abs(
+                        absolute
+                        - anchor
+                    )
+
+                    score = (
+                        base_score
+                        + distance
+                    )
+
+                    lower_window = (
+                        window.lower()
+                    )
+
+                    if (
+                        "dtsginitialdata"
+                        in lower_window
+                    ):
+                        score -= 80
+
+                    if (
+                        "dtsginitdata"
+                        in lower_window
+                    ):
+                        score -= 70
+
+                    if (
+                        "relayprefetchedstreamcache"
+                        in lower_window
+                    ):
+                        score -= 30
+
+                    if (
+                        "requirelazy"
+                        in lower_window
+                    ):
+                        score -= 20
+
+                    if (
+                        "__bbox"
+                        in lower_window
+                    ):
+                        score -= 20
+
+                    candidate = (
+                        score,
+                        token,
+                    )
+
+                    if (
+                        best is None
+                        or candidate[0]
+                        < best[0]
+                    ):
+                        best = candidate
+
+    return (
+        best[1]
+        if best is not None
+        else ""
+    )
+
+
+def extract_doc_id_near_friendly_name(
+    source: str,
+    friendly_name: str,
+) -> str:
+    clean_name = str(
+        friendly_name
+        or ""
+    ).strip()
+
+    if (
+        not source
+        or not clean_name
+    ):
+        return ""
+
+    aliases = (
+        clean_name,
+        (
+            clean_name
+            + "_facebookRelayOperation"
+        ),
+    )
+
+    best: tuple[
+        int,
+        str,
+    ] | None = None
+
+    patterns = (
+        r'(?:"|\')?(?:doc_id|docID|queryID|query_id|id)'
+        r'(?:"|\')?\s*[:=]\s*(?:"|\')([0-9]{5,40})(?:"|\')',
+        r'params\s*:\s*\{.{0,2500}?'
+        r'id\s*:\s*["\']([0-9]{5,40})["\']',
+        r'["\'](?:doc_id|id)["\']'
+        r'\s*,\s*["\']([0-9]{5,40})["\']',
+    )
+
+    for candidate_source in source_variants(
+        source
+    ):
+        for alias in aliases:
+            start = 0
+
+            while True:
+                index = candidate_source.find(
+                    alias,
+                    start,
+                )
+
+                if index < 0:
+                    break
+
+                left = max(
+                    0,
+                    index - 5000,
+                )
+
+                right = min(
+                    len(
+                        candidate_source
+                    ),
+                    index
+                    + len(
+                        alias
+                    )
+                    + 5000,
+                )
+
+                window = candidate_source[
+                    left:right
+                ]
+
+                for pattern in patterns:
+                    for match in re.finditer(
+                        pattern,
+                        window,
+                        flags=(
+                            re.IGNORECASE
+                            | re.DOTALL
+                        ),
+                    ):
+                        value = str(
+                            match.group(
+                                1
+                            )
+                            or ""
+                        ).strip()
+
+                        if not re.fullmatch(
+                            r"\d{5,40}",
+                            value,
+                        ):
+                            continue
+
+                        absolute = (
+                            left
+                            + match.start(
+                                1
+                            )
+                        )
+
+                        distance = abs(
+                            absolute
+                            - index
+                        )
+
+                        score = distance
+
+                        if (
+                            alias.endswith(
+                                "_facebookRelayOperation"
+                            )
+                        ):
+                            score -= 1000
+
+                        candidate = (
+                            score,
+                            value,
+                        )
+
+                        if (
+                            best is None
+                            or candidate[0]
+                            < best[0]
+                        ):
+                            best = candidate
+
+                start = (
+                    index
+                    + len(
+                        alias
+                    )
+                )
+
+    return (
+        best[1]
+        if best is not None
+        else ""
+    )
+
+
+async def discover_persisted_query(
+    session: Any,
+    *,
+    friendly_name: str,
+    entry_urls: list[str],
+    max_scripts_per_entry: int = 0,
+    document_max_bytes: int = 3_000_000,
+    script_max_bytes: int = 0,
+    cache_ttl_seconds: int = 0,
+) -> PersistedQueryDiscovery | None:
+    del max_scripts_per_entry
+    del script_max_bytes
+
+    clean_name = str(
+        friendly_name
+        or ""
+    ).strip()
+
+    if not clean_name:
+        return None
+
+    ttl = max(
+        0,
+        int(
+            cache_ttl_seconds
+        ),
+    )
+
+    cache_key = (
+        clean_name
+        + "|"
+        + "|".join(
+            str(
+                value
+                or ""
+            ).strip()
+            for value in entry_urls
+        )
+    )
+
+    if ttl > 0:
+        cached = _DISCOVERY_CACHE.get(
+            cache_key
         )
 
-        return {
-            "business_id": str(result.business_id),
-            "transport": result.transport,
-            "primary_page_id": result.primary_page_id,
-            "diagnostics": result.diagnostics,
-        }
+        if (
+            cached
+            and time.monotonic()
+            - cached[0]
+            <= ttl
+        ):
+            return cached[1]
 
-    except BusinessCreateError as exc:
-        log.error(
-            "[%s] BUSINESS create failed code=%s retryable=%s message=%s diagnostics=%s",
-            profile_id,
-            exc.code,
-            exc.retryable,
-            str(exc),
-            exc.diagnostics,
-        )
-        raise ProvisioningError(
-            exc.code,
-            str(exc),
-            retryable=exc.retryable,
-        ) from exc
+    async with _discovery_lock(
+        cache_key
+    ):
+        if ttl > 0:
+            cached = (
+                _DISCOVERY_CACHE.get(
+                    cache_key
+                )
+            )
 
-    except RemoteRequestError as exc:
-        err_code, is_retry, diagnostic = classify_meta_request_error(
-            exc,
-            entity="BUSINESS",
-        )
-        log.error(
-            "[%s] BUSINESS GraphQL failed code=%s retryable=%s %s",
-            profile_id,
-            err_code,
-            is_retry,
-            diagnostic,
-        )
-        raise ProvisioningError(
-            err_code,
-            diagnostic,
-            retryable=is_retry,
-        ) from exc
-        
-    except ProxyError as exc:
-        raise ProvisioningError("PROXY_DEAD", f"Proxy failure: {exc}", retryable=True)
-    except asyncio.TimeoutError as exc:
-        raise ProvisioningError("REMOTE_TIMEOUT", f"Network connection timeout: {exc}", retryable=True)
-    except Exception:
-        raise
+            if (
+                cached
+                and time.monotonic()
+                - cached[0]
+                <= ttl
+            ):
+                return cached[1]
+
+        for entry_url in entry_urls:
+            try:
+                if hasattr(
+                    session,
+                    "fetch_text_with_headers",
+                ):
+                    (
+                        status,
+                        document,
+                        final_url,
+                        headers,
+                    ) = (
+                        await session.fetch_text_with_headers(
+                            entry_url,
+                            max_bytes=(
+                                document_max_bytes
+                            ),
+                        )
+                    )
+
+                else:
+                    (
+                        status,
+                        document,
+                        final_url,
+                    ) = await session.fetch_text(
+                        entry_url,
+                        max_bytes=(
+                            document_max_bytes
+                        ),
+                    )
+
+                    headers = {}
+
+            except Exception:
+                continue
+
+            if (
+                int(
+                    status
+                )
+                >= 400
+            ):
+                continue
+
+            doc_id = (
+                extract_doc_id_near_friendly_name(
+                    document,
+                    clean_name,
+                )
+            )
+
+            if doc_id:
+                result = (
+                    PersistedQueryDiscovery(
+                        doc_id=doc_id,
+                        friendly_name=(
+                            clean_name
+                        ),
+                        source_url=str(
+                            final_url
+                            or entry_url
+                        ),
+                        source_kind="html",
+                    )
+                )
+
+                if ttl > 0:
+                    _DISCOVERY_CACHE[
+                        cache_key
+                    ] = (
+                        time.monotonic(),
+                        result,
+                    )
+
+                return result
+
+            header_blob = "\n".join(
+                (
+                    f"{key}: {value}"
+                )
+                for (
+                    key,
+                    value,
+                ) in dict(
+                    headers
+                    or {}
+                ).items()
+            )
+
+            doc_id = (
+                extract_doc_id_near_friendly_name(
+                    header_blob,
+                    clean_name,
+                )
+            )
+
+            if doc_id:
+                result = (
+                    PersistedQueryDiscovery(
+                        doc_id=doc_id,
+                        friendly_name=(
+                            clean_name
+                        ),
+                        source_url=str(
+                            final_url
+                            or entry_url
+                        ),
+                        source_kind=(
+                            "response_headers"
+                        ),
+                    )
+                )
+
+                if ttl > 0:
+                    _DISCOVERY_CACHE[
+                        cache_key
+                    ] = (
+                        time.monotonic(),
+                        result,
+                    )
+
+                return result
+
+    return None
+
+
+__all__ = [
+    "PersistedQueryDiscovery",
+    "discover_persisted_query",
+    "extract_csrf_token",
+    "extract_doc_id_near_friendly_name",
+    "source_variants",
+]
