@@ -37,7 +37,7 @@ RUN /opt/remask-venv/bin/python -m compileall -q /opt/remask-python \
     && grep -q '3_cross_profile_stale_failures' /opt/remask-python/app/facebook_docids.py \
     && grep -q 'fetch_text_with_headers' /opt/remask-python/fb_worker.py \
     && grep -q 'default_doc_id=None' /opt/remask-python/fb_worker.py \
-    && echo "[bm-v14.3] HTML/header-only discovery + UI manual override + 3-profile cache invalidation passed"
+    && echo "[bm-v14.4] HTML/header discovery + resumable BM attach + cross-profile cache passed"
 
 COPY .deploy/clean-preview-valid/runtime.b64.* /tmp/remask-parts/
 COPY railway-persistence-overlay.php /tmp/railway-persistence-overlay.php
@@ -171,7 +171,9 @@ RUN set -eux; \
     test -x /opt/remask-venv/bin/uvicorn; \
     test -f /opt/remask-python/main.py; \
     grep -q 'async def facebook_web' /opt/remask-python/app/session.py; \
-    grep -q 'create_business_resilient' /opt/remask-python/app/provisioning/business_handler.py; \
+    grep -q 'create_business_manager_v2' /opt/remask-python/app/provisioning/business_handler.py; \
+    grep -q '_persist_business_checkpoint' /opt/remask-python/app/provisioning/business_handler.py; \
+    grep -q 'resume_from' /opt/remask-python/app/provisioning/business_handler.py; \
     grep -q 'await session.facebook_controller()' /opt/remask-python/app/provisioning/ad_account_handler.py; \
     grep -q 'classify_meta_request_error' /opt/remask-python/app/provisioning/meta_errors.py; \
     grep -q "@app.get('/ready'" /opt/remask-python/main.py; \
