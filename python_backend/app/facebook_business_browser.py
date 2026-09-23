@@ -798,15 +798,17 @@ class FacebookBusinessBrowser:
             return True
 
         # Current Meta Business Suite places the business/page selector BELOW
-        # the Meta Business Suite logo and ABOVE Home/Startseite. The selector
-        # is not consistently exposed as a button/aria control, so first locate
-        # it geometrically in that narrow left-sidebar band and click the
-        # deepest visible element there. Do not click the Meta Business Suite
-        # logo itself: live canary proved that is a different control.
+        # the Meta Business Suite logo and ABOVE Home/Startseite. Do not walk
+        # the complete SPA DOM here: the live Railway canary showed that a
+        # querySelectorAll("*") geometry scan can destabilize Chromium. Probe
+        # only a small grid inside that narrow sidebar band.
         try:
             probe = await self.page.evaluate(
                 """() => {
                     const visible = (el) => {
+                        if (!el || el === document.body || el === document.documentElement) {
+                            return false;
+                        }
                         const r = el.getBoundingClientRect();
                         const s = getComputedStyle(el);
                         return r.width > 0 && r.height > 0
@@ -815,82 +817,70 @@ class FacebookBusinessBrowser:
                             && s.pointerEvents !== 'none';
                     };
                     const label = (el) => [
-                        el.getAttribute('aria-label') || '',
-                        el.getAttribute('title') || '',
+                        (el.getAttribute && el.getAttribute('aria-label')) || '',
+                        (el.getAttribute && el.getAttribute('title')) || '',
                         el.innerText || el.textContent || ''
-                    ].join(' ').replace(/\\s+/g, ' ').trim();
+                    ].join(' ').replace(/\s+/g, ' ').trim();
 
-                    const all = Array.from(document.querySelectorAll('*'));
-                    const home = all
-                        .filter(visible)
-                        .map(el => ({el, r: el.getBoundingClientRect(), text: label(el)}))
-                        .filter(row =>
-                            row.r.x < 230 &&
-                            row.r.y > 120 &&
-                            row.r.y < 260 &&
-                            /^(Home|Startseite|Start|Главная|Головна)$/i.test(row.text)
-                        )
-                        .sort((a,b) => a.r.y - b.r.y)[0];
+                    const xs = [20, 52, 88, 124, 160, 192];
+                    const ys = [128, 138, 148, 158, 168, 178, 186];
+                    const seen = new Set();
+                    const rows = [];
 
-                    const homeY = home ? home.r.y : 205;
-                    const rows = all
-                        .filter(visible)
-                        .map((el, index) => ({
-                            el,
-                            index,
-                            r: el.getBoundingClientRect(),
-                            text: label(el),
-                            role: el.getAttribute('role') || '',
-                            tabindex: el.getAttribute('tabindex') || '',
-                            tag: el.tagName
-                        }))
-                        .filter(row => {
-                            const r = row.r;
-                            if (r.x > 220 || r.y < 118 || r.y >= homeY - 2) return false;
-                            if (r.width < 90 || r.width > 225 || r.height < 28 || r.height > 85) return false;
-                            if (!row.text || /^Meta Business Suite$/i.test(row.text)) return false;
-                            if (/^(Home|Startseite|Start|Главная|Головна)$/i.test(row.text)) return false;
-                            return true;
-                        });
+                    for (const y of ys) {
+                        for (const x of xs) {
+                            const stack = document.elementsFromPoint(x, y) || [];
+                            for (const el of stack.slice(0, 12)) {
+                                if (seen.has(el) || !visible(el)) continue;
+                                seen.add(el);
 
-                    // Prefer the smallest/deepest candidate: this is normally
-                    // the current Page/business selector itself rather than a
-                    // large sidebar wrapper.
+                                const r = el.getBoundingClientRect();
+                                const text = label(el);
+                                const role = (el.getAttribute && el.getAttribute('role')) || '';
+                                const tabindex = (el.getAttribute && el.getAttribute('tabindex')) || '';
+                                const tag = el.tagName || '';
+
+                                if (r.x > 225 || r.y < 118 || r.y > 190) continue;
+                                if (r.width < 70 || r.width > 230) continue;
+                                if (r.height < 24 || r.height > 90) continue;
+                                if (!text || /^Meta Business Suite$/i.test(text)) continue;
+                                if (/^(Home|Startseite|Start|Главная|Головна)$/i.test(text)) continue;
+
+                                rows.push({el, r, text, role, tabindex, tag});
+                            }
+                        }
+                    }
+
                     rows.sort((a,b) => {
                         const ai = a.r.width * a.r.height;
                         const bi = b.r.width * b.r.height;
-                        const ar = a.role === 'button' || a.tag === 'BUTTON' || a.tabindex === '0' ? -100000 : 0;
-                        const br = b.role === 'button' || b.tag === 'BUTTON' || b.tabindex === '0' ? -100000 : 0;
+                        const ar = a.role === 'button' || a.tag === 'BUTTON' || a.tabindex === '0'
+                            ? -100000 : 0;
+                        const br = b.role === 'button' || b.tag === 'BUTTON' || b.tabindex === '0'
+                            ? -100000 : 0;
                         return (ar + ai) - (br + bi) || b.r.y - a.r.y;
                     });
 
+                    const compact = rows.slice(0,12).map(row => ({
+                        text:row.text,
+                        role:row.role,
+                        tag:row.tag,
+                        x:Math.round(row.r.x),
+                        y:Math.round(row.r.y),
+                        w:Math.round(row.r.width),
+                        h:Math.round(row.r.height)
+                    }));
                     const best = rows[0];
+
                     if (!best) {
-                        return {
-                            clicked:false,
-                            homeY,
-                            candidates: rows.slice(0,12).map(row => ({
-                                text:row.text, role:row.role, tag:row.tag,
-                                x:Math.round(row.r.x), y:Math.round(row.r.y),
-                                w:Math.round(row.r.width), h:Math.round(row.r.height)
-                            }))
-                        };
+                        return {clicked:false, candidates:compact};
                     }
 
                     best.el.click();
                     return {
                         clicked:true,
-                        homeY,
-                        clickedCandidate:{
-                            text:best.text, role:best.role, tag:best.tag,
-                            x:Math.round(best.r.x), y:Math.round(best.r.y),
-                            w:Math.round(best.r.width), h:Math.round(best.r.height)
-                        },
-                        candidates: rows.slice(0,12).map(row => ({
-                            text:row.text, role:row.role, tag:row.tag,
-                            x:Math.round(row.r.x), y:Math.round(row.r.y),
-                            w:Math.round(row.r.width), h:Math.round(row.r.height)
-                        }))
+                        clickedCandidate:compact[0],
+                        candidates:compact
                     };
                 }"""
             )
