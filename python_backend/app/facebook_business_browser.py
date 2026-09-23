@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable
-from urllib.parse import unquote, unquote_plus, urlsplit
+from urllib.parse import parse_qs, unquote, unquote_plus, urlsplit
 
 
 CheckpointCallback = Callable[[dict[str, Any]], Awaitable[None]]
@@ -1034,6 +1034,163 @@ class FacebookBusinessBrowser:
             "email_present": True,
             "filled_input_count": sum(1 for value in values if value),
             "visible_input_count": len(values),
+        }
+
+    async def preflight_capture_create_request(self) -> dict[str, Any]:
+        """
+        Exercise the real final Create click while blocking every Meta POST
+        before it leaves Chromium.
+
+        This is a non-mutating canary: it proves what request Meta's frontend
+        would send without allowing CREATE to reach Facebook. The route stays
+        installed until the browser context is closed, preventing frontend
+        retries after the first aborted request.
+        """
+        if self.page is None:
+            await self.open()
+
+        canary_name = "ReMask Canary Business"
+        canary_email = "remask-canary@example.com"
+
+        await self._prepare_create_form(
+            business_name=canary_name,
+            user_email=canary_email,
+            user_first_name="ReMask",
+            user_last_name="Canary",
+            profile_display_name="ReMask Canary",
+        )
+
+        loop = asyncio.get_running_loop()
+        captured: asyncio.Future[dict[str, Any]] = loop.create_future()
+        blocked_posts: list[dict[str, Any]] = []
+
+        def request_summary(request: Any) -> dict[str, Any]:
+            raw = _clean(getattr(request, "post_data", ""))
+            parsed = parse_qs(raw, keep_blank_values=True)
+
+            friendly = _clean(
+                (parsed.get("fb_api_req_friendly_name") or [""])[0]
+            )
+            doc_id = _clean((parsed.get("doc_id") or [""])[0])
+
+            variables_raw = _clean((parsed.get("variables") or [""])[0])
+            variable_keys: list[str] = []
+            input_keys: list[str] = []
+            if variables_raw:
+                try:
+                    variables = json.loads(variables_raw)
+                    if isinstance(variables, dict):
+                        variable_keys = sorted(str(key) for key in variables)
+                        raw_input = variables.get("input")
+                        if isinstance(raw_input, dict):
+                            input_keys = sorted(str(key) for key in raw_input)
+                except (ValueError, json.JSONDecodeError):
+                    pass
+
+            return {
+                "url": _clean(getattr(request, "url", "")),
+                "method": _clean(getattr(request, "method", "")),
+                "friendly_name": friendly,
+                "doc_id": doc_id,
+                "form_keys": sorted(
+                    str(key)
+                    for key in parsed
+                    if str(key) not in {
+                        "fb_dtsg",
+                        "lsd",
+                        "jazoest",
+                    }
+                ),
+                "variable_keys": variable_keys,
+                "input_keys": input_keys,
+                "contains_canary_name": canary_name.casefold()
+                in unquote_plus(raw).casefold(),
+                "contains_canary_email": canary_email.casefold()
+                in unquote_plus(raw).casefold(),
+            }
+
+        async def block_meta_posts(route: Any, request: Any) -> None:
+            try:
+                method = _clean(request.method).upper()
+                host = _clean(urlsplit(_clean(request.url)).hostname).lower()
+            except Exception:
+                await route.continue_()
+                return
+
+            if method != "POST" or not (
+                host == "facebook.com"
+                or host.endswith(".facebook.com")
+            ):
+                await route.continue_()
+                return
+
+            summary = request_summary(request)
+            blocked_posts.append(summary)
+            if len(blocked_posts) > 40:
+                del blocked_posts[:-40]
+
+            # During this canary no Meta POST is allowed to leave Chromium.
+            # This guarantees the final Create click cannot mutate the account.
+            await route.abort()
+
+            if not captured.done() and (
+                summary["contains_canary_name"]
+                or summary["contains_canary_email"]
+                or "graphql" in summary["url"].lower()
+            ):
+                captured.set_result(summary)
+
+        await self.page.route("**/*", block_meta_posts)
+
+        clicked = await self._click_named(self.CREATE_NAMES)
+        if not clicked:
+            clicked = await self._click_named(
+                (
+                    "Create",
+                    "Submit",
+                    "Continue",
+                    "Создать",
+                    "Продолжить",
+                    "Створити",
+                    "Продовжити",
+                    "Erstellen",
+                    "Senden",
+                    "Weiter",
+                )
+            )
+        if not clicked:
+            diag = await self._diagnostic("blocked_create_submit_missing")
+            raise BrowserBusinessError(
+                "CREATE_UI_CHANGED",
+                "Safe canary could not find Meta's final Create action.",
+                retryable=False,
+                diagnostic=diag,
+            )
+
+        try:
+            summary = await asyncio.wait_for(
+                asyncio.shield(captured),
+                timeout=min(12.0, float(self.timeout_seconds)),
+            )
+        except asyncio.TimeoutError as exc:
+            diag = await self._diagnostic("blocked_create_request_missing")
+            diag["blocked_post_count"] = len(blocked_posts)
+            diag["blocked_posts"] = blocked_posts[-12:]
+            raise BrowserBusinessError(
+                "CREATE_REQUEST_NOT_OBSERVED",
+                (
+                    "Meta's final Create action was clicked, all Meta POSTs were "
+                    "blocked, but no identifiable create request was observed."
+                ),
+                retryable=False,
+                diagnostic=diag,
+            ) from exc
+
+        return {
+            "ready": True,
+            "blocked": True,
+            "request": summary,
+            "blocked_post_count": len(blocked_posts),
         }
 
     async def snapshot_businesses(self) -> dict[str, str]:
