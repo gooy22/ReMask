@@ -2023,6 +2023,42 @@ class FacebookBusinessBrowser:
         return page in body
 
     @staticmethod
+    def _safe_graphql_request_summary(request: Any) -> dict[str, Any]:
+        """Return non-secret request metadata for diagnostics/canaries."""
+        try:
+            raw = _clean(getattr(request, "post_data", ""))
+            parsed = parse_qs(raw, keep_blank_values=True)
+        except Exception:
+            return {}
+
+        variables: dict[str, Any] = {}
+        raw_variables = _clean((parsed.get("variables") or [""])[0])
+        if raw_variables:
+            try:
+                decoded = json.loads(raw_variables)
+                if isinstance(decoded, dict):
+                    variables = decoded
+            except (ValueError, json.JSONDecodeError):
+                variables = {}
+
+        raw_input = variables.get("input")
+        input_keys = (
+            sorted(str(key) for key in raw_input)
+            if isinstance(raw_input, dict)
+            else []
+        )
+        return {
+            "url": _clean(getattr(request, "url", "")),
+            "method": _clean(getattr(request, "method", "")),
+            "friendly_name": _clean(
+                (parsed.get("fb_api_req_friendly_name") or [""])[0]
+            ),
+            "doc_id": _clean((parsed.get("doc_id") or [""])[0]),
+            "variable_keys": sorted(str(key) for key in variables),
+            "input_keys": input_keys,
+        }
+
+    @staticmethod
     def _request_matches_page_add(
         request: Any,
         *,
@@ -2200,6 +2236,9 @@ class FacebookBusinessBrowser:
                                     "the request was blocked before reaching Meta."
                                 ),
                                 retryable=True,
+                                diagnostic=self._safe_graphql_request_summary(
+                                    request
+                                ),
                             )
                         )
                 return
