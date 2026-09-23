@@ -828,7 +828,10 @@ class FacebookBusinessBrowser:
         if not ready:
             diag = await self._diagnostic("create_surface_missing")
             if self._last_selector_diagnostic:
-                diag["selector_attempt"] = self._last_selector_diagnostic
+                diag = {
+                    "selector_attempt": self._last_selector_diagnostic,
+                    **diag,
+                }
             raise BrowserBusinessError(
                 "BUSINESS_CREATE_UI_UNAVAILABLE",
                 "Meta Business portfolio create action is not available for this profile.",
