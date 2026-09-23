@@ -1636,6 +1636,8 @@ class FacebookBusinessBrowser:
             # the Business portfolio inventory and is never blindly retried.
             return "", ""
         finally:
+            if not gate_future.done():
+                gate_future.cancel()
             try:
                 await self.page.unroute("**/api/graphql/**", gate)
             except Exception:
@@ -2164,6 +2166,8 @@ class FacebookBusinessBrowser:
         except BrowserBusinessError:
             raise
         finally:
+            if not gate_future.done():
+                gate_future.cancel()
             try:
                 await self.page.unroute("**/api/graphql/**", gate)
             except Exception:
