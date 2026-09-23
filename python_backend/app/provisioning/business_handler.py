@@ -435,9 +435,9 @@ async def business_handler(
         "resume_from": "DONE",
         "resumed": bool(
             recovered
-            or _clean(checkpoint.get("recovered_after_create_uncertainty"))
+            or checkpoint.get("recovered_after_create_uncertainty")
         ),
-        "transport": "facebook_business_ui_browser",
+        "transport": "facebook_business_suite_ui",
         "create": {
             "response_business_id": _clean(
                 checkpoint.get("create_response_business_id")
