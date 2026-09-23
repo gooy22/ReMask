@@ -421,11 +421,6 @@ class FacebookBusinessBrowser:
             self._profile_lock_acquired = False
         self._profile_lock = None
 
-        if self._profile_lock_acquired and self._profile_lock is not None:
-            self._profile_lock.release()
-            self._profile_lock_acquired = False
-        self._profile_lock = None
-
         self._release_semaphore()
 
     async def _goto(self, url: str) -> str:
@@ -458,25 +453,38 @@ class FacebookBusinessBrowser:
                     or "navigation interrupted" in lower
                 )
                 if interrupted_navigation:
-                    # Meta Business Suite frequently replaces the initial
-                    # document/frame while bootstrapping its SPA. Playwright
-                    # reports ERR_ABORTED even though the replacement page is
-                    # valid. Accept it only after the resulting page proves to
-                    # be alive and authenticated.
+                    # Meta Business Suite is an SPA and may replace/detach the
+                    # document during navigation. Playwright can surface that
+                    # as ERR_ABORTED even though Meta completed the transition.
+                    # No irreversible action happens in _goto(), so a single
+                    # navigation retry is safe if the replacement DOM is not
+                    # ready yet.
                     try:
-                        await self.page.wait_for_timeout(900)
+                        await asyncio.sleep(0.45)
                         await self._assert_authenticated()
                         current_url = _clean(self.page.url)
-                        if (
+                        current_body = await self._body_text()
+                        form_ready = await self._form_ready()
+                        create_surface = await self._has_create_surface()
+                        facebook_surface = (
                             current_url
                             and current_url != "about:blank"
-                            and "business.facebook.com" in current_url.lower()
+                            and "facebook.com" in current_url.lower()
+                        )
+                        if facebook_surface and (
+                            bool(current_body.strip())
+                            or form_ready
+                            or create_surface
                         ):
                             return current_url
                     except BrowserBusinessError:
                         raise
                     except Exception:
                         pass
+
+                    if attempt == 0:
+                        await asyncio.sleep(0.25)
+                        continue
 
                 page_crashed = (
                     "page crashed" in lower
