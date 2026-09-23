@@ -1177,7 +1177,6 @@ async function pythonWorkerOpenOwnBmModal() {
         /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(businessEmail);
       return cfg &&
         cfg.preflightReady === true &&
-        cfg.createRouteReady === true &&
         String(cfg.name.value || '').trim() &&
         selectedPage &&
         businessEmailValid;
@@ -1202,7 +1201,6 @@ async function pythonWorkerOpenOwnBmModal() {
         const businessEmail = String(cfg.businessEmail.value || '').trim();
         return (
           cfg.preflightReady !== true ||
-          cfg.createRouteReady !== true ||
           !String(cfg.name.value || '').trim() ||
           !effectivePage ||
           (
@@ -1280,11 +1278,9 @@ async function pythonWorkerOpenOwnBmModal() {
 
       const routeLabel = cfg.createRouteReady
         ? 'META BUSINESS UI'
-        : 'UNAVAILABLE';
+        : 'PRECHECK UNAVAILABLE';
 
-      cfg.sessionHint.className = cfg.createRouteReady
-        ? 'pwbm-session ok'
-        : 'pwbm-session';
+      cfg.sessionHint.className = 'pwbm-session ok';
 
       cfg.sessionHint.textContent =
         'FB session: OK · BM route: ' + routeLabel +
