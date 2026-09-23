@@ -116,7 +116,7 @@ class _FakeBrowser:
             raise BrowserBusinessError(
                 "CREATE_RESULT_UNKNOWN",
                 "No unique Business found",
-                retryable=False,
+                retryable=True,
             )
         return SimpleNamespace(
             business_id=self.reconcile_id,
@@ -365,9 +365,76 @@ class BusinessBrowserFlowTests(unittest.IsolatedAsyncioTestCase):
             await self._run(browser, step_state=step_state)
 
         self.assertEqual(raised.exception.code, "CREATE_RESULT_UNKNOWN")
-        self.assertFalse(raised.exception.retryable)
+        self.assertTrue(raised.exception.retryable)
         self.assertEqual(browser.create_calls, 0)
         self.assertEqual(browser.reconcile_calls, 1)
+
+    async def test_aborted_create_gate_allows_safe_submit_on_retry(self):
+        await self.store.checkpoint(
+            self.item_id,
+            self.profile_id,
+            self.scope_key,
+            ProvisioningStep.BUSINESS,
+            {
+                "phase": "CREATE_CLICK_INTENT",
+                "business_name": "Test Business",
+                "primary_page_id": "123456789",
+                "business_ids_before": ["111111111111111"],
+            },
+        )
+        await self.store.fail(
+            self.item_id,
+            self.profile_id,
+            self.scope_key,
+            ProvisioningStep.BUSINESS,
+            "CREATE_CHECKPOINT_FAILED_BEFORE_SEND",
+            "request was blocked before Meta send",
+        )
+        step_state = await self.store.step(
+            self.item_id,
+            ProvisioningStep.BUSINESS,
+        )
+
+        browser = _FakeBrowser(verify_sequence=[False, True])
+        result = await self._run(browser, step_state=step_state)
+
+        self.assertEqual(result["business_id"], "555666777888999")
+        self.assertEqual(browser.reconcile_calls, 0)
+        self.assertEqual(browser.create_calls, 1)
+        self.assertEqual(browser.add_calls, 1)
+
+    async def test_aborted_page_gate_allows_safe_page_submit_on_retry(self):
+        await self.store.checkpoint(
+            self.item_id,
+            self.profile_id,
+            self.scope_key,
+            ProvisioningStep.BUSINESS,
+            {
+                "phase": "PAGE_ADD_CLICK_INTENT",
+                "business_id": "555666777888999",
+                "business_name": "Test Business",
+                "primary_page_id": "123456789",
+            },
+        )
+        await self.store.fail(
+            self.item_id,
+            self.profile_id,
+            self.scope_key,
+            ProvisioningStep.BUSINESS,
+            "PAGE_CHECKPOINT_FAILED_BEFORE_SEND",
+            "page request was blocked before Meta send",
+        )
+        step_state = await self.store.step(
+            self.item_id,
+            ProvisioningStep.BUSINESS,
+        )
+
+        browser = _FakeBrowser(verify_sequence=[False, True])
+        result = await self._run(browser, step_state=step_state)
+
+        self.assertEqual(result["business_id"], "555666777888999")
+        self.assertEqual(browser.create_calls, 0)
+        self.assertEqual(browser.add_calls, 1)
 
 
 if __name__ == "__main__":
