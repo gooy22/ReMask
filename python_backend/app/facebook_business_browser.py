@@ -1136,7 +1136,6 @@ class FacebookBusinessBrowser:
             if not captured.done() and (
                 summary["contains_canary_name"]
                 or summary["contains_canary_email"]
-                or "graphql" in summary["url"].lower()
             ):
                 captured.set_result(summary)
 
