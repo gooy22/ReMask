@@ -1395,23 +1395,29 @@ class FacebookBusinessBrowser:
                     if not last_value and len(name_parts) > 1:
                         last_value = " ".join(name_parts[1:])
 
-                if not business_filled:
+                current_business = _clean(
+                    await visible_inputs.nth(0).input_value()
+                )
+                if current_business != business_name:
                     await visible_inputs.nth(0).fill(business_name)
-                    business_filled = True
+                business_filled = True
 
                 if first_value:
                     current = _clean(await visible_inputs.nth(1).input_value())
-                    if not current:
+                    if current != first_value:
                         await visible_inputs.nth(1).fill(first_value)
 
                 if last_value:
                     current = _clean(await visible_inputs.nth(2).input_value())
-                    if not current:
+                    if current != last_value:
                         await visible_inputs.nth(2).fill(last_value)
 
-                if not email_filled:
+                current_email = _clean(
+                    await visible_inputs.nth(3).input_value()
+                )
+                if current_email != user_email:
                     await visible_inputs.nth(3).fill(user_email)
-                    email_filled = True
+                email_filled = True
         except Exception:
             pass
 
