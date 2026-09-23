@@ -13,7 +13,7 @@ from app.models import CreateJobRequest, HealthResponse, JobAccepted, RetryRespo
 from app.runner import WorkerPool
 from app.session import ProfileContextError, ProfileSession, ProxyCheckError
 from app.store import JobStore
-from app.facebook_business_browser import BrowserBusinessError
+from app.facebook_business_browser import BrowserBusinessError, FacebookBusinessBrowser
 from app.facebook_docids import (
     list_candidates,
     registry_view,
@@ -102,12 +102,37 @@ async def run_bm_browser_canary() -> None:
                     fill_result=await browser.preflight_fill_create_form()
                     request_result=await browser.preflight_capture_create_request()
 
+                page_form_result={
+                    'ready':False,
+                    'skipped':True,
+                    'reason':'no existing Business + free saved Page pair',
+                }
+                free_page=next(
+                    (
+                        row for row in (context.pages or [])
+                        if isinstance(row,dict)
+                        and str(row.get('id') or '').strip().isdigit()
+                        and not str(row.get('business_id') or '').strip()
+                    ),
+                    None,
+                )
+                existing_business_id=next(iter(sorted(business_snapshot)), '')
+                if existing_business_id and free_page is not None:
+                    async with FacebookBusinessBrowser(context) as page_browser:
+                        page_form_result=await page_browser.preflight_page_add_form(
+                            business_id=existing_business_id,
+                            page_id=str(free_page.get('id') or '').strip(),
+                        )
+                    page_form_result['skipped']=False
+
                 log.info(
                     'bm browser canary SUCCESS profile=%s snapshot_businesses=%d '
                     'create_surface=%s form_ready=%s field_count=%s '
                     'dry_fill_name=%s dry_fill_email=%s filled_inputs=%s fields=%s '
                     'blocked_create=%s create_friendly=%s create_doc_id=%s '
                     'create_input_keys=%s blocked_posts=%s '
+                    'page_form_ready=%s page_form_skipped=%s page_already_attached=%s '
+                    'page_result_selected=%s page_final_actions=%s '
                     'url=%s attempted=%d',
                     profile_id,
                     len(business_snapshot),
@@ -126,6 +151,14 @@ async def run_bm_browser_canary() -> None:
                         ensure_ascii=False,
                     )[:4000],
                     int(request_result.get('blocked_post_count') or 0),
+                    bool(page_form_result.get('ready')),
+                    bool(page_form_result.get('skipped')),
+                    bool(page_form_result.get('already_attached')),
+                    bool(page_form_result.get('result_selected')),
+                    json.dumps(
+                        page_form_result.get('final_actions') or [],
+                        ensure_ascii=False,
+                    )[:2000],
                     str(form_result.get('current_url') or result.current_url),
                     attempted,
                 )
