@@ -296,50 +296,37 @@ async function pythonWorkerProfilePreflight(profileId) {
     throw new Error('Profile preflight returned no READY result.');
   }
 
-  const graph = preflight.graph_api && typeof preflight.graph_api === 'object'
-    ? preflight.graph_api
+  const browser = preflight.browser_business && typeof preflight.browser_business === 'object'
+    ? preflight.browser_business
     : {};
   const routes = preflight.bm_routes && typeof preflight.bm_routes === 'object'
     ? preflight.bm_routes
     : {};
-  const hasPages =
-    Array.isArray(preflight.pages) &&
-    preflight.pages.length > 0;
-  const graphReady =
-    routes.official_graph_api === true ||
-    (
-      graph.ready === true &&
-      hasPages &&
-      graph.business_management_granted !== false
-    );
-  const webReady =
-    preflight.fb_dtsg_present === true &&
-    preflight.actor_present === true &&
-    (
-      routes.web_dynamic_or_manual === true ||
-      routes.web_page_backed_candidate === true ||
-      routes.web_scope_selector_candidate === true ||
-      preflight.facebook_session === 'ok'
-    );
 
-  if (!graphReady && !webReady) {
+  const browserReady =
+    routes.browser_ui === true &&
+    browser.ready === true &&
+    browser.create_surface_ready === true;
+
+  if (!browserReady) {
     const reasons = [];
-    if (graph.identity_error || graph.error) {
-      reasons.push('Graph API: ' + String(graph.identity_error || graph.error));
-    }
-    if (graph.pages_error) {
-      reasons.push('Pages API: ' + String(graph.pages_error));
+    if (browser.error) {
+      reasons.push(
+        (browser.error_code ? String(browser.error_code) + ': ' : '') +
+        String(browser.error)
+      );
     }
     if (preflight.web_error) {
-      reasons.push('Web session: ' + String(preflight.web_error));
+      reasons.push('FB session: ' + String(preflight.web_error));
     }
-    if (preflight.private_pages && preflight.private_pages.error) {
-      reasons.push('Web Pages: ' + String(preflight.private_pages.error));
+    if (!Array.isArray(preflight.pages) || !preflight.pages.length) {
+      reasons.push('У профиля не найдены доступные Fan Pages.');
     }
+
     throw new Error(
       reasons.length
         ? reasons.join(' · ')
-        : 'Нет рабочего маршрута создания BM для этого FB-профиля.'
+        : 'Meta Business creation UI недоступен для этого FB-профиля.'
     );
   }
 
@@ -590,12 +577,11 @@ function pythonWorkerBmRowConfig(dialog, profiles, fallbackName) {
 
     let name = String(fallbackName || '').trim();
     let pageId = '';
-    let manualDocId = '';
-    let qplJoinId = '';
-    let requestEnvelope = {};
+    let userEmail = '';
 
     if (row) {
       const rowInputs = Array.from(row.querySelectorAll('input'));
+
       const nameInput = rowInputs.find(function(input) {
         const type = String(input.type || 'text').toLowerCase();
         const key = [
@@ -606,55 +592,24 @@ function pythonWorkerBmRowConfig(dialog, profiles, fallbackName) {
         ].join(' ');
         if (type === 'email' || type === 'hidden' || type === 'checkbox' || type === 'radio') return false;
         if (/email|почт/i.test(key)) return false;
-        if (/manual.?doc|doc.?id|qpl.?join/i.test(key)) return false;
         return type === 'text' || type === 'search' || type === '';
       });
       if (nameInput && String(nameInput.value || '').trim()) {
         name = String(nameInput.value || '').trim();
       }
 
-      const manualDocInput = rowInputs.find(function(input) {
+      const emailInput = rowInputs.find(function(input) {
+        const type = String(input.type || '').toLowerCase();
         const key = [
           input.name || '',
           input.id || '',
           input.className || '',
           input.placeholder || ''
         ].join(' ');
-        return /manual.?doc|doc.?id/i.test(key);
+        return type === 'email' || /email|почт/i.test(key);
       });
-      if (manualDocInput) {
-        manualDocId = String(manualDocInput.value || '').trim();
-      }
-
-      const qplInput = rowInputs.find(function(input) {
-        const key = [
-          input.name || '',
-          input.id || '',
-          input.className || '',
-          input.placeholder || ''
-        ].join(' ');
-        return /qpl.?join/i.test(key);
-      });
-      if (qplInput) {
-        qplJoinId = String(qplInput.value || '').trim();
-      }
-
-      const envelopeInput = Array.from(row.querySelectorAll('textarea')).find(function(input) {
-        const key = [
-          input.name || '',
-          input.id || '',
-          input.className || '',
-          input.placeholder || ''
-        ].join(' ');
-        return /request.?envelope|safe.?envelope/i.test(key);
-      });
-      if (envelopeInput && String(envelopeInput.value || '').trim()) {
-        try {
-          const parsedEnvelope = JSON.parse(String(envelopeInput.value || ''));
-          if (parsedEnvelope && typeof parsedEnvelope === 'object' && !Array.isArray(parsedEnvelope)) {
-            requestEnvelope = parsedEnvelope;
-          }
-        } catch (_) {}
+      if (emailInput) {
+        userEmail = String(emailInput.value || '').trim();
       }
 
       const rowSelect = Array.from(row.querySelectorAll('select')).find(function(select) {
@@ -675,9 +630,7 @@ function pythonWorkerBmRowConfig(dialog, profiles, fallbackName) {
     result[profile] = {
       name: name,
       page_id: pageId,
-      manual_doc_id: manualDocId,
-      qpl_join_id: qplJoinId,
-      request_envelope: requestEnvelope
+      user_email: userEmail
     };
   });
 
@@ -769,8 +722,7 @@ async function pythonWorkerStartBusiness(bmName, options) {
       const profileKey = String(profileId);
       const config = rowConfig[profileKey] || {};
       const businessParams = {
-        name: String(config.name || cleanName).trim(),
-        require_page_backed: true
+        name: String(config.name || cleanName).trim()
       };
 
       const pageId = String(config.page_id || '').trim();
@@ -780,24 +732,6 @@ async function pythonWorkerStartBusiness(bmName, options) {
         config.user_email || config.email || ''
       ).trim();
       if (businessEmail) businessParams.user_email = businessEmail;
-
-      const manualDocId = String(
-        config.manual_doc_id || ''
-      ).trim();
-      if (manualDocId) businessParams.manual_doc_id = manualDocId;
-
-      const qplJoinId = String(
-        config.qpl_join_id || ''
-      ).trim();
-      if (qplJoinId) businessParams.qpl_join_id = qplJoinId;
-
-      if (
-        config.request_envelope &&
-        typeof config.request_envelope === 'object' &&
-        !Array.isArray(config.request_envelope)
-      ) {
-        businessParams.request_envelope = config.request_envelope;
-      }
 
       return {
         profile_id: profileKey,
@@ -1161,49 +1095,12 @@ async function pythonWorkerOpenOwnBmModal() {
     businessEmail.placeholder = 'Business email (обязателен, если не сохранён в профиле)';
 
     const emailHint = document.createElement('small');
-    emailHint.textContent = 'Нужен для private scope-selector Business creation.';
-
-    const manualDocId = document.createElement('input');
-    manualDocId.type = 'text';
-    manualDocId.className = 'pwbm-manual';
-    manualDocId.placeholder = 'Manual CREATE_BM doc_id (необязательно)';
-    manualDocId.inputMode = 'numeric';
-    manualDocId.maxLength = 40;
-
-    const docIdHint = document.createElement('small');
-    docIdHint.textContent =
-      'Используется только если dynamic discovery из HTML/headers ничего не нашёл.';
-
-    const qplJoinId = document.createElement('input');
-    qplJoinId.type = 'text';
-    qplJoinId.className = 'pwbm-manual';
-    qplJoinId.placeholder = 'Captured qpl_join_id (необязательно)';
-    qplJoinId.maxLength = 200;
-
-    const qplHint = document.createElement('small');
-    qplHint.textContent =
-      'Не генерируется ReMask. Заполняется только реальным capture, если Meta его требует.';
-
-    const requestEnvelope = document.createElement('textarea');
-    requestEnvelope.className = 'pwbm-manual';
-    requestEnvelope.placeholder = 'Captured safe request envelope JSON (необязательно)';
-    requestEnvelope.rows = 4;
-    requestEnvelope.spellcheck = false;
-
-    const envelopeHint = document.createElement('small');
-    envelopeHint.textContent =
-      'Вставь JSON из Capture → «Копировать envelope». Секреты сюда не входят.';
+    emailHint.textContent = 'Нужен для формы создания Business в Meta Business Suite.';
 
     nameField.appendChild(name);
     nameField.appendChild(nameHint);
     nameField.appendChild(businessEmail);
     nameField.appendChild(emailHint);
-    nameField.appendChild(manualDocId);
-    nameField.appendChild(docIdHint);
-    nameField.appendChild(qplJoinId);
-    nameField.appendChild(qplHint);
-    nameField.appendChild(requestEnvelope);
-    nameField.appendChild(envelopeHint);
 
     const pageField = document.createElement('div');
     pageField.className = 'pwbm-field';
@@ -1238,12 +1135,6 @@ async function pythonWorkerOpenOwnBmModal() {
       name: name,
       businessEmail: businessEmail,
       emailHint: emailHint,
-      manualDocId: manualDocId,
-      docIdHint: docIdHint,
-      qplJoinId: qplJoinId,
-      qplHint: qplHint,
-      requestEnvelope: requestEnvelope,
-      envelopeHint: envelopeHint,
       page: page,
       manualPage: manualPage,
       pageHint: pageHint,
@@ -1298,13 +1189,9 @@ async function pythonWorkerOpenOwnBmModal() {
       const selectedPage = cfg
         ? String(cfg.page.value || cfg.manualPage.value || '').trim()
         : '';
-      const manualDocId = cfg
-        ? String(cfg.manualDocId.value || '').trim()
-        : '';
       const businessEmail = cfg
         ? String(cfg.businessEmail.value || '').trim()
         : '';
-      const manualDocIdValid = !manualDocId || /^\d{5,40}$/.test(manualDocId);
       const businessEmailValid =
         !cfg ||
         cfg.requiresBusinessEmail !== true ||
@@ -1313,7 +1200,6 @@ async function pythonWorkerOpenOwnBmModal() {
         cfg.preflightReady === true &&
         String(cfg.name.value || '').trim() &&
         selectedPage &&
-        manualDocIdValid &&
         businessEmailValid;
     });
 
@@ -1333,13 +1219,11 @@ async function pythonWorkerOpenOwnBmModal() {
         const cfg = rows[profileId];
         if (!cfg) return true;
         const effectivePage = String(cfg.page.value || cfg.manualPage.value || '').trim();
-        const manualDocId = String(cfg.manualDocId.value || '').trim();
         const businessEmail = String(cfg.businessEmail.value || '').trim();
         return (
           cfg.preflightReady !== true ||
           !String(cfg.name.value || '').trim() ||
           !effectivePage ||
-          (manualDocId && !/^\d{5,40}$/.test(manualDocId)) ||
           (
             cfg.requiresBusinessEmail === true &&
             !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(businessEmail)
@@ -1356,15 +1240,6 @@ async function pythonWorkerOpenOwnBmModal() {
     const cfg = rows[profileId];
     cfg.name.addEventListener('input', refreshReadyState);
     cfg.businessEmail.addEventListener('input', refreshReadyState);
-    cfg.manualDocId.addEventListener('input', function() {
-      const value = String(cfg.manualDocId.value || '').trim();
-      const valid = !value || /^\d{5,40}$/.test(value);
-      cfg.docIdHint.className = valid ? '' : 'error';
-      cfg.docIdHint.textContent = valid
-        ? 'Используется только если dynamic discovery из HTML/headers ничего не нашёл.'
-        : 'doc_id должен содержать только 5-40 цифр.';
-      refreshReadyState();
-    });
     cfg.page.addEventListener('change', function() {
       if (String(cfg.page.value || '').trim()) cfg.manualPage.value = '';
       refreshReadyState();
@@ -1379,8 +1254,8 @@ async function pythonWorkerOpenOwnBmModal() {
       cfg.preflightError = '';
       cfg.requiresBusinessEmail = result.email_present !== true;
 
-      const graph = result.graph_api && typeof result.graph_api === 'object'
-        ? result.graph_api
+      const browser = result.browser_business && typeof result.browser_business === 'object'
+        ? result.browser_business
         : {};
       const routes = result.bm_routes && typeof result.bm_routes === 'object'
         ? result.bm_routes
@@ -1389,10 +1264,6 @@ async function pythonWorkerOpenOwnBmModal() {
       const pagesSource = String(result.pages_source || '').trim();
       const officialPages = pagesSource === 'official_graph_api';
       const browserPages = pagesSource.indexOf('facebook_web_') === 0;
-      const webReady =
-        result.fb_dtsg_present === true &&
-        result.actor_present === true;
-
       cfg.sessionHint.className = 'pwbm-session ok';
 
       if (result.email_present === true) {
@@ -1402,53 +1273,19 @@ async function pythonWorkerOpenOwnBmModal() {
       } else {
         cfg.emailHint.className = 'error';
         cfg.emailHint.textContent =
-          'У профиля нет сохранённого email. Введи Business email перед запуском CREATE.';
+          'У профиля нет сохранённого email. Введи Business email перед созданием BM.';
       }
 
-      let routeLabel = 'UNKNOWN';
-      if (routes.official_graph_api === true) {
-        routeLabel = 'OFFICIAL PAGE-BACKED';
-      } else if (routes.web_page_backed_candidate === true) {
-        routeLabel = 'WEB PAGE-BACKED';
-      } else if (routes.web_scope_selector_candidate === true) {
-        routeLabel = 'WEB SCOPE-SELECTOR';
-      } else if (routes.web_dynamic_or_manual === true) {
-        routeLabel = 'WEB DYNAMIC/MANUAL';
-      } else if (webReady) {
-        routeLabel = 'WEB SESSION';
-      }
-
-      const graphNotes = [];
-      if (graph.token_present === true) {
-        if (graph.permissions_ready === true) {
-          graphNotes.push(
-            'pages_show_list=' +
-            (graph.pages_show_list_granted === true ? 'YES' : 'NO')
-          );
-          graphNotes.push(
-            'business_management=' +
-            (graph.business_management_granted === true ? 'YES' : 'NO')
-          );
-        } else if (graph.identity_error || graph.error) {
-          graphNotes.push(
-            'Graph token=' +
-            String(graph.identity_error || graph.error).slice(0, 160)
-          );
-        } else if (graph.permissions_error) {
-          graphNotes.push(
-            'permissions=' + String(graph.permissions_error).slice(0, 160)
-          );
-        }
-      } else {
-        graphNotes.push('Graph token=нет');
-      }
+      const routeLabel = routes.browser_ui === true
+        ? 'META BUSINESS UI'
+        : 'UNAVAILABLE';
 
       cfg.sessionHint.textContent =
         'BM route: ' + routeLabel +
         ' · Fan Pages ' + discoveredPages.length +
         ' · proxy ' + String(result.proxy_exit_ip || '?') +
         ' · ' + String(result.proxy_latency_ms || 0) + ' ms' +
-        (graphNotes.length ? ' · ' + graphNotes.join(' · ') : '');
+        (browser.current_url ? ' · ' + String(browser.current_url) : '');
 
       if (discoveredPages.length) {
         let sourceLabel = pagesSource || 'Meta';
@@ -1515,26 +1352,10 @@ async function pythonWorkerOpenOwnBmModal() {
     const configs = {};
     for (const profileId of profiles) {
       const cfg = rows[profileId];
-      let parsedEnvelope = {};
-      const envelopeText = String(cfg.requestEnvelope.value || '').trim();
-      if (envelopeText) {
-        try {
-          parsedEnvelope = JSON.parse(envelopeText);
-        } catch (_) {
-          throw new Error('Captured request envelope должен быть валидным JSON.');
-        }
-        if (!parsedEnvelope || typeof parsedEnvelope !== 'object' || Array.isArray(parsedEnvelope)) {
-          throw new Error('Captured request envelope должен быть JSON-объектом.');
-        }
-      }
-
       configs[profileId] = {
         name: String(cfg.name.value || '').trim(),
         page_id: String(cfg.page.value || cfg.manualPage.value || '').trim(),
-        user_email: String(cfg.businessEmail.value || '').trim(),
-        manual_doc_id: String(cfg.manualDocId.value || '').trim(),
-        qpl_join_id: String(cfg.qplJoinId.value || '').trim(),
-        request_envelope: parsedEnvelope
+        user_email: String(cfg.businessEmail.value || '').trim()
       };
     }
 
