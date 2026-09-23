@@ -68,26 +68,7 @@ STATIC_CANDIDATES: dict[
 ] = {
     "CREATE_BM": [],
     "SET_PRIMARY_PAGE": [],
-    "LIST_PAGES": [
-        DocIdCandidate(
-            operation="LIST_PAGES",
-            doc_id="5196344227155252",
-            friendly_name=(
-                "AccountQualityUserPagesWrapper_UserPageQuery"
-            ),
-            endpoint_url=(
-                "https://www.facebook.com/api/graphql/"
-            ),
-            variables_mode=(
-                "account_quality_user_pages_v1"
-            ),
-            source=(
-                "community_observed_account_quality_2023"
-            ),
-            priority=25,
-            observed_at="2023",
-        ),
-    ],
+    "LIST_PAGES": [],
 }
 
 
