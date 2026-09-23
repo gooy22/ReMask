@@ -14,17 +14,11 @@ from app.runner import WorkerPool
 from app.session import ProfileContextError, ProfileSession, ProxyCheckError
 from app.store import JobStore
 from app.facebook_business_browser import BrowserBusinessError
-from app.facebook_graph_api import GraphApiError
-from app.facebook_page_discovery import (
-    PageDiscoveryError,
-    discover_pages_via_web,
-)
 from app.facebook_docids import (
     list_candidates,
     registry_view,
     upsert_candidate,
 )
-from fb_worker import AuthenticationError, RemoteRequestError
 
 logging.basicConfig(level=os.getenv('LOG_LEVEL','INFO'),format='%(asctime)s [%(levelname)s] %(name)s: %(message)s')
 log=logging.getLogger('remask.python_api')
@@ -339,152 +333,6 @@ async def profile_preflight(profile_id: str):
                     'error_code':exc.code,
                 })
 
-            web_state={
-                'ready':False,
-                'actor_present':False,
-                'fb_dtsg_present':False,
-                'lsd_present':False,
-                'jazoest_present':False,
-                'error':'',
-            }
-            try:
-                facebook=await profile_session.facebook_web()
-                bootstrap=await facebook.bootstrap()
-                web_state.update({
-                    'ready':True,
-                    'actor_present':bool(bootstrap.actor_id),
-                    'fb_dtsg_present':bool(bootstrap.fb_dtsg),
-                    'lsd_present':bool(bootstrap.lsd),
-                    'jazoest_present':bool(bootstrap.jazoest),
-                })
-            except (AuthenticationError, RemoteRequestError) as exc:
-                web_state['error']=str(exc)
-
-            graph_state={
-                'ready':False,
-                'token_present':bool(str(context.access_token or '').strip()),
-                'identity_ready':False,
-                'permissions_ready':False,
-                'pages_ready':False,
-                'businesses_ready':False,
-                'user_id':'',
-                'name':'',
-                'permissions':{},
-                'pages_show_list_granted':None,
-                'business_management_granted':None,
-                'ads_management_granted':None,
-                'pages':[],
-                'businesses':[],
-                'error':'',
-                'identity_error':'',
-                'permissions_error':'',
-                'pages_error':'',
-                'businesses_error':'',
-                'error_code':None,
-                'error_subcode':None,
-            }
-
-            if graph_state['token_present']:
-                try:
-                    graph=await profile_session.graph_api()
-                    identity=await graph.identity()
-                    graph_state.update({
-                        'ready':True,
-                        'identity_ready':True,
-                        'user_id':identity.user_id,
-                        'name':identity.name,
-                    })
-                except GraphApiError as exc:
-                    graph_state.update({
-                        'error':str(exc),
-                        'identity_error':str(exc),
-                        'error_code':exc.code,
-                        'error_subcode':exc.subcode,
-                    })
-
-                if graph_state['identity_ready']:
-                    permissions_result, pages_result, businesses_result = (
-                        await asyncio.gather(
-                            graph.list_permissions(),
-                            graph.list_pages(),
-                            graph.list_businesses(),
-                            return_exceptions=True,
-                        )
-                    )
-
-                    if isinstance(permissions_result, Exception):
-                        graph_state['permissions_error']=str(permissions_result)
-                    else:
-                        permissions=permissions_result
-                        graph_state.update({
-                            'permissions_ready':True,
-                            'permissions':permissions,
-                            'pages_show_list_granted':(
-                                permissions.get('pages_show_list') == 'granted'
-                            ),
-                            'business_management_granted':(
-                                permissions.get('business_management') == 'granted'
-                            ),
-                            'ads_management_granted':(
-                                permissions.get('ads_management') == 'granted'
-                            ),
-                        })
-
-                    if isinstance(pages_result, Exception):
-                        graph_state['pages_error']=str(pages_result)
-                        if isinstance(pages_result, GraphApiError):
-                            if graph_state['error_code'] is None:
-                                graph_state['error_code']=pages_result.code
-                                graph_state['error_subcode']=pages_result.subcode
-                    else:
-                        graph_state.update({
-                            'pages_ready':True,
-                            'pages':pages_result,
-                        })
-
-                    if isinstance(businesses_result, Exception):
-                        graph_state['businesses_error']=str(businesses_result)
-                    else:
-                        graph_state.update({
-                            'businesses_ready':True,
-                            'businesses':businesses_result,
-                        })
-
-            private_pages_state={
-                'ready':False,
-                'pages':[],
-                'source':'',
-                'doc_id':'',
-                'friendly_name':'',
-                'error':'',
-                'diagnostics':[],
-            }
-
-            if not graph_state['pages'] and web_state['ready']:
-                try:
-                    private_result=await asyncio.wait_for(
-                        discover_pages_via_web(facebook),
-                        timeout=35.0,
-                    )
-                    private_pages_state.update({
-                        'ready':True,
-                        'pages':private_result.pages,
-                        'source':private_result.source,
-                        'doc_id':(
-                            private_result.candidate.doc_id
-                            if private_result.candidate is not None
-                            else ''
-                        ),
-                        'friendly_name':(
-                            private_result.candidate.friendly_name
-                            if private_result.candidate is not None
-                            else ''
-                        ),
-                        'diagnostics':private_result.diagnostics[-8:],
-                    })
-                except (PageDiscoveryError, asyncio.TimeoutError) as exc:
-                    private_pages_state['error']=str(exc)
-
             saved_pages=[
                 {
                     'id':str(row.get('id') or '').strip(),
@@ -502,34 +350,16 @@ async def profile_preflight(profile_id: str):
                 if isinstance(row,dict)
                 and str(row.get('id') or '').strip().isdigit()
             ]
-
-            selected_pages=list(
-                graph_state['pages']
-                if graph_state['pages']
-                else (
-                    private_pages_state['pages']
-                    if private_pages_state['pages']
-                    else saved_pages
-                )
-            )
-            selected_pages.sort(
+            saved_pages.sort(
                 key=lambda page: (
                     1 if str(page.get('business_id') or '').strip() else 0,
                     str(page.get('name') or '').casefold(),
                 )
             )
-            pages_source=(
-                'official_graph_api'
-                if graph_state['pages']
-                else (
-                    private_pages_state['source']
-                    if private_pages_state['pages']
-                    else (
-                        'saved_profile_pages'
-                        if saved_pages
-                        else ''
-                    )
-                )
+
+            browser_ui_ready=bool(
+                browser_state['ready']
+                and browser_state['create_surface_ready']
             )
 
     except HTTPException:
@@ -541,12 +371,6 @@ async def profile_preflight(profile_id: str):
             detail=f'PROFILE_PREFLIGHT_FAILED: {exc}',
         ) from exc
 
-    browser_ui_ready=bool(
-        browser_state['ready']
-        and browser_state['create_surface_ready']
-        and selected_pages
-    )
-
     return {
         'ok':True,
         'profile_id':clean_profile,
@@ -554,21 +378,37 @@ async def profile_preflight(profile_id: str):
         'proxy':'ok',
         'proxy_exit_ip':str(proxy_result.get('exit_ip') or ''),
         'proxy_latency_ms':int(proxy_result.get('latency_ms') or 0),
-        'facebook_session':'ok' if web_state['ready'] else 'unavailable',
+        'facebook_session':'browser',
         'browser_business':browser_state,
-        'actor_present':web_state['actor_present'],
-        'fb_dtsg_present':web_state['fb_dtsg_present'],
-        'lsd_present':web_state['lsd_present'],
-        'jazoest_present':web_state['jazoest_present'],
-        'web_error':web_state['error'],
-        'graph_api':graph_state,
-        'private_pages':private_pages_state,
+        'actor_present':False,
+        'fb_dtsg_present':False,
+        'lsd_present':False,
+        'jazoest_present':False,
+        'web_error':'',
+        'graph_api':{
+            'ready':False,
+            'token_present':bool(str(context.access_token or '').strip()),
+            'identity_ready':False,
+            'permissions_ready':False,
+            'pages_ready':False,
+            'businesses_ready':False,
+            'permissions':{},
+            'pages':[],
+            'businesses':[],
+            'error':'not used by Add BM',
+        },
+        'private_pages':{
+            'ready':False,
+            'pages':[],
+            'source':'',
+            'error':'not used by Add BM',
+        },
         'saved_pages_count':len(saved_pages),
-        'pages':selected_pages,
-        'pages_count':len(selected_pages),
-        'pages_source':pages_source,
-        'businesses':graph_state['businesses'],
-        'businesses_count':len(graph_state['businesses']),
+        'pages':saved_pages,
+        'pages_count':len(saved_pages),
+        'pages_source':'saved_profile_pages' if saved_pages else '',
+        'businesses':[],
+        'businesses_count':0,
         'email_present':bool(str(context.email or '').strip()),
         'first_name_present':bool(str(context.first_name or '').strip()),
         'last_name_present':bool(str(context.last_name or '').strip()),
