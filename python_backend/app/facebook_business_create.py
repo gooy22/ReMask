@@ -886,6 +886,24 @@ async def create_business_with_docids(
         qpl_join_id=qpl_join_id,
     )
 
+    envelope_keys = sorted(
+        str(key)
+        for key in (
+            getattr(
+                bootstrap,
+                "request_context",
+                {},
+            )
+            or {}
+        )
+        if str(key).strip()
+    )
+    create_payload_meta = (
+        "payload_version=scope_selector_footer_v3 "
+        f"qpl={'captured' if _clean(qpl_join_id) else 'omitted'} "
+        f"envelope={','.join(envelope_keys) if envelope_keys else '-'}"
+    )
+
     dynamic_candidate: (
         DocIdCandidate
         | None
@@ -1008,8 +1026,8 @@ async def create_business_with_docids(
             diagnostic = _diagnostic(
                 candidate,
                 payload,
-                str(
-                    exc
+                (
+                    f"{exc} {create_payload_meta}"
                 ),
             )
 
@@ -1162,7 +1180,8 @@ async def create_business_with_docids(
             response,
             (
                 "CREATE_BM returned no "
-                "data.bizkit_create_business.id"
+                "data.bizkit_create_business.id "
+                + create_payload_meta
             ),
         )
 
