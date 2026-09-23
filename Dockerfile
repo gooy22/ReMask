@@ -30,7 +30,7 @@ RUN /opt/remask-venv/bin/python -m compileall -q /opt/remask-python \
     && grep -q 'discover_current_scope_selector_create_candidate' /opt/remask-python/app/facebook_business_create.py \
     && grep -q 'set_business_primary_page' /opt/remask-python/app/facebook_business_create.py \
     && grep -q 'SET_PRIMARY_PAGE' /opt/remask-python/app/facebook_docids.py \
-    && /opt/remask-venv/bin/python -m unittest -q tests.test_fb_worker_bootstrap tests.test_business_private_first tests.test_business_docid_discovery tests.test_business_two_step tests.test_v14_docid_policy tests.test_business_resume_checkpoint tests.test_business_create_variables_capture \
+    && /opt/remask-venv/bin/python -m unittest -q tests.test_fb_worker_bootstrap tests.test_business_private_first tests.test_business_docid_discovery tests.test_business_two_step tests.test_v14_docid_policy tests.test_business_resume_checkpoint tests.test_business_create_variables_capture tests.test_fb_worker_request_envelope \
     && grep -q 'MBS_BUSINESS_CREATION_IN_SCOPE_SELECTOR_FOOTER' /opt/remask-python/app/facebook_business_create.py \
     && grep -q 'BIZWEB_SCOPE_SELECTOR_FOOTER_CREATION_BUTTON' /opt/remask-python/app/facebook_business_create.py \
     && grep -q 'qpl_join_id' /opt/remask-python/app/facebook_business_create.py \
