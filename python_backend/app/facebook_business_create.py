@@ -598,10 +598,13 @@ def _build_create_variables(
             "user_last_name": last_name,
             "user_email": email,
             "creation_source": (
-                "MBS_BUSINESS_CREATION_IN_SCOPE_SELECTOR"
+                "MBS_BUSINESS_CREATION_IN_SCOPE_SELECTOR_FOOTER"
             ),
             "entry_point": (
-                "UNIFIED_GLOBAL_SCOPE_SELECTOR"
+                "BIZWEB_SCOPE_SELECTOR_FOOTER_CREATION_BUTTON"
+            ),
+            "qpl_join_id": (
+                uuid.uuid4().hex
             ),
         }
     }
