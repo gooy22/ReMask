@@ -193,10 +193,10 @@ def _derive_name_parts(
 def candidate_requirements(
     candidate: DocIdCandidate,
 ) -> dict[str, bool]:
-    if (
-        candidate.variables_mode
-        == "scope_selector_business_creation_v1"
-    ):
+    if candidate.variables_mode in {
+        "scope_selector_footer_v2",
+        "scope_selector_footer_v2",
+    }:
         return {
             "email": True,
             "page_id": False,
@@ -539,6 +539,7 @@ def _build_create_variables(
     user_first_name: str,
     user_last_name: str,
     profile_display_name: str,
+    qpl_join_id: str = "",
 ) -> dict[str, Any]:
     actor = _clean(
         actor_id
@@ -587,7 +588,7 @@ def _build_create_variables(
         )
     )
 
-    return {
+    payload = {
         "input": {
             "client_mutation_id": (
                 uuid.uuid4().hex[:16]
@@ -603,11 +604,14 @@ def _build_create_variables(
             "entry_point": (
                 "BIZWEB_SCOPE_SELECTOR_FOOTER_CREATION_BUTTON"
             ),
-            "qpl_join_id": (
-                uuid.uuid4().hex
-            ),
         }
     }
+
+    clean_qpl_join_id = _clean(qpl_join_id)
+    if clean_qpl_join_id:
+        payload["input"]["qpl_join_id"] = clean_qpl_join_id
+
+    return payload
 
 
 def _build_attach_variables(
@@ -703,7 +707,7 @@ async def discover_current_scope_selector_create_candidate(
             BUSINESS_GRAPHQL_URL
         ),
         variables_mode=(
-            "scope_selector_business_creation_v1"
+            "scope_selector_footer_v2"
         ),
         source=(
             "dynamic_html"
@@ -827,6 +831,7 @@ async def create_business_with_docids(
     user_first_name: str = "",
     user_last_name: str = "",
     profile_display_name: str = "",
+    qpl_join_id: str = "",
     manual_doc_id: str = "",
     explicit_doc_id: str | None = None,
     profile_id: str = "",
@@ -878,6 +883,7 @@ async def create_business_with_docids(
         user_first_name=user_first_name,
         user_last_name=user_last_name,
         profile_display_name=profile_display_name,
+        qpl_join_id=qpl_join_id,
     )
 
     dynamic_candidate: (
@@ -922,7 +928,7 @@ async def create_business_with_docids(
                     BUSINESS_GRAPHQL_URL
                 ),
                 variables_mode=(
-                    "scope_selector_business_creation_v1"
+                    "scope_selector_footer_v2"
                 ),
                 source="job_manual",
                 priority=19_000,
@@ -1288,6 +1294,11 @@ async def create_business_manager_v2(
         profile_display_name=_clean(
             clean_params.get(
                 "profile_display_name"
+            )
+        ),
+        qpl_join_id=_clean(
+            clean_params.get(
+                "qpl_join_id"
             )
         ),
         manual_doc_id=(
