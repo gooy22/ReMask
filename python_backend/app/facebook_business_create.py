@@ -195,8 +195,8 @@ def candidate_requirements(
 ) -> dict[str, bool]:
     if candidate.variables_mode in {
         "scope_selector_business_creation_v1",
-        "scope_selector_footer_v4",
-        "scope_selector_footer_v4",
+        "scope_selector_footer_v5_exact_envelope",
+        "scope_selector_footer_v5_exact_envelope",
     }:
         return {
             "email": True,
@@ -707,7 +707,7 @@ async def discover_current_scope_selector_create_candidate(
             BUSINESS_GRAPHQL_URL
         ),
         variables_mode=(
-            "scope_selector_footer_v4"
+            "scope_selector_footer_v5_exact_envelope"
         ),
         source=(
             "dynamic_html"
@@ -832,6 +832,7 @@ async def create_business_with_docids(
     user_last_name: str = "",
     profile_display_name: str = "",
     qpl_join_id: str = "",
+    request_envelope: dict[str, Any] | None = None,
     manual_doc_id: str = "",
     explicit_doc_id: str | None = None,
     profile_id: str = "",
@@ -886,21 +887,37 @@ async def create_business_with_docids(
         qpl_join_id=qpl_join_id,
     )
 
-    envelope_keys = sorted(
-        str(key)
-        for key in (
-            getattr(
-                bootstrap,
-                "request_context",
-                {},
-            )
-            or {}
+    captured_envelope = (
+        request_envelope
+        if isinstance(request_envelope, dict)
+        else {}
+    )
+    bootstrap_envelope = (
+        getattr(
+            bootstrap,
+            "request_context",
+            {},
         )
-        if str(key).strip()
+        or {}
+    )
+    envelope_keys = sorted(
+        {
+            *[
+                str(key)
+                for key in bootstrap_envelope
+                if str(key).strip()
+            ],
+            *[
+                str(key)
+                for key in captured_envelope
+                if str(key).strip()
+            ],
+        }
     )
     create_payload_meta = (
-        "payload_version=scope_selector_footer_v4 "
+        "payload_version=scope_selector_footer_v5_exact_envelope "
         f"qpl={'captured' if _clean(qpl_join_id) else 'generated_uuid4'} "
+        f"envelope_source={'captured' if captured_envelope else 'bootstrap'} "
         f"envelope={','.join(envelope_keys) if envelope_keys else '-'}"
     )
 
@@ -946,7 +963,7 @@ async def create_business_with_docids(
                     BUSINESS_GRAPHQL_URL
                 ),
                 variables_mode=(
-                    "scope_selector_footer_v4"
+                    "scope_selector_footer_v5_exact_envelope"
                 ),
                 source="job_manual",
                 priority=19_000,
@@ -992,6 +1009,9 @@ async def create_business_with_docids(
                 ),
                 endpoint_url=(
                     candidate.endpoint_url
+                ),
+                request_envelope=(
+                    captured_envelope
                 ),
             )
 
@@ -1319,6 +1339,14 @@ async def create_business_manager_v2(
             clean_params.get(
                 "qpl_join_id"
             )
+        ),
+        request_envelope=(
+            clean_params.get("request_envelope")
+            if isinstance(
+                clean_params.get("request_envelope"),
+                dict,
+            )
+            else {}
         ),
         manual_doc_id=(
             manual_doc_id
