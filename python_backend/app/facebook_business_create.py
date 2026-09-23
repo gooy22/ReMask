@@ -195,7 +195,8 @@ def candidate_requirements(
 ) -> dict[str, bool]:
     if candidate.variables_mode in {
         "scope_selector_business_creation_v1",
-        "scope_selector_footer_v2",
+        "scope_selector_footer_v4",
+        "scope_selector_footer_v4",
     }:
         return {
             "email": True,
@@ -706,7 +707,7 @@ async def discover_current_scope_selector_create_candidate(
             BUSINESS_GRAPHQL_URL
         ),
         variables_mode=(
-            "scope_selector_footer_v2"
+            "scope_selector_footer_v4"
         ),
         source=(
             "dynamic_html"
@@ -898,8 +899,8 @@ async def create_business_with_docids(
         if str(key).strip()
     )
     create_payload_meta = (
-        "payload_version=scope_selector_footer_v3 "
-        f"qpl={'captured' if _clean(qpl_join_id) else 'omitted'} "
+        "payload_version=scope_selector_footer_v4 "
+        f"qpl={'captured' if _clean(qpl_join_id) else 'generated_uuid4'} "
         f"envelope={','.join(envelope_keys) if envelope_keys else '-'}"
     )
 
@@ -945,7 +946,7 @@ async def create_business_with_docids(
                     BUSINESS_GRAPHQL_URL
                 ),
                 variables_mode=(
-                    "scope_selector_footer_v2"
+                    "scope_selector_footer_v4"
                 ),
                 source="job_manual",
                 priority=19_000,
