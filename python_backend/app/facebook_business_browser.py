@@ -801,12 +801,12 @@ class FacebookBusinessBrowser:
         if await self._has_create_surface():
             return True
 
-        # Meta sometimes starts Business Suite with only the top logo control
-        # collapsed to ~40px. In that layout the portfolio/page selector row is
-        # not rendered at all, so the geometry probe below can accidentally hit
-        # Home/Notifications. Expand only the narrow logo control; the normal
-        # ~196px "Meta Business Suite" control is NOT the portfolio selector and
-        # must not be clicked.
+        # Meta serves at least two Business Suite sidebar variants.
+        # In one, "Meta Business Suite" is a narrow collapse/expand control;
+        # in another, the same visible label is itself the portfolio selector.
+        # Treat both as read-only candidates and trust only the observed result:
+        # if clicking it exposes a Create action, keep it; otherwise Escape and
+        # continue to the geometry/structured fallbacks below.
         try:
             role_buttons = self.page.locator('[role="button"]')
             count = min(await role_buttons.count(), 180)
@@ -820,18 +820,37 @@ class FacebookBusinessBrowser:
                 box = await item.bounding_box()
                 if not box:
                     continue
+
                 width = float(box.get("width") or 0)
                 x = float(box.get("x") or 0)
                 y = float(box.get("y") or 0)
-                if x <= 40 and y <= 130 and 0 < width <= 80:
+                top_left_business_control = (
+                    x <= 40
+                    and y <= 140
+                    and 0 < width <= 240
+                )
+                if not top_left_business_control:
+                    continue
+
+                try:
                     await item.click(timeout=3000)
-                    await self.page.wait_for_timeout(500)
-                    if await self._has_create_surface():
+                    if await self._wait_for_create_surface(
+                        timeout_ms=2200,
+                        interval_ms=200,
+                    ):
                         return True
+                finally:
+                    # Clicking the wrong A/B variant is harmless navigation/UI
+                    # state only. Close any menu/popover before trying another
+                    # candidate path.
+                    try:
+                        await self.page.keyboard.press("Escape")
+                        await self.page.wait_for_timeout(120)
+                    except Exception:
+                        pass
                 break
         except Exception:
-            # Expansion is a read-only best effort; the direct /reg/ fallback
-            # still exists if Meta renders another sidebar variant.
+            # Read-only candidate probing must never make Add BM fail by itself.
             pass
 
         # Current Meta Business Suite places the business/page selector BELOW
