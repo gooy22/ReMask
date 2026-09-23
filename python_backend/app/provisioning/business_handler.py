@@ -144,6 +144,12 @@ async def business_handler(
         params.get("qpl_join_id")
     )
 
+    request_envelope = (
+        params.get("request_envelope")
+        if isinstance(params.get("request_envelope"), dict)
+        else {}
+    )
+
     manual_doc_id = _clean(
         params.get("manual_doc_id")
         or params.get("doc_id")
@@ -224,6 +230,7 @@ async def business_handler(
                     "user_last_name": last_name,
                     "profile_display_name": display_name,
                     "qpl_join_id": qpl_join_id,
+                    "request_envelope": request_envelope,
                     "manual_doc_id": manual_doc_id,
                 },
                 profile_id=profile_id,
