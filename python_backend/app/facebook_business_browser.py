@@ -1814,6 +1814,38 @@ class FacebookBusinessBrowser:
         return page in body
 
     @staticmethod
+    def _request_matches_page_add(
+        request: Any,
+        *,
+        business_id: str,
+        page_id: str,
+    ) -> bool:
+        try:
+            if request.method.upper() != "POST":
+                return False
+            if "graphql" not in str(request.url or "").lower():
+                return False
+            decoded = unquote_plus(str(request.post_data or ""))
+        except Exception:
+            return False
+
+        lower = decoded.lower()
+        return (
+            business_id in decoded
+            and page_id in decoded
+            and "mutation" in lower
+            and any(
+                marker in lower
+                for marker in (
+                    "page",
+                    "asset",
+                    "claim",
+                    "business",
+                )
+            )
+        )
+
+    @staticmethod
     def _response_matches_page_add(
         response: Any,
         *,
@@ -1821,15 +1853,13 @@ class FacebookBusinessBrowser:
         page_id: str,
     ) -> bool:
         try:
-            if response.request.method.upper() != "POST":
-                return False
-            if "graphql" not in str(response.url or "").lower():
-                return False
-            decoded = unquote_plus(str(response.request.post_data or ""))
+            return FacebookBusinessBrowser._request_matches_page_add(
+                response.request,
+                business_id=business_id,
+                page_id=page_id,
+            )
         except Exception:
             return False
-
-        return business_id in decoded and page_id in decoded
 
     async def add_existing_page(
         self,
@@ -1920,72 +1950,224 @@ class FacebookBusinessBrowser:
                 diagnostic=diag,
             )
 
-        try:
-            async with self.page.expect_response(
-                lambda response: self._response_matches_page_add(
-                    response,
-                    business_id=business,
-                    page_id=page,
-                ),
-                timeout=self.timeout_ms,
+        loop = asyncio.get_running_loop()
+        gate_future: asyncio.Future[bool] = loop.create_future()
+
+        async def gate(route: Any, request: Any) -> None:
+            if not self._request_matches_page_add(
+                request,
+                business_id=business,
+                page_id=page,
             ):
+                await route.continue_()
+                return
+
+            if gate_future.done():
+                await route.continue_()
+                return
+
+            try:
                 if before_submit is not None:
                     await before_submit(
                         {
-                            "phase": "PAGE_ADD_CLICK_INTENT",
+                            "phase": "PAGE_ADD_SUBMITTED",
                             "business_id": business,
                             "primary_page_id": page,
-                            "page_click_intent_at": int(time.time()),
+                            "page_submitted_at": int(time.time()),
+                            "network_gate": "before_meta_send",
+                        }
+                    )
+            except Exception as exc:
+                try:
+                    await route.abort()
+                finally:
+                    if not gate_future.done():
+                        gate_future.set_exception(
+                            BrowserBusinessError(
+                                "PAGE_CHECKPOINT_FAILED_BEFORE_SEND",
+                                (
+                                    "ReMask intercepted Meta Page-add but could "
+                                    "not persist the submitted checkpoint, so "
+                                    "the request was blocked before reaching Meta."
+                                ),
+                                retryable=True,
+                            )
+                        )
+                return
+
+            await route.continue_()
+            if not gate_future.done():
+                gate_future.set_result(True)
+
+        await self.page.route("**/api/graphql/**", gate)
+
+        try:
+            # Search results are often a selectable list before the review
+            # step. Prefer an exact Page-ID result; otherwise select the only
+            # visible option/radio if Meta rendered one.
+            try:
+                exact = self.page.get_by_text(
+                    re.compile(rf"^\\s*{re.escape(page)}\\s*$")
+                )
+                count = min(await exact.count(), 5)
+                for index in range(count):
+                    candidate = exact.nth(index)
+                    if not await candidate.is_visible():
+                        continue
+                    target = candidate.locator(
+                        'xpath=ancestor-or-self::*[@role="option" or @role="button" or self::button][1]'
+                    )
+                    if await target.count() and await target.first.is_visible():
+                        await target.first.click()
+                        await self.page.wait_for_timeout(450)
+                        break
+            except Exception:
+                pass
+
+            try:
+                radios = self.page.get_by_role("radio")
+                visible_radios = []
+                for index in range(min(await radios.count(), 8)):
+                    item = radios.nth(index)
+                    if await item.is_visible() and await item.is_enabled():
+                        visible_radios.append(item)
+                if len(visible_radios) == 1 and not await visible_radios[0].is_checked():
+                    await visible_radios[0].check()
+                    await self.page.wait_for_timeout(250)
+            except Exception:
+                pass
+
+            sent = False
+            clicked_any = False
+
+            for _ in range(7):
+                if gate_future.done():
+                    sent = gate_future.exception() is None
+                    break
+
+                # Meta can show a consent checkbox on the final review step.
+                try:
+                    checkboxes = self.page.get_by_role("checkbox")
+                    for index in range(min(await checkboxes.count(), 12)):
+                        checkbox = checkboxes.nth(index)
+                        if not await checkbox.is_visible() or not await checkbox.is_enabled():
+                            continue
+                        if await checkbox.is_checked():
+                            continue
+                        label = " ".join(
+                            [
+                                _clean(await checkbox.get_attribute("aria-label")),
+                                _clean(
+                                    await checkbox.evaluate(
+                                        "(e) => (e.parentElement && e.parentElement.innerText) || ''"
+                                    )
+                                )[:500],
+                            ]
+                        ).lower()
+                        if any(
+                            marker in label
+                            for marker in (
+                                "agree",
+                                "terms",
+                                "confirm",
+                                "understand",
+                                "соглас",
+                                "подтверж",
+                                "погодж",
+                                "підтвер",
+                                "zustimm",
+                                "bestät",
+                            )
+                        ):
+                            await checkbox.check()
+                            await self.page.wait_for_timeout(200)
+                except Exception:
+                    pass
+
+                final_clicked = await self._click_named(
+                    (
+                        "Add Page",
+                        "Add Facebook Page",
+                        "Add Page and Instagram",
+                        "Confirm",
+                        "Request approval",
+                        "Добавить Страницу",
+                        "Добавить страницу",
+                        "Подтвердить",
+                        "Додати сторінку",
+                        "Підтвердити",
+                        "Seite hinzufügen",
+                        "Bestätigen",
+                    )
+                )
+                if final_clicked:
+                    clicked_any = True
+                    await self.page.wait_for_timeout(700)
+                    if gate_future.done():
+                        sent = gate_future.exception() is None
+                        break
+                    continue
+
+                next_clicked = await self._click_named(
+                    (
+                        "Next",
+                        "Continue",
+                        "Review",
+                        "Select",
+                        "Далее",
+                        "Продолжить",
+                        "Проверить",
+                        "Выбрать",
+                        "Далі",
+                        "Продовжити",
+                        "Перевірити",
+                        "Вибрати",
+                        "Weiter",
+                        "Fortfahren",
+                        "Überprüfen",
+                        "Auswählen",
+                    )
+                )
+                if next_clicked:
+                    clicked_any = True
+                    await self.page.wait_for_timeout(700)
+                    continue
+
+                break
+
+            if gate_future.done() and gate_future.exception() is not None:
+                raise gate_future.exception()
+
+            if not gate_future.done():
+                # A non-GraphQL Meta variant may still have completed the
+                # operation. Verification below is authoritative. If nothing
+                # changed, record that no mutation was observed/sent.
+                if before_submit is not None:
+                    await before_submit(
+                        {
+                            "phase": "PAGE_ADD_NOT_SUBMITTED",
+                            "business_id": business,
+                            "primary_page_id": page,
+                            "page_not_submitted_at": int(time.time()),
                         }
                     )
 
-                clicked = await self._click_named(
-                    ("Add Page", "Add", "Continue", "Добавить Страницу", "Добавить", "Продолжить", "Додати сторінку", "Додати", "Продовжити", "Seite hinzufügen", "Hinzufügen", "Weiter")
-                )
-                if not clicked:
-                    if before_submit is not None:
-                        await before_submit(
-                            {
-                                "phase": "PAGE_ADD_NOT_SUBMITTED",
-                                "business_id": business,
-                                "primary_page_id": page,
-                                "page_not_submitted_at": int(time.time()),
-                            }
-                        )
+                if not clicked_any:
                     diag = await self._diagnostic("page_add_submit_missing")
                     raise BrowserBusinessError(
                         "PAGE_ADD_UI_CHANGED",
-                        "Meta Page-add submit action was not found.",
+                        "Meta Page-add review/submit action was not found.",
                         retryable=False,
                         diagnostic=diag,
                     )
 
-                if before_submit is not None:
-                    try:
-                        await before_submit(
-                            {
-                                "phase": "PAGE_ADD_SUBMITTED",
-                                "business_id": business,
-                                "primary_page_id": page,
-                                "page_submitted_at": int(time.time()),
-                            }
-                        )
-                    except Exception as exc:
-                        raise BrowserBusinessError(
-                            "PAGE_CHECKPOINT_FAILED_AFTER_CLICK",
-                            (
-                                "Meta Page-add was clicked, but ReMask could not "
-                                "persist the submitted checkpoint. Page state "
-                                "must be verified before any retry."
-                            ),
-                            retryable=False,
-                        ) from exc
         except BrowserBusinessError:
             raise
-        except Exception:
-            # Response interception is diagnostic only. Verification below is
-            # authoritative.
-            pass
+        finally:
+            try:
+                await self.page.unroute("**/api/graphql/**", gate)
+            except Exception:
+                pass
 
         await self.page.wait_for_timeout(1500)
 
