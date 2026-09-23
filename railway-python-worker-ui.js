@@ -1249,6 +1249,19 @@ async function pythonWorkerOpenOwnBmModal() {
       refreshReadyState();
     });
 
+    const cachedPagesPromise = pythonWorkerLoadPages(profileId)
+      .then(function(pages) {
+        const cached = Array.isArray(pages) ? pages : [];
+        if (cached.length && cfg.preflightReady !== true) {
+          pythonWorkerApplyPages(cfg, cached, 'ReMask Page cache');
+          refreshReadyState();
+        }
+        return cached;
+      })
+      .catch(function() {
+        return [];
+      });
+
     return pythonWorkerProfilePreflight(profileId).then(async function(result) {
       cfg.preflightReady = true;
       cfg.preflightError = '';
@@ -1309,8 +1322,22 @@ async function pythonWorkerOpenOwnBmModal() {
       }
 
       try {
-        const pages = await pythonWorkerLoadPages(profileId);
-        pythonWorkerApplyPages(cfg, pages, 'ReMask Page cache');
+        const pages = await cachedPagesPromise;
+        if (pages.length) {
+          pythonWorkerApplyPages(cfg, pages, 'ReMask Page cache');
+        } else {
+          cfg.page.textContent = '';
+          const empty = document.createElement('option');
+          empty.value = '';
+          empty.textContent = 'Pages не найдены';
+          cfg.page.appendChild(empty);
+          cfg.page.disabled = false;
+          cfg.loaded = true;
+          cfg.error = 'Pages не найдены';
+          cfg.pageHint.className = 'error';
+          cfg.pageHint.textContent =
+            'Browser preflight и ReMask cache не вернули Pages. Можно ввести Primary Page ID вручную.';
+        }
       } catch (error) {
         cfg.page.textContent = '';
         const failed = document.createElement('option');
