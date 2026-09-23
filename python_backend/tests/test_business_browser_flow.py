@@ -1,8 +1,9 @@
+import os
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from app.facebook_business_browser import (
     BrowserBusinessError,
@@ -119,10 +120,10 @@ class BrowserNavigationRecoveryTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(browser.page.goto_calls, 1)
 
-    async def test_err_aborted_retries_once_when_replacement_dom_is_not_ready(self):
+    async def test_err_aborted_retries_once_when_no_facebook_surface_exists(self):
         class _Page:
             def __init__(self):
-                self.url = "https://business.facebook.com/reg/"
+                self.url = "about:blank"
                 self.goto_calls = 0
 
             async def goto(self, *args, **kwargs):
@@ -131,6 +132,7 @@ class BrowserNavigationRecoveryTests(unittest.IsolatedAsyncioTestCase):
                     raise Exception(
                         "Page.goto: net::ERR_ABORTED; maybe frame was detached?"
                     )
+                self.url = "https://business.facebook.com/reg/"
                 return None
 
             async def wait_for_timeout(self, ms):
@@ -141,7 +143,7 @@ class BrowserNavigationRecoveryTests(unittest.IsolatedAsyncioTestCase):
         )
         browser.page = _Page()
         browser._assert_authenticated = AsyncMock(return_value=None)
-        browser._body_text = AsyncMock(side_effect=["", "Meta Business Suite"])
+        browser._body_text = AsyncMock(return_value="")
         browser._form_ready = AsyncMock(return_value=False)
         browser._has_create_surface = AsyncMock(return_value=False)
 
@@ -154,6 +156,103 @@ class BrowserNavigationRecoveryTests(unittest.IsolatedAsyncioTestCase):
             "https://business.facebook.com/reg/",
         )
         self.assertEqual(browser.page.goto_calls, 2)
+
+
+class BrowserPortfolioSelectorProbeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_portfolio_probe_does_not_scan_entire_spa_dom(self):
+        class _EmptyLocator:
+            async def count(self):
+                return 0
+
+        class _Keyboard:
+            async def press(self, key):
+                return None
+
+        class _Page:
+            def __init__(self):
+                self.script = ""
+                self.keyboard = _Keyboard()
+
+            async def evaluate(self, script):
+                self.script = script
+                return {"clicked": False, "candidates": []}
+
+            def locator(self, selector):
+                return _EmptyLocator()
+
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-light-probe")
+        )
+        browser.page = _Page()
+        browser._has_create_surface = AsyncMock(return_value=False)
+
+        opened = await browser._try_open_top_left_portfolio_menu()
+
+        self.assertFalse(opened)
+        self.assertIn("elementsFromPoint", browser.page.script)
+        self.assertNotIn("querySelectorAll('*')", browser.page.script)
+        self.assertNotIn('querySelectorAll("*")', browser.page.script)
+
+
+class BrowserCreateEntryRoutingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_default_create_flow_uses_home_then_direct_registration(self):
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-create-routing")
+        )
+        calls = []
+
+        async def fake_goto(url):
+            calls.append(url)
+            return url
+
+        browser._goto = AsyncMock(side_effect=fake_goto)
+        browser._form_ready = AsyncMock(return_value=False)
+        browser._try_open_top_left_portfolio_menu = AsyncMock(return_value=False)
+
+        with patch.dict(
+            os.environ,
+            {"REMASK_BM_LEGACY_NAV_FALLBACK": ""},
+            clear=False,
+        ):
+            ready = await browser._open_create_entry(open_form=False)
+
+        self.assertFalse(ready)
+        self.assertEqual(
+            calls,
+            [browser.HOME_URL, browser.CREATE_URL],
+        )
+        self.assertNotIn(browser.OVERVIEW_URL, calls)
+
+    async def test_overview_requires_explicit_legacy_flag(self):
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-create-routing-legacy")
+        )
+        calls = []
+
+        async def fake_goto(url):
+            calls.append(url)
+            return url
+
+        browser._goto = AsyncMock(side_effect=fake_goto)
+        browser._form_ready = AsyncMock(return_value=False)
+        browser._try_open_top_left_portfolio_menu = AsyncMock(return_value=False)
+
+        with patch.dict(
+            os.environ,
+            {"REMASK_BM_LEGACY_NAV_FALLBACK": "1"},
+            clear=False,
+        ):
+            ready = await browser._open_create_entry(open_form=False)
+
+        self.assertFalse(ready)
+        self.assertEqual(
+            calls,
+            [
+                browser.HOME_URL,
+                browser.CREATE_URL,
+                browser.OVERVIEW_URL,
+            ],
+        )
 
 
 class BrowserPageDiscoveryTests(unittest.IsolatedAsyncioTestCase):
