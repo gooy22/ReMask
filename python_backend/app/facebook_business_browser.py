@@ -999,30 +999,48 @@ class FacebookBusinessBrowser:
                 if await self._wait_for_form_ready():
                     return True
 
+        # Direct registration remains a normal fallback. The older live
+        # canary reached the real Meta create form through /reg/ even when the
+        # HOME selector was mounted/ambiguous. _goto() now tolerates Meta SPA
+        # ERR_ABORTED redirects, so this path is safe to retry as navigation.
+        try:
+            await self._goto(self.CREATE_URL)
+        except BrowserBusinessError as exc:
+            if exc.code != "FACEBOOK_NAVIGATION_FAILED":
+                raise
+
+        if await self._form_ready():
+            return True
+
+        if await self._try_open_top_left_portfolio_menu():
+            if not open_form:
+                return True
+            if await self._click_named(self.CREATE_NAMES):
+                await self._assert_authenticated()
+                if await self._wait_for_form_ready():
+                    return True
+
+        # /overview is much heavier and has crashed Railway Chromium. Keep it
+        # diagnostic-only rather than part of normal Add BM execution.
         legacy_fallback = _clean(
             os.getenv("REMASK_BM_LEGACY_NAV_FALLBACK")
         ).lower() in {"1", "true", "yes", "on"}
-        if not legacy_fallback:
-            return False
-
-        for entry_url in (self.OVERVIEW_URL, self.CREATE_URL):
+        if legacy_fallback:
             try:
-                await self._goto(entry_url)
+                await self._goto(self.OVERVIEW_URL)
             except BrowserBusinessError as exc:
-                if exc.code == "FACEBOOK_NAVIGATION_FAILED":
-                    continue
-                raise
-
-            if await self._form_ready():
-                return True
-
-            if await self._try_open_top_left_portfolio_menu():
-                if not open_form:
+                if exc.code != "FACEBOOK_NAVIGATION_FAILED":
+                    raise
+            else:
+                if await self._form_ready():
                     return True
-                if await self._click_named(self.CREATE_NAMES):
-                    await self._assert_authenticated()
-                    if await self._wait_for_form_ready():
+                if await self._try_open_top_left_portfolio_menu():
+                    if not open_form:
                         return True
+                    if await self._click_named(self.CREATE_NAMES):
+                        await self._assert_authenticated()
+                        if await self._wait_for_form_ready():
+                            return True
 
         return False
 
