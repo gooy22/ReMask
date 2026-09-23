@@ -186,6 +186,7 @@ async def business_handler(
 
         elif phase in {
             "CREATE_SUBMITTED",
+            "CREATE_CLICK_INTENT",
             "CREATE_PENDING_SUBMIT",
             "CREATE_RESULT_UNKNOWN",
         }:
@@ -312,7 +313,7 @@ async def business_handler(
         # If a prior Page-add submit was interrupted, verify before doing
         # anything else. We do not blindly click Add again.
         phase = _clean(checkpoint.get("phase")).upper()
-        if phase == "PAGE_ADD_SUBMITTED":
+        if phase in {"PAGE_ADD_SUBMITTED", "PAGE_ADD_CLICK_INTENT"}:
             if await browser.verify_page_attached(
                 business_id=business_id,
                 page_id=page_id,
