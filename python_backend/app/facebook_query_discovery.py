@@ -434,6 +434,302 @@ def extract_csrf_token(
     )
 
 
+_RELAY_CONTEXT_MARKERS = (
+    "RelayPrefetchedStreamCache",
+    "__bbox",
+    "requireLazy",
+)
+
+
+def _balanced_segment(
+    source: str,
+    start: int,
+    *,
+    max_chars: int = 250_000,
+) -> str:
+    if start < 0 or start >= len(source):
+        return ""
+
+    opener = source[start]
+    closer = {
+        "{": "}",
+        "[": "]",
+        "(": ")",
+    }.get(opener)
+
+    if closer is None:
+        return ""
+
+    stack = [opener]
+    quote = ""
+    escaped = False
+    limit = min(len(source), start + max_chars)
+
+    for index in range(start + 1, limit):
+        char = source[index]
+
+        if quote:
+            if escaped:
+                escaped = False
+                continue
+            if char == "\\":
+                escaped = True
+                continue
+            if char == quote:
+                quote = ""
+            continue
+
+        if char in {'"', "'"}:
+            quote = char
+            continue
+
+        if char in "{[(":
+            stack.append(char)
+            continue
+
+        if char in "}])":
+            expected = {
+                "}": "{",
+                "]": "[",
+                ")": "(",
+            }[char]
+
+            if not stack or stack[-1] != expected:
+                return ""
+
+            stack.pop()
+
+            if not stack:
+                return source[start:index + 1]
+
+    return ""
+
+
+def _relay_context_blocks(source: str) -> list[tuple[str, str]]:
+    blocks: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    for marker in _RELAY_CONTEXT_MARKERS:
+        start = 0
+
+        while True:
+            index = source.find(marker, start)
+            if index < 0:
+                break
+
+            candidate_starts: list[int] = []
+
+            backward_floor = max(0, index - 12_000)
+            for opener in ("{", "[", "("):
+                pos = source.rfind(opener, backward_floor, index + 1)
+                if pos >= 0:
+                    candidate_starts.append(pos)
+
+            forward_ceiling = min(len(source), index + 2_000)
+            for opener in ("{", "[", "("):
+                pos = source.find(opener, index, forward_ceiling)
+                if pos >= 0:
+                    candidate_starts.append(pos)
+
+            for block_start in sorted(
+                set(candidate_starts),
+                key=lambda value: abs(value - index),
+            ):
+                block = _balanced_segment(source, block_start)
+                if not block:
+                    continue
+                if marker not in block:
+                    continue
+                if len(block) > 250_000:
+                    continue
+
+                identity = (marker, block)
+                if identity in seen:
+                    continue
+
+                seen.add(identity)
+                blocks.append(identity)
+
+            start = index + len(marker)
+
+    return blocks
+
+
+def _enclosing_object(
+    source: str,
+    position: int,
+    *,
+    max_backtrack: int = 24_000,
+) -> str:
+    floor = max(0, position - max_backtrack)
+
+    openings = [
+        index
+        for index in range(position, floor - 1, -1)
+        if source[index] == "{"
+    ]
+
+    for start in openings:
+        block = _balanced_segment(
+            source,
+            start,
+            max_chars=120_000,
+        )
+        if not block:
+            continue
+
+        end = start + len(block)
+
+        if start <= position < end:
+            return block
+
+    return ""
+
+
+def _doc_id_matches(source: str) -> list[tuple[int, str, int]]:
+    patterns = (
+        (
+            0,
+            r'["\'](?:doc_id|docID|queryID|query_id)["\']\s*:\s*["\']([0-9]{5,40})["\']',
+        ),
+        (
+            10,
+            r'(?<![A-Za-z0-9_])(?:doc_id|docID|queryID|query_id)\s*[:=]\s*["\']([0-9]{5,40})["\']',
+        ),
+        (
+            20,
+            r'["\']params["\']\s*:\s*\{.{0,2500}?["\']id["\']\s*:\s*["\']([0-9]{5,40})["\']',
+        ),
+        (
+            40,
+            r'["\']id["\']\s*:\s*["\']([0-9]{5,40})["\']',
+        ),
+    )
+
+    matches: list[tuple[int, str, int]] = []
+
+    for penalty, pattern in patterns:
+        for match in re.finditer(
+            pattern,
+            source,
+            flags=re.IGNORECASE | re.DOTALL,
+        ):
+            value = str(match.group(1) or "").strip()
+
+            if not re.fullmatch(r"\d{5,40}", value):
+                continue
+
+            matches.append(
+                (
+                    match.start(1),
+                    value,
+                    penalty,
+                )
+            )
+
+    return matches
+
+
+def extract_doc_id_from_relay_context(
+    source: str,
+    friendly_name: str,
+) -> str:
+    clean_name = str(friendly_name or "").strip()
+
+    if not source or not clean_name:
+        return ""
+
+    aliases = (
+        clean_name,
+        clean_name + "_facebookRelayOperation",
+    )
+
+    best: tuple[int, str] | None = None
+
+    for variant in source_variants(source):
+        for marker, block in _relay_context_blocks(variant):
+            lower_block = block.lower()
+
+            if clean_name.lower() not in lower_block:
+                continue
+
+            for alias in aliases:
+                alias_start = 0
+
+                while True:
+                    alias_index = block.find(alias, alias_start)
+                    if alias_index < 0:
+                        break
+
+                    same_object = _enclosing_object(
+                        block,
+                        alias_index,
+                    )
+
+                    candidate_sources: list[tuple[str, int]] = []
+
+                    if same_object and alias in same_object:
+                        candidate_sources.append(
+                            (
+                                same_object,
+                                100_000,
+                            )
+                        )
+
+                    candidate_sources.append(
+                        (
+                            block,
+                            20_000,
+                        )
+                    )
+
+                    for candidate_source, base_score in candidate_sources:
+                        for doc_pos, doc_id, pattern_penalty in _doc_id_matches(
+                            candidate_source
+                        ):
+                            alias_pos = candidate_source.find(alias)
+                            if alias_pos < 0:
+                                continue
+
+                            distance = abs(doc_pos - alias_pos)
+
+                            score = (
+                                base_score
+                                - min(distance, 15_000)
+                                - pattern_penalty
+                            )
+
+                            if alias.endswith(
+                                "_facebookRelayOperation"
+                            ):
+                                score += 5_000
+
+                            if marker == "RelayPrefetchedStreamCache":
+                                score += 500
+                            elif marker == "__bbox":
+                                score += 350
+                            elif marker == "requireLazy":
+                                score += 250
+
+                            candidate = (
+                                score,
+                                doc_id,
+                            )
+
+                            if (
+                                best is None
+                                or candidate[0] > best[0]
+                            ):
+                                best = candidate
+
+                    alias_start = (
+                        alias_index
+                        + len(alias)
+                    )
+
+    return best[1] if best is not None else ""
+
+
 def extract_doc_id_near_friendly_name(
     source: str,
     friendly_name: str,
@@ -692,7 +988,7 @@ async def discover_persisted_query(
                 continue
 
             doc_id = (
-                extract_doc_id_near_friendly_name(
+                extract_doc_id_from_relay_context(
                     document,
                     clean_name,
                 )
@@ -777,6 +1073,7 @@ __all__ = [
     "PersistedQueryDiscovery",
     "discover_persisted_query",
     "extract_csrf_token",
+    "extract_doc_id_from_relay_context",
     "extract_doc_id_near_friendly_name",
     "source_variants",
 ]
