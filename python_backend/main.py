@@ -14,6 +14,7 @@ from app.runner import WorkerPool
 from app.session import ProfileContextError, ProfileSession, ProxyCheckError
 from app.store import JobStore
 from app.facebook_business_create import candidate_requirements
+from app.facebook_business_browser import BrowserBusinessError
 from app.facebook_graph_api import GraphApiError
 from app.facebook_page_discovery import (
     PageDiscoveryError,
@@ -156,7 +157,7 @@ async def ready():
             or os.getenv('REMASK_DEPLOY_REV')
             or ''
         )[:12],
-        'create_bm_payload_version':'scope_selector_footer_v6_browser_native',
+        'create_bm_payload_version':'business_suite_ui_v1',
         'volume_mounted':bool(str(os.getenv('RAILWAY_VOLUME_MOUNT_PATH') or '').strip()),
         'volume_path':str(os.getenv('RAILWAY_VOLUME_MOUNT_PATH') or ''),
     }
@@ -184,6 +185,31 @@ async def profile_preflight(profile_id: str):
                     status_code=422,
                     detail=f'PROXY_DEAD: {exc}',
                 ) from exc
+
+            browser_state={
+                'ready':False,
+                'create_surface_ready':False,
+                'current_url':'',
+                'account_id':'',
+                'diagnostics':[],
+                'error':'',
+                'error_code':'',
+            }
+            try:
+                async with profile_session.facebook_business_browser() as business_browser:
+                    browser_preflight=await business_browser.preflight()
+                    browser_state.update({
+                        'ready':bool(browser_preflight.ready),
+                        'create_surface_ready':bool(browser_preflight.create_surface_ready),
+                        'current_url':browser_preflight.current_url,
+                        'account_id':browser_preflight.account_id,
+                        'diagnostics':list(browser_preflight.diagnostics),
+                    })
+            except BrowserBusinessError as exc:
+                browser_state.update({
+                    'error':str(exc),
+                    'error_code':exc.code,
+                })
 
             web_state={
                 'ready':False,
@@ -409,7 +435,7 @@ async def profile_preflight(profile_id: str):
     official_route_ready=bool(
         graph_state['identity_ready']
         and selected_pages
-        and graph_state.get('business_management_granted') is not False
+        and graph_state.get('business_management_granted') is True
     )
     web_page_backed_candidate=bool(
         web_state['ready']
@@ -425,6 +451,11 @@ async def profile_preflight(profile_id: str):
         and web_state['actor_present']
         and web_state['fb_dtsg_present']
     )
+    browser_ui_ready=bool(
+        browser_state['ready']
+        and browser_state['create_surface_ready']
+        and selected_pages
+    )
 
     return {
         'ok':True,
@@ -434,6 +465,7 @@ async def profile_preflight(profile_id: str):
         'proxy_exit_ip':str(proxy_result.get('exit_ip') or ''),
         'proxy_latency_ms':int(proxy_result.get('latency_ms') or 0),
         'facebook_session':'ok' if web_state['ready'] else 'unavailable',
+        'browser_business':browser_state,
         'actor_present':web_state['actor_present'],
         'fb_dtsg_present':web_state['fb_dtsg_present'],
         'lsd_present':web_state['lsd_present'],
@@ -453,17 +485,13 @@ async def profile_preflight(profile_id: str):
         'display_name_present':bool(str(context.display_name or '').strip()),
         'create_bm_candidates':bm_candidates,
         'bm_routes':{
+            'browser_ui':browser_ui_ready,
             'official_graph_api':official_route_ready,
             'web_page_backed_candidate':web_page_backed_candidate,
             'web_scope_selector_candidate':web_scope_selector_candidate,
             'web_dynamic_or_manual':web_dynamic_or_manual_ready,
         },
-        'bm_route_ready':bool(
-            official_route_ready
-            or web_page_backed_candidate
-            or web_scope_selector_candidate
-            or web_dynamic_or_manual_ready
-        ),
+        'bm_route_ready':browser_ui_ready,
     }
 
 @app.get('/api/v1/facebook/docids',dependencies=[Depends(require_key)])
