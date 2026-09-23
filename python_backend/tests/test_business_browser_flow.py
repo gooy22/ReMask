@@ -1,8 +1,9 @@
+import os
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from app.facebook_business_browser import (
     BrowserBusinessError,
@@ -207,16 +208,48 @@ class BrowserCreateEntryRoutingTests(unittest.IsolatedAsyncioTestCase):
         browser._form_ready = AsyncMock(return_value=False)
         browser._try_open_top_left_portfolio_menu = AsyncMock(return_value=False)
 
-        ready = await browser._open_create_entry(open_form=False)
+        with patch.dict(
+            os.environ,
+            {"REMASK_BM_LEGACY_NAV_FALLBACK": ""},
+            clear=False,
+        ):
+            ready = await browser._open_create_entry(open_form=False)
+
+        self.assertFalse(ready)
+        self.assertEqual(calls, [browser.HOME_URL])
+        self.assertNotIn(browser.OVERVIEW_URL, calls)
+        self.assertNotIn(browser.CREATE_URL, calls)
+
+    async def test_legacy_navigation_fallback_requires_explicit_flag(self):
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-create-routing-legacy")
+        )
+        calls = []
+
+        async def fake_goto(url):
+            calls.append(url)
+            return url
+
+        browser._goto = AsyncMock(side_effect=fake_goto)
+        browser._form_ready = AsyncMock(return_value=False)
+        browser._try_open_top_left_portfolio_menu = AsyncMock(return_value=False)
+
+        with patch.dict(
+            os.environ,
+            {"REMASK_BM_LEGACY_NAV_FALLBACK": "1"},
+            clear=False,
+        ):
+            ready = await browser._open_create_entry(open_form=False)
 
         self.assertFalse(ready)
         self.assertEqual(
             calls,
-            [browser.HOME_URL, browser.CREATE_URL],
+            [
+                browser.HOME_URL,
+                browser.OVERVIEW_URL,
+                browser.CREATE_URL,
+            ],
         )
-        self.assertNotIn(browser.OVERVIEW_URL, calls)
-
-
 
 
 class BrowserPageDiscoveryTests(unittest.IsolatedAsyncioTestCase):
