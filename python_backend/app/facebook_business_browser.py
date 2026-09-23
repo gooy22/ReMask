@@ -421,6 +421,11 @@ class FacebookBusinessBrowser:
             self._profile_lock_acquired = False
         self._profile_lock = None
 
+        if self._profile_lock_acquired and self._profile_lock is not None:
+            self._profile_lock.release()
+            self._profile_lock_acquired = False
+        self._profile_lock = None
+
         self._release_semaphore()
 
     async def _goto(self, url: str) -> str:
