@@ -242,6 +242,9 @@ async function pythonWorkerHealthCheck() {
     );
     const profilesVisible = Number((readiness && readiness.profiles_visible) || 0);
     const revision = String((readiness && readiness.revision) || '').trim();
+    const bmPayloadVersion = String(
+      (readiness && readiness.create_bm_payload_version) || ''
+    ).trim();
     const volumeMounted = readiness ? readiness.volume_mounted === true : false;
 
     pythonWorkerUiState.workerOnline = true;
@@ -251,6 +254,7 @@ async function pythonWorkerHealthCheck() {
       el.textContent =
         'Worker: READY' +
         (revision ? ' · rev ' + revision : '') +
+        (bmPayloadVersion ? ' · BM ' + bmPayloadVersion : '') +
         ' · профили ' + profilesVisible +
         ' · volume ' + (volumeMounted ? 'YES' : 'NO') +
         ' · очередь ' + queued +
