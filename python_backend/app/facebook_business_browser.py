@@ -641,6 +641,36 @@ class FacebookBusinessBrowser:
         if await self._has_create_surface():
             return True
 
+        # Verified against the live 2026 Business Suite UI: the portfolio
+        # selector is a top-left role=button whose accessible text is
+        # "Meta Business Suite". It intentionally has no aria-haspopup or
+        # aria-expanded attributes, so generic dropdown heuristics miss it.
+        try:
+            suite_selector = self.page.get_by_role(
+                "button",
+                name=re.compile(r"^\\s*Meta Business Suite\\s*$", re.IGNORECASE),
+            )
+            count = min(await suite_selector.count(), 4)
+            for index in range(count):
+                item = suite_selector.nth(index)
+                if not await item.is_visible():
+                    continue
+                box = await item.bounding_box()
+                if not box:
+                    continue
+                if float(box.get("x") or 0) > 260 or float(box.get("y") or 0) > 180:
+                    continue
+                await item.click(timeout=3000)
+                await self.page.wait_for_timeout(500)
+                if await self._has_create_surface():
+                    return True
+                await self.page.keyboard.press("Escape")
+        except Exception:
+            try:
+                await self.page.keyboard.press("Escape")
+            except Exception:
+                pass
+
         selectors = (
             'button[aria-haspopup="menu"]',
             '[role="button"][aria-haspopup="menu"]',
