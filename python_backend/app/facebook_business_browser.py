@@ -1701,9 +1701,10 @@ class FacebookBusinessBrowser:
             "CREATE_RESULT_UNKNOWN",
             (
                 "CREATE was submitted but no uniquely new Business portfolio "
-                "could be confirmed. ReMask will not submit CREATE again."
+                "could be confirmed. Retry is verification-only; ReMask will "
+                "not submit CREATE again."
             ),
-            retryable=False,
+            retryable=True,
             diagnostic={
                 "before_ids": sorted(before),
                 "after_ids": sorted(after),
@@ -2202,10 +2203,11 @@ class FacebookBusinessBrowser:
                 "PAGE_ATTACH_RESULT_UNKNOWN",
                 (
                     "Meta Page add was submitted but the selected Page could "
-                    "not be confirmed in Business Settings. ReMask will not "
-                    "blindly submit the Page-add action again."
+                    "not be confirmed in Business Settings. Retry is "
+                    "verification-only; ReMask will not blindly submit the "
+                    "Page-add action again."
                 ),
-                retryable=False,
+                retryable=True,
                 diagnostic=diag,
             )
 
