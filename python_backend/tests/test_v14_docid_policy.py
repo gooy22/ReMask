@@ -260,6 +260,9 @@ class _ManualSession:
             }
         }
 
+    async def graphql_browser_native(self, doc_id, variables, **kwargs):
+        return await self.graphql(doc_id, variables, **kwargs)
+
 
 class ManualFallbackTests(unittest.IsolatedAsyncioTestCase):
     async def test_failed_manual_docid_is_not_promoted_or_recorded(self):
