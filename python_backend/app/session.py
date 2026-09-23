@@ -184,6 +184,8 @@ class MetaSession:
         self._facebook_lock = asyncio.Lock()
         self._graph_api: FacebookGraphApi | None = None
         self._graph_lock = asyncio.Lock()
+        self._business_browser: Any | None = None
+        self._business_browser_lock = asyncio.Lock()
 
     async def _get_session(self) -> aiohttp.ClientSession:
         session = self._session
@@ -244,6 +246,24 @@ class MetaSession:
     async def facebook_controller(self) -> BusinessLogicController:
         return BusinessLogicController(await self.facebook_web())
 
+    async def facebook_business_browser(self):
+        current = self._business_browser
+        if current is not None:
+            return current
+
+        async with self._business_browser_lock:
+            current = self._business_browser
+            if current is None:
+                from .facebook_business_browser import FacebookBusinessBrowser
+
+                current = FacebookBusinessBrowser(
+                    self.context,
+                    timeout_seconds=max(20, int(self.timeout.total or 20)),
+                )
+                await current.open()
+                self._business_browser = current
+            return current
+
     async def graph_api(self) -> FacebookGraphApi:
         current = self._graph_api
         if current is not None:
@@ -266,6 +286,11 @@ class MetaSession:
             return current
 
     async def close(self) -> None:
+        async with self._business_browser_lock:
+            if self._business_browser is not None:
+                await self._business_browser.close()
+                self._business_browser = None
+
         async with self._graph_lock:
             if self._graph_api is not None:
                 await self._graph_api.close()

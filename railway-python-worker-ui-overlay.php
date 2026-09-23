@@ -134,7 +134,7 @@ if (strpos($php, 'REMASK_PYTHON_WORKER_PANEL_V1') === false) {
   <div class="pw-head">
     <div>
       <div class="pw-title">Mass provisioning</div>
-      <div class="pw-sub">Выбранные FB-профили → Job → worker queue → profile context → proxy_check → private GraphQL.</div>
+      <div class="pw-sub">Выбранные FB-профили → Job → worker queue → profile context → proxy_check → Meta Business Suite browser flow.</div>
       <div id="pythonPwWorkerHealth" class="pw-health" data-state="checking">Worker: проверяю…</div>
     </div>
     <div class="pw-actions">

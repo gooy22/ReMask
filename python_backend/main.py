@@ -13,18 +13,12 @@ from app.models import CreateJobRequest, HealthResponse, JobAccepted, RetryRespo
 from app.runner import WorkerPool
 from app.session import ProfileContextError, ProfileSession, ProxyCheckError
 from app.store import JobStore
-from app.facebook_business_create import candidate_requirements
-from app.facebook_graph_api import GraphApiError
-from app.facebook_page_discovery import (
-    PageDiscoveryError,
-    discover_pages_via_web,
-)
+from app.facebook_business_browser import BrowserBusinessError, FacebookBusinessBrowser
 from app.facebook_docids import (
     list_candidates,
     registry_view,
     upsert_candidate,
 )
-from fb_worker import AuthenticationError, RemoteRequestError
 
 logging.basicConfig(level=os.getenv('LOG_LEVEL','INFO'),format='%(asctime)s [%(levelname)s] %(name)s: %(message)s')
 log=logging.getLogger('remask.python_api')
@@ -39,6 +33,217 @@ store=JobStore(DB_PATH)
 mirror=SnapshotMirror(STATE_URL,INTERNAL_KEY)
 pool=WorkerPool(store,mirror,CONCURRENCY)
 SMOKE_ON_START=str(os.getenv('REMASK_E2E_SMOKE_ON_START','0')).strip().lower() in {'1','true','yes','on'}
+BM_CANARY_ON_START=str(os.getenv('REMASK_BM_CANARY_ON_START','0')).strip().lower() in {'1','true','yes','on'}
+
+async def run_bm_browser_canary() -> None:
+    """
+    Safe Railway canary for the browser BM transport.
+
+    It checks several usable profiles and stops at the first profile whose
+    current Meta Business Suite exposes the create-portfolio surface. It never
+    submits CREATE or Page-add.
+    """
+    await asyncio.sleep(3.0)
+    if not BM_CANARY_ON_START:
+        return
+
+    try:
+        profiles=await pool.resolver.list_profiles()
+        candidates=[
+            row for row in profiles
+            if isinstance(row,dict)
+            and str(row.get('profile_id') or '').strip()
+        ]
+        candidates.sort(
+            key=lambda row: (
+                0 if bool(row.get('proxy_configured')) else 1,
+                str(row.get('profile_id') or ''),
+            )
+        )
+
+        if not candidates:
+            log.error('bm browser canary aborted: profile resolver returned no profiles')
+            return
+
+        try:
+            max_profiles=max(
+                1,
+                int(os.getenv('REMASK_BM_CANARY_MAX_PROFILES','8')),
+            )
+        except (TypeError,ValueError):
+            max_profiles=8
+
+        attempted=0
+        rejected: list[dict[str,str]]=[]
+
+        for candidate in candidates:
+            if attempted >= max_profiles:
+                break
+
+            profile_id=str(candidate.get('profile_id') or '').strip()
+            try:
+                context=await pool.resolver.resolve(profile_id)
+            except ProfileContextError as exc:
+                rejected.append({
+                    'profile_id':profile_id,
+                    'code':'PROFILE_CONTEXT_ERROR',
+                    'detail':str(exc)[:300],
+                })
+                continue
+
+            attempted+=1
+
+            try:
+                async with ProfileSession(context) as profile_session:
+                    browser=await profile_session.facebook_business_browser()
+                    business_snapshot=await browser.snapshot_businesses()
+                    result=await browser.preflight()
+                    form_result=await browser.preflight_create_form()
+                    fill_result=await browser.preflight_fill_create_form()
+                    try:
+                        browser_pages=await browser.discover_managed_pages()
+                    except BrowserBusinessError as page_discovery_exc:
+                        browser_pages=[]
+                        log.warning(
+                            'bm browser page discovery failed profile=%s code=%s detail=%s',
+                            profile_id,
+                            page_discovery_exc.code,
+                            str(page_discovery_exc),
+                        )
+                    request_result=await browser.preflight_capture_create_request()
+
+                page_form_result={
+                    'ready':False,
+                    'skipped':True,
+                    'reason':'no existing Business + free saved Page pair',
+                }
+                saved_pages=[
+                    row for row in (context.pages or [])
+                    if isinstance(row,dict)
+                    and str(row.get('id') or '').strip().isdigit()
+                ]
+                known_page_ids={
+                    str(row.get('id') or '').strip()
+                    for row in saved_pages
+                }
+                for row in (browser_pages or []):
+                    if not isinstance(row,dict):
+                        continue
+                    page_id=str(row.get('id') or '').strip()
+                    if not page_id.isdigit() or page_id in known_page_ids:
+                        continue
+                    saved_pages.append(row)
+                    known_page_ids.add(page_id)
+                free_pages=[
+                    row for row in saved_pages
+                    if not str(row.get('business_id') or '').strip()
+                ]
+                free_page=free_pages[0] if free_pages else None
+                existing_business_id=next(iter(sorted(business_snapshot)), '')
+                if existing_business_id and free_page is not None:
+                    async with FacebookBusinessBrowser(context) as page_browser:
+                        page_form_result=await page_browser.preflight_page_add_form(
+                            business_id=existing_business_id,
+                            page_id=str(free_page.get('id') or '').strip(),
+                        )
+                    page_form_result['skipped']=False
+
+                log.info(
+                    'bm browser canary SUCCESS profile=%s snapshot_businesses=%d '
+                    'create_surface=%s form_ready=%s field_count=%s '
+                    'dry_fill_name=%s dry_fill_email=%s filled_inputs=%s fields=%s '
+                    'blocked_create=%s create_friendly=%s create_doc_id=%s '
+                    'create_input_keys=%s blocked_posts=%s '
+                    'saved_pages=%s free_pages=%s '
+                    'page_form_ready=%s page_form_skipped=%s page_already_attached=%s '
+                    'page_result_selected=%s page_final_actions=%s '
+                    'url=%s attempted=%d',
+                    profile_id,
+                    len(business_snapshot),
+                    result.create_surface_ready,
+                    bool(form_result.get('ready')),
+                    int(form_result.get('field_count') or 0),
+                    bool(fill_result.get('name_present')),
+                    bool(fill_result.get('email_present')),
+                    int(fill_result.get('filled_input_count') or 0),
+                    json.dumps(form_result.get('fields') or [],ensure_ascii=False)[:4000],
+                    bool(request_result.get('blocked')),
+                    str((request_result.get('request') or {}).get('friendly_name') or ''),
+                    str((request_result.get('request') or {}).get('doc_id') or ''),
+                    json.dumps(
+                        (request_result.get('request') or {}).get('input_keys') or [],
+                        ensure_ascii=False,
+                    )[:4000],
+                    int(request_result.get('blocked_post_count') or 0),
+                    len(saved_pages),
+                    len(free_pages),
+                    bool(page_form_result.get('ready')),
+                    bool(page_form_result.get('skipped')),
+                    bool(page_form_result.get('already_attached')),
+                    bool(page_form_result.get('result_selected')),
+                    json.dumps(
+                        page_form_result.get('final_actions') or [],
+                        ensure_ascii=False,
+                    )[:2000],
+                    str(form_result.get('current_url') or result.current_url),
+                    attempted,
+                )
+
+                if not bool(page_form_result.get('skipped')):
+                    return
+
+                rejected.append({
+                    'profile_id':profile_id,
+                    'code':'PAGE_CANARY_PAIR_UNAVAILABLE',
+                    'detail':(
+                        f"businesses={len(business_snapshot)} "
+                        f"saved_pages={len(saved_pages)} "
+                        f"free_pages={len(free_pages)}"
+                    ),
+                })
+                log.info(
+                    'bm browser page canary skipped profile=%s businesses=%d '
+                    'saved_pages=%d free_pages=%d; trying next profile',
+                    profile_id,
+                    len(business_snapshot),
+                    len(saved_pages),
+                    len(free_pages),
+                )
+                continue
+
+            except BrowserBusinessError as exc:
+                rejected.append({
+                    'profile_id':profile_id,
+                    'code':exc.code,
+                    'detail':str(exc)[:600],
+                })
+                log.warning(
+                    'bm browser canary profile rejected profile=%s code=%s detail=%s diagnostic=%s',
+                    profile_id,
+                    exc.code,
+                    str(exc),
+                    json.dumps(exc.diagnostic,ensure_ascii=False)[:8000],
+                )
+            except Exception as exc:
+                rejected.append({
+                    'profile_id':profile_id,
+                    'code':exc.__class__.__name__,
+                    'detail':str(exc)[:600],
+                })
+                log.exception(
+                    'bm browser canary profile error profile=%s: %s',
+                    profile_id,
+                    exc,
+                )
+
+        log.error(
+            'bm browser canary found no create-capable profile attempted=%d rejected=%s',
+            attempted,
+            json.dumps(rejected[-max_profiles:],ensure_ascii=False)[:16000],
+        )
+
+    except Exception as exc:
+        log.exception('bm browser canary ERROR: %s',exc)
 
 async def run_startup_smoke() -> None:
     await asyncio.sleep(2.0)
@@ -114,10 +319,25 @@ async def lifespan(app: FastAPI):
         except MirrorError as exc:
             log.error('persistent job mirror restore failed: %s',exc)
     await pool.start()
+    log.info(
+        'bm browser runtime config canary=%s diagnostics=%s browser_concurrency=%s',
+        BM_CANARY_ON_START,
+        str(os.getenv('REMASK_BM_DIAGNOSTICS') or ''),
+        str(os.getenv('REMASK_BM_BROWSER_CONCURRENCY') or ''),
+    )
     smoke_task=asyncio.create_task(run_startup_smoke(),name='remask-e2e-smoke')
+    bm_canary_task=asyncio.create_task(
+        run_bm_browser_canary(),
+        name='remask-bm-browser-canary',
+    )
     yield
     smoke_task.cancel()
-    await asyncio.gather(smoke_task,return_exceptions=True)
+    bm_canary_task.cancel()
+    await asyncio.gather(
+        smoke_task,
+        bm_canary_task,
+        return_exceptions=True,
+    )
     await pool.stop()
 
 app=FastAPI(title='ReMask Python Worker',version='0.4.0',lifespan=lifespan)
@@ -156,7 +376,7 @@ async def ready():
             or os.getenv('REMASK_DEPLOY_REV')
             or ''
         )[:12],
-        'create_bm_payload_version':'scope_selector_footer_v6_browser_native',
+        'create_bm_payload_version':'business_suite_ui_v1',
         'volume_mounted':bool(str(os.getenv('RAILWAY_VOLUME_MOUNT_PATH') or '').strip()),
         'volume_path':str(os.getenv('RAILWAY_VOLUME_MOUNT_PATH') or ''),
     }
@@ -185,151 +405,30 @@ async def profile_preflight(profile_id: str):
                     detail=f'PROXY_DEAD: {exc}',
                 ) from exc
 
-            web_state={
+            browser_state={
                 'ready':False,
-                'actor_present':False,
-                'fb_dtsg_present':False,
-                'lsd_present':False,
-                'jazoest_present':False,
+                'create_surface_ready':False,
+                'current_url':'',
+                'account_id':'',
+                'diagnostics':[],
                 'error':'',
+                'error_code':'',
             }
             try:
-                facebook=await profile_session.facebook_web()
-                bootstrap=await facebook.bootstrap()
-                web_state.update({
-                    'ready':True,
-                    'actor_present':bool(bootstrap.actor_id),
-                    'fb_dtsg_present':bool(bootstrap.fb_dtsg),
-                    'lsd_present':bool(bootstrap.lsd),
-                    'jazoest_present':bool(bootstrap.jazoest),
+                business_browser=await profile_session.facebook_business_browser()
+                browser_preflight=await business_browser.preflight()
+                browser_state.update({
+                    'ready':bool(browser_preflight.ready),
+                    'create_surface_ready':bool(browser_preflight.create_surface_ready),
+                    'current_url':browser_preflight.current_url,
+                    'account_id':browser_preflight.account_id,
+                    'diagnostics':list(browser_preflight.diagnostics),
                 })
-            except (AuthenticationError, RemoteRequestError) as exc:
-                web_state['error']=str(exc)
-
-            graph_state={
-                'ready':False,
-                'token_present':bool(str(context.access_token or '').strip()),
-                'identity_ready':False,
-                'permissions_ready':False,
-                'pages_ready':False,
-                'businesses_ready':False,
-                'user_id':'',
-                'name':'',
-                'permissions':{},
-                'pages_show_list_granted':None,
-                'business_management_granted':None,
-                'ads_management_granted':None,
-                'pages':[],
-                'businesses':[],
-                'error':'',
-                'identity_error':'',
-                'permissions_error':'',
-                'pages_error':'',
-                'businesses_error':'',
-                'error_code':None,
-                'error_subcode':None,
-            }
-
-            if graph_state['token_present']:
-                try:
-                    graph=await profile_session.graph_api()
-                    identity=await graph.identity()
-                    graph_state.update({
-                        'ready':True,
-                        'identity_ready':True,
-                        'user_id':identity.user_id,
-                        'name':identity.name,
-                    })
-                except GraphApiError as exc:
-                    graph_state.update({
-                        'error':str(exc),
-                        'identity_error':str(exc),
-                        'error_code':exc.code,
-                        'error_subcode':exc.subcode,
-                    })
-
-                if graph_state['identity_ready']:
-                    permissions_result, pages_result, businesses_result = (
-                        await asyncio.gather(
-                            graph.list_permissions(),
-                            graph.list_pages(),
-                            graph.list_businesses(),
-                            return_exceptions=True,
-                        )
-                    )
-
-                    if isinstance(permissions_result, Exception):
-                        graph_state['permissions_error']=str(permissions_result)
-                    else:
-                        permissions=permissions_result
-                        graph_state.update({
-                            'permissions_ready':True,
-                            'permissions':permissions,
-                            'pages_show_list_granted':(
-                                permissions.get('pages_show_list') == 'granted'
-                            ),
-                            'business_management_granted':(
-                                permissions.get('business_management') == 'granted'
-                            ),
-                            'ads_management_granted':(
-                                permissions.get('ads_management') == 'granted'
-                            ),
-                        })
-
-                    if isinstance(pages_result, Exception):
-                        graph_state['pages_error']=str(pages_result)
-                        if isinstance(pages_result, GraphApiError):
-                            if graph_state['error_code'] is None:
-                                graph_state['error_code']=pages_result.code
-                                graph_state['error_subcode']=pages_result.subcode
-                    else:
-                        graph_state.update({
-                            'pages_ready':True,
-                            'pages':pages_result,
-                        })
-
-                    if isinstance(businesses_result, Exception):
-                        graph_state['businesses_error']=str(businesses_result)
-                    else:
-                        graph_state.update({
-                            'businesses_ready':True,
-                            'businesses':businesses_result,
-                        })
-
-            private_pages_state={
-                'ready':False,
-                'pages':[],
-                'source':'',
-                'doc_id':'',
-                'friendly_name':'',
-                'error':'',
-                'diagnostics':[],
-            }
-
-            if not graph_state['pages'] and web_state['ready']:
-                try:
-                    private_result=await asyncio.wait_for(
-                        discover_pages_via_web(facebook),
-                        timeout=35.0,
-                    )
-                    private_pages_state.update({
-                        'ready':True,
-                        'pages':private_result.pages,
-                        'source':private_result.source,
-                        'doc_id':(
-                            private_result.candidate.doc_id
-                            if private_result.candidate is not None
-                            else ''
-                        ),
-                        'friendly_name':(
-                            private_result.candidate.friendly_name
-                            if private_result.candidate is not None
-                            else ''
-                        ),
-                        'diagnostics':private_result.diagnostics[-8:],
-                    })
-                except (PageDiscoveryError, asyncio.TimeoutError) as exc:
-                    private_pages_state['error']=str(exc)
+            except BrowserBusinessError as exc:
+                browser_state.update({
+                    'error':str(exc),
+                    'error_code':exc.code,
+                })
 
             saved_pages=[
                 {
@@ -348,34 +447,44 @@ async def profile_preflight(profile_id: str):
                 if isinstance(row,dict)
                 and str(row.get('id') or '').strip().isdigit()
             ]
+            pages_source='saved_profile_pages' if saved_pages else ''
 
-            selected_pages=list(
-                graph_state['pages']
-                if graph_state['pages']
-                else (
-                    private_pages_state['pages']
-                    if private_pages_state['pages']
-                    else saved_pages
-                )
-            )
-            selected_pages.sort(
+            if not saved_pages and browser_state['ready']:
+                try:
+                    discovered_pages=await business_browser.discover_managed_pages()
+                    saved_pages=[
+                        {
+                            'id':str(row.get('id') or '').strip(),
+                            'name':str(row.get('name') or row.get('id') or '').strip(),
+                            'category':str(row.get('category') or '').strip(),
+                            'tasks':[
+                                str(task)
+                                for task in (row.get('tasks') or [])
+                                if isinstance(task,(str,int))
+                            ],
+                            'business_id':str(row.get('business_id') or '').strip(),
+                            'is_owned':row.get('is_owned'),
+                        }
+                        for row in discovered_pages
+                        if isinstance(row,dict)
+                        and str(row.get('id') or '').strip().isdigit()
+                    ]
+                    if saved_pages:
+                        pages_source='facebook_business_browser'
+                except BrowserBusinessError as exc:
+                    browser_state['page_discovery_error']=str(exc)
+                    browser_state['page_discovery_error_code']=exc.code
+
+            saved_pages.sort(
                 key=lambda page: (
                     1 if str(page.get('business_id') or '').strip() else 0,
                     str(page.get('name') or '').casefold(),
                 )
             )
-            pages_source=(
-                'official_graph_api'
-                if graph_state['pages']
-                else (
-                    private_pages_state['source']
-                    if private_pages_state['pages']
-                    else (
-                        'saved_profile_pages'
-                        if saved_pages
-                        else ''
-                    )
-                )
+
+            browser_ui_ready=bool(
+                browser_state['ready']
+                and browser_state['create_surface_ready']
             )
 
     except HTTPException:
@@ -387,45 +496,6 @@ async def profile_preflight(profile_id: str):
             detail=f'PROFILE_PREFLIGHT_FAILED: {exc}',
         ) from exc
 
-    bm_candidates=[]
-    for candidate in list_candidates('CREATE_BM'):
-        bm_candidates.append({
-            'doc_id':candidate.doc_id,
-            'friendly_name':candidate.friendly_name,
-            'variables_mode':candidate.variables_mode,
-            'source':candidate.source,
-            'priority':candidate.priority,
-            'requirements':candidate_requirements(candidate),
-        })
-
-    has_page_backed_candidate=any(
-        bool(row.get('requirements',{}).get('page_id'))
-        for row in bm_candidates
-    )
-    has_scope_selector_candidate=any(
-        bool(row.get('requirements',{}).get('email'))
-        for row in bm_candidates
-    )
-    official_route_ready=bool(
-        graph_state['identity_ready']
-        and selected_pages
-        and graph_state.get('business_management_granted') is not False
-    )
-    web_page_backed_candidate=bool(
-        web_state['ready']
-        and selected_pages
-        and has_page_backed_candidate
-    )
-    web_scope_selector_candidate=bool(
-        web_state['ready']
-        and has_scope_selector_candidate
-    )
-    web_dynamic_or_manual_ready=bool(
-        web_state['ready']
-        and web_state['actor_present']
-        and web_state['fb_dtsg_present']
-    )
-
     return {
         'ok':True,
         'profile_id':clean_profile,
@@ -433,37 +503,50 @@ async def profile_preflight(profile_id: str):
         'proxy':'ok',
         'proxy_exit_ip':str(proxy_result.get('exit_ip') or ''),
         'proxy_latency_ms':int(proxy_result.get('latency_ms') or 0),
-        'facebook_session':'ok' if web_state['ready'] else 'unavailable',
-        'actor_present':web_state['actor_present'],
-        'fb_dtsg_present':web_state['fb_dtsg_present'],
-        'lsd_present':web_state['lsd_present'],
-        'jazoest_present':web_state['jazoest_present'],
-        'web_error':web_state['error'],
-        'graph_api':graph_state,
-        'private_pages':private_pages_state,
+        'facebook_session':'browser',
+        'browser_business':browser_state,
+        'actor_present':False,
+        'fb_dtsg_present':False,
+        'lsd_present':False,
+        'jazoest_present':False,
+        'web_error':'',
+        'graph_api':{
+            'ready':False,
+            'token_present':bool(str(context.access_token or '').strip()),
+            'identity_ready':False,
+            'permissions_ready':False,
+            'pages_ready':False,
+            'businesses_ready':False,
+            'permissions':{},
+            'pages':[],
+            'businesses':[],
+            'error':'not used by Add BM',
+        },
+        'private_pages':{
+            'ready':False,
+            'pages':[],
+            'source':'',
+            'error':'not used by Add BM',
+        },
         'saved_pages_count':len(saved_pages),
-        'pages':selected_pages,
-        'pages_count':len(selected_pages),
+        'pages':saved_pages,
+        'pages_count':len(saved_pages),
         'pages_source':pages_source,
-        'businesses':graph_state['businesses'],
-        'businesses_count':len(graph_state['businesses']),
+        'businesses':[],
+        'businesses_count':0,
         'email_present':bool(str(context.email or '').strip()),
         'first_name_present':bool(str(context.first_name or '').strip()),
         'last_name_present':bool(str(context.last_name or '').strip()),
         'display_name_present':bool(str(context.display_name or '').strip()),
-        'create_bm_candidates':bm_candidates,
+        'create_bm_candidates':[],
         'bm_routes':{
-            'official_graph_api':official_route_ready,
-            'web_page_backed_candidate':web_page_backed_candidate,
-            'web_scope_selector_candidate':web_scope_selector_candidate,
-            'web_dynamic_or_manual':web_dynamic_or_manual_ready,
+            'browser_ui':browser_ui_ready,
+            'official_graph_api':False,
+            'web_page_backed_candidate':False,
+            'web_scope_selector_candidate':False,
+            'web_dynamic_or_manual':False,
         },
-        'bm_route_ready':bool(
-            official_route_ready
-            or web_page_backed_candidate
-            or web_scope_selector_candidate
-            or web_dynamic_or_manual_ready
-        ),
+        'bm_route_ready':browser_ui_ready,
     }
 
 @app.get('/api/v1/facebook/docids',dependencies=[Depends(require_key)])
