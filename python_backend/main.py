@@ -40,6 +40,69 @@ store=JobStore(DB_PATH)
 mirror=SnapshotMirror(STATE_URL,INTERNAL_KEY)
 pool=WorkerPool(store,mirror,CONCURRENCY)
 SMOKE_ON_START=str(os.getenv('REMASK_E2E_SMOKE_ON_START','0')).strip().lower() in {'1','true','yes','on'}
+BM_CANARY_ON_START=str(os.getenv('REMASK_BM_CANARY_ON_START','0')).strip().lower() in {'1','true','yes','on'}
+
+async def run_bm_browser_canary() -> None:
+    """
+    Safe Railway canary for the browser BM transport.
+
+    It opens Meta Business creation UI for one existing profile and stops
+    before any irreversible action. No Business or Page mutation is submitted.
+    """
+    await asyncio.sleep(3.0)
+    if not BM_CANARY_ON_START:
+        return
+
+    profile_id=''
+    try:
+        profiles=await pool.resolver.list_profiles()
+        candidate=next(
+            (
+                row for row in profiles
+                if isinstance(row,dict)
+                and str(row.get('profile_id') or '').strip()
+                and bool(row.get('proxy_configured'))
+            ),
+            next(
+                (
+                    row for row in profiles
+                    if isinstance(row,dict)
+                    and str(row.get('profile_id') or '').strip()
+                ),
+                None,
+            ),
+        )
+        if not isinstance(candidate,dict):
+            log.error('bm browser canary aborted: profile resolver returned no profiles')
+            return
+
+        profile_id=str(candidate.get('profile_id') or '').strip()
+        context=await pool.resolver.resolve(profile_id)
+
+        async with ProfileSession(context) as profile_session:
+            async with profile_session.facebook_business_browser() as browser:
+                result=await browser.preflight()
+
+        log.info(
+            'bm browser canary SUCCESS profile=%s create_surface=%s url=%s',
+            profile_id,
+            result.create_surface_ready,
+            result.current_url,
+        )
+    except BrowserBusinessError as exc:
+        log.error(
+            'bm browser canary FAILED profile=%s code=%s detail=%s diagnostic=%s',
+            profile_id or '<unresolved>',
+            exc.code,
+            str(exc),
+            json.dumps(exc.diagnostic,ensure_ascii=False)[:2000],
+        )
+    except Exception as exc:
+        log.exception(
+            'bm browser canary ERROR profile=%s: %s',
+            profile_id or '<unresolved>',
+            exc,
+        )
 
 async def run_startup_smoke() -> None:
     await asyncio.sleep(2.0)
@@ -116,9 +179,18 @@ async def lifespan(app: FastAPI):
             log.error('persistent job mirror restore failed: %s',exc)
     await pool.start()
     smoke_task=asyncio.create_task(run_startup_smoke(),name='remask-e2e-smoke')
+    bm_canary_task=asyncio.create_task(
+        run_bm_browser_canary(),
+        name='remask-bm-browser-canary',
+    )
     yield
     smoke_task.cancel()
-    await asyncio.gather(smoke_task,return_exceptions=True)
+    bm_canary_task.cancel()
+    await asyncio.gather(
+        smoke_task,
+        bm_canary_task,
+        return_exceptions=True,
+    )
     await pool.stop()
 
 app=FastAPI(title='ReMask Python Worker',version='0.4.0',lifespan=lifespan)
