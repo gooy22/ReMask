@@ -1,4 +1,4 @@
-from python_backend.app.facebook_business_create import _build_create_variables
+from app.facebook_business_create import _build_create_variables
 
 
 def test_create_variables_match_current_scope_selector_footer_capture():
