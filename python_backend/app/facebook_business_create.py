@@ -70,7 +70,24 @@ class BusinessMutationError(RuntimeError):
 class DocIdMutationError(
     BusinessMutationError
 ):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "DOC_ID_MUTATION_ERROR",
+        retryable: bool = False,
+        payload: dict[str, Any] | None = None,
+        candidate: DocIdCandidate | None = None,
+        stale_candidate: bool = False,
+    ) -> None:
+        super().__init__(
+            code,
+            message,
+            retryable=retryable,
+            payload=payload,
+            candidate=candidate,
+        )
+        self.stale_candidate = bool(stale_candidate)
 
 
 @dataclass(slots=True)
@@ -197,6 +214,67 @@ def candidate_requirements(
         "email": False,
         "page_id": False,
     }
+
+
+def _candidate_is_stale_or_schema_mismatch(
+    payload: dict[str, Any] | None,
+    message: str = "",
+) -> bool:
+    body = payload if isinstance(payload, dict) else {}
+
+    def walk(value: Any) -> list[str]:
+        output: list[str] = []
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if str(key).lower() in {
+                    "message",
+                    "description",
+                    "summary",
+                    "errorsummary",
+                    "errordescription",
+                    "error_user_msg",
+                    "error_user_title",
+                    "type",
+                }:
+                    text = str(child or "").strip()
+                    if text:
+                        output.append(text)
+                output.extend(walk(child))
+        elif isinstance(value, list):
+            for child in value:
+                output.extend(walk(child))
+        return output
+
+    raw_errors = body.get("errors")
+    if isinstance(raw_errors, list):
+        for error in raw_errors:
+            if not isinstance(error, dict):
+                continue
+            try:
+                code = int(error.get("code"))
+            except (TypeError, ValueError):
+                code = None
+            if code == 1357054 and bool(error.get("isNotCritical")):
+                return True
+
+    text = " ".join([*walk(body), str(message or "")]).lower()
+    markers = (
+        "persistedquerynotfound",
+        "persisted query not found",
+        "persisted query",
+        "query not found",
+        "unknown query",
+        "unknown document",
+        "unknown field",
+        "unknown argument",
+        "document id",
+        "invalid document",
+        "cannot query field",
+        "expected type",
+        "was not provided",
+        "operation not found",
+    )
+    return any(marker in text for marker in markers)
 
 
 def _graphql_errors(
@@ -834,7 +912,7 @@ async def create_business_with_docids(
                 and response_path
                 == "data.bizkit_create_business.id"
             ):
-                persisted_candidate = upsert_candidate(
+                stored_candidate = upsert_candidate(
                     CREATE_BM_OPERATION,
                     doc_id=(
                         candidate.doc_id
@@ -858,11 +936,13 @@ async def create_business_with_docids(
                         )
                     ),
                 )
+                if isinstance(stored_candidate, DocIdCandidate):
+                    persisted_candidate = stored_candidate
 
             elif candidate.source.startswith(
                 "dynamic_"
             ):
-                persisted_candidate = upsert_candidate(
+                stored_candidate = upsert_candidate(
                     CREATE_BM_OPERATION,
                     doc_id=(
                         candidate.doc_id
@@ -886,6 +966,8 @@ async def create_business_with_docids(
                         )
                     ),
                 )
+                if isinstance(stored_candidate, DocIdCandidate):
+                    persisted_candidate = stored_candidate
 
             record_result(
                 CREATE_BM_OPERATION,
@@ -1286,7 +1368,7 @@ async def attach_page_to_business(
         if candidate.source.startswith(
             "dynamic_"
         ):
-            persisted_candidate = upsert_candidate(
+            stored_candidate = upsert_candidate(
                 SET_PRIMARY_PAGE_OPERATION,
                 doc_id=(
                     candidate.doc_id
@@ -1310,6 +1392,8 @@ async def attach_page_to_business(
                     )
                 ),
             )
+            if isinstance(stored_candidate, DocIdCandidate):
+                persisted_candidate = stored_candidate
 
         record_result(
             SET_PRIMARY_PAGE_OPERATION,
