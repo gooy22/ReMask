@@ -283,6 +283,16 @@ class FacebookBusinessBrowser:
                     "--no-sandbox",
                     "--disable-dev-shm-usage",
                     "--disable-background-networking",
+                    "--disable-gpu",
+                    "--disable-software-rasterizer",
+                    "--disable-extensions",
+                    "--disable-sync",
+                    "--disable-translate",
+                    "--disable-default-apps",
+                    "--disable-component-update",
+                    "--no-first-run",
+                    "--renderer-process-limit=2",
+                    "--blink-settings=imagesEnabled=false",
                 ],
             }
             proxy = _proxy_config(getattr(self.context, "proxy", None))
@@ -293,9 +303,22 @@ class FacebookBusinessBrowser:
             self._browser_context = await self._browser.new_context(
                 user_agent=_clean(getattr(self.context, "user_agent", "")),
                 locale="en-US",
-                viewport={"width": 1440, "height": 1000},
+                viewport={"width": 1280, "height": 800},
                 service_workers="block",
+                reduced_motion="reduce",
             )
+
+            async def block_heavy_resources(route: Any, request: Any) -> None:
+                if _clean(getattr(request, "resource_type", "")).lower() in {
+                    "image",
+                    "media",
+                    "font",
+                }:
+                    await route.abort()
+                    return
+                await route.continue_()
+
+            await self._browser_context.route("**/*", block_heavy_resources)
 
             raw_cookies = getattr(self.context, "cookies", {}) or {}
             cookies: list[dict[str, Any]] = []
@@ -404,23 +427,47 @@ class FacebookBusinessBrowser:
         if self.page is None:
             await self.open()
 
-        try:
-            await self.page.goto(
-                url,
-                wait_until="domcontentloaded",
-                timeout=self.timeout_ms,
-            )
-            await self.page.wait_for_timeout(1200)
-        except Exception as exc:
-            await self._diagnostic("navigation_error")
-            raise BrowserBusinessError(
-                "FACEBOOK_NAVIGATION_FAILED",
-                f"Facebook navigation failed: {exc.__class__.__name__}: {exc}",
-                retryable=True,
-            ) from exc
+        for attempt in range(2):
+            try:
+                await self.page.goto(
+                    url,
+                    wait_until="domcontentloaded",
+                    timeout=self.timeout_ms,
+                )
+                await self.page.wait_for_timeout(900)
+                await self._assert_authenticated()
+                return _clean(self.page.url)
+            except Exception as exc:
+                text = f"{exc.__class__.__name__}: {exc}"
+                page_crashed = (
+                    "page crashed" in text.lower()
+                    or "targetclosederror" in text.lower()
+                    or "target page, context or browser has been closed" in text.lower()
+                )
 
-        await self._assert_authenticated()
-        return _clean(self.page.url)
+                if page_crashed and attempt == 0:
+                    # Safe at navigation boundaries: release the crashed
+                    # Chromium process and open a fresh low-memory context.
+                    await self.close()
+                    await asyncio.sleep(0.25)
+                    await self.open()
+                    continue
+
+                try:
+                    await self._diagnostic("navigation_error")
+                except Exception:
+                    pass
+                raise BrowserBusinessError(
+                    "FACEBOOK_NAVIGATION_FAILED",
+                    f"Facebook navigation failed: {text}",
+                    retryable=True,
+                ) from exc
+
+        raise BrowserBusinessError(
+            "FACEBOOK_NAVIGATION_FAILED",
+            "Facebook navigation failed after Chromium relaunch.",
+            retryable=True,
+        )
 
     async def _body_text(self) -> str:
         if self.page is None:
