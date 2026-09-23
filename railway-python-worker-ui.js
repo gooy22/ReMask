@@ -1477,7 +1477,8 @@ async function pythonWorkerOpenOwnBmModal() {
         name: String(cfg.name.value || '').trim(),
         page_id: String(cfg.page.value || cfg.manualPage.value || '').trim(),
         user_email: String(cfg.businessEmail.value || '').trim(),
-        manual_doc_id: String(cfg.manualDocId.value || '').trim()
+        manual_doc_id: String(cfg.manualDocId.value || '').trim(),
+        qpl_join_id: String(cfg.qplJoinId.value || '').trim()
       };
     }
 
