@@ -1053,11 +1053,19 @@ class FacebookBusinessBrowser:
 
         return False
 
-    async def _open_create_entry(self, *, open_form: bool) -> bool:
+    async def _open_create_entry(
+        self,
+        *,
+        open_form: bool,
+        already_on_home: bool = False,
+    ) -> bool:
         # Keep production on the lightweight Business Suite HOME SPA. The
         # heavier /overview and /reg surfaces have crashed Chromium on Railway
         # and are not required when the portfolio selector is available.
-        await self._goto(self.HOME_URL)
+        # Preflight may already have authenticated HOME; do not navigate to the
+        # same SPA twice because each Meta navigation may take tens of seconds.
+        if not already_on_home:
+            await self._goto(self.HOME_URL)
 
         if await self._form_ready():
             return True
@@ -1117,7 +1125,11 @@ class FacebookBusinessBrowser:
 
         return False
 
-    async def discover_managed_pages(self) -> list[dict[str, Any]]:
+    async def discover_managed_pages(
+        self,
+        *,
+        fast: bool = False,
+    ) -> list[dict[str, Any]]:
         """
         Discover Fan Pages from the authenticated browser session.
 
@@ -1128,6 +1140,8 @@ class FacebookBusinessBrowser:
         from .facebook_page_discovery import _extract_pages_from_browser_document
 
         surfaces = (
+            "https://www.facebook.com/pages/?category=your_pages",
+        ) if fast else (
             "https://www.facebook.com/pages/?category=your_pages",
             "https://www.facebook.com/pages/?category=your_pages&ref=bookmarks",
             "https://www.facebook.com/pages/",
@@ -1257,7 +1271,10 @@ class FacebookBusinessBrowser:
         await self._goto(self.HOME_URL)
         diagnostics.append("home_authenticated")
 
-        ready = await self._open_create_entry(open_form=False)
+        ready = await self._open_create_entry(
+            open_form=False,
+            already_on_home=True,
+        )
         if ready:
             diagnostics.append("portfolio_create_action_visible")
 

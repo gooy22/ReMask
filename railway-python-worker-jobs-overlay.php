@@ -67,7 +67,7 @@ function rmx_pwj_worker_request(string $method, string $path, ?array $payload = 
     $http = [
         'method' => strtoupper($method),
         'header' => implode("\r\n", $headers) . "\r\n",
-        'timeout' => max(2, min($timeoutSeconds, 90)),
+        'timeout' => max(2, min($timeoutSeconds, 180)),
         'ignore_errors' => true,
         'follow_location' => 0,
     ];
@@ -143,7 +143,7 @@ try {
             'POST',
             '/api/v1/profiles/' . rawurlencode($profileId) . '/preflight',
             null,
-            60
+            150
         );
         rmx_pwj_out(['ok'=>true,'preflight'=>$result]);
     }
