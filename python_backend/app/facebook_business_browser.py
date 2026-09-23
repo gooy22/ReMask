@@ -643,18 +643,18 @@ class FacebookBusinessBrowser:
             return True
 
         # Verified against the live 2026 Business Suite UI: the portfolio
-        # selector is a top-left role=button whose accessible text is
-        # "Meta Business Suite". It intentionally has no aria-haspopup or
-        # aria-expanded attributes, so generic dropdown heuristics miss it.
+        # selector is a top-left DIV role=button with visible innerText
+        # "Meta Business Suite". Its accessible name is empty in the live DOM,
+        # so get_by_role(name=...) cannot be relied on here.
         try:
-            suite_selector = self.page.get_by_role(
-                "button",
-                name=re.compile(r"^\\s*Meta Business Suite\\s*$", re.IGNORECASE),
-            )
-            count = min(await suite_selector.count(), 4)
+            role_buttons = self.page.locator('[role="button"]')
+            count = min(await role_buttons.count(), 180)
             for index in range(count):
-                item = suite_selector.nth(index)
+                item = role_buttons.nth(index)
                 if not await item.is_visible():
+                    continue
+                text_value = _clean(await item.inner_text(timeout=1000))
+                if text_value.casefold() != "meta business suite":
                     continue
                 box = await item.bounding_box()
                 if not box:
@@ -662,13 +662,14 @@ class FacebookBusinessBrowser:
                 if float(box.get("x") or 0) > 260 or float(box.get("y") or 0) > 180:
                     continue
                 await item.click(timeout=3000)
-                await self.page.wait_for_timeout(500)
+                await self.page.wait_for_timeout(600)
                 if await self._has_create_surface():
                     return True
                 self._last_selector_diagnostic = await self._diagnostic(
                     "portfolio_selector_open_without_create"
                 )
                 await self.page.keyboard.press("Escape")
+                break
         except Exception:
             try:
                 await self.page.keyboard.press("Escape")
