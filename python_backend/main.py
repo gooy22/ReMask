@@ -46,14 +46,14 @@ async def run_bm_browser_canary() -> None:
     """
     Safe Railway canary for the browser BM transport.
 
-    It opens Meta Business creation UI for one existing profile and stops
-    before any irreversible action. No Business or Page mutation is submitted.
+    It checks several usable profiles and stops at the first profile whose
+    current Meta Business Suite exposes the create-portfolio surface. It never
+    submits CREATE or Page-add.
     """
     await asyncio.sleep(3.0)
     if not BM_CANARY_ON_START:
         return
 
-    profile_id=''
     try:
         profiles=await pool.resolver.list_profiles()
         candidates=[
@@ -72,54 +72,81 @@ async def run_bm_browser_canary() -> None:
             log.error('bm browser canary aborted: profile resolver returned no profiles')
             return
 
-        context=None
-        rejected: list[str]=[]
+        try:
+            max_profiles=max(
+                1,
+                int(os.getenv('REMASK_BM_CANARY_MAX_PROFILES','8')),
+            )
+        except (TypeError,ValueError):
+            max_profiles=8
+
+        attempted=0
+        rejected: list[dict[str,str]]=[]
+
         for candidate in candidates:
-            candidate_id=str(candidate.get('profile_id') or '').strip()
+            if attempted >= max_profiles:
+                break
+
+            profile_id=str(candidate.get('profile_id') or '').strip()
             try:
-                resolved=await pool.resolver.resolve(candidate_id)
+                context=await pool.resolver.resolve(profile_id)
             except ProfileContextError as exc:
-                rejected.append(
-                    f"{candidate_id}:{str(exc)[:180]}"
-                )
+                rejected.append({
+                    'profile_id':profile_id,
+                    'code':'PROFILE_CONTEXT_ERROR',
+                    'detail':str(exc)[:300],
+                })
                 continue
 
-            profile_id=candidate_id
-            context=resolved
-            break
+            attempted+=1
 
-        if context is None:
-            log.error(
-                'bm browser canary aborted: no profile has a usable logged-in '
-                'Facebook session + proxy. rejected=%s',
-                json.dumps(rejected[-12:],ensure_ascii=False),
-            )
-            return
+            try:
+                async with ProfileSession(context) as profile_session:
+                    browser=await profile_session.facebook_business_browser()
+                    result=await browser.preflight()
 
-        async with ProfileSession(context) as profile_session:
-            browser=await profile_session.facebook_business_browser()
-            result=await browser.preflight()
+                log.info(
+                    'bm browser canary SUCCESS profile=%s create_surface=%s url=%s attempted=%d',
+                    profile_id,
+                    result.create_surface_ready,
+                    result.current_url,
+                    attempted,
+                )
+                return
 
-        log.info(
-            'bm browser canary SUCCESS profile=%s create_surface=%s url=%s',
-            profile_id,
-            result.create_surface_ready,
-            result.current_url,
-        )
-    except BrowserBusinessError as exc:
+            except BrowserBusinessError as exc:
+                rejected.append({
+                    'profile_id':profile_id,
+                    'code':exc.code,
+                    'detail':str(exc)[:600],
+                })
+                log.warning(
+                    'bm browser canary profile rejected profile=%s code=%s detail=%s diagnostic=%s',
+                    profile_id,
+                    exc.code,
+                    str(exc),
+                    json.dumps(exc.diagnostic,ensure_ascii=False)[:8000],
+                )
+            except Exception as exc:
+                rejected.append({
+                    'profile_id':profile_id,
+                    'code':exc.__class__.__name__,
+                    'detail':str(exc)[:600],
+                })
+                log.exception(
+                    'bm browser canary profile error profile=%s: %s',
+                    profile_id,
+                    exc,
+                )
+
         log.error(
-            'bm browser canary FAILED profile=%s code=%s detail=%s diagnostic=%s',
-            profile_id or '<unresolved>',
-            exc.code,
-            str(exc),
-            json.dumps(exc.diagnostic,ensure_ascii=False)[:12000],
+            'bm browser canary found no create-capable profile attempted=%d rejected=%s',
+            attempted,
+            json.dumps(rejected[-max_profiles:],ensure_ascii=False)[:16000],
         )
+
     except Exception as exc:
-        log.exception(
-            'bm browser canary ERROR profile=%s: %s',
-            profile_id or '<unresolved>',
-            exc,
-        )
+        log.exception('bm browser canary ERROR: %s',exc)
 
 async def run_startup_smoke() -> None:
     await asyncio.sleep(2.0)
