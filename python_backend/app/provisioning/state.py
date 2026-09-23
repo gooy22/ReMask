@@ -141,6 +141,130 @@ class ProvisioningStateStore:
                 (item_id, profile_id, scope_key, step.value, "RUNNING", now, now),
             )
 
+    async def checkpoint(
+        self,
+        item_id: str,
+        profile_id: str,
+        scope_key: str,
+        step: ProvisioningStep,
+        patch: dict[str, Any],
+    ) -> dict[str, Any]:
+        """
+        Atomically merge a partial step result without marking the step SUCCESS.
+
+        This is used for resumable multi-phase operations such as BUSINESS:
+        CREATE may have succeeded while ATTACH_PAGE is still pending. The
+        checkpoint is persisted inside provisioning_steps.result_json only;
+        provisioning_entities is deliberately untouched until complete().
+        """
+        if not isinstance(patch, dict):
+            raise TypeError("checkpoint patch must be a dict")
+
+        return await asyncio.to_thread(
+            self._checkpoint_sync,
+            item_id,
+            profile_id,
+            scope_key,
+            step,
+            patch,
+        )
+
+    def _checkpoint_sync(
+        self,
+        item_id: str,
+        profile_id: str,
+        scope_key: str,
+        step: ProvisioningStep,
+        patch: dict[str, Any],
+    ) -> dict[str, Any]:
+        now = _now()
+
+        with self._connect() as con:
+            con.execute("BEGIN IMMEDIATE")
+
+            row = con.execute(
+                """
+                SELECT profile_id,scope_key,status,result_json
+                FROM provisioning_steps
+                WHERE item_id=? AND step=?
+                """,
+                (item_id, step.value),
+            ).fetchone()
+
+            if row is None:
+                con.rollback()
+                raise RuntimeError(
+                    f"cannot checkpoint {step.value}: step row does not exist for item {item_id}"
+                )
+
+            stored_profile_id = str(row["profile_id"] or "")
+            stored_scope_key = str(row["scope_key"] or "")
+
+            if stored_profile_id != str(profile_id):
+                con.rollback()
+                raise RuntimeError(
+                    f"cannot checkpoint {step.value}: profile mismatch "
+                    f"{stored_profile_id!r} != {profile_id!r}"
+                )
+
+            if stored_scope_key != str(scope_key):
+                con.rollback()
+                raise RuntimeError(
+                    f"cannot checkpoint {step.value}: scope mismatch "
+                    f"{stored_scope_key!r} != {scope_key!r}"
+                )
+
+            current: dict[str, Any] = {}
+            raw_result = row["result_json"]
+
+            if raw_result:
+                try:
+                    decoded = json.loads(str(raw_result))
+                except (json.JSONDecodeError, ValueError) as exc:
+                    con.rollback()
+                    raise RuntimeError(
+                        f"cannot checkpoint {step.value}: stored result_json is invalid"
+                    ) from exc
+
+                if not isinstance(decoded, dict):
+                    con.rollback()
+                    raise RuntimeError(
+                        f"cannot checkpoint {step.value}: stored result_json is not an object"
+                    )
+
+                current.update(decoded)
+
+            current.update(patch)
+
+            result_json = json.dumps(
+                current,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            )
+
+            cursor = con.execute(
+                """
+                UPDATE provisioning_steps
+                SET result_json=?,updated_at=?
+                WHERE item_id=? AND step=?
+                """,
+                (
+                    result_json,
+                    now,
+                    item_id,
+                    step.value,
+                ),
+            )
+
+            if cursor.rowcount != 1:
+                con.rollback()
+                raise RuntimeError(
+                    f"cannot checkpoint {step.value}: update affected {cursor.rowcount} rows"
+                )
+
+            con.commit()
+            return current
+
     async def complete(
         self,
         item_id: str,
