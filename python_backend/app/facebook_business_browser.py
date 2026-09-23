@@ -759,6 +759,32 @@ class FacebookBusinessBrowser:
         )
         return has_email and has_name
 
+    async def _wait_for_create_surface(
+        self,
+        *,
+        timeout_ms: int = 3000,
+        interval_ms: int = 250,
+    ) -> bool:
+        deadline = time.monotonic() + max(0.25, timeout_ms / 1000)
+        while time.monotonic() < deadline:
+            if await self._has_create_surface():
+                return True
+            await self.page.wait_for_timeout(interval_ms)
+        return await self._has_create_surface()
+
+    async def _wait_for_form_ready(
+        self,
+        *,
+        timeout_ms: int = 3500,
+        interval_ms: int = 250,
+    ) -> bool:
+        deadline = time.monotonic() + max(0.25, timeout_ms / 1000)
+        while time.monotonic() < deadline:
+            if await self._form_ready():
+                return True
+            await self.page.wait_for_timeout(interval_ms)
+        return await self._form_ready()
+
     async def _try_open_top_left_portfolio_menu(self) -> bool:
         if self.page is None:
             return False
@@ -864,8 +890,7 @@ class FacebookBusinessBrowser:
                 }"""
             )
             if isinstance(probe, dict) and probe.get("clicked"):
-                await self.page.wait_for_timeout(650)
-                if await self._has_create_surface():
+                if await self._wait_for_create_surface():
                     return True
 
                 # Preserve a compact probe before the larger diagnostic so the
@@ -947,8 +972,7 @@ class FacebookBusinessBrowser:
             seen.add(marker)
             try:
                 await item.click(timeout=2500)
-                await self.page.wait_for_timeout(500)
-                if await self._has_create_surface():
+                if await self._wait_for_create_surface():
                     return True
                 await self.page.keyboard.press("Escape")
                 await self.page.wait_for_timeout(120)
@@ -975,9 +999,8 @@ class FacebookBusinessBrowser:
                     return True
 
                 if await self._click_named(self.CREATE_NAMES):
-                    await self.page.wait_for_timeout(650)
                     await self._assert_authenticated()
-                    if await self._form_ready():
+                    if await self._wait_for_form_ready():
                         return True
 
         # Legacy/no-portfolio fallback. Existing-portfolio accounts may redirect
@@ -990,9 +1013,8 @@ class FacebookBusinessBrowser:
             if not open_form:
                 return True
             if await self._click_named(self.CREATE_NAMES):
-                await self.page.wait_for_timeout(650)
                 await self._assert_authenticated()
-                return await self._form_ready()
+                return await self._wait_for_form_ready()
 
         return False
 
