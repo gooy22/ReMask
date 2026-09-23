@@ -76,6 +76,35 @@ async def run_bm_browser_canary() -> None:
         attempted=0
         rejected: list[dict[str,str]]=[]
 
+        try:
+            canary_phase_timeout=max(
+                20,
+                min(
+                    90,
+                    int(os.getenv('REMASK_BM_CANARY_PHASE_TIMEOUT','55')),
+                ),
+            )
+        except (TypeError,ValueError):
+            canary_phase_timeout=55
+
+        async def browser_phase(label: str, context, callback):
+            async def execute():
+                async with FacebookBusinessBrowser(context) as phase_browser:
+                    return await callback(phase_browser)
+
+            try:
+                return await asyncio.wait_for(
+                    execute(),
+                    timeout=float(canary_phase_timeout),
+                )
+            except asyncio.TimeoutError as exc:
+                raise BrowserBusinessError(
+                    'BM_CANARY_TIMEOUT',
+                    f'BM canary phase {label} exceeded {canary_phase_timeout}s',
+                    retryable=True,
+                    diagnostic={'phase':label},
+                ) from exc
+
         for candidate in candidates:
             if attempted >= max_profiles:
                 break
@@ -94,23 +123,59 @@ async def run_bm_browser_canary() -> None:
             attempted+=1
 
             try:
-                async with ProfileSession(context) as profile_session:
-                    browser=await profile_session.facebook_business_browser()
-                    business_snapshot=await browser.snapshot_businesses()
-                    result=await browser.preflight()
-                    form_result=await browser.preflight_create_form()
-                    fill_result=await browser.preflight_fill_create_form()
-                    try:
-                        browser_pages=await browser.discover_managed_pages()
-                    except BrowserBusinessError as page_discovery_exc:
-                        browser_pages=[]
-                        log.warning(
-                            'bm browser page discovery failed profile=%s code=%s detail=%s',
-                            profile_id,
-                            page_discovery_exc.code,
-                            str(page_discovery_exc),
-                        )
-                    request_result=await browser.preflight_capture_create_request()
+                # Keep the safe canary memory-bounded. Meta Business Suite is a
+                # heavy SPA and repeatedly opening several flows in one Chromium
+                # context can approach Railway's 1 GB memory limit. Each phase
+                # uses a short-lived context while production Add BM still uses
+                # one profile-bound context for its actual transaction.
+                business_snapshot=await browser_phase(
+                    'snapshot_businesses',
+                    context,
+                    lambda browser: browser.snapshot_businesses(),
+                )
+                result=await browser_phase(
+                    'create_surface',
+                    context,
+                    lambda browser: browser.preflight(),
+                )
+                form_result=await browser_phase(
+                    'create_form',
+                    context,
+                    lambda browser: browser.preflight_create_form(),
+                )
+
+                try:
+                    browser_pages=await browser_phase(
+                        'discover_pages',
+                        context,
+                        lambda browser: browser.discover_managed_pages(),
+                    )
+                except BrowserBusinessError as page_discovery_exc:
+                    browser_pages=[]
+                    log.warning(
+                        'bm browser page discovery failed profile=%s code=%s detail=%s',
+                        profile_id,
+                        page_discovery_exc.code,
+                        str(page_discovery_exc),
+                    )
+
+                request_result=await browser_phase(
+                    'capture_create_request',
+                    context,
+                    lambda browser: browser.preflight_capture_create_request(),
+                )
+                request_summary=request_result.get('request') or {}
+                fill_result={
+                    'name_present':bool(
+                        request_summary.get('contains_canary_name')
+                    ),
+                    'email_present':bool(
+                        request_summary.get('contains_canary_email')
+                    ),
+                    'filled_input_count':int(
+                        form_result.get('field_count') or 0
+                    ),
+                }
 
                 page_form_result={
                     'ready':False,
@@ -141,11 +206,15 @@ async def run_bm_browser_canary() -> None:
                 free_page=free_pages[0] if free_pages else None
                 existing_business_id=next(iter(sorted(business_snapshot)), '')
                 if existing_business_id and free_page is not None:
-                    async with FacebookBusinessBrowser(context) as page_browser:
-                        page_form_result=await page_browser.preflight_page_add_form(
+                    page_id=str(free_page.get('id') or '').strip()
+                    page_form_result=await browser_phase(
+                        'page_add_form',
+                        context,
+                        lambda browser: browser.preflight_page_add_form(
                             business_id=existing_business_id,
-                            page_id=str(free_page.get('id') or '').strip(),
-                        )
+                            page_id=page_id,
+                        ),
+                    )
                     page_form_result['skipped']=False
 
                 log.info(
