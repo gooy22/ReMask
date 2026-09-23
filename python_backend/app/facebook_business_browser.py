@@ -167,6 +167,7 @@ class FacebookBusinessBrowser:
     """
 
     HOME_URL = "https://business.facebook.com/latest/home"
+    OVERVIEW_URL = "https://business.facebook.com/overview"
     CREATE_URL = "https://business.facebook.com/reg/"
     SETTINGS_PAGES_URL = (
         "https://business.facebook.com/settings/pages/?business_id={business_id}"
@@ -487,6 +488,33 @@ class FacebookBusinessBrowser:
         except Exception:
             pass
 
+        try:
+            controls = await self.page.locator(
+                'button, [role="button"], [role="menuitem"], a[href]'
+            ).evaluate_all(
+                """els => els.slice(0, 220).map(el => {
+                    const r = el.getBoundingClientRect();
+                    const style = window.getComputedStyle(el);
+                    return {
+                        tag: el.tagName,
+                        role: el.getAttribute("role") || "",
+                        text: (el.innerText || el.textContent || "").trim().slice(0, 180),
+                        aria: (el.getAttribute("aria-label") || "").slice(0, 180),
+                        title: (el.getAttribute("title") || "").slice(0, 180),
+                        haspopup: el.getAttribute("aria-haspopup") || "",
+                        expanded: el.getAttribute("aria-expanded") || "",
+                        x: Math.round(r.x),
+                        y: Math.round(r.y),
+                        w: Math.round(r.width),
+                        h: Math.round(r.height),
+                        visible: r.width > 0 && r.height > 0 && style.visibility !== "hidden" && style.display !== "none"
+                    };
+                }).filter(row => row.visible)"""
+            )
+            result["controls"] = controls[:80]
+        except Exception:
+            pass
+
         return result
 
     async def _has_create_surface(self) -> bool:
@@ -506,30 +534,212 @@ class FacebookBusinessBrowser:
         body = (await self._body_text()).lower()
         return any(name.lower() in body for name in self.CREATE_NAMES)
 
+    async def _form_ready(self) -> bool:
+        if self.page is None:
+            return False
+
+        try:
+            email_count = await self.page.locator('input[type="email"]').count()
+        except Exception:
+            email_count = 0
+
+        try:
+            text_count = await self.page.locator(
+                'input:not([type]), input[type="text"]'
+            ).count()
+        except Exception:
+            text_count = 0
+
+        if email_count >= 1 and text_count >= 1:
+            return True
+
+        body = (await self._body_text()).lower()
+        has_email = any(
+            marker in body
+            for marker in (
+                "business email",
+                "business email address",
+                "рабочий электронный адрес",
+                "электронный адрес компании",
+                "робоча електронна адреса",
+                "електронна адреса компанії",
+            )
+        )
+        has_name = any(
+            marker in body
+            for marker in (
+                "business portfolio name",
+                "business name",
+                "business and account name",
+                "название бизнес-портфолио",
+                "название компании",
+                "назва бізнес-портфоліо",
+                "назва компанії",
+            )
+        )
+        return has_email and has_name
+
+    async def _try_open_top_left_portfolio_menu(self) -> bool:
+        if self.page is None:
+            return False
+
+        if await self._has_create_surface():
+            return True
+
+        selectors = (
+            'button[aria-haspopup="menu"]',
+            '[role="button"][aria-haspopup="menu"]',
+            'button[aria-expanded]',
+            '[role="button"][aria-expanded]',
+        )
+        candidates: list[tuple[int, float, float, Any]] = []
+
+        for selector in selectors:
+            try:
+                locator = self.page.locator(selector)
+                count = min(await locator.count(), 60)
+            except Exception:
+                continue
+
+            for index in range(count):
+                item = locator.nth(index)
+                try:
+                    if not await item.is_visible():
+                        continue
+                    box = await item.bounding_box()
+                    if not box:
+                        continue
+
+                    x = float(box.get("x") or 0)
+                    y = float(box.get("y") or 0)
+                    if x > 520 or y > 300:
+                        continue
+
+                    text = _clean(await item.inner_text(timeout=1000))
+                    aria = _clean(await item.get_attribute("aria-label"))
+                    title = _clean(await item.get_attribute("title"))
+                    key = " ".join((text, aria, title)).lower()
+
+                    score = 0
+                    if any(token in key for token in ("business", "portfolio")):
+                        score -= 100
+                    if any(token in key for token in ("switch", "select", "account")):
+                        score -= 50
+                    if y < 180:
+                        score -= 20
+                    if x < 360:
+                        score -= 10
+
+                    candidates.append((score, y, x, item))
+                except Exception:
+                    continue
+
+        candidates.sort(key=lambda row: (row[0], row[1], row[2]))
+
+        seen: set[tuple[int, int]] = set()
+        for _, y, x, item in candidates[:12]:
+            marker = (round(x), round(y))
+            if marker in seen:
+                continue
+            seen.add(marker)
+
+            try:
+                await item.click(timeout=2500)
+                await self.page.wait_for_timeout(450)
+                if await self._has_create_surface():
+                    return True
+                await self.page.keyboard.press("Escape")
+                await self.page.wait_for_timeout(150)
+            except Exception:
+                try:
+                    await self.page.keyboard.press("Escape")
+                except Exception:
+                    pass
+
+        # Current Business Suite exposes the portfolio selector immediately
+        # around the "Home" heading on some variants. Restrict this fallback
+        # to an ancestor that is itself an interactive control.
+        for home_name in ("Home", "Главная", "Головна"):
+            try:
+                home = self.page.get_by_text(
+                    re.compile(rf"^\\s*{re.escape(home_name)}\\s*$", re.IGNORECASE)
+                )
+                count = min(await home.count(), 6)
+            except Exception:
+                continue
+
+            for index in range(count):
+                try:
+                    node = home.nth(index)
+                    interactive = node.locator(
+                        'xpath=ancestor-or-self::*[self::button or @role="button"][1]'
+                    )
+                    if not await interactive.count() or not await interactive.first.is_visible():
+                        continue
+                    box = await interactive.first.bounding_box()
+                    if not box or float(box.get("x") or 0) > 520 or float(box.get("y") or 0) > 300:
+                        continue
+                    await interactive.first.click(timeout=2500)
+                    await self.page.wait_for_timeout(450)
+                    if await self._has_create_surface():
+                        return True
+                    await self.page.keyboard.press("Escape")
+                except Exception:
+                    continue
+
+        return False
+
+    async def _open_create_entry(self, *, open_form: bool) -> bool:
+        entry_urls = (self.HOME_URL, self.OVERVIEW_URL)
+
+        for entry_url in entry_urls:
+            await self._goto(entry_url)
+
+            if await self._form_ready():
+                return True
+
+            menu_open = await self._try_open_top_left_portfolio_menu()
+            if menu_open:
+                if not open_form:
+                    return True
+
+                if await self._click_named(self.CREATE_NAMES):
+                    await self.page.wait_for_timeout(650)
+                    await self._assert_authenticated()
+                    if await self._form_ready():
+                        return True
+
+        # Legacy/no-portfolio fallback. Existing-portfolio accounts may redirect
+        # this URL back to Home, so it is intentionally last.
+        await self._goto(self.CREATE_URL)
+        if await self._form_ready():
+            return True
+
+        if await self._try_open_top_left_portfolio_menu():
+            if not open_form:
+                return True
+            if await self._click_named(self.CREATE_NAMES):
+                await self.page.wait_for_timeout(650)
+                await self._assert_authenticated()
+                return await self._form_ready()
+
+        return False
+
     async def preflight(self) -> BrowserPreflightResult:
         diagnostics: list[str] = []
 
         await self._goto(self.HOME_URL)
         diagnostics.append("home_authenticated")
 
-        await self._goto(self.CREATE_URL)
-        diagnostics.append("create_surface_opened")
-
-        ready = await self._has_create_surface()
-        if not ready:
-            # Some accounts land directly on the creation form, where the
-            # button text is generic but business/email fields are present.
-            try:
-                visible_inputs = await self.page.locator("input").count()
-            except Exception:
-                visible_inputs = 0
-            ready = visible_inputs >= 2
+        ready = await self._open_create_entry(open_form=False)
+        if ready:
+            diagnostics.append("portfolio_create_action_visible")
 
         if not ready:
             diag = await self._diagnostic("create_surface_missing")
             raise BrowserBusinessError(
                 "BUSINESS_CREATE_UI_UNAVAILABLE",
-                "Meta Business creation surface is not available for this profile.",
+                "Meta Business portfolio create action is not available for this profile.",
                 retryable=False,
                 diagnostic=diag,
             )
@@ -672,7 +882,14 @@ class FacebookBusinessBrowser:
         user_last_name: str,
         profile_display_name: str,
     ) -> None:
-        await self._goto(self.CREATE_URL)
+        if not await self._open_create_entry(open_form=True):
+            diag = await self._diagnostic("create_form_unavailable")
+            raise BrowserBusinessError(
+                "BUSINESS_CREATE_UI_UNAVAILABLE",
+                "Meta Business portfolio creation form could not be opened.",
+                retryable=False,
+                diagnostic=diag,
+            )
 
         business_filled = await self._fill_first(
             labels=(
