@@ -386,35 +386,38 @@ class FacebookBusinessBrowser:
             _BROWSER_SEMAPHORE.release()
 
     async def close(self) -> None:
+        async def bounded_cleanup(awaitable: Any, *, timeout: float) -> None:
+            try:
+                await asyncio.wait_for(awaitable, timeout=timeout)
+            except BaseException:
+                # Cleanup must never wedge the worker. A crashed Meta renderer
+                # can make Playwright close calls stall; the next, broader
+                # cleanup level still gets a chance to terminate Chromium.
+                pass
+
         page = self.page
         self.page = None
 
+        browser_context = self._browser_context
+        self._browser_context = None
+
+        browser = self._browser
+        self._browser = None
+
+        playwright = self._playwright
+        self._playwright = None
+
         if page is not None:
-            try:
-                await page.close()
-            except Exception:
-                pass
+            await bounded_cleanup(page.close(), timeout=1.5)
 
-        if self._browser_context is not None:
-            try:
-                await self._browser_context.close()
-            except Exception:
-                pass
-            self._browser_context = None
+        if browser_context is not None:
+            await bounded_cleanup(browser_context.close(), timeout=2.0)
 
-        if self._browser is not None:
-            try:
-                await self._browser.close()
-            except Exception:
-                pass
-            self._browser = None
+        if browser is not None:
+            await bounded_cleanup(browser.close(), timeout=4.0)
 
-        if self._playwright is not None:
-            try:
-                await self._playwright.stop()
-            except Exception:
-                pass
-            self._playwright = None
+        if playwright is not None:
+            await bounded_cleanup(playwright.stop(), timeout=2.0)
 
         if self._profile_lock_acquired and self._profile_lock is not None:
             self._profile_lock.release()
@@ -821,7 +824,7 @@ class FacebookBusinessBrowser:
                         (el.getAttribute && el.getAttribute('aria-label')) || '',
                         (el.getAttribute && el.getAttribute('title')) || '',
                         el.innerText || el.textContent || ''
-                    ].join(' ').replace(/\s+/g, ' ').trim();
+                    ].join(' ').replace(/\\s+/g, ' ').trim();
 
                     const xs = [20, 52, 88, 124, 160, 192];
                     const ys = [128, 138, 148, 158, 168, 178, 186];
