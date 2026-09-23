@@ -57,6 +57,18 @@ class BrowserPageResult:
 
 _BROWSER_LIMIT = max(1, int(os.getenv("REMASK_BM_BROWSER_CONCURRENCY") or "2"))
 _BROWSER_SEMAPHORE = asyncio.Semaphore(_BROWSER_LIMIT)
+_PROFILE_LOCKS: dict[str, asyncio.Lock] = {}
+_PROFILE_LOCKS_GUARD = asyncio.Lock()
+
+
+async def _get_profile_lock(profile_id: str) -> asyncio.Lock:
+    key = _clean(profile_id) or "unknown"
+    async with _PROFILE_LOCKS_GUARD:
+        current = _PROFILE_LOCKS.get(key)
+        if current is None:
+            current = asyncio.Lock()
+            _PROFILE_LOCKS[key] = current
+        return current
 
 
 def _clean(value: Any) -> str:
@@ -222,6 +234,8 @@ class FacebookBusinessBrowser:
         self._browser_context = None
         self.page = None
         self._semaphore_acquired = False
+        self._profile_lock: asyncio.Lock | None = None
+        self._profile_lock_acquired = False
         self._last_selector_diagnostic: dict[str, Any] = {}
 
     async def __aenter__(self) -> "FacebookBusinessBrowser":
@@ -241,6 +255,10 @@ class FacebookBusinessBrowser:
 
         await _BROWSER_SEMAPHORE.acquire()
         self._semaphore_acquired = True
+
+        self._profile_lock = await _get_profile_lock(self.profile_id)
+        await self._profile_lock.acquire()
+        self._profile_lock_acquired = True
 
         try:
             from playwright.async_api import async_playwright
@@ -367,6 +385,11 @@ class FacebookBusinessBrowser:
             except Exception:
                 pass
             self._playwright = None
+
+        if self._profile_lock_acquired and self._profile_lock is not None:
+            self._profile_lock.release()
+            self._profile_lock_acquired = False
+        self._profile_lock = None
 
         self._release_semaphore()
 
