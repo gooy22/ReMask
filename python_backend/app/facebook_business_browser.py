@@ -222,6 +222,7 @@ class FacebookBusinessBrowser:
         self._browser_context = None
         self.page = None
         self._semaphore_acquired = False
+        self._last_selector_diagnostic: dict[str, Any] = {}
 
     async def __aenter__(self) -> "FacebookBusinessBrowser":
         await self.open()
@@ -664,6 +665,9 @@ class FacebookBusinessBrowser:
                 await self.page.wait_for_timeout(500)
                 if await self._has_create_surface():
                     return True
+                self._last_selector_diagnostic = await self._diagnostic(
+                    "portfolio_selector_open_without_create"
+                )
                 await self.page.keyboard.press("Escape")
         except Exception:
             try:
@@ -822,6 +826,8 @@ class FacebookBusinessBrowser:
 
         if not ready:
             diag = await self._diagnostic("create_surface_missing")
+            if self._last_selector_diagnostic:
+                diag["selector_attempt"] = self._last_selector_diagnostic
             raise BrowserBusinessError(
                 "BUSINESS_CREATE_UI_UNAVAILABLE",
                 "Meta Business portfolio create action is not available for this profile.",
