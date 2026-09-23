@@ -471,11 +471,12 @@ class FacebookBusinessBrowser:
                             and current_url != "about:blank"
                             and "facebook.com" in current_url.lower()
                         )
-                        if facebook_surface and (
-                            bool(current_body.strip())
-                            or form_ready
-                            or create_surface
-                        ):
+                        # For read-only navigation, an authenticated Meta/Facebook
+                        # URL is sufficient evidence that ERR_ABORTED came from
+                        # an SPA redirect/frame replacement rather than a failed
+                        # login. The caller will still verify the expected form
+                        # or create surface separately.
+                        if facebook_surface:
                             return current_url
                     except BrowserBusinessError:
                         raise
