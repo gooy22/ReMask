@@ -853,6 +853,34 @@ class FacebookBusinessBrowser:
     async def snapshot_businesses(self) -> dict[str, str]:
         await self._goto(self.HOME_URL)
 
+        # The home document often contains only the currently selected
+        # portfolio. Open the real top-left portfolio selector first so the
+        # rendered DOM also contains the other portfolios available to this
+        # Facebook profile. This makes CREATE reconciliation useful even when
+        # Meta does not switch the current portfolio after creation.
+        selector_opened = False
+        try:
+            role_buttons = self.page.locator('[role="button"]')
+            count = min(await role_buttons.count(), 180)
+            for index in range(count):
+                item = role_buttons.nth(index)
+                if not await item.is_visible():
+                    continue
+                text_value = _clean(await item.inner_text(timeout=1000))
+                if text_value.casefold() != "meta business suite":
+                    continue
+                box = await item.bounding_box()
+                if not box:
+                    continue
+                if float(box.get("x") or 0) > 260 or float(box.get("y") or 0) > 180:
+                    continue
+                await item.click(timeout=3000)
+                await self.page.wait_for_timeout(500)
+                selector_opened = True
+                break
+        except Exception:
+            selector_opened = False
+
         href_rows: list[dict[str, str]] = []
         try:
             href_rows = await self.page.locator("a[href]").evaluate_all(
@@ -881,6 +909,13 @@ class FacebookBusinessBrowser:
 
         for business_id in _business_ids_from_text(content):
             output.setdefault(business_id, "")
+
+        if selector_opened:
+            try:
+                await self.page.keyboard.press("Escape")
+                await self.page.wait_for_timeout(120)
+            except Exception:
+                pass
 
         return output
 
