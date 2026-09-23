@@ -30,7 +30,10 @@ RUN /opt/remask-venv/bin/python -m compileall -q /opt/remask-python \
     && grep -q 'discover_current_scope_selector_create_candidate' /opt/remask-python/app/facebook_business_create.py \
     && grep -q 'set_business_primary_page' /opt/remask-python/app/facebook_business_create.py \
     && grep -q 'SET_PRIMARY_PAGE' /opt/remask-python/app/facebook_docids.py \
-    && /opt/remask-venv/bin/python -m unittest -q tests.test_fb_worker_bootstrap tests.test_business_private_first tests.test_business_docid_discovery tests.test_business_two_step tests.test_v14_docid_policy tests.test_business_resume_checkpoint \
+    && /opt/remask-venv/bin/python -m unittest -q tests.test_fb_worker_bootstrap tests.test_business_private_first tests.test_business_docid_discovery tests.test_business_two_step tests.test_v14_docid_policy tests.test_business_resume_checkpoint tests.test_business_create_variables_capture \
+    && grep -q 'MBS_BUSINESS_CREATION_IN_SCOPE_SELECTOR_FOOTER' /opt/remask-python/app/facebook_business_create.py \
+    && grep -q 'BIZWEB_SCOPE_SELECTOR_FOOTER_CREATION_BUTTON' /opt/remask-python/app/facebook_business_create.py \
+    && grep -q 'qpl_join_id' /opt/remask-python/app/facebook_business_create.py \
     && /opt/remask-venv/bin/python -c "from app.facebook_page_discovery import discover_pages_from_browser_html,_extract_pages_from_browser_document; p=_extract_pages_from_browser_document('{\"__typename\":\"Page\",\"id\":\"123456789\",\"name\":\"Demo Page\",\"category\":\"Local business\"}'); assert p and p[0]['id']=='123456789' and p[0]['name']=='Demo Page'; assert callable(discover_pages_from_browser_html)" \
     && /opt/remask-venv/bin/python -c "import inspect; from app.facebook_query_discovery import discover_persisted_query; d=inspect.getsource(discover_persisted_query); assert 'extract_script_urls' not in d; assert 'script_url' not in d; assert 'fetch_text_with_headers' in d" \
     && grep -q 'manual_doc_id' /opt/remask-python/app/provisioning/business_handler.py \
