@@ -16,7 +16,7 @@ class _Session:
             request_context={"__rev": "111"},
         )
 
-    async def graphql(self, doc_id, variables, **kwargs):
+    async def graphql_browser_native(self, doc_id, variables, **kwargs):
         self.calls.append((doc_id, variables, kwargs))
         return {
             "data": {
@@ -28,7 +28,7 @@ class _Session:
 
 
 class ExactEnvelopeTests(unittest.IsolatedAsyncioTestCase):
-    async def test_captured_safe_envelope_is_forwarded_to_graphql(self):
+    async def test_captured_safe_envelope_is_forwarded_to_browser_graphql(self):
         session = _Session()
         captured = {
             "__rev": "222",
