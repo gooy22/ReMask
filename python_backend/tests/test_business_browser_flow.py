@@ -156,6 +156,42 @@ class BrowserNavigationRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(browser.page.goto_calls, 2)
 
 
+class BrowserPortfolioSelectorProbeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_portfolio_probe_does_not_scan_entire_spa_dom(self):
+        class _EmptyLocator:
+            async def count(self):
+                return 0
+
+        class _Keyboard:
+            async def press(self, key):
+                return None
+
+        class _Page:
+            def __init__(self):
+                self.script = ""
+                self.keyboard = _Keyboard()
+
+            async def evaluate(self, script):
+                self.script = script
+                return {"clicked": False, "candidates": []}
+
+            def locator(self, selector):
+                return _EmptyLocator()
+
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-light-probe")
+        )
+        browser.page = _Page()
+        browser._has_create_surface = AsyncMock(return_value=False)
+
+        opened = await browser._try_open_top_left_portfolio_menu()
+
+        self.assertFalse(opened)
+        self.assertIn("elementsFromPoint", browser.page.script)
+        self.assertNotIn("querySelectorAll('*')", browser.page.script)
+        self.assertNotIn('querySelectorAll("*")', browser.page.script)
+
+
 class BrowserCreateEntryRoutingTests(unittest.IsolatedAsyncioTestCase):
     async def test_create_flow_skips_crash_prone_overview_surface(self):
         browser = FacebookBusinessBrowser(
