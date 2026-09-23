@@ -233,6 +233,61 @@ class BusinessBrowserFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(browser.add_calls, 0)
         self.assertTrue(result["page"]["recovered"])
 
+    async def test_create_click_intent_retry_reconciles_without_second_create(self):
+        await self.store.checkpoint(
+            self.item_id,
+            self.profile_id,
+            self.scope_key,
+            ProvisioningStep.BUSINESS,
+            {
+                "phase": "CREATE_CLICK_INTENT",
+                "business_name": "Test Business",
+                "primary_page_id": "123456789",
+                "business_ids_before": ["111111111111111"],
+            },
+        )
+        step_state = await self.store.step(
+            self.item_id,
+            ProvisioningStep.BUSINESS,
+        )
+
+        browser = _FakeBrowser(
+            reconcile_id="555666777888999",
+            verify_sequence=[True],
+        )
+        result = await self._run(browser, step_state=step_state)
+
+        self.assertEqual(result["business_id"], "555666777888999")
+        self.assertEqual(browser.create_calls, 0)
+        self.assertEqual(browser.reconcile_calls, 1)
+        self.assertEqual(browser.add_calls, 0)
+
+    async def test_page_click_intent_retry_verifies_without_second_add(self):
+        await self.store.checkpoint(
+            self.item_id,
+            self.profile_id,
+            self.scope_key,
+            ProvisioningStep.BUSINESS,
+            {
+                "phase": "PAGE_ADD_CLICK_INTENT",
+                "business_id": "555666777888999",
+                "business_name": "Test Business",
+                "primary_page_id": "123456789",
+            },
+        )
+        step_state = await self.store.step(
+            self.item_id,
+            ProvisioningStep.BUSINESS,
+        )
+
+        browser = _FakeBrowser(verify_sequence=[True])
+        result = await self._run(browser, step_state=step_state)
+
+        self.assertEqual(result["business_id"], "555666777888999")
+        self.assertEqual(browser.create_calls, 0)
+        self.assertEqual(browser.add_calls, 0)
+        self.assertTrue(result["page"]["recovered"])
+
     async def test_unknown_create_is_terminal_and_never_recreated(self):
         await self.store.checkpoint(
             self.item_id,
