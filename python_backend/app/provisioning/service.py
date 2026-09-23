@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from typing import Any
 
 import aiohttp
@@ -105,18 +106,39 @@ class ProvisioningService:
                     handler = get_handler(step.value)
 
                     if step is ProvisioningStep.BUSINESS:
-                        result = await handler(
-                            session,
-                            step_params,
-                            state,
-                            transport=self.transport,
-                            idempotency_key=step_key,
-                            provisioning_state=self.state,
-                            item_id=item_id,
-                            profile_id=profile_id,
-                            scope_key=scope_key,
-                            step_state=prior,
-                        )
+                        try:
+                            business_timeout = float(
+                                os.getenv("REMASK_BUSINESS_STEP_TIMEOUT", "180")
+                            )
+                        except (TypeError, ValueError):
+                            business_timeout = 180.0
+                        business_timeout = max(60.0, min(business_timeout, 600.0))
+
+                        try:
+                            result = await asyncio.wait_for(
+                                handler(
+                                    session,
+                                    step_params,
+                                    state,
+                                    transport=self.transport,
+                                    idempotency_key=step_key,
+                                    provisioning_state=self.state,
+                                    item_id=item_id,
+                                    profile_id=profile_id,
+                                    scope_key=scope_key,
+                                    step_state=prior,
+                                ),
+                                timeout=business_timeout,
+                            )
+                        except asyncio.TimeoutError as exc:
+                            raise ProvisioningError(
+                                "BUSINESS_TIMEOUT",
+                                (
+                                    "Meta Business workflow exceeded "
+                                    f"{int(business_timeout)}s"
+                                ),
+                                retryable=True,
+                            ) from exc
                     else:
                         result = await handler(
                             session,
