@@ -910,6 +910,52 @@ class FacebookBusinessBrowser:
             diagnostics=diagnostics,
         )
 
+    async def preflight_create_form(self) -> dict[str, Any]:
+        """
+        Open Meta's real Create business portfolio form without filling or
+        submitting it. This safe canary performs no irreversible mutation.
+        """
+        if not await self._open_create_entry(open_form=True):
+            diag = await self._diagnostic("create_form_preflight_failed")
+            raise BrowserBusinessError(
+                "BUSINESS_CREATE_FORM_UNAVAILABLE",
+                "Create business portfolio was visible, but Meta's creation form did not open.",
+                retryable=False,
+                diagnostic=diag,
+            )
+
+        await self._assert_authenticated()
+        if not await self._form_ready():
+            diag = await self._diagnostic("create_form_fields_missing")
+            raise BrowserBusinessError(
+                "CREATE_UI_CHANGED",
+                "Meta opened Business creation but expected name/email fields were not found.",
+                retryable=False,
+                diagnostic=diag,
+            )
+
+        fields: list[dict[str, Any]] = []
+        try:
+            inputs = self.page.locator("input:visible")
+            count = min(await inputs.count(), 20)
+            for index in range(count):
+                item = inputs.nth(index)
+                fields.append({
+                    "type": _clean(await item.get_attribute("type")) or "text",
+                    "name": _clean(await item.get_attribute("name"))[:120],
+                    "aria": _clean(await item.get_attribute("aria-label"))[:240],
+                    "placeholder": _clean(await item.get_attribute("placeholder"))[:240],
+                })
+        except Exception:
+            fields = []
+
+        return {
+            "ready": True,
+            "current_url": _clean(self.page.url),
+            "field_count": len(fields),
+            "fields": fields,
+        }
+
     async def snapshot_businesses(self) -> dict[str, str]:
         await self._goto(self.HOME_URL)
 
