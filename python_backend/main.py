@@ -419,6 +419,11 @@ async def profile_preflight(profile_id: str):
         web_state['ready']
         and has_scope_selector_candidate
     )
+    web_dynamic_or_manual_ready=bool(
+        web_state['ready']
+        and web_state['actor_present']
+        and web_state['fb_dtsg_present']
+    )
 
     return {
         'ok':True,
@@ -450,11 +455,13 @@ async def profile_preflight(profile_id: str):
             'official_graph_api':official_route_ready,
             'web_page_backed_candidate':web_page_backed_candidate,
             'web_scope_selector_candidate':web_scope_selector_candidate,
+            'web_dynamic_or_manual':web_dynamic_or_manual_ready,
         },
         'bm_route_ready':bool(
             official_route_ready
             or web_page_backed_candidate
             or web_scope_selector_candidate
+            or web_dynamic_or_manual_ready
         ),
     }
 
