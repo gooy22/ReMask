@@ -956,6 +956,54 @@ class FacebookBusinessBrowser:
             "fields": fields,
         }
 
+    async def preflight_fill_create_form(self) -> dict[str, Any]:
+        """
+        Fill the real Meta form with disposable canary values, then stop.
+        Nothing is submitted and no Business is created.
+        """
+        canary_name = "ReMask Canary Business"
+        canary_email = "remask-canary@example.com"
+        await self._prepare_create_form(
+            business_name=canary_name,
+            user_email=canary_email,
+            user_first_name="ReMask",
+            user_last_name="Canary",
+            profile_display_name="ReMask Canary",
+        )
+
+        values: list[str] = []
+        try:
+            inputs = self.page.locator("input:visible")
+            count = min(await inputs.count(), 20)
+            for index in range(count):
+                values.append(_clean(await inputs.nth(index).input_value()))
+        except Exception:
+            values = []
+
+        name_present = canary_name in values
+        email_present = canary_email in values
+        if not name_present or not email_present:
+            diag = await self._diagnostic("create_form_fill_mismatch")
+            diag.update({
+                "name_present": name_present,
+                "email_present": email_present,
+                "filled_input_count": sum(1 for value in values if value),
+            })
+            raise BrowserBusinessError(
+                "CREATE_FORM_FILL_FAILED",
+                "Meta form opened, but ReMask could not prove Business name and email were filled correctly.",
+                retryable=False,
+                diagnostic=diag,
+            )
+
+        return {
+            "ready": True,
+            "name_present": True,
+            "email_present": True,
+            "filled_input_count": sum(1 for value in values if value),
+            "visible_input_count": len(values),
+        }
+
     async def snapshot_businesses(self) -> dict[str, str]:
         await self._goto(self.HOME_URL)
 
