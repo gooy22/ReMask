@@ -1,3 +1,4 @@
+# deploy-trigger: bm-preflight-sync-hotfix 2026-09-24
 FROM php:8.4-apache
 
 ENV DEBIAN_FRONTEND=noninteractive
