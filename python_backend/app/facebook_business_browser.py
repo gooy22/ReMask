@@ -1447,30 +1447,42 @@ class FacebookBusinessBrowser:
             )
 
     @staticmethod
-    def _response_matches_create(response: Any, business_name: str) -> bool:
+    def _request_matches_create(request: Any, business_name: str) -> bool:
         try:
-            if response.request.method.upper() != "POST":
+            if request.method.upper() != "POST":
                 return False
-            if "graphql" not in str(response.url or "").lower():
+            if "graphql" not in str(request.url or "").lower():
                 return False
-            post_data = str(response.request.post_data or "")
+            post_data = str(request.post_data or "")
         except Exception:
             return False
 
         decoded = unquote_plus(post_data)
         lower = decoded.lower()
+        expected = business_name.lower()
         return (
-            business_name.lower() in lower
+            expected in lower
             and any(
                 marker in lower
                 for marker in (
-                    "business",
-                    "creation",
-                    "create",
+                    "businesscreation",
+                    "createbusiness",
+                    "create_business",
+                    "business_creation",
                     "portfolio",
                 )
             )
         )
+
+    @staticmethod
+    def _response_matches_create(response: Any, business_name: str) -> bool:
+        try:
+            return FacebookBusinessBrowser._request_matches_create(
+                response.request,
+                business_name,
+            )
+        except Exception:
+            return False
 
     async def _submit_create_and_observe(
         self,
@@ -1485,7 +1497,60 @@ class FacebookBusinessBrowser:
                 retryable=False,
             )
 
+        loop = asyncio.get_running_loop()
+        gate_future: asyncio.Future[bool] = loop.create_future()
+
+        async def gate(route: Any, request: Any) -> None:
+            if not self._request_matches_create(request, business_name):
+                await route.continue_()
+                return
+
+            if gate_future.done():
+                await route.continue_()
+                return
+
+            try:
+                if before_submit is not None:
+                    await before_submit(
+                        {
+                            "phase": "CREATE_SUBMITTED",
+                            "submitted_at": int(time.time()),
+                            "network_gate": "before_meta_send",
+                        }
+                    )
+            except Exception as exc:
+                try:
+                    await route.abort()
+                finally:
+                    if not gate_future.done():
+                        gate_future.set_exception(
+                            BrowserBusinessError(
+                                "CREATE_CHECKPOINT_FAILED_BEFORE_SEND",
+                                (
+                                    "ReMask intercepted Meta CREATE but could not "
+                                    "persist the submitted checkpoint, so the "
+                                    "request was blocked before reaching Meta."
+                                ),
+                                retryable=True,
+                            )
+                        )
+                return
+
+            await route.continue_()
+            if not gate_future.done():
+                gate_future.set_result(True)
+
+        await self.page.route("**/api/graphql/**", gate)
+
         try:
+            if before_submit is not None:
+                await before_submit(
+                    {
+                        "phase": "CREATE_CLICK_INTENT",
+                        "click_intent_at": int(time.time()),
+                    }
+                )
+
             async with self.page.expect_response(
                 lambda response: self._response_matches_create(
                     response,
@@ -1493,19 +1558,23 @@ class FacebookBusinessBrowser:
                 ),
                 timeout=self.timeout_ms,
             ) as response_info:
-                if before_submit is not None:
-                    await before_submit(
-                        {
-                            "phase": "CREATE_CLICK_INTENT",
-                            "click_intent_at": int(time.time()),
-                        }
-                    )
-
                 clicked = await self._click_named(self.CREATE_NAMES)
                 if not clicked:
                     clicked = await self._click_named(
-                        ("Create", "Submit", "Continue", "Создать", "Продолжить", "Створити", "Продовжити", "Erstellen", "Senden", "Weiter")
+                        (
+                            "Create",
+                            "Submit",
+                            "Continue",
+                            "Создать",
+                            "Продолжить",
+                            "Створити",
+                            "Продовжити",
+                            "Erstellen",
+                            "Senden",
+                            "Weiter",
+                        )
                     )
+
                 if not clicked:
                     if before_submit is not None:
                         await before_submit(
@@ -1522,26 +1591,23 @@ class FacebookBusinessBrowser:
                         diagnostic=diag,
                     )
 
-                if before_submit is not None:
-                    try:
-                        await before_submit(
-                            {
-                                "phase": "CREATE_SUBMITTED",
-                                "submitted_at": int(time.time()),
-                            }
-                        )
-                    except Exception as exc:
-                        raise BrowserBusinessError(
-                            "CREATE_CHECKPOINT_FAILED_AFTER_CLICK",
-                            (
-                                "Meta Create was clicked, but ReMask could not "
-                                "persist the submitted checkpoint. CREATE must "
-                                "be reconciled before any retry."
-                            ),
-                            retryable=False,
-                        ) from exc
+            response_task = asyncio.ensure_future(response_info.value)
+            gate_task = asyncio.ensure_future(gate_future)
 
-            response = await response_info.value
+            done, _ = await asyncio.wait(
+                {response_task, gate_task},
+                return_when=asyncio.FIRST_EXCEPTION,
+            )
+
+            if gate_task in done and gate_task.exception() is not None:
+                response_task.cancel()
+                await asyncio.gather(response_task, return_exceptions=True)
+                raise gate_task.exception()
+
+            response = await response_task
+            if not gate_future.done():
+                await asyncio.wait_for(gate_future, timeout=2.0)
+
             raw = await response.text()
             payload = _decode_graphql_text(raw)
 
@@ -1565,9 +1631,15 @@ class FacebookBusinessBrowser:
         except BrowserBusinessError:
             raise
         except Exception:
-            # A lost/changed response does not mean CREATE failed. The caller
-            # must reconcile against the before/after Business snapshot.
+            # If CREATE was actually sent, the network gate has already
+            # persisted CREATE_SUBMITTED. A missing response is reconciled from
+            # the Business portfolio inventory and is never blindly retried.
             return "", ""
+        finally:
+            try:
+                await self.page.unroute("**/api/graphql/**", gate)
+            except Exception:
+                pass
 
     async def reconcile_created_business(
         self,
