@@ -217,9 +217,14 @@ class BrowserCreateEntryRoutingTests(unittest.IsolatedAsyncioTestCase):
             ready = await browser._open_create_entry(open_form=False)
 
         self.assertFalse(ready)
-        self.assertEqual(calls, [browser.HOME_URL])
+        self.assertEqual(
+            calls,
+            [
+                browser.HOME_URL,
+                browser.CREATE_URL,
+            ],
+        )
         self.assertNotIn(browser.OVERVIEW_URL, calls)
-        self.assertNotIn(browser.CREATE_URL, calls)
 
     async def test_legacy_navigation_fallback_requires_explicit_flag(self):
         browser = FacebookBusinessBrowser(
@@ -247,8 +252,8 @@ class BrowserCreateEntryRoutingTests(unittest.IsolatedAsyncioTestCase):
             calls,
             [
                 browser.HOME_URL,
-                browser.OVERVIEW_URL,
                 browser.CREATE_URL,
+                browser.OVERVIEW_URL,
             ],
         )
 
