@@ -246,21 +246,6 @@ class MetaSession:
     async def facebook_controller(self) -> BusinessLogicController:
         return BusinessLogicController(await self.facebook_web())
 
-    def facebook_business_browser(self):
-        """
-        Browser-first Business Suite workflow.
-
-        A fresh browser/context is created for one BUSINESS operation so CREATE
-        and Page attachment remain inside the same authenticated Meta session.
-        Browser concurrency is capped inside facebook_business_browser.py.
-        """
-        from .facebook_business_browser import FacebookBusinessBrowser
-
-        return FacebookBusinessBrowser(
-            self.context,
-            timeout_seconds=max(30, int(self.timeout.total or 30)),
-        )
-
     async def facebook_business_browser(self):
         current = self._business_browser
         if current is not None:
