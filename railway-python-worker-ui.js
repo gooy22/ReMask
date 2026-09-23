@@ -1,4 +1,4 @@
-/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 REMASK_PYTHON_WORKER_UI_V140 REMASK_PYTHON_WORKER_UI_V141 REMASK_PYTHON_WORKER_UI_V142 REMASK_PYTHON_WORKER_UI_V143 REMASK_PYTHON_WORKER_UI_V144 REMASK_PYTHON_WORKER_UI_V145 REMASK_PYTHON_WORKER_UI_V146 REMASK_PYTHON_WORKER_UI_V147 REMASK_PYTHON_WORKER_UI_V148 REMASK_PYTHON_WORKER_UI_V149 REMASK_PYTHON_WORKER_UI_V150 REMASK_PYTHON_WORKER_UI_V151 REMASK_PYTHON_WORKER_UI_V152 REMASK_PYTHON_WORKER_UI_V153 REMASK_PYTHON_WORKER_UI_V154 REMASK_PYTHON_WORKER_UI_V155 REMASK_PYTHON_WORKER_UI_V156 REMASK_PYTHON_WORKER_UI_V157 */
+/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 REMASK_PYTHON_WORKER_UI_V140 REMASK_PYTHON_WORKER_UI_V141 REMASK_PYTHON_WORKER_UI_V142 REMASK_PYTHON_WORKER_UI_V143 REMASK_PYTHON_WORKER_UI_V144 REMASK_PYTHON_WORKER_UI_V145 REMASK_PYTHON_WORKER_UI_V146 REMASK_PYTHON_WORKER_UI_V147 REMASK_PYTHON_WORKER_UI_V148 REMASK_PYTHON_WORKER_UI_V149 REMASK_PYTHON_WORKER_UI_V150 REMASK_PYTHON_WORKER_UI_V151 REMASK_PYTHON_WORKER_UI_V152 REMASK_PYTHON_WORKER_UI_V153 REMASK_PYTHON_WORKER_UI_V154 REMASK_PYTHON_WORKER_UI_V155 REMASK_PYTHON_WORKER_UI_V156 REMASK_PYTHON_WORKER_UI_V157 REMASK_PYTHON_WORKER_UI_V158 */
 const restoredPythonWorkerJobId = localStorage.getItem('remask_python_worker_job_v1') || '';
 
 const pythonWorkerUiState = {
@@ -309,10 +309,14 @@ async function pythonWorkerProfilePreflight(profileId) {
       graph.business_management_granted !== false
     );
   const webReady =
-    routes.web_page_backed_candidate === true &&
-    hasPages &&
     preflight.fb_dtsg_present === true &&
-    preflight.actor_present === true;
+    preflight.actor_present === true &&
+    (
+      routes.web_dynamic_or_manual === true ||
+      routes.web_page_backed_candidate === true ||
+      routes.web_scope_selector_candidate === true ||
+      preflight.facebook_session === 'ok'
+    );
 
   if (!graphReady && !webReady) {
     const reasons = [];
@@ -1102,7 +1106,7 @@ async function pythonWorkerOpenOwnBmModal() {
     const businessEmail = document.createElement('input');
     businessEmail.type = 'email';
     businessEmail.className = 'pwbm-manual';
-    businessEmail.placeholder = 'Business email для web fallback (необязательно)';
+    businessEmail.placeholder = 'Business email (обязателен, если не сохранён в профиле)';
 
     const emailHint = document.createElement('small');
     emailHint.textContent = 'Нужен для private scope-selector Business creation.';
@@ -1167,6 +1171,7 @@ async function pythonWorkerOpenOwnBmModal() {
       loaded: false,
       preflightReady: false,
       preflightError: '',
+      requiresBusinessEmail: false,
       error: ''
     };
   }
@@ -1216,12 +1221,20 @@ async function pythonWorkerOpenOwnBmModal() {
       const manualDocId = cfg
         ? String(cfg.manualDocId.value || '').trim()
         : '';
+      const businessEmail = cfg
+        ? String(cfg.businessEmail.value || '').trim()
+        : '';
       const manualDocIdValid = !manualDocId || /^\d{5,40}$/.test(manualDocId);
+      const businessEmailValid =
+        !cfg ||
+        cfg.requiresBusinessEmail !== true ||
+        /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(businessEmail);
       return cfg &&
         cfg.preflightReady === true &&
         String(cfg.name.value || '').trim() &&
         selectedPage &&
-        manualDocIdValid;
+        manualDocIdValid &&
+        businessEmailValid;
     });
 
     create.disabled = pythonWorkerUiState.busy || !allLoaded || !allReady;
@@ -1241,11 +1254,16 @@ async function pythonWorkerOpenOwnBmModal() {
         if (!cfg) return true;
         const effectivePage = String(cfg.page.value || cfg.manualPage.value || '').trim();
         const manualDocId = String(cfg.manualDocId.value || '').trim();
+        const businessEmail = String(cfg.businessEmail.value || '').trim();
         return (
           cfg.preflightReady !== true ||
           !String(cfg.name.value || '').trim() ||
           !effectivePage ||
-          (manualDocId && !/^\d{5,40}$/.test(manualDocId))
+          (manualDocId && !/^\d{5,40}$/.test(manualDocId)) ||
+          (
+            cfg.requiresBusinessEmail === true &&
+            !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(businessEmail)
+          )
         );
       });
       status.textContent = failed.length
@@ -1279,6 +1297,7 @@ async function pythonWorkerOpenOwnBmModal() {
     return pythonWorkerProfilePreflight(profileId).then(async function(result) {
       cfg.preflightReady = true;
       cfg.preflightError = '';
+      cfg.requiresBusinessEmail = result.email_present !== true;
 
       const graph = result.graph_api && typeof result.graph_api === 'object'
         ? result.graph_api
@@ -1297,14 +1316,13 @@ async function pythonWorkerOpenOwnBmModal() {
       cfg.sessionHint.className = 'pwbm-session ok';
 
       if (result.email_present === true) {
+        cfg.emailHint.className = '';
         cfg.emailHint.textContent =
           'Business/login email уже сохранён в профиле.';
-      } else if (routes.web_scope_selector_candidate === true) {
-        cfg.emailHint.textContent =
-          'Email понадобится только если Page-backed route окажется устаревшим и Meta переключит создание на scope-selector.';
       } else {
+        cfg.emailHint.className = 'error';
         cfg.emailHint.textContent =
-          'Email для текущего Page-backed маршрута не требуется.';
+          'У профиля нет сохранённого email. Введи Business email перед запуском CREATE.';
       }
 
       let routeLabel = 'UNKNOWN';
@@ -1314,6 +1332,8 @@ async function pythonWorkerOpenOwnBmModal() {
         routeLabel = 'WEB PAGE-BACKED';
       } else if (routes.web_scope_selector_candidate === true) {
         routeLabel = 'WEB SCOPE-SELECTOR';
+      } else if (routes.web_dynamic_or_manual === true) {
+        routeLabel = 'WEB DYNAMIC/MANUAL';
       } else if (webReady) {
         routeLabel = 'WEB SESSION';
       }
