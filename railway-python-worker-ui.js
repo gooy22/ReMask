@@ -592,6 +592,7 @@ function pythonWorkerBmRowConfig(dialog, profiles, fallbackName) {
     let pageId = '';
     let manualDocId = '';
     let qplJoinId = '';
+    let requestEnvelope = {};
 
     if (row) {
       const rowInputs = Array.from(row.querySelectorAll('input'));
@@ -638,6 +639,24 @@ function pythonWorkerBmRowConfig(dialog, profiles, fallbackName) {
         qplJoinId = String(qplInput.value || '').trim();
       }
 
+      const envelopeInput = Array.from(row.querySelectorAll('textarea')).find(function(input) {
+        const key = [
+          input.name || '',
+          input.id || '',
+          input.className || '',
+          input.placeholder || ''
+        ].join(' ');
+        return /request.?envelope|safe.?envelope/i.test(key);
+      });
+      if (envelopeInput && String(envelopeInput.value || '').trim()) {
+        try {
+          const parsedEnvelope = JSON.parse(String(envelopeInput.value || ''));
+          if (parsedEnvelope && typeof parsedEnvelope === 'object' && !Array.isArray(parsedEnvelope)) {
+            requestEnvelope = parsedEnvelope;
+          }
+        } catch (_) {}
+      }
+
       const rowSelect = Array.from(row.querySelectorAll('select')).find(function(select) {
         const optionText = Array.from(select.options || []).map(function(option) {
           return String(option.textContent || '');
@@ -657,7 +676,8 @@ function pythonWorkerBmRowConfig(dialog, profiles, fallbackName) {
       name: name,
       page_id: pageId,
       manual_doc_id: manualDocId,
-      qpl_join_id: qplJoinId
+      qpl_join_id: qplJoinId,
+      request_envelope: requestEnvelope
     };
   });
 
@@ -770,6 +790,14 @@ async function pythonWorkerStartBusiness(bmName, options) {
         config.qpl_join_id || ''
       ).trim();
       if (qplJoinId) businessParams.qpl_join_id = qplJoinId;
+
+      if (
+        config.request_envelope &&
+        typeof config.request_envelope === 'object' &&
+        !Array.isArray(config.request_envelope)
+      ) {
+        businessParams.request_envelope = config.request_envelope;
+      }
 
       return {
         profile_id: profileKey,
@@ -1156,6 +1184,16 @@ async function pythonWorkerOpenOwnBmModal() {
     qplHint.textContent =
       'Не генерируется ReMask. Заполняется только реальным capture, если Meta его требует.';
 
+    const requestEnvelope = document.createElement('textarea');
+    requestEnvelope.className = 'pwbm-manual';
+    requestEnvelope.placeholder = 'Captured safe request envelope JSON (необязательно)';
+    requestEnvelope.rows = 4;
+    requestEnvelope.spellcheck = false;
+
+    const envelopeHint = document.createElement('small');
+    envelopeHint.textContent =
+      'Вставь JSON из Capture → «Копировать envelope». Секреты сюда не входят.';
+
     nameField.appendChild(name);
     nameField.appendChild(nameHint);
     nameField.appendChild(businessEmail);
@@ -1164,6 +1202,8 @@ async function pythonWorkerOpenOwnBmModal() {
     nameField.appendChild(docIdHint);
     nameField.appendChild(qplJoinId);
     nameField.appendChild(qplHint);
+    nameField.appendChild(requestEnvelope);
+    nameField.appendChild(envelopeHint);
 
     const pageField = document.createElement('div');
     pageField.className = 'pwbm-field';
@@ -1202,6 +1242,8 @@ async function pythonWorkerOpenOwnBmModal() {
       docIdHint: docIdHint,
       qplJoinId: qplJoinId,
       qplHint: qplHint,
+      requestEnvelope: requestEnvelope,
+      envelopeHint: envelopeHint,
       page: page,
       manualPage: manualPage,
       pageHint: pageHint,
@@ -1473,12 +1515,26 @@ async function pythonWorkerOpenOwnBmModal() {
     const configs = {};
     for (const profileId of profiles) {
       const cfg = rows[profileId];
+      let parsedEnvelope = {};
+      const envelopeText = String(cfg.requestEnvelope.value || '').trim();
+      if (envelopeText) {
+        try {
+          parsedEnvelope = JSON.parse(envelopeText);
+        } catch (_) {
+          throw new Error('Captured request envelope должен быть валидным JSON.');
+        }
+        if (!parsedEnvelope || typeof parsedEnvelope !== 'object' || Array.isArray(parsedEnvelope)) {
+          throw new Error('Captured request envelope должен быть JSON-объектом.');
+        }
+      }
+
       configs[profileId] = {
         name: String(cfg.name.value || '').trim(),
         page_id: String(cfg.page.value || cfg.manualPage.value || '').trim(),
         user_email: String(cfg.businessEmail.value || '').trim(),
         manual_doc_id: String(cfg.manualDocId.value || '').trim(),
-        qpl_join_id: String(cfg.qplJoinId.value || '').trim()
+        qpl_join_id: String(cfg.qplJoinId.value || '').trim(),
+        request_envelope: parsedEnvelope
       };
     }
 
