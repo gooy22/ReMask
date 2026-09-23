@@ -2,6 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 from app.facebook_business_browser import (
     BrowserBusinessError,
@@ -60,6 +61,34 @@ class BrowserNetworkGateTests(unittest.TestCase):
                 page_id="123456789",
             )
         )
+
+
+class BrowserPageDiscoveryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_discovers_pages_from_rendered_browser_surface(self):
+        class _RenderedPage:
+            async def wait_for_timeout(self, ms):
+                return None
+
+            async def content(self):
+                return (
+                    '<script type="application/json">'
+                    '{"__typename":"Page","id":"123456789",'
+                    '"name":"Demo Fan Page","category":"Local business"}'
+                    '</script>'
+                )
+
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-pages")
+        )
+        browser.page = _RenderedPage()
+        browser._goto = AsyncMock(return_value="https://www.facebook.com/pages/")
+
+        pages = await browser.discover_managed_pages()
+
+        self.assertEqual(len(pages), 1)
+        self.assertEqual(pages[0]["id"], "123456789")
+        self.assertEqual(pages[0]["name"], "Demo Fan Page")
+        browser._goto.assert_awaited()
 
 
 class _FakeBrowser:
