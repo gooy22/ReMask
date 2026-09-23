@@ -156,6 +156,33 @@ class BrowserNavigationRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(browser.page.goto_calls, 2)
 
 
+class BrowserCreateEntryRoutingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_create_flow_skips_crash_prone_overview_surface(self):
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-create-routing")
+        )
+        calls = []
+
+        async def fake_goto(url):
+            calls.append(url)
+            return url
+
+        browser._goto = AsyncMock(side_effect=fake_goto)
+        browser._form_ready = AsyncMock(return_value=False)
+        browser._try_open_top_left_portfolio_menu = AsyncMock(return_value=False)
+
+        ready = await browser._open_create_entry(open_form=False)
+
+        self.assertFalse(ready)
+        self.assertEqual(
+            calls,
+            [browser.HOME_URL, browser.CREATE_URL],
+        )
+        self.assertNotIn(browser.OVERVIEW_URL, calls)
+
+
+
+
 class BrowserPageDiscoveryTests(unittest.IsolatedAsyncioTestCase):
     async def test_discovers_pages_from_rendered_browser_surface(self):
         class _RenderedPage:
