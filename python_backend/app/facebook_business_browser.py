@@ -45,6 +45,7 @@ class BrowserCreateResult:
     after_ids: list[str]
     response_business_id: str = ""
     response_friendly_name: str = ""
+    response_path: str = ""
     recovered: bool = False
 
 
@@ -80,6 +81,77 @@ def _digits(value: Any) -> str:
     return text if re.fullmatch(r"\d{5,30}", text) else ""
 
 
+def _request_graphql_meta(request: Any) -> dict[str, Any]:
+    """Parse Meta GraphQL request metadata without exposing auth fields."""
+    method = ""
+    url = ""
+    raw = ""
+    body_decodable = True
+
+    try:
+        method = _clean(getattr(request, "method", "")).upper()
+        url = _clean(getattr(request, "url", ""))
+        raw_buffer = getattr(request, "post_data_buffer", None)
+        if raw_buffer:
+            if isinstance(raw_buffer, bytes):
+                raw = raw_buffer.decode("utf-8")
+            else:
+                raw = str(raw_buffer)
+        else:
+            raw = str(getattr(request, "post_data", "") or "")
+    except (UnicodeDecodeError, UnicodeError):
+        body_decodable = False
+        try:
+            raw = str(getattr(request, "post_data", "") or "")
+        except Exception:
+            raw = ""
+    except Exception:
+        body_decodable = False
+        try:
+            raw = str(getattr(request, "post_data", "") or "")
+        except Exception:
+            raw = ""
+
+    parsed = parse_qs(raw, keep_blank_values=True) if raw else {}
+    friendly = _clean(
+        (parsed.get("fb_api_req_friendly_name") or [""])[0]
+    )
+    if not friendly:
+        try:
+            headers = getattr(request, "headers", {}) or {}
+            friendly = _clean(
+                headers.get("x-fb-friendly-name")
+                or headers.get("X-FB-Friendly-Name")
+            )
+        except Exception:
+            friendly = ""
+    doc_id = _clean((parsed.get("doc_id") or [""])[0])
+
+    variables: dict[str, Any] = {}
+    variables_raw = _clean((parsed.get("variables") or [""])[0])
+    if variables_raw:
+        try:
+            decoded_variables = json.loads(variables_raw)
+            if isinstance(decoded_variables, dict):
+                variables = decoded_variables
+        except (ValueError, json.JSONDecodeError):
+            variables = {}
+
+    raw_input = variables.get("input")
+    input_data = raw_input if isinstance(raw_input, dict) else {}
+
+    return {
+        "method": method,
+        "url": url,
+        "friendly_name": friendly,
+        "doc_id": doc_id,
+        "variables": variables,
+        "input": input_data,
+        "decoded_raw": unquote_plus(raw) if raw else "",
+        "body_decodable": body_decodable,
+    }
+
+
 def _proxy_config(raw_proxy: str | None) -> dict[str, str] | None:
     raw = _clean(raw_proxy)
     if not raw:
@@ -110,10 +182,211 @@ def _decode_graphql_text(raw: str) -> Any:
         body = body[len("for (;;);"):].lstrip()
     if not body:
         return None
+
     try:
         return json.loads(body)
     except (json.JSONDecodeError, ValueError):
-        return None
+        pass
+
+    # Facebook/Relay may stream several JSON payloads as newline-delimited
+    # chunks. Keep all successfully decoded chunks: downstream ID/error
+    # walkers already recurse through lists.
+    chunks: list[Any] = []
+    for raw_line in body.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith("for (;;);"):
+            line = line[len("for (;;);"):].lstrip()
+        if not line:
+            continue
+        try:
+            chunks.append(json.loads(line))
+        except (json.JSONDecodeError, ValueError):
+            continue
+
+    if len(chunks) == 1:
+        return chunks[0]
+    if chunks:
+        return chunks
+    return None
+
+
+def _graphql_error_details(payload: Any) -> list[dict[str, Any]]:
+    """Extract compact, non-secret GraphQL error details from Meta responses."""
+    output: list[dict[str, Any]] = []
+
+    def add_error(value: Any) -> None:
+        if not isinstance(value, dict):
+            return
+
+        message = _clean(
+            value.get("message")
+            or value.get("errorDescription")
+            or value.get("error_description")
+            or value.get("description")
+            or value.get("error_user_msg")
+        )
+
+        extensions = value.get("extensions")
+        if not isinstance(extensions, dict):
+            extensions = {}
+
+        code = _clean(
+            value.get("code")
+            or value.get("error")
+            or extensions.get("code")
+            or extensions.get("error_code")
+        )
+        subcode = _clean(
+            value.get("error_subcode")
+            or value.get("subcode")
+            or extensions.get("error_subcode")
+        )
+        error_type = _clean(
+            value.get("type")
+            or extensions.get("type")
+            or extensions.get("classification")
+        )
+
+        if not message and not code and not subcode:
+            return
+
+        row = {
+            "message": message[:1000],
+            "code": code[:120],
+            "subcode": subcode[:120],
+            "type": error_type[:120],
+        }
+        if row not in output:
+            output.append(row)
+
+    if isinstance(payload, dict):
+        errors = payload.get("errors")
+        if isinstance(errors, list):
+            for item in errors[:20]:
+                add_error(item)
+
+        raw_error = payload.get("error")
+        if isinstance(raw_error, dict):
+            add_error(raw_error)
+        elif raw_error is not None:
+            add_error(
+                {
+                    "error": raw_error,
+                    "message": (
+                        payload.get("errorDescription")
+                        or payload.get("error_summary")
+                        or payload.get("errorSummary")
+                    ),
+                }
+            )
+
+        if any(
+            key in payload
+            for key in (
+                "errorDescription",
+                "error_description",
+                "errorSummary",
+                "error_summary",
+                "error_user_msg",
+            )
+        ):
+            add_error(payload)
+
+    elif isinstance(payload, list):
+        for item in payload[:20]:
+            for row in _graphql_error_details(item):
+                if row not in output:
+                    output.append(row)
+
+    return output[:10]
+
+
+def _meta_error_retryable(errors: list[dict[str, Any]]) -> bool:
+    text = " ".join(
+        " ".join(
+            _clean(row.get(key))
+            for key in ("message", "code", "subcode", "type")
+        )
+        for row in errors
+        if isinstance(row, dict)
+    ).casefold()
+
+    non_retryable = (
+        "permission",
+        "not allowed",
+        "not eligible",
+        "restricted",
+        "restriction",
+        "checkpoint",
+        "confirm your",
+        "verify your",
+        "business limit",
+        "maximum",
+        "too many business",
+        "temporarily blocked",
+        "misusing this feature",
+    )
+    if any(marker in text for marker in non_retryable):
+        return False
+
+    retryable = (
+        "rate limit",
+        "try again",
+        "temporarily unavailable",
+        "server error",
+        "timeout",
+        "timed out",
+        "please retry",
+    )
+    return any(marker in text for marker in retryable)
+
+
+def _extract_created_business_id(payload: Any) -> tuple[str, str]:
+    """Extract only IDs from known Meta Business CREATE response shapes."""
+    known_paths = (
+        ("data", "business_create", "business", "id"),
+        ("data", "business_create", "id"),
+        ("data", "bizkit_create_business", "business", "id"),
+        ("data", "bizkit_create_business", "id"),
+        ("data", "business_manager_create", "business", "id"),
+        ("data", "business_manager_create", "id"),
+    )
+
+    chunks = payload if isinstance(payload, list) else [payload]
+    found: list[tuple[str, str]] = []
+
+    for chunk in chunks:
+        if not isinstance(chunk, dict):
+            continue
+        for path in known_paths:
+            current: Any = chunk
+            valid = True
+            for key in path:
+                if not isinstance(current, dict) or key not in current:
+                    valid = False
+                    break
+                current = current[key]
+            if not valid:
+                continue
+            candidate = _digits(current)
+            if candidate:
+                row = (candidate, ".".join(path))
+                if row not in found:
+                    found.append(row)
+
+    unique_ids = sorted({business_id for business_id, _ in found})
+    if len(unique_ids) != 1:
+        return "", ""
+
+    business_id = unique_ids[0]
+    response_path = next(
+        path
+        for candidate, path in found
+        if candidate == business_id
+    )
+    return business_id, response_path
 
 
 def _walk_business_ids(value: Any, path: str = "") -> list[tuple[str, str]]:
@@ -1616,68 +1889,116 @@ class FacebookBusinessBrowser:
         # Meta does not switch the current portfolio after creation.
         selector_opened = False
         try:
-            selector_opened = bool(
-                await self.page.evaluate(
-                    """() => {
-                        const visible = (el) => {
-                            const r = el.getBoundingClientRect();
-                            const s = getComputedStyle(el);
-                            return r.width > 0 && r.height > 0
-                                && s.display !== 'none'
-                                && s.visibility !== 'hidden'
-                                && s.pointerEvents !== 'none';
-                        };
-                        const label = (el) => [
-                            el.getAttribute('aria-label') || '',
-                            el.getAttribute('title') || '',
-                            el.innerText || el.textContent || ''
-                        ].join(' ').replace(/\\s+/g, ' ').trim();
+            selector_probe = await self.page.evaluate(
+                """() => {
+                    const visible = (el) => {
+                        if (!el || el === document.body || el === document.documentElement) {
+                            return false;
+                        }
+                        const r = el.getBoundingClientRect();
+                        const s = getComputedStyle(el);
+                        return r.width > 0 && r.height > 0
+                            && s.display !== 'none'
+                            && s.visibility !== 'hidden'
+                            && s.pointerEvents !== 'none';
+                    };
+                    const label = (el) => [
+                        (el.getAttribute && el.getAttribute('aria-label')) || '',
+                        (el.getAttribute && el.getAttribute('title')) || '',
+                        el.innerText || el.textContent || ''
+                    ].join(' ').replace(/\\s+/g, ' ').trim();
 
-                        const all = Array.from(document.querySelectorAll('*'));
-                        const home = all
-                            .filter(visible)
-                            .map(el => ({el, r:el.getBoundingClientRect(), text:label(el)}))
-                            .filter(row =>
-                                row.r.x < 230 &&
-                                row.r.y > 120 &&
-                                row.r.y < 260 &&
-                                /^(Home|Startseite|Start|Главная|Головна)$/i.test(row.text)
-                            )
-                            .sort((a,b) => a.r.y - b.r.y)[0];
-                        const homeY = home ? home.r.y : 205;
+                    const xs = [20, 52, 88, 124, 160, 196, 228];
+                    const ys = [
+                        58, 72, 86, 100, 114, 128, 142, 156,
+                        170, 184, 198, 212, 226, 240, 254, 268
+                    ];
+                    const seen = new Set();
+                    const rows = [];
 
-                        const rows = all
-                            .filter(visible)
-                            .map(el => ({
-                                el,
-                                r:el.getBoundingClientRect(),
-                                text:label(el),
-                                role:el.getAttribute('role') || '',
-                                tabindex:el.getAttribute('tabindex') || '',
-                                tag:el.tagName
+                    for (const y of ys) {
+                        for (const x of xs) {
+                            const stack = document.elementsFromPoint(x, y) || [];
+                            for (const el of stack.slice(0, 10)) {
+                                if (seen.has(el) || !visible(el)) continue;
+                                seen.add(el);
+                                const r = el.getBoundingClientRect();
+                                const text = label(el);
+                                const role = (el.getAttribute && el.getAttribute('role')) || '';
+                                const tabindex = (el.getAttribute && el.getAttribute('tabindex')) || '';
+                                const tag = el.tagName || '';
+
+                                if (r.x > 300 || r.y < 48 || r.y > 285) continue;
+                                if (r.width < 70 || r.width > 300) continue;
+                                if (r.height < 22 || r.height > 100) continue;
+                                if (!text) continue;
+
+                                rows.push({el, r, text, role, tabindex, tag});
+                            }
+                        }
+                    }
+
+                    const homeRows = rows.filter(row =>
+                        /^(Home|Startseite|Start|Главная|Головна)$/i.test(row.text)
+                    );
+                    const homeY = homeRows.length
+                        ? Math.min(...homeRows.map(row => row.r.y))
+                        : 285;
+
+                    const candidates = rows.filter(row =>
+                        row.r.y < homeY - 2
+                        && !/^Meta Business Suite$/i.test(row.text)
+                        && !/^(Home|Startseite|Start|Главная|Головна)$/i.test(row.text)
+                        && !/^(Create|Создать|Створити|Erstellen)$/i.test(row.text)
+                    );
+
+                    candidates.sort((a,b) => {
+                        const ai = (
+                            a.role === 'button' ||
+                            a.tag === 'BUTTON' ||
+                            a.tabindex === '0'
+                        ) ? 1 : 0;
+                        const bi = (
+                            b.role === 'button' ||
+                            b.tag === 'BUTTON' ||
+                            b.tabindex === '0'
+                        ) ? 1 : 0;
+                        if (ai !== bi) return bi - ai;
+                        // Portfolio selector normally sits directly above Home.
+                        if (a.r.y !== b.r.y) return b.r.y - a.r.y;
+                        return (b.r.width * b.r.height) - (a.r.width * a.r.height);
+                    });
+
+                    const best = candidates[0];
+                    if (!best) {
+                        return {
+                            clicked:false,
+                            candidates:candidates.slice(0,12).map(row => ({
+                                text:row.text,
+                                x:Math.round(row.r.x),
+                                y:Math.round(row.r.y),
+                                w:Math.round(row.r.width),
+                                h:Math.round(row.r.height)
                             }))
-                            .filter(row => {
-                                const r=row.r;
-                                return r.x <= 220 && r.y >= 118 && r.y < homeY - 2
-                                    && r.width >= 90 && r.width <= 225
-                                    && r.height >= 28 && r.height <= 85
-                                    && row.text
-                                    && !/^Meta Business Suite$/i.test(row.text)
-                                    && !/^(Home|Startseite|Start|Главная|Головна)$/i.test(row.text);
-                            });
+                        };
+                    }
 
-                        rows.sort((a,b) => {
-                            const aa=a.r.width*a.r.height;
-                            const ba=b.r.width*b.r.height;
-                            const ap=a.role==='button'||a.tag==='BUTTON'||a.tabindex==='0' ? -100000 : 0;
-                            const bp=b.role==='button'||b.tag==='BUTTON'||b.tabindex==='0' ? -100000 : 0;
-                            return (ap+aa)-(bp+ba) || b.r.y-a.r.y;
-                        });
-                        if (!rows[0]) return false;
-                        rows[0].el.click();
-                        return true;
-                    }"""
-                )
+                    best.el.click();
+                    return {
+                        clicked:true,
+                        clickedCandidate:{
+                            text:best.text,
+                            x:Math.round(best.r.x),
+                            y:Math.round(best.r.y),
+                            w:Math.round(best.r.width),
+                            h:Math.round(best.r.height)
+                        }
+                    };
+                }"""
+            )
+            selector_opened = bool(
+                isinstance(selector_probe, dict)
+                and selector_probe.get("clicked")
             )
             if selector_opened:
                 await self.page.wait_for_timeout(550)
@@ -2021,31 +2342,53 @@ class FacebookBusinessBrowser:
 
     @staticmethod
     def _request_matches_create(request: Any, business_name: str) -> bool:
-        try:
-            if request.method.upper() != "POST":
-                return False
-            if "graphql" not in str(request.url or "").lower():
-                return False
-            post_data = str(request.post_data or "")
-        except Exception:
+        meta = _request_graphql_meta(request)
+        if meta["method"] != "POST":
+            return False
+        if "graphql" not in str(meta["url"]).lower():
             return False
 
-        decoded = unquote_plus(post_data)
-        lower = decoded.lower()
-        expected = business_name.lower()
-        return (
-            expected in lower
-            and any(
-                marker in lower
-                for marker in (
-                    "businesscreation",
-                    "createbusiness",
-                    "create_business",
-                    "business_creation",
-                    "portfolio",
-                )
-            )
+        expected = _clean(business_name).casefold()
+        if not expected:
+            return False
+
+        friendly = _clean(meta["friendly_name"]).casefold()
+        decoded = _clean(meta["decoded_raw"]).casefold()
+        input_data = meta["input"] if isinstance(meta["input"], dict) else {}
+
+        operation_markers = (
+            "businesscreation",
+            "businesscreate",
+            "createbusiness",
+            "create_business",
+            "business_creation",
         )
+        operation_match = any(
+            marker in friendly or marker in decoded
+            for marker in operation_markers
+        )
+
+        candidate_names = []
+        for key in (
+            "business_name",
+            "businessName",
+            "name",
+            "portfolio_name",
+            "portfolioName",
+        ):
+            value = input_data.get(key)
+            if isinstance(value, str) and value.strip():
+                candidate_names.append(value.strip().casefold())
+
+        name_match = (
+            expected in candidate_names
+            or expected in decoded
+        )
+
+        # The live canary has repeatedly observed
+        # useBusinessCreationMutationMutation with input.business_name.
+        # Prefer that structured evidence over fragile raw substring scanning.
+        return operation_match and name_match
 
     @staticmethod
     def _response_matches_create(response: Any, business_name: str) -> bool:
@@ -2062,7 +2405,7 @@ class FacebookBusinessBrowser:
         business_name: str,
         *,
         before_submit: CheckpointCallback | None = None,
-    ) -> tuple[str, str]:
+    ) -> tuple[str, str, str]:
         if self.page is None:
             raise BrowserBusinessError(
                 "BROWSER_NOT_OPEN",
@@ -2087,6 +2430,8 @@ class FacebookBusinessBrowser:
                     await before_submit(
                         {
                             "phase": "CREATE_SUBMITTED",
+                            "activity": "CREATE_SUBMITTED",
+                            "activity_at": int(time.time()),
                             "submitted_at": int(time.time()),
                             "network_gate": "before_meta_send",
                         }
@@ -2120,6 +2465,8 @@ class FacebookBusinessBrowser:
                 await before_submit(
                     {
                         "phase": "CREATE_CLICK_INTENT",
+                        "activity": "CREATE_CLICK_INTENT",
+                        "activity_at": int(time.time()),
                         "click_intent_at": int(time.time()),
                     }
                 )
@@ -2153,6 +2500,8 @@ class FacebookBusinessBrowser:
                         await before_submit(
                             {
                                 "phase": "CREATE_NOT_SUBMITTED",
+                                "activity": "CREATE_NOT_SUBMITTED",
+                                "activity_at": int(time.time()),
                                 "not_submitted_at": int(time.time()),
                             }
                         )
@@ -2185,21 +2534,58 @@ class FacebookBusinessBrowser:
             payload = _decode_graphql_text(raw)
 
             business_id = ""
+            response_path = ""
             if payload is not None:
-                ids = _walk_business_ids(payload)
-                if ids:
-                    business_id = ids[0][0]
+                business_id, response_path = _extract_created_business_id(payload)
 
             friendly = ""
             try:
-                friendly = _clean(
-                    response.request.headers.get("x-fb-friendly-name")
-                    or response.request.headers.get("X-FB-Friendly-Name")
-                )
+                request_meta = _request_graphql_meta(response.request)
+                friendly = _clean(request_meta.get("friendly_name"))
             except Exception:
                 friendly = ""
 
-            return business_id, friendly
+            meta_errors = _graphql_error_details(payload)
+            if not business_id and meta_errors:
+                retryable = _meta_error_retryable(meta_errors)
+                if before_submit is not None:
+                    await before_submit(
+                        {
+                            "phase": "CREATE_REJECTED",
+                            "activity": "CREATE_REJECTED",
+                            "activity_at": int(time.time()),
+                            "meta_errors": meta_errors,
+                            "response_friendly_name": friendly,
+                        }
+                    )
+
+                parts = []
+                for row in meta_errors[:3]:
+                    code = _clean(row.get("code"))
+                    subcode = _clean(row.get("subcode"))
+                    message = _clean(row.get("message"))
+                    prefix = "/".join(value for value in (code, subcode) if value)
+                    if prefix and message:
+                        parts.append(f"{prefix}: {message}")
+                    elif message:
+                        parts.append(message)
+                    elif prefix:
+                        parts.append(prefix)
+
+                error_message = " · ".join(parts) or "Meta rejected Business creation."
+                raise BrowserBusinessError(
+                    "META_CREATE_REJECTED",
+                    error_message[:2500],
+                    retryable=retryable,
+                    diagnostic={
+                        "meta_errors": meta_errors,
+                        "request": self._safe_graphql_request_summary(
+                            response.request
+                        ),
+                    },
+                )
+
+            return business_id, friendly, response_path
 
         except BrowserBusinessError:
             raise
@@ -2207,7 +2593,7 @@ class FacebookBusinessBrowser:
             # If CREATE was actually sent, the network gate has already
             # persisted CREATE_SUBMITTED. A missing response is reconciled from
             # the Business portfolio inventory and is never blindly retried.
-            return "", ""
+            return "", "", ""
         finally:
             if not gate_future.done():
                 gate_future.cancel()
@@ -2312,14 +2698,6 @@ class FacebookBusinessBrowser:
         if before_map is None:
             before_map = await self.snapshot_businesses()
 
-        await self._prepare_create_form(
-            business_name=name,
-            user_email=email,
-            user_first_name=_clean(user_first_name),
-            user_last_name=_clean(user_last_name),
-            profile_display_name=_clean(profile_display_name),
-        )
-
         async def create_checkpoint(patch: dict[str, Any]) -> None:
             if before_submit is None:
                 return
@@ -2331,26 +2709,77 @@ class FacebookBusinessBrowser:
                 }
             )
 
-        response_business_id, friendly = await self._submit_create_and_observe(
-            name,
-            before_submit=create_checkpoint,
+        await create_checkpoint(
+            {
+                "activity": "CREATE_FORM_OPENING",
+                "activity_at": int(time.time()),
+            }
         )
-        await self.page.wait_for_timeout(1800)
 
-        # Always verify through current UI state, even if GraphQL response
-        # exposed an ID.
-        after_map = await self.snapshot_businesses()
-        after_ids = set(after_map)
+        await self._prepare_create_form(
+            business_name=name,
+            user_email=email,
+            user_first_name=_clean(user_first_name),
+            user_last_name=_clean(user_last_name),
+            profile_display_name=_clean(profile_display_name),
+        )
+
+        await create_checkpoint(
+            {
+                "activity": "CREATE_FORM_READY",
+                "activity_at": int(time.time()),
+            }
+        )
+
+        response_business_id, friendly, response_path = (
+            await self._submit_create_and_observe(
+                name,
+                before_submit=create_checkpoint,
+            )
+        )
+
+        await create_checkpoint(
+            {
+                "activity": (
+                    "CREATE_RESPONSE_OBSERVED"
+                    if response_business_id
+                    else "CREATE_RESPONSE_UNCONFIRMED"
+                ),
+                "activity_at": int(time.time()),
+                "create_response_business_id": response_business_id,
+                "create_response_friendly_name": friendly,
+                "create_response_path": response_path,
+            }
+        )
+
         before_ids = set(before_map)
 
-        if response_business_id and response_business_id in after_ids:
+        # The response belongs to the exact CREATE mutation that passed the
+        # network gate. A numeric ID from a known CREATE response path is
+        # authoritative Meta evidence; Business Suite inventory can lag behind
+        # the mutation response and must not turn a success into a timeout.
+        if response_business_id and response_path:
             return BrowserCreateResult(
                 business_id=response_business_id,
                 before_ids=sorted(before_ids),
-                after_ids=sorted(after_ids),
+                after_ids=sorted(before_ids | {response_business_id}),
                 response_business_id=response_business_id,
                 response_friendly_name=friendly,
+                response_path=response_path,
             )
+
+        await self.page.wait_for_timeout(1800)
+
+        # If the response was missing or unparseable, fall back to UI
+        # reconciliation before declaring the result unknown.
+        await create_checkpoint(
+            {
+                "activity": "VERIFY_CREATE_INVENTORY",
+                "activity_at": int(time.time()),
+            }
+        )
+        after_map = await self.snapshot_businesses()
+        after_ids = set(after_map)
 
         created = sorted(after_ids - before_ids)
         if len(created) == 1:
@@ -2360,8 +2789,15 @@ class FacebookBusinessBrowser:
                 after_ids=sorted(after_ids),
                 response_business_id=response_business_id,
                 response_friendly_name=friendly,
+                response_path=response_path,
             )
 
+        await create_checkpoint(
+            {
+                "activity": "RECONCILE_CREATE",
+                "activity_at": int(time.time()),
+            }
+        )
         return await self.reconcile_created_business(
             before_ids=sorted(before_ids),
             business_name=name,
@@ -2392,22 +2828,12 @@ class FacebookBusinessBrowser:
     @staticmethod
     def _safe_graphql_request_summary(request: Any) -> dict[str, Any]:
         """Return non-secret request metadata for diagnostics/canaries."""
-        try:
-            raw = _clean(getattr(request, "post_data", ""))
-            parsed = parse_qs(raw, keep_blank_values=True)
-        except Exception:
-            return {}
-
-        variables: dict[str, Any] = {}
-        raw_variables = _clean((parsed.get("variables") or [""])[0])
-        if raw_variables:
-            try:
-                decoded = json.loads(raw_variables)
-                if isinstance(decoded, dict):
-                    variables = decoded
-            except (ValueError, json.JSONDecodeError):
-                variables = {}
-
+        meta = _request_graphql_meta(request)
+        variables = (
+            meta["variables"]
+            if isinstance(meta.get("variables"), dict)
+            else {}
+        )
         raw_input = variables.get("input")
         input_keys = (
             sorted(str(key) for key in raw_input)
@@ -2415,14 +2841,13 @@ class FacebookBusinessBrowser:
             else []
         )
         return {
-            "url": _clean(getattr(request, "url", "")),
-            "method": _clean(getattr(request, "method", "")),
-            "friendly_name": _clean(
-                (parsed.get("fb_api_req_friendly_name") or [""])[0]
-            ),
-            "doc_id": _clean((parsed.get("doc_id") or [""])[0]),
+            "url": _clean(meta.get("url")),
+            "method": _clean(meta.get("method")),
+            "friendly_name": _clean(meta.get("friendly_name")),
+            "doc_id": _clean(meta.get("doc_id")),
             "variable_keys": sorted(str(key) for key in variables),
             "input_keys": input_keys,
+            "body_decodable": bool(meta.get("body_decodable")),
         }
 
     @staticmethod
@@ -2432,30 +2857,64 @@ class FacebookBusinessBrowser:
         business_id: str,
         page_id: str,
     ) -> bool:
-        try:
-            if request.method.upper() != "POST":
-                return False
-            if "graphql" not in str(request.url or "").lower():
-                return False
-            decoded = unquote_plus(str(request.post_data or ""))
-        except Exception:
+        meta = _request_graphql_meta(request)
+        if meta["method"] != "POST":
+            return False
+        if "graphql" not in str(meta["url"]).lower():
             return False
 
-        lower = decoded.lower()
-        return (
-            business_id in decoded
-            and page_id in decoded
-            and "mutation" in lower
+        business = _digits(business_id)
+        page = _digits(page_id)
+        if not business or not page:
+            return False
+
+        friendly = _clean(meta["friendly_name"]).casefold()
+        decoded = _clean(meta["decoded_raw"])
+        variables = (
+            meta["variables"]
+            if isinstance(meta.get("variables"), dict)
+            else {}
+        )
+
+        try:
+            variables_text = json.dumps(
+                variables,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            )
+        except Exception:
+            variables_text = ""
+
+        evidence = decoded + "\n" + variables_text
+        ids_match = business in evidence and page in evidence
+
+        operation_match = (
+            "mutation" in friendly
             and any(
-                marker in lower
+                marker in friendly
                 for marker in (
-                    "page",
+                    "addpage",
+                    "pageadd",
+                    "claimpage",
+                    "pageclaim",
+                    "businesspage",
                     "asset",
-                    "claim",
-                    "business",
+                )
+            )
+        ) or (
+            "mutation" in decoded.casefold()
+            and any(
+                marker in decoded.casefold()
+                for marker in (
+                    "addpage",
+                    "pageadd",
+                    "claimpage",
+                    "pageclaim",
                 )
             )
         )
+
+        return ids_match and operation_match
 
     @staticmethod
     def _response_matches_page_add(
@@ -2761,6 +3220,8 @@ class FacebookBusinessBrowser:
                     await before_submit(
                         {
                             "phase": "PAGE_ADD_SUBMITTED",
+                            "activity": "PAGE_ADD_SUBMITTED",
+                            "activity_at": int(time.time()),
                             "business_id": business,
                             "primary_page_id": page,
                             "page_submitted_at": int(time.time()),
@@ -2841,6 +3302,8 @@ class FacebookBusinessBrowser:
                 await before_submit(
                     {
                         "phase": "PAGE_ADD_CLICK_INTENT",
+                        "activity": "PAGE_ADD_CLICK_INTENT",
+                        "activity_at": int(time.time()),
                         "business_id": business,
                         "primary_page_id": page,
                         "page_click_intent_at": int(time.time()),

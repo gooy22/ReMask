@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from typing import Any
 
 from ..facebook_business_browser import BrowserBusinessError
@@ -134,7 +135,6 @@ async def business_handler(
     display_name = _clean(
         params.get("profile_display_name")
         or getattr(context, "display_name", "")
-        or profile_id
     )
 
     step_state = kwargs.get("step_state")
@@ -175,6 +175,23 @@ async def business_handler(
     business_id = _clean(checkpoint.get("business_id"))
     recovered = False
 
+    checkpoint_response_id = _clean(
+        checkpoint.get("create_response_business_id")
+        or checkpoint.get("response_business_id")
+    )
+    checkpoint_response_path = _clean(
+        checkpoint.get("create_response_path")
+        or checkpoint.get("response_path")
+    )
+    exact_response_paths = {
+        "data.business_create.business.id",
+        "data.business_create.id",
+        "data.bizkit_create_business.business.id",
+        "data.bizkit_create_business.id",
+        "data.business_manager_create.business.id",
+        "data.business_manager_create.id",
+    }
+
     # The network gate aborts the Meta request if the atomic SUBMITTED
     # checkpoint cannot be persisted. In that specific case we know the
     # irreversible request did NOT reach Meta, so retry may safely submit
@@ -194,6 +211,36 @@ async def business_handler(
 
     try:
         browser = await session.facebook_business_browser()
+
+        # If Meta already returned an exact CREATE response ID before a worker
+        # restart/cancellation, that response is authoritative. Resume at Page
+        # attach instead of falling back to inventory reconciliation.
+        if (
+            not business_id.isdigit()
+            and checkpoint_response_id.isdigit()
+            and checkpoint_response_path in exact_response_paths
+        ):
+            business_id = checkpoint_response_id
+            phase = "CREATE_CONFIRMED"
+            recovered = True
+            checkpoint = await provisioning_state.checkpoint(
+                item_id,
+                profile_id,
+                scope_key,
+                ProvisioningStep.BUSINESS,
+                {
+                    "phase": "CREATE_CONFIRMED",
+                    "resume_from": "PAGE_ADD",
+                    "business_id": business_id,
+                    "business_name": bm_name,
+                    "primary_page_id": page_id,
+                    "create_response_business_id": checkpoint_response_id,
+                    "create_response_path": checkpoint_response_path,
+                    "recovered_from_exact_create_response": True,
+                    "activity": "VERIFY_PAGE",
+                    "activity_at": int(time.time()),
+                },
+            )
 
         # Legacy checkpoints produced by the previous GraphQL flow already
         # contain a created business_id. They are safe to resume at Page attach.
@@ -235,6 +282,16 @@ async def business_handler(
                 item_id,
                 phase,
             )
+            checkpoint = await provisioning_state.checkpoint(
+                item_id,
+                profile_id,
+                scope_key,
+                ProvisioningStep.BUSINESS,
+                {
+                    "activity": "RECONCILE_CREATE",
+                    "activity_at": int(time.time()),
+                },
+            )
             recovered_result = await browser.reconcile_created_business(
                 before_ids=before_ids,
                 business_name=bm_name,
@@ -257,6 +314,16 @@ async def business_handler(
             )
 
         else:
+            await provisioning_state.checkpoint(
+                item_id,
+                profile_id,
+                scope_key,
+                ProvisioningStep.BUSINESS,
+                {
+                    "activity": "SNAPSHOT_BUSINESSES",
+                    "activity_at": int(time.time()),
+                },
+            )
             before_map = await browser.snapshot_businesses()
             checkpoint = await provisioning_state.checkpoint(
                 item_id,
@@ -320,9 +387,12 @@ async def business_handler(
                     "create_response_friendly_name": (
                         create_result.response_friendly_name
                     ),
+                    "create_response_path": create_result.response_path,
                     "recovered_after_create_uncertainty": bool(
                         create_result.recovered
                     ),
+                    "activity": "VERIFY_PAGE",
+                    "activity_at": int(time.time()),
                 },
             )
 
@@ -353,6 +423,16 @@ async def business_handler(
         # anything else. We do not blindly click Add again.
         phase = _clean(checkpoint.get("phase")).upper()
         if phase in {"PAGE_ADD_SUBMITTED", "PAGE_ADD_CLICK_INTENT"}:
+            checkpoint = await provisioning_state.checkpoint(
+                item_id,
+                profile_id,
+                scope_key,
+                ProvisioningStep.BUSINESS,
+                {
+                    "activity": "VERIFY_PAGE_AFTER_SUBMIT",
+                    "activity_at": int(time.time()),
+                },
+            )
             if await browser.verify_page_attached(
                 business_id=business_id,
                 page_id=page_id,
@@ -381,6 +461,16 @@ async def business_handler(
                 )
 
         if _clean(checkpoint.get("phase")).upper() != "PAGE_CONFIRMED":
+            checkpoint = await provisioning_state.checkpoint(
+                item_id,
+                profile_id,
+                scope_key,
+                ProvisioningStep.BUSINESS,
+                {
+                    "activity": "VERIFY_PAGE",
+                    "activity_at": int(time.time()),
+                },
+            )
             if await browser.verify_page_attached(
                 business_id=business_id,
                 page_id=page_id,
@@ -397,6 +487,17 @@ async def business_handler(
                     },
                 )
             else:
+                checkpoint = await provisioning_state.checkpoint(
+                    item_id,
+                    profile_id,
+                    scope_key,
+                    ProvisioningStep.BUSINESS,
+                    {
+                        "activity": "PAGE_ATTACH_OPENING",
+                        "activity_at": int(time.time()),
+                    },
+                )
+
                 async def before_page_submit(patch: dict[str, Any]) -> None:
                     await provisioning_state.checkpoint(
                         item_id,
@@ -431,6 +532,8 @@ async def business_handler(
                         "page_already_attached": bool(
                             page_result.already_attached
                         ),
+                        "activity": "DONE",
+                        "activity_at": int(time.time()),
                     },
                 )
 
@@ -519,6 +622,9 @@ async def business_handler(
             ),
             "friendly_name": _clean(
                 checkpoint.get("create_response_friendly_name")
+            ),
+            "response_path": _clean(
+                checkpoint.get("create_response_path")
             ),
             "recovered": bool(
                 checkpoint.get("recovered_after_create_uncertainty")

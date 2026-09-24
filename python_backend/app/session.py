@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from dataclasses import dataclass
 from typing import Any
 
@@ -149,7 +150,14 @@ class ProfileResolver:
             proxy=proxy,
             user_agent=user_agent,
             access_token=str(payload.get("access_token") or "").strip(),
-            display_name=str(payload.get("display_name") or profile_id).strip(),
+            display_name=(
+                ""
+                if (
+                    str(payload.get("display_name") or "").strip() == profile_id
+                    or str(payload.get("display_name") or "").strip().isdigit()
+                )
+                else str(payload.get("display_name") or "").strip()
+            ),
             email=str(payload.get("email") or "").strip(),
             first_name=str(payload.get("first_name") or "").strip(),
             last_name=str(payload.get("last_name") or "").strip(),
@@ -256,9 +264,23 @@ class MetaSession:
             if current is None:
                 from .facebook_business_browser import FacebookBusinessBrowser
 
+                try:
+                    browser_timeout = int(
+                        os.getenv("REMASK_BM_BROWSER_TIMEOUT_SECONDS", "45")
+                    )
+                except (TypeError, ValueError):
+                    browser_timeout = 45
+                browser_timeout = max(
+                    20,
+                    min(
+                        browser_timeout,
+                        90,
+                    ),
+                )
+
                 current = FacebookBusinessBrowser(
                     self.context,
-                    timeout_seconds=max(20, int(self.timeout.total or 20)),
+                    timeout_seconds=browser_timeout,
                 )
                 await current.open()
                 self._business_browser = current
