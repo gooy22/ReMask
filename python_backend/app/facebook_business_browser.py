@@ -2390,14 +2390,6 @@ class FacebookBusinessBrowser:
         if before_map is None:
             before_map = await self.snapshot_businesses()
 
-        await self._prepare_create_form(
-            business_name=name,
-            user_email=email,
-            user_first_name=_clean(user_first_name),
-            user_last_name=_clean(user_last_name),
-            profile_display_name=_clean(profile_display_name),
-        )
-
         async def create_checkpoint(patch: dict[str, Any]) -> None:
             if before_submit is None:
                 return
@@ -2409,14 +2401,56 @@ class FacebookBusinessBrowser:
                 }
             )
 
+        await create_checkpoint(
+            {
+                "activity": "CREATE_FORM_OPENING",
+                "activity_at": int(time.time()),
+            }
+        )
+
+        await self._prepare_create_form(
+            business_name=name,
+            user_email=email,
+            user_first_name=_clean(user_first_name),
+            user_last_name=_clean(user_last_name),
+            profile_display_name=_clean(profile_display_name),
+        )
+
+        await create_checkpoint(
+            {
+                "activity": "CREATE_FORM_READY",
+                "activity_at": int(time.time()),
+            }
+        )
+
         response_business_id, friendly = await self._submit_create_and_observe(
             name,
             before_submit=create_checkpoint,
         )
+
+        await create_checkpoint(
+            {
+                "activity": (
+                    "CREATE_RESPONSE_OBSERVED"
+                    if response_business_id
+                    else "CREATE_RESPONSE_UNCONFIRMED"
+                ),
+                "activity_at": int(time.time()),
+                "response_business_id": response_business_id,
+                "response_friendly_name": friendly,
+            }
+        )
+
         await self.page.wait_for_timeout(1800)
 
         # Always verify through current UI state, even if GraphQL response
         # exposed an ID.
+        await create_checkpoint(
+            {
+                "activity": "VERIFY_CREATE_INVENTORY",
+                "activity_at": int(time.time()),
+            }
+        )
         after_map = await self.snapshot_businesses()
         after_ids = set(after_map)
         before_ids = set(before_map)
@@ -2440,6 +2474,12 @@ class FacebookBusinessBrowser:
                 response_friendly_name=friendly,
             )
 
+        await create_checkpoint(
+            {
+                "activity": "RECONCILE_CREATE",
+                "activity_at": int(time.time()),
+            }
+        )
         return await self.reconcile_created_business(
             before_ids=sorted(before_ids),
             business_name=name,
