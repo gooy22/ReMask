@@ -232,6 +232,22 @@ class MetaCreateErrorTests(unittest.TestCase):
         self.assertIn("maximum", errors[0]["message"].lower())
         self.assertFalse(_meta_error_retryable(errors))
 
+    def test_extracts_summary_only_meta_error(self):
+        errors = _graphql_error_details(
+            {
+                "errors": [
+                    {
+                        "summary": "You have reached the maximum number of business portfolios.",
+                        "code": 200,
+                    }
+                ]
+            }
+        )
+        self.assertEqual(len(errors), 1)
+        self.assertIn("maximum", errors[0]["message"].lower())
+        self.assertEqual(errors[0]["code"], "200")
+        self.assertFalse(_meta_error_retryable(errors))
+
     def test_transient_meta_error_is_retryable(self):
         errors = _graphql_error_details(
             {
