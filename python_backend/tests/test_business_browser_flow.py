@@ -416,6 +416,40 @@ class BrowserCreateEntryRoutingTests(unittest.IsolatedAsyncioTestCase):
         )
 
 
+class BrowserCreateFormTimeoutTests(unittest.IsolatedAsyncioTestCase):
+    async def test_prepare_create_form_has_own_timeout(self):
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-create-form-timeout")
+        )
+        browser.page = SimpleNamespace(url=browser.HOME_URL)
+        browser._open_create_entry = AsyncMock()
+        browser._diagnostic = AsyncMock(
+            return_value={
+                "stage": "create_form_timeout",
+                "url": browser.HOME_URL,
+            }
+        )
+
+        with patch(
+            "app.facebook_business_browser.asyncio.wait_for",
+            new=AsyncMock(side_effect=asyncio.TimeoutError),
+        ):
+            with self.assertRaises(BrowserBusinessError) as ctx:
+                await browser._prepare_create_form(
+                    business_name="Test Business",
+                    user_email="owner@example.com",
+                    user_first_name="",
+                    user_last_name="",
+                    profile_display_name="",
+                )
+
+        self.assertEqual(
+            ctx.exception.code,
+            "BUSINESS_CREATE_FORM_TIMEOUT",
+        )
+        self.assertTrue(ctx.exception.retryable)
+
+
 class BrowserCreateFormNavigationTests(unittest.IsolatedAsyncioTestCase):
     async def test_prepare_create_form_reuses_existing_home_page(self):
         browser = FacebookBusinessBrowser(
