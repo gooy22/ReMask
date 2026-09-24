@@ -688,7 +688,8 @@ async def discover_current_scope_selector_create_candidate(
             "https://www.facebook.com/",
             "https://business.facebook.com/latest/home",
         ],
-        max_scripts_per_entry=0,
+        max_scripts_per_entry=32,
+        script_max_bytes=3_000_000,
         cache_ttl_seconds=0,
     )
 
@@ -748,7 +749,8 @@ async def discover_current_set_primary_page_candidate(
             "https://www.facebook.com/",
             "https://business.facebook.com/latest/home",
         ],
-        max_scripts_per_entry=0,
+        max_scripts_per_entry=24,
+        script_max_bytes=2_000_000,
         cache_ttl_seconds=0,
     )
 
