@@ -467,19 +467,40 @@ async def business_handler(
 
             private_result = None
             private_error = None
-            try:
-                private_result = await create_business_resilient(
-                    session,
-                    business_name=bm_name,
-                    page_id=page_id,
-                    user_email=user_email,
-                    user_first_name=first_name,
-                    user_last_name=last_name,
-                    profile_display_name=display_name,
-                    require_page_backed=True,
+            private_controller = getattr(session, "facebook_controller", None)
+
+            # Real MetaSession/ProfileSession exposes facebook_controller().
+            # Test/dummy sessions from the legacy browser-flow suite do not;
+            # keep those on the UI path so production can be private-first
+            # without breaking the existing resumability tests.
+            if not callable(private_controller):
+                private_error = BusinessCreateError(
+                    "CREATE_BM_MUTATION_NOT_DISCOVERED",
+                    "Authenticated Facebook web controller is unavailable in this session.",
+                    retryable=False,
+                    diagnostics=[
+                        {
+                            "transport": "facebook_web_graphql",
+                            "stage": "route_selection",
+                            "result": "unavailable",
+                            "reason": "session_has_no_facebook_controller",
+                        }
+                    ],
                 )
-            except BusinessCreateError as exc:
-                private_error = exc
+            else:
+                try:
+                    private_result = await create_business_resilient(
+                        session,
+                        business_name=bm_name,
+                        page_id=page_id,
+                        user_email=user_email,
+                        user_first_name=first_name,
+                        user_last_name=last_name,
+                        profile_display_name=display_name,
+                        require_page_backed=True,
+                    )
+                except BusinessCreateError as exc:
+                    private_error = exc
 
             if private_result is not None:
                 business_id = _clean(private_result.business_id)
