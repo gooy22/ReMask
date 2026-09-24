@@ -18,6 +18,7 @@ export REMASK_MEDIA_LIBRARY_DIR="${REMASK_MEDIA_LIBRARY_DIR:-$DATA_DIR/media-lib
 export REMASK_CREATIVE_PRESET_DIR="${REMASK_CREATIVE_PRESET_DIR:-$DATA_DIR/creative-presets}"
 export REMASK_PYTHON_STATE_DIR="${REMASK_PYTHON_STATE_DIR:-$DATA_DIR/python-worker-jobs}"
 export REMASK_JOB_DB="${REMASK_JOB_DB:-$DATA_DIR/python-worker/jobs.sqlite3}"
+export REMASK_PHP_SESSION_DIR="${REMASK_PHP_SESSION_DIR:-$DATA_DIR/php-sessions}"
 
 if [ -z "${REMASK_INTERNAL_KEY:-}" ]; then
   export REMASK_INTERNAL_KEY="$(/opt/remask-venv/bin/python -c 'import secrets; print(secrets.token_hex(24))')"
@@ -51,6 +52,7 @@ mkdir -p \
   "$REMASK_MEDIA_LIBRARY_DIR" \
   "$REMASK_CREATIVE_PRESET_DIR" \
   "$REMASK_PYTHON_STATE_DIR" \
+  "$REMASK_PHP_SESSION_DIR" \
   "$(dirname "$REMASK_JOB_DB")"
 
 touch "$REMASK_META_USAGE_FILE"
@@ -88,6 +90,18 @@ printf '%s\n' '{"ok":true,"service":"remask"}' > "$ROOT/health"
 
 chown -R www-data:www-data "$DATA_DIR" 2>/dev/null || true
 chmod -R u+rwX,g+rwX "$DATA_DIR" 2>/dev/null || true
+chmod 700 "$REMASK_PHP_SESSION_DIR" 2>/dev/null || true
+chown www-data:www-data "$REMASK_PHP_SESSION_DIR" 2>/dev/null || true
+
+# Persist PHP login sessions across Railway container replacements. Without
+# this, an open Workspace page keeps its browser cookie but the server-side
+# session file disappears on every deploy, causing pythonWorkerJobs.php to
+# return 401 until the user logs in again.
+mkdir -p /usr/local/etc/php/conf.d
+cat > /usr/local/etc/php/conf.d/remask-session.ini <<EOF
+session.save_handler = files
+session.save_path = "$REMASK_PHP_SESSION_DIR"
+EOF
 
 if [ "${REMASK_JOB_EXECUTION_MODE:-browser}" = "background" ] && [ -f "$ROOT/bin/remask-worker.php" ]; then
   (
