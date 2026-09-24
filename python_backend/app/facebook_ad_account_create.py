@@ -306,17 +306,56 @@ async def create_ad_account_with_docids(
             retryable=False,
         ) from exc
 
-    variables = {
-        "input": {
-            "client_mutation_id": uuid.uuid4().hex[:16],
-            "business_id": business,
-            "name": name,
-            "currency": currency_code,
-            "timezone_id": timezone,
+    capture = captured_request if isinstance(captured_request, dict) else {}
+    captured_variables = (
+        capture.get("variables")
+        if isinstance(capture.get("variables"), dict)
+        else {}
+    )
+    variables = (
+        _replace_capture_values(
+            captured_variables,
+            canary_name=_clean(capture.get("canary_name")),
+            business_id=business,
+            account_name=name,
+            currency=currency_code,
+            timezone_id=timezone,
+        )
+        if captured_variables
+        else {
+            "input": {
+                "client_mutation_id": uuid.uuid4().hex[:16],
+                "business_id": business,
+                "name": name,
+                "currency": currency_code,
+                "timezone_id": timezone,
+            }
         }
-    }
+    )
 
     ordered: list[DocIdCandidate] = []
+
+    capture_doc_id = _clean(capture.get("doc_id"))
+    if capture_doc_id.isdigit() and captured_variables:
+        ordered.append(
+            DocIdCandidate(
+                operation=CREATE_AD_ACCOUNT_OPERATION,
+                doc_id=capture_doc_id,
+                friendly_name=(
+                    _clean(capture.get("friendly_name"))
+                    or CREATE_AD_ACCOUNT_FRIENDLY_NAME
+                ),
+                endpoint_url=(
+                    _clean(capture.get("endpoint_url"))
+                    or BUSINESS_GRAPHQL_URL
+                ),
+                variables_mode="live_business_settings_capture_v1",
+                source="live_ui_capture",
+                priority=40_000,
+                observed_at=str(int(time.time())),
+                enabled=True,
+            )
+        )
 
     clean_manual = _clean(manual_doc_id)
     if clean_manual:
