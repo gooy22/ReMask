@@ -493,6 +493,23 @@ class FacebookBusinessBrowser:
         "Créer un compte",
     )
 
+    SUBMIT_NAMES = (
+        "Create",
+        "Submit",
+        "Continue",
+        "Создать",
+        "Продолжить",
+        "Створити",
+        "Продовжити",
+        "Erstellen",
+        "Senden",
+        "Weiter",
+        "Créer",
+        "Continuer",
+        "Envoyer",
+        "Valider",
+    )
+
     ADD_NAMES = (
         "Add",
         "Добавить",
@@ -1182,60 +1199,101 @@ class FacebookBusinessBrowser:
         if self.page is None:
             return False
 
-        try:
-            email_count = await self.page.locator('input[type="email"]').count()
-        except Exception:
-            email_count = 0
+        # Never infer the CREATE form from a raw input count. The normal Meta
+        # Business Suite home page can expose four unrelated inputs (search,
+        # onboarding, connection widgets, etc.), which caused profile 4 to be
+        # misclassified as CREATE_FORM_READY and then fail at submit.
+        body = (await self._body_text()).casefold()
 
-        try:
-            text_count = await self.page.locator(
-                'input:not([type]), input[type="text"]'
-            ).count()
-        except Exception:
-            text_count = 0
+        email_markers = (
+            "business email",
+            "business email address",
+            "рабочий электронный адрес",
+            "электронный адрес компании",
+            "робоча електронна адреса",
+            "електронна адреса компанії",
+            "geschäftliche e-mail-adresse",
+            "geschäftliche email-adresse",
+            "geschäftliche e-mail",
+            "adresse e-mail professionnelle",
+            "adresse e-mail de l’entreprise",
+            "adresse e-mail de l'entreprise",
+            "e-mail professionnel",
+        )
+        name_markers = (
+            "business portfolio name",
+            "business name",
+            "business and account name",
+            "название бизнес-портфолио",
+            "название компании",
+            "назва бізнес-портфоліо",
+            "назва компанії",
+            "business-portfolio-name",
+            "name des business-portfolios",
+            "unternehmensname",
+            "nom du portefeuille business",
+            "nom du portefeuille professionnel",
+            "nom de l’entreprise",
+            "nom de l'entreprise",
+        )
 
-        if email_count >= 1 and text_count >= 1:
+        has_email = any(marker in body for marker in email_markers)
+        has_name = any(marker in body for marker in name_markers)
+        if has_email and has_name:
             return True
 
-        body = (await self._body_text()).lower()
-        has_email = any(
-            marker in body
-            for marker in (
-                "business email",
-                "business email address",
-                "рабочий электронный адрес",
-                "электронный адрес компании",
-                "робоча електронна адреса",
-                "електронна адреса компанії",
-                "geschäftliche e-mail-adresse",
-                "geschäftliche email-adresse",
-                "geschäftliche e-mail",
-                "adresse e-mail professionnelle",
-                "adresse e-mail de l’entreprise",
-                "adresse e-mail de l'entreprise",
-                "e-mail professionnel",
-            )
-        )
-        has_name = any(
-            marker in body
-            for marker in (
-                "business portfolio name",
-                "business name",
-                "business and account name",
-                "название бизнес-портфолио",
-                "название компании",
-                "назва бізнес-портфоліо",
-                "назва компанії",
-                "business-portfolio-name",
-                "name des business-portfolios",
-                "unternehmensname",
-                "nom du portefeuille business",
-                "nom du portefeuille professionnel",
-                "nom de l’entreprise",
-                "nom de l'entreprise",
-            )
-        )
-        return has_email and has_name
+        # Secondary semantic fallback for A/B variants where labels are
+        # attached only to input attributes and are absent from body.innerText.
+        semantic_email = False
+        semantic_name = False
+        try:
+            inputs = self.page.locator("input:visible")
+            count = min(await inputs.count(), 16)
+            for index in range(count):
+                item = inputs.nth(index)
+                input_type = _clean(await item.get_attribute("type")).casefold()
+                key = " ".join(
+                    _clean(await item.get_attribute(attr))
+                    for attr in (
+                        "name",
+                        "id",
+                        "placeholder",
+                        "aria-label",
+                        "autocomplete",
+                    )
+                ).casefold()
+
+                if (
+                    input_type == "email"
+                    and any(
+                        token in key
+                        for token in (
+                            "business",
+                            "profession",
+                            "entreprise",
+                            "company",
+                            "geschäft",
+                        )
+                    )
+                ):
+                    semantic_email = True
+
+                if any(
+                    token in key
+                    for token in (
+                        "business_name",
+                        "business name",
+                        "portfolio",
+                        "portefeuille",
+                        "entreprise",
+                        "unternehmensname",
+                    )
+                ):
+                    semantic_name = True
+        except Exception:
+            pass
+
+        return semantic_email and semantic_name
 
     async def _wait_for_create_surface(
         self,
@@ -2866,20 +2924,7 @@ class FacebookBusinessBrowser:
 
         clicked = await self._click_named(self.CREATE_NAMES)
         if not clicked:
-            clicked = await self._click_named(
-                (
-                    "Create",
-                    "Submit",
-                    "Continue",
-                    "Создать",
-                    "Продолжить",
-                    "Створити",
-                    "Продовжити",
-                    "Erstellen",
-                    "Senden",
-                    "Weiter",
-                )
-            )
+            clicked = await self._click_named(self.SUBMIT_NAMES)
         if not clicked:
             diag = await self._diagnostic("blocked_create_submit_missing")
             raise BrowserBusinessError(
@@ -3273,6 +3318,20 @@ class FacebookBusinessBrowser:
                 diagnostic=diag,
             )
 
+        if not await self._form_ready():
+            diag = await self._diagnostic("create_form_false_positive")
+            if self._last_selector_diagnostic:
+                diag = {
+                    "selector_attempt": self._last_selector_diagnostic,
+                    **diag,
+                }
+            raise BrowserBusinessError(
+                "BUSINESS_CREATE_FORM_LOST",
+                "Meta returned to Business Suite before the Business creation form became usable.",
+                retryable=True,
+                diagnostic=diag,
+            )
+
         business_filled = await self._fill_first(
             labels=(
                 "Business portfolio name",
@@ -3285,6 +3344,10 @@ class FacebookBusinessBrowser:
                 "Business-Portfolio-Name",
                 "Name des Business-Portfolios",
                 "Unternehmensname",
+                "Nom du portefeuille business",
+                "Nom du portefeuille professionnel",
+                "Nom de l’entreprise",
+                "Nom de l'entreprise",
             ),
             value=business_name,
         )
@@ -3306,18 +3369,20 @@ class FacebookBusinessBrowser:
                     "Ваше ім'я",
                     "Dein Name",
                     "Ihr Name",
+                    "Votre nom",
+                    "Nom complet",
                 ),
                 value=display_name,
             )
 
         if user_first_name:
             await self._fill_first(
-                labels=("First name", "Имя", "Ім'я", "Vorname"),
+                labels=("First name", "Имя", "Ім'я", "Vorname", "Prénom"),
                 value=user_first_name,
             )
         if user_last_name:
             await self._fill_first(
-                labels=("Last name", "Фамилия", "Прізвище", "Nachname"),
+                labels=("Last name", "Фамилия", "Прізвище", "Nachname", "Nom"),
                 value=user_last_name,
             )
 
@@ -3333,6 +3398,10 @@ class FacebookBusinessBrowser:
                 "Geschäftliche E-Mail-Adresse",
                 "Geschäftliche Email-Adresse",
                 "Geschäftliche E-Mail",
+                "Adresse e-mail professionnelle",
+                "Adresse e-mail de l’entreprise",
+                "Adresse e-mail de l'entreprise",
+                "E-mail professionnel",
             ),
             value=user_email,
             input_type="email",
@@ -3375,7 +3444,7 @@ class FacebookBusinessBrowser:
                 'input:visible:not([type="hidden"]):not([type="checkbox"]):not([type="radio"])'
             )
             visible_count = await visible_inputs.count()
-            if visible_count >= 4:
+            if await self._form_ready() and visible_count >= 4:
                 first_value = _clean(user_first_name)
                 last_value = _clean(user_last_name)
                 if not first_value or not last_value:
@@ -3508,22 +3577,6 @@ class FacebookBusinessBrowser:
 
         loop = asyncio.get_running_loop()
         gate_future: asyncio.Future[bool] = loop.create_future()
-        response_future: asyncio.Future[Any] = loop.create_future()
-
-        def observe_response(response: Any) -> None:
-            if response_future.done():
-                return
-            try:
-                if self._response_matches_page_add(
-                    response,
-                    business_id=business,
-                    page_id=page,
-                ):
-                    response_future.set_result(response)
-            except Exception:
-                return
-
-        self.page.on("response", observe_response)
 
         async def gate(route: Any, request: Any) -> None:
             if not self._request_matches_create(request, business_name):
@@ -3570,6 +3623,24 @@ class FacebookBusinessBrowser:
         await self.page.route("**/api/graphql/**", gate)
 
         try:
+            if not await self._form_ready():
+                if before_submit is not None:
+                    await before_submit(
+                        {
+                            "phase": "CREATE_NOT_SUBMITTED",
+                            "activity": "CREATE_NOT_SUBMITTED",
+                            "activity_at": int(time.time()),
+                            "not_submitted_at": int(time.time()),
+                        }
+                    )
+                diag = await self._diagnostic("create_form_missing_before_submit")
+                raise BrowserBusinessError(
+                    "BUSINESS_CREATE_FORM_LOST",
+                    "Meta Business creation form disappeared before submit.",
+                    retryable=True,
+                    diagnostic=diag,
+                )
+
             if before_submit is not None:
                 await before_submit(
                     {
@@ -3589,20 +3660,7 @@ class FacebookBusinessBrowser:
             ) as response_info:
                 clicked = await self._click_named(self.CREATE_NAMES)
                 if not clicked:
-                    clicked = await self._click_named(
-                        (
-                            "Create",
-                            "Submit",
-                            "Continue",
-                            "Создать",
-                            "Продолжить",
-                            "Створити",
-                            "Продовжити",
-                            "Erstellen",
-                            "Senden",
-                            "Weiter",
-                        )
-                    )
+                    clicked = await self._click_named(self.SUBMIT_NAMES)
 
                 if not clicked:
                     if before_submit is not None:
