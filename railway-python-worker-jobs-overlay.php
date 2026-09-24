@@ -148,6 +148,19 @@ try {
         rmx_pwj_out(['ok'=>true,'preflight'=>$result]);
     }
 
+    if ($action === 'profile_state') {
+        $profileId = trim((string)($input['profile_id'] ?? ''));
+        if ($profileId === '' || strlen($profileId) > 160) {
+            rmx_pwj_out(['ok'=>false,'error'=>'INVALID_PROFILE_ID'], 400);
+        }
+
+        $result = rmx_pwj_worker_request(
+            'GET',
+            '/api/v1/profiles/' . rawurlencode($profileId) . '/provisioning-state'
+        );
+        rmx_pwj_out(['ok'=>true,'state'=>$result]);
+    }
+
     if ($action === 'docids') {
         $operation = trim((string)($input['operation'] ?? $_GET['operation'] ?? ''));
         $path = '/api/v1/facebook/docids';
@@ -160,7 +173,7 @@ try {
 
     if ($action === 'register_docid') {
         $operation = strtoupper(trim((string)($input['operation'] ?? 'CREATE_BM')));
-        if (!in_array($operation, ['CREATE_BM','LIST_PAGES'], true)) {
+        if (!in_array($operation, ['CREATE_BM','CREATE_AD_ACCOUNT','LIST_PAGES'], true)) {
             rmx_pwj_out(['ok'=>false,'error'=>'UNSUPPORTED_DOCID_OPERATION'], 400);
         }
 
@@ -171,7 +184,11 @@ try {
 
         $defaultMode = $operation === 'LIST_PAGES'
             ? 'account_quality_user_pages_v1'
-            : 'scope_selector_business_creation_v1';
+            : (
+                $operation === 'CREATE_AD_ACCOUNT'
+                    ? 'business_ad_account_create_v1'
+                    : 'scope_selector_business_creation_v1'
+            );
         $defaultEndpoint = $operation === 'LIST_PAGES'
             ? 'https://www.facebook.com/api/graphql/'
             : 'https://business.facebook.com/api/graphql/';

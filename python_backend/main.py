@@ -682,21 +682,28 @@ async def register_facebook_docid(
     payload: dict = Body(...),
 ):
     clean_operation=str(operation or '').strip().upper()
-    if clean_operation not in {'CREATE_BM','LIST_PAGES'}:
+    if clean_operation not in {'CREATE_BM','CREATE_AD_ACCOUNT','LIST_PAGES'}:
         raise HTTPException(
             status_code=400,
-            detail='supported doc_id operations: CREATE_BM, LIST_PAGES',
+            detail=(
+                'supported doc_id operations: CREATE_BM, '
+                'CREATE_AD_ACCOUNT, LIST_PAGES'
+            ),
         )
 
     default_endpoint=(
         'https://business.facebook.com/api/graphql/'
-        if clean_operation == 'CREATE_BM'
+        if clean_operation in {'CREATE_BM','CREATE_AD_ACCOUNT'}
         else 'https://www.facebook.com/api/graphql/'
     )
     default_mode=(
         'scope_selector_business_creation_v1'
         if clean_operation == 'CREATE_BM'
-        else 'account_quality_user_pages_v1'
+        else (
+            'business_ad_account_create_v1'
+            if clean_operation == 'CREATE_AD_ACCOUNT'
+            else 'account_quality_user_pages_v1'
+        )
     )
 
     try:
@@ -732,6 +739,16 @@ async def register_facebook_docid(
         'ok':True,
         'candidate':candidate.as_dict(),
         'registry':registry_view(clean_operation),
+    }
+
+@app.get('/api/v1/profiles/{profile_id}/provisioning-state',dependencies=[Depends(require_key)])
+async def profile_provisioning_state(profile_id: str):
+    clean_profile=str(profile_id or '').strip()
+    if not clean_profile:
+        raise HTTPException(status_code=400,detail='profile_id is required')
+    return {
+        'ok':True,
+        **await pool.provisioning_state.latest_profile_entities(clean_profile),
     }
 
 @app.post('/api/v1/jobs',response_model=JobAccepted,dependencies=[Depends(require_key)])

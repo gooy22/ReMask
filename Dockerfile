@@ -181,6 +181,9 @@ RUN set -eux; \
     grep -q 'pythonProvisionAdAccount' /var/www/html/workspace.php; \
     grep -q 'pythonWorkerOpenOwnAdAccountModal' /var/www/html/scripts/workspace.js; \
     grep -q 'latest_ad_account_resume_for_business' /opt/remask-python/app/provisioning/state.py; \
+    grep -q 'latest_profile_entities' /opt/remask-python/app/provisioning/state.py; \
+    grep -q 'profile_provisioning_state' /opt/remask-python/main.py; \
+    grep -q "action === 'profile_state'" /var/www/html/ajax/pythonWorkerJobs.php; \
     grep -q 'CREATE_AD_ACCOUNT_RESULT_UNKNOWN' /opt/remask-python/app/facebook_ad_account_create.py; \
     grep -q 'list_ad_accounts_for_business' /opt/remask-python/app/facebook_graph_api.py; \
     grep -q 'pythonWorkerOpenOwnBmModal' /var/www/html/scripts/workspace.js; \

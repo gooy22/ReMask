@@ -59,10 +59,22 @@ try {
         if (!is_array($row)) continue;
         $id = trim((string)($row['id'] ?? ''));
         if ($id === '') continue;
+        $businessId = '';
+        $business = $row['business'] ?? null;
+        if (is_array($business)) {
+            $businessId = trim((string)($business['id'] ?? ''));
+        } elseif (is_scalar($business)) {
+            $businessId = trim((string)$business);
+        }
+        if ($businessId === '') {
+            $businessId = trim((string)($row['business_id'] ?? ''));
+        }
+
         $pages[] = [
             'id' => $id,
             'name' => trim((string)($row['name'] ?? $id)),
             'category' => trim((string)($row['category'] ?? '')),
+            'business_id' => $businessId,
         ];
     }
 
@@ -243,7 +255,7 @@ HTML;
 
     $php = preg_replace(
         '#scripts/workspace\.js(?:\?[^"\']*)?#',
-        'scripts/workspace.js?v=20260924-python-worker-ui-v159',
+        'scripts/workspace.js?v=20260924-python-worker-ui-v160',
         $php,
         1,
         $scriptCount
@@ -265,7 +277,7 @@ if ($workerPos === false) {
 
 $php = preg_replace(
     '#scripts/workspace\.js(?:\?[^"\']*)?#',
-    'scripts/workspace.js?v=20260924-python-worker-ui-v159',
+    'scripts/workspace.js?v=20260924-python-worker-ui-v160',
     $php,
     1
 ) ?? $php;

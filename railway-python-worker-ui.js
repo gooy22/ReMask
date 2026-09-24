@@ -1,4 +1,4 @@
-/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 REMASK_PYTHON_WORKER_UI_V140 REMASK_PYTHON_WORKER_UI_V141 REMASK_PYTHON_WORKER_UI_V142 REMASK_PYTHON_WORKER_UI_V143 REMASK_PYTHON_WORKER_UI_V144 REMASK_PYTHON_WORKER_UI_V145 REMASK_PYTHON_WORKER_UI_V146 REMASK_PYTHON_WORKER_UI_V147 REMASK_PYTHON_WORKER_UI_V148 REMASK_PYTHON_WORKER_UI_V149 REMASK_PYTHON_WORKER_UI_V150 REMASK_PYTHON_WORKER_UI_V151 REMASK_PYTHON_WORKER_UI_V152 REMASK_PYTHON_WORKER_UI_V153 REMASK_PYTHON_WORKER_UI_V154 REMASK_PYTHON_WORKER_UI_V155 REMASK_PYTHON_WORKER_UI_V156 REMASK_PYTHON_WORKER_UI_V157 REMASK_PYTHON_WORKER_UI_V158 REMASK_PYTHON_WORKER_UI_V159 */
+/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 REMASK_PYTHON_WORKER_UI_V140 REMASK_PYTHON_WORKER_UI_V141 REMASK_PYTHON_WORKER_UI_V142 REMASK_PYTHON_WORKER_UI_V143 REMASK_PYTHON_WORKER_UI_V144 REMASK_PYTHON_WORKER_UI_V145 REMASK_PYTHON_WORKER_UI_V146 REMASK_PYTHON_WORKER_UI_V147 REMASK_PYTHON_WORKER_UI_V148 REMASK_PYTHON_WORKER_UI_V149 REMASK_PYTHON_WORKER_UI_V150 REMASK_PYTHON_WORKER_UI_V151 REMASK_PYTHON_WORKER_UI_V152 REMASK_PYTHON_WORKER_UI_V153 REMASK_PYTHON_WORKER_UI_V154 REMASK_PYTHON_WORKER_UI_V155 REMASK_PYTHON_WORKER_UI_V156 REMASK_PYTHON_WORKER_UI_V157 REMASK_PYTHON_WORKER_UI_V158 REMASK_PYTHON_WORKER_UI_V159 REMASK_PYTHON_WORKER_UI_V160 */
 const restoredPythonWorkerJobId = localStorage.getItem('remask_python_worker_job_v1') || '';
 
 const pythonWorkerUiState = {
@@ -115,10 +115,10 @@ function pythonWorkerSelectionRefresh() {
       profiles.length
         ? (
             pythonWorkerUiState.workerOnline === true
-              ? 'Worker UI v157 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
-              : 'Worker UI v157 · Выбрано FB-профилей: ' + profiles.length + '. Жду READY от worker.'
+              ? 'Worker UI v160 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
+              : 'Worker UI v160 · Выбрано FB-профилей: ' + profiles.length + '. Жду READY от worker.'
           )
-        : 'Worker UI v157 · Выберите FB-профили в Workspace.'
+        : 'Worker UI v160 · Выберите FB-профили в Workspace.'
     );
   }
 }
@@ -1716,6 +1716,16 @@ function pythonWorkerEnhanceBmDialog() {
 }
 
 
+async function pythonWorkerProfileProvisioningState(profileId) {
+  const data = await pythonWorkerBridge({
+    action: 'profile_state',
+    profile_id: String(profileId || '').trim()
+  });
+  return data && data.state && typeof data.state === 'object'
+    ? data.state
+    : {};
+}
+
 async function pythonWorkerLoadBusinesses(profileId, csrfRetried) {
   const csrf = await pythonWorkerCsrf(false);
   const response = await fetch('ajax/pythonWorkerBusinesses.php', {
@@ -1759,7 +1769,29 @@ async function pythonWorkerLoadBusinesses(profileId, csrfRetried) {
     throw new Error(errorText);
   }
 
-  return Array.isArray(data.businesses) ? data.businesses : [];
+  const businesses = Array.isArray(data.businesses) ? data.businesses.slice() : [];
+
+  try {
+    const persisted = await pythonWorkerProfileProvisioningState(profileId);
+    const persistedBusinessId = String((persisted && persisted.business_id) || '').trim();
+    if (
+      /^\d+$/.test(persistedBusinessId) &&
+      !businesses.some(function(item) {
+        return String((item && item.id) || '').trim() === persistedBusinessId;
+      })
+    ) {
+      businesses.unshift({
+        id: persistedBusinessId,
+        name: 'ReMask BM ' + persistedBusinessId,
+        source: 'provisioning_state',
+        ad_account_id: String((persisted && persisted.ad_account_id) || '').trim()
+      });
+    }
+  } catch (stateError) {
+    console.warn('[ReMask Worker UI] provisioning state fallback failed:', stateError);
+  }
+
+  return businesses;
 }
 
 async function pythonWorkerStartAdAccounts(options) {

@@ -321,6 +321,88 @@ class ProvisioningStateStore:
 
         return {}
 
+    async def latest_profile_entities(
+        self,
+        profile_id: str,
+    ) -> dict[str, Any]:
+        """
+        Return the newest confirmed BM/RK pair for a profile.
+
+        Add BM and Add RK intentionally use different stable scopes. This
+        profile-level view lets the UI recover the BM created by ReMask without
+        depending on a separate Meta hierarchy cache refresh.
+        """
+        return await asyncio.to_thread(
+            self._latest_profile_entities_sync,
+            profile_id,
+        )
+
+    def _latest_profile_entities_sync(
+        self,
+        profile_id: str,
+    ) -> dict[str, Any]:
+        profile = str(profile_id or "").strip()
+        if not profile:
+            return {
+                "profile_id": "",
+                "scope_key": "",
+                "business_id": "",
+                "ad_account_id": "",
+                "funding_source_id": "",
+            }
+
+        with self._connect() as con:
+            rows = con.execute(
+                """
+                SELECT profile_id,scope_key,business_id,ad_account_id,
+                       funding_source_id,updated_at
+                FROM provisioning_entities
+                WHERE profile_id=?
+                ORDER BY updated_at DESC
+                LIMIT 100
+                """,
+                (profile,),
+            ).fetchall()
+
+        business_id = ""
+        ad_account_id = ""
+        funding_source_id = ""
+        scope_key = ""
+
+        for row in rows:
+            row_business = str(row["business_id"] or "").strip()
+            row_ad_account = str(row["ad_account_id"] or "").strip()
+            row_funding = str(row["funding_source_id"] or "").strip()
+
+            if not business_id and row_business:
+                business_id = row_business
+                scope_key = str(row["scope_key"] or "")
+
+            if (
+                business_id
+                and row_business == business_id
+                and not ad_account_id
+                and row_ad_account
+            ):
+                ad_account_id = row_ad_account
+                scope_key = str(row["scope_key"] or scope_key)
+
+            if (
+                ad_account_id
+                and row_ad_account == ad_account_id
+                and not funding_source_id
+                and row_funding
+            ):
+                funding_source_id = row_funding
+
+        return {
+            "profile_id": profile,
+            "scope_key": scope_key,
+            "business_id": business_id,
+            "ad_account_id": ad_account_id,
+            "funding_source_id": funding_source_id,
+        }
+
     async def set_running(
         self,
         item_id: str,
