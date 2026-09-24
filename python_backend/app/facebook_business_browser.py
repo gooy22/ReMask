@@ -5059,6 +5059,7 @@ class FacebookBusinessBrowser:
                     let createEntry = false;
                     let nameInput = false;
                     let formEvidence = false;
+                    let editableFormControl = false;
                     let addSurface = false;
 
                     for (const el of rightNodes) {
@@ -5072,16 +5073,37 @@ class FacebookBusinessBrowser:
                         );
                         const low = text.toLowerCase();
 
+                        const role = (
+                            el.getAttribute('role') || ''
+                        ).toLowerCase();
+                        const isEditable = (
+                            el.tagName === 'INPUT'
+                            || el.tagName === 'TEXTAREA'
+                            || el.tagName === 'SELECT'
+                            || role === 'combobox'
+                            || role === 'textbox'
+                            || role === 'spinbutton'
+                        );
                         if (
                             (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')
                             && nameWords.some(word => low.includes(word))
                         ) {
                             nameInput = true;
                         }
-                        if (nameWords.some(word => low.includes(word))) {
-                            formEvidence = true;
-                        }
-                        if (formWords.some(word => low.includes(word))) {
+                        // Text-only column headings such as "Nom du compte"
+                        // exist on the normal Ad Accounts table. They must not
+                        // make the state-machine believe the creation form is
+                        // already open. Require a real editable control here;
+                        // dialog-level form detection below handles unlabeled
+                        // Meta inputs.
+                        if (
+                            isEditable
+                            && (
+                                nameWords.some(word => low.includes(word))
+                                || formWords.some(word => low.includes(word))
+                            )
+                        ) {
+                            editableFormControl = true;
                             formEvidence = true;
                         }
                         if (
@@ -5122,13 +5144,14 @@ class FacebookBusinessBrowser:
                         .filter(Boolean)
                         .slice(0, 6);
                     const dialogCombined = dialogTexts.join(' ').toLowerCase();
+                    const dialogHasFormControl = dialogs.some(
+                        dialog => dialog.querySelector(
+                            'input,textarea,select,[role="combobox"],[role="textbox"]'
+                        )
+                    );
                     if (
                         accountWords.some(word => dialogCombined.includes(word))
-                        && (
-                            nameWords.some(word => dialogCombined.includes(word))
-                            || formWords.some(word => dialogCombined.includes(word))
-                            || dialogs.some(dialog => dialog.querySelector('input,select,[role="combobox"]'))
-                        )
+                        && dialogHasFormControl
                     ) {
                         formEvidence = true;
                     }
@@ -5169,6 +5192,7 @@ class FacebookBusinessBrowser:
                         url: location.href,
                         name_input: nameInput,
                         form_evidence: formEvidence,
+                        editable_form_control: editableFormControl,
                         create_entry: createEntry,
                         add_surface: addSurface,
                         errors,
@@ -5193,6 +5217,9 @@ class FacebookBusinessBrowser:
             "url": _clean(raw.get("url"))[:900],
             "name_input": bool(raw.get("name_input")),
             "form_evidence": bool(raw.get("form_evidence")),
+            "editable_form_control": bool(
+                raw.get("editable_form_control")
+            ),
             "create_entry": bool(raw.get("create_entry")),
             "add_surface": bool(raw.get("add_surface")),
             "errors": [
@@ -5224,6 +5251,9 @@ class FacebookBusinessBrowser:
             "url": _clean(state.get("url"))[:700],
             "name_input": bool(state.get("name_input")),
             "form_evidence": bool(state.get("form_evidence")),
+            "editable_form_control": bool(
+                state.get("editable_form_control")
+            ),
             "create_entry": bool(state.get("create_entry")),
             "add_surface": bool(state.get("add_surface")),
             "errors": list(state.get("errors") or [])[:3],

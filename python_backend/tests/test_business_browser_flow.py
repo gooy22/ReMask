@@ -931,6 +931,20 @@ class BrowserAdAccountSubmitProgressionTests(unittest.TestCase):
         )
 
 
+class BrowserAdAccountFormClassificationTests(unittest.TestCase):
+    def test_form_classifier_requires_editable_or_dialog_control(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser._ad_account_ui_state
+        )
+        self.assertIn("const isEditable", source)
+        self.assertIn("dialogHasFormControl", source)
+        self.assertNotIn(
+            "if (nameWords.some(word => low.includes(word))) {\n"
+            "                            formEvidence = true;",
+            source,
+        )
+
+
 class BrowserAdAccountStateMachineTests(unittest.IsolatedAsyncioTestCase):
     async def test_ui_state_can_recognize_direct_form_open(self):
         browser = FacebookBusinessBrowser(
