@@ -105,25 +105,6 @@ async def business_handler(
             retryable=False,
         )
 
-    # Older ReMask UI generated names like ReMask_BM_1. Meta now rejects that
-    # generated format (error 1690091 / Business name not allowed). Only
-    # normalize our own legacy auto-name; never rewrite a user's custom name.
-    auto_name_match = re.fullmatch(r"ReMask_BM_(\d+)", bm_name, flags=re.IGNORECASE)
-    if auto_name_match:
-        page_name = ""
-        for row in (getattr(context, "pages", None) or []):
-            if not isinstance(row, dict):
-                continue
-            if _clean(row.get("id")) == page_id:
-                page_name = _clean(row.get("name"))
-                if page_name:
-                    break
-        bm_name = (
-            page_name[:255]
-            if page_name
-            else f"ReMask Business {auto_name_match.group(1)}"
-        )
-
     user_email = _clean(
         params.get("user_email")
         or params.get("email")
@@ -188,6 +169,30 @@ async def business_handler(
     if checkpoint_name:
         bm_name = checkpoint_name
 
+    # Older ReMask UI generated names like ReMask_BM_1. Meta rejects that
+    # format with 1690091 ("Business name not allowed"). Normalize only our
+    # own legacy generated name, including when it was restored from a failed
+    # Job checkpoint. A custom user-entered name is never rewritten.
+    auto_name_match = re.fullmatch(
+        r"ReMask_BM_(\d+)",
+        bm_name,
+        flags=re.IGNORECASE,
+    )
+    if auto_name_match:
+        page_name = ""
+        for row in (getattr(context, "pages", None) or []):
+            if not isinstance(row, dict):
+                continue
+            if _clean(row.get("id")) == page_id:
+                page_name = _clean(row.get("name"))
+                if page_name:
+                    break
+        bm_name = (
+            page_name[:255]
+            if page_name
+            else f"ReMask Business {auto_name_match.group(1)}"
+        )
+
     phase = _clean(
         checkpoint.get("phase")
         or checkpoint.get("resume_from")
@@ -197,6 +202,33 @@ async def business_handler(
         or state.get("business_id")
     )
     recovered = False
+
+    # Builds before b30b416 mislabeled Meta error 1690091 as
+    # CREATE_RESULT_UNKNOWN because the response also contained a data shell.
+    # That response is an authoritative rejection: no BM was created, so a
+    # retry of the same Job is safe once the legacy generated name is fixed.
+    prior_name_rejected = False
+    if prior_error_code == "CREATE_RESULT_UNKNOWN":
+        for row in (checkpoint.get("private_create_diagnostics") or []):
+            if not isinstance(row, dict):
+                continue
+            summary = row.get("response_summary")
+            if not isinstance(summary, dict):
+                continue
+            for error_row in (summary.get("errors") or []):
+                if not isinstance(error_row, dict):
+                    continue
+                try:
+                    if int(error_row.get("code") or 0) == 1690091:
+                        prior_name_rejected = True
+                        break
+                except (TypeError, ValueError):
+                    pass
+            if prior_name_rejected:
+                break
+
+    if prior_name_rejected:
+        phase = "CREATE_NOT_SUBMITTED"
 
     checkpoint_response_id = _clean(
         checkpoint.get("create_response_business_id")
