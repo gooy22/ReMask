@@ -440,4 +440,4 @@ ENV REMASK_META_CACHE_TTL=1800 \
 
 EXPOSE 80
 CMD ["/var/www/html/docker-start.sh"]
-# railway deploy trigger: bm-adsmanager-render-diagnostics 2026-09-24
+# railway deploy trigger: worker-hard-watchdog 2026-09-24
