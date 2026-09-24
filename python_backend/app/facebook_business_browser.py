@@ -1073,6 +1073,183 @@ class FacebookBusinessBrowser:
             await self.page.wait_for_timeout(interval_ms)
         return await self._form_ready()
 
+    async def _try_open_known_asset_selector(self) -> bool:
+        """
+        Open Meta's top-left account/business selector by anchoring on a Page
+        that ReMask already knows belongs to this FB profile.
+
+        This specifically handles Business Suite sessions that are pinned to a
+        Page via ?asset_id=... and therefore redirect /reg/ back to Home.
+        """
+        if self.page is None:
+            return False
+
+        raw_pages = getattr(self.context, "pages", None) or []
+        known_pages: list[tuple[str, str]] = []
+        for row in raw_pages:
+            if not isinstance(row, dict):
+                continue
+            page_id = _digits(row.get("id"))
+            page_name = _clean(row.get("name") or row.get("title"))
+            if page_id and page_name:
+                known_pages.append((page_id, page_name))
+
+        if not known_pages:
+            return False
+
+        current_asset = ""
+        try:
+            query = parse_qs(urlsplit(_clean(self.page.url)).query)
+            current_asset = _digits(
+                (query.get("asset_id") or query.get("assetId") or [""])[0]
+            )
+        except Exception:
+            current_asset = ""
+
+        # Prefer the Page Meta explicitly pinned into the current URL.
+        known_pages.sort(
+            key=lambda row: (
+                0 if current_asset and row[0] == current_asset else 1,
+                row[1].casefold(),
+            )
+        )
+
+        diagnostic_rows: list[dict[str, Any]] = []
+
+        async def try_click_candidate(candidate: Any, *, label: str) -> bool:
+            try:
+                if not await candidate.is_visible():
+                    return False
+
+                target = candidate
+                try:
+                    role = _clean(await candidate.get_attribute("role")).lower()
+                    tag = _clean(
+                        await candidate.evaluate("(e) => e.tagName || ''")
+                    ).upper()
+                    has_popup = _clean(
+                        await candidate.get_attribute("aria-haspopup")
+                    )
+                    if (
+                        role not in {"button", "menuitem", "link"}
+                        and tag not in {"BUTTON", "A"}
+                        and not has_popup
+                    ):
+                        ancestor = candidate.locator(
+                            'xpath=ancestor-or-self::*['
+                            '@role="button" or @role="menuitem" or '
+                            '@aria-haspopup or self::button or self::a'
+                            '][1]'
+                        )
+                        if await ancestor.count():
+                            target = ancestor.first
+                except Exception:
+                    target = candidate
+
+                box = await target.bounding_box()
+                if not box:
+                    return False
+
+                x = float(box.get("x") or 0)
+                y = float(box.get("y") or 0)
+                w = float(box.get("width") or 0)
+                h = float(box.get("height") or 0)
+
+                diagnostic_rows.append(
+                    {
+                        "label": label[:180],
+                        "x": round(x),
+                        "y": round(y),
+                        "w": round(w),
+                        "h": round(h),
+                    }
+                )
+
+                # Keep the click constrained to the Business Suite top-left
+                # selector zone so a same-named Page in the main content is
+                # never treated as the account selector.
+                if x > 330 or y > 340 or w <= 0 or h <= 0:
+                    return False
+
+                await target.click(timeout=3000)
+                if await self._wait_for_create_surface(
+                    timeout_ms=3500,
+                    interval_ms=200,
+                ):
+                    self._last_selector_diagnostic = {
+                        "known_asset_selector": {
+                            "current_asset_id": current_asset,
+                            "matched_label": label,
+                            "candidates": diagnostic_rows[-12:],
+                        }
+                    }
+                    return True
+
+                try:
+                    await self.page.keyboard.press("Escape")
+                    await self.page.wait_for_timeout(120)
+                except Exception:
+                    pass
+            except Exception as exc:
+                diagnostic_rows.append(
+                    {
+                        "label": label[:180],
+                        "error": f"{exc.__class__.__name__}: {exc}"[:500],
+                    }
+                )
+            return False
+
+        for page_id, page_name in known_pages:
+            # Role-based search first: most Meta selector variants expose the
+            # current Page as an accessible button/menu item.
+            name_pattern = re.compile(
+                re.escape(page_name),
+                re.IGNORECASE,
+            )
+            for role in ("button", "menuitem", "link"):
+                try:
+                    locator = self.page.get_by_role(role, name=name_pattern)
+                    count = min(await locator.count(), 8)
+                except Exception:
+                    count = 0
+
+                for index in range(count):
+                    if await try_click_candidate(
+                        locator.nth(index),
+                        label=f"{page_name} [{page_id}]/{role}",
+                    ):
+                        return True
+
+            # Some A/B variants render the Page name in a nested DIV/span and
+            # put the click handler on an ancestor.
+            try:
+                text_nodes = self.page.get_by_text(
+                    name_pattern,
+                    exact=False,
+                )
+                count = min(await text_nodes.count(), 12)
+            except Exception:
+                count = 0
+
+            for index in range(count):
+                if await try_click_candidate(
+                    text_nodes.nth(index),
+                    label=f"{page_name} [{page_id}]/text",
+                ):
+                    return True
+
+        self._last_selector_diagnostic = {
+            "known_asset_selector": {
+                "current_asset_id": current_asset,
+                "known_pages": [
+                    {"id": page_id, "name": page_name}
+                    for page_id, page_name in known_pages[:12]
+                ],
+                "candidates": diagnostic_rows[-20:],
+            }
+        }
+        return False
+
     async def _try_open_top_left_portfolio_menu(self) -> bool:
         if self.page is None:
             return False
