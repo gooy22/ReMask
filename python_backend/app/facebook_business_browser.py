@@ -2579,22 +2579,12 @@ class FacebookBusinessBrowser:
     @staticmethod
     def _safe_graphql_request_summary(request: Any) -> dict[str, Any]:
         """Return non-secret request metadata for diagnostics/canaries."""
-        try:
-            raw = _clean(getattr(request, "post_data", ""))
-            parsed = parse_qs(raw, keep_blank_values=True)
-        except Exception:
-            return {}
-
-        variables: dict[str, Any] = {}
-        raw_variables = _clean((parsed.get("variables") or [""])[0])
-        if raw_variables:
-            try:
-                decoded = json.loads(raw_variables)
-                if isinstance(decoded, dict):
-                    variables = decoded
-            except (ValueError, json.JSONDecodeError):
-                variables = {}
-
+        meta = _request_graphql_meta(request)
+        variables = (
+            meta["variables"]
+            if isinstance(meta.get("variables"), dict)
+            else {}
+        )
         raw_input = variables.get("input")
         input_keys = (
             sorted(str(key) for key in raw_input)
@@ -2602,14 +2592,13 @@ class FacebookBusinessBrowser:
             else []
         )
         return {
-            "url": _clean(getattr(request, "url", "")),
-            "method": _clean(getattr(request, "method", "")),
-            "friendly_name": _clean(
-                (parsed.get("fb_api_req_friendly_name") or [""])[0]
-            ),
-            "doc_id": _clean((parsed.get("doc_id") or [""])[0]),
+            "url": _clean(meta.get("url")),
+            "method": _clean(meta.get("method")),
+            "friendly_name": _clean(meta.get("friendly_name")),
+            "doc_id": _clean(meta.get("doc_id")),
             "variable_keys": sorted(str(key) for key in variables),
             "input_keys": input_keys,
+            "body_decodable": bool(meta.get("body_decodable")),
         }
 
     @staticmethod
@@ -2619,30 +2608,64 @@ class FacebookBusinessBrowser:
         business_id: str,
         page_id: str,
     ) -> bool:
-        try:
-            if request.method.upper() != "POST":
-                return False
-            if "graphql" not in str(request.url or "").lower():
-                return False
-            decoded = unquote_plus(str(request.post_data or ""))
-        except Exception:
+        meta = _request_graphql_meta(request)
+        if meta["method"] != "POST":
+            return False
+        if "graphql" not in str(meta["url"]).lower():
             return False
 
-        lower = decoded.lower()
-        return (
-            business_id in decoded
-            and page_id in decoded
-            and "mutation" in lower
+        business = _digits(business_id)
+        page = _digits(page_id)
+        if not business or not page:
+            return False
+
+        friendly = _clean(meta["friendly_name"]).casefold()
+        decoded = _clean(meta["decoded_raw"])
+        variables = (
+            meta["variables"]
+            if isinstance(meta.get("variables"), dict)
+            else {}
+        )
+
+        try:
+            variables_text = json.dumps(
+                variables,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            )
+        except Exception:
+            variables_text = ""
+
+        evidence = decoded + "\n" + variables_text
+        ids_match = business in evidence and page in evidence
+
+        operation_match = (
+            "mutation" in friendly
             and any(
-                marker in lower
+                marker in friendly
                 for marker in (
-                    "page",
+                    "addpage",
+                    "pageadd",
+                    "claimpage",
+                    "pageclaim",
+                    "businesspage",
                     "asset",
-                    "claim",
-                    "business",
+                )
+            )
+        ) or (
+            "mutation" in decoded.casefold()
+            and any(
+                marker in decoded.casefold()
+                for marker in (
+                    "addpage",
+                    "pageadd",
+                    "claimpage",
+                    "pageclaim",
                 )
             )
         )
+
+        return ids_match and operation_match
 
     @staticmethod
     def _response_matches_page_add(
