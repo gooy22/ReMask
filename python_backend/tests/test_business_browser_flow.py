@@ -333,6 +333,7 @@ class BrowserAssetContextAdsManagerFallbackTests(unittest.IsolatedAsyncioTestCas
         browser._form_ready = AsyncMock(return_value=False)
         browser._try_open_known_asset_selector = AsyncMock(return_value=False)
         browser._try_open_top_left_portfolio_menu = AsyncMock(return_value=False)
+        browser._try_open_direct_create_url = AsyncMock(return_value=False)
         browser._try_open_ads_manager_create_entry = AsyncMock(return_value=True)
         browser._goto = AsyncMock()
 
@@ -342,8 +343,65 @@ class BrowserAssetContextAdsManagerFallbackTests(unittest.IsolatedAsyncioTestCas
         )
 
         self.assertTrue(ready)
+        browser._try_open_direct_create_url.assert_awaited_once()
         browser._try_open_ads_manager_create_entry.assert_awaited_once()
         browser._goto.assert_not_awaited()
+
+
+class BrowserAssetContextDirectCreateFallbackTests(unittest.IsolatedAsyncioTestCase):
+    async def test_known_asset_context_prefers_direct_create_before_ads_manager(self):
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(
+                profile_id="4",
+                pages=[
+                    {
+                        "id": "1301710056363524",
+                        "name": "Lucky Joker",
+                    }
+                ],
+            )
+        )
+        browser.page = SimpleNamespace(
+            url=(
+                "https://business.facebook.com/latest/home"
+                "?asset_id=1301710056363524"
+            )
+        )
+        browser._form_ready = AsyncMock(return_value=False)
+        browser._try_open_known_asset_selector = AsyncMock(return_value=False)
+        browser._try_open_top_left_portfolio_menu = AsyncMock(return_value=False)
+        browser._try_open_direct_create_url = AsyncMock(return_value=True)
+        browser._try_open_ads_manager_create_entry = AsyncMock(return_value=False)
+
+        ready = await browser._open_create_entry(
+            open_form=True,
+            already_on_home=True,
+        )
+
+        self.assertTrue(ready)
+        browser._try_open_direct_create_url.assert_awaited_once()
+        browser._try_open_ads_manager_create_entry.assert_not_awaited()
+
+    async def test_direct_create_route_accepts_form_ready(self):
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-direct-create")
+        )
+        browser.page = SimpleNamespace(url=browser.HOME_URL)
+        browser._goto = AsyncMock(return_value=browser.DIRECT_CREATE_URL)
+        browser._assert_authenticated = AsyncMock(return_value=None)
+        browser._form_ready = AsyncMock(return_value=True)
+        browser._has_create_surface = AsyncMock(return_value=False)
+
+        ready = await browser._try_open_direct_create_url()
+
+        self.assertTrue(ready)
+        browser._goto.assert_awaited_once_with(browser.DIRECT_CREATE_URL)
+        self.assertTrue(
+            browser._last_selector_diagnostic["direct_create_route"]["form_ready"]
+        )
+
+    def test_current_create_labels_include_plain_portfolio_variant(self):
+        self.assertIn("Create portfolio", FacebookBusinessBrowser.CREATE_NAMES)
 
 
 class BrowserAssetContextFastFailTests(unittest.IsolatedAsyncioTestCase):
@@ -368,6 +426,7 @@ class BrowserAssetContextFastFailTests(unittest.IsolatedAsyncioTestCase):
         browser._form_ready = AsyncMock(return_value=False)
         browser._try_open_known_asset_selector = AsyncMock(return_value=False)
         browser._try_open_top_left_portfolio_menu = AsyncMock(return_value=False)
+        browser._try_open_direct_create_url = AsyncMock(return_value=False)
         browser._try_open_ads_manager_create_entry = AsyncMock(return_value=False)
         browser._goto = AsyncMock()
 
@@ -382,6 +441,7 @@ class BrowserAssetContextFastFailTests(unittest.IsolatedAsyncioTestCase):
         browser._try_open_top_left_portfolio_menu.assert_awaited_once_with(
             skip_known_asset=True,
         )
+        browser._try_open_direct_create_url.assert_awaited_once()
         browser._try_open_ads_manager_create_entry.assert_awaited_once()
         self.assertTrue(
             browser._last_selector_diagnostic.get(
