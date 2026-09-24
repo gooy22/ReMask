@@ -33,55 +33,15 @@ RUN /opt/remask-venv/bin/python -m compileall -q /opt/remask-python \
     && echo "[bm-browser-v1] Meta Business UI flow + resumable checkpoints passed"
 
 COPY .deploy/clean-preview-valid/runtime.b64.* /tmp/remask-parts/
-COPY railway-persistence-overlay.php /tmp/railway-persistence-overlay.php
-COPY railway-launch-overlay.php /tmp/railway-launch-overlay.php
-COPY railway-launch-job-ui-overlay.php /tmp/railway-launch-job-ui-overlay.php
-COPY railway-launch-flow-overlay.php /tmp/railway-launch-flow-overlay.php
-COPY railway-media-persistence-overlay.php /tmp/railway-media-persistence-overlay.php
-COPY railway-campaign-budget-sharing-overlay.php /tmp/railway-campaign-budget-sharing-overlay.php
-COPY railway-job-error-ui-overlay.php /tmp/railway-job-error-ui-overlay.php
-COPY railway-budget-guard-overlay.php /tmp/railway-budget-guard-overlay.php
-COPY railway-retry-current-payload-overlay.php /tmp/railway-retry-current-payload-overlay.php
-COPY railway-launch-multi-profile-overlay.php /tmp/railway-launch-multi-profile-overlay.php
-COPY railway-check-account-session-overlay.php /tmp/railway-check-account-session-overlay.php
-COPY railway-profile-session-guard-overlay.php /tmp/railway-profile-session-guard-overlay.php
-COPY railway-workspace-session-integrity-overlay.php /tmp/railway-workspace-session-integrity-overlay.php
-COPY railway-meta-session-context-overlay.php /tmp/railway-meta-session-context-overlay.php
-COPY railway-workspace-sync-fix-overlay.php /tmp/railway-workspace-sync-fix-overlay.php
-COPY railway-sync-smoke.php /tmp/railway-sync-smoke.php
-COPY railway-worker-overlay.php /tmp/railway-worker-overlay.php
-COPY railway-retry-overlay.php /tmp/railway-retry-overlay.php
-COPY railway-targeting-autocomplete-overlay.php /tmp/railway-targeting-autocomplete-overlay.php
-COPY railway-live-targeting-overlay.php /tmp/railway-live-targeting-overlay.php
-COPY railway-behaviors-backend-overlay.php /tmp/railway-behaviors-backend-overlay.php
-COPY railway-behaviors-ui-overlay.php /tmp/railway-behaviors-ui-overlay.php
-COPY railway-targeting-russian-overlay.php /tmp/railway-targeting-russian-overlay.php
-COPY railway-creative-targeting-v109-overlay.php /tmp/railway-creative-targeting-v109-overlay.php
-COPY railway-creative-library-overlay.php /tmp/railway-creative-library-overlay.php
-COPY railway-v100-creativeLibrary.php /tmp/remask-v100-creativeLibrary.php
-COPY railway-v100-creativePreview.php /tmp/remask-v100-creativePreview.php
-COPY railway-v100-creatives.php /tmp/remask-v100-creatives.php
-COPY railway-v100-creatives.js /tmp/remask-v100-creatives.js
-COPY railway-creative-library-v100-overlay.php /tmp/railway-creative-library-v100-overlay.php
-COPY railway-meta-official-fields.php /tmp/railway-meta-official-fields.php
-COPY railway-meta-builder-v102-overlay.php /tmp/railway-meta-builder-v102-overlay.php
-COPY railway-v102-MetaSdkSchema.php /tmp/remask-v102-MetaSdkSchema.php
-COPY railway-meta-schema-ui-v103-overlay.php /tmp/railway-meta-schema-ui-v103-overlay.php
-COPY railway-creative-capabilities-v105-overlay.php /tmp/railway-creative-capabilities-v105-overlay.php
-COPY railway-placement-capabilities-v106-overlay.php /tmp/railway-placement-capabilities-v106-overlay.php
-COPY railway-launch-full-meta-v113-overlay.php /tmp/railway-launch-full-meta-v113-overlay.php
-COPY railway-launch-meta-editors-v114-overlay.php /tmp/railway-launch-meta-editors-v114-overlay.php
-COPY railway-language-targeting-v116-overlay.php /tmp/railway-language-targeting-v116-overlay.php
-COPY railway-selection-persistence-overlay.php /tmp/railway-selection-persistence-overlay.php
-COPY railway-profile-error-fix-overlay.php /tmp/railway-profile-error-fix-overlay.php
-COPY railway-python-worker-bridge-overlay.php /tmp/railway-python-worker-bridge-overlay.php
-COPY railway-python-worker-jobs-overlay.php /tmp/railway-python-worker-jobs-overlay.php
-COPY railway-python-worker-state-overlay.php /tmp/railway-python-worker-state-overlay.php
-COPY railway-python-worker-ui-overlay.php /tmp/railway-python-worker-ui-overlay.php
-COPY railway-python-worker-ui.js /tmp/railway-python-worker-ui.js
+COPY railway-*.php railway-*.js /tmp/
 COPY docker-start.sh /tmp/docker-start.sh
 
 RUN set -eux; \
+    cp /tmp/railway-v100-creativeLibrary.php /tmp/remask-v100-creativeLibrary.php; \
+    cp /tmp/railway-v100-creativePreview.php /tmp/remask-v100-creativePreview.php; \
+    cp /tmp/railway-v100-creatives.php /tmp/remask-v100-creatives.php; \
+    cp /tmp/railway-v100-creatives.js /tmp/remask-v100-creatives.js; \
+    cp /tmp/railway-v102-MetaSdkSchema.php /tmp/remask-v102-MetaSdkSchema.php; \
     php -r '$out=""; $files=glob("/tmp/remask-parts/runtime.b64.*"); sort($files, SORT_NATURAL); foreach ($files as $file) { $out .= preg_replace("/\\s+/", "", file_get_contents($file)); } if ($out === "") { fwrite(STDERR, "empty ReMask runtime payload\n"); exit(20); } file_put_contents("/tmp/remask-runtime.b64", $out);'; \
     base64 -d /tmp/remask-runtime.b64 > /tmp/remask-runtime.archive; \
     echo "84b51ad4c062e45a13fd61b1ca8c66d0d1896b2bab2ebf2513dfd782998fdd95  /tmp/remask-runtime.archive" | sha256sum -c -; \
