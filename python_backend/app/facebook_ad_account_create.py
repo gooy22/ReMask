@@ -415,19 +415,15 @@ async def create_ad_account_with_docids(
     candidates = _unique_candidates(ordered)
 
     if not candidates:
-        candidates = [
-            DocIdCandidate(
-                operation=CREATE_AD_ACCOUNT_OPERATION,
-                doc_id=LEGACY_CREATE_AD_ACCOUNT_DOC_ID,
-                friendly_name=CREATE_AD_ACCOUNT_FRIENDLY_NAME,
-                endpoint_url=BUSINESS_GRAPHQL_URL,
-                variables_mode="business_ad_account_create_v1",
-                source="legacy_static_unconfirmed",
-                priority=100,
-                observed_at="legacy",
-                enabled=True,
-            )
-        ]
+        raise AdAccountMutationError(
+            "CREATE_AD_ACCOUNT_MUTATION_NOT_DISCOVERED",
+            (
+                "ReMask could not capture or discover Meta's current private "
+                "Ad Account CREATE mutation and has no previously confirmed "
+                "candidate. No CREATE was sent."
+            ),
+            retryable=True,
+        )
 
     diagnostics: list[str] = []
 
@@ -449,6 +445,15 @@ async def create_ad_account_with_docids(
                 variables,
                 friendly_name=candidate.friendly_name,
                 endpoint_url=candidate.endpoint_url,
+                request_envelope=(
+                    capture.get("request_envelope")
+                    if (
+                        candidate.source == "live_ui_capture"
+                        and isinstance(capture.get("request_envelope"), dict)
+                    )
+                    else {}
+                ),
+                before_submit=before_submit,
             )
         except Exception as exc:
             payload = getattr(exc, "meta_payload", None)
