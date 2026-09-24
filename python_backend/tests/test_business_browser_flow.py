@@ -73,6 +73,55 @@ class BrowserNetworkGateTests(unittest.TestCase):
             )
         )
 
+    def test_ad_account_gate_accepts_known_create_without_name_in_envelope(self):
+        request = _FakeRequest(
+            "fb_api_req_friendly_name=AdAccountCreateMutation"
+            "&doc_id=9988776655443322"
+            "&variables=%7B%22input%22%3A%7B%22business_id%22%3A"
+            "%22555666777888999%22%2C%22currency%22%3A%22USD%22%2C"
+            "%22timezone_id%22%3A1%7D%7D"
+        )
+        self.assertTrue(
+            FacebookBusinessBrowser._request_matches_ad_account_create(
+                request,
+                business_id="555666777888999",
+                account_name="ReMask Ads",
+            )
+        )
+
+    def test_ad_account_gate_accepts_strong_renamed_mutation_without_name(self):
+        request = _FakeRequest(
+            "fb_api_req_friendly_name=BizKitSettingsAssetMutation"
+            "&doc_id=8877665544332211"
+            "&variables=%7B%22input%22%3A%7B%22business_id%22%3A"
+            "%22555666777888999%22%2C%22currency%22%3A%22USD%22%2C"
+            "%22timezone_id%22%3A1%7D%7D"
+        )
+        self.assertTrue(
+            FacebookBusinessBrowser._request_matches_ad_account_create(
+                request,
+                business_id="555666777888999",
+                account_name="ReMask Ads",
+            )
+        )
+
+    def test_ad_account_gate_rejects_update_shape_without_name(self):
+        request = _FakeRequest(
+            "fb_api_req_friendly_name=BizKitSettingsAssetMutation"
+            "&doc_id=8877665544332211"
+            "&variables=%7B%22input%22%3A%7B%22business_id%22%3A"
+            "%22555666777888999%22%2C%22ad_account_id%22%3A"
+            "%221234567890%22%2C%22currency%22%3A%22USD%22%2C"
+            "%22timezone_id%22%3A1%7D%7D"
+        )
+        self.assertFalse(
+            FacebookBusinessBrowser._request_matches_ad_account_create(
+                request,
+                business_id="555666777888999",
+                account_name="ReMask Ads",
+            )
+        )
+
     def test_ad_account_gate_rejects_same_name_without_create_shape(self):
         request = _FakeRequest(
             "fb_api_req_friendly_name=BusinessSettingsValidationMutation"

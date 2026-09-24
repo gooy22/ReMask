@@ -3577,9 +3577,6 @@ class FacebookBusinessBrowser:
         expected_name = _clean(account_name).casefold()
         business = _digits(business_id)
 
-        if not expected_name or expected_name not in decoded:
-            return False
-
         operation_markers = (
             "adaccountcreate",
             "ad_account_create",
@@ -3594,7 +3591,18 @@ class FacebookBusinessBrowser:
             for marker in operation_markers
         )
         business_match = bool(business and business in decoded)
+        name_match = bool(expected_name and expected_name in decoded)
 
+        queryish = any(
+            marker in friendly
+            for marker in ("query", "search", "list", "lookup", "typeahead")
+        )
+        if queryish:
+            return False
+
+        # A known CREATE operation name + target Business is already strong
+        # enough evidence. Meta does not guarantee that the account name stays
+        # duplicated in the same encoded request envelope.
         if operation_match and business_match:
             return True
 
@@ -3602,10 +3610,6 @@ class FacebookBusinessBrowser:
             meta.get("variables")
             if isinstance(meta.get("variables"), dict)
             else {}
-        )
-        queryish = any(
-            marker in friendly
-            for marker in ("query", "search", "list", "lookup", "typeahead")
         )
 
         def iter_dicts(value: Any):
@@ -3617,36 +3621,83 @@ class FacebookBusinessBrowser:
                 for child in value:
                     yield from iter_dicts(child)
 
-        if not queryish:
-            for node in iter_dicts(variables):
-                node_business = _digits(
-                    node.get("business_id")
-                    or node.get("businessId")
-                    or node.get("business")
-                )
-                node_name = _clean(
-                    node.get("name")
-                    or node.get("account_name")
-                    or node.get("ad_account_name")
-                ).casefold()
-                if node_business != business or node_name != expected_name:
-                    continue
+        for node in iter_dicts(variables):
+            node_business = _digits(
+                node.get("business_id")
+                or node.get("businessId")
+                or node.get("business")
+            )
+            if node_business != business:
+                continue
 
-                create_fields = {
-                    "currency",
-                    "timezone_id",
-                    "time_zone_id",
-                    "end_advertiser",
-                    "media_agency",
-                    "partner",
-                }
-                present = create_fields.intersection(
-                    str(key) for key in node.keys()
+            node_name = _clean(
+                node.get("name")
+                or node.get("account_name")
+                or node.get("ad_account_name")
+            ).casefold()
+
+            create_fields = {
+                "currency",
+                "timezone_id",
+                "time_zone_id",
+                "end_advertiser",
+                "media_agency",
+                "partner",
+            }
+            present = create_fields.intersection(
+                str(key) for key in node.keys()
+            )
+
+            existing_account_keys = {
+                "account_id",
+                "ad_account_id",
+                "adAccountId",
+                "adaccount_id",
+            }
+            has_existing_account = any(
+                _clean(node.get(key))
+                for key in existing_account_keys
+                if key in node
+            )
+
+            # Existing behavior: exact name + multiple immutable creation
+            # fields is enough for renamed Meta mutations.
+            if (
+                expected_name
+                and node_name == expected_name
+                and len(present) >= 2
+                and not has_existing_account
+            ):
+                return True
+
+            # Strong no-name fallback: a mutation targeting this Business with
+            # both immutable account identity fields present and no existing
+            # account ID. This tolerates Relay moving/omitting the name while
+            # avoiding update/list/search traffic.
+            immutable_pair = (
+                "currency" in present
+                and (
+                    "timezone_id" in present
+                    or "time_zone_id" in present
                 )
-                if len(present) >= 2:
-                    return True
-                if "mutation" in friendly and present:
-                    return True
+            )
+            if (
+                "mutation" in friendly
+                and immutable_pair
+                and not has_existing_account
+            ):
+                return True
+
+            # Weak single-field fallback still requires the exact requested
+            # account name.
+            if (
+                name_match
+                and node_name == expected_name
+                and "mutation" in friendly
+                and present
+                and not has_existing_account
+            ):
+                return True
 
         return False
 
