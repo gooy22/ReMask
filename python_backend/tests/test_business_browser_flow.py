@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import os
 import tempfile
 import unittest
@@ -863,6 +864,25 @@ class BrowserAdAccountFormFieldTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(
             "America/Los_Angeles",
             second.kwargs["tokens"],
+        )
+
+
+class BrowserAdAccountSubmitProgressionTests(unittest.TestCase):
+    def test_submit_flow_does_not_use_one_shot_own_business_attempt_flag(self):
+        source = inspect.getsource(FacebookBusinessBrowser.create_ad_account)
+        self.assertIn("own_business_selected = False", source)
+        self.assertNotIn("own_business_attempted", source)
+        self.assertGreaterEqual(
+            source.count("_select_own_business_if_present()"),
+            2,
+        )
+
+    def test_submit_flow_reprepares_immutable_fields_only_on_new_form_signature(self):
+        source = inspect.getsource(FacebookBusinessBrowser.create_ad_account)
+        self.assertIn("last_form_setup_signature", source)
+        self.assertIn(
+            "transition_signature != last_form_setup_signature",
+            source,
         )
 
 

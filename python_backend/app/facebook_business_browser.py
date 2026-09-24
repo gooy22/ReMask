@@ -6606,13 +6606,18 @@ class FacebookBusinessBrowser:
         )
 
         self._mark_ad_account_phase("SUBMIT_UI")
+        last_form_setup_signature = ""
         form_setup = await self._prepare_ad_account_form_fields(
             currency=currency,
             timezone_id=timezone_id,
         )
+        initial_form_state = await self._ad_account_ui_state()
+        last_form_setup_signature = _clean(
+            initial_form_state.get("signature")
+        )
         try:
             clicked_any = False
-            own_business_attempted = False
+            own_business_selected = False
             submit_attempts: list[dict[str, Any]] = []
 
             for step in range(12):
@@ -6668,20 +6673,44 @@ class FacebookBusinessBrowser:
                     )
                     if gate_future.done():
                         break
-                    if not own_business_attempted:
-                        own_business_attempted = True
-                        await self._select_own_business_if_present()
-                    if _clean(transition.get("state")).upper() == "FORM":
+
+                    # Meta can show the ownership choice one or several
+                    # transitions after the first Next. Keep probing until it
+                    # is actually selected; do not burn the opportunity merely
+                    # because it was absent on an earlier screen.
+                    if not own_business_selected:
+                        own_business_selected = (
+                            await self._select_own_business_if_present()
+                        )
+                        if own_business_selected:
+                            submit_attempts.append(
+                                {
+                                    "step": step,
+                                    "action": "own_business_after_next",
+                                    "selected": True,
+                                }
+                            )
+                            await self.page.wait_for_timeout(250)
+
+                    transition_signature = _clean(
+                        transition.get("signature")
+                    )
+                    if (
+                        _clean(transition.get("state")).upper() == "FORM"
+                        and transition_signature
+                        and transition_signature != last_form_setup_signature
+                    ):
                         form_setup = await self._prepare_ad_account_form_fields(
                             currency=currency,
                             timezone_id=timezone_id,
                         )
+                        last_form_setup_signature = transition_signature
                     continue
 
-                if not own_business_attempted:
-                    own_business_attempted = True
+                if not own_business_selected:
                     own_selected = await self._select_own_business_if_present()
                     if own_selected:
+                        own_business_selected = True
                         clicked_any = True
                         await self.page.wait_for_timeout(350)
                         state_after_own = await self._ad_account_ui_state()
@@ -6693,11 +6722,27 @@ class FacebookBusinessBrowser:
                             {
                                 "step": step,
                                 "action": "own_business",
+                                "selected": True,
                                 "state_after": _clean(
                                     state_after_own.get("state")
                                 ),
                             }
                         )
+                        # Ownership selection itself can reveal a new form
+                        # stage with immutable fields. Prepare it immediately.
+                        own_signature = _clean(
+                            state_after_own.get("signature")
+                        )
+                        if (
+                            _clean(state_after_own.get("state")).upper() == "FORM"
+                            and own_signature
+                            and own_signature != last_form_setup_signature
+                        ):
+                            form_setup = await self._prepare_ad_account_form_fields(
+                                currency=currency,
+                                timezone_id=timezone_id,
+                            )
+                            last_form_setup_signature = own_signature
                         continue
 
                 await checkpoint(
@@ -6793,6 +6838,8 @@ class FacebookBusinessBrowser:
                     "form_setup": form_setup,
                     "submit_controls": await self._ad_account_submit_controls(),
                     "submit_attempts": submit_attempts[-12:],
+                    "own_business_selected": own_business_selected,
+                    "last_form_setup_signature": last_form_setup_signature[:1000],
                     "graphql_candidates": graphql_candidates[-12:],
                     "form_candidates": await self._ad_account_form_candidates(),
                     "ui_state": await self._ad_account_ui_state(),
