@@ -4125,6 +4125,173 @@ class FacebookBusinessBrowser:
             pass
         return []
 
+    async def _click_ad_account_create_entry_by_visible_text(self) -> bool:
+        """Click a visible Create-new-RK label even if Meta omitted ARIA roles.
+
+        Meta frequently nests localized menu text in plain span/div nodes while
+        the actual pointer handler lives on an ancestor.  Search by semantic
+        text first, then climb to the nearest actionable ancestor instead of
+        requiring a correct button/menuitem role.
+        """
+        if self.page is None:
+            return False
+
+        try:
+            result = await self.page.evaluate(
+                """() => {
+                    const visible = el => {
+                        if (!el) return false;
+                        const r = el.getBoundingClientRect();
+                        const s = getComputedStyle(el);
+                        return r.width > 0 && r.height > 0
+                            && s.display !== 'none'
+                            && s.visibility !== 'hidden'
+                            && s.pointerEvents !== 'none';
+                    };
+                    const clean = text => (text || '')
+                        .normalize('NFKC')
+                        .replace(/\u00a0/g, ' ')
+                        .replace(/\s+/g, ' ')
+                        .trim()
+                        .toLowerCase();
+
+                    const createWords = [
+                        'create','créer','создать','створити',
+                        'erstellen','তৈরি করুন','tạo','बनाएँ','बनाएं'
+                    ];
+                    const accountWords = [
+                        'ad account','advertising account','compte publicitaire',
+                        'реклам','werbekonto','বিজ্ঞাপন অ্যাকাউন্ট',
+                        'tài khoản quảng cáo','विज्ञापन खाता','विज्ञापन खाते'
+                    ];
+
+                    const nodes = [...document.querySelectorAll(
+                        'span,div,a,button,[role],[tabindex]'
+                    )];
+                    const candidates = [];
+                    for (const el of nodes) {
+                        if (!visible(el)) continue;
+                        const r = el.getBoundingClientRect();
+                        if (r.x < 280 || r.y < 40 || r.y > 790) continue;
+
+                        const text = clean(
+                            (el.getAttribute('aria-label') || '') + ' ' +
+                            (el.getAttribute('title') || '') + ' ' +
+                            (el.innerText || el.textContent || '')
+                        );
+                        if (!text || text.length > 220) continue;
+                        const hasCreate = createWords.some(word => text.includes(word));
+                        const hasAccount = accountWords.some(word => text.includes(word));
+                        if (!hasCreate || !hasAccount) continue;
+
+                        const clickable = el.closest(
+                            'button,a,[role="button"],[role="menuitem"],'
+                            + '[role="menuitemradio"],[role="option"],'
+                            + '[tabindex]:not([tabindex="-1"])'
+                        ) || el;
+                        if (!visible(clickable)) continue;
+                        const cr = clickable.getBoundingClientRect();
+
+                        let score = 0;
+                        if (text === 'créer un compte publicitaire') score -= 500;
+                        if (text === 'create ad account') score -= 500;
+                        if (clickable !== el) score -= 100;
+                        if (cr.x >= 300) score -= 50;
+                        score += Math.round(cr.y / 10);
+
+                        candidates.push({
+                            el: clickable,
+                            text,
+                            x: Math.round(cr.x),
+                            y: Math.round(cr.y),
+                            tag: clickable.tagName || '',
+                            role: clickable.getAttribute('role') || '',
+                            score
+                        });
+                    }
+
+                    candidates.sort((a,b) => a.score - b.score);
+                    const best = candidates[0];
+                    if (!best) return {clicked:false};
+
+                    best.el.scrollIntoView({block:'center'});
+                    best.el.click();
+                    return {
+                        clicked:true,
+                        text:best.text,
+                        x:best.x,
+                        y:best.y,
+                        tag:best.tag,
+                        role:best.role
+                    };
+                }"""
+            )
+            return bool(isinstance(result, dict) and result.get("clicked"))
+        except Exception:
+            return False
+
+    async def _ad_account_right_pane_snapshot(self) -> list[str]:
+        """Capture compact visible text/controls from Meta's right pane."""
+        if self.page is None:
+            return []
+        try:
+            rows = await self.page.evaluate(
+                """() => {
+                    const visible = el => {
+                        if (!el) return false;
+                        const r = el.getBoundingClientRect();
+                        const s = getComputedStyle(el);
+                        return r.width > 0 && r.height > 0
+                            && s.display !== 'none'
+                            && s.visibility !== 'hidden';
+                    };
+                    const clean = text => (text || '')
+                        .normalize('NFKC')
+                        .replace(/\u00a0/g, ' ')
+                        .replace(/\s+/g, ' ')
+                        .trim();
+
+                    const out = [];
+                    const seen = new Set();
+                    const nodes = [
+                        ...document.querySelectorAll(
+                            'button,a,[role="button"],[role="link"],'
+                            + '[role="menuitem"],[role="menuitemradio"],'
+                            + '[role="option"],[role="dialog"],h1,h2,h3,'
+                            + '[aria-label],[title],[tabindex]'
+                        )
+                    ];
+                    for (const el of nodes) {
+                        if (!visible(el)) continue;
+                        const r = el.getBoundingClientRect();
+                        if (r.x < 280 || r.y < 35 || r.y > 795) continue;
+
+                        const text = clean(
+                            (el.getAttribute('aria-label') || '') + ' ' +
+                            (el.getAttribute('title') || '') + ' ' +
+                            (el.innerText || el.textContent || '')
+                        );
+                        if (!text || text.length > 220) continue;
+                        const row = text
+                            + ' [tag=' + (el.tagName || '')
+                            + ' role=' + (el.getAttribute('role') || '')
+                            + ' x=' + Math.round(r.x)
+                            + ' y=' + Math.round(r.y)
+                            + ']';
+                        if (seen.has(row)) continue;
+                        seen.add(row);
+                        out.push(row);
+                        if (out.length >= 80) break;
+                    }
+                    return out;
+                }"""
+            )
+            if isinstance(rows, list):
+                return [_clean(x)[:300] for x in rows if _clean(x)][:80]
+        except Exception:
+            pass
+        return []
+
     async def _wait_for_ad_account_create_entry(
         self,
         *,
@@ -4151,6 +4318,9 @@ class FacebookBusinessBrowser:
                 ),
                 click_timeout_ms=2500,
             ):
+                return True
+
+            if await self._click_ad_account_create_entry_by_visible_text():
                 return True
 
             try:
@@ -4393,10 +4563,19 @@ class FacebookBusinessBrowser:
                     attempts.append(attempt)
                     continue
 
+                before_snapshot = set(
+                    await self._ad_account_right_pane_snapshot()
+                )
                 await item.scroll_into_view_if_needed(timeout=1500)
                 await item.click(timeout=2500)
                 attempt["clicked"] = True
-                await self.page.wait_for_timeout(300)
+                await self.page.wait_for_timeout(450)
+                after_snapshot = await self._ad_account_right_pane_snapshot()
+                attempt["new_right_pane"] = [
+                    row
+                    for row in after_snapshot
+                    if row not in before_snapshot
+                ][:20]
 
                 if await self._wait_for_ad_account_create_entry(
                     timeout_seconds=3.5,
@@ -4442,6 +4621,10 @@ class FacebookBusinessBrowser:
             popup_head = ""
             if isinstance(popup, list) and popup:
                 popup_head = _clean(popup[0])[:120]
+            new_right_pane = row.get("new_right_pane")
+            new_head = ""
+            if isinstance(new_right_pane, list) and new_right_pane:
+                new_head = _clean(new_right_pane[0])[:120]
             parts = [
                 f"x={int(row.get('x') or 0)}",
                 f"y={int(row.get('y') or 0)}",
@@ -4456,6 +4639,8 @@ class FacebookBusinessBrowser:
                 parts.append(f"error={error[:100]}")
             if popup_head:
                 parts.append(f"popup={popup_head}")
+            if new_head:
+                parts.append(f"new={new_head}")
             summary.append(" ".join(parts))
         return summary
 

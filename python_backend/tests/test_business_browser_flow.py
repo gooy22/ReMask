@@ -653,6 +653,49 @@ class BrowserAdAccountAddProbeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rows[1]["y"], 97)
 
 
+class BrowserAdAccountVisibleTextCreateTests(unittest.IsolatedAsyncioTestCase):
+    async def test_visible_text_create_fallback_can_click_plain_meta_node(self):
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-rk-visible-create")
+        )
+        browser.page = SimpleNamespace(
+            evaluate=AsyncMock(
+                return_value={
+                    "clicked": True,
+                    "text": "créer un compte publicitaire",
+                    "x": 810,
+                    "y": 420,
+                    "tag": "DIV",
+                    "role": "",
+                }
+            )
+        )
+
+        clicked = await browser._click_ad_account_create_entry_by_visible_text()
+
+        self.assertTrue(clicked)
+        script = browser.page.evaluate.await_args.args[0]
+        self.assertIn("compte publicitaire", script)
+        self.assertIn("closest(", script)
+
+    async def test_right_pane_snapshot_is_available_for_add_diff(self):
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-rk-pane-diff")
+        )
+        browser.page = SimpleNamespace(
+            evaluate=AsyncMock(
+                return_value=[
+                    "Créer un compte publicitaire [tag=DIV role= x=820 y=440]"
+                ]
+            )
+        )
+
+        rows = await browser._ad_account_right_pane_snapshot()
+
+        self.assertEqual(len(rows), 1)
+        self.assertIn("Créer un compte publicitaire", rows[0])
+
+
 class BrowserAdAccountCreateEntryWaitTests(unittest.IsolatedAsyncioTestCase):
     async def test_wait_for_create_entry_never_reclicks_generic_add(self):
         browser = FacebookBusinessBrowser(
