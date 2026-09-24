@@ -2077,31 +2077,53 @@ class FacebookBusinessBrowser:
 
     @staticmethod
     def _request_matches_create(request: Any, business_name: str) -> bool:
-        try:
-            if request.method.upper() != "POST":
-                return False
-            if "graphql" not in str(request.url or "").lower():
-                return False
-            post_data = str(request.post_data or "")
-        except Exception:
+        meta = _request_graphql_meta(request)
+        if meta["method"] != "POST":
+            return False
+        if "graphql" not in str(meta["url"]).lower():
             return False
 
-        decoded = unquote_plus(post_data)
-        lower = decoded.lower()
-        expected = business_name.lower()
-        return (
-            expected in lower
-            and any(
-                marker in lower
-                for marker in (
-                    "businesscreation",
-                    "createbusiness",
-                    "create_business",
-                    "business_creation",
-                    "portfolio",
-                )
-            )
+        expected = _clean(business_name).casefold()
+        if not expected:
+            return False
+
+        friendly = _clean(meta["friendly_name"]).casefold()
+        decoded = _clean(meta["decoded_raw"]).casefold()
+        input_data = meta["input"] if isinstance(meta["input"], dict) else {}
+
+        operation_markers = (
+            "businesscreation",
+            "businesscreate",
+            "createbusiness",
+            "create_business",
+            "business_creation",
         )
+        operation_match = any(
+            marker in friendly or marker in decoded
+            for marker in operation_markers
+        )
+
+        candidate_names = []
+        for key in (
+            "business_name",
+            "businessName",
+            "name",
+            "portfolio_name",
+            "portfolioName",
+        ):
+            value = input_data.get(key)
+            if isinstance(value, str) and value.strip():
+                candidate_names.append(value.strip().casefold())
+
+        name_match = (
+            expected in candidate_names
+            or expected in decoded
+        )
+
+        # The live canary has repeatedly observed
+        # useBusinessCreationMutationMutation with input.business_name.
+        # Prefer that structured evidence over fragile raw substring scanning.
+        return operation_match and name_match
 
     @staticmethod
     def _response_matches_create(response: Any, business_name: str) -> bool:
