@@ -808,7 +808,7 @@ class BrowserAdAccountFormFieldTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(browser._timezone_name_for_id(17), "Asia/Dhaka")
         self.assertEqual(browser._timezone_name_for_id(71), "Asia/Kolkata")
         self.assertEqual(browser._timezone_name_for_id(140), "Asia/Ho_Chi_Minh")
-        self.assertEqual(browser._timezone_name_for_id(137), "Europe/Kiev")
+        self.assertEqual(browser._timezone_name_for_id(137), "Europe/Kyiv")
 
     def test_choice_matching_uses_exact_currency_and_timezone_ids(self):
         browser = FacebookBusinessBrowser(
