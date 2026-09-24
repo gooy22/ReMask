@@ -95,6 +95,42 @@ class BrowserNetworkGateTests(unittest.TestCase):
         self.assertIn("media_agency", post_data)
         self.assertIn("partner", post_data)
 
+    def test_ad_account_live_request_applies_requested_currency_timezone(self):
+        request = _FakeRequest(
+            "fb_api_req_friendly_name=AdAccountCreateMutation"
+            "&doc_id=9988776655443322"
+            "&variables=%7B%22input%22%3A%7B%22business_id%22%3A"
+            "%22555666777888999%22%2C%22name%22%3A"
+            "%22ReMask%20Ads%22%2C%22currency%22%3A%22EUR%22%2C"
+            "%22timezone_id%22%3A10%7D%7D"
+        )
+        post_data, applied = _ad_account_required_attribution_post_data(
+            request,
+            currency="USD",
+            timezone_id=1,
+        )
+        self.assertEqual(applied["currency"], "USD")
+        self.assertEqual(applied["timezone_id"], 1)
+        decoded = unquote(post_data)
+        self.assertIn('"currency":"USD"', decoded)
+        self.assertIn('"timezone_id":1', decoded)
+
+    def test_ad_account_live_request_does_not_invent_currency_timezone_keys(self):
+        request = _FakeRequest(
+            "doc_id=9988776655443322"
+            "&variables=%7B%22input%22%3A%7B"
+            "%22business_id%22%3A%22555666777888999%22%7D%7D"
+        )
+        post_data, applied = _ad_account_required_attribution_post_data(
+            request,
+            currency="USD",
+            timezone_id=1,
+        )
+        self.assertNotIn("currency", applied)
+        self.assertNotIn("timezone_id", applied)
+        self.assertNotIn("%22currency%22", post_data)
+        self.assertNotIn("%22timezone_id%22", post_data)
+
     def test_ad_account_required_attribution_preserves_meta_values(self):
         request = _FakeRequest(
             "doc_id=9988776655443322"

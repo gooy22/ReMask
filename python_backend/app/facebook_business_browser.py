@@ -167,7 +167,9 @@ def _ad_account_required_attribution_post_data(
     end_advertiser: str = "NONE",
     media_agency: str = "NONE",
     partner: str = "NONE",
-) -> tuple[str, dict[str, str]]:
+    currency: str = "",
+    timezone_id: int | None = None,
+) -> tuple[str, dict[str, Any]]:
     """Fill Meta-required attribution fields on its own Add-RK GraphQL request.
 
     Meta's Business /adaccount contract requires end_advertiser,
@@ -213,12 +215,33 @@ def _ad_account_required_attribution_post_data(
         "media_agency": _clean(media_agency) or "NONE",
         "partner": _clean(partner) or "NONE",
     }
-    applied: dict[str, str] = {}
+    applied: dict[str, Any] = {}
     for key, value in defaults.items():
         current = input_data.get(key)
         if current is None or (isinstance(current, str) and not current.strip()):
             input_data[key] = value
             applied[key] = value
+
+    # Keep Meta's own live mutation shape/doc_id, but make the user-selected
+    # immutable account settings effective when those keys are present in the
+    # request. We deliberately do not invent new schema fields.
+    requested_currency = _clean(currency).upper()
+    if requested_currency and "currency" in input_data:
+        if _clean(input_data.get("currency")).upper() != requested_currency:
+            input_data["currency"] = requested_currency
+            applied["currency"] = requested_currency
+
+    if timezone_id is not None and "timezone_id" in input_data:
+        try:
+            requested_timezone = int(timezone_id)
+        except (TypeError, ValueError):
+            requested_timezone = None
+        if (
+            requested_timezone is not None
+            and input_data.get("timezone_id") != requested_timezone
+        ):
+            input_data["timezone_id"] = requested_timezone
+            applied["timezone_id"] = requested_timezone
 
     if not applied:
         return raw, {}
@@ -4002,6 +4025,67 @@ class FacebookBusinessBrowser:
         value = _clean(result).lower()
         return value if value in {"create", "add"} else ""
 
+    async def _ad_account_form_candidates(self) -> list[str]:
+        """Compact visible inputs/selectors/buttons in the Add-RK dialog."""
+        if self.page is None:
+            return []
+        try:
+            rows = await self.page.evaluate(
+                """() => {
+                    const visible = el => {
+                        const r = el.getBoundingClientRect();
+                        const s = getComputedStyle(el);
+                        return r.width > 0 && r.height > 0
+                            && s.display !== 'none'
+                            && s.visibility !== 'hidden';
+                    };
+                    const clean = text => (text || '')
+                        .normalize('NFKC')
+                        .replace(/\u00a0/g, ' ')
+                        .replace(/\s+/g, ' ')
+                        .trim();
+                    const nodes = [
+                        ...document.querySelectorAll(
+                            '[role="dialog"] input,[role="dialog"] select,'
+                            + '[role="dialog"] [role="combobox"],'
+                            + '[role="dialog"] button,[role="dialog"] [role="button"]'
+                        )
+                    ];
+                    const out = [];
+                    for (const el of nodes) {
+                        if (!visible(el)) continue;
+                        const r = el.getBoundingClientRect();
+                        const text = clean(
+                            (el.getAttribute('aria-label') || '') + ' ' +
+                            (el.getAttribute('placeholder') || '') + ' ' +
+                            (el.getAttribute('name') || '') + ' ' +
+                            (el.innerText || el.textContent || '')
+                        );
+                        const value = (
+                            typeof el.value === 'string'
+                                ? clean(el.value)
+                                : ''
+                        );
+                        out.push(
+                            (text || '<no-label>')
+                            + (value ? ' value=' + value : '')
+                            + ' [tag=' + (el.tagName || '')
+                            + ' role=' + (el.getAttribute('role') || '')
+                            + ' x=' + Math.round(r.x)
+                            + ' y=' + Math.round(r.y)
+                            + ']'
+                        );
+                        if (out.length >= 40) break;
+                    }
+                    return out;
+                }"""
+            )
+            if isinstance(rows, list):
+                return [_clean(x)[:320] for x in rows if _clean(x)][:40]
+        except Exception:
+            pass
+        return []
+
     async def _wait_for_ad_account_create_entry(
         self,
         *,
@@ -4663,7 +4747,11 @@ class FacebookBusinessBrowser:
                 return
 
             patched_post_data, attribution_defaults = (
-                _ad_account_required_attribution_post_data(request)
+                _ad_account_required_attribution_post_data(
+                    request,
+                    currency=_clean(currency).upper(),
+                    timezone_id=int(timezone_id),
+                )
             )
             if attribution_defaults:
                 await checkpoint(
@@ -4671,7 +4759,7 @@ class FacebookBusinessBrowser:
                         "phase": "CREATE_SUBMITTED",
                         "activity": "AD_ACCOUNT_REQUIRED_ATTRIBUTION_APPLIED",
                         "activity_at": int(time.time()),
-                        "required_attribution_defaults": sorted(
+                        "request_fields_applied": sorted(
                             attribution_defaults.keys()
                         ),
                     }
@@ -4795,6 +4883,9 @@ class FacebookBusinessBrowser:
                     "ad_account_create_submit_missing"
                 )
                 diag["clicked_any"] = clicked_any
+                diag["form_candidates"] = await self._ad_account_form_candidates()
+                diag["requested_currency"] = _clean(currency).upper()
+                diag["requested_timezone_id"] = int(timezone_id)
                 raise BrowserBusinessError(
                     "AD_ACCOUNT_CREATE_UI_CHANGED",
                     (
