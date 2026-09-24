@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from dataclasses import dataclass
 from typing import Any
 
@@ -256,9 +257,23 @@ class MetaSession:
             if current is None:
                 from .facebook_business_browser import FacebookBusinessBrowser
 
+                try:
+                    browser_timeout = int(
+                        os.getenv("REMASK_BM_BROWSER_TIMEOUT_SECONDS", "45")
+                    )
+                except (TypeError, ValueError):
+                    browser_timeout = 45
+                browser_timeout = max(
+                    20,
+                    min(
+                        browser_timeout,
+                        90,
+                    ),
+                )
+
                 current = FacebookBusinessBrowser(
                     self.context,
-                    timeout_seconds=max(20, int(self.timeout.total or 20)),
+                    timeout_seconds=browser_timeout,
                 )
                 await current.open()
                 self._business_browser = current
