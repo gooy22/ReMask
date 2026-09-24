@@ -1004,6 +1004,19 @@ function pythonWorkerApplyPages(cfg, pages, sourceLabel) {
   }) || null;
 
   cfg.page.value = String((preferred && preferred.id) || '');
+
+  const currentName = String((cfg.name && cfg.name.value) || '').trim();
+  const isGeneratedName =
+    /^ReMask(?:_BM_| Business )\d+$/i.test(currentName);
+  if (
+    cfg.name &&
+    isGeneratedName &&
+    preferred &&
+    String(preferred.name || '').trim()
+  ) {
+    cfg.name.value = String(preferred.name || '').trim().slice(0, 255);
+  }
+
   cfg.page.disabled = false;
   cfg.loaded = true;
   cfg.error = '';
@@ -1136,7 +1149,7 @@ async function pythonWorkerOpenOwnBmModal() {
     nameField.className = 'pwbm-field';
     const name = document.createElement('input');
     name.type = 'text';
-    name.value = 'ReMask_BM_' + (index + 1);
+    name.value = 'ReMask Business ' + (index + 1);
     name.placeholder = 'Название Business Manager';
     const nameHint = document.createElement('small');
     nameHint.textContent = 'Название BM';
