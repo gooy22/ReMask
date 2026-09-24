@@ -31,6 +31,55 @@ class TaskRegistry:
 async def _proxy_check(session: ProfileSession, payload: dict[str,Any]) -> dict[str,Any]:
     return await session.proxy_check()
 
+def _consume_background_task(task: asyncio.Task[Any]) -> None:
+    try:
+        task.result()
+    except BaseException:
+        # The task is intentionally detached only after a hard watchdog fires.
+        # Its browser/session is closed by the owning ProfileSession context.
+        pass
+
+
+async def _await_with_hard_watchdog(
+    awaitable: Awaitable[dict[str, Any]],
+    *,
+    timeout_seconds: float,
+    code: str,
+    message: str,
+) -> dict[str, Any]:
+    """
+    Wall-clock watchdog that does not wait for cooperative cancellation.
+
+    asyncio.wait_for() can exceed its nominal timeout because it waits until
+    the wrapped coroutine acknowledges cancellation. Playwright/Chromium can
+    wedge during that cancellation path. This watchdog marks the job failed
+    immediately, requests cancellation, and lets ProfileSession.close() kill
+    the browser independently.
+    """
+    task = asyncio.create_task(awaitable)
+    try:
+        done, _ = await asyncio.wait(
+            {task},
+            timeout=max(0.01, float(timeout_seconds)),
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+    except BaseException:
+        task.cancel()
+        task.add_done_callback(_consume_background_task)
+        raise
+
+    if task not in done:
+        task.cancel()
+        task.add_done_callback(_consume_background_task)
+        raise ProvisioningError(
+            code,
+            message,
+            retryable=True,
+        )
+
+    return task.result()
+
+
 class WorkerPool:
     def __init__(self, store: JobStore, mirror: SnapshotMirror | None = None, concurrency: int = 30) -> None:
         self.store=store
@@ -100,14 +149,56 @@ class WorkerPool:
                         try:
                             action=str(task['action'])
                             if action=='provisioning':
-                                result=await self.provisioning.run(
-                                    item_id=item_id,
-                                    profile_id=profile_id,
-                                    context=context,
-                                    session=session,
-                                    payload=task['payload'],
-                                    task_idempotency_key=task.get('idempotency_key'),
-                                )
+                                payload=task['payload']
+                                raw_steps=payload.get('steps') if isinstance(payload,dict) else None
+                                normalized_steps=[
+                                    str(value).strip().upper()
+                                    for value in (raw_steps or [])
+                                ] if isinstance(raw_steps,list) else []
+
+                                add_bm_only=normalized_steps==[
+                                    'PROXY_CHECK',
+                                    'BUSINESS',
+                                ]
+
+                                if add_bm_only:
+                                    try:
+                                        hard_timeout=float(
+                                            os.getenv(
+                                                'REMASK_ADD_BM_HARD_TIMEOUT_SECONDS',
+                                                '210',
+                                            )
+                                        )
+                                    except (TypeError,ValueError):
+                                        hard_timeout=210.0
+                                    hard_timeout=max(90.0,min(hard_timeout,600.0))
+
+                                    result=await _await_with_hard_watchdog(
+                                        self.provisioning.run(
+                                            item_id=item_id,
+                                            profile_id=profile_id,
+                                            context=context,
+                                            session=session,
+                                            payload=payload,
+                                            task_idempotency_key=task.get('idempotency_key'),
+                                        ),
+                                        timeout_seconds=hard_timeout,
+                                        code='ADD_BM_HARD_TIMEOUT',
+                                        message=(
+                                            'Add BM worker watchdog exceeded '
+                                            f'{int(hard_timeout)}s; '
+                                            'Chromium cancellation did not complete.'
+                                        ),
+                                    )
+                                else:
+                                    result=await self.provisioning.run(
+                                        item_id=item_id,
+                                        profile_id=profile_id,
+                                        context=context,
+                                        session=session,
+                                        payload=payload,
+                                        task_idempotency_key=task.get('idempotency_key'),
+                                    )
                             else:
                                 result=await self.registry.execute(action,session,task['payload'])
                             await self.store.set_task_success(task['id'],result)
