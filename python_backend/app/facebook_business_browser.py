@@ -2405,7 +2405,7 @@ class FacebookBusinessBrowser:
         business_name: str,
         *,
         before_submit: CheckpointCallback | None = None,
-    ) -> tuple[str, str]:
+    ) -> tuple[str, str, str]:
         if self.page is None:
             raise BrowserBusinessError(
                 "BROWSER_NOT_OPEN",
@@ -2534,10 +2534,9 @@ class FacebookBusinessBrowser:
             payload = _decode_graphql_text(raw)
 
             business_id = ""
+            response_path = ""
             if payload is not None:
-                ids = _walk_business_ids(payload)
-                if ids:
-                    business_id = ids[0][0]
+                business_id, response_path = _extract_created_business_id(payload)
 
             friendly = ""
             try:
@@ -2586,7 +2585,7 @@ class FacebookBusinessBrowser:
                     },
                 )
 
-            return business_id, friendly
+            return business_id, friendly, response_path
 
         except BrowserBusinessError:
             raise
@@ -2594,7 +2593,7 @@ class FacebookBusinessBrowser:
             # If CREATE was actually sent, the network gate has already
             # persisted CREATE_SUBMITTED. A missing response is reconciled from
             # the Business portfolio inventory and is never blindly retried.
-            return "", ""
+            return "", "", ""
         finally:
             if not gate_future.done():
                 gate_future.cancel()
