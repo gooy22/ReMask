@@ -181,10 +181,34 @@ def _decode_graphql_text(raw: str) -> Any:
         body = body[len("for (;;);"):].lstrip()
     if not body:
         return None
+
     try:
         return json.loads(body)
     except (json.JSONDecodeError, ValueError):
-        return None
+        pass
+
+    # Facebook/Relay may stream several JSON payloads as newline-delimited
+    # chunks. Keep all successfully decoded chunks: downstream ID/error
+    # walkers already recurse through lists.
+    chunks: list[Any] = []
+    for raw_line in body.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith("for (;;);"):
+            line = line[len("for (;;);"):].lstrip()
+        if not line:
+            continue
+        try:
+            chunks.append(json.loads(line))
+        except (json.JSONDecodeError, ValueError):
+            continue
+
+    if len(chunks) == 1:
+        return chunks[0]
+    if chunks:
+        return chunks
+    return None
 
 
 def _graphql_error_details(payload: Any) -> list[dict[str, Any]]:
