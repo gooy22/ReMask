@@ -483,6 +483,7 @@ class FacebookBusinessBrowser:
         "Werbekonto erstellen",
         "Créer un nouveau compte publicitaire",
         "Créer un compte publicitaire",
+        "Nouveau compte publicitaire",
     )
     AD_ACCOUNT_SUBMIT_NAMES = (
         "Create ad account",
@@ -555,6 +556,7 @@ class FacebookBusinessBrowser:
         "Добавить",
         "Додати",
         "Hinzufügen",
+        "Ajouter",
     )
 
     ADD_EXISTING_PAGE_NAMES = (
