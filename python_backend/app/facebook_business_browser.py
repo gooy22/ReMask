@@ -1269,7 +1269,11 @@ class FacebookBusinessBrowser:
         }
         return False
 
-    async def _try_open_top_left_portfolio_menu(self) -> bool:
+    async def _try_open_top_left_portfolio_menu(
+        self,
+        *,
+        skip_known_asset: bool = False,
+    ) -> bool:
         if self.page is None:
             return False
 
@@ -1279,7 +1283,7 @@ class FacebookBusinessBrowser:
         # Meta can pin Business Suite to a Page via ?asset_id=... and then
         # redirect direct /reg/ navigation back to Home. In that state, use
         # the Page already known in ProfileContext as the selector anchor.
-        if await self._try_open_known_asset_selector():
+        if not skip_known_asset and await self._try_open_known_asset_selector():
             return True
 
         # Meta serves at least two Business Suite sidebar variants.
@@ -1553,6 +1557,98 @@ class FacebookBusinessBrowser:
 
         if await self._form_ready():
             return True
+
+        # Live profile-4 evidence showed Meta redirecting /reg/ back to
+        # latest/home?asset_id=<PageID>. Once we are already pinned to a Page
+        # that ReMask knows belongs to this profile, repeatedly navigating
+        # ROOT -> /reg/ -> HOME only burns the whole BUSINESS timeout and lands
+        # back in the same state. Handle that state once, with bounded selector
+        # probes, and fail fast with diagnostics if the Create surface is not
+        # reachable.
+        current_asset = ""
+        try:
+            current_query = parse_qs(urlsplit(_clean(self.page.url)).query)
+            current_asset = _digits(
+                (
+                    current_query.get("asset_id")
+                    or current_query.get("assetId")
+                    or [""]
+                )[0]
+            )
+        except Exception:
+            current_asset = ""
+
+        known_page_ids = {
+            _digits(row.get("id"))
+            for row in (getattr(self.context, "pages", None) or [])
+            if isinstance(row, dict) and _digits(row.get("id"))
+        }
+        pinned_known_asset = bool(
+            open_form
+            and current_asset
+            and current_asset in known_page_ids
+        )
+
+        if pinned_known_asset:
+            self._last_selector_diagnostic = {
+                **self._last_selector_diagnostic,
+                "asset_context_fast_path": {
+                    "asset_id": current_asset,
+                    "url": _clean(self.page.url),
+                },
+            }
+
+            targeted_open = False
+            try:
+                targeted_open = await asyncio.wait_for(
+                    self._try_open_known_asset_selector(),
+                    timeout=15.0,
+                )
+            except asyncio.TimeoutError:
+                self._last_selector_diagnostic = {
+                    **self._last_selector_diagnostic,
+                    "asset_selector_timeout": 15,
+                }
+
+            if targeted_open:
+                if await self._click_named(self.CREATE_NAMES):
+                    await self._assert_authenticated()
+                    if await self._wait_for_form_ready(
+                        timeout_ms=6500,
+                        interval_ms=250,
+                    ):
+                        return True
+
+            generic_open = False
+            try:
+                generic_open = await asyncio.wait_for(
+                    self._try_open_top_left_portfolio_menu(
+                        skip_known_asset=True,
+                    ),
+                    timeout=20.0,
+                )
+            except asyncio.TimeoutError:
+                self._last_selector_diagnostic = {
+                    **self._last_selector_diagnostic,
+                    "asset_generic_selector_timeout": 20,
+                }
+
+            if generic_open:
+                if await self._click_named(self.CREATE_NAMES):
+                    await self._assert_authenticated()
+                    if await self._wait_for_form_ready(
+                        timeout_ms=6500,
+                        interval_ms=250,
+                    ):
+                        return True
+
+            # Do not navigate to ROOT or /reg/ from the same known Page
+            # context: Meta already proved that /reg/ redirects back here.
+            self._last_selector_diagnostic = {
+                **self._last_selector_diagnostic,
+                "asset_context_fast_fail": True,
+            }
+            return False
 
         menu_open = await self._try_open_top_left_portfolio_menu()
         if menu_open:
