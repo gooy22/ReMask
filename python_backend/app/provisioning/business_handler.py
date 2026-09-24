@@ -135,7 +135,6 @@ async def business_handler(
     display_name = _clean(
         params.get("profile_display_name")
         or getattr(context, "display_name", "")
-        or profile_id
     )
 
     step_state = kwargs.get("step_state")
