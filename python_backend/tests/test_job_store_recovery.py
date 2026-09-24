@@ -1,3 +1,4 @@
+import asyncio
 import tempfile
 import time
 import unittest
@@ -5,6 +6,8 @@ from pathlib import Path
 
 from app.store import JobStore
 from app.provisioning.state import ProvisioningStateStore
+from app.runner import _await_with_hard_watchdog
+from app.provisioning.models import ProvisioningError
 
 
 class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
@@ -73,6 +76,35 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(item_id, recovered)
         self.assertEqual(item["status"], "QUEUED")
         self.assertEqual(tasks[0]["status"], "QUEUED")
+
+    async def test_hard_watchdog_does_not_wait_for_slow_cancellation(self):
+        async def cancellation_resistant():
+            try:
+                await asyncio.sleep(10)
+            except asyncio.CancelledError:
+                # Simulate a Playwright coroutine that takes time to unwind
+                # after cancellation. The watchdog must return before this
+                # cleanup completes.
+                await asyncio.sleep(0.20)
+                return {"late": True}
+
+        started = time.monotonic()
+        with self.assertRaises(ProvisioningError) as ctx:
+            await _await_with_hard_watchdog(
+                cancellation_resistant(),
+                timeout_seconds=0.02,
+                code="TEST_HARD_TIMEOUT",
+                message="test watchdog",
+            )
+        elapsed = time.monotonic() - started
+
+        self.assertEqual(ctx.exception.code, "TEST_HARD_TIMEOUT")
+        self.assertTrue(ctx.exception.retryable)
+        self.assertLess(elapsed, 0.12)
+
+        # Let the detached cancellation cleanup finish so the test loop exits
+        # without leaving a pending task.
+        await asyncio.sleep(0.25)
 
     async def test_finalize_marks_all_success_tasks_success(self):
         job_id, item_id = self._seed(task_status="SUCCESS")
