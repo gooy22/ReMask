@@ -1599,7 +1599,34 @@ async def attach_page_to_business(
             raise BusinessMutationError(
                 "SET_PRIMARY_PAGE_META_ERROR",
                 diagnostic,
-                retryable=True,
+                retryable=(failure_kind == "network"),
+                payload=response,
+                candidate=candidate,
+            )
+
+        data = response.get("data")
+        if not isinstance(data, dict) or not data:
+            diagnostic = _diagnostic(
+                candidate,
+                response,
+                "SET_PRIMARY_PAGE returned no confirmable data",
+            )
+            record_result(
+                SET_PRIMARY_PAGE_OPERATION,
+                candidate,
+                success=False,
+                reason=diagnostic,
+                profile_id=clean_profile_id,
+                failure_kind="other",
+            )
+            raise BusinessMutationError(
+                "SET_PRIMARY_PAGE_RESULT_UNKNOWN",
+                (
+                    "SET_PRIMARY_PAGE returned no GraphQL errors but also no "
+                    "confirmable data. Business creation must not be repeated; "
+                    "Page attachment should be verified through Business Settings."
+                ),
+                retryable=False,
                 payload=response,
                 candidate=candidate,
             )
