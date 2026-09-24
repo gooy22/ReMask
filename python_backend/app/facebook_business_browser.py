@@ -504,6 +504,12 @@ def _normalize_ad_account_id(value: Any) -> str:
 
 
 def _extract_created_ad_account_id(payload: Any) -> tuple[str, str]:
+    """Extract exactly one Ad Account ID from a matched CREATE response.
+
+    Known response nodes are preferred. A conservative recursive fallback
+    tolerates Relay node renames but only accepts account_id/ad_account_id
+    fields or an id whose immediate parent explicitly names an ad account.
+    """
     known_nodes = (
         "ad_account_create",
         "business_ad_account_create",
@@ -513,6 +519,14 @@ def _extract_created_ad_account_id(payload: Any) -> tuple[str, str]:
     )
     chunks = payload if isinstance(payload, list) else [payload]
     matches: list[tuple[str, str]] = []
+
+    def add(candidate: Any, path: str) -> None:
+        account_id = _normalize_ad_account_id(candidate)
+        if not account_id:
+            return
+        row = (account_id, path)
+        if row not in matches:
+            matches.append(row)
 
     for chunk in chunks:
         if not isinstance(chunk, dict):
@@ -525,40 +539,57 @@ def _extract_created_ad_account_id(payload: Any) -> tuple[str, str]:
             node = data.get(node_name)
             if not isinstance(node, dict):
                 continue
-
-            direct = _normalize_ad_account_id(
-                node.get("id") or node.get("account_id")
+            add(
+                node.get("id") or node.get("account_id"),
+                f"data.{node_name}.id",
             )
-            if direct:
-                matches.append((direct, f"data.{node_name}.id"))
-
             for child_name in ("ad_account", "account"):
                 child = node.get(child_name)
                 if not isinstance(child, dict):
                     continue
-                nested = _normalize_ad_account_id(
-                    child.get("id") or child.get("account_id")
+                add(
+                    child.get("id") or child.get("account_id"),
+                    f"data.{node_name}.{child_name}.id",
                 )
-                if nested:
-                    matches.append(
-                        (
-                            nested,
-                            f"data.{node_name}.{child_name}.id",
+
+        def walk(value: Any, path: str = "data") -> None:
+            if isinstance(value, dict):
+                parent_key = path.rsplit(".", 1)[-1].casefold()
+                for key, child in value.items():
+                    key_text = str(key or "")
+                    key_folded = key_text.casefold()
+                    child_path = f"{path}.{key_text}"
+
+                    if key_folded in {"account_id", "ad_account_id"}:
+                        add(child, child_path)
+                    elif (
+                        key_folded == "id"
+                        and (
+                            "ad_account" in parent_key
+                            or "adaccount" in parent_key
+                            or "advertising_account" in parent_key
                         )
-                    )
+                    ):
+                        add(child, child_path)
+
+                    walk(child, child_path)
+            elif isinstance(value, list):
+                for index, child in enumerate(value):
+                    walk(child, f"{path}[{index}]")
+
+        walk(data)
 
     unique = sorted({account_id for account_id, _ in matches})
     if len(unique) != 1:
         return "", ""
 
     account_id = unique[0]
-    path = next(
-        response_path
-        for candidate, response_path in matches
+    response_path = next(
+        path
+        for candidate, path in matches
         if candidate == account_id
     )
-    return account_id, path
-
+    return account_id, response_path
 
 def _walk_business_ids(value: Any, path: str = "") -> list[tuple[str, str]]:
     found: list[tuple[str, str]] = []
@@ -6731,6 +6762,7 @@ class FacebookBusinessBrowser:
         try:
             clicked_any = False
             own_business_selected = False
+            final_click_attempted = False
             submit_attempts: list[dict[str, Any]] = []
 
             for step in range(12):
@@ -6866,19 +6898,34 @@ class FacebookBusinessBrowser:
                         last_form_setup_signature = transition_signature
                     continue
 
-                await checkpoint(
-                    {
-                        "phase": "CREATE_CLICK_INTENT",
-                        "activity": "AD_ACCOUNT_CREATE_CLICK_INTENT",
-                        "activity_at": int(time.time()),
-                    }
-                )
+                if final_click_attempted:
+                    submit_attempts.append(
+                        {
+                            "step": step,
+                            "action": "final_blocked_duplicate",
+                        }
+                    )
+                    break
+
+                async def persist_final_click_intent() -> None:
+                    await checkpoint(
+                        {
+                            "phase": "CREATE_CLICK_INTENT",
+                            "activity": "AD_ACCOUNT_CREATE_CLICK_INTENT",
+                            "activity_at": int(time.time()),
+                        }
+                    )
+
                 final_clicked = await self._click_named(
                     final_names,
+                    before_click=persist_final_click_intent,
                     click_timeout_ms=2500,
                 )
                 final_meta: dict[str, Any] = {}
                 if not final_clicked:
+                    # The role-independent fallback clicks inside page.evaluate,
+                    # so persist uncertainty immediately before invoking it.
+                    await persist_final_click_intent()
                     final_meta = (
                         await self._click_ad_account_form_action_by_visible_text(
                             "final"
@@ -6888,10 +6935,13 @@ class FacebookBusinessBrowser:
 
                 if final_clicked:
                     clicked_any = True
+                    final_click_attempted = True
+                    candidate_count_before_wait = len(graphql_candidates)
+
                     try:
                         await asyncio.wait_for(
                             asyncio.shield(gate_future),
-                            timeout=4.0,
+                            timeout=6.0,
                         )
                     except asyncio.TimeoutError:
                         pass
@@ -6913,6 +6963,9 @@ class FacebookBusinessBrowser:
                         label=f"submit_step_{step}_after_final",
                         require_signature_change=True,
                     )
+                    new_network_candidates = graphql_candidates[
+                        candidate_count_before_wait:
+                    ]
                     submit_attempts.append(
                         {
                             "step": step,
@@ -6921,9 +6974,35 @@ class FacebookBusinessBrowser:
                             "gate": "not_matched",
                             "state_after": _clean(transition.get("state")),
                             "errors": list(transition.get("errors") or [])[:3],
+                            "new_graphql_candidates": new_network_candidates[-8:],
                         }
                     )
-                    continue
+
+                    await checkpoint(
+                        {
+                            "phase": "CREATE_RESULT_UNKNOWN",
+                            "resume_from": "RECONCILE_CREATE",
+                            "activity": "AD_ACCOUNT_FINAL_CLICK_UNMATCHED",
+                            "activity_at": int(time.time()),
+                            "graphql_candidates": new_network_candidates[-8:],
+                        }
+                    )
+                    raise BrowserBusinessError(
+                        "AD_ACCOUNT_CREATE_RESULT_UNKNOWN",
+                        (
+                            "Meta final Create was clicked, but ReMask did not "
+                            "match a definitive CREATE mutation. A second final "
+                            "click is blocked; reconcile inventory before retry."
+                        ),
+                        retryable=True,
+                        diagnostic={
+                            "stage": "ad_account_final_click_unmatched",
+                            "final_meta": final_meta,
+                            "state_after": transition,
+                            "graphql_candidates": graphql_candidates[-12:],
+                            "submit_attempts": submit_attempts[-12:],
+                        },
+                    )
 
                 submit_attempts.append(
                     {
@@ -6951,6 +7030,7 @@ class FacebookBusinessBrowser:
                 diag = {
                     "stage": "ad_account_create_submit_missing",
                     "clicked_any": clicked_any,
+                    "final_click_attempted": final_click_attempted,
                     "requested_currency": _clean(currency).upper(),
                     "requested_timezone_id": int(timezone_id),
                     "requested_timezone_name": self._timezone_name_for_id(

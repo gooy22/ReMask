@@ -178,6 +178,35 @@ class BrowserNetworkGateTests(unittest.TestCase):
         self.assertEqual(applied, {})
         self.assertEqual(post_data, request.post_data)
 
+    def test_ad_account_response_id_accepts_unique_renamed_account_node(self):
+        account_id, path = _extract_created_ad_account_id(
+            {
+                "data": {
+                    "settingsCreateAdvertisingAccount": {
+                        "adAccount": {"id": "act_123456789012345"}
+                    }
+                }
+            }
+        )
+        self.assertEqual(account_id, "act_123456789012345")
+        self.assertIn("adAccount.id", path)
+
+    def test_ad_account_response_id_rejects_ambiguous_generic_ids(self):
+        account_id, path = _extract_created_ad_account_id(
+            {
+                "data": {
+                    "settingsCreateAdvertisingAccount": {
+                        "adAccount": {"id": "act_111111111111111"},
+                        "secondary": {
+                            "ad_account_id": "act_222222222222222"
+                        },
+                    }
+                }
+            }
+        )
+        self.assertEqual(account_id, "")
+        self.assertEqual(path, "")
+
     def test_ad_account_response_id_known_shape(self):
         account_id, path = _extract_created_ad_account_id(
             {
@@ -900,6 +929,16 @@ class BrowserAdAccountTimezoneSafetyTests(unittest.TestCase):
         )
         self.assertIn("Europe/Kiev", source)
         self.assertIn("Kyiv", source)
+
+
+class BrowserAdAccountExactlyOnceSubmitTests(unittest.TestCase):
+    def test_unmatched_final_click_becomes_unknown_instead_of_second_click(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser.create_ad_account
+        )
+        self.assertIn("final_click_attempted = True", source)
+        self.assertIn("AD_ACCOUNT_FINAL_CLICK_UNMATCHED", source)
+        self.assertIn("A second final click is blocked", source)
 
 
 class BrowserAdAccountSubmitProgressionTests(unittest.TestCase):
