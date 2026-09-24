@@ -2933,6 +2933,8 @@ class FacebookBusinessBrowser:
                     await before_submit(
                         {
                             "phase": "PAGE_ADD_SUBMITTED",
+                            "activity": "PAGE_ADD_SUBMITTED",
+                            "activity_at": int(time.time()),
                             "business_id": business,
                             "primary_page_id": page,
                             "page_submitted_at": int(time.time()),
@@ -3013,6 +3015,8 @@ class FacebookBusinessBrowser:
                 await before_submit(
                     {
                         "phase": "PAGE_ADD_CLICK_INTENT",
+                        "activity": "PAGE_ADD_CLICK_INTENT",
+                        "activity_at": int(time.time()),
                         "business_id": business,
                         "primary_page_id": page,
                         "page_click_intent_at": int(time.time()),
