@@ -368,6 +368,7 @@ class BrowserAssetContextFastFailTests(unittest.IsolatedAsyncioTestCase):
         browser._form_ready = AsyncMock(return_value=False)
         browser._try_open_known_asset_selector = AsyncMock(return_value=False)
         browser._try_open_top_left_portfolio_menu = AsyncMock(return_value=False)
+        browser._try_open_ads_manager_create_entry = AsyncMock(return_value=False)
         browser._goto = AsyncMock()
 
         ready = await browser._open_create_entry(
@@ -381,6 +382,7 @@ class BrowserAssetContextFastFailTests(unittest.IsolatedAsyncioTestCase):
         browser._try_open_top_left_portfolio_menu.assert_awaited_once_with(
             skip_known_asset=True,
         )
+        browser._try_open_ads_manager_create_entry.assert_awaited_once()
         self.assertTrue(
             browser._last_selector_diagnostic.get(
                 "asset_context_fast_fail"
