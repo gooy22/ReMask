@@ -632,9 +632,11 @@ class FacebookBusinessBrowser:
         "https://business.facebook.com/settings/pages/?business_id={business_id}"
     )
     SETTINGS_AD_ACCOUNTS_URLS = (
-        "https://business.facebook.com/settings/ad-accounts/?business_id={business_id}",
+        # Live 2026 Business Suite route observed on current ReMask profiles.
         "https://business.facebook.com/latest/settings/ad_accounts?business_id={business_id}",
         "https://business.facebook.com/latest/settings/ad_accounts/?business_id={business_id}",
+        # Legacy settings route remains only as a final fallback.
+        "https://business.facebook.com/settings/ad-accounts/?business_id={business_id}",
     )
     AD_ACCOUNT_SECTION_NAMES = (
         "Ad accounts",
