@@ -206,6 +206,56 @@ class BrowserAdAccountSectionNavigationTests(unittest.IsolatedAsyncioTestCase):
         )
 
 
+class BrowserAdAccountDomFallbackTests(unittest.IsolatedAsyncioTestCase):
+    async def test_section_dom_fallback_is_used_when_exact_role_name_misses(self):
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-rk-french-dom")
+        )
+        browser.page = SimpleNamespace(
+            wait_for_timeout=AsyncMock(return_value=None),
+            evaluate=AsyncMock(return_value=True),
+        )
+        browser._click_named = AsyncMock(return_value=False)
+
+        clicked = await browser._activate_ad_account_settings_section()
+
+        self.assertTrue(clicked)
+        browser.page.evaluate.assert_awaited_once()
+        browser.page.wait_for_timeout.assert_awaited_once_with(900)
+
+    async def test_dom_action_can_open_generic_add_button(self):
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-rk-french-add")
+        )
+        browser.page = SimpleNamespace(
+            evaluate=AsyncMock(return_value="add"),
+        )
+
+        action = await browser._click_ad_account_action_dom(
+            allow_generic_add=True
+        )
+
+        self.assertEqual(action, "add")
+        args = browser.page.evaluate.await_args.args
+        self.assertTrue(args[1])
+
+    async def test_dom_action_can_click_create_entry_without_generic_add(self):
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-rk-french-create")
+        )
+        browser.page = SimpleNamespace(
+            evaluate=AsyncMock(return_value="create"),
+        )
+
+        action = await browser._click_ad_account_action_dom(
+            allow_generic_add=False
+        )
+
+        self.assertEqual(action, "create")
+        args = browser.page.evaluate.await_args.args
+        self.assertFalse(args[1])
+
+
 class BrowserAdAccountHydrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_waits_through_empty_meta_shell_until_ad_account_surface_renders(self):
         browser = FacebookBusinessBrowser(

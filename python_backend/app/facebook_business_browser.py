@@ -3648,9 +3648,13 @@ class FacebookBusinessBrowser:
             roles=("link", "menuitem", "button"),
         )
         if clicked:
-            await self.page.wait_for_timeout(700)
+            await self.page.wait_for_timeout(900)
             return True
 
+        # Meta frequently wraps the visible section label inside a larger
+        # accessible-name container. Prefer the explicit ad_accounts href when
+        # available, otherwise accept a short interactive ancestor containing
+        # the localized section label.
         try:
             clicked = bool(
                 await self.page.evaluate(
@@ -3664,8 +3668,12 @@ class FacebookBusinessBrowser:
                                 && s.pointerEvents !== 'none';
                         };
                         const clean = text => (text || '')
-                            .replace(/\s+/g, ' ').trim().toLowerCase();
-                        const names = new Set([
+                            .normalize('NFKC')
+                            .replace(/\u00a0/g, ' ')
+                            .replace(/\s+/g, ' ')
+                            .trim()
+                            .toLowerCase();
+                        const names = [
                             'ad accounts',
                             'advertising accounts',
                             'рекламные аккаунты',
@@ -3677,23 +3685,42 @@ class FacebookBusinessBrowser:
                             'tài khoản quảng cáo',
                             'विज्ञापन खाते',
                             'विज्ञापन खाता'
-                        ]);
+                        ];
                         const nodes = [...document.querySelectorAll(
                             'a,button,[role="link"],[role="menuitem"],'
                             + '[role="button"],[tabindex]'
                         )];
                         const rows = nodes
                             .filter(visible)
-                            .map(el => ({
-                                el,
-                                text: clean(
+                            .map(el => {
+                                const href = clean(el.getAttribute('href') || '');
+                                const text = clean(
                                     (el.getAttribute('aria-label') || '') + ' ' +
+                                    (el.getAttribute('title') || '') + ' ' +
                                     (el.innerText || el.textContent || '')
-                                )
-                            }))
-                            .filter(row => names.has(row.text))
-                            .sort((a,b) => a.text.length - b.text.length);
+                                );
+                                const hrefMatch = (
+                                    href.includes('/settings/ad_accounts')
+                                    || href.includes('/settings/ad-accounts')
+                                );
+                                const textMatch = names.some(
+                                    name => text === name
+                                        || (
+                                            text.includes(name)
+                                            && text.length <= Math.max(140, name.length + 80)
+                                        )
+                                );
+                                return {el, href, text, hrefMatch, textMatch};
+                            })
+                            .filter(row => row.hrefMatch || row.textMatch)
+                            .sort((a,b) => {
+                                if (a.hrefMatch !== b.hrefMatch) {
+                                    return a.hrefMatch ? -1 : 1;
+                                }
+                                return a.text.length - b.text.length;
+                            });
                         if (!rows.length) return false;
+                        rows[0].el.scrollIntoView({block: 'center'});
                         rows[0].el.click();
                         return true;
                     }"""
@@ -3703,8 +3730,164 @@ class FacebookBusinessBrowser:
             clicked = False
 
         if clicked:
-            await self.page.wait_for_timeout(700)
+            await self.page.wait_for_timeout(900)
         return clicked
+
+    async def _click_ad_account_action_dom(
+        self,
+        *,
+        allow_generic_add: bool = False,
+    ) -> str:
+        """Click Meta's current Ad Account Create/Add control by visible DOM text."""
+        if self.page is None:
+            return ""
+
+        try:
+            result = await self.page.evaluate(
+                """(allowGenericAdd) => {
+                    const visible = el => {
+                        const r = el.getBoundingClientRect();
+                        const s = getComputedStyle(el);
+                        return r.width > 0 && r.height > 0
+                            && s.display !== 'none'
+                            && s.visibility !== 'hidden'
+                            && s.pointerEvents !== 'none';
+                    };
+                    const clean = text => (text || '')
+                        .normalize('NFKC')
+                        .replace(/\u00a0/g, ' ')
+                        .replace(/\s+/g, ' ')
+                        .trim()
+                        .toLowerCase();
+                    const accountWords = [
+                        'ad account','advertising account','реклам',
+                        'werbekonto','compte publicitaire',
+                        'বিজ্ঞাপন অ্যাকাউন্ট','tài khoản quảng cáo',
+                        'विज्ञापन खाता','विज्ञापन खाते'
+                    ];
+                    const createWords = [
+                        'create','new ad account',
+                        'создать','створити','erstellen',
+                        'créer','nouveau compte publicitaire',
+                        'তৈরি করুন','নতুন বিজ্ঞাপন অ্যাকাউন্ট',
+                        'tạo','tài khoản quảng cáo mới',
+                        'बनाएँ','बनाएं','नया विज्ञापन खाता'
+                    ];
+                    const addWords = [
+                        'add','ajouter','добавить','додати',
+                        'hinzufügen','যোগ করুন','thêm','जोड़ें'
+                    ];
+                    const nodes = [...document.querySelectorAll(
+                        'button,a,[role="button"],[role="menuitem"],'
+                        + '[role="menuitemradio"],[role="option"]'
+                    )];
+                    const rows = nodes
+                        .filter(visible)
+                        .map(el => ({
+                            el,
+                            text: clean(
+                                (el.getAttribute('aria-label') || '') + ' ' +
+                                (el.getAttribute('title') || '') + ' ' +
+                                (el.innerText || el.textContent || '')
+                            )
+                        }))
+                        .filter(row => row.text);
+
+                    const direct = rows
+                        .filter(row =>
+                            accountWords.some(x => row.text.includes(x))
+                            && createWords.some(x => row.text.includes(x))
+                        )
+                        .sort((a,b) => a.text.length - b.text.length);
+                    if (direct.length) {
+                        direct[0].el.scrollIntoView({block: 'center'});
+                        direct[0].el.click();
+                        return 'create';
+                    }
+
+                    if (!allowGenericAdd) return '';
+
+                    const generic = rows
+                        .filter(row => {
+                            const isButton = row.el.matches(
+                                'button,[role="button"]'
+                            );
+                            if (!isButton || row.text.length > 96) return false;
+                            if (accountWords.some(x => row.text.includes(x))) {
+                                return false;
+                            }
+                            return addWords.some(
+                                word => row.text === word
+                                    || row.text.startsWith(word + ' ')
+                            );
+                        })
+                        .sort((a,b) => a.text.length - b.text.length);
+                    if (!generic.length) return '';
+                    generic[0].el.scrollIntoView({block: 'center'});
+                    generic[0].el.click();
+                    return 'add';
+                }""",
+                bool(allow_generic_add),
+            )
+        except Exception:
+            return ""
+
+        value = _clean(result).lower()
+        return value if value in {"create", "add"} else ""
+
+    async def _ad_account_action_candidates(self) -> list[str]:
+        if self.page is None:
+            return []
+        try:
+            rows = await self.page.evaluate(
+                """() => {
+                    const visible = el => {
+                        const r = el.getBoundingClientRect();
+                        const s = getComputedStyle(el);
+                        return r.width > 0 && r.height > 0
+                            && s.display !== 'none'
+                            && s.visibility !== 'hidden';
+                    };
+                    const clean = text => (text || '')
+                        .normalize('NFKC')
+                        .replace(/\u00a0/g, ' ')
+                        .replace(/\s+/g, ' ')
+                        .trim();
+                    const markers = [
+                        'add','create','ad account','advertising account',
+                        'ajouter','créer','compte publicitaire',
+                        'добавить','создать','реклам',
+                        'додати','створити',
+                        'hinzufügen','erstellen','werbekonto',
+                        'যোগ করুন','তৈরি করুন','বিজ্ঞাপন অ্যাকাউন্ট',
+                        'thêm','tạo','tài khoản quảng cáo',
+                        'जोड़ें','बनाएँ','बनाएं','विज्ञापन खाता'
+                    ];
+                    const out = [];
+                    for (const el of document.querySelectorAll(
+                        'button,a,[role="button"],[role="menuitem"],'
+                        + '[role="menuitemradio"],[role="option"]'
+                    )) {
+                        if (!visible(el)) continue;
+                        const text = clean(
+                            (el.getAttribute('aria-label') || '') + ' ' +
+                            (el.getAttribute('title') || '') + ' ' +
+                            (el.innerText || el.textContent || '')
+                        );
+                        const lower = text.toLowerCase();
+                        if (!text || text.length > 180) continue;
+                        if (!markers.some(x => lower.includes(x))) continue;
+                        if (!out.includes(text)) out.push(text);
+                        if (out.length >= 30) break;
+                    }
+                    return out;
+                }"""
+            )
+            if isinstance(rows, list):
+                return [_clean(value)[:180] for value in rows if _clean(value)][:30]
+        except Exception:
+            pass
+        return []
 
     async def _open_ad_account_create_form(
         self,
@@ -3791,68 +3974,36 @@ class FacebookBusinessBrowser:
             self.AD_ACCOUNT_CREATE_ENTRY_NAMES
         )
         if not entry_clicked:
+            entry_clicked = (
+                await self._click_ad_account_action_dom(
+                    allow_generic_add=False
+                )
+                == "create"
+            )
+
+        if not entry_clicked:
             add_clicked = await self._click_named(self.ADD_NAMES)
-            if add_clicked:
-                await self.page.wait_for_timeout(350)
+            dom_action = ""
+            if not add_clicked:
+                dom_action = await self._click_ad_account_action_dom(
+                    allow_generic_add=True
+                )
+                if dom_action == "create":
+                    entry_clicked = True
+                add_clicked = dom_action == "add"
+
+            if add_clicked and not entry_clicked:
+                await self.page.wait_for_timeout(700)
                 entry_clicked = await self._click_named(
                     self.AD_ACCOUNT_CREATE_ENTRY_NAMES
                 )
-
-        if not entry_clicked:
-            try:
-                entry_clicked = bool(
-                    await self.page.evaluate(
-                        """() => {
-                            const visible = el => {
-                                const r = el.getBoundingClientRect();
-                                const s = getComputedStyle(el);
-                                return r.width > 0 && r.height > 0
-                                    && s.display !== 'none'
-                                    && s.visibility !== 'hidden'
-                                    && s.pointerEvents !== 'none';
-                            };
-                            const clean = text => (text || '')
-                                .replace(/\\s+/g, ' ').trim().toLowerCase();
-                            const createWords = [
-                                'create','new ad account','add a new ad account',
-                                'создать','добавить новый реклам',
-                                'створити','додати новий реклам',
-                                'erstellen','neues werbekonto',
-                                'créer','nouveau compte publicitaire',
-                                'ajouter',
-                                'তৈরি করুন','নতুন বিজ্ঞাপন অ্যাকাউন্ট',
-                                'যোগ করুন',
-                                'tạo','tài khoản quảng cáo mới','thêm',
-                                'बनाएँ','बनाएं','नया विज्ञापन खाता','जोड़ें'
-                            ];
-                            const accountWords = [
-                                'ad account','advertising account','реклам',
-                                'werbekonto','compte publicitaire',
-                                'বিজ্ঞাপন অ্যাকাউন্ট','tài khoản quảng cáo',
-                                'विज्ञापन खाता','विज्ञापन खाते'
-                            ];
-                            const nodes = [...document.querySelectorAll(
-                                'button,a,[role="button"],[role="menuitem"]'
-                            )];
-                            const rows = nodes
-                                .filter(visible)
-                                .map(el => ({el, text: clean(
-                                    (el.getAttribute('aria-label') || '') + ' ' +
-                                    (el.innerText || el.textContent || '')
-                                )}))
-                                .filter(row =>
-                                    accountWords.some(x => row.text.includes(x))
-                                    && createWords.some(x => row.text.includes(x))
-                                )
-                                .sort((a,b) => a.text.length - b.text.length);
-                            if (!rows.length) return false;
-                            rows[0].el.click();
-                            return true;
-                        }"""
+                if not entry_clicked:
+                    entry_clicked = (
+                        await self._click_ad_account_action_dom(
+                            allow_generic_add=False
+                        )
+                        == "create"
                     )
-                )
-            except Exception:
-                entry_clicked = False
 
         if not entry_clicked:
             # A late Meta render can happen even after the settings
@@ -3866,18 +4017,42 @@ class FacebookBusinessBrowser:
                 self.AD_ACCOUNT_CREATE_ENTRY_NAMES
             )
             if not entry_clicked:
+                entry_clicked = (
+                    await self._click_ad_account_action_dom(
+                        allow_generic_add=False
+                    )
+                    == "create"
+                )
+            if not entry_clicked:
                 add_clicked = await self._click_named(self.ADD_NAMES)
-                if add_clicked:
-                    await self.page.wait_for_timeout(500)
+                dom_action = ""
+                if not add_clicked:
+                    dom_action = await self._click_ad_account_action_dom(
+                        allow_generic_add=True
+                    )
+                    if dom_action == "create":
+                        entry_clicked = True
+                    add_clicked = dom_action == "add"
+
+                if add_clicked and not entry_clicked:
+                    await self.page.wait_for_timeout(700)
                     entry_clicked = await self._click_named(
                         self.AD_ACCOUNT_CREATE_ENTRY_NAMES
                     )
+                    if not entry_clicked:
+                        entry_clicked = (
+                            await self._click_ad_account_action_dom(
+                                allow_generic_add=False
+                            )
+                            == "create"
+                        )
 
         if not entry_clicked:
             diag = await self._diagnostic("ad_account_create_entry_missing")
             diag["business_id"] = business
             diag["hydration_attempts"] = hydration_attempts
             diag["section_clicked"] = section_clicked
+            diag["action_candidates"] = await self._ad_account_action_candidates()
             raise BrowserBusinessError(
                 "AD_ACCOUNT_CREATE_UI_CHANGED",
                 "Meta Ad Account create entry was not found.",
