@@ -87,6 +87,69 @@ class BrowserCreateSurfaceVisibilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await browser._has_create_surface())
 
 
+class BrowserCreateFormIdentityTests(unittest.IsolatedAsyncioTestCase):
+    async def test_four_generic_home_inputs_are_not_create_form(self):
+        class _Input:
+            def __init__(self, attrs):
+                self.attrs = attrs
+
+            async def get_attribute(self, name):
+                return self.attrs.get(name)
+
+        class _Locator:
+            def __init__(self, rows):
+                self.rows = rows
+
+            async def count(self):
+                return len(self.rows)
+
+            def nth(self, index):
+                return _Input(self.rows[index])
+
+        class _Page:
+            def locator(self, selector):
+                self.last_selector = selector
+                return _Locator(
+                    [
+                        {"type": "text", "placeholder": "Rechercher"},
+                        {"type": "text", "aria-label": "Rechercher"},
+                        {"type": "email", "placeholder": "E-mail"},
+                        {"type": "text", "name": "instagram"},
+                    ]
+                )
+
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-french-home")
+        )
+        browser.page = _Page()
+        browser._body_text = AsyncMock(
+            return_value=(
+                "Lucky Joker Connectez-vous à Instagram Créer une publication "
+                "Créer une publicité Se familiariser avec Meta Business Suite"
+            )
+        )
+
+        self.assertFalse(await browser._form_ready())
+
+    async def test_french_business_form_markers_are_recognized(self):
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-french-form")
+        )
+        browser.page = SimpleNamespace()
+        browser._body_text = AsyncMock(
+            return_value=(
+                "Nom du portefeuille business "
+                "Adresse e-mail professionnelle"
+            )
+        )
+
+        self.assertTrue(await browser._form_ready())
+
+    def test_french_final_submit_action_is_supported(self):
+        self.assertIn("Créer", FacebookBusinessBrowser.SUBMIT_NAMES)
+        self.assertIn("Continuer", FacebookBusinessBrowser.SUBMIT_NAMES)
+
+
 class BrowserAuthenticationStateTests(unittest.IsolatedAsyncioTestCase):
     async def test_temporary_feature_block_is_not_retryable(self):
         browser = FacebookBusinessBrowser(
