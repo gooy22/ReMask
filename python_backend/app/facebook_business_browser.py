@@ -4312,6 +4312,534 @@ class FacebookBusinessBrowser:
         )
         return bool(fallback.get("clicked"))
 
+    @staticmethod
+    def _timezone_name_for_id(timezone_id: int) -> str:
+        """Map common Meta timezone IDs to the names shown in the UI.
+
+        Selection first matches the live option's numeric attributes.  These
+        names are fallback tokens for Meta variants that expose only IANA text.
+        """
+        names = {
+            1: "America/Los_Angeles",
+            2: "America/Denver",
+            3: "Pacific/Honolulu",
+            4: "America/Anchorage",
+            5: "America/Phoenix",
+            6: "America/Chicago",
+            7: "America/New_York",
+            8: "Asia/Dubai",
+            12: "Europe/Vienna",
+            15: "Australia/Sydney",
+            17: "Asia/Dhaka",
+            18: "Europe/Brussels",
+            25: "America/Sao_Paulo",
+            28: "America/Vancouver",
+            35: "America/Toronto",
+            42: "Asia/Shanghai",
+            47: "Europe/Berlin",
+            53: "Africa/Cairo",
+            55: "Europe/Madrid",
+            56: "Europe/Helsinki",
+            57: "Europe/Paris",
+            58: "Europe/London",
+            62: "Asia/Hong_Kong",
+            66: "Asia/Jakarta",
+            70: "Asia/Jerusalem",
+            71: "Asia/Kolkata",
+            74: "Europe/Rome",
+            77: "Asia/Tokyo",
+            79: "Asia/Seoul",
+            86: "Africa/Casablanca",
+            94: "America/Mexico_City",
+            95: "Asia/Kuala_Lumpur",
+            96: "Africa/Lagos",
+            98: "Europe/Amsterdam",
+            100: "Pacific/Auckland",
+            104: "Asia/Manila",
+            105: "Asia/Karachi",
+            106: "Europe/Warsaw",
+            110: "Europe/Lisbon",
+            113: "Europe/Bucharest",
+            116: "Europe/Moscow",
+            126: "Asia/Riyadh",
+            128: "Asia/Singapore",
+            132: "Asia/Bangkok",
+            134: "Europe/Istanbul",
+            136: "Asia/Taipei",
+            137: "Europe/Kiev",
+            140: "Asia/Ho_Chi_Minh",
+            141: "Africa/Johannesburg",
+            145: "Asia/Kathmandu",
+            474: "UTC",
+        }
+        try:
+            return names.get(int(timezone_id), "")
+        except (TypeError, ValueError):
+            return ""
+
+    @staticmethod
+    def _ad_account_choice_matches(
+        text: str,
+        *,
+        tokens: tuple[str, ...] = (),
+        numeric_id: str = "",
+    ) -> bool:
+        raw = _clean(text)
+        folded = raw.casefold().replace("_", " ").replace("/", " ")
+        numeric = _clean(numeric_id)
+        if numeric:
+            if raw == numeric:
+                return True
+            if re.search(
+                rf"(?<!\\d){re.escape(numeric)}(?!\\d)",
+                raw,
+            ):
+                return True
+        for token in tokens:
+            candidate = (
+                _clean(token).casefold().replace("_", " ").replace("/", " ")
+            )
+            if not candidate:
+                continue
+            if len(candidate) <= 4:
+                if re.search(
+                    rf"(?<![a-z0-9]){re.escape(candidate)}(?![a-z0-9])",
+                    folded,
+                ):
+                    return True
+            elif candidate in folded:
+                return True
+        return False
+
+    async def _ad_account_visible_options(
+        self,
+    ) -> tuple[Any | None, list[dict[str, Any]]]:
+        if self.page is None:
+            return None, []
+        selector = (
+            '[role="option"]:visible,'
+            '[role="menuitem"]:visible,'
+            '[role="menuitemradio"]:visible,'
+            '[role="listbox"] [tabindex]:visible,'
+            '[role="menu"] [tabindex]:visible'
+        )
+        try:
+            locator = self.page.locator(selector)
+            count = min(await locator.count(), 100)
+        except Exception:
+            return None, []
+
+        rows: list[dict[str, Any]] = []
+        for index in range(count):
+            item = locator.nth(index)
+            try:
+                if not await item.is_visible():
+                    continue
+                box = await item.bounding_box()
+                if (
+                    not isinstance(box, dict)
+                    or float(box.get("x") or 0) < 260
+                ):
+                    continue
+                parts = []
+                for attr in (
+                    "aria-label",
+                    "title",
+                    "value",
+                    "data-value",
+                    "data-id",
+                    "data-key",
+                    "id",
+                ):
+                    parts.append(
+                        _clean(await item.get_attribute(attr))
+                    )
+                try:
+                    parts.append(_clean(await item.inner_text()))
+                except Exception:
+                    pass
+                text = " ".join(part for part in parts if part)
+                if not text:
+                    continue
+                rows.append(
+                    {
+                        "index": index,
+                        "text": text[:500],
+                        "x": round(float(box.get("x") or 0)),
+                        "y": round(float(box.get("y") or 0)),
+                    }
+                )
+            except Exception:
+                continue
+        return locator, rows[:100]
+
+    async def _select_ad_account_form_field(
+        self,
+        *,
+        field_name: str,
+        labels: tuple[str, ...],
+        tokens: tuple[str, ...],
+        numeric_id: str = "",
+    ) -> dict[str, Any]:
+        """Select one Meta Add-RK field without guessing an unrelated option."""
+        if self.page is None:
+            return {"field": field_name, "status": "no_page"}
+
+        controls: list[Any] = []
+
+        # Prefer native label wiring.
+        for label in labels:
+            pattern = re.compile(re.escape(label), re.IGNORECASE)
+            try:
+                locator = self.page.get_by_label(pattern)
+                count = min(await locator.count(), 8)
+            except Exception:
+                count = 0
+            for index in range(count):
+                try:
+                    item = locator.nth(index)
+                    if await item.is_visible():
+                        controls.append(item)
+                except Exception:
+                    continue
+
+        # Meta often renders a plain text label next to a custom combobox.
+        if not controls:
+            for label in labels:
+                pattern = re.compile(
+                    rf"^\\s*{re.escape(label)}\\s*$",
+                    re.IGNORECASE,
+                )
+                try:
+                    label_nodes = self.page.get_by_text(pattern)
+                    label_count = min(await label_nodes.count(), 8)
+                except Exception:
+                    label_count = 0
+                for label_index in range(label_count):
+                    try:
+                        label_node = label_nodes.nth(label_index)
+                        if not await label_node.is_visible():
+                            continue
+                    except Exception:
+                        continue
+                    for selector in (
+                        'xpath=ancestor::*[.//select][1]//select',
+                        'xpath=ancestor::*[.//*[@role="combobox"]][1]//*[@role="combobox"]',
+                        'xpath=ancestor::*[.//button or .//*[@role="button"]][1]//*[self::button or @role="button"]',
+                    ):
+                        try:
+                            nearby = label_node.locator(selector)
+                            count = min(await nearby.count(), 6)
+                        except Exception:
+                            count = 0
+                        for index in range(count):
+                            try:
+                                item = nearby.nth(index)
+                                if await item.is_visible():
+                                    controls.append(item)
+                            except Exception:
+                                continue
+
+        if not controls:
+            return {
+                "field": field_name,
+                "status": "field_not_found",
+            }
+
+        control = controls[0]
+        try:
+            tag_name = _clean(
+                await control.evaluate("(el) => el.tagName")
+            ).upper()
+        except Exception:
+            tag_name = ""
+
+        if tag_name == "SELECT":
+            try:
+                options = control.locator("option")
+                count = min(await options.count(), 200)
+            except Exception:
+                count = 0
+            preview: list[str] = []
+            for index in range(count):
+                option = options.nth(index)
+                try:
+                    parts = [
+                        _clean(await option.get_attribute("value")),
+                        _clean(await option.get_attribute("data-value")),
+                        _clean(await option.get_attribute("data-id")),
+                        _clean(await option.inner_text()),
+                    ]
+                    text = " ".join(part for part in parts if part)
+                    if text:
+                        preview.append(text[:300])
+                    if not self._ad_account_choice_matches(
+                        text,
+                        tokens=tokens,
+                        numeric_id=numeric_id,
+                    ):
+                        continue
+                    value = _clean(
+                        await option.get_attribute("value")
+                    )
+                    if value:
+                        await control.select_option(value=value)
+                    else:
+                        await control.select_option(index=index)
+                    return {
+                        "field": field_name,
+                        "status": "selected_native",
+                        "selected": text[:300],
+                    }
+                except Exception:
+                    continue
+            return {
+                "field": field_name,
+                "status": "native_option_not_found",
+                "options": preview[:60],
+            }
+
+        current_parts = []
+        for attr in (
+            "aria-label",
+            "title",
+            "value",
+            "data-value",
+            "data-id",
+        ):
+            try:
+                current_parts.append(
+                    _clean(await control.get_attribute(attr))
+                )
+            except Exception:
+                pass
+        try:
+            current_parts.append(_clean(await control.inner_text()))
+        except Exception:
+            pass
+        current_text = " ".join(
+            part for part in current_parts if part
+        )
+        if self._ad_account_choice_matches(
+            current_text,
+            tokens=tokens,
+            numeric_id=numeric_id,
+        ):
+            return {
+                "field": field_name,
+                "status": "already_selected",
+                "selected": current_text[:300],
+            }
+
+        try:
+            await control.scroll_into_view_if_needed(timeout=1500)
+            await control.click(timeout=2500)
+        except Exception as exc:
+            return {
+                "field": field_name,
+                "status": "open_failed",
+                "error": f"{exc.__class__.__name__}: {exc}"[:400],
+            }
+
+        await self.page.wait_for_timeout(300)
+        option_locator, rows = await self._ad_account_visible_options()
+        if option_locator is None or not rows:
+            return {
+                "field": field_name,
+                "status": "no_visible_options",
+            }
+
+        for row in rows:
+            if not self._ad_account_choice_matches(
+                row.get("text", ""),
+                tokens=tokens,
+                numeric_id=numeric_id,
+            ):
+                continue
+            try:
+                item = option_locator.nth(int(row["index"]))
+                await item.scroll_into_view_if_needed(timeout=1500)
+                await item.click(timeout=2500)
+                return {
+                    "field": field_name,
+                    "status": "selected",
+                    "selected": row.get("text", "")[:300],
+                }
+            except Exception as exc:
+                return {
+                    "field": field_name,
+                    "status": "option_click_failed",
+                    "selected": row.get("text", "")[:300],
+                    "error": f"{exc.__class__.__name__}: {exc}"[:400],
+                }
+
+        try:
+            await self.page.keyboard.press("Escape")
+        except Exception:
+            pass
+        return {
+            "field": field_name,
+            "status": "option_not_found",
+            "options": [
+                row.get("text", "")[:300]
+                for row in rows[:60]
+            ],
+        }
+
+    async def _prepare_ad_account_form_fields(
+        self,
+        *,
+        currency: str,
+        timezone_id: int,
+    ) -> dict[str, Any]:
+        currency_labels = (
+            "Currency",
+            "Devise",
+            "Währung",
+            "Валюта",
+            "মুদ্রা",
+            "Tiền tệ",
+            "मुद्रा",
+        )
+        timezone_labels = (
+            "Time zone",
+            "Timezone",
+            "Fuseau horaire",
+            "Zeitzone",
+            "Часовой пояс",
+            "Часовий пояс",
+            "সময় অঞ্চল",
+            "Múi giờ",
+            "समय क्षेत्र",
+        )
+
+        requested_currency = _clean(currency).upper()
+        timezone_name = self._timezone_name_for_id(
+            int(timezone_id)
+        )
+        timezone_tokens = tuple(
+            token
+            for token in (
+                timezone_name,
+                timezone_name.replace("_", " ") if timezone_name else "",
+                (
+                    timezone_name.split("/")[-1].replace("_", " ")
+                    if timezone_name
+                    else ""
+                ),
+            )
+            if token
+        )
+
+        currency_result = await self._select_ad_account_form_field(
+            field_name="currency",
+            labels=currency_labels,
+            tokens=(requested_currency,),
+        )
+        await self.page.wait_for_timeout(150)
+        timezone_result = await self._select_ad_account_form_field(
+            field_name="timezone",
+            labels=timezone_labels,
+            tokens=timezone_tokens,
+            numeric_id=str(int(timezone_id)),
+        )
+        await self.page.wait_for_timeout(200)
+
+        return {
+            "currency": currency_result,
+            "timezone": timezone_result,
+            "timezone_name": timezone_name,
+        }
+
+    async def _ad_account_submit_controls(
+        self,
+    ) -> list[dict[str, Any]]:
+        if self.page is None:
+            return []
+        try:
+            locator = self.page.locator(
+                'button:visible,a:visible,[role="button"]:visible,'
+                '[role="link"]:visible'
+            )
+            count = min(await locator.count(), 100)
+        except Exception:
+            return []
+
+        markers = (
+            "next",
+            "continue",
+            "create",
+            "suivant",
+            "continuer",
+            "créer",
+            "weiter",
+            "fortfahren",
+            "erstellen",
+            "далее",
+            "продолжить",
+            "создать",
+            "далі",
+            "продовжити",
+            "створити",
+            "পরবর্তী",
+            "চালিয়ে যান",
+            "তৈরি করুন",
+            "tiếp",
+            "tiếp tục",
+            "tạo",
+            "अगला",
+            "आगे",
+            "जारी रखें",
+            "बनाएँ",
+            "बनाएं",
+        )
+        rows: list[dict[str, Any]] = []
+        for index in range(count):
+            item = locator.nth(index)
+            try:
+                box = await item.bounding_box()
+                if (
+                    not isinstance(box, dict)
+                    or float(box.get("x") or 0) < 280
+                ):
+                    continue
+                parts = [
+                    _clean(await item.get_attribute("aria-label")),
+                    _clean(await item.get_attribute("title")),
+                ]
+                try:
+                    parts.append(_clean(await item.inner_text()))
+                except Exception:
+                    pass
+                text = " ".join(part for part in parts if part)
+                if not text:
+                    continue
+                folded = text.casefold()
+                if not any(marker in folded for marker in markers):
+                    continue
+                disabled = False
+                try:
+                    disabled = (
+                        not await item.is_enabled()
+                        or _clean(
+                            await item.get_attribute("aria-disabled")
+                        ).lower()
+                        == "true"
+                    )
+                except Exception:
+                    pass
+                rows.append(
+                    {
+                        "text": text[:250],
+                        "disabled": disabled,
+                        "x": round(float(box.get("x") or 0)),
+                        "y": round(float(box.get("y") or 0)),
+                    }
+                )
+            except Exception:
+                continue
+        return rows[:30]
+
     async def _ad_account_form_candidates(self) -> list[str]:
         """Compact visible inputs/selectors/buttons in the Add-RK dialog."""
         if self.page is None:
@@ -6078,6 +6606,10 @@ class FacebookBusinessBrowser:
         )
 
         self._mark_ad_account_phase("SUBMIT_UI")
+        form_setup = await self._prepare_ad_account_form_fields(
+            currency=currency,
+            timezone_id=timezone_id,
+        )
         try:
             clicked_any = False
             own_business_attempted = False
@@ -6139,6 +6671,11 @@ class FacebookBusinessBrowser:
                     if not own_business_attempted:
                         own_business_attempted = True
                         await self._select_own_business_if_present()
+                    if _clean(transition.get("state")).upper() == "FORM":
+                        form_setup = await self._prepare_ad_account_form_fields(
+                            currency=currency,
+                            timezone_id=timezone_id,
+                        )
                     continue
 
                 if not own_business_attempted:
@@ -6242,17 +6779,28 @@ class FacebookBusinessBrowser:
                         "activity_at": int(time.time()),
                     }
                 )
-                diag = await self._diagnostic(
+                raw_diag = await self._diagnostic(
                     "ad_account_create_submit_missing"
                 )
-                diag["clicked_any"] = clicked_any
-                diag["submit_attempts"] = submit_attempts[-12:]
-                diag["graphql_candidates"] = graphql_candidates[-12:]
-                diag["form_candidates"] = await self._ad_account_form_candidates()
-                diag["ui_state"] = await self._ad_account_ui_state()
-                diag["ui_trace"] = self._ad_account_ui_trace[-16:]
-                diag["requested_currency"] = _clean(currency).upper()
-                diag["requested_timezone_id"] = int(timezone_id)
+                diag = {
+                    "stage": "ad_account_create_submit_missing",
+                    "clicked_any": clicked_any,
+                    "requested_currency": _clean(currency).upper(),
+                    "requested_timezone_id": int(timezone_id),
+                    "requested_timezone_name": self._timezone_name_for_id(
+                        int(timezone_id)
+                    ),
+                    "form_setup": form_setup,
+                    "submit_controls": await self._ad_account_submit_controls(),
+                    "submit_attempts": submit_attempts[-12:],
+                    "graphql_candidates": graphql_candidates[-12:],
+                    "form_candidates": await self._ad_account_form_candidates(),
+                    "ui_state": await self._ad_account_ui_state(),
+                    "ui_trace": self._ad_account_ui_trace[-16:],
+                }
+                for key, value in raw_diag.items():
+                    if key not in diag:
+                        diag[key] = value
                 raise BrowserBusinessError(
                     "AD_ACCOUNT_CREATE_UI_CHANGED",
                     (

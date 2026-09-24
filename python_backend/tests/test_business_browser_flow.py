@@ -798,6 +798,74 @@ class BrowserAdAccountSubmitTransitionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(browser._ad_account_ui_state.await_count, 2)
 
 
+class BrowserAdAccountFormFieldTests(unittest.IsolatedAsyncioTestCase):
+    def test_timezone_fallbacks_cover_main_profile_geos(self):
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-rk-timezone-map")
+        )
+        self.assertEqual(browser._timezone_name_for_id(57), "Europe/Paris")
+        self.assertEqual(browser._timezone_name_for_id(17), "Asia/Dhaka")
+        self.assertEqual(browser._timezone_name_for_id(71), "Asia/Kolkata")
+        self.assertEqual(browser._timezone_name_for_id(140), "Asia/Ho_Chi_Minh")
+        self.assertEqual(browser._timezone_name_for_id(137), "Europe/Kiev")
+
+    def test_choice_matching_uses_exact_currency_and_timezone_ids(self):
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-rk-choice-match")
+        )
+        self.assertTrue(
+            browser._ad_account_choice_matches(
+                "USD US Dollar",
+                tokens=("USD",),
+            )
+        )
+        self.assertFalse(
+            browser._ad_account_choice_matches(
+                "AUD Australian Dollar",
+                tokens=("USD",),
+            )
+        )
+        self.assertTrue(
+            browser._ad_account_choice_matches(
+                "data-id=17 Asia/Dhaka",
+                tokens=("Asia/Dhaka",),
+                numeric_id="17",
+            )
+        )
+
+    async def test_prepare_fields_targets_currency_and_timezone(self):
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-rk-form-fields")
+        )
+        browser.page = SimpleNamespace(
+            wait_for_timeout=AsyncMock(return_value=None),
+        )
+        browser._select_ad_account_form_field = AsyncMock(
+            side_effect=[
+                {"field":"currency","status":"selected","selected":"USD"},
+                {
+                    "field":"timezone",
+                    "status":"selected",
+                    "selected":"America/Los_Angeles",
+                },
+            ]
+        )
+
+        result = await browser._prepare_ad_account_form_fields(
+            currency="USD",
+            timezone_id=1,
+        )
+
+        self.assertEqual(result["currency"]["status"], "selected")
+        self.assertEqual(result["timezone"]["status"], "selected")
+        second = browser._select_ad_account_form_field.await_args_list[1]
+        self.assertEqual(second.kwargs["numeric_id"], "1")
+        self.assertIn(
+            "America/Los_Angeles",
+            second.kwargs["tokens"],
+        )
+
+
 class BrowserAdAccountStateMachineTests(unittest.IsolatedAsyncioTestCase):
     async def test_ui_state_can_recognize_direct_form_open(self):
         browser = FacebookBusinessBrowser(
