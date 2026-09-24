@@ -1,3 +1,4 @@
+import asyncio
 import os
 import tempfile
 import unittest
@@ -310,6 +311,48 @@ class BrowserKnownAssetSelectorTests(unittest.IsolatedAsyncioTestCase):
         )
 
 
+class BrowserAssetContextFastFailTests(unittest.IsolatedAsyncioTestCase):
+    async def test_known_asset_context_does_not_loop_root_and_reg(self):
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(
+                profile_id="4",
+                pages=[
+                    {
+                        "id": "1301710056363524",
+                        "name": "Lucky Joker",
+                    }
+                ],
+            )
+        )
+        browser.page = SimpleNamespace(
+            url=(
+                "https://business.facebook.com/latest/home"
+                "?nav_ref=bm_home_redirect&asset_id=1301710056363524"
+            )
+        )
+        browser._form_ready = AsyncMock(return_value=False)
+        browser._try_open_known_asset_selector = AsyncMock(return_value=False)
+        browser._try_open_top_left_portfolio_menu = AsyncMock(return_value=False)
+        browser._goto = AsyncMock()
+
+        ready = await browser._open_create_entry(
+            open_form=True,
+            already_on_home=True,
+        )
+
+        self.assertFalse(ready)
+        browser._goto.assert_not_awaited()
+        browser._try_open_known_asset_selector.assert_awaited_once()
+        browser._try_open_top_left_portfolio_menu.assert_awaited_once_with(
+            skip_known_asset=True,
+        )
+        self.assertTrue(
+            browser._last_selector_diagnostic.get(
+                "asset_context_fast_fail"
+            )
+        )
+
+
 class BrowserCreateEntryRoutingTests(unittest.IsolatedAsyncioTestCase):
     async def test_create_flow_skips_crash_prone_overview_surface(self):
         browser = FacebookBusinessBrowser(
@@ -372,6 +415,40 @@ class BrowserCreateEntryRoutingTests(unittest.IsolatedAsyncioTestCase):
                 browser.OVERVIEW_URL,
             ],
         )
+
+
+class BrowserCreateFormTimeoutTests(unittest.IsolatedAsyncioTestCase):
+    async def test_prepare_create_form_has_own_timeout(self):
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-create-form-timeout")
+        )
+        browser.page = SimpleNamespace(url=browser.HOME_URL)
+        browser._open_create_entry = AsyncMock()
+        browser._diagnostic = AsyncMock(
+            return_value={
+                "stage": "create_form_timeout",
+                "url": browser.HOME_URL,
+            }
+        )
+
+        with patch(
+            "app.facebook_business_browser.asyncio.wait_for",
+            new=AsyncMock(side_effect=asyncio.TimeoutError),
+        ):
+            with self.assertRaises(BrowserBusinessError) as ctx:
+                await browser._prepare_create_form(
+                    business_name="Test Business",
+                    user_email="owner@example.com",
+                    user_first_name="",
+                    user_last_name="",
+                    profile_display_name="",
+                )
+
+        self.assertEqual(
+            ctx.exception.code,
+            "BUSINESS_CREATE_FORM_TIMEOUT",
+        )
+        self.assertTrue(ctx.exception.retryable)
 
 
 class BrowserCreateFormNavigationTests(unittest.IsolatedAsyncioTestCase):
