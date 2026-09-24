@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, patch
 from app.facebook_business_browser import (
     BrowserBusinessError,
     FacebookBusinessBrowser,
+    _extract_created_ad_account_id,
 )
 from app.provisioning.business_handler import business_handler
 from app.provisioning.models import ProvisioningError, ProvisioningStep
@@ -35,6 +36,54 @@ class BrowserNetworkGateTests(unittest.TestCase):
                 request,
                 "Test Business",
             )
+        )
+
+    def test_ad_account_gate_matches_live_create_mutation(self):
+        request = _FakeRequest(
+            "fb_api_req_friendly_name=AdAccountCreateMutation"
+            "&doc_id=9988776655443322"
+            "&variables=%7B%22input%22%3A%7B%22business_id%22%3A"
+            "%22555666777888999%22%2C%22name%22%3A"
+            "%22ReMask%20Ads%22%2C%22currency%22%3A%22USD%22%7D%7D"
+        )
+        self.assertTrue(
+            FacebookBusinessBrowser._request_matches_ad_account_create(
+                request,
+                business_id="555666777888999",
+                account_name="ReMask Ads",
+            )
+        )
+
+    def test_ad_account_gate_ignores_unrelated_graphql(self):
+        request = _FakeRequest(
+            "fb_api_req_friendly_name=BusinessAdAccountSearchQuery"
+            "&doc_id=9988776655443322"
+            "&variables=%7B%22business_id%22%3A"
+            "%22555666777888999%22%2C%22query%22%3A"
+            "%22ReMask%20Ads%22%7D"
+        )
+        self.assertFalse(
+            FacebookBusinessBrowser._request_matches_ad_account_create(
+                request,
+                business_id="555666777888999",
+                account_name="ReMask Ads",
+            )
+        )
+
+    def test_ad_account_response_id_known_shape(self):
+        account_id, path = _extract_created_ad_account_id(
+            {
+                "data": {
+                    "business_ad_account_create": {
+                        "ad_account": {"id": "123456789012345"}
+                    }
+                }
+            }
+        )
+        self.assertEqual(account_id, "act_123456789012345")
+        self.assertEqual(
+            path,
+            "data.business_ad_account_create.ad_account.id",
         )
 
     def test_page_gate_matches_mutation_with_business_and_page(self):
