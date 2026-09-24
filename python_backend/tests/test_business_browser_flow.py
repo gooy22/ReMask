@@ -212,8 +212,20 @@ class BrowserAdAccountDomFallbackTests(unittest.IsolatedAsyncioTestCase):
             SimpleNamespace(profile_id="profile-rk-french-dom")
         )
         browser.page = SimpleNamespace(
+            url="https://business.facebook.com/latest/settings/ad_accounts",
             wait_for_timeout=AsyncMock(return_value=None),
-            evaluate=AsyncMock(return_value=True),
+            evaluate=AsyncMock(
+                return_value={
+                    "mode": "click",
+                    "href": "",
+                    "text": "comptes publicitaires",
+                    "x": 120,
+                    "y": 280,
+                    "tag": "DIV",
+                    "role": "button",
+                    "candidates": [],
+                }
+            ),
         )
         browser._click_named = AsyncMock(return_value=False)
 
@@ -222,6 +234,47 @@ class BrowserAdAccountDomFallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(clicked)
         browser.page.evaluate.assert_awaited_once()
         browser.page.wait_for_timeout.assert_awaited_once_with(900)
+
+    async def test_section_prefers_real_meta_href_over_text_click(self):
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-rk-french-href")
+        )
+        href = (
+            "https://business.facebook.com/latest/settings/ad_accounts/"
+            "?nav_ref=bm_settings_redirect_migration"
+            "&business_id=1056638030476027"
+        )
+        browser.page = SimpleNamespace(
+            url="https://business.facebook.com/latest/settings/",
+            wait_for_timeout=AsyncMock(return_value=None),
+            evaluate=AsyncMock(
+                return_value={
+                    "mode": "href",
+                    "href": href,
+                    "text": "comptes publicitaires",
+                    "x": 112,
+                    "y": 302,
+                    "tag": "A",
+                    "role": "link",
+                    "candidates": [],
+                }
+            ),
+        )
+        browser._goto = AsyncMock(return_value=href)
+        browser._assert_authenticated = AsyncMock(return_value=None)
+        browser._click_named = AsyncMock(return_value=False)
+
+        clicked = await browser._activate_ad_account_settings_section(
+            business_id="1056638030476027",
+        )
+
+        self.assertTrue(clicked)
+        browser._goto.assert_awaited_once_with(href)
+        browser._click_named.assert_not_awaited()
+        self.assertEqual(
+            browser._last_ad_account_section_diagnostic["mode"],
+            "href",
+        )
 
     async def test_dom_action_can_open_generic_add_button(self):
         browser = FacebookBusinessBrowser(

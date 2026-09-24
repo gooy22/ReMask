@@ -772,6 +772,7 @@ class FacebookBusinessBrowser:
         self._profile_lock: asyncio.Lock | None = None
         self._profile_lock_acquired = False
         self._last_selector_diagnostic: dict[str, Any] = {}
+        self._last_ad_account_section_diagnostic: dict[str, Any] = {}
         self._browser_events: list[dict[str, Any]] = []
 
     async def __aenter__(self) -> "FacebookBusinessBrowser":
@@ -3642,100 +3643,247 @@ class FacebookBusinessBrowser:
         # failure, not proof that Meta changed the UI.
         return saw_nonempty_body and False
 
-    async def _activate_ad_account_settings_section(self) -> bool:
-        """Open the actual Ad Accounts pane after Meta's settings-shell redirect."""
+    async def _activate_ad_account_settings_section(
+        self,
+        *,
+        business_id: str = "",
+    ) -> bool:
+        """Open the real Ad Accounts pane, preferring Meta's own section href."""
         if self.page is None:
             return False
 
+        business = _digits(business_id)
+        self._last_ad_account_section_diagnostic = {}
+
+        # Meta often renders the visible localized label inside a nested span
+        # while the actual SPA navigation lives on an ancestor <a> or role
+        # control. Discover that real interactive node first. This avoids the
+        # false-positive "click succeeded" state where clicking only the text
+        # node leaves the generic Settings shell mounted.
+        probe: dict[str, Any] | None = None
+        try:
+            raw_probe = await self.page.evaluate(
+                """() => {
+                    const visible = el => {
+                        if (!el) return false;
+                        const r = el.getBoundingClientRect();
+                        const s = getComputedStyle(el);
+                        return r.width > 0 && r.height > 0
+                            && s.display !== 'none'
+                            && s.visibility !== 'hidden'
+                            && s.pointerEvents !== 'none';
+                    };
+                    const clean = text => (text || '')
+                        .normalize('NFKC')
+                        .replace(/\u00a0/g, ' ')
+                        .replace(/\s+/g, ' ')
+                        .trim()
+                        .toLowerCase();
+                    const names = [
+                        'ad accounts',
+                        'advertising accounts',
+                        'рекламные аккаунты',
+                        'рекламні акаунти',
+                        'werbekonten',
+                        'comptes publicitaires',
+                        'বিজ্ঞাপন অ্যাকাউন্ট',
+                        'বিজ্ঞাপন অ্যাকাউন্টসমূহ',
+                        'tài khoản quảng cáo',
+                        'विज्ञापन खाते',
+                        'विज्ञापन खाता'
+                    ];
+                    const interactive = [
+                        ...document.querySelectorAll(
+                            'a[href],button,[role="link"],[role="menuitem"],'
+                            + '[role="button"],[tabindex]'
+                        )
+                    ];
+                    const rows = [];
+                    for (const el of interactive) {
+                        if (!visible(el)) continue;
+                        const r = el.getBoundingClientRect();
+                        // The settings navigation is in Meta's left column.
+                        // Keeping this bounded prevents a similarly named
+                        // control in the content pane from winning.
+                        if (r.x > 620 || r.y < 35 || r.y > 760) continue;
+
+                        const text = clean(
+                            (el.getAttribute('aria-label') || '') + ' ' +
+                            (el.getAttribute('title') || '') + ' ' +
+                            (el.innerText || el.textContent || '')
+                        );
+                        const href = (
+                            el.tagName === 'A'
+                                ? (el.href || '')
+                                : ((el.closest && el.closest('a[href]'))?.href || '')
+                        );
+                        const hrefKey = clean(href);
+                        const hrefMatch = (
+                            hrefKey.includes('/settings/ad_accounts')
+                            || hrefKey.includes('/settings/ad-accounts')
+                        );
+                        const exactText = names.some(name => text === name);
+                        const shortText = names.some(
+                            name => text.includes(name)
+                                && text.length <= Math.max(150, name.length + 90)
+                        );
+                        if (!hrefMatch && !exactText && !shortText) continue;
+
+                        let score = Math.round(r.y);
+                        if (hrefMatch) score -= 1000;
+                        if (exactText) score -= 500;
+                        if (el.tagName === 'A') score -= 180;
+                        if ((el.getAttribute('role') || '') === 'link') score -= 120;
+                        if (r.x < 360) score -= 100;
+
+                        rows.push({
+                            el,
+                            href,
+                            text,
+                            score,
+                            x: Math.round(r.x),
+                            y: Math.round(r.y),
+                            w: Math.round(r.width),
+                            h: Math.round(r.height),
+                            tag: el.tagName || '',
+                            role: el.getAttribute('role') || ''
+                        });
+                    }
+                    rows.sort((a,b) => a.score - b.score || a.y - b.y || a.x - b.x);
+                    const best = rows[0];
+                    if (!best) return {mode:'none', candidates:[]};
+
+                    const compact = rows.slice(0,12).map(row => ({
+                        href: row.href,
+                        text: row.text,
+                        x: row.x,
+                        y: row.y,
+                        w: row.w,
+                        h: row.h,
+                        tag: row.tag,
+                        role: row.role,
+                        score: row.score
+                    }));
+
+                    if (best.href && (
+                        best.href.includes('/settings/ad_accounts')
+                        || best.href.includes('/settings/ad-accounts')
+                    )) {
+                        return {
+                            mode:'href',
+                            href:best.href,
+                            text:best.text,
+                            x:best.x,
+                            y:best.y,
+                            tag:best.tag,
+                            role:best.role,
+                            candidates:compact
+                        };
+                    }
+
+                    best.el.scrollIntoView({block:'center'});
+                    best.el.click();
+                    return {
+                        mode:'click',
+                        href:'',
+                        text:best.text,
+                        x:best.x,
+                        y:best.y,
+                        tag:best.tag,
+                        role:best.role,
+                        candidates:compact
+                    };
+                }"""
+            )
+            if isinstance(raw_probe, dict):
+                probe = raw_probe
+        except Exception as exc:
+            self._last_ad_account_section_diagnostic = {
+                "mode": "probe_error",
+                "error": f"{exc.__class__.__name__}: {exc}"[:500],
+            }
+
+        if isinstance(probe, dict):
+            mode = _clean(probe.get("mode")).lower()
+            href = _clean(probe.get("href"))
+            self._last_ad_account_section_diagnostic = {
+                "mode": mode or "none",
+                "href": href[:900],
+                "text": _clean(probe.get("text"))[:240],
+                "x": probe.get("x"),
+                "y": probe.get("y"),
+                "tag": _clean(probe.get("tag"))[:40],
+                "role": _clean(probe.get("role"))[:80],
+                "candidates": (
+                    probe.get("candidates")[:8]
+                    if isinstance(probe.get("candidates"), list)
+                    else []
+                ),
+            }
+
+            if mode == "href" and href:
+                # Never follow a link that explicitly targets a different BM.
+                href_business = ""
+                try:
+                    href_query = parse_qs(urlsplit(href).query)
+                    href_business = _digits(
+                        (href_query.get("business_id") or [""])[0]
+                    )
+                except Exception:
+                    href_business = ""
+
+                if business and href_business and href_business != business:
+                    self._last_ad_account_section_diagnostic["href_rejected"] = (
+                        "different_business"
+                    )
+                else:
+                    try:
+                        final_url = await self._goto(href)
+                        await self._assert_authenticated()
+                        await self.page.wait_for_timeout(700)
+                        self._last_ad_account_section_diagnostic["final_url"] = (
+                            _clean(final_url or self.page.url)[:900]
+                        )
+                        return True
+                    except BrowserBusinessError as exc:
+                        if exc.code in {
+                            "SESSION_EXPIRED",
+                            "CHECKPOINT_REQUIRED",
+                            "TWO_FACTOR_REQUIRED",
+                            "FACEBOOK_TEMPORARILY_BLOCKED",
+                        }:
+                            raise
+                        self._last_ad_account_section_diagnostic[
+                            "href_navigation_error"
+                        ] = f"{exc.code}: {exc}"[:700]
+                    except Exception as exc:
+                        self._last_ad_account_section_diagnostic[
+                            "href_navigation_error"
+                        ] = f"{exc.__class__.__name__}: {exc}"[:700]
+
+            if mode == "click":
+                await self.page.wait_for_timeout(900)
+                self._last_ad_account_section_diagnostic["final_url"] = (
+                    _clean(self.page.url)[:900]
+                )
+                return True
+
+        # Last fallback for variants where Playwright exposes the semantic
+        # role cleanly but the bounded DOM probe above cannot see the item.
         clicked = await self._click_named(
             self.AD_ACCOUNT_SECTION_NAMES,
             roles=("link", "menuitem", "button"),
         )
         if clicked:
             await self.page.wait_for_timeout(900)
+            self._last_ad_account_section_diagnostic = {
+                **self._last_ad_account_section_diagnostic,
+                "mode": "role_click",
+                "final_url": _clean(self.page.url)[:900],
+            }
             return True
 
-        # Meta frequently wraps the visible section label inside a larger
-        # accessible-name container. Prefer the explicit ad_accounts href when
-        # available, otherwise accept a short interactive ancestor containing
-        # the localized section label.
-        try:
-            clicked = bool(
-                await self.page.evaluate(
-                    """() => {
-                        const visible = el => {
-                            const r = el.getBoundingClientRect();
-                            const s = getComputedStyle(el);
-                            return r.width > 0 && r.height > 0
-                                && s.display !== 'none'
-                                && s.visibility !== 'hidden'
-                                && s.pointerEvents !== 'none';
-                        };
-                        const clean = text => (text || '')
-                            .normalize('NFKC')
-                            .replace(/\u00a0/g, ' ')
-                            .replace(/\s+/g, ' ')
-                            .trim()
-                            .toLowerCase();
-                        const names = [
-                            'ad accounts',
-                            'advertising accounts',
-                            'рекламные аккаунты',
-                            'рекламні акаунти',
-                            'werbekonten',
-                            'comptes publicitaires',
-                            'বিজ্ঞাপন অ্যাকাউন্ট',
-                            'বিজ্ঞাপন অ্যাকাউন্টসমূহ',
-                            'tài khoản quảng cáo',
-                            'विज्ञापन खाते',
-                            'विज्ञापन खाता'
-                        ];
-                        const nodes = [...document.querySelectorAll(
-                            'a,button,[role="link"],[role="menuitem"],'
-                            + '[role="button"],[tabindex]'
-                        )];
-                        const rows = nodes
-                            .filter(visible)
-                            .map(el => {
-                                const href = clean(el.getAttribute('href') || '');
-                                const text = clean(
-                                    (el.getAttribute('aria-label') || '') + ' ' +
-                                    (el.getAttribute('title') || '') + ' ' +
-                                    (el.innerText || el.textContent || '')
-                                );
-                                const hrefMatch = (
-                                    href.includes('/settings/ad_accounts')
-                                    || href.includes('/settings/ad-accounts')
-                                );
-                                const textMatch = names.some(
-                                    name => text === name
-                                        || (
-                                            text.includes(name)
-                                            && text.length <= Math.max(140, name.length + 80)
-                                        )
-                                );
-                                return {el, href, text, hrefMatch, textMatch};
-                            })
-                            .filter(row => row.hrefMatch || row.textMatch)
-                            .sort((a,b) => {
-                                if (a.hrefMatch !== b.hrefMatch) {
-                                    return a.hrefMatch ? -1 : 1;
-                                }
-                                return a.text.length - b.text.length;
-                            });
-                        if (!rows.length) return false;
-                        rows[0].el.scrollIntoView({block: 'center'});
-                        rows[0].el.click();
-                        return true;
-                    }"""
-                )
-            )
-        except Exception:
-            clicked = False
-
-        if clicked:
-            await self.page.wait_for_timeout(900)
-        return clicked
+        return False
 
     async def _click_ad_account_action_dom(
         self,
@@ -4044,23 +4192,96 @@ class FacebookBusinessBrowser:
             )
 
         # Meta's migrated settings URL can land on the generic settings shell
-        # even though the URL already contains /ad_accounts. Explicitly open
-        # the Ad Accounts item in the left navigation before looking for Add.
-        section_clicked = await self._activate_ad_account_settings_section()
-        action_surface_ready = await self._wait_for_ad_account_create_action(
-            timeout_seconds=10.0 if section_clicked else 6.0,
+        # even though the URL already contains /ad_accounts. Resolve and open
+        # Meta's own sidebar href first, then require a real right-pane action.
+        section_clicked = await self._activate_ad_account_settings_section(
+            business_id=business,
         )
+        action_surface_ready = await self._wait_for_ad_account_create_action(
+            timeout_seconds=8.0 if section_clicked else 4.0,
+        )
+        section_reload_attempted = False
+        section_route_attempts: list[str] = []
 
-        # The migrated Meta settings shell can acknowledge the sidebar click
-        # before React mounts the right-hand pane. If the first probe sees no
-        # action, re-activate the section once and wait again instead of
-        # declaring UI_CHANGED from sidebar text alone.
+        # If Meta mounted only the generic Settings shell, reload the route that
+        # the actual sidebar item resolved to. This is intentionally different
+        # from re-clicking the same text node.
         if section_clicked and not action_surface_ready:
-            await self.page.wait_for_timeout(500)
-            await self._activate_ad_account_settings_section()
-            action_surface_ready = await self._wait_for_ad_account_create_action(
-                timeout_seconds=8.0,
-            )
+            current_url = _clean(self.page.url)
+            if (
+                "/settings/ad_accounts" in current_url
+                or "/settings/ad-accounts" in current_url
+            ):
+                try:
+                    await self.page.reload(
+                        wait_until="commit",
+                        timeout=self.timeout_ms,
+                    )
+                    section_reload_attempted = True
+                    await self.page.wait_for_timeout(700)
+                    await self._assert_authenticated()
+                    await self._activate_ad_account_settings_section(
+                        business_id=business,
+                    )
+                    action_surface_ready = (
+                        await self._wait_for_ad_account_create_action(
+                            timeout_seconds=8.0,
+                        )
+                    )
+                except BrowserBusinessError as exc:
+                    section_route_attempts.append(
+                        f"reload:{exc.code}:{exc}"
+                    )
+                    if exc.code in {
+                        "SESSION_EXPIRED",
+                        "CHECKPOINT_REQUIRED",
+                        "TWO_FACTOR_REQUIRED",
+                        "FACEBOOK_TEMPORARILY_BLOCKED",
+                    }:
+                        raise
+                except Exception as exc:
+                    section_route_attempts.append(
+                        f"reload:{exc.__class__.__name__}:{exc}"
+                    )
+
+        # Final bounded routing fallback: try every known Meta settings route,
+        # but this time judge success only by the real right-pane Add/Create
+        # control instead of sidebar text.
+        if not action_surface_ready:
+            for template in self.SETTINGS_AD_ACCOUNTS_URLS:
+                target_url = template.format(business_id=business)
+                try:
+                    await self._goto(target_url)
+                    await self.page.wait_for_timeout(450)
+                    await self._assert_authenticated()
+                    activated = await self._activate_ad_account_settings_section(
+                        business_id=business,
+                    )
+                    ready = await self._wait_for_ad_account_create_action(
+                        timeout_seconds=4.5 if activated else 2.5,
+                    )
+                    section_route_attempts.append(
+                        f"{target_url}:activated={activated}:ready={ready}"
+                    )
+                    if ready:
+                        action_surface_ready = True
+                        section_clicked = section_clicked or activated
+                        break
+                except BrowserBusinessError as exc:
+                    section_route_attempts.append(
+                        f"{target_url}:{exc.code}:{exc}"
+                    )
+                    if exc.code in {
+                        "SESSION_EXPIRED",
+                        "CHECKPOINT_REQUIRED",
+                        "TWO_FACTOR_REQUIRED",
+                        "FACEBOOK_TEMPORARILY_BLOCKED",
+                    }:
+                        raise
+                except Exception as exc:
+                    section_route_attempts.append(
+                        f"{target_url}:{exc.__class__.__name__}:{exc}"
+                    )
 
         entry_clicked = await self._click_named(
             self.AD_ACCOUNT_CREATE_ENTRY_NAMES
@@ -4139,12 +4360,25 @@ class FacebookBusinessBrowser:
                         )
 
         if not entry_clicked:
-            diag = await self._diagnostic("ad_account_create_entry_missing")
-            diag["business_id"] = business
-            diag["hydration_attempts"] = hydration_attempts
-            diag["section_clicked"] = section_clicked
-            diag["action_surface_ready"] = action_surface_ready
-            diag["action_candidates"] = await self._ad_account_action_candidates()
+            raw_diag = await self._diagnostic(
+                "ad_account_create_entry_missing"
+            )
+            diag: dict[str, Any] = {
+                "stage": "ad_account_create_entry_missing",
+                "business_id": business,
+                "section_clicked": section_clicked,
+                "section_reload_attempted": section_reload_attempted,
+                "section_activation": self._last_ad_account_section_diagnostic,
+                "action_surface_ready": action_surface_ready,
+                "action_candidates": (
+                    await self._ad_account_action_candidates()
+                ),
+                "section_route_attempts": section_route_attempts[-8:],
+                "hydration_attempts": hydration_attempts,
+            }
+            for key, value in raw_diag.items():
+                if key not in diag:
+                    diag[key] = value
             raise BrowserBusinessError(
                 "AD_ACCOUNT_CREATE_UI_CHANGED",
                 "Meta Ad Account create entry was not found.",
