@@ -80,6 +80,62 @@ def _digits(value: Any) -> str:
     return text if re.fullmatch(r"\d{5,30}", text) else ""
 
 
+def _request_graphql_meta(request: Any) -> dict[str, Any]:
+    """Parse Meta GraphQL request metadata without exposing auth fields."""
+    method = ""
+    url = ""
+    raw = ""
+    body_decodable = True
+
+    try:
+        method = _clean(getattr(request, "method", "")).upper()
+        url = _clean(getattr(request, "url", ""))
+        raw_buffer = getattr(request, "post_data_buffer", None)
+        if raw_buffer:
+            if isinstance(raw_buffer, bytes):
+                raw = raw_buffer.decode("utf-8")
+            else:
+                raw = str(raw_buffer)
+        else:
+            raw = str(getattr(request, "post_data", "") or "")
+    except (UnicodeDecodeError, UnicodeError):
+        body_decodable = False
+        raw = ""
+    except Exception:
+        body_decodable = False
+        raw = ""
+
+    parsed = parse_qs(raw, keep_blank_values=True) if raw else {}
+    friendly = _clean(
+        (parsed.get("fb_api_req_friendly_name") or [""])[0]
+    )
+    doc_id = _clean((parsed.get("doc_id") or [""])[0])
+
+    variables: dict[str, Any] = {}
+    variables_raw = _clean((parsed.get("variables") or [""])[0])
+    if variables_raw:
+        try:
+            decoded_variables = json.loads(variables_raw)
+            if isinstance(decoded_variables, dict):
+                variables = decoded_variables
+        except (ValueError, json.JSONDecodeError):
+            variables = {}
+
+    raw_input = variables.get("input")
+    input_data = raw_input if isinstance(raw_input, dict) else {}
+
+    return {
+        "method": method,
+        "url": url,
+        "friendly_name": friendly,
+        "doc_id": doc_id,
+        "variables": variables,
+        "input": input_data,
+        "decoded_raw": unquote_plus(raw) if raw else "",
+        "body_decodable": body_decodable,
+    }
+
+
 def _proxy_config(raw_proxy: str | None) -> dict[str, str] | None:
     raw = _clean(raw_proxy)
     if not raw:
