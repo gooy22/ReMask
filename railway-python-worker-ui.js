@@ -1129,7 +1129,7 @@ async function pythonWorkerOpenOwnBmModal() {
 
     const sessionHint = document.createElement('span');
     sessionHint.className = 'pwbm-session';
-    sessionHint.textContent = 'FB session: проверяю…';
+    sessionHint.textContent = 'Данные синхронизации · FB проверится при создании';
     profile.appendChild(sessionHint);
 
     const nameField = document.createElement('div');
@@ -1237,60 +1237,39 @@ async function pythonWorkerOpenOwnBmModal() {
     const allLoaded = profiles.every(function(profileId) {
       return rows[profileId] && rows[profileId].loaded;
     });
-    const allReady = profiles.every(function(profileId) {
+
+    const failed = profiles.filter(function(profileId) {
       const cfg = rows[profileId];
-      const selectedPage = cfg
-        ? String(cfg.page.value || cfg.manualPage.value || '').trim()
-        : '';
-      const businessEmail = cfg
-        ? String(cfg.businessEmail.value || '').trim()
-        : '';
-      const businessEmailValid =
-        !cfg ||
-        cfg.requiresBusinessEmail !== true ||
-        /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(businessEmail);
-      return cfg &&
-        cfg.preflightReady === true &&
-        String(cfg.name.value || '').trim() &&
-        selectedPage &&
-        businessEmailValid;
+      if (!cfg) return true;
+
+      const effectivePage = String(
+        cfg.page.value || cfg.manualPage.value || ''
+      ).trim();
+
+      return (
+        !String(cfg.name.value || '').trim() ||
+        !effectivePage
+      );
     });
 
-    create.disabled = pythonWorkerUiState.busy || !allLoaded || !allReady;
+    create.disabled =
+      pythonWorkerUiState.busy ||
+      !allLoaded ||
+      failed.length > 0;
 
-    const allPreflightFinished = profiles.every(function(profileId) {
-      const cfg = rows[profileId];
-      return cfg && (cfg.preflightReady === true || String(cfg.preflightError || '').trim());
-    });
-
-    if (!allPreflightFinished) {
-      status.textContent = 'Проверяю FB session / proxy…';
-    } else if (!allLoaded) {
-      status.textContent = 'Загружаю Primary Pages…';
+    if (!allLoaded) {
+      status.textContent = 'Загружаю данные последней синхронизации…';
     } else {
-      const failed = profiles.filter(function(profileId) {
-        const cfg = rows[profileId];
-        if (!cfg) return true;
-        const effectivePage = String(cfg.page.value || cfg.manualPage.value || '').trim();
-        const businessEmail = String(cfg.businessEmail.value || '').trim();
-        return (
-          cfg.preflightReady !== true ||
-          !String(cfg.name.value || '').trim() ||
-          !effectivePage ||
-          (
-            cfg.requiresBusinessEmail === true &&
-            !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(businessEmail)
-          )
-        );
-      });
       status.textContent = failed.length
         ? 'Не готовы профили: ' + failed.join(', ')
-        : 'Готово к отправке Job: ' + profiles.length + '.';
+        : 'Данные синхронизации загружены. Готово к запуску Job: ' +
+          profiles.length + '.';
     }
   };
 
   pythonWorkerMapLimit(profiles, 8, async function(profileId) {
     const cfg = rows[profileId];
+
     cfg.name.addEventListener('input', refreshReadyState);
     cfg.businessEmail.addEventListener('input', refreshReadyState);
     cfg.page.addEventListener('change', function() {
@@ -1302,145 +1281,50 @@ async function pythonWorkerOpenOwnBmModal() {
       refreshReadyState();
     });
 
-    const cachedPagesPromise = pythonWorkerLoadPages(profileId)
-      .then(function(pages) {
-        const cached = Array.isArray(pages) ? pages : [];
-        if (cached.length && cfg.preflightReady !== true) {
-          pythonWorkerApplyPages(cfg, cached, 'ReMask Page cache');
-          refreshReadyState();
-        }
-        return cached;
-      })
-      .catch(function() {
-        return [];
-      });
+    try {
+      const pages = await pythonWorkerLoadPages(profileId);
+      pythonWorkerApplyPages(
+        cfg,
+        Array.isArray(pages) ? pages : [],
+        'ReMask sync cache'
+      );
 
-    return pythonWorkerProfilePreflight(profileId).then(async function(result) {
       cfg.preflightReady = true;
       cfg.preflightError = '';
-      cfg.requiresBusinessEmail = result.email_present !== true;
-
-      const browser = result.browser_business && typeof result.browser_business === 'object'
-        ? result.browser_business
-        : {};
-      const routes = result.bm_routes && typeof result.bm_routes === 'object'
-        ? result.bm_routes
-        : {};
-      const discoveredPages = Array.isArray(result.pages) ? result.pages : [];
-      const pagesSource = String(result.pages_source || '').trim();
-      const officialPages = pagesSource === 'official_graph_api';
-      const browserPages = pagesSource.indexOf('facebook_web_') === 0;
+      cfg.createRouteReady = false;
+      cfg.requiresBusinessEmail = false;
       cfg.sessionHint.className = 'pwbm-session ok';
-
-      if (result.email_present === true) {
-        cfg.emailHint.className = '';
-        cfg.emailHint.textContent =
-          'Business/login email уже сохранён в профиле.';
-      } else {
-        cfg.emailHint.className = 'error';
-        cfg.emailHint.textContent =
-          'У профиля нет сохранённого email. Введи Business email перед созданием BM.';
-      }
-
-      cfg.createRouteReady =
-        result.create_route_ready === true ||
-        (
-          routes.browser_ui === true &&
-          browser.ready === true &&
-          browser.create_surface_ready === true
-        );
-
-      const routeLabel = cfg.createRouteReady
-        ? 'META BUSINESS UI'
-        : 'PRECHECK UNAVAILABLE';
-
-      cfg.sessionHint.className = 'pwbm-session ok';
-
       cfg.sessionHint.textContent =
-        'FB session: OK · BM route: ' + routeLabel +
-        ' · Fan Pages ' + discoveredPages.length +
-        ' · proxy ' + String(result.proxy_exit_ip || '?') +
-        ' · ' + String(result.proxy_latency_ms || 0) + ' ms' +
-        (
-          !cfg.createRouteReady && browser.error
-            ? ' · ' +
-              (browser.error_code ? String(browser.error_code) + ': ' : '') +
-              String(browser.error)
-            : ''
-        ) +
-        (browser.current_url ? ' · ' + String(browser.current_url) : '');
-
-      if (discoveredPages.length) {
-        let sourceLabel = pagesSource || 'Meta';
-        if (officialPages) sourceLabel = 'Graph API /me/accounts';
-        else if (pagesSource === 'facebook_web_graphql') {
-          sourceLabel = 'Facebook web GraphQL';
-        } else if (pagesSource === 'facebook_web_html') {
-          sourceLabel = 'Facebook browser Pages HTML';
-        } else if (browserPages) {
-          sourceLabel = 'Facebook browser session';
-        }
-
-        pythonWorkerApplyPages(
-          cfg,
-          discoveredPages,
-          sourceLabel
-        );
-
-        refreshReadyState();
-        return;
-      }
-
-      try {
-        const pages = await cachedPagesPromise;
-        if (pages.length) {
-          pythonWorkerApplyPages(cfg, pages, 'ReMask Page cache');
-        } else {
-          cfg.page.textContent = '';
-          const empty = document.createElement('option');
-          empty.value = '';
-          empty.textContent = 'Pages не найдены';
-          cfg.page.appendChild(empty);
-          cfg.page.disabled = false;
-          cfg.loaded = true;
-          cfg.error = 'Pages не найдены';
-          cfg.pageHint.className = 'error';
-          cfg.pageHint.textContent =
-            'Browser preflight и ReMask cache не вернули Pages. Можно ввести Primary Page ID вручную.';
-        }
-      } catch (error) {
-        cfg.page.textContent = '';
-        const failed = document.createElement('option');
-        failed.value = '';
-        failed.textContent = 'Ошибка загрузки Pages';
-        cfg.page.appendChild(failed);
-        cfg.page.disabled = true;
-        cfg.loaded = true;
-        cfg.error = String((error && error.message) || error);
-        cfg.pageHint.className = 'error';
-        cfg.pageHint.textContent =
-          'Pages не загрузились: ' + cfg.error +
-          '. Можно ввести Primary Page ID вручную.';
-      }
+        'Синхронизация: OK · FB session / proxy проверятся внутри Job';
 
       refreshReadyState();
-    }).catch(function(error) {
-      cfg.preflightReady = false;
-      cfg.preflightError = String((error && error.message) || error);
-      cfg.sessionHint.className = 'pwbm-session error';
-      cfg.sessionHint.textContent = 'BM preflight: ' + cfg.preflightError;
+    } catch (error) {
+      cfg.preflightReady = true;
+      cfg.preflightError = '';
+      cfg.createRouteReady = false;
+      cfg.requiresBusinessEmail = false;
+      cfg.error = String((error && error.message) || error);
 
       cfg.page.textContent = '';
       const failed = document.createElement('option');
       failed.value = '';
-      failed.textContent = 'Preflight не пройден';
+      failed.textContent = 'Кэш Pages недоступен';
       cfg.page.appendChild(failed);
-      cfg.page.disabled = true;
+      cfg.page.disabled = false;
       cfg.loaded = true;
+
+      cfg.sessionHint.className = 'pwbm-session error';
+      cfg.sessionHint.textContent =
+        'Кэш синхронизации недоступен · можно ввести Primary Page ID вручную';
+      cfg.pageHint.className = 'error';
+      cfg.pageHint.textContent =
+        'Не удалось прочитать Pages из синхронизации: ' + cfg.error +
+        '. Введи Primary Page ID вручную.';
+
       refreshReadyState();
-    });
+    }
   }).catch(function(error) {
-    console.error('[ReMask Worker UI] preflight pool failed:', error);
+    console.error('[ReMask Worker UI] cache pool failed:', error);
   });
 
   create.addEventListener('click', function() {
