@@ -156,6 +156,8 @@ class WorkerPool:
                                     for value in (raw_steps or [])
                                 ] if isinstance(raw_steps,list) else []
 
+                                # Any composite provisioning flow that contains BUSINESS
+                                # must inherit the same non-cooperative Chromium watchdog.
                                 business_guarded='BUSINESS' in normalized_steps
 
                                 if business_guarded:
