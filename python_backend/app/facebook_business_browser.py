@@ -2746,9 +2746,9 @@ class FacebookBusinessBrowser:
                     else "CREATE_RESPONSE_UNCONFIRMED"
                 ),
                 "activity_at": int(time.time()),
-                "response_business_id": response_business_id,
-                "response_friendly_name": friendly,
-                "response_path": response_path,
+                "create_response_business_id": response_business_id,
+                "create_response_friendly_name": friendly,
+                "create_response_path": response_path,
             }
         )
 
