@@ -3864,7 +3864,7 @@ class FacebookBusinessBrowser:
             if mode == "click":
                 await self.page.wait_for_timeout(900)
                 self._last_ad_account_section_diagnostic["final_url"] = (
-                    _clean(self.page.url)[:900]
+                    _clean(getattr(self.page, "url", ""))[:900]
                 )
                 return True
 
@@ -3879,7 +3879,7 @@ class FacebookBusinessBrowser:
             self._last_ad_account_section_diagnostic = {
                 **self._last_ad_account_section_diagnostic,
                 "mode": "role_click",
-                "final_url": _clean(self.page.url)[:900],
+                "final_url": _clean(getattr(self.page, "url", ""))[:900],
             }
             return True
 
