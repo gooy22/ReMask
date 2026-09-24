@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 from app.facebook_business_browser import (
     FacebookBusinessBrowser,
     _decode_graphql_text,
+    _extract_created_business_id,
     _graphql_error_details,
     _meta_error_retryable,
     _walk_business_ids,
@@ -113,6 +114,73 @@ class BusinessCreateObserverTests(unittest.TestCase):
                 "Test Business",
             )
         )
+
+
+class ExactCreateResponseTests(unittest.TestCase):
+    def test_extracts_business_create_nested_id(self):
+        business_id, path = _extract_created_business_id(
+            {
+                "data": {
+                    "business_create": {
+                        "business": {
+                            "id": "555666777888999"
+                        }
+                    }
+                }
+            }
+        )
+        self.assertEqual(business_id, "555666777888999")
+        self.assertEqual(path, "data.business_create.business.id")
+
+    def test_extracts_legacy_bizkit_create_id(self):
+        business_id, path = _extract_created_business_id(
+            {
+                "data": {
+                    "bizkit_create_business": {
+                        "id": "555666777888999"
+                    }
+                }
+            }
+        )
+        self.assertEqual(business_id, "555666777888999")
+        self.assertEqual(path, "data.bizkit_create_business.id")
+
+    def test_ignores_unrelated_business_id(self):
+        business_id, path = _extract_created_business_id(
+            {
+                "data": {
+                    "viewer": {
+                        "business": {
+                            "id": "111111111111111"
+                        }
+                    }
+                }
+            }
+        )
+        self.assertEqual(business_id, "")
+        self.assertEqual(path, "")
+
+    def test_rejects_ambiguous_create_ids(self):
+        business_id, path = _extract_created_business_id(
+            [
+                {
+                    "data": {
+                        "business_create": {
+                            "business": {"id": "111111111111111"}
+                        }
+                    }
+                },
+                {
+                    "data": {
+                        "bizkit_create_business": {
+                            "id": "222222222222222"
+                        }
+                    }
+                },
+            ]
+        )
+        self.assertEqual(business_id, "")
+        self.assertEqual(path, "")
 
 
 class RelayResponseDecodeTests(unittest.TestCase):
