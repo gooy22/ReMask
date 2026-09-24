@@ -359,13 +359,13 @@ function pythonWorkerBusinessResult(item) {
     return (
       step &&
       String(step.step || '').toUpperCase() === 'BUSINESS' &&
-      String(step.status || '').toUpperCase() === 'SUCCESS'
+      step.result &&
+      typeof step.result === 'object' &&
+      String(step.result.business_id || '').trim()
     );
   });
 
-  if (!business || !business.result || typeof business.result !== 'object') {
-    return null;
-  }
+  if (!business) return null;
 
   const result = business.result;
   const businessId = String(result.business_id || '').trim();
@@ -374,7 +374,10 @@ function pythonWorkerBusinessResult(item) {
   return {
     business_id: businessId,
     transport: String(result.transport || '').trim(),
-    primary_page_id: String(result.primary_page_id || '').trim()
+    primary_page_id: String(result.primary_page_id || '').trim(),
+    status: String(business.status || '').toUpperCase(),
+    phase: String(result.phase || '').trim(),
+    activity: String(result.activity || '').trim()
   };
 }
 
@@ -440,10 +443,18 @@ function pythonWorkerRenderJob(job) {
         if (item && item.error_code) errorParts.push(item.error_code);
         if (item && item.error_message) errorParts.push(item.error_message);
 
+        const businessResult = pythonWorkerBusinessResult(item);
+
         if (errorParts.length) {
-          errorTd.textContent = errorParts.join(': ');
+          const details = [errorParts.join(': ')];
+          if (businessResult) {
+            details.push('BM ' + businessResult.business_id + ' уже сохранён');
+            if (businessResult.phase) {
+              details.push('phase ' + businessResult.phase);
+            }
+          }
+          errorTd.textContent = details.join(' · ');
         } else {
-          const businessResult = pythonWorkerBusinessResult(item);
           if (businessResult) {
             const resultParts = [
               'BM ' + businessResult.business_id
