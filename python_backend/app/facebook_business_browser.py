@@ -1505,6 +1505,145 @@ class FacebookBusinessBrowser:
                 ):
                     return True
 
+        # Last-resort bounded probe for Meta A/B variants where the current
+        # Page selector has no accessible name at all. Live profile-4 evidence
+        # showed an authenticated Page-pinned shell with zero name candidates,
+        # so probe only interactive controls in the upper-left region and rank
+        # them by asset-id/page-name/popup evidence before clicking.
+        geometry_rows: list[dict[str, Any]] = []
+        try:
+            geometry_rows = await self.page.evaluate(
+                """(args) => {
+                    const assetId = String(args.assetId || '');
+                    const pageNames = (args.pageNames || [])
+                        .map(v => String(v || '').trim().toLowerCase())
+                        .filter(Boolean);
+                    const els = Array.from(document.querySelectorAll(
+                        'button,[role="button"],[role="menuitem"],[aria-haspopup],'
+                        + '[aria-expanded],a[href],[data-asset-id],[data-asset_id]'
+                    )).slice(0, 700);
+                    const rows = [];
+                    for (const el of els) {
+                        const r = el.getBoundingClientRect();
+                        const s = getComputedStyle(el);
+                        if (!(r.width > 0 && r.height > 0)
+                            || s.display === 'none'
+                            || s.visibility === 'hidden'
+                            || s.pointerEvents === 'none') continue;
+                        if (r.x > 520 || r.y > 520 || r.right < 0 || r.bottom < 0) continue;
+
+                        const aria = (el.getAttribute('aria-label') || '').trim();
+                        const title = (el.getAttribute('title') || '').trim();
+                        const text = (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+                        const href = (el.getAttribute('href') || '').trim();
+                        const role = (el.getAttribute('role') || '').trim();
+                        const haspopup = (el.getAttribute('aria-haspopup') || '').trim();
+                        const expanded = (el.getAttribute('aria-expanded') || '').trim();
+                        const dataAsset = (
+                            el.getAttribute('data-asset-id')
+                            || el.getAttribute('data-asset_id')
+                            || ''
+                        ).trim();
+
+                        const label = [aria, title, text].filter(Boolean).join(' | ').slice(0, 320);
+                        const key = label.toLowerCase();
+                        const assetMatch = !!assetId && (
+                            href.includes(assetId)
+                            || dataAsset === assetId
+                            || key.includes(assetId)
+                        );
+                        const nameMatch = pageNames.some(name => key.includes(name));
+
+                        let score = 0;
+                        if (assetMatch) score += 500;
+                        if (nameMatch) score += 320;
+                        if (haspopup) score += 180;
+                        if (role === 'button' || role === 'menuitem') score += 90;
+                        if (expanded) score += 40;
+                        if (r.x <= 360) score += 60;
+                        if (r.y <= 260) score += 40;
+
+                        if (!assetMatch && !nameMatch && /^(home|inbox|ads|content|planner|insights|notifications|settings)$/i.test(text)) {
+                            score -= 300;
+                        }
+                        if (score < 180) continue;
+
+                        rows.push({
+                            score,
+                            x: Math.round(r.x + r.width / 2),
+                            y: Math.round(r.y + r.height / 2),
+                            left: Math.round(r.x),
+                            top: Math.round(r.y),
+                            w: Math.round(r.width),
+                            h: Math.round(r.height),
+                            label,
+                            href: href.slice(0, 320),
+                            role,
+                            haspopup,
+                            expanded,
+                            assetMatch,
+                            nameMatch
+                        });
+                    }
+                    rows.sort((a, b) => b.score - a.score || a.top - b.top || a.left - b.left);
+                    return rows.slice(0, 24);
+                }""",
+                {
+                    "assetId": current_asset,
+                    "pageNames": [name for _, name in known_pages],
+                },
+            )
+        except Exception as exc:
+            geometry_rows = [{
+                "error": f"{exc.__class__.__name__}: {exc}"[:500],
+            }]
+
+        if isinstance(geometry_rows, list):
+            for row in geometry_rows[:6]:
+                if not isinstance(row, dict):
+                    continue
+                x = row.get("x")
+                y = row.get("y")
+                if not isinstance(x, (int, float)) or not isinstance(y, (int, float)):
+                    continue
+                try:
+                    await self.page.mouse.click(float(x), float(y))
+                    if await self._wait_for_form_ready(
+                        timeout_ms=1200,
+                        interval_ms=200,
+                    ):
+                        self._last_selector_diagnostic = {
+                            "known_asset_selector": {
+                                "current_asset_id": current_asset,
+                                "geometry_match": row,
+                                "geometry_candidates": geometry_rows[:12],
+                            }
+                        }
+                        return True
+                    if await self._wait_for_create_surface(
+                        timeout_ms=4200,
+                        interval_ms=250,
+                    ):
+                        self._last_selector_diagnostic = {
+                            "known_asset_selector": {
+                                "current_asset_id": current_asset,
+                                "geometry_match": row,
+                                "geometry_candidates": geometry_rows[:12],
+                            }
+                        }
+                        return True
+                    try:
+                        await self.page.keyboard.press("Escape")
+                        await self.page.wait_for_timeout(120)
+                    except Exception:
+                        pass
+                except Exception as exc:
+                    row["click_error"] = f"{exc.__class__.__name__}: {exc}"[:500]
+                    try:
+                        await self.page.keyboard.press("Escape")
+                    except Exception:
+                        pass
+
         self._last_selector_diagnostic = {
             "known_asset_selector": {
                 "current_asset_id": current_asset,
@@ -1513,6 +1652,9 @@ class FacebookBusinessBrowser:
                     for page_id, page_name in known_pages[:12]
                 ],
                 "candidates": diagnostic_rows[-20:],
+                "geometry_candidates": geometry_rows[:20]
+                if isinstance(geometry_rows, list)
+                else [],
             }
         }
         return False
@@ -2034,13 +2176,13 @@ class FacebookBusinessBrowser:
         try:
             await asyncio.wait_for(
                 self._goto(self.ADS_MANAGER_URL),
-                timeout=12.0,
+                timeout=30.0,
             )
         except asyncio.TimeoutError:
             self._last_selector_diagnostic = {
                 **self._last_selector_diagnostic,
                 "ads_manager_probe": {
-                    "navigation_timeout": 12,
+                    "navigation_timeout": 30,
                     "url": _clean(self.page.url if self.page else ""),
                 },
             }
@@ -2380,12 +2522,12 @@ class FacebookBusinessBrowser:
             try:
                 ads_manager_open = await asyncio.wait_for(
                     self._try_open_ads_manager_create_entry(),
-                    timeout=18.0,
+                    timeout=40.0,
                 )
             except asyncio.TimeoutError:
                 self._last_selector_diagnostic = {
                     **self._last_selector_diagnostic,
-                    "ads_manager_fallback_timeout": 18,
+                    "ads_manager_fallback_timeout": 40,
                 }
 
             if ads_manager_open:
