@@ -867,6 +867,33 @@ class BrowserAdAccountFormFieldTests(unittest.IsolatedAsyncioTestCase):
         )
 
 
+class BrowserAdAccountTimezoneSafetyTests(unittest.TestCase):
+    def test_numeric_timezone_id_does_not_match_human_offset_text(self):
+        self.assertFalse(
+            FacebookBusinessBrowser._ad_account_choice_matches(
+                "UTC+1 Central European Time",
+                numeric_id="1",
+            )
+        )
+        self.assertTrue(
+            FacebookBusinessBrowser._ad_account_choice_matches(
+                "1",
+                numeric_id="1",
+            )
+        )
+
+    def test_kyiv_timezone_uses_current_name_and_keeps_legacy_aliases(self):
+        self.assertEqual(
+            FacebookBusinessBrowser._timezone_name_for_id(137),
+            "Europe/Kyiv",
+        )
+        source = inspect.getsource(
+            FacebookBusinessBrowser._prepare_ad_account_form_fields
+        )
+        self.assertIn("Europe/Kiev", source)
+        self.assertIn("Kyiv", source)
+
+
 class BrowserAdAccountSubmitProgressionTests(unittest.TestCase):
     def test_submit_flow_does_not_use_one_shot_own_business_attempt_flag(self):
         source = inspect.getsource(FacebookBusinessBrowser.create_ad_account)

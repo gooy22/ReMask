@@ -4366,7 +4366,7 @@ class FacebookBusinessBrowser:
             132: "Asia/Bangkok",
             134: "Europe/Istanbul",
             136: "Asia/Taipei",
-            137: "Europe/Kiev",
+            137: "Europe/Kyiv",
             140: "Asia/Ho_Chi_Minh",
             141: "Africa/Johannesburg",
             145: "Asia/Kathmandu",
@@ -4441,30 +4441,43 @@ class FacebookBusinessBrowser:
                     or float(box.get("x") or 0) < 260
                 ):
                     continue
-                parts = []
+                identity_parts = []
                 for attr in (
-                    "aria-label",
-                    "title",
                     "value",
                     "data-value",
                     "data-id",
                     "data-key",
                     "id",
                 ):
-                    parts.append(
+                    identity_parts.append(
+                        _clean(await item.get_attribute(attr))
+                    )
+                label_parts = []
+                for attr in ("aria-label", "title"):
+                    label_parts.append(
                         _clean(await item.get_attribute(attr))
                     )
                 try:
-                    parts.append(_clean(await item.inner_text()))
+                    label_parts.append(_clean(await item.inner_text()))
                 except Exception:
                     pass
-                text = " ".join(part for part in parts if part)
+                identity = " ".join(
+                    part for part in identity_parts if part
+                )
+                label_text = " ".join(
+                    part for part in label_parts if part
+                )
+                text = " ".join(
+                    part for part in (identity, label_text) if part
+                )
                 if not text:
                     continue
                 rows.append(
                     {
                         "index": index,
                         "text": text[:500],
+                        "identity": identity[:300],
+                        "label": label_text[:400],
                         "x": round(float(box.get("x") or 0)),
                         "y": round(float(box.get("y") or 0)),
                     }
@@ -4573,11 +4586,28 @@ class FacebookBusinessBrowser:
                     text = " ".join(part for part in parts if part)
                     if text:
                         preview.append(text[:300])
-                    if not self._ad_account_choice_matches(
-                        text,
+                    identity_text = " ".join(
+                        part
+                        for part in (
+                            _clean(await option.get_attribute("value")),
+                            _clean(await option.get_attribute("data-value")),
+                            _clean(await option.get_attribute("data-id")),
+                        )
+                        if part
+                    )
+                    label_text = _clean(await option.inner_text())
+                    identity_match = bool(
+                        numeric_id
+                        and self._ad_account_choice_matches(
+                            identity_text,
+                            numeric_id=numeric_id,
+                        )
+                    )
+                    label_match = self._ad_account_choice_matches(
+                        label_text,
                         tokens=tokens,
-                        numeric_id=numeric_id,
-                    ):
+                    )
+                    if not identity_match and not label_match:
                         continue
                     value = _clean(
                         await option.get_attribute("value")
@@ -4620,11 +4650,32 @@ class FacebookBusinessBrowser:
         current_text = " ".join(
             part for part in current_parts if part
         )
-        if self._ad_account_choice_matches(
-            current_text,
+        current_identity = " ".join(
+            part
+            for part in current_parts[2:5]
+            if part
+        )
+        current_label = " ".join(
+            part
+            for part in (
+                current_parts[0] if len(current_parts) > 0 else "",
+                current_parts[1] if len(current_parts) > 1 else "",
+                current_parts[-1] if current_parts else "",
+            )
+            if part
+        )
+        current_identity_match = bool(
+            numeric_id
+            and self._ad_account_choice_matches(
+                current_identity,
+                numeric_id=numeric_id,
+            )
+        )
+        current_label_match = self._ad_account_choice_matches(
+            current_label,
             tokens=tokens,
-            numeric_id=numeric_id,
-        ):
+        )
+        if current_identity_match or current_label_match:
             return {
                 "field": field_name,
                 "status": "already_selected",
@@ -4650,11 +4701,18 @@ class FacebookBusinessBrowser:
             }
 
         for row in rows:
-            if not self._ad_account_choice_matches(
-                row.get("text", ""),
+            identity_match = bool(
+                numeric_id
+                and self._ad_account_choice_matches(
+                    row.get("identity", ""),
+                    numeric_id=numeric_id,
+                )
+            )
+            label_match = self._ad_account_choice_matches(
+                row.get("label", "") or row.get("text", ""),
                 tokens=tokens,
-                numeric_id=numeric_id,
-            ):
+            )
+            if not identity_match and not label_match:
                 continue
             try:
                 item = option_locator.nth(int(row["index"]))
@@ -4717,18 +4775,30 @@ class FacebookBusinessBrowser:
         timezone_name = self._timezone_name_for_id(
             int(timezone_id)
         )
-        timezone_tokens = tuple(
-            token
-            for token in (
-                timezone_name,
-                timezone_name.replace("_", " ") if timezone_name else "",
-                (
-                    timezone_name.split("/")[-1].replace("_", " ")
-                    if timezone_name
-                    else ""
-                ),
+        timezone_aliases: list[str] = []
+        if timezone_name:
+            timezone_aliases.extend(
+                [
+                    timezone_name,
+                    timezone_name.replace("_", " "),
+                    timezone_name.split("/")[-1].replace("_", " "),
+                ]
             )
-            if token
+        if int(timezone_id) == 137:
+            timezone_aliases.extend(
+                [
+                    "Europe/Kiev",
+                    "Europe Kiev",
+                    "Kiev",
+                    "Kyiv",
+                ]
+            )
+        timezone_tokens = tuple(
+            dict.fromkeys(
+                token
+                for token in timezone_aliases
+                if _clean(token)
+            )
         )
 
         currency_result = await self._select_ad_account_form_field(
