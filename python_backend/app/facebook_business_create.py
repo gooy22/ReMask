@@ -1274,6 +1274,61 @@ async def create_business_with_docids(
         ):
             continue
 
+        # GraphQL may legitimately return both a data envelope and errors.
+        # Errors are authoritative: do not mislabel a Meta rejection as an
+        # ambiguous success merely because data.bizkit_create_business exists.
+        if errors:
+            error_text = json.dumps(
+                errors,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).casefold()
+            error_codes: set[int] = set()
+            for row in errors:
+                if not isinstance(row, dict):
+                    continue
+                for key in ("code", "error_subcode"):
+                    try:
+                        raw_code = row.get(key)
+                        if raw_code is not None:
+                            error_codes.add(int(raw_code))
+                    except (TypeError, ValueError):
+                        pass
+
+            business_name_not_allowed = (
+                1690091 in error_codes
+                or "nom d’entreprise non autorisé" in error_text
+                or "nom d'entreprise non autorisé" in error_text
+                or (
+                    "business name" in error_text
+                    and any(
+                        marker in error_text
+                        for marker in (
+                            "not allowed",
+                            "not permitted",
+                            "invalid",
+                        )
+                    )
+                )
+            )
+
+            raise BusinessMutationError(
+                (
+                    "BUSINESS_NAME_NOT_ALLOWED"
+                    if business_name_not_allowed
+                    else "CREATE_BM_META_ERROR"
+                ),
+                (
+                    "Meta rejected the Business name. Choose a normal "
+                    "business/Page-style name without generated separators."
+                    if business_name_not_allowed
+                    else diagnostic
+                ),
+                retryable=False,
+                payload=response,
+                candidate=candidate,
+            )
+
         data = response.get(
             "data"
         )
