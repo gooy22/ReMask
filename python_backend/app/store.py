@@ -190,7 +190,20 @@ class JobStore:
                 (item_id,),
             ).fetchall()
             failed=[r for r in rows if r['status']=='FAILED']
-            status='FAILED' if failed else 'SUCCESS'
+            statuses=[str(r['status']) for r in rows]
+
+            if failed:
+                status='FAILED'
+            elif statuses and all(value=='SUCCESS' for value in statuses):
+                status='SUCCESS'
+            elif 'RUNNING' in statuses:
+                status='RUNNING'
+            else:
+                # QUEUED (including a cancelled/recoverable worker task) must
+                # never be promoted to SUCCESS merely because no failure row
+                # exists yet.
+                status='QUEUED'
+
             code=failed[0]['error_code'] if failed else None
             msg=failed[0]['error_message'] if failed else None
             retryable=1 if any(bool(r['retryable']) for r in failed) else 0
