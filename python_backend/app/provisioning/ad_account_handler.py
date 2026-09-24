@@ -590,9 +590,19 @@ async def ad_account_handler(
                     "last_error": str(exc)[:4000],
                 },
             )
+            capture_suffix = ""
+            if capture_error:
+                capture_suffix = (
+                    " | live_capture="
+                    + str(capture_error.get("code") or "-")
+                    + ": "
+                    + str(capture_error.get("message") or "-")[:1200]
+                    + " diagnostic="
+                    + str(capture_error.get("diagnostic") or {})[:2000]
+                )
             raise ProvisioningError(
                 exc.code,
-                str(exc),
+                str(exc) + capture_suffix,
                 retryable=True,
             ) from exc
 
