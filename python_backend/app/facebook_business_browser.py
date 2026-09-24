@@ -187,6 +187,137 @@ def _decode_graphql_text(raw: str) -> Any:
         return None
 
 
+def _graphql_error_details(payload: Any) -> list[dict[str, Any]]:
+    """Extract compact, non-secret GraphQL error details from Meta responses."""
+    output: list[dict[str, Any]] = []
+
+    def add_error(value: Any) -> None:
+        if not isinstance(value, dict):
+            return
+
+        message = _clean(
+            value.get("message")
+            or value.get("errorDescription")
+            or value.get("error_description")
+            or value.get("description")
+            or value.get("error_user_msg")
+        )
+
+        extensions = value.get("extensions")
+        if not isinstance(extensions, dict):
+            extensions = {}
+
+        code = _clean(
+            value.get("code")
+            or value.get("error")
+            or extensions.get("code")
+            or extensions.get("error_code")
+        )
+        subcode = _clean(
+            value.get("error_subcode")
+            or value.get("subcode")
+            or extensions.get("error_subcode")
+        )
+        error_type = _clean(
+            value.get("type")
+            or extensions.get("type")
+            or extensions.get("classification")
+        )
+
+        if not message and not code and not subcode:
+            return
+
+        row = {
+            "message": message[:1000],
+            "code": code[:120],
+            "subcode": subcode[:120],
+            "type": error_type[:120],
+        }
+        if row not in output:
+            output.append(row)
+
+    if isinstance(payload, dict):
+        errors = payload.get("errors")
+        if isinstance(errors, list):
+            for item in errors[:20]:
+                add_error(item)
+
+        raw_error = payload.get("error")
+        if isinstance(raw_error, dict):
+            add_error(raw_error)
+        elif raw_error is not None:
+            add_error(
+                {
+                    "error": raw_error,
+                    "message": (
+                        payload.get("errorDescription")
+                        or payload.get("error_summary")
+                        or payload.get("errorSummary")
+                    ),
+                }
+            )
+
+        if any(
+            key in payload
+            for key in (
+                "errorDescription",
+                "error_description",
+                "errorSummary",
+                "error_summary",
+                "error_user_msg",
+            )
+        ):
+            add_error(payload)
+
+    elif isinstance(payload, list):
+        for item in payload[:20]:
+            for row in _graphql_error_details(item):
+                if row not in output:
+                    output.append(row)
+
+    return output[:10]
+
+
+def _meta_error_retryable(errors: list[dict[str, Any]]) -> bool:
+    text = " ".join(
+        " ".join(
+            _clean(row.get(key))
+            for key in ("message", "code", "subcode", "type")
+        )
+        for row in errors
+        if isinstance(row, dict)
+    ).casefold()
+
+    non_retryable = (
+        "permission",
+        "not allowed",
+        "not eligible",
+        "restricted",
+        "restriction",
+        "checkpoint",
+        "confirm your",
+        "verify your",
+        "business limit",
+        "maximum",
+        "too many business",
+        "temporarily blocked",
+        "misusing this feature",
+    )
+    if any(marker in text for marker in non_retryable):
+        return False
+
+    retryable = (
+        "rate limit",
+        "try again",
+        "temporarily unavailable",
+        "server error",
+        "timeout",
+        "timed out",
+        "please retry",
+    )
+    return any(marker in text for marker in retryable)
+
+
 def _walk_business_ids(value: Any, path: str = "") -> list[tuple[str, str]]:
     found: list[tuple[str, str]] = []
 
