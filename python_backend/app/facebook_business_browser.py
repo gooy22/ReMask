@@ -613,6 +613,14 @@ class FacebookBusinessBrowser:
         "https://business.facebook.com/latest/settings/ad_accounts?business_id={business_id}",
         "https://business.facebook.com/latest/settings/ad_accounts/?business_id={business_id}",
     )
+    AD_ACCOUNT_SECTION_NAMES = (
+        "Ad accounts",
+        "Advertising accounts",
+        "Рекламные аккаунты",
+        "Рекламні акаунти",
+        "Werbekonten",
+        "Comptes publicitaires",
+    )
     AD_ACCOUNT_CREATE_ENTRY_NAMES = (
         "Create a new ad account",
         "Create new ad account",
@@ -3592,6 +3600,69 @@ class FacebookBusinessBrowser:
         # failure, not proof that Meta changed the UI.
         return saw_nonempty_body and False
 
+    async def _activate_ad_account_settings_section(self) -> bool:
+        """Open the actual Ad Accounts pane after Meta's settings-shell redirect."""
+        if self.page is None:
+            return False
+
+        clicked = await self._click_named(
+            self.AD_ACCOUNT_SECTION_NAMES,
+            roles=("link", "menuitem", "button"),
+        )
+        if clicked:
+            await self.page.wait_for_timeout(700)
+            return True
+
+        try:
+            clicked = bool(
+                await self.page.evaluate(
+                    """() => {
+                        const visible = el => {
+                            const r = el.getBoundingClientRect();
+                            const s = getComputedStyle(el);
+                            return r.width > 0 && r.height > 0
+                                && s.display !== 'none'
+                                && s.visibility !== 'hidden'
+                                && s.pointerEvents !== 'none';
+                        };
+                        const clean = text => (text || '')
+                            .replace(/\s+/g, ' ').trim().toLowerCase();
+                        const names = new Set([
+                            'ad accounts',
+                            'advertising accounts',
+                            'рекламные аккаунты',
+                            'рекламні акаунти',
+                            'werbekonten',
+                            'comptes publicitaires'
+                        ]);
+                        const nodes = [...document.querySelectorAll(
+                            'a,button,[role="link"],[role="menuitem"],'
+                            + '[role="button"],[tabindex]'
+                        )];
+                        const rows = nodes
+                            .filter(visible)
+                            .map(el => ({
+                                el,
+                                text: clean(
+                                    (el.getAttribute('aria-label') || '') + ' ' +
+                                    (el.innerText || el.textContent || '')
+                                )
+                            }))
+                            .filter(row => names.has(row.text))
+                            .sort((a,b) => a.text.length - b.text.length);
+                        if (!rows.length) return false;
+                        rows[0].el.click();
+                        return true;
+                    }"""
+                )
+            )
+        except Exception:
+            clicked = False
+
+        if clicked:
+            await self.page.wait_for_timeout(700)
+        return clicked
+
     async def _open_ad_account_create_form(
         self,
         *,
@@ -3661,6 +3732,16 @@ class FacebookBusinessBrowser:
                 "Meta Business Settings Ad Accounts surface could not be opened.",
                 retryable=True,
                 diagnostic=diag,
+            )
+
+        # Meta's migrated settings URL can land on the generic settings shell
+        # even though the URL already contains /ad_accounts. Explicitly open
+        # the Ad Accounts item in the left navigation before looking for Add.
+        section_clicked = await self._activate_ad_account_settings_section()
+        if section_clicked:
+            await self._wait_for_ad_account_settings_ready(
+                business_id=business,
+                timeout_seconds=6.0,
             )
 
         entry_clicked = await self._click_named(
@@ -3747,6 +3828,7 @@ class FacebookBusinessBrowser:
             diag = await self._diagnostic("ad_account_create_entry_missing")
             diag["business_id"] = business
             diag["hydration_attempts"] = hydration_attempts
+            diag["section_clicked"] = section_clicked
             raise BrowserBusinessError(
                 "AD_ACCOUNT_CREATE_UI_CHANGED",
                 "Meta Ad Account create entry was not found.",
