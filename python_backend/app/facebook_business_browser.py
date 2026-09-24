@@ -4002,6 +4002,107 @@ class FacebookBusinessBrowser:
         value = _clean(result).lower()
         return value if value in {"create", "add"} else ""
 
+    async def _wait_for_ad_account_create_entry(
+        self,
+        *,
+        timeout_seconds: float = 6.0,
+    ) -> bool:
+        """Wait specifically for the Create-new-Ad-Account menu entry.
+
+        This must not treat the persistent generic Add button as readiness,
+        otherwise a second Add click can toggle Meta's popup closed.
+        """
+        if self.page is None:
+            return False
+
+        deadline = time.monotonic() + max(1.0, float(timeout_seconds))
+        while time.monotonic() < deadline:
+            if await self._click_named(
+                self.AD_ACCOUNT_CREATE_ENTRY_NAMES,
+                roles=(
+                    "button",
+                    "link",
+                    "menuitem",
+                    "menuitemradio",
+                    "option",
+                ),
+            ):
+                return True
+
+            try:
+                action = await self._click_ad_account_action_dom(
+                    allow_generic_add=False
+                )
+                if action == "create":
+                    return True
+            except Exception:
+                pass
+
+            await self.page.wait_for_timeout(250)
+
+        return False
+
+    async def _ad_account_popup_candidates(self) -> list[str]:
+        """Return compact visible popup/menu text after clicking Add."""
+        if self.page is None:
+            return []
+        try:
+            rows = await self.page.evaluate(
+                """() => {
+                    const visible = el => {
+                        const r = el.getBoundingClientRect();
+                        const s = getComputedStyle(el);
+                        return r.width > 0 && r.height > 0
+                            && s.display !== 'none'
+                            && s.visibility !== 'hidden';
+                    };
+                    const clean = text => (text || '')
+                        .normalize('NFKC')
+                        .replace(/\u00a0/g, ' ')
+                        .replace(/\s+/g, ' ')
+                        .trim();
+                    const out = [];
+                    const seen = new Set();
+                    const selectors = [
+                        '[role="menu"] [role="menuitem"]',
+                        '[role="menu"] [role="menuitemradio"]',
+                        '[role="listbox"] [role="option"]',
+                        '[role="dialog"] button',
+                        '[role="dialog"] a',
+                        '[data-visualcompletion="ignore-dynamic"] [role="button"]',
+                        '[data-visualcompletion="ignore-dynamic"] a'
+                    ];
+                    for (const selector of selectors) {
+                        for (const el of document.querySelectorAll(selector)) {
+                            if (!visible(el)) continue;
+                            const text = clean(
+                                (el.getAttribute('aria-label') || '') + ' ' +
+                                (el.getAttribute('title') || '') + ' ' +
+                                (el.innerText || el.textContent || '')
+                            );
+                            if (!text || text.length > 260) continue;
+                            const r = el.getBoundingClientRect();
+                            const row = text
+                                + ' [tag=' + (el.tagName || '')
+                                + ' role=' + (el.getAttribute('role') || '')
+                                + ' x=' + Math.round(r.x)
+                                + ' y=' + Math.round(r.y)
+                                + ']';
+                            if (seen.has(row)) continue;
+                            seen.add(row);
+                            out.push(row);
+                            if (out.length >= 30) return out;
+                        }
+                    }
+                    return out;
+                }"""
+            )
+            if isinstance(rows, list):
+                return [_clean(x)[:300] for x in rows if _clean(x)][:30]
+        except Exception:
+            pass
+        return []
+
     async def _ad_account_action_candidates(self) -> list[str]:
         if self.page is None:
             return []
@@ -4327,8 +4428,13 @@ class FacebookBusinessBrowser:
                 == "create"
             )
 
+        add_clicked = False
+        post_add_candidates: list[str] = []
         if not entry_clicked:
-            add_clicked = await self._click_named(self.ADD_NAMES)
+            add_clicked = await self._click_named(
+                self.ADD_NAMES,
+                roles=("button", "link", "menuitem"),
+            )
             dom_action = ""
             if not add_clicked:
                 dom_action = await self._click_ad_account_action_dom(
@@ -4339,58 +4445,24 @@ class FacebookBusinessBrowser:
                 add_clicked = dom_action == "add"
 
             if add_clicked and not entry_clicked:
-                await self.page.wait_for_timeout(700)
-                entry_clicked = await self._click_named(
-                    self.AD_ACCOUNT_CREATE_ENTRY_NAMES
+                # Click Add exactly once. Re-clicking can toggle Meta's popup
+                # closed. Wait only for the CREATE menu item from here.
+                entry_clicked = await self._wait_for_ad_account_create_entry(
+                    timeout_seconds=6.0,
                 )
                 if not entry_clicked:
-                    entry_clicked = (
-                        await self._click_ad_account_action_dom(
-                            allow_generic_add=False
-                        )
-                        == "create"
+                    post_add_candidates = (
+                        await self._ad_account_popup_candidates()
                     )
 
-        if not entry_clicked:
-            # A late Meta render can happen even after the settings
-            # surface first became usable. Give the actual Add/Create controls
-            # one more short hydration window before declaring UI_CHANGED.
-            await self._wait_for_ad_account_create_action(
-                timeout_seconds=6.0,
+        if not entry_clicked and not add_clicked:
+            # No Add action was found at all. Give the page one late hydration
+            # window, then retry the direct Create entry only (still no second
+            # Add toggle).
+            await self.page.wait_for_timeout(1200)
+            entry_clicked = await self._wait_for_ad_account_create_entry(
+                timeout_seconds=4.0,
             )
-            entry_clicked = await self._click_named(
-                self.AD_ACCOUNT_CREATE_ENTRY_NAMES
-            )
-            if not entry_clicked:
-                entry_clicked = (
-                    await self._click_ad_account_action_dom(
-                        allow_generic_add=False
-                    )
-                    == "create"
-                )
-            if not entry_clicked:
-                add_clicked = await self._click_named(self.ADD_NAMES)
-                dom_action = ""
-                if not add_clicked:
-                    dom_action = await self._click_ad_account_action_dom(
-                        allow_generic_add=True
-                    )
-                    if dom_action == "create":
-                        entry_clicked = True
-                    add_clicked = dom_action == "add"
-
-                if add_clicked and not entry_clicked:
-                    await self.page.wait_for_timeout(700)
-                    entry_clicked = await self._click_named(
-                        self.AD_ACCOUNT_CREATE_ENTRY_NAMES
-                    )
-                    if not entry_clicked:
-                        entry_clicked = (
-                            await self._click_ad_account_action_dom(
-                                allow_generic_add=False
-                            )
-                            == "create"
-                        )
 
         if not entry_clicked:
             raw_diag = await self._diagnostic(
@@ -4406,6 +4478,8 @@ class FacebookBusinessBrowser:
                 "action_candidates": (
                     await self._ad_account_action_candidates()
                 ),
+                "add_clicked": add_clicked,
+                "post_add_candidates": post_add_candidates,
                 "section_route_attempts": section_route_attempts[-8:],
                 "hydration_attempts": hydration_attempts,
             }

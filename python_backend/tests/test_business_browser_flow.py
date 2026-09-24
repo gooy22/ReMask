@@ -329,6 +329,50 @@ class BrowserAdAccountDomFallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(args[1])
 
 
+class BrowserAdAccountCreateEntryWaitTests(unittest.IsolatedAsyncioTestCase):
+    async def test_wait_for_create_entry_never_reclicks_generic_add(self):
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-rk-create-entry-wait")
+        )
+        browser.page = SimpleNamespace(
+            wait_for_timeout=AsyncMock(return_value=None),
+        )
+        browser._click_named = AsyncMock(side_effect=[False, True])
+        browser._click_ad_account_action_dom = AsyncMock(
+            return_value=""
+        )
+
+        ready = await browser._wait_for_ad_account_create_entry(
+            timeout_seconds=2.0,
+        )
+
+        self.assertTrue(ready)
+        self.assertEqual(browser._click_named.await_count, 2)
+        for call in browser._click_named.await_args_list:
+            self.assertEqual(
+                call.args[0],
+                browser.AD_ACCOUNT_CREATE_ENTRY_NAMES,
+            )
+            self.assertNotEqual(call.args[0], browser.ADD_NAMES)
+
+    async def test_post_add_popup_diagnostic_exists(self):
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-rk-popup-diag")
+        )
+        browser.page = SimpleNamespace(
+            evaluate=AsyncMock(
+                return_value=[
+                    "Créer un compte publicitaire [tag=DIV role=menuitem x=902 y=420]"
+                ]
+            ),
+        )
+
+        rows = await browser._ad_account_popup_candidates()
+
+        self.assertEqual(len(rows), 1)
+        self.assertIn("Créer un compte publicitaire", rows[0])
+
+
 class BrowserAdAccountCreateActionTests(unittest.IsolatedAsyncioTestCase):
     async def test_french_sidebar_text_does_not_count_as_create_action(self):
         browser = FacebookBusinessBrowser(
