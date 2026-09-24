@@ -111,9 +111,8 @@ class BrowserNetworkGateTests(unittest.TestCase):
         )
         self.assertEqual(applied["currency"], "USD")
         self.assertEqual(applied["timezone_id"], 1)
-        decoded = unquote(post_data)
-        self.assertIn('"currency":"USD"', decoded)
-        self.assertIn('"timezone_id":1', decoded)
+        self.assertIn("%22currency%22%3A%22USD%22", post_data)
+        self.assertIn("%22timezone_id%22%3A1", post_data)
 
     def test_ad_account_live_request_does_not_invent_currency_timezone_keys(self):
         request = _FakeRequest(
