@@ -222,10 +222,15 @@ def _graphql_error_details(payload: Any) -> list[dict[str, Any]]:
 
         message = _clean(
             value.get("message")
+            or value.get("summary")
+            or value.get("errorSummary")
+            or value.get("error_summary")
             or value.get("errorDescription")
             or value.get("error_description")
             or value.get("description")
+            or value.get("description_raw")
             or value.get("error_user_msg")
+            or value.get("error_user_title")
         )
 
         extensions = value.get("extensions")
