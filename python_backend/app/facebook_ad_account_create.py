@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from .facebook_docids import (
     DocIdCandidate,
@@ -226,6 +227,8 @@ async def create_ad_account_with_docids(
     timezone_id: int,
     profile_id: str = "",
     manual_doc_id: str = "",
+    captured_request: dict[str, Any] | None = None,
+    before_submit: Callable[[], Awaitable[None]] | None = None,
 ) -> CreateAdAccountResult:
     business = _clean(business_id)
     name = _clean(account_name)
