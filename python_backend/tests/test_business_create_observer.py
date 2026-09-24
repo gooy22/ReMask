@@ -64,6 +64,35 @@ class BusinessCreateObserverTests(unittest.TestCase):
             )
         )
 
+
+    def test_matches_structured_page_add_mutation(self):
+        request = _TextRequest(
+            "fb_api_req_friendly_name=BizKitSettingsAddPageMutation"
+            "&variables=%7B%22business_id%22%3A%22555666777888999%22%2C"
+            "%22page_id%22%3A%22123456789%22%7D"
+        )
+        self.assertTrue(
+            FacebookBusinessBrowser._request_matches_page_add(
+                request,
+                business_id="555666777888999",
+                page_id="123456789",
+            )
+        )
+
+    def test_rejects_page_search_query_with_same_ids(self):
+        request = _TextRequest(
+            "fb_api_req_friendly_name=BusinessPageSearchQuery"
+            "&variables=%7B%22business_id%22%3A%22555666777888999%22%2C"
+            "%22page_id%22%3A%22123456789%22%7D"
+        )
+        self.assertFalse(
+            FacebookBusinessBrowser._request_matches_page_add(
+                request,
+                business_id="555666777888999",
+                page_id="123456789",
+            )
+        )
+
     def test_rejects_creation_mutation_for_different_business_name(self):
         request = _TextRequest(
             "fb_api_req_friendly_name=useBusinessCreationMutationMutation"
