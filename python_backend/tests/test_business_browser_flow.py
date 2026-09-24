@@ -154,6 +154,33 @@ class BrowserNetworkGateTests(unittest.TestCase):
         )
 
 
+class BrowserAdAccountHydrationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_waits_through_empty_meta_shell_until_ad_account_surface_renders(self):
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-rk-hydration")
+        )
+        browser.page = SimpleNamespace(
+            url=(
+                "https://business.facebook.com/latest/settings/ad_accounts/"
+                "?business_id=1056638030476027"
+            ),
+            evaluate=AsyncMock(return_value=False),
+            wait_for_timeout=AsyncMock(return_value=None),
+        )
+        browser._assert_authenticated = AsyncMock(return_value=None)
+        browser._body_text = AsyncMock(
+            side_effect=["", "", "Ad accounts Add"]
+        )
+
+        ready = await browser._wait_for_ad_account_settings_ready(
+            business_id="1056638030476027",
+            timeout_seconds=2.0,
+        )
+
+        self.assertTrue(ready)
+        self.assertEqual(browser._body_text.await_count, 3)
+
+
 class BrowserCreateSurfaceVisibilityTests(unittest.IsolatedAsyncioTestCase):
     async def test_mounted_create_text_counts_as_meta_create_surface(self):
         class _EmptyLocator:
