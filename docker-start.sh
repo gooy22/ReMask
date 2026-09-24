@@ -118,9 +118,11 @@ import sys
 import urllib.request
 
 port = int(sys.argv[1])
-with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=0.5) as response:
-    if response.status != 200:
-        raise SystemExit(1)
+try:
+    with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=0.5) as response:
+        raise SystemExit(0 if response.status == 200 else 1)
+except Exception:
+    raise SystemExit(1)
 PY
     then
       WORKER_HEALTH_OK=1
@@ -130,12 +132,18 @@ PY
   done
 
   if [ "$WORKER_HEALTH_OK" != "1" ]; then
-    echo "Embedded Python worker failed initial HTTP health check; keeping web service online and starting watchdog" >&2
+    echo "Embedded Python worker did not become healthy during initial probe window; watchdog will recover it" >&2
     tail -n 160 "$DATA_DIR/python-worker.log" >&2 || true
+  fi
 
-    (
-      while true; do
-        if /opt/remask-venv/bin/python - "$PYTHON_WORKER_PORT" <<'PY'
+  # Keep monitoring after startup too. A Chromium-heavy BUSINESS job can leave
+  # the worker process alive while its HTTP loop is no longer responsive.
+  # Restart only after three consecutive failed health probes to avoid killing
+  # the worker on a single transient event-loop stall.
+  (
+    FAIL_COUNT=0
+    while true; do
+      if /opt/remask-venv/bin/python - "$PYTHON_WORKER_PORT" <<'PY'
 import sys
 import urllib.request
 
@@ -146,30 +154,48 @@ try:
 except Exception:
     raise SystemExit(1)
 PY
-        then
-          sleep 5
-          continue
-        fi
-
-        CURRENT_PID=""
-        if [ -f "$DATA_DIR/python-worker.pid" ]; then
-          CURRENT_PID="$(cat "$DATA_DIR/python-worker.pid" 2>/dev/null || true)"
-        fi
-
-        if [ -z "$CURRENT_PID" ] || ! kill -0 "$CURRENT_PID" 2>/dev/null; then
-          echo "[$(date -u +%FT%TZ)] restarting embedded Python worker" >> "$DATA_DIR/python-worker.log"
-          (
-            cd /opt/remask-python
-            exec /opt/remask-venv/bin/uvicorn main:app --host 127.0.0.1 --port "$PYTHON_WORKER_PORT" --workers 1
-          ) >> "$DATA_DIR/python-worker.log" 2>&1 &
-          echo "$!" > "$DATA_DIR/python-worker.pid"
-        fi
-
+      then
+        FAIL_COUNT=0
         sleep 5
-      done
-    ) &
-    echo "$!" > "$DATA_DIR/python-worker-watchdog.pid" || true
-  fi
+        continue
+      fi
+
+      FAIL_COUNT=$((FAIL_COUNT + 1))
+      if [ "$FAIL_COUNT" -lt 3 ]; then
+        sleep 2
+        continue
+      fi
+
+      CURRENT_PID=""
+      if [ -f "$DATA_DIR/python-worker.pid" ]; then
+        CURRENT_PID="$(cat "$DATA_DIR/python-worker.pid" 2>/dev/null || true)"
+      fi
+
+      if [ -n "$CURRENT_PID" ] && kill -0 "$CURRENT_PID" 2>/dev/null; then
+        echo "[$(date -u +%FT%TZ)] embedded Python worker unhealthy; terminating pid=$CURRENT_PID" >> "$DATA_DIR/python-worker.log"
+        kill -TERM "$CURRENT_PID" 2>/dev/null || true
+        for _ in $(seq 1 12); do
+          if ! kill -0 "$CURRENT_PID" 2>/dev/null; then
+            break
+          fi
+          sleep 0.25
+        done
+        if kill -0 "$CURRENT_PID" 2>/dev/null; then
+          kill -KILL "$CURRENT_PID" 2>/dev/null || true
+        fi
+      fi
+
+      echo "[$(date -u +%FT%TZ)] restarting embedded Python worker after health failure" >> "$DATA_DIR/python-worker.log"
+      (
+        cd /opt/remask-python
+        exec /opt/remask-venv/bin/uvicorn main:app --host 127.0.0.1 --port "$PYTHON_WORKER_PORT" --workers 1
+      ) >> "$DATA_DIR/python-worker.log" 2>&1 &
+      echo "$!" > "$DATA_DIR/python-worker.pid"
+      FAIL_COUNT=0
+      sleep 5
+    done
+  ) &
+  echo "$!" > "$DATA_DIR/python-worker-watchdog.pid" || true
 fi
 
 a2dismod -f mpm_event mpm_worker 2>/dev/null || true
