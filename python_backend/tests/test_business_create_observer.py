@@ -2,7 +2,11 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from app.facebook_business_browser import (\n    FacebookBusinessBrowser,\n    _graphql_error_details,\n    _meta_error_retryable,\n)
+from app.facebook_business_browser import (
+    FacebookBusinessBrowser,
+    _graphql_error_details,
+    _meta_error_retryable,
+)
 
 
 class _BufferedRequest:
