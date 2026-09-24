@@ -2420,6 +2420,22 @@ class FacebookBusinessBrowser:
 
         loop = asyncio.get_running_loop()
         gate_future: asyncio.Future[bool] = loop.create_future()
+        response_future: asyncio.Future[Any] = loop.create_future()
+
+        def observe_response(response: Any) -> None:
+            if response_future.done():
+                return
+            try:
+                if self._response_matches_page_add(
+                    response,
+                    business_id=business,
+                    page_id=page,
+                ):
+                    response_future.set_result(response)
+            except Exception:
+                return
+
+        self.page.on("response", observe_response)
 
         async def gate(route: Any, request: Any) -> None:
             if not self._request_matches_create(request, business_name):
@@ -3415,6 +3431,94 @@ class FacebookBusinessBrowser:
             if gate_future.done() and gate_future.exception() is not None:
                 raise gate_future.exception()
 
+            if gate_future.done() and gate_future.exception() is None:
+                response = None
+                try:
+                    response = await asyncio.wait_for(
+                        asyncio.shield(response_future),
+                        timeout=min(8.0, float(self.timeout_seconds)),
+                    )
+                except asyncio.TimeoutError:
+                    if before_submit is not None:
+                        await before_submit(
+                            {
+                                "activity": "PAGE_ADD_RESPONSE_UNCONFIRMED",
+                                "activity_at": int(time.time()),
+                                "business_id": business,
+                                "primary_page_id": page,
+                            }
+                        )
+                except Exception:
+                    response = None
+
+                if response is not None:
+                    try:
+                        raw = await response.text()
+                        payload = _decode_graphql_text(raw)
+                    except Exception:
+                        payload = None
+
+                    meta_errors = _graphql_error_details(payload)
+                    if meta_errors:
+                        retryable = _meta_error_retryable(meta_errors)
+                        if before_submit is not None:
+                            await before_submit(
+                                {
+                                    "phase": "PAGE_ADD_REJECTED",
+                                    "activity": "PAGE_ADD_REJECTED",
+                                    "activity_at": int(time.time()),
+                                    "business_id": business,
+                                    "primary_page_id": page,
+                                    "meta_errors": meta_errors,
+                                }
+                            )
+
+                        parts = []
+                        for row in meta_errors[:3]:
+                            code = _clean(row.get("code"))
+                            subcode = _clean(row.get("subcode"))
+                            message = _clean(row.get("message"))
+                            prefix = "/".join(
+                                value for value in (code, subcode) if value
+                            )
+                            if prefix and message:
+                                parts.append(f"{prefix}: {message}")
+                            elif message:
+                                parts.append(message)
+                            elif prefix:
+                                parts.append(prefix)
+
+                        error_message = (
+                            " · ".join(parts)
+                            or "Meta rejected Page attachment."
+                        )
+                        raise BrowserBusinessError(
+                            "META_PAGE_ADD_REJECTED",
+                            error_message[:2500],
+                            retryable=retryable,
+                            diagnostic={
+                                "meta_errors": meta_errors,
+                                "request": self._safe_graphql_request_summary(
+                                    response.request
+                                ),
+                            },
+                        )
+
+                    if before_submit is not None:
+                        await before_submit(
+                            {
+                                "activity": "PAGE_ADD_RESPONSE_OBSERVED",
+                                "activity_at": int(time.time()),
+                                "business_id": business,
+                                "primary_page_id": page,
+                                "response_friendly_name": _clean(
+                                    _request_graphql_meta(
+                                        response.request
+                                    ).get("friendly_name")
+                                ),
+                            }
+                        )
+
             if not gate_future.done():
                 # A non-GraphQL Meta variant may still have completed the
                 # operation. If a FINAL action was clicked, preserve
@@ -3445,6 +3549,12 @@ class FacebookBusinessBrowser:
         finally:
             if not gate_future.done():
                 gate_future.cancel()
+            if not response_future.done():
+                response_future.cancel()
+            try:
+                self.page.remove_listener("response", observe_response)
+            except Exception:
+                pass
             try:
                 await self.page.unroute("**/api/graphql/**", gate)
             except Exception:
