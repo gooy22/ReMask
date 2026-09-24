@@ -1,4 +1,4 @@
-/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 REMASK_PYTHON_WORKER_UI_V140 REMASK_PYTHON_WORKER_UI_V141 REMASK_PYTHON_WORKER_UI_V142 REMASK_PYTHON_WORKER_UI_V143 REMASK_PYTHON_WORKER_UI_V144 REMASK_PYTHON_WORKER_UI_V145 REMASK_PYTHON_WORKER_UI_V146 REMASK_PYTHON_WORKER_UI_V147 REMASK_PYTHON_WORKER_UI_V148 REMASK_PYTHON_WORKER_UI_V149 REMASK_PYTHON_WORKER_UI_V150 REMASK_PYTHON_WORKER_UI_V151 REMASK_PYTHON_WORKER_UI_V152 REMASK_PYTHON_WORKER_UI_V153 REMASK_PYTHON_WORKER_UI_V154 REMASK_PYTHON_WORKER_UI_V155 REMASK_PYTHON_WORKER_UI_V156 REMASK_PYTHON_WORKER_UI_V157 REMASK_PYTHON_WORKER_UI_V158 */
+/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 REMASK_PYTHON_WORKER_UI_V140 REMASK_PYTHON_WORKER_UI_V141 REMASK_PYTHON_WORKER_UI_V142 REMASK_PYTHON_WORKER_UI_V143 REMASK_PYTHON_WORKER_UI_V144 REMASK_PYTHON_WORKER_UI_V145 REMASK_PYTHON_WORKER_UI_V146 REMASK_PYTHON_WORKER_UI_V147 REMASK_PYTHON_WORKER_UI_V148 REMASK_PYTHON_WORKER_UI_V149 REMASK_PYTHON_WORKER_UI_V150 REMASK_PYTHON_WORKER_UI_V151 REMASK_PYTHON_WORKER_UI_V152 REMASK_PYTHON_WORKER_UI_V153 REMASK_PYTHON_WORKER_UI_V154 REMASK_PYTHON_WORKER_UI_V155 REMASK_PYTHON_WORKER_UI_V156 REMASK_PYTHON_WORKER_UI_V157 REMASK_PYTHON_WORKER_UI_V158 REMASK_PYTHON_WORKER_UI_V159 */
 const restoredPythonWorkerJobId = localStorage.getItem('remask_python_worker_job_v1') || '';
 
 const pythonWorkerUiState = {
@@ -59,6 +59,7 @@ async function pythonWorkerMapLimit(items, limit, worker) {
 function pythonWorkerSelectionRefresh() {
   const profiles = pythonWorkerSelectedProfiles();
   const start = pythonWorkerEl('pythonProvisionStart');
+  const addRk = pythonWorkerEl('pythonProvisionAdAccount');
 
   if (start) {
     start.disabled =
@@ -68,6 +69,16 @@ function pythonWorkerSelectionRefresh() {
     start.textContent = profiles.length
       ? 'Add BM (' + profiles.length + ')'
       : 'Add BM';
+  }
+
+  if (addRk) {
+    addRk.disabled =
+      pythonWorkerUiState.busy ||
+      profiles.length === 0 ||
+      pythonWorkerUiState.workerOnline !== true;
+    addRk.textContent = profiles.length
+      ? 'Add RK (' + profiles.length + ')'
+      : 'Add RK';
   }
 
   document
@@ -378,6 +389,33 @@ function pythonWorkerBusinessResult(item) {
   };
 }
 
+function pythonWorkerAdAccountResult(item) {
+  const steps = Array.isArray(item && item.provisioning_steps)
+    ? item.provisioning_steps
+    : [];
+  const step = steps.find(function(row) {
+    return (
+      row &&
+      String(row.step || '').toUpperCase() === 'AD_ACCOUNT' &&
+      String(row.status || '').toUpperCase() === 'SUCCESS'
+    );
+  });
+
+  if (!step || !step.result || typeof step.result !== 'object') return null;
+  const result = step.result;
+  const adAccountId = String(result.ad_account_id || '').trim();
+  if (!adAccountId) return null;
+
+  return {
+    ad_account_id: adAccountId,
+    business_id: String(result.business_id || '').trim(),
+    currency: String(result.currency || '').trim(),
+    timezone_id: String(result.timezone_id == null ? '' : result.timezone_id).trim(),
+    transport: String(result.transport || '').trim(),
+    response_path: String(result.create_response_path || '').trim()
+  };
+}
+
 function pythonWorkerBusinessTelemetry(item) {
   const steps = Array.isArray(item && item.provisioning_steps)
     ? item.provisioning_steps
@@ -497,8 +535,30 @@ function pythonWorkerRenderJob(job) {
           }
           errorTd.textContent = errorParts.join(' · ');
         } else {
+          const adAccountResult = pythonWorkerAdAccountResult(item);
           const businessResult = pythonWorkerBusinessResult(item);
-          if (businessResult) {
+          if (adAccountResult) {
+            const resultParts = [
+              'RK ' + adAccountResult.ad_account_id
+            ];
+            if (adAccountResult.business_id) {
+              resultParts.push('BM ' + adAccountResult.business_id);
+            }
+            if (adAccountResult.currency) {
+              resultParts.push(adAccountResult.currency);
+            }
+            if (adAccountResult.timezone_id) {
+              resultParts.push('TZ ' + adAccountResult.timezone_id);
+            }
+            if (adAccountResult.transport) {
+              resultParts.push(adAccountResult.transport);
+            }
+            if (adAccountResult.response_path) {
+              resultParts.push('response ' + adAccountResult.response_path);
+            }
+            errorTd.className = 'pw-result';
+            errorTd.textContent = resultParts.join(' · ');
+          } else if (businessResult) {
             const resultParts = [
               'BM ' + businessResult.business_id
             ];
@@ -1438,16 +1498,33 @@ async function pythonWorkerPoll() {
     pythonWorkerUiState.busy = false;
 
     if (status === 'SUCCESS') {
+      const isAdAccountJob = items.some(function(item) {
+        return (Array.isArray(item && item.provisioning_steps) ? item.provisioning_steps : [])
+          .some(function(step) {
+            return step && String(step.step || '').toUpperCase() === 'AD_ACCOUNT';
+          });
+      });
       const unconfirmed = await pythonWorkerRefreshSuccessfulProfiles(items);
       pythonWorkerSetText(
         'pythonPwStatus',
-        unconfirmed.length
+        isAdAccountJob
           ? (
-              'BM создан. ID сохранён в Job. Обычный Meta inventory sync не ' +
-              'подтвердил профили: ' + unconfirmed.join(', ') +
-              '. Это не отменяет успешный CREATE.'
+              unconfirmed.length
+                ? (
+                    'RK создан. ad_account_id сохранён в Job. Workspace sync не ' +
+                    'подтвердил профили: ' + unconfirmed.join(', ') + '.'
+                  )
+                : 'Рекламный кабинет создан и Workspace sync завершён.'
             )
-          : 'Business Manager создан и подтверждён Workspace sync.'
+          : (
+              unconfirmed.length
+                ? (
+                    'BM создан. ID сохранён в Job. Обычный Meta inventory sync не ' +
+                    'подтвердил профили: ' + unconfirmed.join(', ') +
+                    '. Это не отменяет успешный CREATE.'
+                  )
+                : 'Business Manager создан и подтверждён Workspace sync.'
+            )
       );
 
       pythonWorkerUiState.jobId = '';
@@ -1638,14 +1715,445 @@ function pythonWorkerEnhanceBmDialog() {
   pythonWorkerSetBmDialogStatus(dialog, 'Add BM подключён к Python worker.', false);
 }
 
+
+async function pythonWorkerLoadBusinesses(profileId, csrfRetried) {
+  const csrf = await pythonWorkerCsrf(false);
+  const response = await fetch('ajax/pythonWorkerBusinesses.php', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      'X-REMASK-CSRF': csrf
+    },
+    body: JSON.stringify({
+      profile: String(profileId || '').trim(),
+      remask_csrf: csrf
+    })
+  });
+
+  let data = null;
+  try {
+    data = await response.json();
+  } catch (_) {
+    throw new Error('Businesses endpoint returned invalid JSON (HTTP ' + response.status + ').');
+  }
+
+  const detail = data && data.detail && typeof data.detail === 'object'
+    ? (data.detail.message || JSON.stringify(data.detail))
+    : '';
+  const errorText = String(
+    detail || (data && (data.message || data.error)) || ('Businesses HTTP ' + response.status)
+  );
+
+  if (
+    response.status === 403 &&
+    csrfRetried !== true &&
+    /csrf/i.test(errorText)
+  ) {
+    await pythonWorkerCsrf(true);
+    return pythonWorkerLoadBusinesses(profileId, true);
+  }
+
+  if (!response.ok || !(data && data.ok)) {
+    throw new Error(errorText);
+  }
+
+  return Array.isArray(data.businesses) ? data.businesses : [];
+}
+
+async function pythonWorkerStartAdAccounts(options) {
+  const profiles = options && Array.isArray(options.profiles)
+    ? options.profiles.map(function(value) { return String(value || '').trim(); }).filter(Boolean)
+    : pythonWorkerSelectedProfiles();
+  const configs = options && options.configs && typeof options.configs === 'object'
+    ? options.configs
+    : {};
+
+  if (!profiles.length || pythonWorkerUiState.busy) return;
+
+  const invalid = profiles.filter(function(profileId) {
+    const cfg = configs[String(profileId)] || {};
+    return (
+      !/^\d+$/.test(String(cfg.business_id || '').trim()) ||
+      !String(cfg.name || '').trim() ||
+      !String(cfg.currency || '').trim() ||
+      !/^\d+$/.test(String(cfg.timezone_id == null ? '' : cfg.timezone_id).trim())
+    );
+  });
+
+  if (invalid.length) {
+    throw new Error(
+      'Add RK request not sent: нужен BM ID, имя РК, currency и timezone_id. Проблема: ' +
+      invalid.join(', ')
+    );
+  }
+
+  pythonWorkerUiState.busy = true;
+  pythonWorkerSelectionRefresh();
+  pythonWorkerSetText(
+    'pythonPwStatus',
+    'Создаю Add RK Job для ' + profiles.length + ' FB-профилей...'
+  );
+
+  try {
+    const nonce = Date.now() + '-' + Math.random().toString(16).slice(2);
+    const payloadProfiles = profiles.map(function(profileId, index) {
+      const profileKey = String(profileId);
+      const cfg = configs[profileKey] || {};
+      const businessId = String(cfg.business_id || '').trim();
+
+      return {
+        profile_id: profileKey,
+        tasks: [
+          {
+            action: 'provisioning',
+            idempotency_key: 'add-rk-' + nonce + '-' + index,
+            payload: {
+              steps: ['PROXY_CHECK', 'AD_ACCOUNT'],
+              // One stable RK slot per BM. Once ad_account_id is confirmed,
+              // ProvisioningService reuses it instead of creating a duplicate.
+              scope_key: 'add-rk-bm-' + businessId,
+              parameters: {
+                AD_ACCOUNT: {
+                  business_id: businessId,
+                  name: String(cfg.name || '').trim(),
+                  currency: String(cfg.currency || '').trim().toUpperCase(),
+                  timezone_id: Number(cfg.timezone_id)
+                }
+              }
+            }
+          }
+        ]
+      };
+    });
+
+    const data = await pythonWorkerBridge({
+      action: 'create',
+      idempotency_key: 'workspace-add-rk-' + nonce,
+      profiles: payloadProfiles
+    });
+
+    const jobId = String((data && data.job && data.job.job_id) || '').trim();
+    if (!jobId) throw new Error('Worker did not return job_id.');
+
+    pythonWorkerUiState.jobId = jobId;
+    localStorage.setItem('remask_python_worker_job_v1', jobId);
+    pythonWorkerSetText('pythonPwJob', 'Job: ' + jobId);
+    pythonWorkerSetText('pythonPwStatus', 'Создание рекламного кабинета запущено...');
+
+    pythonWorkerPoll().catch(function(error) {
+      pythonWorkerSetText(
+        'pythonPwStatus',
+        'Ошибка polling: ' + ((error && error.message) || error)
+      );
+    });
+  } catch (error) {
+    pythonWorkerUiState.busy = false;
+    pythonWorkerSelectionRefresh();
+    pythonWorkerSetText(
+      'pythonPwStatus',
+      'Add RK: ' + ((error && error.message) || error)
+    );
+    throw error;
+  }
+}
+
+async function pythonWorkerOpenOwnAdAccountModal() {
+  if (pythonWorkerUiState.workerOnline !== true) {
+    pythonWorkerSetText('pythonPwStatus', 'Add RK недоступен: worker ещё не READY.');
+    await pythonWorkerHealthCheck();
+    if (pythonWorkerUiState.workerOnline !== true) return;
+  }
+
+  const profiles = pythonWorkerSelectedProfiles();
+  if (!profiles.length) {
+    pythonWorkerSetText('pythonPwStatus', 'Сначала выбери хотя бы один FB-профиль.');
+    return;
+  }
+
+  pythonWorkerEnsureBmModalStyle();
+  pythonWorkerCloseOwnBmModal();
+
+  const modal = document.createElement('div');
+  modal.id = 'pythonWorkerBmModal';
+
+  const card = document.createElement('div');
+  card.className = 'pwbm-card';
+
+  const head = document.createElement('div');
+  head.className = 'pwbm-head';
+  const title = document.createElement('div');
+  title.className = 'pwbm-title';
+  title.textContent = 'Добавить рекламный кабинет · ' + profiles.length + ' проф.';
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'pwbm-close';
+  close.textContent = '×';
+  close.addEventListener('click', pythonWorkerCloseOwnBmModal);
+  head.appendChild(title);
+  head.appendChild(close);
+
+  const body = document.createElement('div');
+  body.className = 'pwbm-body';
+  const note = document.createElement('div');
+  note.className = 'pwbm-note';
+  note.textContent =
+    'Модель: 1 BM = 1 RK. Выбери BM; повторный Add RK для того же BM переиспользует уже подтверждённый ad_account_id.';
+  body.appendChild(note);
+
+  const rows = {};
+  for (let index = 0; index < profiles.length; index++) {
+    const profileId = profiles[index];
+    const row = document.createElement('div');
+    row.className = 'pwbm-row';
+
+    const profile = document.createElement('div');
+    profile.className = 'pwbm-profile';
+    profile.textContent = profileId;
+    const sessionHint = document.createElement('span');
+    sessionHint.className = 'pwbm-session';
+    sessionHint.textContent = 'Загружаю Business Managers…';
+    profile.appendChild(sessionHint);
+
+    const accountField = document.createElement('div');
+    accountField.className = 'pwbm-field';
+    const name = document.createElement('input');
+    name.type = 'text';
+    name.value = 'ReMask RK ' + (index + 1);
+    name.placeholder = 'Название рекламного кабинета';
+
+    const currency = document.createElement('input');
+    currency.type = 'text';
+    currency.className = 'pwbm-manual';
+    currency.value = 'USD';
+    currency.placeholder = 'Currency, например USD';
+
+    const timezone = document.createElement('input');
+    timezone.type = 'number';
+    timezone.className = 'pwbm-manual';
+    timezone.value = '1';
+    timezone.min = '0';
+    timezone.placeholder = 'Meta timezone_id';
+
+    const accountHint = document.createElement('small');
+    accountHint.textContent = 'Имя · валюта · Meta timezone_id. Currency/timezone после CREATE обычно не меняются.';
+    accountField.appendChild(name);
+    accountField.appendChild(currency);
+    accountField.appendChild(timezone);
+    accountField.appendChild(accountHint);
+
+    const bmField = document.createElement('div');
+    bmField.className = 'pwbm-field';
+    const bm = document.createElement('select');
+    bm.disabled = true;
+    const loading = document.createElement('option');
+    loading.value = '';
+    loading.textContent = 'Загружаю BM…';
+    bm.appendChild(loading);
+
+    const manualBm = document.createElement('input');
+    manualBm.type = 'text';
+    manualBm.className = 'pwbm-manual';
+    manualBm.inputMode = 'numeric';
+    manualBm.placeholder = 'Или введи BM ID вручную';
+
+    const bmHint = document.createElement('small');
+    bmHint.textContent = 'Business Manager';
+    bmField.appendChild(bm);
+    bmField.appendChild(manualBm);
+    bmField.appendChild(bmHint);
+
+    row.appendChild(profile);
+    row.appendChild(accountField);
+    row.appendChild(bmField);
+    body.appendChild(row);
+
+    rows[profileId] = {
+      name: name,
+      currency: currency,
+      timezone: timezone,
+      bm: bm,
+      manualBm: manualBm,
+      bmHint: bmHint,
+      sessionHint: sessionHint,
+      loaded: false
+    };
+  }
+
+  const footer = document.createElement('div');
+  footer.className = 'pwbm-footer';
+  const status = document.createElement('div');
+  status.className = 'pwbm-status';
+  status.textContent = 'Загружаю BM…';
+  const actions = document.createElement('div');
+  actions.className = 'pwbm-actions';
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.className = 'btn btn-secondary';
+  cancel.textContent = 'Отмена';
+  cancel.addEventListener('click', pythonWorkerCloseOwnBmModal);
+  const create = document.createElement('button');
+  create.type = 'button';
+  create.className = 'btn btn-primary';
+  create.textContent = 'Создать RK';
+  create.disabled = true;
+  actions.appendChild(cancel);
+  actions.appendChild(create);
+  footer.appendChild(status);
+  footer.appendChild(actions);
+
+  card.appendChild(head);
+  card.appendChild(body);
+  card.appendChild(footer);
+  modal.appendChild(card);
+  document.body.appendChild(modal);
+
+  const refreshReadyState = function() {
+    const allLoaded = profiles.every(function(profileId) {
+      return rows[profileId] && rows[profileId].loaded;
+    });
+    const failed = profiles.filter(function(profileId) {
+      const cfg = rows[profileId];
+      const businessId = String(cfg.bm.value || cfg.manualBm.value || '').trim();
+      return (
+        !/^\d+$/.test(businessId) ||
+        !String(cfg.name.value || '').trim() ||
+        !String(cfg.currency.value || '').trim() ||
+        !/^\d+$/.test(String(cfg.timezone.value || '').trim())
+      );
+    });
+    create.disabled =
+      pythonWorkerUiState.busy ||
+      !allLoaded ||
+      failed.length > 0;
+    status.textContent = !allLoaded
+      ? 'Загружаю Business Managers…'
+      : (
+          failed.length
+            ? 'Не готовы профили: ' + failed.join(', ')
+            : 'Готово к Add RK: ' + profiles.length + '.'
+        );
+  };
+
+  pythonWorkerMapLimit(profiles, 8, async function(profileId) {
+    const cfg = rows[profileId];
+    cfg.name.addEventListener('input', refreshReadyState);
+    cfg.currency.addEventListener('input', refreshReadyState);
+    cfg.timezone.addEventListener('input', refreshReadyState);
+    cfg.bm.addEventListener('change', function() {
+      if (String(cfg.bm.value || '').trim()) cfg.manualBm.value = '';
+      refreshReadyState();
+    });
+    cfg.manualBm.addEventListener('input', function() {
+      if (String(cfg.manualBm.value || '').trim()) cfg.bm.value = '';
+      refreshReadyState();
+    });
+
+    try {
+      const businesses = await pythonWorkerLoadBusinesses(profileId);
+      cfg.bm.textContent = '';
+
+      const placeholder = document.createElement('option');
+      placeholder.value = '';
+      placeholder.textContent = 'Выбери Business Manager';
+      cfg.bm.appendChild(placeholder);
+
+      for (const item of businesses) {
+        if (!item || !/^\d+$/.test(String(item.id || '').trim())) continue;
+        const option = document.createElement('option');
+        option.value = String(item.id).trim();
+        option.textContent =
+          String(item.name || item.id) + ' — ' + String(item.id).trim();
+        cfg.bm.appendChild(option);
+      }
+
+      if (businesses.length === 1) {
+        cfg.bm.value = String(businesses[0].id || '').trim();
+      }
+
+      cfg.bm.disabled = false;
+      cfg.loaded = true;
+      cfg.sessionHint.className = 'pwbm-session ok';
+      cfg.sessionHint.textContent = 'BM cache: ' + businesses.length;
+      cfg.bmHint.textContent = businesses.length
+        ? 'Выбери BM для единственного RK.'
+        : 'BM не найден в кэше — введи ID вручную.';
+    } catch (error) {
+      cfg.bm.textContent = '';
+      const failed = document.createElement('option');
+      failed.value = '';
+      failed.textContent = 'Кэш BM недоступен';
+      cfg.bm.appendChild(failed);
+      cfg.bm.disabled = false;
+      cfg.loaded = true;
+      cfg.sessionHint.className = 'pwbm-session error';
+      cfg.sessionHint.textContent = 'BM cache error';
+      cfg.bmHint.className = 'error';
+      cfg.bmHint.textContent =
+        'Введи BM ID вручную: ' + String((error && error.message) || error);
+    }
+    refreshReadyState();
+  }).catch(function(error) {
+    console.error('[ReMask Worker UI] BM cache pool failed:', error);
+  });
+
+  create.addEventListener('click', function() {
+    if (create.disabled) return;
+
+    const configs = {};
+    for (const profileId of profiles) {
+      const cfg = rows[profileId];
+      configs[profileId] = {
+        business_id: String(cfg.bm.value || cfg.manualBm.value || '').trim(),
+        name: String(cfg.name.value || '').trim(),
+        currency: String(cfg.currency.value || '').trim().toUpperCase(),
+        timezone_id: String(cfg.timezone.value || '').trim()
+      };
+    }
+
+    create.disabled = true;
+    cancel.disabled = true;
+    status.textContent = 'Отправляю Add RK Job…';
+
+    pythonWorkerStartAdAccounts({
+      profiles: profiles,
+      configs: configs
+    }).then(function() {
+      pythonWorkerCloseOwnBmModal();
+    }).catch(function(error) {
+      cancel.disabled = false;
+      refreshReadyState();
+      status.textContent = 'Ошибка: ' + String((error && error.message) || error);
+    });
+  });
+
+  refreshReadyState();
+}
+
+window.pythonWorkerStartAdAccounts = pythonWorkerStartAdAccounts;
+
 function pythonWorkerInitUi() {
   const start = pythonWorkerEl('pythonProvisionStart');
+  const addRk = pythonWorkerEl('pythonProvisionAdAccount');
   const retry = pythonWorkerEl('pythonProvisionRetry');
 
   if (start) {
     start.addEventListener('click', function(event) {
       event.preventDefault();
       pythonWorkerStartProvisioning().catch(function(error) {
+        pythonWorkerSetText(
+          'pythonPwStatus',
+          String((error && error.message) || error)
+        );
+      });
+    });
+  }
+
+  if (addRk) {
+    addRk.addEventListener('click', function(event) {
+      event.preventDefault();
+      pythonWorkerOpenOwnAdAccountModal().catch(function(error) {
         pythonWorkerSetText(
           'pythonPwStatus',
           String((error && error.message) || error)

@@ -6,6 +6,7 @@ $phpPath = '/var/www/html/workspace.php';
 $jsPath = '/var/www/html/scripts/workspace.js';
 $addonPath = '/tmp/railway-python-worker-ui.js';
 $pagesEndpointPath = '/var/www/html/ajax/pythonWorkerPages.php';
+$businessesEndpointPath = '/var/www/html/ajax/pythonWorkerBusinesses.php';
 
 $pagesEndpoint = <<<'PHP_PAGES'
 <?php
@@ -81,7 +82,79 @@ try {
 }
 PHP_PAGES;
 
+$businessesEndpoint = <<<'PHP_BUSINESSES'
+<?php
+declare(strict_types=1);
+
+ini_set('display_errors', '0');
+ini_set('html_errors', '0');
+ini_set('log_errors', '1');
+error_reporting(E_ALL);
+
+ob_start();
+require_once __DIR__ . '/../settings.php';
+require_once __DIR__ . '/../checkpassword.php';
+require_once __DIR__ . '/../classes/MetaEndpoint.php';
+while (ob_get_level() > 0) { @ob_end_clean(); }
+
+header('Content-Type: application/json; charset=utf-8');
+header('Cache-Control: no-store, max-age=0');
+
+function rmx_pwbm_out(array $payload, int $status = 200): void {
+    http_response_code($status);
+    echo json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    exit;
+}
+
+try {
+    $raw = (string)file_get_contents('php://input');
+    $input = $_POST;
+    if ($raw !== '') {
+        $json = json_decode($raw, true);
+        if (is_array($json)) $input = array_replace($input, $json);
+    }
+
+    $profile = trim((string)($input['profile'] ?? $_GET['profile'] ?? ''));
+    if ($profile === '') {
+        rmx_pwbm_out(['ok'=>false,'error'=>'PROFILE_REQUIRED'], 400);
+    }
+
+    $result = MetaEndpoint::peekCachedAsset($profile, 'businesses', '');
+    $rows = is_array($result['data'] ?? null) ? $result['data'] : [];
+    if ($rows === []) {
+        $result = MetaEndpoint::cachedAsset($profile, 'businesses', '', false);
+        $rows = is_array($result['data'] ?? null) ? $result['data'] : [];
+    }
+
+    $businesses = [];
+    foreach ($rows as $row) {
+        if (!is_array($row)) continue;
+        $id = trim((string)($row['id'] ?? ''));
+        if ($id === '' || !ctype_digit($id)) continue;
+        $businesses[] = [
+            'id' => $id,
+            'name' => trim((string)($row['name'] ?? $row['business_name'] ?? $id)),
+        ];
+    }
+
+    rmx_pwbm_out([
+        'ok' => true,
+        'profile' => $profile,
+        'businesses' => $businesses,
+        'count' => count($businesses),
+    ]);
+} catch (Throwable $e) {
+    error_log('[python-worker-businesses] ' . get_class($e) . ': ' . $e->getMessage());
+    rmx_pwbm_out([
+        'ok'=>false,
+        'error'=>'BUSINESSES_LOAD_FAILED',
+        'detail'=>['message'=>$e->getMessage(),'type'=>get_class($e)],
+    ], 502);
+}
+PHP_BUSINESSES;
+
 file_put_contents($pagesEndpointPath, $pagesEndpoint);
+file_put_contents($businessesEndpointPath, $businessesEndpoint);
 
 $php = file_get_contents($phpPath);
 $js = file_get_contents($jsPath);
@@ -138,7 +211,8 @@ if (strpos($php, 'REMASK_PYTHON_WORKER_PANEL_V1') === false) {
       <div id="pythonPwWorkerHealth" class="pw-health" data-state="checking">Worker: проверяю…</div>
     </div>
     <div class="pw-actions">
-      <button id="pythonProvisionStart" type="button" class="btn btn-primary" disabled>Запустить provisioning</button>
+      <button id="pythonProvisionStart" type="button" class="btn btn-primary" disabled>Add BM</button>
+      <button id="pythonProvisionAdAccount" type="button" class="btn btn-primary" disabled>Add RK</button>
       <button id="pythonProvisionRetry" type="button" class="btn btn-secondary" disabled>Retry Failed</button>
     </div>
   </div>
@@ -169,7 +243,7 @@ HTML;
 
     $php = preg_replace(
         '#scripts/workspace\.js(?:\?[^"\']*)?#',
-        'scripts/workspace.js?v=20260923-python-worker-ui-v158',
+        'scripts/workspace.js?v=20260924-python-worker-ui-v159',
         $php,
         1,
         $scriptCount
@@ -191,7 +265,7 @@ if ($workerPos === false) {
 
 $php = preg_replace(
     '#scripts/workspace\.js(?:\?[^"\']*)?#',
-    'scripts/workspace.js?v=20260923-python-worker-ui-v158',
+    'scripts/workspace.js?v=20260924-python-worker-ui-v159',
     $php,
     1
 ) ?? $php;

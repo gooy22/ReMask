@@ -1829,6 +1829,35 @@ class BusinessLogicController:
     # Ad Account
     # ------------------------------------------------------------------
 
+    async def create_ad_account_detailed(
+        self,
+        business_id: str,
+        account_name: str,
+        doc_id: str | None = None,
+        *,
+        currency: str = "USD",
+        timezone_id: int = 1,
+    ):
+        """
+        Current Meta Ad Account CREATE path.
+
+        Uses the same browser-native persisted-query discovery/cache policy as
+        the working Business creation flow. A legacy doc_id is only a last
+        unconfirmed fallback and becomes trusted only after Meta returns a
+        numeric Ad Account ID.
+        """
+        from app.facebook_ad_account_create import create_ad_account_with_docids
+
+        return await create_ad_account_with_docids(
+            self.session,
+            business_id=business_id,
+            account_name=account_name,
+            currency=currency,
+            timezone_id=timezone_id,
+            profile_id=self.session.profile.name,
+            manual_doc_id=str(doc_id or "").strip(),
+        )
+
     async def create_ad_account(
         self,
         business_id: str,
@@ -1838,110 +1867,23 @@ class BusinessLogicController:
         currency: str = "USD",
         timezone_id: int = 1,
     ) -> str:
-
-        clean_business_id = str(
-            business_id or ""
-        ).strip()
-
-        clean_name = str(
-            account_name or ""
-        ).strip()
-
-        clean_currency = str(
-            currency or ""
-        ).strip().upper()
-
-        if not clean_business_id:
-            raise ValueError(
-                "business_id is required"
-            )
-
-        if not clean_name:
-            raise ValueError(
-                "Ad Account name is required"
-            )
-
-        if not clean_currency:
-            raise ValueError(
-                "currency is required"
-            )
-
-        try:
-            timezone = int(timezone_id)
-
-        except (TypeError, ValueError) as exc:
-            raise ValueError(
-                "timezone_id must be an integer"
-            ) from exc
-
-        variables = {
-            "input": {
-                "client_mutation_id": "1",
-                "business_id": clean_business_id,
-                "name": clean_name,
-                "currency": clean_currency,
-                "timezone_id": timezone,
-            }
-        }
-
-        response = await self.execute_operation(
-            "CREATE_AD_ACCOUNT",
-            variables,
+        result = await self.create_ad_account_detailed(
+            business_id=business_id,
+            account_name=account_name,
             doc_id=doc_id,
+            currency=currency,
+            timezone_id=timezone_id,
         )
-
-        data = response.get("data")
-
-        if not isinstance(data, dict):
-            raise RemoteRequestError(
-                "CREATE_AD_ACCOUNT returned no data. "
-                f"Meta response: {self._diagnostic(response)}",
-                meta_payload=response,
-            )
-
-        create_payload = data.get(
-            "ad_account_create"
-        )
-
-        if not isinstance(create_payload, dict):
-            raise RemoteRequestError(
-                "CREATE_AD_ACCOUNT response has no "
-                "ad_account_create. Meta response: "
-                f"{self._diagnostic(response)}",
-                meta_payload=response,
-            )
-
-        account = create_payload.get(
-            "ad_account"
-        )
-
-        if not isinstance(account, dict):
-            raise RemoteRequestError(
-                "CREATE_AD_ACCOUNT response has no "
-                "ad_account object. Meta response: "
-                f"{self._diagnostic(response)}",
-                meta_payload=response,
-            )
-
-        account_id = str(
-            account.get("id") or ""
-        ).strip()
-
-        if not account_id:
-            raise RemoteRequestError(
-                "CREATE_AD_ACCOUNT returned empty ID. "
-                f"Meta response: {self._diagnostic(response)}",
-                meta_payload=response,
-            )
 
         log.info(
-            "[%s] Ad Account created id=%s business=%s",
+            "[%s] Ad Account created id=%s business=%s doc_id=%s response_path=%s",
             self.session.profile.name,
-            account_id,
-            clean_business_id,
+            result.ad_account_id,
+            str(business_id or "").strip(),
+            result.candidate.doc_id,
+            result.response_path,
         )
-
-        return account_id
+        return result.ad_account_id
 
     # ------------------------------------------------------------------
     # Existing funding credential

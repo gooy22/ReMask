@@ -67,6 +67,7 @@ STATIC_CANDIDATES: dict[
     list[DocIdCandidate],
 ] = {
     "CREATE_BM": [],
+    "CREATE_AD_ACCOUNT": [],
     "SET_PRIMARY_PAGE": [],
     "LIST_PAGES": [],
 }
@@ -413,6 +414,59 @@ def _env_candidates(
         raw_candidates = str(
             os.getenv(
                 "REMASK_DOC_ID_CREATE_BM_CANDIDATES_JSON"
+            )
+            or ""
+        ).strip()
+
+    elif key == "CREATE_AD_ACCOUNT":
+        doc_id = str(
+            os.getenv(
+                "REMASK_DOC_ID_CREATE_AD_ACCOUNT"
+            )
+            or ""
+        ).strip()
+
+        if doc_id:
+            output.append(
+                DocIdCandidate(
+                    operation=key,
+                    doc_id=(
+                        _clean_doc_id(
+                            doc_id
+                        )
+                    ),
+                    friendly_name=str(
+                        os.getenv(
+                            "REMASK_CREATE_AD_ACCOUNT_FRIENDLY_NAME"
+                        )
+                        or (
+                            "AdAccountCreateMutation"
+                        )
+                    ).strip(),
+                    endpoint_url=(
+                        _clean_endpoint(
+                            os.getenv(
+                                "REMASK_CREATE_AD_ACCOUNT_GRAPHQL_URL"
+                            )
+                        )
+                    ),
+                    variables_mode=str(
+                        os.getenv(
+                            "REMASK_CREATE_AD_ACCOUNT_VARIABLES_MODE"
+                        )
+                        or (
+                            "business_ad_account_create_v1"
+                        )
+                    ).strip(),
+                    source="environment",
+                    priority=10_000,
+                    observed_at="runtime",
+                )
+            )
+
+        raw_candidates = str(
+            os.getenv(
+                "REMASK_DOC_ID_CREATE_AD_ACCOUNT_CANDIDATES_JSON"
             )
             or ""
         ).strip()
