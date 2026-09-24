@@ -187,7 +187,14 @@ def _replace_capture_values(
         return value
 
     result = walk(copy.deepcopy(variables))
-    return result if isinstance(result, dict) else {}
+    if not isinstance(result, dict):
+        return {}
+    input_data = result.get("input")
+    if isinstance(input_data, dict):
+        input_data.setdefault("end_advertiser", "NONE")
+        input_data.setdefault("media_agency", "NONE")
+        input_data.setdefault("partner", "NONE")
+    return result
 
 
 def _unique_candidates(
@@ -329,6 +336,9 @@ async def create_ad_account_with_docids(
                 "name": name,
                 "currency": currency_code,
                 "timezone_id": timezone,
+                "end_advertiser": "NONE",
+                "media_agency": "NONE",
+                "partner": "NONE",
             }
         }
     )
