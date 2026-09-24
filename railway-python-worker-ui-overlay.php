@@ -223,8 +223,6 @@ if (strpos($php, 'REMASK_PYTHON_WORKER_PANEL_V1') === false) {
       <div id="pythonPwWorkerHealth" class="pw-health" data-state="checking">Worker: проверяю…</div>
     </div>
     <div class="pw-actions">
-      <button id="pythonProvisionStart" type="button" class="btn btn-primary" disabled>Add BM</button>
-      <button id="pythonProvisionAdAccount" type="button" class="btn btn-primary" disabled>Add RK</button>
       <button id="pythonProvisionRetry" type="button" class="btn btn-secondary" disabled>Retry Failed</button>
     </div>
   </div>
@@ -255,7 +253,7 @@ HTML;
 
     $php = preg_replace(
         '#scripts/workspace\.js(?:\?[^"\']*)?#',
-        'scripts/workspace.js?v=20260924-python-worker-ui-v160',
+        'scripts/workspace.js?v=20260924-python-worker-ui-v161',
         $php,
         1,
         $scriptCount
@@ -277,7 +275,7 @@ if ($workerPos === false) {
 
 $php = preg_replace(
     '#scripts/workspace\.js(?:\?[^"\']*)?#',
-    'scripts/workspace.js?v=20260924-python-worker-ui-v160',
+    'scripts/workspace.js?v=20260924-python-worker-ui-v161',
     $php,
     1
 ) ?? $php;

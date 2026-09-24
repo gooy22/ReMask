@@ -1,4 +1,4 @@
-/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 REMASK_PYTHON_WORKER_UI_V140 REMASK_PYTHON_WORKER_UI_V141 REMASK_PYTHON_WORKER_UI_V142 REMASK_PYTHON_WORKER_UI_V143 REMASK_PYTHON_WORKER_UI_V144 REMASK_PYTHON_WORKER_UI_V145 REMASK_PYTHON_WORKER_UI_V146 REMASK_PYTHON_WORKER_UI_V147 REMASK_PYTHON_WORKER_UI_V148 REMASK_PYTHON_WORKER_UI_V149 REMASK_PYTHON_WORKER_UI_V150 REMASK_PYTHON_WORKER_UI_V151 REMASK_PYTHON_WORKER_UI_V152 REMASK_PYTHON_WORKER_UI_V153 REMASK_PYTHON_WORKER_UI_V154 REMASK_PYTHON_WORKER_UI_V155 REMASK_PYTHON_WORKER_UI_V156 REMASK_PYTHON_WORKER_UI_V157 REMASK_PYTHON_WORKER_UI_V158 REMASK_PYTHON_WORKER_UI_V159 REMASK_PYTHON_WORKER_UI_V160 */
+/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 REMASK_PYTHON_WORKER_UI_V140 REMASK_PYTHON_WORKER_UI_V141 REMASK_PYTHON_WORKER_UI_V142 REMASK_PYTHON_WORKER_UI_V143 REMASK_PYTHON_WORKER_UI_V144 REMASK_PYTHON_WORKER_UI_V145 REMASK_PYTHON_WORKER_UI_V146 REMASK_PYTHON_WORKER_UI_V147 REMASK_PYTHON_WORKER_UI_V148 REMASK_PYTHON_WORKER_UI_V149 REMASK_PYTHON_WORKER_UI_V150 REMASK_PYTHON_WORKER_UI_V151 REMASK_PYTHON_WORKER_UI_V152 REMASK_PYTHON_WORKER_UI_V153 REMASK_PYTHON_WORKER_UI_V154 REMASK_PYTHON_WORKER_UI_V155 REMASK_PYTHON_WORKER_UI_V156 REMASK_PYTHON_WORKER_UI_V157 REMASK_PYTHON_WORKER_UI_V158 REMASK_PYTHON_WORKER_UI_V159 REMASK_PYTHON_WORKER_UI_V160 REMASK_PYTHON_WORKER_UI_V161 */
 const restoredPythonWorkerJobId = localStorage.getItem('remask_python_worker_job_v1') || '';
 
 const pythonWorkerUiState = {
@@ -115,10 +115,10 @@ function pythonWorkerSelectionRefresh() {
       profiles.length
         ? (
             pythonWorkerUiState.workerOnline === true
-              ? 'Worker UI v160 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
-              : 'Worker UI v160 · Выбрано FB-профилей: ' + profiles.length + '. Жду READY от worker.'
+              ? 'Worker UI v161 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
+              : 'Worker UI v161 · Выбрано FB-профилей: ' + profiles.length + '. Жду READY от worker.'
           )
-        : 'Worker UI v160 · Выберите FB-профили в Workspace.'
+        : 'Worker UI v161 · Выберите FB-профили в Workspace.'
     );
   }
 }
@@ -2165,6 +2165,69 @@ async function pythonWorkerOpenOwnAdAccountModal() {
 
 window.pythonWorkerStartAdAccounts = pythonWorkerStartAdAccounts;
 
+
+function pythonWorkerEnhanceProfileThreeDots() {
+  const candidates = Array.from(
+    document.querySelectorAll(
+      '.js-btn-add-bm, #btn_add_bm, .js-python-add-bm, button, a, [role="button"], [role="menuitem"], [data-action]'
+    )
+  ).filter(function(el) {
+    if (!el || el.id === 'pythonProvisionStart') return false;
+    if (el.hasAttribute('data-python-worker-rk-menu')) return false;
+
+    const label = String(
+      el.textContent ||
+      el.value ||
+      el.getAttribute('aria-label') ||
+      ''
+    ).replace(/\s+/g, ' ').trim();
+
+    return /^(Добавить\s*(?:BM|Business Manager)|Add\s*(?:BM|Business Manager))$/i.test(label);
+  });
+
+  for (const addBm of candidates) {
+    const parent = addBm.parentNode;
+    if (!parent || parent.nodeType !== 1) continue;
+    if (parent.querySelector && parent.querySelector('[data-python-worker-rk-menu="1"]')) {
+      continue;
+    }
+
+    const addRk = addBm.cloneNode(true);
+    addRk.removeAttribute('id');
+    addRk.removeAttribute('onclick');
+    addRk.removeAttribute('data-action');
+    addRk.setAttribute('data-python-worker-rk-menu', '1');
+    addRk.setAttribute('aria-label', 'Add RK');
+
+    if (addRk.tagName === 'A') {
+      addRk.setAttribute('href', '#');
+    } else if (addRk.tagName === 'BUTTON') {
+      addRk.type = 'button';
+    }
+
+    addRk.textContent = 'Add RK';
+
+    addRk.addEventListener('click', function(event) {
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+
+      pythonWorkerOpenOwnAdAccountModal().catch(function(error) {
+        pythonWorkerSetText(
+          'pythonPwStatus',
+          'Add RK: ' + String((error && error.message) || error)
+        );
+      });
+    }, true);
+
+    if (addBm.nextSibling) {
+      parent.insertBefore(addRk, addBm.nextSibling);
+    } else {
+      parent.appendChild(addRk);
+    }
+  }
+}
+
 function pythonWorkerInitUi() {
   const start = pythonWorkerEl('pythonProvisionStart');
   const addRk = pythonWorkerEl('pythonProvisionAdAccount');
@@ -2216,6 +2279,7 @@ function pythonWorkerInitUi() {
 
   pythonWorkerSelectionRefresh();
   pythonWorkerEnhanceBmDialog();
+  pythonWorkerEnhanceProfileThreeDots();
   pythonWorkerHealthCheck().catch(function(){});
   setInterval(function() {
     pythonWorkerHealthCheck().catch(function(){});
@@ -2223,6 +2287,7 @@ function pythonWorkerInitUi() {
 
   new MutationObserver(function() {
     pythonWorkerEnhanceBmDialog();
+    pythonWorkerEnhanceProfileThreeDots();
   }).observe(document.documentElement, {childList: true, subtree: true});
 
   if (pythonWorkerUiState.jobId) {
