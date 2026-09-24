@@ -4,13 +4,17 @@ import unittest
 from pathlib import Path
 
 from app.store import JobStore
+from app.provisioning.state import ProvisioningStateStore
 
 
 class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.store = JobStore(str(Path(self.tmp.name) / "jobs.sqlite3"))
+        db_path = str(Path(self.tmp.name) / "jobs.sqlite3")
+        self.store = JobStore(db_path)
+        self.provisioning_state = ProvisioningStateStore(db_path)
         await self.store.init()
+        await self.provisioning_state.init()
 
     async def asyncTearDown(self):
         self.tmp.cleanup()
