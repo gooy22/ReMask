@@ -3423,7 +3423,7 @@ class FacebookBusinessBrowser:
         )
         business_match = bool(business and business in decoded)
 
-        return operation_match or business_match
+        return operation_match and business_match
 
     @staticmethod
     def _response_matches_ad_account_create(
