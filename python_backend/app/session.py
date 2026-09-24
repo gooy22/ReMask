@@ -150,7 +150,14 @@ class ProfileResolver:
             proxy=proxy,
             user_agent=user_agent,
             access_token=str(payload.get("access_token") or "").strip(),
-            display_name=str(payload.get("display_name") or profile_id).strip(),
+            display_name=(
+                ""
+                if (
+                    str(payload.get("display_name") or "").strip() == profile_id
+                    or str(payload.get("display_name") or "").strip().isdigit()
+                )
+                else str(payload.get("display_name") or "").strip()
+            ),
             email=str(payload.get("email") or "").strip(),
             first_name=str(payload.get("first_name") or "").strip(),
             last_name=str(payload.get("last_name") or "").strip(),
