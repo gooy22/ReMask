@@ -45,6 +45,7 @@ class BrowserCreateResult:
     after_ids: list[str]
     response_business_id: str = ""
     response_friendly_name: str = ""
+    response_path: str = ""
     recovered: bool = False
 
 
@@ -340,6 +341,52 @@ def _meta_error_retryable(errors: list[dict[str, Any]]) -> bool:
         "please retry",
     )
     return any(marker in text for marker in retryable)
+
+
+def _extract_created_business_id(payload: Any) -> tuple[str, str]:
+    """Extract only IDs from known Meta Business CREATE response shapes."""
+    known_paths = (
+        ("data", "business_create", "business", "id"),
+        ("data", "business_create", "id"),
+        ("data", "bizkit_create_business", "business", "id"),
+        ("data", "bizkit_create_business", "id"),
+        ("data", "business_manager_create", "business", "id"),
+        ("data", "business_manager_create", "id"),
+    )
+
+    chunks = payload if isinstance(payload, list) else [payload]
+    found: list[tuple[str, str]] = []
+
+    for chunk in chunks:
+        if not isinstance(chunk, dict):
+            continue
+        for path in known_paths:
+            current: Any = chunk
+            valid = True
+            for key in path:
+                if not isinstance(current, dict) or key not in current:
+                    valid = False
+                    break
+                current = current[key]
+            if not valid:
+                continue
+            candidate = _digits(current)
+            if candidate:
+                row = (candidate, ".".join(path))
+                if row not in found:
+                    found.append(row)
+
+    unique_ids = sorted({business_id for business_id, _ in found})
+    if len(unique_ids) != 1:
+        return "", ""
+
+    business_id = unique_ids[0]
+    response_path = next(
+        path
+        for candidate, path in found
+        if candidate == business_id
+    )
+    return business_id, response_path
 
 
 def _walk_business_ids(value: Any, path: str = "") -> list[tuple[str, str]]:
