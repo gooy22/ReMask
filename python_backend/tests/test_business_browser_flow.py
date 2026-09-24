@@ -259,6 +259,29 @@ class BrowserCreateEntryRoutingTests(unittest.IsolatedAsyncioTestCase):
         )
 
 
+class BrowserCreateFormNavigationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_prepare_create_form_reuses_existing_home_page(self):
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-create-form-home")
+        )
+        browser.page = SimpleNamespace(url=browser.HOME_URL)
+        browser._open_create_entry = AsyncMock(return_value=True)
+        browser._fill_first = AsyncMock(return_value=True)
+
+        await browser._prepare_create_form(
+            business_name="Test Business",
+            user_email="owner@example.com",
+            user_first_name="",
+            user_last_name="",
+            profile_display_name="",
+        )
+
+        browser._open_create_entry.assert_awaited_once_with(
+            open_form=True,
+            already_on_home=True,
+        )
+
+
 class BrowserPageDiscoveryTests(unittest.IsolatedAsyncioTestCase):
     async def test_discovers_pages_from_rendered_browser_surface(self):
         class _RenderedPage:
