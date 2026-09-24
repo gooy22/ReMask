@@ -520,7 +520,8 @@ class BrowserAdAccountAddProbeTests(unittest.IsolatedAsyncioTestCase):
                 self.scroll_kwargs = kwargs
                 return None
 
-            async def click(self):
+            async def click(self, **kwargs):
+                self.click_kwargs = kwargs
                 self.clicks.append(self.name)
 
         class _Locator:
