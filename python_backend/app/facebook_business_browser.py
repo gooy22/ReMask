@@ -3222,6 +3222,22 @@ class FacebookBusinessBrowser:
 
         loop = asyncio.get_running_loop()
         gate_future: asyncio.Future[bool] = loop.create_future()
+        response_future: asyncio.Future[Any] = loop.create_future()
+
+        def observe_response(response: Any) -> None:
+            if response_future.done():
+                return
+            try:
+                if self._response_matches_page_add(
+                    response,
+                    business_id=business,
+                    page_id=page,
+                ):
+                    response_future.set_result(response)
+            except Exception:
+                return
+
+        self.page.on("response", observe_response)
 
         async def gate(route: Any, request: Any) -> None:
             if not self._request_matches_page_add(
