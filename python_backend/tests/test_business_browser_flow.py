@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, patch
 from app.facebook_business_browser import (
     BrowserBusinessError,
     FacebookBusinessBrowser,
+    _ad_account_required_attribution_post_data,
     _extract_created_ad_account_id,
 )
 from app.provisioning.business_handler import business_handler
@@ -69,6 +70,44 @@ class BrowserNetworkGateTests(unittest.TestCase):
                 account_name="ReMask Ads",
             )
         )
+
+    def test_ad_account_required_attribution_defaults_are_added(self):
+        request = _FakeRequest(
+            "fb_api_req_friendly_name=AdAccountCreateMutation"
+            "&doc_id=9988776655443322"
+            "&variables=%7B%22input%22%3A%7B%22business_id%22%3A"
+            "%22555666777888999%22%2C%22name%22%3A"
+            "%22ReMask%20Ads%22%2C%22currency%22%3A%22USD%22%2C"
+            "%22timezone_id%22%3A1%7D%7D"
+        )
+        post_data, applied = _ad_account_required_attribution_post_data(
+            request
+        )
+        self.assertEqual(
+            applied,
+            {
+                "end_advertiser": "NONE",
+                "media_agency": "NONE",
+                "partner": "NONE",
+            },
+        )
+        self.assertIn("end_advertiser", post_data)
+        self.assertIn("media_agency", post_data)
+        self.assertIn("partner", post_data)
+
+    def test_ad_account_required_attribution_preserves_meta_values(self):
+        request = _FakeRequest(
+            "doc_id=9988776655443322"
+            "&variables=%7B%22input%22%3A%7B"
+            "%22end_advertiser%22%3A%22123456789%22%2C"
+            "%22media_agency%22%3A%22NONE%22%2C"
+            "%22partner%22%3A%22NONE%22%7D%7D"
+        )
+        post_data, applied = _ad_account_required_attribution_post_data(
+            request
+        )
+        self.assertEqual(applied, {})
+        self.assertEqual(post_data, request.post_data)
 
     def test_ad_account_response_id_known_shape(self):
         account_id, path = _extract_created_ad_account_id(
