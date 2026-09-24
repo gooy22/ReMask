@@ -2470,12 +2470,50 @@ class FacebookBusinessBrowser:
 
             friendly = ""
             try:
-                friendly = _clean(
-                    response.request.headers.get("x-fb-friendly-name")
-                    or response.request.headers.get("X-FB-Friendly-Name")
-                )
+                request_meta = _request_graphql_meta(response.request)
+                friendly = _clean(request_meta.get("friendly_name"))
             except Exception:
                 friendly = ""
+
+            meta_errors = _graphql_error_details(payload)
+            if not business_id and meta_errors:
+                retryable = _meta_error_retryable(meta_errors)
+                if before_submit is not None:
+                    await before_submit(
+                        {
+                            "phase": "CREATE_REJECTED",
+                            "activity": "CREATE_REJECTED",
+                            "activity_at": int(time.time()),
+                            "meta_errors": meta_errors,
+                            "response_friendly_name": friendly,
+                        }
+                    )
+
+                parts = []
+                for row in meta_errors[:3]:
+                    code = _clean(row.get("code"))
+                    subcode = _clean(row.get("subcode"))
+                    message = _clean(row.get("message"))
+                    prefix = "/".join(value for value in (code, subcode) if value)
+                    if prefix and message:
+                        parts.append(f"{prefix}: {message}")
+                    elif message:
+                        parts.append(message)
+                    elif prefix:
+                        parts.append(prefix)
+
+                error_message = " · ".join(parts) or "Meta rejected Business creation."
+                raise BrowserBusinessError(
+                    "META_CREATE_REJECTED",
+                    error_message[:2500],
+                    retryable=retryable,
+                    diagnostic={
+                        "meta_errors": meta_errors,
+                        "request": self._safe_graphql_request_summary(
+                            response.request
+                        ),
+                    },
+                )
 
             return business_id, friendly
 
