@@ -4025,6 +4025,39 @@ class FacebookBusinessBrowser:
         value = _clean(result).lower()
         return value if value in {"create", "add"} else ""
 
+    async def _select_own_business_if_present(self) -> bool:
+        """Select Meta's optional 'use this ad account for my business' choice."""
+        names = (
+            "My business",
+            "My business portfolio",
+            "For my business",
+            "Mon entreprise",
+            "Mon portefeuille business",
+            "Pour mon entreprise",
+            "Mein Unternehmen",
+            "Für mein Unternehmen",
+            "Мой бизнес",
+            "Для моего бизнеса",
+            "Мій бізнес",
+            "Для мого бізнесу",
+            "আমার ব্যবসা",
+            "আমার ব্যবসার জন্য",
+            "Doanh nghiệp của tôi",
+            "Dành cho doanh nghiệp của tôi",
+            "मेरा व्यवसाय",
+            "मेरे व्यवसाय के लिए",
+        )
+        return await self._click_named(
+            names,
+            roles=(
+                "radio",
+                "option",
+                "button",
+                "menuitemradio",
+                "menuitem",
+            ),
+        )
+
     async def _ad_account_form_candidates(self) -> list[str]:
         """Compact visible inputs/selectors/buttons in the Add-RK dialog."""
         if self.page is None:
@@ -4577,27 +4610,33 @@ class FacebookBusinessBrowser:
                 diagnostic=diag,
             )
 
-        await self.page.wait_for_timeout(500)
+        await self.page.wait_for_timeout(350)
 
-        name_filled = await self._fill_first(
-            labels=(
-                "Ad account name",
-                "Advertising account name",
-                "Account name",
-                "Название рекламного аккаунта",
-                "Название аккаунта",
-                "Назва рекламного акаунта",
-                "Назва облікового запису",
-                "Name des Werbekontos",
-                "Nom du compte publicitaire",
-                "Nom du compte",
-                "বিজ্ঞাপন অ্যাকাউন্টের নাম",
-                "Tên tài khoản quảng cáo",
-                "विज्ञापन खाते का नाम",
-                "विज्ञापन खाता नाम",
-            ),
-            value=account_name,
+        name_labels = (
+            "Ad account name",
+            "Advertising account name",
+            "Account name",
+            "Название рекламного аккаунта",
+            "Название аккаунта",
+            "Назва рекламного акаунта",
+            "Назва облікового запису",
+            "Name des Werbekontos",
+            "Nom du compte publicitaire",
+            "Nom du compte",
+            "বিজ্ঞাপন অ্যাকাউন্টের নাম",
+            "Tên tài khoản quảng cáo",
+            "विज्ञापन खाते का नाम",
+            "विज्ञापन खाता नाम",
         )
+        name_filled = False
+        name_deadline = time.monotonic() + 6.0
+        while time.monotonic() < name_deadline and not name_filled:
+            name_filled = await self._fill_first(
+                labels=name_labels,
+                value=account_name,
+            )
+            if not name_filled:
+                await self.page.wait_for_timeout(250)
 
         if not name_filled:
             try:
@@ -4638,6 +4677,7 @@ class FacebookBusinessBrowser:
         if not name_filled:
             diag = await self._diagnostic("ad_account_name_input_missing")
             diag["business_id"] = business
+            diag["form_candidates"] = await self._ad_account_form_candidates()
             raise BrowserBusinessError(
                 "AD_ACCOUNT_CREATE_UI_CHANGED",
                 "Meta Ad Account form opened but the account-name field was not found.",
@@ -4841,7 +4881,10 @@ class FacebookBusinessBrowser:
                     await self.page.wait_for_timeout(650)
                     if gate_future.done():
                         break
+                    await self._select_own_business_if_present()
                     continue
+
+                await self._select_own_business_if_present()
 
                 final_clicked = await self._click_named(
                     final_names,

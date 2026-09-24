@@ -364,6 +364,23 @@ class BrowserAdAccountDomFallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(args[1])
 
 
+class BrowserAdAccountOwnBusinessTests(unittest.IsolatedAsyncioTestCase):
+    async def test_optional_french_own_business_choice_is_supported(self):
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-rk-own-business")
+        )
+        browser._click_named = AsyncMock(return_value=True)
+
+        selected = await browser._select_own_business_if_present()
+
+        self.assertTrue(selected)
+        names = browser._click_named.await_args.args[0]
+        self.assertIn("My business", names)
+        self.assertIn("Mon entreprise", names)
+        self.assertIn("Pour mon entreprise", names)
+        self.assertIn("Мой бизнес", names)
+
+
 class BrowserAdAccountCreateEntryWaitTests(unittest.IsolatedAsyncioTestCase):
     async def test_wait_for_create_entry_never_reclicks_generic_add(self):
         browser = FacebookBusinessBrowser(
