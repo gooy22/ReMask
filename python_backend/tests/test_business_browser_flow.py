@@ -903,6 +903,16 @@ class BrowserAdAccountTimezoneSafetyTests(unittest.TestCase):
 
 
 class BrowserAdAccountSubmitProgressionTests(unittest.TestCase):
+    def test_ownership_selection_precedes_next_click(self):
+        source = inspect.getsource(FacebookBusinessBrowser.create_ad_account)
+        own_pos = source.index(
+            "own_selected_now = ("
+        )
+        next_pos = source.index(
+            "next_clicked = await self._click_named("
+        )
+        self.assertLess(own_pos, next_pos)
+
     def test_submit_flow_does_not_use_one_shot_own_business_attempt_flag(self):
         source = inspect.getsource(FacebookBusinessBrowser.create_ad_account)
         self.assertIn("own_business_selected = False", source)

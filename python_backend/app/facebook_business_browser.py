@@ -4293,6 +4293,14 @@ class FacebookBusinessBrowser:
             "मेरा व्यवसाय",
             "मेरे व्यवसाय के लिए",
         )
+        # Prefer the right-pane bounded semantic probe so a same-named
+        # Business navigation item elsewhere in the SPA cannot be selected.
+        fallback = await self._click_ad_account_form_action_by_visible_text(
+            "own_business"
+        )
+        if fallback.get("clicked"):
+            return True
+
         clicked = await self._click_named(
             names,
             roles=(
@@ -4304,13 +4312,7 @@ class FacebookBusinessBrowser:
             ),
             click_timeout_ms=2500,
         )
-        if clicked:
-            return True
-
-        fallback = await self._click_ad_account_form_action_by_visible_text(
-            "own_business"
-        )
-        return bool(fallback.get("clicked"))
+        return bool(clicked)
 
     @staticmethod
     def _timezone_name_for_id(timezone_id: int) -> str:
@@ -6722,6 +6724,52 @@ class FacebookBusinessBrowser:
                     )
                     break
 
+                # Ownership is a form choice, not merely a fallback
+                # after Next. Select it before advancing whenever it appears,
+                # otherwise Meta may carry a default/previous choice forward.
+                if not own_business_selected:
+                    own_selected_now = (
+                        await self._select_own_business_if_present()
+                    )
+                    if own_selected_now:
+                        own_business_selected = True
+                        clicked_any = True
+                        await self.page.wait_for_timeout(250)
+                        ownership_state = await self._ad_account_ui_state()
+                        self._record_ad_account_ui_state(
+                            f"submit_step_{step}_ownership_selected",
+                            ownership_state,
+                        )
+                        submit_attempts.append(
+                            {
+                                "step": step,
+                                "action": "own_business_before_next",
+                                "selected": True,
+                                "state_after": _clean(
+                                    ownership_state.get("state")
+                                ),
+                            }
+                        )
+                        ownership_signature = _clean(
+                            ownership_state.get("signature")
+                        )
+                        if (
+                            _clean(
+                                ownership_state.get("state")
+                            ).upper()
+                            == "FORM"
+                            and ownership_signature
+                            and ownership_signature
+                            != last_form_setup_signature
+                        ):
+                            form_setup = (
+                                await self._prepare_ad_account_form_fields(
+                                    currency=currency,
+                                    timezone_id=timezone_id,
+                                )
+                            )
+                            last_form_setup_signature = ownership_signature
+
                 next_clicked = await self._click_named(
                     next_names,
                     click_timeout_ms=2500,
@@ -6787,44 +6835,6 @@ class FacebookBusinessBrowser:
                         )
                         last_form_setup_signature = transition_signature
                     continue
-
-                if not own_business_selected:
-                    own_selected = await self._select_own_business_if_present()
-                    if own_selected:
-                        own_business_selected = True
-                        clicked_any = True
-                        await self.page.wait_for_timeout(350)
-                        state_after_own = await self._ad_account_ui_state()
-                        self._record_ad_account_ui_state(
-                            f"submit_step_{step}_after_own_business",
-                            state_after_own,
-                        )
-                        submit_attempts.append(
-                            {
-                                "step": step,
-                                "action": "own_business",
-                                "selected": True,
-                                "state_after": _clean(
-                                    state_after_own.get("state")
-                                ),
-                            }
-                        )
-                        # Ownership selection itself can reveal a new form
-                        # stage with immutable fields. Prepare it immediately.
-                        own_signature = _clean(
-                            state_after_own.get("signature")
-                        )
-                        if (
-                            _clean(state_after_own.get("state")).upper() == "FORM"
-                            and own_signature
-                            and own_signature != last_form_setup_signature
-                        ):
-                            form_setup = await self._prepare_ad_account_form_fields(
-                                currency=currency,
-                                timezone_id=timezone_id,
-                            )
-                            last_form_setup_signature = own_signature
-                        continue
 
                 await checkpoint(
                     {
