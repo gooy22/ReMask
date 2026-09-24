@@ -1195,6 +1195,7 @@ class FacebookWebSession:
         friendly_name: str = "",
         endpoint_url: str | None = None,
         request_envelope: dict[str, Any] | None = None,
+        before_submit: Any | None = None,
     ) -> dict[str, Any]:
         """
         Send one GraphQL request from a real Chromium page bound to the
@@ -1444,6 +1445,10 @@ class FacebookWebSession:
                     form["jazoest"] = jazoest
                 if friendly_name:
                     form["fb_api_req_friendly_name"] = friendly_name
+
+                transport_stage = "before_graphql_submit"
+                if callable(before_submit):
+                    await before_submit()
 
                 transport_stage = "graphql_submit"
                 request_may_have_been_sent = True
@@ -1864,6 +1869,8 @@ class BusinessLogicController:
         *,
         currency: str = "USD",
         timezone_id: int = 1,
+        captured_request: dict[str, Any] | None = None,
+        before_submit: Any | None = None,
     ):
         """
         Current Meta Ad Account CREATE path.
@@ -1883,6 +1890,12 @@ class BusinessLogicController:
             timezone_id=timezone_id,
             profile_id=self.session.profile.name,
             manual_doc_id=str(doc_id or "").strip(),
+            captured_request=(
+                captured_request
+                if isinstance(captured_request, dict)
+                else {}
+            ),
+            before_submit=before_submit,
         )
 
     async def create_ad_account(
