@@ -23,9 +23,9 @@ CREATE_AD_ACCOUNT_OPERATION = "CREATE_AD_ACCOUNT"
 CREATE_AD_ACCOUNT_FRIENDLY_NAME = "AdAccountCreateMutation"
 BUSINESS_GRAPHQL_URL = "https://business.facebook.com/api/graphql/"
 
-# Legacy value that existed in ReMask before the live-discovery path.
-# It is deliberately the last fallback and is never treated as confirmed
-# until Meta returns a real Ad Account ID.
+# Old ReMask value. It remains an unconfirmed LAST fallback only, after current
+# discovery + confirmed cache. It becomes trusted only after Meta returns a
+# real Ad Account ID through a known response path.
 LEGACY_CREATE_AD_ACCOUNT_DOC_ID = "684920184730193"
 
 
@@ -58,6 +58,15 @@ def _clean(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _normalize_ad_account_id(value: Any) -> str:
+    raw = _clean(value)
+    if raw.lower().startswith("act_"):
+        raw = raw[4:]
+    if not raw.isdigit() or not (5 <= len(raw) <= 30):
+        return ""
+    return "act_" + raw
+
+
 def _graphql_errors(payload: dict[str, Any]) -> list[Any]:
     raw = payload.get("errors")
     if isinstance(raw, list):
@@ -78,6 +87,7 @@ def _extract_ad_account_id(payload: dict[str, Any]) -> tuple[str, str]:
         "business_ad_account_create",
         "bizkit_create_ad_account",
         "create_ad_account",
+        "adaccount_create",
     )
     matches: list[tuple[str, str]] = []
 
@@ -86,16 +96,18 @@ def _extract_ad_account_id(payload: dict[str, Any]) -> tuple[str, str]:
         if not isinstance(node, dict):
             continue
 
-        direct = _clean(node.get("id"))
-        if direct.isdigit():
+        direct = _normalize_ad_account_id(node.get("id") or node.get("account_id"))
+        if direct:
             matches.append((direct, f"data.{node_name}.id"))
 
         for child_name in ("ad_account", "account"):
             child = node.get(child_name)
             if not isinstance(child, dict):
                 continue
-            nested = _clean(child.get("id") or child.get("account_id"))
-            if nested.isdigit():
+            nested = _normalize_ad_account_id(
+                child.get("id") or child.get("account_id")
+            )
+            if nested:
                 matches.append(
                     (nested, f"data.{node_name}.{child_name}.id")
                 )
@@ -157,15 +169,26 @@ def _unique_candidates(
 
 async def discover_current_ad_account_create_candidate(
     session: Any,
+    *,
+    business_id: str = "",
 ) -> DocIdCandidate | None:
+    business = _clean(business_id)
+    entry_urls = [
+        "https://business.facebook.com/latest/settings/ad_accounts",
+        "https://business.facebook.com/latest/home",
+        "https://www.facebook.com/",
+    ]
+    if business.isdigit():
+        entry_urls.insert(
+            0,
+            "https://business.facebook.com/latest/settings/ad_accounts"
+            f"?business_id={business}",
+        )
+
     discovered = await discover_persisted_query(
         session,
         friendly_name=CREATE_AD_ACCOUNT_FRIENDLY_NAME,
-        entry_urls=[
-            "https://business.facebook.com/latest/settings/ad_accounts",
-            "https://business.facebook.com/latest/home",
-            "https://www.facebook.com/",
-        ],
+        entry_urls=entry_urls,
         max_scripts_per_entry=32,
         script_max_bytes=3_000_000,
         cache_ttl_seconds=0,
@@ -250,35 +273,16 @@ async def create_ad_account_with_docids(
     }
 
     ordered: list[DocIdCandidate] = []
-    confirmed = list_candidates(
-        CREATE_AD_ACCOUNT_OPERATION,
-        confirmed_only=True,
-    )
-    ordered.extend(confirmed)
-
-    dynamic_candidate: DocIdCandidate | None = None
-    try:
-        dynamic_candidate = await asyncio.wait_for(
-            discover_current_ad_account_create_candidate(session),
-            timeout=12.0 if confirmed else 25.0,
-        )
-    except Exception:
-        dynamic_candidate = None
-
-    if dynamic_candidate is not None:
-        ordered.insert(0, dynamic_candidate)
-
-    ordered.extend(
-        list_candidates(
-            CREATE_AD_ACCOUNT_OPERATION,
-            confirmed_only=False,
-        )
-    )
 
     clean_manual = _clean(manual_doc_id)
-    if clean_manual.isdigit():
-        ordered.insert(
-            0,
+    if clean_manual:
+        if not clean_manual.isdigit():
+            raise AdAccountMutationError(
+                "INVALID_DOC_ID",
+                "manual CREATE_AD_ACCOUNT doc_id must be numeric",
+                retryable=False,
+            )
+        ordered.append(
             DocIdCandidate(
                 operation=CREATE_AD_ACCOUNT_OPERATION,
                 doc_id=clean_manual,
@@ -289,8 +293,41 @@ async def create_ad_account_with_docids(
                 priority=30_000,
                 observed_at=str(int(time.time())),
                 enabled=True,
-            ),
+            )
         )
+
+    confirmed = list_candidates(
+        CREATE_AD_ACCOUNT_OPERATION,
+        confirmed_only=True,
+    )
+    ordered.extend(confirmed)
+
+    dynamic_candidate: DocIdCandidate | None = None
+    try:
+        dynamic_candidate = await asyncio.wait_for(
+            discover_current_ad_account_create_candidate(
+                session,
+                business_id=business,
+            ),
+            timeout=5.0 if confirmed else 25.0,
+        )
+    except Exception:
+        dynamic_candidate = None
+
+    if dynamic_candidate is not None:
+        # A live discovery outranks unconfirmed candidates but a previously
+        # confirmed working candidate remains first.
+        if confirmed:
+            ordered.append(dynamic_candidate)
+        else:
+            ordered.insert(0, dynamic_candidate)
+
+    ordered.extend(
+        list_candidates(
+            CREATE_AD_ACCOUNT_OPERATION,
+            confirmed_only=False,
+        )
+    )
 
     candidates = _unique_candidates(ordered)
 
@@ -312,24 +349,24 @@ async def create_ad_account_with_docids(
     diagnostics: list[str] = []
 
     for candidate in candidates:
-        try:
-            browser_graphql = getattr(session, "graphql_browser_native", None)
-            if not callable(browser_graphql):
-                raise AdAccountMutationError(
-                    "CREATE_AD_ACCOUNT_BROWSER_TRANSPORT_UNAVAILABLE",
-                    "CREATE_AD_ACCOUNT requires browser-native GraphQL transport",
-                    retryable=False,
-                    candidate=candidate,
-                )
+        browser_graphql = getattr(session, "graphql_browser_native", None)
+        if not callable(browser_graphql):
+            raise AdAccountMutationError(
+                "CREATE_AD_ACCOUNT_BROWSER_TRANSPORT_UNAVAILABLE",
+                "CREATE_AD_ACCOUNT requires browser-native GraphQL transport",
+                retryable=False,
+                candidate=candidate,
+            )
 
+        try:
+            # From this call onward, a transport exception cannot prove whether
+            # the POST reached Meta. Treat it as UNKNOWN, never as a safe retry.
             response = await browser_graphql(
                 candidate.doc_id,
                 variables,
                 friendly_name=candidate.friendly_name,
                 endpoint_url=candidate.endpoint_url,
             )
-        except AdAccountMutationError:
-            raise
         except Exception as exc:
             payload = getattr(exc, "meta_payload", None)
             if not isinstance(payload, dict):
@@ -353,16 +390,27 @@ async def create_ad_account_with_docids(
             diagnostics.append(diagnostic)
 
             if failure_kind == "stale_schema":
+                # Meta authoritatively rejected this document/schema; it is safe
+                # to try the next candidate because CREATE was not executed.
                 continue
 
+            if failure_kind == "account":
+                raise AdAccountMutationError(
+                    "SESSION_EXPIRED",
+                    diagnostic,
+                    retryable=False,
+                    payload=payload,
+                    candidate=candidate,
+                ) from exc
+
             raise AdAccountMutationError(
+                "CREATE_AD_ACCOUNT_RESULT_UNKNOWN",
                 (
-                    "CREATE_AD_ACCOUNT_TRANSPORT_UNKNOWN"
-                    if failure_kind == "network"
-                    else "CREATE_AD_ACCOUNT_TRANSPORT_FAILED"
+                    "CREATE_AD_ACCOUNT transport failed after submit may have "
+                    "reached Meta. Reconcile Business inventory before retry. "
+                    + diagnostic
                 ),
-                diagnostic,
-                retryable=False,
+                retryable=True,
                 payload=payload,
                 candidate=candidate,
             ) from exc
@@ -370,7 +418,11 @@ async def create_ad_account_with_docids(
         account_id, response_path = _extract_ad_account_id(response)
         if account_id:
             persisted = candidate
-            if candidate.source.startswith("dynamic_") or candidate.source.startswith("legacy_static_"):
+            if (
+                candidate.source.startswith("dynamic_")
+                or candidate.source.startswith("legacy_static_")
+                or candidate.source == "job_manual"
+            ):
                 stored = upsert_candidate(
                     CREATE_AD_ACCOUNT_OPERATION,
                     doc_id=candidate.doc_id,
@@ -380,7 +432,11 @@ async def create_ad_account_with_docids(
                     source=(
                         "dynamic_success"
                         if candidate.source.startswith("dynamic_")
-                        else "legacy_confirmed_success"
+                        else (
+                            "legacy_confirmed_success"
+                            if candidate.source.startswith("legacy_static_")
+                            else "manual_success"
+                        )
                     ),
                     priority=9_700,
                     observed_at=str(int(time.time())),
@@ -434,7 +490,7 @@ async def create_ad_account_with_docids(
             raise AdAccountMutationError(
                 "CREATE_AD_ACCOUNT_META_ERROR",
                 diagnostic,
-                retryable=False,
+                retryable=(failure_kind == "network"),
                 payload=response,
                 candidate=candidate,
             )
@@ -444,10 +500,11 @@ async def create_ad_account_with_docids(
             raise AdAccountMutationError(
                 "CREATE_AD_ACCOUNT_RESULT_UNKNOWN",
                 (
-                    "Meta returned data for CREATE_AD_ACCOUNT but ReMask could not "
-                    "prove an Ad Account ID. CREATE will not be repeated blindly."
+                    "Meta returned data for CREATE_AD_ACCOUNT but ReMask could "
+                    "not prove an Ad Account ID. CREATE will not be repeated "
+                    "until inventory reconciliation succeeds."
                 ),
-                retryable=False,
+                retryable=True,
                 payload=response,
                 candidate=candidate,
             )
@@ -463,16 +520,19 @@ async def create_ad_account_with_docids(
     raise AdAccountMutationError(
         "CREATE_AD_ACCOUNT_MUTATION_NOT_DISCOVERED",
         (
-            "All available CREATE_AD_ACCOUNT candidates were rejected as stale/schema "
-            "mismatches. " + " || ".join(diagnostics[-4:])
+            "All CREATE_AD_ACCOUNT candidates were rejected as stale/schema "
+            "mismatches. No additional CREATE request is available. "
+            + " || ".join(diagnostics[-4:])
         ),
-        retryable=False,
+        retryable=True,
     )
 
 
 __all__ = [
     "AdAccountMutationError",
     "CreateAdAccountResult",
+    "_extract_ad_account_id",
+    "_normalize_ad_account_id",
     "create_ad_account_with_docids",
     "discover_current_ad_account_create_candidate",
 ]

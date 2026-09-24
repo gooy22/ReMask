@@ -105,14 +105,33 @@ class ProvisioningService:
 
                     handler = get_handler(step.value)
 
-                    if step is ProvisioningStep.BUSINESS:
+                    if step in {
+                        ProvisioningStep.BUSINESS,
+                        ProvisioningStep.AD_ACCOUNT,
+                    }:
+                        if step is ProvisioningStep.BUSINESS:
+                            timeout_env = "REMASK_BUSINESS_STEP_TIMEOUT"
+                            timeout_default = 180.0
+                            timeout_min = 60.0
+                            timeout_code = "BUSINESS_TIMEOUT"
+                            timeout_label = "Meta Business workflow"
+                        else:
+                            timeout_env = "REMASK_AD_ACCOUNT_STEP_TIMEOUT"
+                            timeout_default = 150.0
+                            timeout_min = 45.0
+                            timeout_code = "AD_ACCOUNT_TIMEOUT"
+                            timeout_label = "Meta Ad Account workflow"
+
                         try:
-                            business_timeout = float(
-                                os.getenv("REMASK_BUSINESS_STEP_TIMEOUT", "180")
+                            step_timeout = float(
+                                os.getenv(timeout_env, str(int(timeout_default)))
                             )
                         except (TypeError, ValueError):
-                            business_timeout = 180.0
-                        business_timeout = max(60.0, min(business_timeout, 600.0))
+                            step_timeout = timeout_default
+                        step_timeout = max(
+                            timeout_min,
+                            min(step_timeout, 600.0),
+                        )
 
                         try:
                             result = await asyncio.wait_for(
@@ -128,14 +147,14 @@ class ProvisioningService:
                                     scope_key=scope_key,
                                     step_state=prior,
                                 ),
-                                timeout=business_timeout,
+                                timeout=step_timeout,
                             )
                         except asyncio.TimeoutError as exc:
                             raise ProvisioningError(
-                                "BUSINESS_TIMEOUT",
+                                timeout_code,
                                 (
-                                    "Meta Business workflow exceeded "
-                                    f"{int(business_timeout)}s"
+                                    f"{timeout_label} exceeded "
+                                    f"{int(step_timeout)}s"
                                 ),
                                 retryable=True,
                             ) from exc

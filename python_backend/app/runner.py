@@ -156,20 +156,34 @@ class WorkerPool:
                                     for value in (raw_steps or [])
                                 ] if isinstance(raw_steps,list) else []
 
-                                # Any composite provisioning flow that contains BUSINESS
-                                # must inherit the same non-cooperative Chromium watchdog.
+                                # CREATE_BM and CREATE_AD_ACCOUNT both use
+                                # profile-bound Chromium and need a hard wall
+                                # clock watchdog independent of Playwright
+                                # cooperative cancellation.
                                 business_guarded='BUSINESS' in normalized_steps
+                                ad_account_guarded='AD_ACCOUNT' in normalized_steps
 
-                                if business_guarded:
+                                if business_guarded or ad_account_guarded:
+                                    if business_guarded:
+                                        timeout_env='REMASK_ADD_BM_HARD_TIMEOUT_SECONDS'
+                                        timeout_default=210.0
+                                        watchdog_code='ADD_BM_HARD_TIMEOUT'
+                                        watchdog_label='BUSINESS'
+                                    else:
+                                        timeout_env='REMASK_ADD_RK_HARD_TIMEOUT_SECONDS'
+                                        timeout_default=180.0
+                                        watchdog_code='ADD_RK_HARD_TIMEOUT'
+                                        watchdog_label='AD_ACCOUNT'
+
                                     try:
                                         hard_timeout=float(
                                             os.getenv(
-                                                'REMASK_ADD_BM_HARD_TIMEOUT_SECONDS',
-                                                '210',
+                                                timeout_env,
+                                                str(int(timeout_default)),
                                             )
                                         )
                                     except (TypeError,ValueError):
-                                        hard_timeout=210.0
+                                        hard_timeout=timeout_default
                                     hard_timeout=max(90.0,min(hard_timeout,600.0))
 
                                     result=await _await_with_hard_watchdog(
@@ -182,9 +196,9 @@ class WorkerPool:
                                             task_idempotency_key=task.get('idempotency_key'),
                                         ),
                                         timeout_seconds=hard_timeout,
-                                        code='ADD_BM_HARD_TIMEOUT',
+                                        code=watchdog_code,
                                         message=(
-                                            'BUSINESS worker watchdog exceeded '
+                                            f'{watchdog_label} worker watchdog exceeded '
                                             f'{int(hard_timeout)}s; '
                                             'Chromium cancellation did not complete.'
                                         ),

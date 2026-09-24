@@ -224,6 +224,103 @@ class ProvisioningStateStore:
 
         return {}
 
+    async def latest_ad_account_resume_for_business(
+        self,
+        profile_id: str,
+        business_id: str,
+        *,
+        exclude_item_id: str = "",
+    ) -> dict[str, Any]:
+        """
+        Return the newest confirmed or uncertain AD_ACCOUNT checkpoint for a
+        profile+Business. This protects a later Job from creating a second RK
+        after an earlier CREATE had an ambiguous response.
+        """
+        return await asyncio.to_thread(
+            self._latest_ad_account_resume_for_business_sync,
+            profile_id,
+            business_id,
+            exclude_item_id,
+        )
+
+    def _latest_ad_account_resume_for_business_sync(
+        self,
+        profile_id: str,
+        business_id: str,
+        exclude_item_id: str,
+    ) -> dict[str, Any]:
+        profile = str(profile_id or "").strip()
+        business = str(business_id or "").strip()
+        excluded = str(exclude_item_id or "").strip()
+        if not profile or not business:
+            return {}
+
+        with self._connect() as con:
+            rows = con.execute(
+                """
+                SELECT item_id,scope_key,status,result_json,error_code,error_message,
+                       created_at,updated_at
+                FROM provisioning_steps
+                WHERE profile_id=? AND step=? AND result_json IS NOT NULL
+                ORDER BY updated_at DESC
+                LIMIT 250
+                """,
+                (profile, ProvisioningStep.AD_ACCOUNT.value),
+            ).fetchall()
+
+        uncertain = {
+            "CREATE_SUBMIT_INTENT",
+            "CREATE_SUBMITTED",
+            "CREATE_RESULT_UNKNOWN",
+            "RECONCILE_CREATE",
+        }
+
+        for row in rows:
+            if excluded and str(row["item_id"] or "") == excluded:
+                continue
+
+            raw = row["result_json"]
+            if not raw:
+                continue
+            try:
+                result = json.loads(str(raw))
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if not isinstance(result, dict):
+                continue
+
+            if str(result.get("business_id") or "").strip() != business:
+                continue
+
+            raw_id = str(
+                result.get("ad_account_id")
+                or result.get("create_response_ad_account_id")
+                or ""
+            ).strip()
+            numeric_id = raw_id[4:] if raw_id.lower().startswith("act_") else raw_id
+            confirmed = numeric_id.isdigit() and 5 <= len(numeric_id) <= 30
+
+            phase = str(
+                result.get("phase")
+                or result.get("resume_from")
+                or ""
+            ).strip().upper()
+
+            if not confirmed and phase not in uncertain:
+                continue
+
+            return {
+                "item_id": str(row["item_id"] or ""),
+                "scope_key": str(row["scope_key"] or ""),
+                "status": str(row["status"] or ""),
+                "error_code": str(row["error_code"] or ""),
+                "error_message": str(row["error_message"] or ""),
+                "result": result,
+                "updated_at": int(row["updated_at"] or 0),
+            }
+
+        return {}
+
     async def set_running(
         self,
         item_id: str,

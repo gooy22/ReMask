@@ -392,6 +392,55 @@ class FacebookGraphApi:
             )
         return output
 
+    async def list_ad_accounts_for_business(
+        self,
+        business_id: str,
+    ) -> list[dict[str, Any]]:
+        business = str(business_id or "").strip()
+        if not business.isdigit():
+            raise ValueError("business_id must be numeric")
+
+        fields = (
+            "id,account_id,name,account_status,currency,timezone_name,business"
+        )
+
+        # Prefer the Business-owned edge. If token permissions do not expose
+        # it, fall back to the user's ad accounts and filter by business.id.
+        try:
+            payload = await self._request(
+                "GET",
+                f"{business}/owned_ad_accounts",
+                params={"fields": fields, "limit": "100"},
+            )
+            rows = payload.get("data")
+            if isinstance(rows, list):
+                return [row for row in rows if isinstance(row, dict)]
+        except GraphApiError:
+            pass
+
+        payload = await self._request(
+            "GET",
+            "me/adaccounts",
+            params={"fields": fields, "limit": "100"},
+        )
+        rows = payload.get("data")
+        if not isinstance(rows, list):
+            return []
+
+        output: list[dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            owner = row.get("business")
+            owner_id = ""
+            if isinstance(owner, dict):
+                owner_id = str(owner.get("id") or "").strip()
+            elif isinstance(owner, (str, int)):
+                owner_id = str(owner).strip()
+            if owner_id == business:
+                output.append(row)
+        return output
+
     async def create_business(
         self,
         *,
