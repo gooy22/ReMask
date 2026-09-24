@@ -311,6 +311,41 @@ class BrowserKnownAssetSelectorTests(unittest.IsolatedAsyncioTestCase):
         )
 
 
+class BrowserAssetContextAdsManagerFallbackTests(unittest.IsolatedAsyncioTestCase):
+    async def test_known_asset_context_uses_ads_manager_fallback(self):
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(
+                profile_id="4",
+                pages=[
+                    {
+                        "id": "1301710056363524",
+                        "name": "Lucky Joker",
+                    }
+                ],
+            )
+        )
+        browser.page = SimpleNamespace(
+            url=(
+                "https://business.facebook.com/latest/home"
+                "?asset_id=1301710056363524"
+            )
+        )
+        browser._form_ready = AsyncMock(return_value=False)
+        browser._try_open_known_asset_selector = AsyncMock(return_value=False)
+        browser._try_open_top_left_portfolio_menu = AsyncMock(return_value=False)
+        browser._try_open_ads_manager_create_entry = AsyncMock(return_value=True)
+        browser._goto = AsyncMock()
+
+        ready = await browser._open_create_entry(
+            open_form=True,
+            already_on_home=True,
+        )
+
+        self.assertTrue(ready)
+        browser._try_open_ads_manager_create_entry.assert_awaited_once()
+        browser._goto.assert_not_awaited()
+
+
 class BrowserAssetContextFastFailTests(unittest.IsolatedAsyncioTestCase):
     async def test_known_asset_context_does_not_loop_root_and_reg(self):
         browser = FacebookBusinessBrowser(
@@ -333,6 +368,7 @@ class BrowserAssetContextFastFailTests(unittest.IsolatedAsyncioTestCase):
         browser._form_ready = AsyncMock(return_value=False)
         browser._try_open_known_asset_selector = AsyncMock(return_value=False)
         browser._try_open_top_left_portfolio_menu = AsyncMock(return_value=False)
+        browser._try_open_ads_manager_create_entry = AsyncMock(return_value=False)
         browser._goto = AsyncMock()
 
         ready = await browser._open_create_entry(
@@ -346,6 +382,7 @@ class BrowserAssetContextFastFailTests(unittest.IsolatedAsyncioTestCase):
         browser._try_open_top_left_portfolio_menu.assert_awaited_once_with(
             skip_known_asset=True,
         )
+        browser._try_open_ads_manager_create_entry.assert_awaited_once()
         self.assertTrue(
             browser._last_selector_diagnostic.get(
                 "asset_context_fast_fail"
