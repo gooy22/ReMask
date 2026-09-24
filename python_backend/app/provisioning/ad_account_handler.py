@@ -468,145 +468,67 @@ async def ad_account_handler(
             "currency": currency,
             "timezone_id": timezone_id,
             "inventory_before": inventory_before,
-            "activity": "CAPTURE_PRIVATE_CREATE",
+            "activity": "BUSINESS_SETTINGS_CREATE_OPENING",
         },
     )
 
-    captured_request: dict[str, Any] = {}
-    capture_error: dict[str, Any] = {}
+    async def browser_checkpoint(patch: dict[str, Any]) -> None:
+        phase_value = _clean(patch.get("phase")).upper()
+        if phase_value in {"CREATE_SUBMITTED", "CREATE_RESULT_UNKNOWN"}:
+            resume_from = "RECONCILE_CREATE"
+        elif phase_value == "CREATE_CONFIRMED":
+            resume_from = "DONE"
+        elif phase_value == "CREATE_REJECTED":
+            resume_from = "STOP"
+        else:
+            resume_from = "CREATE"
 
-    try:
-        async with FacebookBusinessBrowser(
-            context,
-            timeout_seconds=45,
-        ) as capture_browser:
-            captured_request = (
-                await capture_browser.capture_ad_account_create_request(
-                    business_id=business_id,
-                )
-            )
-    except BrowserBusinessError as exc:
-        capture_error = {
-            "code": exc.code,
-            "message": str(exc)[:2000],
-            "diagnostic": (
-                exc.diagnostic
-                if isinstance(exc.diagnostic, dict)
-                else {}
-            ),
-        }
-        log.warning(
-            "[%s] AD_ACCOUNT live private capture failed business=%s "
-            "code=%s: %s",
-            profile_id,
-            business_id,
-            exc.code,
-            exc,
-        )
-
-    await provisioning_state.checkpoint(
-        item_id,
-        profile_id,
-        scope_key,
-        ProvisioningStep.AD_ACCOUNT,
-        {
-            "phase": "CREATE_PREPARED",
-            "resume_from": "CREATE",
-            "business_id": business_id,
-            "account_name": rk_name,
-            "currency": currency,
-            "timezone_id": timezone_id,
-            "capture": {
-                "doc_id": _clean(captured_request.get("doc_id")),
-                "friendly_name": _clean(
-                    captured_request.get("friendly_name")
-                ),
-                "source": _clean(captured_request.get("source")),
-            },
-            "capture_error": capture_error,
-            "activity": "PRIVATE_CREATE_READY",
-        },
-    )
-
-    async def before_private_submit() -> None:
         await provisioning_state.checkpoint(
             item_id,
             profile_id,
             scope_key,
             ProvisioningStep.AD_ACCOUNT,
             {
-                "phase": "CREATE_SUBMITTED",
-                "resume_from": "RECONCILE_CREATE",
                 "business_id": business_id,
                 "account_name": rk_name,
                 "currency": currency,
                 "timezone_id": timezone_id,
-                "create_doc_id": _clean(
-                    captured_request.get("doc_id")
-                ),
-                "create_friendly_name": _clean(
-                    captured_request.get("friendly_name")
-                ),
-                "activity": "PRIVATE_CREATE_POST",
+                "resume_from": resume_from,
+                **patch,
             },
         )
 
     log.info(
-        "[%s] AD_ACCOUNT private submit business=%s currency=%s timezone=%s "
-        "key=%s captured_doc_id=%s",
+        "[%s] AD_ACCOUNT Business Settings create business=%s "
+        "currency=%s timezone=%s key=%s",
         profile_id,
         business_id,
         currency,
         timezone_id,
         idempotency_key,
-        _clean(captured_request.get("doc_id")) or "-",
     )
 
     try:
-        controller = await session.facebook_controller()
-        result = await controller.create_ad_account_detailed(
-            business_id=business_id,
-            account_name=rk_name,
-            currency=currency,
-            timezone_id=timezone_id,
-            captured_request=captured_request,
-            before_submit=before_private_submit,
-        )
-    except AdAccountMutationError as exc:
-        if exc.code in {
-            "CREATE_AD_ACCOUNT_MUTATION_NOT_DISCOVERED",
-            "CREATE_AD_ACCOUNT_PRE_SUBMIT_TRANSPORT",
-        }:
-            await provisioning_state.checkpoint(
-                item_id,
-                profile_id,
-                scope_key,
-                ProvisioningStep.AD_ACCOUNT,
-                {
-                    "phase": "CREATE_NOT_SUBMITTED",
-                    "resume_from": "CREATE",
-                    "business_id": business_id,
-                    "last_error_code": exc.code,
-                    "last_error": str(exc)[:4000],
-                },
+        async with FacebookBusinessBrowser(
+            context,
+            timeout_seconds=60,
+        ) as browser:
+            result = await browser.create_ad_account(
+                business_id=business_id,
+                account_name=rk_name,
+                currency=currency,
+                timezone_id=timezone_id,
+                before_submit=browser_checkpoint,
             )
-            capture_suffix = ""
-            if capture_error:
-                capture_suffix = (
-                    " | live_capture="
-                    + str(capture_error.get("code") or "-")
-                    + ": "
-                    + str(capture_error.get("message") or "-")[:1200]
-                    + " diagnostic="
-                    + str(capture_error.get("diagnostic") or {})[:2000]
-                )
-            raise ProvisioningError(
-                exc.code,
-                str(exc) + capture_suffix,
-                retryable=True,
-            ) from exc
 
-        if exc.code == "CREATE_AD_ACCOUNT_RESULT_UNKNOWN":
+    except BrowserBusinessError as exc:
+        diagnostic = (
+            exc.diagnostic
+            if isinstance(exc.diagnostic, dict)
+            else {}
+        )
+
+        if exc.code == "AD_ACCOUNT_CREATE_RESULT_UNKNOWN":
             await provisioning_state.checkpoint(
                 item_id,
                 profile_id,
@@ -621,6 +543,7 @@ async def ad_account_handler(
                     "timezone_id": timezone_id,
                     "last_error_code": exc.code,
                     "last_error": str(exc)[:4000],
+                    "browser_diagnostic": diagnostic,
                 },
             )
 
@@ -652,8 +575,50 @@ async def ad_account_handler(
 
             raise ProvisioningError(
                 "AD_ACCOUNT_CREATE_RESULT_UNKNOWN",
-                str(exc),
+                (
+                    str(exc)
+                    + " diagnostic="
+                    + str(diagnostic)[:3000]
+                ),
                 retryable=True,
+            ) from exc
+
+        pre_submit_codes = {
+            "AD_ACCOUNT_CREATE_UI_UNAVAILABLE",
+            "AD_ACCOUNT_CREATE_UI_CHANGED",
+            "FACEBOOK_NAVIGATION_FAILED",
+            "CREATE_CHECKPOINT_FAILED_BEFORE_SEND",
+            "BROWSER_UNAVAILABLE",
+            "PROXY_INVALID",
+            "SESSION_COOKIES_MISSING",
+            "SESSION_EXPIRED",
+            "CHECKPOINT_REQUIRED",
+            "TWO_FACTOR_REQUIRED",
+            "FACEBOOK_TEMPORARILY_BLOCKED",
+        }
+        if exc.code in pre_submit_codes:
+            await provisioning_state.checkpoint(
+                item_id,
+                profile_id,
+                scope_key,
+                ProvisioningStep.AD_ACCOUNT,
+                {
+                    "phase": "CREATE_NOT_SUBMITTED",
+                    "resume_from": "CREATE",
+                    "business_id": business_id,
+                    "last_error_code": exc.code,
+                    "last_error": str(exc)[:4000],
+                    "browser_diagnostic": diagnostic,
+                },
+            )
+            raise ProvisioningError(
+                exc.code,
+                (
+                    str(exc)
+                    + " diagnostic="
+                    + str(diagnostic)[:3000]
+                ),
+                retryable=exc.retryable,
             ) from exc
 
         await provisioning_state.checkpoint(
@@ -667,55 +632,17 @@ async def ad_account_handler(
                 "business_id": business_id,
                 "last_error_code": exc.code,
                 "last_error": str(exc)[:4000],
+                "browser_diagnostic": diagnostic,
             },
         )
         raise ProvisioningError(
             exc.code,
-            str(exc),
+            (
+                str(exc)
+                + " diagnostic="
+                + str(diagnostic)[:3000]
+            ),
             retryable=exc.retryable,
-        ) from exc
-
-    except AuthenticationError as exc:
-        raise ProvisioningError(
-            "SESSION_EXPIRED",
-            f"FB Session expired: {exc}",
-            retryable=False,
-        ) from exc
-    except RemoteRequestError as exc:
-        err_code, is_retry, diagnostic = classify_meta_request_error(
-            exc,
-            entity="AD_ACCOUNT",
-        )
-        raise ProvisioningError(
-            err_code,
-            diagnostic,
-            retryable=is_retry,
-        ) from exc
-    except ProxyError as exc:
-        raise ProvisioningError(
-            "PROXY_DEAD",
-            f"Proxy failure: {exc}",
-            retryable=True,
-        ) from exc
-    except asyncio.TimeoutError as exc:
-        # The CREATE intent is already persisted. A timeout is therefore
-        # ambiguous and the next retry must reconcile, not re-submit.
-        await provisioning_state.checkpoint(
-            item_id,
-            profile_id,
-            scope_key,
-            ProvisioningStep.AD_ACCOUNT,
-            {
-                "phase": "CREATE_RESULT_UNKNOWN",
-                "resume_from": "RECONCILE_CREATE",
-                "business_id": business_id,
-                "last_error_code": "REMOTE_TIMEOUT",
-            },
-        )
-        raise ProvisioningError(
-            "AD_ACCOUNT_CREATE_RESULT_UNKNOWN",
-            f"Network timeout after CREATE intent: {exc}",
-            retryable=True,
         ) from exc
 
     rk_id = _normalize_ad_account_id(result.ad_account_id)
