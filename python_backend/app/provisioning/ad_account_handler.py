@@ -664,10 +664,10 @@ async def ad_account_handler(
             "business_id": business_id,
             "ad_account_id": rk_id,
             "create_response_ad_account_id": rk_id,
-            "create_response_friendly_name": result.candidate.friendly_name,
-            "create_response_doc_id": result.candidate.doc_id,
+            "create_response_friendly_name": result.response_friendly_name,
+            "create_response_doc_id": result.response_doc_id,
             "create_response_path": result.response_path,
-            "transport": "facebook_web_graphql_browser_native",
+            "transport": "facebook_business_settings_ui",
         },
     )
     await provisioning_state.remember_entity(
@@ -683,8 +683,8 @@ async def ad_account_handler(
         "name": rk_name,
         "currency": currency,
         "timezone_id": timezone_id,
-        "transport": "facebook_web_graphql_browser_native",
-        "create_response_friendly_name": result.candidate.friendly_name,
-        "create_response_doc_id": result.candidate.doc_id,
+        "transport": "facebook_business_settings_ui",
+        "create_response_friendly_name": result.response_friendly_name,
+        "create_response_doc_id": result.response_doc_id,
         "create_response_path": result.response_path,
     }
