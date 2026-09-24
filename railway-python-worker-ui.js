@@ -378,6 +378,55 @@ function pythonWorkerBusinessResult(item) {
   };
 }
 
+function pythonWorkerBusinessTelemetry(item) {
+  const steps = Array.isArray(item && item.provisioning_steps)
+    ? item.provisioning_steps
+    : [];
+  const business = steps.find(function(step) {
+    return step && String(step.step || '').toUpperCase() === 'BUSINESS';
+  });
+  if (!business || !business.result || typeof business.result !== 'object') {
+    return [];
+  }
+
+  const result = business.result;
+  const parts = [];
+  const phase = String(result.activity || result.phase || '').trim();
+  const responseId = String(
+    result.business_id || result.create_response_business_id || ''
+  ).trim();
+  const friendly = String(
+    result.create_response_friendly_name ||
+    result.response_friendly_name ||
+    ''
+  ).trim();
+  const responsePath = String(
+    result.create_response_path || result.response_path || ''
+  ).trim();
+
+  if (phase) parts.push('phase ' + phase);
+  if (responseId) parts.push('BM ' + responseId);
+  if (friendly) parts.push('Meta ' + friendly);
+  if (responsePath) parts.push('response ' + responsePath);
+  if (result.recovered_cross_job === true) parts.push('cross-job resume');
+
+  const metaErrors = Array.isArray(result.meta_errors)
+    ? result.meta_errors
+    : [];
+  if (metaErrors.length && metaErrors[0] && typeof metaErrors[0] === 'object') {
+    const first = metaErrors[0];
+    const code = [
+      String(first.code || '').trim(),
+      String(first.subcode || '').trim()
+    ].filter(Boolean).join('/');
+    const message = String(first.message || '').trim();
+    const detail = [code, message].filter(Boolean).join(': ');
+    if (detail) parts.push('Meta error ' + detail.slice(0, 260));
+  }
+
+  return parts;
+}
+
 function pythonWorkerRenderJob(job) {
   pythonWorkerUiState.job = job;
   const items = Array.isArray(job && job.items) ? job.items : [];
@@ -440,8 +489,13 @@ function pythonWorkerRenderJob(job) {
         if (item && item.error_code) errorParts.push(item.error_code);
         if (item && item.error_message) errorParts.push(item.error_message);
 
+        const businessTelemetry = pythonWorkerBusinessTelemetry(item);
+
         if (errorParts.length) {
-          errorTd.textContent = errorParts.join(': ');
+          if (businessTelemetry.length) {
+            errorParts.push(businessTelemetry.join(' · '));
+          }
+          errorTd.textContent = errorParts.join(' · ');
         } else {
           const businessResult = pythonWorkerBusinessResult(item);
           if (businessResult) {
@@ -454,8 +508,16 @@ function pythonWorkerRenderJob(job) {
             if (businessResult.transport) {
               resultParts.push(businessResult.transport);
             }
+            for (const detail of businessTelemetry) {
+              if (resultParts.indexOf(detail) === -1) {
+                resultParts.push(detail);
+              }
+            }
             errorTd.className = 'pw-result';
             errorTd.textContent = resultParts.join(' · ');
+          } else if (businessTelemetry.length) {
+            errorTd.className = 'pw-result';
+            errorTd.textContent = businessTelemetry.join(' · ');
           } else {
             errorTd.textContent = '—';
           }
