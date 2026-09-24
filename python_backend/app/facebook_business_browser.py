@@ -460,6 +460,7 @@ class FacebookBusinessBrowser:
     HOME_URL = "https://business.facebook.com/latest/home"
     OVERVIEW_URL = "https://business.facebook.com/overview"
     CREATE_URL = "https://business.facebook.com/reg/"
+    DIRECT_CREATE_URL = "https://business.facebook.com/create"
     ADS_MANAGER_URL = "https://adsmanager.facebook.com/adsmanager/manage/campaigns"
     SETTINGS_PAGES_URL = (
         "https://business.facebook.com/settings/pages/?business_id={business_id}"
@@ -470,11 +471,15 @@ class FacebookBusinessBrowser:
         "Create business portfolio",
         "Create a business",
         "Create business",
+        "Create a portfolio",
+        "Create portfolio",
         "Create account",
         "Создать бизнес-портфолио",
+        "Создать портфолио",
         "Создать бизнес",
         "Создать аккаунт",
         "Створити бізнес-портфоліо",
+        "Створити портфоліо",
         "Створити бізнес",
         "Створити обліковий запис",
         "Business-Portfolio erstellen",
@@ -1432,8 +1437,8 @@ class FacebookBusinessBrowser:
                         el.innerText || el.textContent || ''
                     ].join(' ').replace(/\\s+/g, ' ').trim();
 
-                    const xs = [20, 52, 88, 124, 160, 192, 224];
-                    const ys = [68, 82, 96, 110, 124, 138, 152, 166, 180, 194, 208, 224, 240, 256];
+                    const xs = [16, 36, 60, 88, 120, 156, 192, 228, 264, 300, 328];
+                    const ys = [58, 72, 86, 100, 114, 128, 142, 156, 170, 184, 198, 214, 230, 246, 264, 282, 300, 318];
                     const seen = new Set();
                     const rows = [];
 
@@ -1448,45 +1453,53 @@ class FacebookBusinessBrowser:
                                 const text = label(el);
                                 const role = (el.getAttribute && el.getAttribute('role')) || '';
                                 const tabindex = (el.getAttribute && el.getAttribute('tabindex')) || '';
+                                const haspopup = (el.getAttribute && el.getAttribute('aria-haspopup')) || '';
                                 const tag = el.tagName || '';
+                                const interactive = (
+                                    role === 'button' ||
+                                    role === 'menuitem' ||
+                                    tag === 'BUTTON' ||
+                                    tag === 'A' ||
+                                    tabindex === '0' ||
+                                    !!haspopup
+                                );
 
-                                if (r.x > 300 || r.y < 54 || r.y > 276) continue;
-                                if (r.width < 70 || r.width > 280) continue;
-                                if (r.height < 24 || r.height > 90) continue;
-                                if (!text || /^Meta Business Suite$/i.test(text)) continue;
+                                if (r.x > 360 || r.y < 48 || r.y > 340) continue;
+                                if (r.width < 18 || r.width > 340) continue;
+                                if (r.height < 18 || r.height > 110) continue;
+                                if (/^Meta Business Suite$/i.test(text)) continue;
                                 if (/^(Home|Startseite|Start|Главная|Головна)$/i.test(text)) continue;
+                                if (!text && !interactive) continue;
 
-                                rows.push({el, r, text, role, tabindex, tag});
+                                rows.push({el, r, text, role, tabindex, haspopup, tag, interactive});
                             }
                         }
                     }
 
+                    const score = (row) => {
+                        const key = (row.text || '').toLowerCase();
+                        let value = Math.round(row.r.y);
+                        if (row.interactive) value -= 160;
+                        if (row.haspopup) value -= 180;
+                        if (/business|portfolio|account|asset|switch|select|page|profile/.test(key)) value -= 140;
+                        if (!row.text) value += 35;
+                        return value;
+                    };
+
                     rows.sort((a,b) => {
+                        const as = score(a);
+                        const bs = score(b);
+                        if (as !== bs) return as - bs;
                         const ai = a.r.width * a.r.height;
                         const bi = b.r.width * b.r.height;
-                        const aInteractive = (
-                            a.role === 'button' ||
-                            a.tag === 'BUTTON' ||
-                            a.tabindex === '0'
-                        ) ? 1 : 0;
-                        const bInteractive = (
-                            b.role === 'button' ||
-                            b.tag === 'BUTTON' ||
-                            b.tabindex === '0'
-                        ) ? 1 : 0;
-                        if (aInteractive !== bInteractive) {
-                            return bInteractive - aInteractive;
-                        }
-                        // When Meta implements the selector as nested DIVs,
-                        // prefer the largest container in the selector band so
-                        // the synthetic click bubbles through the whole row.
                         return bi - ai || a.r.y - b.r.y;
                     });
 
-                    const compact = rows.slice(0,12).map(row => ({
+                    const compact = rows.slice(0,16).map(row => ({
                         text:row.text,
                         role:row.role,
                         tag:row.tag,
+                        haspopup:row.haspopup,
                         x:Math.round(row.r.x),
                         y:Math.round(row.r.y),
                         w:Math.round(row.r.width),
@@ -1545,6 +1558,9 @@ class FacebookBusinessBrowser:
             '[role="button"][aria-haspopup="menu"]',
             'button[aria-expanded]',
             '[role="button"][aria-expanded]',
+            '[role="button"]',
+            'button',
+            '[tabindex="0"]',
         )
         candidates: list[tuple[int, float, float, Any]] = []
 
@@ -1566,7 +1582,7 @@ class FacebookBusinessBrowser:
 
                     x = float(box.get("x") or 0)
                     y = float(box.get("y") or 0)
-                    if x > 260 or y < 105 or y > 210:
+                    if x > 340 or y < 55 or y > 325:
                         continue
 
                     text_value = _clean(await item.inner_text(timeout=1000))
@@ -1609,6 +1625,102 @@ class FacebookBusinessBrowser:
                     pass
 
         return False
+
+    async def _try_open_direct_create_url(self) -> bool:
+        """
+        Try Meta's current direct Business Portfolio creation route.
+
+        This is navigation-only until Meta's own form is visible. It is useful
+        for Page-pinned Business Suite sessions where /reg/ redirects back to
+        latest/home?asset_id=<PageID> and no portfolio selector is rendered.
+        """
+        if self.page is None:
+            return False
+
+        requested_url = self.DIRECT_CREATE_URL
+        final_url = ""
+        try:
+            final_url = await asyncio.wait_for(
+                self._goto(requested_url),
+                timeout=18.0,
+            )
+        except asyncio.TimeoutError:
+            self._last_selector_diagnostic = {
+                **self._last_selector_diagnostic,
+                "direct_create_route": {
+                    "requested_url": requested_url,
+                    "timeout": 18,
+                    "url": _clean(self.page.url if self.page else ""),
+                },
+            }
+            return False
+        except BrowserBusinessError as exc:
+            if exc.code != "FACEBOOK_NAVIGATION_FAILED":
+                raise
+            self._last_selector_diagnostic = {
+                **self._last_selector_diagnostic,
+                "direct_create_route": {
+                    "requested_url": requested_url,
+                    "navigation_error": exc.code,
+                    "message": str(exc)[:500],
+                    "url": _clean(self.page.url if self.page else ""),
+                },
+            }
+            return False
+
+        await self._assert_authenticated()
+
+        if await self._form_ready():
+            self._last_selector_diagnostic = {
+                **self._last_selector_diagnostic,
+                "direct_create_route": {
+                    "requested_url": requested_url,
+                    "final_url": _clean(final_url or self.page.url),
+                    "form_ready": True,
+                },
+            }
+            return True
+
+        create_surface = await self._has_create_surface()
+        if create_surface and await self._click_named(self.CREATE_NAMES):
+            await self._assert_authenticated()
+            if await self._wait_for_form_ready(
+                timeout_ms=6500,
+                interval_ms=250,
+            ):
+                self._last_selector_diagnostic = {
+                    **self._last_selector_diagnostic,
+                    "direct_create_route": {
+                        "requested_url": requested_url,
+                        "final_url": _clean(self.page.url),
+                        "create_surface": True,
+                        "create_clicked": True,
+                        "form_ready": True,
+                    },
+                }
+                return True
+
+        redirected_asset_id = ""
+        try:
+            query = parse_qs(urlsplit(_clean(self.page.url)).query)
+            redirected_asset_id = _digits(
+                (query.get("asset_id") or query.get("assetId") or [""])[0]
+            )
+        except Exception:
+            redirected_asset_id = ""
+
+        self._last_selector_diagnostic = {
+            **self._last_selector_diagnostic,
+            "direct_create_route": {
+                "requested_url": requested_url,
+                "final_url": _clean(final_url or self.page.url),
+                "create_surface": bool(create_surface),
+                "form_ready": False,
+                "redirected_asset_id": redirected_asset_id,
+            },
+        }
+        return False
+
 
     async def _try_open_ads_manager_create_entry(self) -> bool:
         """
@@ -1864,12 +1976,12 @@ class FacebookBusinessBrowser:
             try:
                 targeted_open = await asyncio.wait_for(
                     self._try_open_known_asset_selector(),
-                    timeout=8.0,
+                    timeout=6.0,
                 )
             except asyncio.TimeoutError:
                 self._last_selector_diagnostic = {
                     **self._last_selector_diagnostic,
-                    "asset_selector_timeout": 8,
+                    "asset_selector_timeout": 6,
                 }
 
             if targeted_open:
@@ -1887,12 +1999,12 @@ class FacebookBusinessBrowser:
                     self._try_open_top_left_portfolio_menu(
                         skip_known_asset=True,
                     ),
-                    timeout=10.0,
+                    timeout=7.0,
                 )
             except asyncio.TimeoutError:
                 self._last_selector_diagnostic = {
                     **self._last_selector_diagnostic,
-                    "asset_generic_selector_timeout": 10,
+                    "asset_generic_selector_timeout": 7,
                 }
 
             if generic_open:
@@ -1904,20 +2016,26 @@ class FacebookBusinessBrowser:
                     ):
                         return True
 
-            # Business Suite rendered no usable selector. Current Meta Ads
-            # Manager also exposes a Business Portfolio/account selector, so
-            # try that independent UI surface before declaring this profile
-            # unable to reach the create form.
+            # Current Meta also exposes a direct /create route. It is distinct
+            # from the legacy /reg/ route that was observed redirecting this
+            # Page-pinned profile back to Home.
+            direct_create_open = await self._try_open_direct_create_url()
+            if direct_create_open:
+                return True
+
+            # Business Suite rendered no usable selector and the direct route
+            # did not expose the form. Try Ads Manager as an independent UI
+            # surface before declaring this profile unable to reach CREATE.
             ads_manager_open = False
             try:
                 ads_manager_open = await asyncio.wait_for(
                     self._try_open_ads_manager_create_entry(),
-                    timeout=35.0,
+                    timeout=24.0,
                 )
             except asyncio.TimeoutError:
                 self._last_selector_diagnostic = {
                     **self._last_selector_diagnostic,
-                    "ads_manager_fallback_timeout": 35,
+                    "ads_manager_fallback_timeout": 24,
                 }
 
             if ads_manager_open:
@@ -1940,6 +2058,11 @@ class FacebookBusinessBrowser:
                 await self._assert_authenticated()
                 if await self._wait_for_form_ready():
                     return True
+
+        # Try Meta's current direct Business Portfolio creation route before
+        # falling back to older Business Suite navigation surfaces.
+        if await self._try_open_direct_create_url():
+            return True
 
         # Accounts without an existing Business Portfolio can land on a
         # Page/personal-profile Business Suite shell whose selector sits higher
@@ -2169,7 +2292,7 @@ class FacebookBusinessBrowser:
             raise BrowserBusinessError(
                 "BUSINESS_CREATE_UI_UNAVAILABLE",
                 "Meta Business portfolio create action is not available for this profile.",
-                retryable=False,
+                retryable=True,
                 diagnostic=diag,
             )
 
@@ -2820,7 +2943,7 @@ class FacebookBusinessBrowser:
             raise BrowserBusinessError(
                 "BUSINESS_CREATE_UI_UNAVAILABLE",
                 "Meta Business portfolio creation form could not be opened.",
-                retryable=False,
+                retryable=True,
                 diagnostic=diag,
             )
 
