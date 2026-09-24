@@ -2731,9 +2731,11 @@ class FacebookBusinessBrowser:
             }
         )
 
-        response_business_id, friendly = await self._submit_create_and_observe(
-            name,
-            before_submit=create_checkpoint,
+        response_business_id, friendly, response_path = (
+            await self._submit_create_and_observe(
+                name,
+                before_submit=create_checkpoint,
+            )
         )
 
         await create_checkpoint(
@@ -2746,13 +2748,30 @@ class FacebookBusinessBrowser:
                 "activity_at": int(time.time()),
                 "response_business_id": response_business_id,
                 "response_friendly_name": friendly,
+                "response_path": response_path,
             }
         )
 
+        before_ids = set(before_map)
+
+        # The response belongs to the exact CREATE mutation that passed the
+        # network gate. A numeric ID from a known CREATE response path is
+        # authoritative Meta evidence; Business Suite inventory can lag behind
+        # the mutation response and must not turn a success into a timeout.
+        if response_business_id and response_path:
+            return BrowserCreateResult(
+                business_id=response_business_id,
+                before_ids=sorted(before_ids),
+                after_ids=sorted(before_ids | {response_business_id}),
+                response_business_id=response_business_id,
+                response_friendly_name=friendly,
+                response_path=response_path,
+            )
+
         await self.page.wait_for_timeout(1800)
 
-        # Always verify through current UI state, even if GraphQL response
-        # exposed an ID.
+        # If the response was missing or unparseable, fall back to UI
+        # reconciliation before declaring the result unknown.
         await create_checkpoint(
             {
                 "activity": "VERIFY_CREATE_INVENTORY",
@@ -2761,16 +2780,6 @@ class FacebookBusinessBrowser:
         )
         after_map = await self.snapshot_businesses()
         after_ids = set(after_map)
-        before_ids = set(before_map)
-
-        if response_business_id and response_business_id in after_ids:
-            return BrowserCreateResult(
-                business_id=response_business_id,
-                before_ids=sorted(before_ids),
-                after_ids=sorted(after_ids),
-                response_business_id=response_business_id,
-                response_friendly_name=friendly,
-            )
 
         created = sorted(after_ids - before_ids)
         if len(created) == 1:
@@ -2780,6 +2789,7 @@ class FacebookBusinessBrowser:
                 after_ids=sorted(after_ids),
                 response_business_id=response_business_id,
                 response_friendly_name=friendly,
+                response_path=response_path,
             )
 
         await create_checkpoint(
