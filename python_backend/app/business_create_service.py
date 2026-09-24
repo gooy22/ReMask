@@ -14,6 +14,7 @@ from .facebook_graph_api import (
 )
 
 from .facebook_business_create import (
+    BusinessMutationError,
     DocIdMutationError,
     set_business_primary_page,
 )
@@ -55,6 +56,62 @@ def _graph_diag(exc: GraphApiError) -> dict[str, Any]:
 
 def _text(exc: Exception) -> str:
     return str(exc or "").strip().lower()
+
+
+def _mutation_payload_summary(
+    payload: dict[str, Any] | None,
+) -> dict[str, Any]:
+    body = payload if isinstance(payload, dict) else {}
+    data = body.get("data")
+    summary: dict[str, Any] = {
+        "top_keys": sorted(str(key) for key in body),
+    }
+
+    if isinstance(data, dict):
+        summary["data_keys"] = sorted(str(key) for key in data)
+        nodes: dict[str, Any] = {}
+        for key, value in data.items():
+            if not isinstance(value, dict):
+                continue
+            node: dict[str, Any] = {
+                "keys": sorted(str(child_key) for child_key in value),
+            }
+            direct_id = str(value.get("id") or "").strip()
+            if direct_id.isdigit():
+                node["id"] = direct_id
+            business = value.get("business")
+            if isinstance(business, dict):
+                node["business_keys"] = sorted(
+                    str(child_key) for child_key in business
+                )
+                nested_id = str(business.get("id") or "").strip()
+                if nested_id.isdigit():
+                    node["business_id"] = nested_id
+            nodes[str(key)] = node
+        if nodes:
+            summary["data_nodes"] = nodes
+
+    errors = body.get("errors")
+    if isinstance(errors, list):
+        summary["errors"] = [
+            {
+                key: row.get(key)
+                for key in (
+                    "message",
+                    "code",
+                    "error_subcode",
+                    "summary",
+                    "type",
+                )
+                if isinstance(row, dict) and row.get(key) is not None
+            }
+            for row in errors[:5]
+            if isinstance(row, dict)
+        ]
+    elif body.get("error") is not None:
+        summary["error"] = str(body.get("error"))[:1000]
+
+    return summary
 
 
 def _official_page_constraint(exc: GraphApiError) -> bool:
@@ -336,6 +393,36 @@ async def _create_business_via_web(
             ),
             diagnostics=diagnostics,
         )
+
+    except BusinessMutationError as exc:
+        candidate = getattr(exc, "candidate", None)
+        payload = getattr(exc, "payload", None)
+        diagnostics.append(
+            {
+                "transport": "facebook_web_graphql",
+                "stage": "create",
+                "code": str(getattr(exc, "code", "") or "BUSINESS_MUTATION_FAILED"),
+                "message": str(exc),
+                "retryable": bool(getattr(exc, "retryable", False)),
+                "doc_id": str(getattr(candidate, "doc_id", "") or ""),
+                "friendly_name": str(
+                    getattr(candidate, "friendly_name", "") or ""
+                ),
+                "variables_mode": str(
+                    getattr(candidate, "variables_mode", "") or ""
+                ),
+                "source": str(getattr(candidate, "source", "") or ""),
+                "response_summary": _mutation_payload_summary(
+                    payload if isinstance(payload, dict) else {}
+                ),
+            }
+        )
+        raise BusinessCreateError(
+            str(getattr(exc, "code", "") or "BUSINESS_MUTATION_FAILED"),
+            str(exc),
+            retryable=bool(getattr(exc, "retryable", False)),
+            diagnostics=diagnostics,
+        ) from exc
 
     except AuthenticationError as exc:
         diagnostics.append(
