@@ -440,4 +440,4 @@ ENV REMASK_META_CACHE_TTL=1800 \
 
 EXPOSE 80
 CMD ["/var/www/html/docker-start.sh"]
-# railway deploy trigger: bm-asset-context-selector 2026-09-24
+# railway deploy trigger: bm-asset-context-fast-fail-60s 2026-09-24
