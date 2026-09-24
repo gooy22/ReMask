@@ -949,8 +949,9 @@ class BrowserAdAccountExactlyOnceSubmitTests(unittest.TestCase):
             FacebookBusinessBrowser.create_ad_account
         )
         self.assertIn("final_click_attempted = True", source)
+        self.assertIn('"action": "final_blocked_duplicate"', source)
         self.assertIn("AD_ACCOUNT_FINAL_CLICK_UNMATCHED", source)
-        self.assertIn("A second final click is blocked", source)
+        self.assertIn('"phase": "CREATE_RESULT_UNKNOWN"', source)
 
 
 class BrowserAdAccountSubmitProgressionTests(unittest.TestCase):
