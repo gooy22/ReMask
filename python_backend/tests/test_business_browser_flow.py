@@ -365,7 +365,8 @@ class _FakeBrowser:
             before_ids=sorted(self.snapshot),
             after_ids=sorted([*self.snapshot, self.create_id]),
             response_business_id=self.create_id,
-            response_friendly_name="MetaBusinessCreate",
+            response_friendly_name="useBusinessCreationMutationMutation",
+            response_path="data.business_create.business.id",
             recovered=False,
         )
 
@@ -385,6 +386,7 @@ class _FakeBrowser:
             ),
             response_business_id="",
             response_friendly_name="",
+            response_path="",
             recovered=True,
         )
 
@@ -517,6 +519,48 @@ class BusinessBrowserFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(browser.reconcile_calls, 1)
         self.assertEqual(browser.add_calls, 0)
         self.assertTrue(result["resumed"])
+
+    async def test_exact_create_response_checkpoint_resumes_without_reconcile(self):
+        await self.store.checkpoint(
+            self.item_id,
+            self.profile_id,
+            self.scope_key,
+            ProvisioningStep.BUSINESS,
+            {
+                "phase": "CREATE_SUBMITTED",
+                "activity": "CREATE_RESPONSE_OBSERVED",
+                "business_name": "Test Business",
+                "primary_page_id": "123456789",
+                "business_ids_before": ["111111111111111"],
+                "create_response_business_id": "555666777888999",
+                "create_response_friendly_name": (
+                    "useBusinessCreationMutationMutation"
+                ),
+                "create_response_path": "data.business_create.business.id",
+            },
+        )
+        step_state = await self.store.step(
+            self.item_id,
+            ProvisioningStep.BUSINESS,
+        )
+
+        browser = _FakeBrowser(verify_sequence=[True])
+        result = await self._run(browser, step_state=step_state)
+
+        self.assertEqual(result["business_id"], "555666777888999")
+        self.assertEqual(browser.create_calls, 0)
+        self.assertEqual(browser.reconcile_calls, 0)
+        self.assertEqual(browser.add_calls, 0)
+        self.assertTrue(result["resumed"])
+
+        stored = await self.store.step(
+            self.item_id,
+            ProvisioningStep.BUSINESS,
+        )
+        self.assertEqual(stored["result"]["phase"], "PAGE_CONFIRMED")
+        self.assertTrue(
+            stored["result"].get("recovered_from_exact_create_response")
+        )
 
     async def test_page_submitted_retry_verifies_without_second_add(self):
         await self.store.checkpoint(
