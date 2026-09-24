@@ -381,6 +381,129 @@ class BrowserAdAccountOwnBusinessTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Мой бизнес", names)
 
 
+class BrowserAdAccountAddProbeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_add_probe_tries_second_distinct_button_after_first_misses(self):
+        class _Item:
+            def __init__(self, name, clicks):
+                self.name = name
+                self.clicks = clicks
+
+            async def is_visible(self):
+                return True
+
+            async def is_enabled(self):
+                return True
+
+            async def scroll_into_view_if_needed(self):
+                return None
+
+            async def click(self):
+                self.clicks.append(self.name)
+
+        class _Locator:
+            def __init__(self, item):
+                self.first = item
+
+            async def count(self):
+                return 1
+
+        class _Keyboard:
+            def __init__(self):
+                self.keys = []
+
+            async def press(self, key):
+                self.keys.append(key)
+
+        class _Page:
+            def __init__(self):
+                self.clicks = []
+                self.keyboard = _Keyboard()
+
+            def locator(self, selector):
+                probe_id = selector.split('"')[1]
+                return _Locator(_Item(probe_id, self.clicks))
+
+            async def wait_for_timeout(self, ms):
+                return None
+
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-rk-multi-add")
+        )
+        browser.page = _Page()
+        browser._ad_account_add_button_candidates = AsyncMock(
+            return_value=[
+                {
+                    "probe_id": "0",
+                    "text": "Ajouter",
+                    "x": 745,
+                    "y": 631,
+                },
+                {
+                    "probe_id": "1",
+                    "text": "Ajouter",
+                    "x": 1137,
+                    "y": 97,
+                },
+            ]
+        )
+        browser._wait_for_ad_account_create_entry = AsyncMock(
+            side_effect=[False, True]
+        )
+        browser._ad_account_popup_candidates = AsyncMock(
+            return_value=["Unrelated popup"]
+        )
+
+        found, attempts = await browser._probe_ad_account_add_buttons()
+
+        self.assertTrue(found)
+        self.assertEqual(browser.page.clicks, ["0", "1"])
+        self.assertEqual(browser.page.keyboard.keys, ["Escape"])
+        self.assertFalse(attempts[0]["create_entry_found"])
+        self.assertTrue(attempts[1]["create_entry_found"])
+
+    async def test_add_candidate_scanner_prefers_content_button_over_toolbar(self):
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-rk-add-scan")
+        )
+        browser.page = SimpleNamespace(
+            evaluate=AsyncMock(
+                return_value=[
+                    {
+                        "probe_id": "0",
+                        "text": "Ajouter",
+                        "x": 745,
+                        "y": 631,
+                        "w": 100,
+                        "h": 32,
+                        "tag": "DIV",
+                        "role": "button",
+                        "haspopup": "",
+                        "toolbar_penalty": 0,
+                    },
+                    {
+                        "probe_id": "1",
+                        "text": "Ajouter",
+                        "x": 1137,
+                        "y": 97,
+                        "w": 100,
+                        "h": 32,
+                        "tag": "DIV",
+                        "role": "button",
+                        "haspopup": "",
+                        "toolbar_penalty": 1,
+                    },
+                ]
+            )
+        )
+
+        rows = await browser._ad_account_add_button_candidates()
+
+        self.assertEqual(rows[0]["x"], 745)
+        self.assertEqual(rows[0]["y"], 631)
+        self.assertEqual(rows[1]["x"], 1137)
+        self.assertEqual(rows[1]["y"], 97)
+
+
 class BrowserAdAccountCreateEntryWaitTests(unittest.IsolatedAsyncioTestCase):
     async def test_wait_for_create_entry_never_reclicks_generic_add(self):
         browser = FacebookBusinessBrowser(

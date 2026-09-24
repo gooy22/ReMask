@@ -4159,6 +4159,223 @@ class FacebookBusinessBrowser:
 
         return False
 
+    async def _ad_account_add_button_candidates(self) -> list[dict[str, Any]]:
+        """Find all visible Add controls in the right settings pane.
+
+        Meta can render more than one localized Add control at once.  Do not
+        let the generic role locator pick the first one blindly; tag each
+        candidate so the caller can probe them one-by-one.
+        """
+        if self.page is None:
+            return []
+
+        try:
+            rows = await self.page.evaluate(
+                """() => {
+                    const visible = el => {
+                        const r = el.getBoundingClientRect();
+                        const s = getComputedStyle(el);
+                        return r.width > 0 && r.height > 0
+                            && s.display !== 'none'
+                            && s.visibility !== 'hidden'
+                            && s.pointerEvents !== 'none';
+                    };
+                    const clean = text => (text || '')
+                        .normalize('NFKC')
+                        .replace(/\u00a0/g, ' ')
+                        .replace(/\s+/g, ' ')
+                        .trim();
+                    const addWords = [
+                        'add','ajouter','добавить','додати',
+                        'hinzufügen','যোগ করুন','thêm','जोड़ें'
+                    ];
+                    for (const el of document.querySelectorAll(
+                        '[data-remask-rk-add-probe]'
+                    )) {
+                        el.removeAttribute('data-remask-rk-add-probe');
+                    }
+
+                    const rows = [];
+                    const seen = new Set();
+                    for (const el of document.querySelectorAll(
+                        'button,a,[role="button"],[role="link"],[aria-haspopup]'
+                    )) {
+                        if (!visible(el)) continue;
+                        const r = el.getBoundingClientRect();
+                        if (r.x < 300) continue;
+
+                        const text = clean(
+                            (el.getAttribute('aria-label') || '') + ' ' +
+                            (el.getAttribute('title') || '') + ' ' +
+                            (el.innerText || el.textContent || '')
+                        );
+                        const lower = text.toLowerCase();
+                        if (!text || text.length > 120) continue;
+                        if (!addWords.some(
+                            word => lower === word
+                                || lower.startsWith(word + ' ')
+                        )) {
+                            continue;
+                        }
+
+                        const key = [
+                            text,
+                            Math.round(r.x),
+                            Math.round(r.y),
+                            Math.round(r.width),
+                            Math.round(r.height)
+                        ].join('|');
+                        if (seen.has(key)) continue;
+                        seen.add(key);
+                        rows.push({
+                            el,
+                            text,
+                            x: Math.round(r.x),
+                            y: Math.round(r.y),
+                            w: Math.round(r.width),
+                            h: Math.round(r.height),
+                            tag: el.tagName || '',
+                            role: el.getAttribute('role') || '',
+                            haspopup: el.getAttribute('aria-haspopup') || '',
+                            // A control inside the content body is a better
+                            // first probe than a global top-toolbar Add.
+                            toolbar_penalty: r.y < 180 ? 1 : 0
+                        });
+                    }
+
+                    rows.sort((a, b) => {
+                        if (a.toolbar_penalty !== b.toolbar_penalty) {
+                            return a.toolbar_penalty - b.toolbar_penalty;
+                        }
+                        // For equivalent controls, probe the lower content
+                        // action before the top toolbar duplicate.
+                        if (a.y !== b.y) return b.y - a.y;
+                        return a.x - b.x;
+                    });
+
+                    return rows.slice(0, 8).map((row, index) => {
+                        const probeId = String(index);
+                        row.el.setAttribute(
+                            'data-remask-rk-add-probe',
+                            probeId
+                        );
+                        return {
+                            probe_id: probeId,
+                            text: row.text,
+                            x: row.x,
+                            y: row.y,
+                            w: row.w,
+                            h: row.h,
+                            tag: row.tag,
+                            role: row.role,
+                            haspopup: row.haspopup,
+                            toolbar_penalty: row.toolbar_penalty
+                        };
+                    });
+                }"""
+            )
+        except Exception:
+            return []
+
+        if not isinstance(rows, list):
+            return []
+
+        output: list[dict[str, Any]] = []
+        for row in rows[:8]:
+            if not isinstance(row, dict):
+                continue
+            output.append(
+                {
+                    "probe_id": _clean(row.get("probe_id")),
+                    "text": _clean(row.get("text"))[:120],
+                    "x": int(row.get("x") or 0),
+                    "y": int(row.get("y") or 0),
+                    "w": int(row.get("w") or 0),
+                    "h": int(row.get("h") or 0),
+                    "tag": _clean(row.get("tag")),
+                    "role": _clean(row.get("role")),
+                    "haspopup": _clean(row.get("haspopup")),
+                    "toolbar_penalty": int(
+                        row.get("toolbar_penalty") or 0
+                    ),
+                }
+            )
+        return output
+
+    async def _probe_ad_account_add_buttons(
+        self,
+    ) -> tuple[bool, list[dict[str, Any]]]:
+        """Probe each visible right-pane Add button until CREATE appears."""
+        if self.page is None:
+            return False, []
+
+        candidates = await self._ad_account_add_button_candidates()
+        attempts: list[dict[str, Any]] = []
+
+        for row in candidates[:8]:
+            probe_id = _clean(row.get("probe_id"))
+            if not probe_id:
+                continue
+
+            attempt: dict[str, Any] = {
+                key: value
+                for key, value in row.items()
+                if key != "probe_id"
+            }
+            attempt["probe_id"] = probe_id
+            attempt["clicked"] = False
+            attempt["create_entry_found"] = False
+
+            try:
+                locator = self.page.locator(
+                    f'[data-remask-rk-add-probe="{probe_id}"]'
+                )
+                if not await locator.count():
+                    attempt["skip"] = "candidate_disappeared"
+                    attempts.append(attempt)
+                    continue
+                item = locator.first
+                if not await item.is_visible():
+                    attempt["skip"] = "candidate_not_visible"
+                    attempts.append(attempt)
+                    continue
+                if not await item.is_enabled():
+                    attempt["skip"] = "candidate_disabled"
+                    attempts.append(attempt)
+                    continue
+
+                await item.scroll_into_view_if_needed()
+                await item.click()
+                attempt["clicked"] = True
+                await self.page.wait_for_timeout(250)
+
+                if await self._wait_for_ad_account_create_entry(
+                    timeout_seconds=3.0,
+                ):
+                    attempt["create_entry_found"] = True
+                    attempts.append(attempt)
+                    return True, attempts
+
+                attempt["post_click_candidates"] = (
+                    await self._ad_account_popup_candidates()
+                )
+                attempts.append(attempt)
+
+                # The candidate did not expose CREATE. Close any unrelated
+                # popup before probing the next distinct Add button.
+                try:
+                    await self.page.keyboard.press("Escape")
+                    await self.page.wait_for_timeout(200)
+                except Exception:
+                    pass
+            except Exception as exc:
+                attempt["error"] = (
+                    f"{exc.__class__.__name__}:{_clean(exc)}"
+                )[:300]
+                attempts.append(attempt)
+
+        return False, attempts
+
     async def _ad_account_popup_candidates(self) -> list[str]:
         """Return compact visible popup/menu text after clicking Add."""
         if self.page is None:
@@ -4192,13 +4409,22 @@ class FacebookBusinessBrowser:
                     for (const selector of selectors) {
                         for (const el of document.querySelectorAll(selector)) {
                             if (!visible(el)) continue;
+                            const r = el.getBoundingClientRect();
+                            const insideSemanticPopup = Boolean(
+                                el.closest(
+                                    '[role="menu"],[role="listbox"],[role="dialog"],[aria-modal="true"]'
+                                )
+                            );
+                            // Dynamic Meta wrappers also cover the whole SPA.
+                            // For non-semantic popup fallbacks, ignore the left
+                            // navigation entirely.
+                            if (!insideSemanticPopup && r.x < 300) continue;
                             const text = clean(
                                 (el.getAttribute('aria-label') || '') + ' ' +
                                 (el.getAttribute('title') || '') + ' ' +
                                 (el.innerText || el.textContent || '')
                             );
                             if (!text || text.length > 260) continue;
-                            const r = el.getBoundingClientRect();
                             const row = text
                                 + ' [tag=' + (el.tagName || '')
                                 + ' role=' + (el.getAttribute('role') || '')
@@ -4547,39 +4773,47 @@ class FacebookBusinessBrowser:
 
         add_clicked = False
         post_add_candidates: list[str] = []
+        add_attempts: list[dict[str, Any]] = []
         if not entry_clicked:
-            add_clicked = await self._click_named(
-                self.ADD_NAMES,
-                roles=("button", "link", "menuitem"),
+            entry_clicked, add_attempts = (
+                await self._probe_ad_account_add_buttons()
             )
-            dom_action = ""
-            if not add_clicked:
-                dom_action = await self._click_ad_account_action_dom(
-                    allow_generic_add=True
-                )
-                if dom_action == "create":
-                    entry_clicked = True
-                add_clicked = dom_action == "add"
-
-            if add_clicked and not entry_clicked:
-                # Click Add exactly once. Re-clicking can toggle Meta's popup
-                # closed. Wait only for the CREATE menu item from here.
-                entry_clicked = await self._wait_for_ad_account_create_entry(
-                    timeout_seconds=6.0,
-                )
-                if not entry_clicked:
-                    post_add_candidates = (
-                        await self._ad_account_popup_candidates()
-                    )
+            add_clicked = any(
+                bool(row.get("clicked"))
+                for row in add_attempts
+                if isinstance(row, dict)
+            )
+            if not entry_clicked and add_attempts:
+                last_attempt = add_attempts[-1]
+                post_add_candidates = list(
+                    last_attempt.get("post_click_candidates") or []
+                )[:30]
 
         if not entry_clicked and not add_clicked:
-            # No Add action was found at all. Give the page one late hydration
-            # window, then retry the direct Create entry only (still no second
-            # Add toggle).
+            # No Add candidate was usable yet. Give Meta one late hydration
+            # window, retry direct CREATE, then rescan all right-pane Add
+            # controls once.
             await self.page.wait_for_timeout(1200)
             entry_clicked = await self._wait_for_ad_account_create_entry(
-                timeout_seconds=4.0,
+                timeout_seconds=2.0,
             )
+            if not entry_clicked:
+                late_entry, late_attempts = (
+                    await self._probe_ad_account_add_buttons()
+                )
+                add_attempts.extend(late_attempts)
+                add_clicked = any(
+                    bool(row.get("clicked"))
+                    for row in add_attempts
+                    if isinstance(row, dict)
+                )
+                entry_clicked = late_entry
+                if not entry_clicked and late_attempts:
+                    post_add_candidates = list(
+                        late_attempts[-1].get(
+                            "post_click_candidates"
+                        ) or []
+                    )[:30]
 
         if not entry_clicked:
             raw_diag = await self._diagnostic(
@@ -4596,6 +4830,7 @@ class FacebookBusinessBrowser:
                     await self._ad_account_action_candidates()
                 ),
                 "add_clicked": add_clicked,
+                "add_attempts": add_attempts[-8:],
                 "post_add_candidates": post_add_candidates,
                 "section_route_attempts": section_route_attempts[-8:],
                 "hydration_attempts": hydration_attempts,
