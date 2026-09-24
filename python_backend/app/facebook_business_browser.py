@@ -460,6 +460,7 @@ class FacebookBusinessBrowser:
     HOME_URL = "https://business.facebook.com/latest/home"
     OVERVIEW_URL = "https://business.facebook.com/overview"
     CREATE_URL = "https://business.facebook.com/reg/"
+    ADS_MANAGER_URL = "https://adsmanager.facebook.com/adsmanager/manage/campaigns"
     SETTINGS_PAGES_URL = (
         "https://business.facebook.com/settings/pages/?business_id={business_id}"
     )
@@ -872,6 +873,74 @@ class FacebookBusinessBrowser:
             "stage": _clean(stage),
             "url": _clean(self.page.url),
         }
+
+        # Always capture a small, non-file diagnostic surface. Production
+        # normally keeps REMASK_BM_DIAGNOSTICS disabled, so returning only
+        # stage+URL made live Meta UI failures impossible to distinguish.
+        try:
+            result["title"] = _clean(await self.page.title())[:300]
+        except Exception:
+            pass
+
+        try:
+            viewport = await self.page.evaluate(
+                """() => ({
+                    width: window.innerWidth,
+                    height: window.innerHeight,
+                    dpr: window.devicePixelRatio || 1
+                })"""
+            )
+            if isinstance(viewport, dict):
+                result["viewport"] = viewport
+        except Exception:
+            pass
+
+        try:
+            body = " ".join((await self._body_text()).split())
+            if body:
+                result["body_excerpt"] = body[:3500]
+        except Exception:
+            pass
+
+        try:
+            lightweight = await self.page.locator(
+                'button, [role="button"], [role="menuitem"], '
+                '[aria-haspopup], [aria-expanded], a[href]'
+            ).evaluate_all(
+                """els => els.slice(0, 260).map(el => {
+                    const r = el.getBoundingClientRect();
+                    const s = getComputedStyle(el);
+                    if (!(r.width > 0 && r.height > 0)
+                        || s.display === 'none'
+                        || s.visibility === 'hidden') {
+                        return null;
+                    }
+                    return {
+                        tag: el.tagName,
+                        role: el.getAttribute('role') || '',
+                        text: (el.innerText || el.textContent || '')
+                            .replace(/\\s+/g, ' ').trim().slice(0, 180),
+                        aria: (el.getAttribute('aria-label') || '').slice(0, 180),
+                        title: (el.getAttribute('title') || '').slice(0, 180),
+                        haspopup: el.getAttribute('aria-haspopup') || '',
+                        expanded: el.getAttribute('aria-expanded') || '',
+                        x: Math.round(r.x),
+                        y: Math.round(r.y),
+                        w: Math.round(r.width),
+                        h: Math.round(r.height)
+                    };
+                }).filter(Boolean)"""
+            )
+            if isinstance(lightweight, list):
+                result["visible_controls"] = lightweight[:60]
+                result["top_left_controls"] = [
+                    row
+                    for row in lightweight
+                    if int(row.get("x") or 0) < 620
+                    and int(row.get("y") or 0) < 420
+                ][:60]
+        except Exception:
+            pass
 
         if _clean(os.getenv("REMASK_BM_DIAGNOSTICS")) not in {"1", "true", "yes"}:
             return result
