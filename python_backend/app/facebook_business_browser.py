@@ -1419,6 +1419,7 @@ class FacebookBusinessBrowser:
                 # clickable this is the only useful evidence of what Meta
                 # actually rendered between the logo and Home.
                 self._last_selector_diagnostic = {
+                    **self._last_selector_diagnostic,
                     "sidebar_probe": probe,
                 }
 
@@ -1430,14 +1431,16 @@ class FacebookBusinessBrowser:
                         "portfolio_sidebar_selector_open_without_create"
                     )
                     self._last_selector_diagnostic = {
+                        **self._last_selector_diagnostic,
                         "sidebar_probe": probe,
-                        **diagnostic,
+                        "sidebar_open_diagnostic": diagnostic,
                     }
                     await self.page.keyboard.press("Escape")
                     await self.page.wait_for_timeout(120)
         except Exception as exc:
             self._last_selector_diagnostic = {
-                "sidebar_probe_error": f"{exc.__class__.__name__}: {exc}"
+                **self._last_selector_diagnostic,
+                "sidebar_probe_error": f"{exc.__class__.__name__}: {exc}",
             }
             try:
                 await self.page.keyboard.press("Escape")
