@@ -8,6 +8,7 @@ import re
 import time
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urljoin
 
 
 @dataclass(
@@ -881,8 +882,8 @@ async def discover_persisted_query(
     script_max_bytes: int = 0,
     cache_ttl_seconds: int = 0,
 ) -> PersistedQueryDiscovery | None:
-    del max_scripts_per_entry
-    del script_max_bytes
+    max_scripts = max(0, int(max_scripts_per_entry or 0))
+    max_script_bytes = max(0, int(script_max_bytes or 0))
 
     clean_name = str(
         friendly_name
@@ -1065,6 +1066,125 @@ async def discover_persisted_query(
                     )
 
                 return result
+
+            # Meta increasingly keeps Relay persisted-query metadata in JS
+            # bundles instead of the initial HTML. The old implementation
+            # accepted script-scan parameters but discarded them, which meant
+            # CREATE_BM discovery could never succeed unless the exact
+            # operation happened to be embedded in the first document.
+            if max_scripts > 0 and max_script_bytes > 0:
+                script_urls: list[str] = []
+                seen_script_urls: set[str] = set()
+                script_patterns = (
+                    r'<script[^>]+src=["\']([^"\']+)["\']',
+                    r'["\']src["\']\s*:\s*["\']([^"\']+\.js(?:\?[^"\']*)?)["\']',
+                )
+
+                for source in source_variants(document):
+                    for pattern in script_patterns:
+                        for match in re.finditer(
+                            pattern,
+                            source,
+                            flags=re.IGNORECASE,
+                        ):
+                            raw_url = html.unescape(
+                                str(match.group(1) or "")
+                            ).strip()
+                            if not raw_url:
+                                continue
+
+                            script_url = urljoin(
+                                str(final_url or entry_url),
+                                raw_url,
+                            )
+                            if script_url in seen_script_urls:
+                                continue
+
+                            seen_script_urls.add(script_url)
+                            script_urls.append(script_url)
+
+                            if len(script_urls) >= max_scripts:
+                                break
+                        if len(script_urls) >= max_scripts:
+                            break
+                    if len(script_urls) >= max_scripts:
+                        break
+
+                for script_url in script_urls[:max_scripts]:
+                    try:
+                        if hasattr(
+                            session,
+                            "fetch_text_with_headers",
+                        ):
+                            (
+                                script_status,
+                                script_body,
+                                script_final_url,
+                                script_headers,
+                            ) = await session.fetch_text_with_headers(
+                                script_url,
+                                max_bytes=max_script_bytes,
+                                referer=str(final_url or entry_url),
+                            )
+                        else:
+                            (
+                                script_status,
+                                script_body,
+                                script_final_url,
+                            ) = await session.fetch_text(
+                                script_url,
+                                max_bytes=max_script_bytes,
+                                referer=str(final_url or entry_url),
+                            )
+                            script_headers = {}
+                    except Exception:
+                        continue
+
+                    if int(script_status) >= 400:
+                        continue
+
+                    doc_id = extract_doc_id_near_friendly_name(
+                        script_body,
+                        clean_name,
+                    )
+                    if not doc_id:
+                        doc_id = extract_doc_id_from_relay_context(
+                            script_body,
+                            clean_name,
+                        )
+
+                    if not doc_id and script_headers:
+                        script_header_blob = "\n".join(
+                            f"{key}: {value}"
+                            for key, value in dict(
+                                script_headers or {}
+                            ).items()
+                        )
+                        doc_id = extract_doc_id_near_friendly_name(
+                            script_header_blob,
+                            clean_name,
+                        )
+
+                    if doc_id:
+                        result = PersistedQueryDiscovery(
+                            doc_id=doc_id,
+                            friendly_name=clean_name,
+                            source_url=str(
+                                script_final_url
+                                or script_url
+                            ),
+                            source_kind="script",
+                        )
+
+                        if ttl > 0:
+                            _DISCOVERY_CACHE[
+                                cache_key
+                            ] = (
+                                time.monotonic(),
+                                result,
+                            )
+
+                        return result
 
     return None
 
