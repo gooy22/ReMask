@@ -4305,17 +4305,55 @@ class FacebookBusinessBrowser:
     async def _probe_ad_account_add_buttons(
         self,
     ) -> tuple[bool, list[dict[str, Any]]]:
-        """Probe each visible right-pane Add button until CREATE appears."""
+        """Probe distinct right-pane Add buttons across React re-renders.
+
+        Meta may replace the DOM after each popup open/close, so candidate
+        locators must be rediscovered before every attempt.  We only persist a
+        compact spatial signature of already-tried controls.
+        """
         if self.page is None:
             return False, []
 
-        candidates = await self._ad_account_add_button_candidates()
         attempts: list[dict[str, Any]] = []
+        tried: list[tuple[str, int, int]] = []
 
-        for row in candidates[:8]:
+        def already_tried(row: dict[str, Any]) -> bool:
+            text = _clean(row.get("text")).lower()
+            x = int(row.get("x") or 0)
+            y = int(row.get("y") or 0)
+            for old_text, old_x, old_y in tried:
+                if text != old_text:
+                    continue
+                if abs(x - old_x) <= 48 and abs(y - old_y) <= 48:
+                    return True
+            return False
+
+        for _ in range(8):
+            # IMPORTANT: rescan on every loop. Opening or closing any Meta
+            # popup can replace the button nodes and invalidate old locators.
+            candidates = await self._ad_account_add_button_candidates()
+            row = next(
+                (
+                    candidate
+                    for candidate in candidates
+                    if isinstance(candidate, dict)
+                    and not already_tried(candidate)
+                ),
+                None,
+            )
+            if not isinstance(row, dict):
+                break
+
             probe_id = _clean(row.get("probe_id"))
             if not probe_id:
-                continue
+                break
+
+            signature = (
+                _clean(row.get("text")).lower(),
+                int(row.get("x") or 0),
+                int(row.get("y") or 0),
+            )
+            tried.append(signature)
 
             attempt: dict[str, Any] = {
                 key: value
@@ -4327,13 +4365,17 @@ class FacebookBusinessBrowser:
             attempt["create_entry_found"] = False
 
             try:
+                # This locator was assigned by the *fresh* scan above and is
+                # consumed immediately, before Meta has another chance to
+                # replace the underlying React node.
                 locator = self.page.locator(
                     f'[data-remask-rk-add-probe="{probe_id}"]'
                 )
                 if not await locator.count():
-                    attempt["skip"] = "candidate_disappeared"
+                    attempt["skip"] = "fresh_candidate_disappeared"
                     attempts.append(attempt)
                     continue
+
                 item = locator.first
                 if not await item.is_visible():
                     attempt["skip"] = "candidate_not_visible"
@@ -4347,10 +4389,10 @@ class FacebookBusinessBrowser:
                 await item.scroll_into_view_if_needed()
                 await item.click()
                 attempt["clicked"] = True
-                await self.page.wait_for_timeout(250)
+                await self.page.wait_for_timeout(300)
 
                 if await self._wait_for_ad_account_create_entry(
-                    timeout_seconds=3.0,
+                    timeout_seconds=3.5,
                 ):
                     attempt["create_entry_found"] = True
                     attempts.append(attempt)
@@ -4361,11 +4403,11 @@ class FacebookBusinessBrowser:
                 )
                 attempts.append(attempt)
 
-                # The candidate did not expose CREATE. Close any unrelated
-                # popup before probing the next distinct Add button.
+                # Wrong Add control or unrelated popup. Close it, allow Meta to
+                # settle, then RESCAN instead of reusing stale candidate nodes.
                 try:
                     await self.page.keyboard.press("Escape")
-                    await self.page.wait_for_timeout(200)
+                    await self.page.wait_for_timeout(350)
                 except Exception:
                     pass
             except Exception as exc:
@@ -4373,8 +4415,42 @@ class FacebookBusinessBrowser:
                     f"{exc.__class__.__name__}:{_clean(exc)}"
                 )[:300]
                 attempts.append(attempt)
+                try:
+                    await self.page.keyboard.press("Escape")
+                    await self.page.wait_for_timeout(250)
+                except Exception:
+                    pass
 
         return False, attempts
+
+    @staticmethod
+    def _summarize_ad_account_add_attempts(
+        attempts: list[dict[str, Any]],
+    ) -> list[str]:
+        summary: list[str] = []
+        for row in attempts[-8:]:
+            if not isinstance(row, dict):
+                continue
+            popup = row.get("post_click_candidates")
+            popup_head = ""
+            if isinstance(popup, list) and popup:
+                popup_head = _clean(popup[0])[:120]
+            parts = [
+                f"x={int(row.get('x') or 0)}",
+                f"y={int(row.get('y') or 0)}",
+                f"clicked={bool(row.get('clicked'))}",
+                f"create={bool(row.get('create_entry_found'))}",
+            ]
+            skip = _clean(row.get("skip"))
+            error = _clean(row.get("error"))
+            if skip:
+                parts.append(f"skip={skip}")
+            if error:
+                parts.append(f"error={error[:100]}")
+            if popup_head:
+                parts.append(f"popup={popup_head}")
+            summary.append(" ".join(parts))
+        return summary
 
     async def _ad_account_popup_candidates(self) -> list[str]:
         """Return compact visible popup/menu text after clicking Add."""
@@ -4822,16 +4898,19 @@ class FacebookBusinessBrowser:
             diag: dict[str, Any] = {
                 "stage": "ad_account_create_entry_missing",
                 "business_id": business,
+                "add_attempt_summary": (
+                    self._summarize_ad_account_add_attempts(add_attempts)
+                ),
+                "add_clicked": add_clicked,
+                "action_surface_ready": action_surface_ready,
+                "post_add_candidates": post_add_candidates[:8],
                 "section_clicked": section_clicked,
                 "section_reload_attempted": section_reload_attempted,
                 "section_activation": self._last_ad_account_section_diagnostic,
-                "action_surface_ready": action_surface_ready,
                 "action_candidates": (
                     await self._ad_account_action_candidates()
                 ),
-                "add_clicked": add_clicked,
                 "add_attempts": add_attempts[-8:],
-                "post_add_candidates": post_add_candidates,
                 "section_route_attempts": section_route_attempts[-8:],
                 "hydration_attempts": hydration_attempts,
             }

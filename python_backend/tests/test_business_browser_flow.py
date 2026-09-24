@@ -382,7 +382,7 @@ class BrowserAdAccountOwnBusinessTests(unittest.IsolatedAsyncioTestCase):
 
 
 class BrowserAdAccountAddProbeTests(unittest.IsolatedAsyncioTestCase):
-    async def test_add_probe_tries_second_distinct_button_after_first_misses(self):
+    async def test_add_probe_rescans_after_first_popup_misses(self):
         class _Item:
             def __init__(self, name, clicks):
                 self.name = name
@@ -427,23 +427,20 @@ class BrowserAdAccountAddProbeTests(unittest.IsolatedAsyncioTestCase):
                 return None
 
         browser = FacebookBusinessBrowser(
-            SimpleNamespace(profile_id="profile-rk-multi-add")
+            SimpleNamespace(profile_id="profile-rk-multi-add-rescan")
         )
         browser.page = _Page()
         browser._ad_account_add_button_candidates = AsyncMock(
-            return_value=[
-                {
-                    "probe_id": "0",
-                    "text": "Ajouter",
-                    "x": 745,
-                    "y": 631,
-                },
-                {
-                    "probe_id": "1",
-                    "text": "Ajouter",
-                    "x": 1137,
-                    "y": 97,
-                },
+            side_effect=[
+                [
+                    {"probe_id":"0","text":"Ajouter","x":745,"y":631},
+                    {"probe_id":"1","text":"Ajouter","x":1137,"y":97},
+                ],
+                [
+                    # React rerender: probe ids are reassigned on fresh scan.
+                    {"probe_id":"0","text":"Ajouter","x":745,"y":631},
+                    {"probe_id":"1","text":"Ajouter","x":1137,"y":97},
+                ],
             ]
         )
         browser._wait_for_ad_account_create_entry = AsyncMock(
@@ -457,9 +454,37 @@ class BrowserAdAccountAddProbeTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(found)
         self.assertEqual(browser.page.clicks, ["0", "1"])
+        self.assertEqual(
+            browser._ad_account_add_button_candidates.await_count,
+            2,
+        )
         self.assertEqual(browser.page.keyboard.keys, ["Escape"])
         self.assertFalse(attempts[0]["create_entry_found"])
         self.assertTrue(attempts[1]["create_entry_found"])
+
+    def test_add_attempt_summary_is_compact_and_ordered(self):
+        rows = FacebookBusinessBrowser._summarize_ad_account_add_attempts(
+            [
+                {
+                    "x": 745,
+                    "y": 631,
+                    "clicked": True,
+                    "create_entry_found": False,
+                    "post_click_candidates": ["Wrong popup [tag=DIV]"],
+                },
+                {
+                    "x": 1137,
+                    "y": 97,
+                    "clicked": True,
+                    "create_entry_found": True,
+                },
+            ]
+        )
+        self.assertEqual(len(rows), 2)
+        self.assertIn("x=745", rows[0])
+        self.assertIn("popup=Wrong popup", rows[0])
+        self.assertIn("x=1137", rows[1])
+        self.assertIn("create=True", rows[1])
 
     async def test_add_candidate_scanner_prefers_content_button_over_toolbar(self):
         browser = FacebookBusinessBrowser(
