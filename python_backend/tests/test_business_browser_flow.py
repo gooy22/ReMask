@@ -154,6 +154,30 @@ class BrowserNetworkGateTests(unittest.TestCase):
         )
 
 
+class BrowserAdAccountSectionNavigationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_french_ad_accounts_sidebar_is_opened_before_create(self):
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-rk-french-nav")
+        )
+        browser.page = SimpleNamespace(
+            wait_for_timeout=AsyncMock(return_value=None),
+            evaluate=AsyncMock(return_value=False),
+        )
+        browser._click_named = AsyncMock(return_value=True)
+
+        clicked = await browser._activate_ad_account_settings_section()
+
+        self.assertTrue(clicked)
+        browser._click_named.assert_awaited_once_with(
+            browser.AD_ACCOUNT_SECTION_NAMES,
+            roles=("link", "menuitem", "button"),
+        )
+        self.assertIn(
+            "Comptes publicitaires",
+            browser.AD_ACCOUNT_SECTION_NAMES,
+        )
+
+
 class BrowserAdAccountHydrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_waits_through_empty_meta_shell_until_ad_account_surface_renders(self):
         browser = FacebookBusinessBrowser(
