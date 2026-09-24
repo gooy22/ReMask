@@ -1257,6 +1257,12 @@ class FacebookBusinessBrowser:
         if await self._has_create_surface():
             return True
 
+        # Meta can pin Business Suite to a Page via ?asset_id=... and then
+        # redirect direct /reg/ navigation back to Home. In that state, use
+        # the Page already known in ProfileContext as the selector anchor.
+        if await self._try_open_known_asset_selector():
+            return True
+
         # Meta serves at least two Business Suite sidebar variants.
         # In one, "Meta Business Suite" is a narrow collapse/expand control;
         # in another, the same visible label is itself the portfolio selector.
@@ -2370,6 +2376,29 @@ class FacebookBusinessBrowser:
             already_on_home=already_on_home,
         ):
             diag = await self._diagnostic("create_form_unavailable")
+            if self._last_selector_diagnostic:
+                diag = {
+                    "selector_attempt": self._last_selector_diagnostic,
+                    **diag,
+                }
+
+            current_url = _clean(self.page.url if self.page else "")
+            try:
+                current_query = parse_qs(urlsplit(current_url).query)
+            except Exception:
+                current_query = {}
+
+            redirected_asset_id = _digits(
+                (
+                    current_query.get("asset_id")
+                    or current_query.get("assetId")
+                    or [""]
+                )[0]
+            )
+            if redirected_asset_id:
+                diag["asset_context_redirect"] = True
+                diag["redirected_asset_id"] = redirected_asset_id
+
             raise BrowserBusinessError(
                 "BUSINESS_CREATE_UI_UNAVAILABLE",
                 "Meta Business portfolio creation form could not be opened.",
