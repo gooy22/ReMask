@@ -340,6 +340,7 @@ async def business_handler(
                     "create_response_friendly_name": (
                         create_result.response_friendly_name
                     ),
+                    "create_response_path": create_result.response_path,
                     "recovered_after_create_uncertainty": bool(
                         create_result.recovered
                     ),
@@ -574,6 +575,9 @@ async def business_handler(
             ),
             "friendly_name": _clean(
                 checkpoint.get("create_response_friendly_name")
+            ),
+            "response_path": _clean(
+                checkpoint.get("create_response_path")
             ),
             "recovered": bool(
                 checkpoint.get("recovered_after_create_uncertainty")
