@@ -7,6 +7,7 @@ import re
 import time
 from typing import Any
 
+from ..business_create_service import BusinessCreateError, create_business_resilient
 from ..facebook_business_browser import BrowserBusinessError
 from .models import ProvisioningError, ProvisioningStep
 from .state import ProvisioningStateStore
@@ -481,50 +482,198 @@ async def business_handler(
                     },
                 )
 
-            create_result = await browser.create_business(
-                business_name=bm_name,
-                user_email=user_email,
-                user_first_name=first_name,
-                user_last_name=last_name,
-                profile_display_name=display_name,
-                before_snapshot=before_map,
-                before_submit=before_create_submit,
-            )
-            business_id = _clean(create_result.business_id)
-            if not business_id.isdigit():
-                raise ProvisioningError(
-                    "INVALID_RESULT",
-                    "Browser CREATE returned invalid business_id",
-                    retryable=False,
+            create_transport = "facebook_business_suite_ui"
+            private_page_confirmed = False
+            try:
+                create_result = await browser.create_business(
+                    business_name=bm_name,
+                    user_email=user_email,
+                    user_first_name=first_name,
+                    user_last_name=last_name,
+                    profile_display_name=display_name,
+                    before_snapshot=before_map,
+                    before_submit=before_create_submit,
+                )
+                business_id = _clean(create_result.business_id)
+                if not business_id.isdigit():
+                    raise ProvisioningError(
+                        "INVALID_RESULT",
+                        "Browser CREATE returned invalid business_id",
+                        retryable=False,
+                    )
+
+                checkpoint = await provisioning_state.checkpoint(
+                    item_id,
+                    profile_id,
+                    scope_key,
+                    ProvisioningStep.BUSINESS,
+                    {
+                        "phase": "CREATE_CONFIRMED",
+                        "resume_from": "PAGE_ADD",
+                        "business_id": business_id,
+                        "business_name": bm_name,
+                        "primary_page_id": page_id,
+                        "business_ids_before": create_result.before_ids,
+                        "business_ids_after": create_result.after_ids,
+                        "create_response_business_id": (
+                            create_result.response_business_id
+                        ),
+                        "create_response_friendly_name": (
+                            create_result.response_friendly_name
+                        ),
+                        "create_response_path": create_result.response_path,
+                        "recovered_after_create_uncertainty": bool(
+                            create_result.recovered
+                        ),
+                        "transport": create_transport,
+                        "activity": "VERIFY_PAGE",
+                        "activity_at": int(time.time()),
+                    },
                 )
 
-            checkpoint = await provisioning_state.checkpoint(
-                item_id,
-                profile_id,
-                scope_key,
-                ProvisioningStep.BUSINESS,
-                {
-                    "phase": "CREATE_CONFIRMED",
-                    "resume_from": "PAGE_ADD",
-                    "business_id": business_id,
-                    "business_name": bm_name,
-                    "primary_page_id": page_id,
-                    "business_ids_before": create_result.before_ids,
-                    "business_ids_after": create_result.after_ids,
-                    "create_response_business_id": (
-                        create_result.response_business_id
-                    ),
-                    "create_response_friendly_name": (
-                        create_result.response_friendly_name
-                    ),
-                    "create_response_path": create_result.response_path,
-                    "recovered_after_create_uncertainty": bool(
-                        create_result.recovered
-                    ),
-                    "activity": "VERIFY_PAGE",
-                    "activity_at": int(time.time()),
-                },
-            )
+            except BrowserBusinessError as ui_exc:
+                # If Meta never exposed the Create form, no CREATE click was
+                # possible. In that exact pre-submit state, use the existing
+                # authenticated Facebook-web mutation path instead of retrying
+                # brittle UI navigation/selectors. This is a real route
+                # fallback, not a longer timeout.
+                safe_private_fallback_codes = {
+                    "BUSINESS_CREATE_UI_UNAVAILABLE",
+                    "BUSINESS_CREATE_FORM_UNAVAILABLE",
+                    "BUSINESS_CREATE_FORM_TIMEOUT",
+                    "CREATE_UI_CHANGED",
+                }
+                current_step_state = await provisioning_state.step(
+                    item_id,
+                    ProvisioningStep.BUSINESS,
+                )
+                current_result = _checkpoint_result(current_step_state)
+                current_phase = _clean(current_result.get("phase")).upper()
+                current_activity = _clean(
+                    current_result.get("activity")
+                ).upper()
+                create_may_have_been_submitted = current_phase in {
+                    "CREATE_SUBMITTED",
+                    "CREATE_CLICK_INTENT",
+                    "CREATE_PENDING_SUBMIT",
+                    "CREATE_RESULT_UNKNOWN",
+                } or current_activity in {
+                    "CREATE_SUBMITTED",
+                    "CREATE_CLICK_INTENT",
+                    "CREATE_RESPONSE_OBSERVED",
+                    "CREATE_RESPONSE_UNCONFIRMED",
+                }
+
+                if (
+                    ui_exc.code not in safe_private_fallback_codes
+                    or create_may_have_been_submitted
+                ):
+                    raise
+
+                checkpoint = await provisioning_state.checkpoint(
+                    item_id,
+                    profile_id,
+                    scope_key,
+                    ProvisioningStep.BUSINESS,
+                    {
+                        "phase": "CREATE_NOT_SUBMITTED",
+                        "resume_from": "CREATE",
+                        "business_name": bm_name,
+                        "primary_page_id": page_id,
+                        "business_ids_before": sorted(before_map),
+                        "browser_create_error_code": ui_exc.code,
+                        "browser_create_error": str(ui_exc)[:4000],
+                        "browser_create_diagnostic": (
+                            ui_exc.diagnostic
+                            if isinstance(ui_exc.diagnostic, dict)
+                            else {}
+                        ),
+                        "activity": "PRIVATE_CREATE_FALLBACK",
+                        "activity_at": int(time.time()),
+                    },
+                )
+
+                try:
+                    private_result = await create_business_resilient(
+                        session,
+                        business_name=bm_name,
+                        page_id=page_id,
+                        user_email=user_email,
+                        user_first_name=first_name,
+                        user_last_name=last_name,
+                        profile_display_name=display_name,
+                        require_page_backed=True,
+                    )
+                except BusinessCreateError as private_exc:
+                    diagnostic_suffix = ""
+                    if private_exc.diagnostics:
+                        try:
+                            diagnostic_suffix = " diagnostics=" + json.dumps(
+                                private_exc.diagnostics,
+                                ensure_ascii=False,
+                                separators=(",", ":"),
+                            )[:5000]
+                        except Exception:
+                            diagnostic_suffix = ""
+                    raise ProvisioningError(
+                        private_exc.code,
+                        str(private_exc) + diagnostic_suffix,
+                        retryable=private_exc.retryable,
+                    ) from private_exc
+
+                business_id = _clean(private_result.business_id)
+                if not business_id.isdigit():
+                    raise ProvisioningError(
+                        "INVALID_RESULT",
+                        "Private Facebook CREATE returned invalid business_id",
+                        retryable=False,
+                    )
+
+                create_transport = _clean(private_result.transport) or (
+                    "facebook_web_graphql"
+                )
+                private_page_confirmed = (
+                    _clean(private_result.primary_page_id) == page_id
+                )
+
+                checkpoint = await provisioning_state.checkpoint(
+                    item_id,
+                    profile_id,
+                    scope_key,
+                    ProvisioningStep.BUSINESS,
+                    {
+                        "phase": (
+                            "PAGE_CONFIRMED"
+                            if private_page_confirmed
+                            else "CREATE_CONFIRMED"
+                        ),
+                        "resume_from": (
+                            "DONE"
+                            if private_page_confirmed
+                            else "PAGE_ADD"
+                        ),
+                        "business_id": business_id,
+                        "business_name": bm_name,
+                        "primary_page_id": page_id,
+                        "business_ids_before": sorted(before_map),
+                        "transport": create_transport,
+                        "private_create_fallback": True,
+                        "private_create_diagnostics": (
+                            private_result.diagnostics
+                            if isinstance(private_result.diagnostics, list)
+                            else []
+                        ),
+                        "page_confirmed_by_private_create": (
+                            private_page_confirmed
+                        ),
+                        "activity": (
+                            "DONE"
+                            if private_page_confirmed
+                            else "VERIFY_PAGE"
+                        ),
+                        "activity_at": int(time.time()),
+                    },
+                )
 
         if not business_id.isdigit():
             raise ProvisioningError(
@@ -756,7 +905,7 @@ async def business_handler(
             recovered
             or checkpoint.get("recovered_after_create_uncertainty")
         ),
-        "transport": "facebook_business_suite_ui",
+        "transport": _clean(checkpoint.get("transport")) or "facebook_business_suite_ui",
         "create": {
             "response_business_id": _clean(
                 checkpoint.get("create_response_business_id")
