@@ -477,7 +477,12 @@ async def ad_account_handler(
 
     async def browser_checkpoint(patch: dict[str, Any]) -> None:
         phase_value = _clean(patch.get("phase")).upper()
-        if phase_value in {"CREATE_SUBMITTED", "CREATE_RESULT_UNKNOWN"}:
+        if phase_value in {
+            "CREATE_CLICK_INTENT",
+            "CREATE_SUBMIT_INTENT",
+            "CREATE_SUBMITTED",
+            "CREATE_RESULT_UNKNOWN",
+        }:
             resume_from = "RECONCILE_CREATE"
         elif phase_value == "CREATE_CONFIRMED":
             resume_from = "DONE"

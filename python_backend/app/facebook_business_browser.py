@@ -6970,22 +6970,84 @@ class FacebookBusinessBrowser:
                         }
                     )
 
-                final_clicked = await self._click_named(
+                direct_final = await self._click_named_single_attempt(
                     final_names,
                     before_click=persist_final_click_intent,
                     click_timeout_ms=2500,
                 )
-                final_meta: dict[str, Any] = {}
-                if not final_clicked:
-                    # The role-independent fallback clicks inside page.evaluate,
-                    # so persist uncertainty immediately before invoking it.
+                final_clicked = bool(direct_final.get("clicked"))
+                final_meta: dict[str, Any] = {
+                    "direct": direct_final,
+                }
+
+                if (
+                    bool(direct_final.get("attempted"))
+                    and not final_clicked
+                ):
+                    await checkpoint(
+                        {
+                            "phase": "CREATE_RESULT_UNKNOWN",
+                            "resume_from": "RECONCILE_CREATE",
+                            "activity": "AD_ACCOUNT_FINAL_CLICK_EXCEPTION",
+                            "activity_at": int(time.time()),
+                        }
+                    )
+                    raise BrowserBusinessError(
+                        "AD_ACCOUNT_CREATE_RESULT_UNKNOWN",
+                        (
+                            "Meta final Create click was attempted but Playwright "
+                            "could not confirm the click result. Duplicate CREATE "
+                            "is blocked; reconcile inventory before retry."
+                        ),
+                        retryable=True,
+                        diagnostic={
+                            "stage": "ad_account_final_click_exception",
+                            "final_meta": final_meta,
+                            "graphql_candidates": graphql_candidates[-12:],
+                            "submit_attempts": submit_attempts[-12:],
+                        },
+                    )
+
+                if not final_clicked and not direct_final.get("found"):
+                    # The role-independent fallback clicks inside page.evaluate.
+                    # Persist uncertainty first. If evaluate itself errors, the
+                    # DOM click may already have fired, so that is uncertain.
                     await persist_final_click_intent()
-                    final_meta = (
+                    fallback_meta = (
                         await self._click_ad_account_form_action_by_visible_text(
                             "final"
                         )
                     )
-                    final_clicked = bool(final_meta.get("clicked"))
+                    final_meta["fallback"] = fallback_meta
+                    final_clicked = bool(fallback_meta.get("clicked"))
+
+                    if (
+                        not final_clicked
+                        and _clean(fallback_meta.get("error"))
+                    ):
+                        await checkpoint(
+                            {
+                                "phase": "CREATE_RESULT_UNKNOWN",
+                                "resume_from": "RECONCILE_CREATE",
+                                "activity": "AD_ACCOUNT_FINAL_FALLBACK_EXCEPTION",
+                                "activity_at": int(time.time()),
+                            }
+                        )
+                        raise BrowserBusinessError(
+                            "AD_ACCOUNT_CREATE_RESULT_UNKNOWN",
+                            (
+                                "Meta final Create fallback may have clicked "
+                                "before its browser context changed. Duplicate "
+                                "CREATE is blocked; reconcile inventory."
+                            ),
+                            retryable=True,
+                            diagnostic={
+                                "stage": "ad_account_final_fallback_exception",
+                                "final_meta": final_meta,
+                                "graphql_candidates": graphql_candidates[-12:],
+                                "submit_attempts": submit_attempts[-12:],
+                            },
+                        )
 
                 if final_clicked:
                     clicked_any = True
@@ -7629,6 +7691,78 @@ class FacebookBusinessBrowser:
                     continue
 
         return False
+
+    async def _click_named_single_attempt(
+        self,
+        names: tuple[str, ...],
+        *,
+        roles: tuple[str, ...] = ("button", "link", "menuitem"),
+        before_click: Callable[[], Awaitable[None]] | None = None,
+        click_timeout_ms: int = 2500,
+    ) -> dict[str, Any]:
+        """Attempt at most one irreversible click.
+
+        Unlike _click_named(), this never moves on to a second candidate after
+        the chosen control's click has been attempted. That is required for
+        operations such as final Ad Account CREATE where an exception may occur
+        after Meta already received the click.
+        """
+        if self.page is None:
+            return {"found": False, "attempted": False, "clicked": False}
+
+        for name in names:
+            pattern = re.compile(
+                rf"^\s*{re.escape(name)}\s*$",
+                re.IGNORECASE,
+            )
+            for role in roles:
+                try:
+                    locator = self.page.get_by_role(role, name=pattern)
+                    count = await locator.count()
+                except Exception:
+                    continue
+
+                for index in range(min(count, 6)):
+                    try:
+                        item = locator.nth(index)
+                        if not (
+                            await item.is_visible()
+                            and await item.is_enabled()
+                        ):
+                            continue
+                    except Exception:
+                        continue
+
+                    meta: dict[str, Any] = {
+                        "found": True,
+                        "attempted": False,
+                        "clicked": False,
+                        "name": name,
+                        "role": role,
+                        "index": index,
+                    }
+                    try:
+                        if before_click is not None:
+                            await before_click()
+                        meta["attempted"] = True
+                        await item.click(
+                            timeout=max(
+                                250,
+                                min(int(click_timeout_ms), 10000),
+                            )
+                        )
+                        meta["clicked"] = True
+                        return meta
+                    except Exception as exc:
+                        # If before_click completed, the actual browser click
+                        # may already have reached Meta before Playwright saw
+                        # navigation/context teardown. Never try a second one.
+                        meta["error"] = (
+                            f"{exc.__class__.__name__}: {exc}"
+                        )[:500]
+                        return meta
+
+        return {"found": False, "attempted": False, "clicked": False}
 
     async def _prepare_create_form(
         self,

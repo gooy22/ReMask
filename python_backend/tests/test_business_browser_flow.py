@@ -384,6 +384,72 @@ class BrowserAdAccountFillBudgetTests(unittest.IsolatedAsyncioTestCase):
         )
 
 
+class BrowserAdAccountSingleAttemptClickTests(unittest.IsolatedAsyncioTestCase):
+    async def test_single_attempt_stops_after_click_exception(self):
+        class _Item:
+            async def is_visible(self):
+                return True
+            async def is_enabled(self):
+                return True
+            async def click(self, **kwargs):
+                raise RuntimeError("context destroyed after click")
+
+        class _Locator:
+            def nth(self, index):
+                return _Item()
+            async def count(self):
+                return 2
+
+        class _Page:
+            def get_by_role(self, role, name=None):
+                return _Locator()
+
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-rk-single-attempt")
+        )
+        browser.page = _Page()
+        intent = AsyncMock(return_value=None)
+
+        result = await browser._click_named_single_attempt(
+            ("Créer",),
+            roles=("button",),
+            before_click=intent,
+            click_timeout_ms=2500,
+        )
+
+        self.assertTrue(result["found"])
+        self.assertTrue(result["attempted"])
+        self.assertFalse(result["clicked"])
+        self.assertIn("context destroyed", result["error"])
+        intent.assert_awaited_once()
+
+    async def test_single_attempt_reports_no_candidate_without_arming_intent(self):
+        class _Locator:
+            async def count(self):
+                return 0
+
+        class _Page:
+            def get_by_role(self, role, name=None):
+                return _Locator()
+
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-rk-no-final")
+        )
+        browser.page = _Page()
+        intent = AsyncMock(return_value=None)
+
+        result = await browser._click_named_single_attempt(
+            ("Créer",),
+            roles=("button",),
+            before_click=intent,
+        )
+
+        self.assertFalse(result["found"])
+        self.assertFalse(result["attempted"])
+        self.assertFalse(result["clicked"])
+        intent.assert_not_awaited()
+
+
 class BrowserAdAccountClickBudgetTests(unittest.IsolatedAsyncioTestCase):
     async def test_named_click_can_use_short_add_rk_timeout(self):
         class _Item:
@@ -1001,6 +1067,8 @@ class BrowserAdAccountExactlyOnceSubmitTests(unittest.TestCase):
         self.assertIn('"action": "final_blocked_duplicate"', source)
         self.assertIn("AD_ACCOUNT_FINAL_CLICK_UNMATCHED", source)
         self.assertIn('"phase": "CREATE_RESULT_UNKNOWN"', source)
+        self.assertIn("_click_named_single_attempt", source)
+        self.assertIn("AD_ACCOUNT_FINAL_CLICK_EXCEPTION", source)
 
 
 class BrowserAdAccountSubmitProgressionTests(unittest.TestCase):
