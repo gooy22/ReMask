@@ -2213,6 +2213,8 @@ class FacebookBusinessBrowser:
                     await before_submit(
                         {
                             "phase": "CREATE_SUBMITTED",
+                            "activity": "CREATE_SUBMITTED",
+                            "activity_at": int(time.time()),
                             "submitted_at": int(time.time()),
                             "network_gate": "before_meta_send",
                         }
@@ -2246,6 +2248,8 @@ class FacebookBusinessBrowser:
                 await before_submit(
                     {
                         "phase": "CREATE_CLICK_INTENT",
+                        "activity": "CREATE_CLICK_INTENT",
+                        "activity_at": int(time.time()),
                         "click_intent_at": int(time.time()),
                     }
                 )
@@ -2279,6 +2283,8 @@ class FacebookBusinessBrowser:
                         await before_submit(
                             {
                                 "phase": "CREATE_NOT_SUBMITTED",
+                                "activity": "CREATE_NOT_SUBMITTED",
+                                "activity_at": int(time.time()),
                                 "not_submitted_at": int(time.time()),
                             }
                         )
