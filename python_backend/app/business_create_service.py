@@ -335,7 +335,7 @@ async def _create_business_via_web(
                         "source": attach_candidate.source,
                     }
                 )
-            except DocIdMutationError as exc:
+            except BusinessMutationError as exc:
                 diagnostics.append(
                     {
                         "transport": "facebook_web_graphql",
@@ -343,8 +343,17 @@ async def _create_business_via_web(
                         "result": "failed_after_business_created",
                         "business_id": web_result.business_id,
                         "page_id": clean_page,
+                        "code": str(
+                            getattr(exc, "code", "")
+                            or "SET_PRIMARY_PAGE_FAILED"
+                        ),
+                        "retryable": bool(
+                            getattr(exc, "retryable", False)
+                        ),
                         "message": str(exc),
-                        "payload": exc.payload,
+                        "response_summary": _mutation_payload_summary(
+                            getattr(exc, "payload", None)
+                        ),
                     }
                 )
                 raise BusinessCreateError(
@@ -352,8 +361,8 @@ async def _create_business_via_web(
                     (
                         f"Business {web_result.business_id} was created, but "
                         "the selected Fan Page could not be set as primary. "
-                        "Do not repeat CREATE automatically; sync Business "
-                        "Managers first. Page attach error: "
+                        "ReMask must resume from Page attach and must not send "
+                        "CREATE again. Page attach error: "
                         + str(exc)
                     ),
                     retryable=False,
