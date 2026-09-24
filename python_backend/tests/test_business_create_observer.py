@@ -1,4 +1,6 @@
 import unittest
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 from app.facebook_business_browser import FacebookBusinessBrowser
 
@@ -105,6 +107,50 @@ class BusinessCreateObserverTests(unittest.TestCase):
                 "Test Business",
             )
         )
+
+
+class BusinessInventoryProbeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_snapshot_uses_lightweight_sidebar_probe(self):
+        class _Links:
+            async def evaluate_all(self, script):
+                return []
+
+        class _Keyboard:
+            async def press(self, key):
+                return None
+
+        class _Page:
+            def __init__(self):
+                self.script = ""
+                self.keyboard = _Keyboard()
+
+            async def evaluate(self, script):
+                self.script = script
+                return {"clicked": False, "candidates": []}
+
+            async def wait_for_timeout(self, ms):
+                return None
+
+            def locator(self, selector):
+                return _Links()
+
+            async def content(self):
+                return "<html><body>Meta Business Suite</body></html>"
+
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-inventory-probe")
+        )
+        browser.page = _Page()
+        browser._goto = AsyncMock(
+            return_value="https://business.facebook.com/latest/home"
+        )
+
+        result = await browser.snapshot_businesses()
+
+        self.assertEqual(result, {})
+        self.assertIn("elementsFromPoint", browser.page.script)
+        self.assertNotIn("querySelectorAll('*')", browser.page.script)
+        self.assertNotIn('querySelectorAll("*")', browser.page.script)
 
 
 if __name__ == "__main__":
