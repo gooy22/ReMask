@@ -100,15 +100,30 @@ def _request_graphql_meta(request: Any) -> dict[str, Any]:
             raw = str(getattr(request, "post_data", "") or "")
     except (UnicodeDecodeError, UnicodeError):
         body_decodable = False
-        raw = ""
+        try:
+            raw = str(getattr(request, "post_data", "") or "")
+        except Exception:
+            raw = ""
     except Exception:
         body_decodable = False
-        raw = ""
+        try:
+            raw = str(getattr(request, "post_data", "") or "")
+        except Exception:
+            raw = ""
 
     parsed = parse_qs(raw, keep_blank_values=True) if raw else {}
     friendly = _clean(
         (parsed.get("fb_api_req_friendly_name") or [""])[0]
     )
+    if not friendly:
+        try:
+            headers = getattr(request, "headers", {}) or {}
+            friendly = _clean(
+                headers.get("x-fb-friendly-name")
+                or headers.get("X-FB-Friendly-Name")
+            )
+        except Exception:
+            friendly = ""
     doc_id = _clean((parsed.get("doc_id") or [""])[0])
 
     variables: dict[str, Any] = {}
