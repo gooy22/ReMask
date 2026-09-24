@@ -723,6 +723,7 @@ class BrowserCreateFormNavigationTests(unittest.IsolatedAsyncioTestCase):
         )
         browser.page = SimpleNamespace(url=browser.HOME_URL)
         browser._open_create_entry = AsyncMock(return_value=True)
+        browser._form_ready = AsyncMock(return_value=True)
         browser._fill_first = AsyncMock(return_value=True)
 
         await browser._prepare_create_form(
