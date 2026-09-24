@@ -265,6 +265,72 @@ class ProvisioningStateStore:
             con.commit()
             return current
 
+    async def remember_entity(
+        self,
+        profile_id: str,
+        scope_key: str,
+        step: ProvisioningStep,
+        result: dict[str, Any],
+    ) -> None:
+        """
+        Persist a confirmed remote entity before a multi-phase step finishes.
+
+        BUSINESS uses this immediately after Meta confirms business_id so a
+        later Job with the same stable scope can resume Page attach instead of
+        creating a duplicate Business Portfolio.
+        """
+        entity_key = ENTITY_RESULT_KEYS.get(step)
+        entity_value = (
+            str(result.get(entity_key) or "").strip()
+            if entity_key and isinstance(result, dict)
+            else ""
+        )
+        if not entity_key or not entity_value:
+            return
+
+        await asyncio.to_thread(
+            self._remember_entity_sync,
+            profile_id,
+            scope_key,
+            entity_key,
+            entity_value,
+        )
+
+    def _remember_entity_sync(
+        self,
+        profile_id: str,
+        scope_key: str,
+        entity_key: str,
+        entity_value: str,
+    ) -> None:
+        column = {
+            "business_id": "business_id",
+            "ad_account_id": "ad_account_id",
+            "funding_source_id": "funding_source_id",
+        }.get(entity_key)
+        if not column:
+            return
+
+        now = _now()
+        with self._connect() as con:
+            con.execute("BEGIN IMMEDIATE")
+            con.execute(
+                """
+                INSERT INTO provisioning_entities(
+                    profile_id,scope_key,business_id,ad_account_id,funding_source_id,
+                    created_at,updated_at
+                ) VALUES(?,?,?,?,?,?,?)
+                ON CONFLICT(profile_id,scope_key) DO NOTHING
+                """,
+                (profile_id, scope_key, None, None, None, now, now),
+            )
+            con.execute(
+                f"UPDATE provisioning_entities SET {column}=?,updated_at=? "
+                "WHERE profile_id=? AND scope_key=?",
+                (entity_value, now, profile_id, scope_key),
+            )
+            con.commit()
+
     async def complete(
         self,
         item_id: str,
