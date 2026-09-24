@@ -758,6 +758,46 @@ class BrowserAdAccountAddProbeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rows[1]["y"], 97)
 
 
+class BrowserAdAccountSubmitTransitionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_submit_transition_waits_for_signature_change(self):
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-rk-submit-transition")
+        )
+        browser.page = SimpleNamespace(
+            wait_for_timeout=AsyncMock(return_value=None),
+        )
+        browser._ad_account_ui_state = AsyncMock(
+            side_effect=[
+                {
+                    "state": "FORM",
+                    "signature": "same-form",
+                    "url": "",
+                    "errors": [],
+                    "dialogs": [],
+                    "controls": [],
+                },
+                {
+                    "state": "FORM",
+                    "signature": "next-form",
+                    "url": "",
+                    "errors": [],
+                    "dialogs": [],
+                    "controls": [],
+                },
+            ]
+        )
+
+        state = await browser._wait_for_ad_account_ui_transition(
+            previous_signature="same-form",
+            timeout_seconds=2.0,
+            label="after_next",
+            require_signature_change=True,
+        )
+
+        self.assertEqual(state["signature"], "next-form")
+        self.assertEqual(browser._ad_account_ui_state.await_count, 2)
+
+
 class BrowserAdAccountStateMachineTests(unittest.IsolatedAsyncioTestCase):
     async def test_ui_state_can_recognize_direct_form_open(self):
         browser = FacebookBusinessBrowser(

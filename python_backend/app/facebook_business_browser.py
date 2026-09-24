@@ -4198,7 +4198,17 @@ class FacebookBusinessBrowser:
                         }
 
                         const cr = clickable.getBoundingClientRect();
+                        const role = clickable.getAttribute('role') || '';
+                        const tabindex = clickable.getAttribute('tabindex');
+                        const interactive = (
+                            clickable.tagName === 'BUTTON'
+                            || clickable.tagName === 'A'
+                            || ['button','radio','option','menuitem','menuitemradio']
+                                .includes(role)
+                            || (tabindex !== null && tabindex !== '-1')
+                        );
                         let score = Math.round(cr.y);
+                        if (!interactive) score += 500;
                         if (clickable !== el) score -= 80;
                         if (clickable.tagName === 'BUTTON') score -= 80;
                         if ((clickable.getAttribute('role') || '') === 'button') {
@@ -4619,6 +4629,7 @@ class FacebookBusinessBrowser:
         previous_signature: str = "",
         timeout_seconds: float = 4.0,
         label: str = "transition",
+        require_signature_change: bool = False,
     ) -> dict[str, Any]:
         deadline = time.monotonic() + max(0.5, float(timeout_seconds))
         last: dict[str, Any] = {"state": "UNKNOWN", "signature": ""}
@@ -4626,14 +4637,16 @@ class FacebookBusinessBrowser:
             last = await self._ad_account_ui_state()
             current_signature = _clean(last.get("signature"))
             current_state = _clean(last.get("state")).upper()
-            if (
-                current_state in {"FORM", "CREATE_ENTRY", "BLOCKED"}
-                or (
-                    previous_signature
-                    and current_signature
-                    and current_signature != previous_signature
-                )
-            ):
+            signature_changed = bool(
+                previous_signature
+                and current_signature
+                and current_signature != previous_signature
+            )
+            terminal_state = current_state == "BLOCKED" or (
+                not require_signature_change
+                and current_state in {"FORM", "CREATE_ENTRY"}
+            )
+            if terminal_state or signature_changed:
                 self._record_ad_account_ui_state(label, last)
                 return last
             await self.page.wait_for_timeout(200)
@@ -6110,6 +6123,7 @@ class FacebookBusinessBrowser:
                         previous_signature=before_signature,
                         timeout_seconds=3.5,
                         label=f"submit_step_{step}_after_next",
+                        require_signature_change=True,
                     )
                     submit_attempts.append(
                         {
@@ -6194,6 +6208,7 @@ class FacebookBusinessBrowser:
                         previous_signature=before_signature,
                         timeout_seconds=2.5,
                         label=f"submit_step_{step}_after_final",
+                        require_signature_change=True,
                     )
                     submit_attempts.append(
                         {
