@@ -860,7 +860,7 @@ class FacebookBusinessBrowser:
             raise BrowserBusinessError(
                 "FACEBOOK_TEMPORARILY_BLOCKED",
                 "Facebook temporarily blocked this profile action.",
-                retryable=True,
+                retryable=False,
                 diagnostic={"url": url},
             )
 
