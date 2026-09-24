@@ -221,6 +221,95 @@ class BrowserPortfolioSelectorProbeTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('querySelectorAll("*")', browser.page.script)
 
 
+class BrowserKnownAssetSelectorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_asset_id_prefers_known_page_selector(self):
+        class _Candidate:
+            def __init__(self):
+                self.clicked = False
+
+            async def is_visible(self):
+                return True
+
+            async def get_attribute(self, name):
+                if name == "role":
+                    return "button"
+                return ""
+
+            async def evaluate(self, script):
+                return "DIV"
+
+            async def bounding_box(self):
+                return {
+                    "x": 20,
+                    "y": 110,
+                    "width": 220,
+                    "height": 48,
+                }
+
+            async def click(self, timeout=None):
+                self.clicked = True
+
+        class _Locator:
+            def __init__(self, items=None):
+                self.items = list(items or [])
+
+            async def count(self):
+                return len(self.items)
+
+            def nth(self, index):
+                return self.items[index]
+
+        class _Keyboard:
+            async def press(self, key):
+                return None
+
+        class _Page:
+            def __init__(self, candidate):
+                self.url = (
+                    "https://business.facebook.com/latest/home"
+                    "?nav_ref=bm_home_redirect&asset_id=1301710056363524"
+                )
+                self.candidate = candidate
+                self.keyboard = _Keyboard()
+
+            def get_by_role(self, role, name=None):
+                if role == "button":
+                    return _Locator([self.candidate])
+                return _Locator()
+
+            def get_by_text(self, *args, **kwargs):
+                return _Locator()
+
+            async def wait_for_timeout(self, ms):
+                return None
+
+        candidate = _Candidate()
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(
+                profile_id="4",
+                pages=[
+                    {
+                        "id": "1301710056363524",
+                        "name": "Lucky Joker",
+                    }
+                ],
+            )
+        )
+        browser.page = _Page(candidate)
+        browser._wait_for_create_surface = AsyncMock(return_value=True)
+
+        opened = await browser._try_open_known_asset_selector()
+
+        self.assertTrue(opened)
+        self.assertTrue(candidate.clicked)
+        self.assertEqual(
+            browser._last_selector_diagnostic[
+                "known_asset_selector"
+            ]["current_asset_id"],
+            "1301710056363524",
+        )
+
+
 class BrowserCreateEntryRoutingTests(unittest.IsolatedAsyncioTestCase):
     async def test_create_flow_skips_crash_prone_overview_surface(self):
         browser = FacebookBusinessBrowser(

@@ -1073,11 +1073,213 @@ class FacebookBusinessBrowser:
             await self.page.wait_for_timeout(interval_ms)
         return await self._form_ready()
 
+    async def _try_open_known_asset_selector(self) -> bool:
+        """
+        Open Meta's top-left account/business selector by anchoring on a Page
+        that ReMask already knows belongs to this FB profile.
+
+        This specifically handles Business Suite sessions that are pinned to a
+        Page via ?asset_id=... and therefore redirect /reg/ back to Home.
+        """
+        if self.page is None:
+            return False
+
+        raw_pages = getattr(self.context, "pages", None) or []
+        known_pages: list[tuple[str, str]] = []
+        for row in raw_pages:
+            if not isinstance(row, dict):
+                continue
+            page_id = _digits(row.get("id"))
+            page_name = _clean(row.get("name") or row.get("title"))
+            if page_id and page_name:
+                known_pages.append((page_id, page_name))
+
+        if not known_pages:
+            return False
+
+        current_asset = ""
+        try:
+            query = parse_qs(urlsplit(_clean(self.page.url)).query)
+            current_asset = _digits(
+                (query.get("asset_id") or query.get("assetId") or [""])[0]
+            )
+        except Exception:
+            current_asset = ""
+
+        # This targeted path is deliberately limited to the live failure
+        # mode we observed: Meta redirected Business Suite into a known Page
+        # context via ?asset_id=<PageID>. Other profiles keep the generic,
+        # already-canary-tested selector path below.
+        if not current_asset:
+            return False
+
+        pinned_pages = [
+            row for row in known_pages
+            if row[0] == current_asset
+        ]
+        if not pinned_pages:
+            self._last_selector_diagnostic = {
+                **self._last_selector_diagnostic,
+                "known_asset_selector": {
+                    "current_asset_id": current_asset,
+                    "matched_known_page": False,
+                    "known_pages": [
+                        {"id": page_id, "name": page_name}
+                        for page_id, page_name in known_pages[:12]
+                    ],
+                },
+            }
+            return False
+
+        known_pages = pinned_pages
+
+        diagnostic_rows: list[dict[str, Any]] = []
+
+        async def try_click_candidate(candidate: Any, *, label: str) -> bool:
+            try:
+                if not await candidate.is_visible():
+                    return False
+
+                target = candidate
+                try:
+                    role = _clean(await candidate.get_attribute("role")).lower()
+                    tag = _clean(
+                        await candidate.evaluate("(e) => e.tagName || ''")
+                    ).upper()
+                    has_popup = _clean(
+                        await candidate.get_attribute("aria-haspopup")
+                    )
+                    if (
+                        role not in {"button", "menuitem", "link"}
+                        and tag not in {"BUTTON", "A"}
+                        and not has_popup
+                    ):
+                        ancestor = candidate.locator(
+                            'xpath=ancestor-or-self::*['
+                            '@role="button" or @role="menuitem" or '
+                            '@aria-haspopup or self::button or self::a'
+                            '][1]'
+                        )
+                        if await ancestor.count():
+                            target = ancestor.first
+                except Exception:
+                    target = candidate
+
+                box = await target.bounding_box()
+                if not box:
+                    return False
+
+                x = float(box.get("x") or 0)
+                y = float(box.get("y") or 0)
+                w = float(box.get("width") or 0)
+                h = float(box.get("height") or 0)
+
+                diagnostic_rows.append(
+                    {
+                        "label": label[:180],
+                        "x": round(x),
+                        "y": round(y),
+                        "w": round(w),
+                        "h": round(h),
+                    }
+                )
+
+                # Keep the click constrained to the Business Suite top-left
+                # selector zone so a same-named Page in the main content is
+                # never treated as the account selector.
+                if x > 330 or y > 340 or w <= 0 or h <= 0:
+                    return False
+
+                await target.click(timeout=3000)
+                if await self._wait_for_create_surface(
+                    timeout_ms=6500,
+                    interval_ms=250,
+                ):
+                    self._last_selector_diagnostic = {
+                        "known_asset_selector": {
+                            "current_asset_id": current_asset,
+                            "matched_label": label,
+                            "candidates": diagnostic_rows[-12:],
+                        }
+                    }
+                    return True
+
+                try:
+                    await self.page.keyboard.press("Escape")
+                    await self.page.wait_for_timeout(120)
+                except Exception:
+                    pass
+            except Exception as exc:
+                diagnostic_rows.append(
+                    {
+                        "label": label[:180],
+                        "error": f"{exc.__class__.__name__}: {exc}"[:500],
+                    }
+                )
+            return False
+
+        for page_id, page_name in known_pages:
+            # Role-based search first: most Meta selector variants expose the
+            # current Page as an accessible button/menu item.
+            name_pattern = re.compile(
+                re.escape(page_name),
+                re.IGNORECASE,
+            )
+            for role in ("button", "menuitem", "link"):
+                try:
+                    locator = self.page.get_by_role(role, name=name_pattern)
+                    count = min(await locator.count(), 8)
+                except Exception:
+                    count = 0
+
+                for index in range(count):
+                    if await try_click_candidate(
+                        locator.nth(index),
+                        label=f"{page_name} [{page_id}]/{role}",
+                    ):
+                        return True
+
+            # Some A/B variants render the Page name in a nested DIV/span and
+            # put the click handler on an ancestor.
+            try:
+                text_nodes = self.page.get_by_text(
+                    name_pattern,
+                    exact=False,
+                )
+                count = min(await text_nodes.count(), 12)
+            except Exception:
+                count = 0
+
+            for index in range(count):
+                if await try_click_candidate(
+                    text_nodes.nth(index),
+                    label=f"{page_name} [{page_id}]/text",
+                ):
+                    return True
+
+        self._last_selector_diagnostic = {
+            "known_asset_selector": {
+                "current_asset_id": current_asset,
+                "known_pages": [
+                    {"id": page_id, "name": page_name}
+                    for page_id, page_name in known_pages[:12]
+                ],
+                "candidates": diagnostic_rows[-20:],
+            }
+        }
+        return False
+
     async def _try_open_top_left_portfolio_menu(self) -> bool:
         if self.page is None:
             return False
 
         if await self._has_create_surface():
+            return True
+
+        # Meta can pin Business Suite to a Page via ?asset_id=... and then
+        # redirect direct /reg/ navigation back to Home. In that state, use
+        # the Page already known in ProfileContext as the selector anchor.
+        if await self._try_open_known_asset_selector():
             return True
 
         # Meta serves at least two Business Suite sidebar variants.
@@ -1236,6 +1438,7 @@ class FacebookBusinessBrowser:
                 # clickable this is the only useful evidence of what Meta
                 # actually rendered between the logo and Home.
                 self._last_selector_diagnostic = {
+                    **self._last_selector_diagnostic,
                     "sidebar_probe": probe,
                 }
 
@@ -1247,14 +1450,16 @@ class FacebookBusinessBrowser:
                         "portfolio_sidebar_selector_open_without_create"
                     )
                     self._last_selector_diagnostic = {
+                        **self._last_selector_diagnostic,
                         "sidebar_probe": probe,
-                        **diagnostic,
+                        "sidebar_open_diagnostic": diagnostic,
                     }
                     await self.page.keyboard.press("Escape")
                     await self.page.wait_for_timeout(120)
         except Exception as exc:
             self._last_selector_diagnostic = {
-                "sidebar_probe_error": f"{exc.__class__.__name__}: {exc}"
+                **self._last_selector_diagnostic,
+                "sidebar_probe_error": f"{exc.__class__.__name__}: {exc}",
             }
             try:
                 await self.page.keyboard.press("Escape")
@@ -2193,6 +2398,29 @@ class FacebookBusinessBrowser:
             already_on_home=already_on_home,
         ):
             diag = await self._diagnostic("create_form_unavailable")
+            if self._last_selector_diagnostic:
+                diag = {
+                    "selector_attempt": self._last_selector_diagnostic,
+                    **diag,
+                }
+
+            current_url = _clean(self.page.url if self.page else "")
+            try:
+                current_query = parse_qs(urlsplit(current_url).query)
+            except Exception:
+                current_query = {}
+
+            redirected_asset_id = _digits(
+                (
+                    current_query.get("asset_id")
+                    or current_query.get("assetId")
+                    or [""]
+                )[0]
+            )
+            if redirected_asset_id:
+                diag["asset_context_redirect"] = True
+                diag["redirected_asset_id"] = redirected_asset_id
+
             raise BrowserBusinessError(
                 "BUSINESS_CREATE_UI_UNAVAILABLE",
                 "Meta Business portfolio creation form could not be opened.",
