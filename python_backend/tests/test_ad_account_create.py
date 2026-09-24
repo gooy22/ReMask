@@ -6,6 +6,9 @@ from app.facebook_ad_account_create import (
     _extract_ad_account_id,
     _normalize_ad_account_id,
 )
+from app.provisioning.ad_account_handler import (
+    _known_pre_submit_navigation_failure,
+)
 
 
 class AdAccountCreateResponseTests(unittest.TestCase):
@@ -60,6 +63,32 @@ class AdAccountCreateResponseTests(unittest.TestCase):
         )
         self.assertEqual(account_id, "")
         self.assertEqual(path, "")
+
+    def test_page_goto_timeout_is_known_pre_submit_failure(self) -> None:
+        self.assertTrue(
+            _known_pre_submit_navigation_failure(
+                {
+                    "last_error": (
+                        "Facebook browser GraphQL transport failure: "
+                        "TimeoutError: Page.goto: Timeout 15000ms exceeded. "
+                        "Call log: navigating to "
+                        "https://business.facebook.com/latest/home"
+                    )
+                }
+            )
+        )
+
+    def test_post_submit_timeout_is_not_migrated(self) -> None:
+        self.assertFalse(
+            _known_pre_submit_navigation_failure(
+                {
+                    "last_error": (
+                        "Facebook browser GraphQL transport failure: "
+                        "TimeoutError during page.evaluate"
+                    )
+                }
+            )
+        )
 
 
 if __name__ == "__main__":

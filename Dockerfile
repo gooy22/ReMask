@@ -187,6 +187,9 @@ RUN set -eux; \
     grep -q 'profile_provisioning_state' /opt/remask-python/main.py; \
     grep -q "action === 'profile_state'" /var/www/html/ajax/pythonWorkerJobs.php; \
     grep -q 'CREATE_AD_ACCOUNT_RESULT_UNKNOWN' /opt/remask-python/app/facebook_ad_account_create.py; \
+    grep -q 'CREATE_AD_ACCOUNT_PRE_SUBMIT_TRANSPORT' /opt/remask-python/app/facebook_ad_account_create.py; \
+    grep -q 'request_may_have_been_sent' /opt/remask-python/fb_worker.py; \
+    grep -q 'PRE_SUBMIT_NAVIGATION_TIMEOUT_RECOVERED' /opt/remask-python/app/provisioning/ad_account_handler.py; \
     grep -q 'list_ad_accounts_for_business' /opt/remask-python/app/facebook_graph_api.py; \
     grep -q 'pythonWorkerOpenOwnBmModal' /var/www/html/scripts/workspace.js; \
     grep -q 'REMASK_PYTHON_WORKER_URL' /var/www/html/ajax/pythonWorkerJobs.php; \

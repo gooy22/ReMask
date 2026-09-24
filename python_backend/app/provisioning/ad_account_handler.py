@@ -28,6 +28,23 @@ def _checkpoint_result(step_state: Any) -> dict[str, Any]:
     return dict(result) if isinstance(result, dict) else {}
 
 
+def _known_pre_submit_navigation_failure(result: Any) -> bool:
+    if not isinstance(result, dict):
+        return False
+    message = _clean(
+        result.get("last_error")
+        or result.get("error")
+        or result.get("message")
+    )
+    lowered = message.lower()
+    return (
+        "page.goto" in lowered
+        and "timeout" in lowered
+        and "navigating to" in lowered
+        and "business.facebook.com/latest/home" in lowered
+    )
+
+
 async def _reconcile_existing(
     session: Any,
     *,
@@ -284,12 +301,15 @@ async def ad_account_handler(
         prior_phase = _clean(
             prior.get("phase") or prior.get("resume_from")
         ).upper()
-        if prior_phase in {
-            "CREATE_SUBMIT_INTENT",
-            "CREATE_SUBMITTED",
-            "CREATE_RESULT_UNKNOWN",
-            "RECONCILE_CREATE",
-        }:
+        if (
+            prior_phase in {
+                "CREATE_SUBMIT_INTENT",
+                "CREATE_SUBMITTED",
+                "CREATE_RESULT_UNKNOWN",
+                "RECONCILE_CREATE",
+            }
+            and not _known_pre_submit_navigation_failure(prior)
+        ):
             found_id, diagnostics = await _reconcile_existing(
                 session,
                 business_id=business_id,
@@ -327,6 +347,30 @@ async def ad_account_handler(
     phase = _clean(
         checkpoint.get("phase") or checkpoint.get("resume_from")
     ).upper()
+
+    if (
+        phase in {
+            "CREATE_SUBMIT_INTENT",
+            "CREATE_SUBMITTED",
+            "CREATE_RESULT_UNKNOWN",
+            "RECONCILE_CREATE",
+        }
+        and _known_pre_submit_navigation_failure(checkpoint)
+    ):
+        checkpoint = await provisioning_state.checkpoint(
+            item_id,
+            profile_id,
+            scope_key,
+            ProvisioningStep.AD_ACCOUNT,
+            {
+                "phase": "CREATE_NOT_SUBMITTED",
+                "resume_from": "CREATE",
+                "business_id": business_id,
+                "last_error_code": "PRE_SUBMIT_NAVIGATION_TIMEOUT_RECOVERED",
+                "last_error": "",
+            },
+        )
+        phase = "CREATE_NOT_SUBMITTED"
 
     if phase in {
         "CREATE_SUBMIT_INTENT",
@@ -441,7 +485,10 @@ async def ad_account_handler(
             timezone_id=timezone_id,
         )
     except AdAccountMutationError as exc:
-        if exc.code == "CREATE_AD_ACCOUNT_MUTATION_NOT_DISCOVERED":
+        if exc.code in {
+            "CREATE_AD_ACCOUNT_MUTATION_NOT_DISCOVERED",
+            "CREATE_AD_ACCOUNT_PRE_SUBMIT_TRANSPORT",
+        }:
             await provisioning_state.checkpoint(
                 item_id,
                 profile_id,

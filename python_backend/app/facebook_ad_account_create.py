@@ -403,6 +403,21 @@ async def create_ad_account_with_docids(
                     candidate=candidate,
                 ) from exc
 
+            if getattr(exc, "request_may_have_been_sent", None) is False:
+                stage = _clean(getattr(exc, "transport_stage", ""))
+                raise AdAccountMutationError(
+                    "CREATE_AD_ACCOUNT_PRE_SUBMIT_TRANSPORT",
+                    (
+                        "CREATE_AD_ACCOUNT was not submitted to Meta; "
+                        "browser transport failed before GraphQL POST"
+                        + (f" at stage={stage}. " if stage else ". ")
+                        + diagnostic
+                    ),
+                    retryable=True,
+                    payload=payload,
+                    candidate=candidate,
+                ) from exc
+
             raise AdAccountMutationError(
                 "CREATE_AD_ACCOUNT_RESULT_UNKNOWN",
                 (

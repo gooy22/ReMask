@@ -39,10 +39,14 @@ class RemoteRequestError(AutomationError):
         *,
         http_status: int | None = None,
         meta_payload: dict[str, Any] | None = None,
+        request_may_have_been_sent: bool | None = None,
+        transport_stage: str = "",
     ) -> None:
         super().__init__(message)
         self.http_status = http_status
         self.meta_payload = meta_payload or {}
+        self.request_may_have_been_sent = request_may_have_been_sent
+        self.transport_stage = str(transport_stage or "").strip()
 
 
 # ---------------------------------------------------------------------------
@@ -1245,6 +1249,8 @@ class FacebookWebSession:
 
         browser = None
         context = None
+        request_may_have_been_sent = False
+        transport_stage = "browser_launch"
         try:
             async with async_playwright() as playwright:
                 executable_path = str(
@@ -1290,13 +1296,30 @@ class FacebookWebSession:
                     await context.add_cookies(cookies)
 
                 page = await context.new_page()
+                transport_stage = "navigate_business_home"
+                navigation_timeout_ms = max(
+                    30_000,
+                    self.timeout_seconds * 1000,
+                )
                 await page.goto(
                     self.ADS_MANAGER_URL,
-                    wait_until="domcontentloaded",
-                    timeout=self.timeout_seconds * 1000,
+                    wait_until="commit",
+                    timeout=navigation_timeout_ms,
                 )
-                await page.wait_for_timeout(1200)
 
+                # The GraphQL POST only needs a committed business.facebook.com
+                # execution context. A slow Meta shell/proxy must not make a
+                # pre-submit page load look like an ambiguous CREATE.
+                try:
+                    await page.wait_for_load_state(
+                        "domcontentloaded",
+                        timeout=min(15_000, navigation_timeout_ms),
+                    )
+                except Exception:
+                    pass
+                await page.wait_for_timeout(800)
+
+                transport_stage = "prepare_graphql_context"
                 current_url = str(page.url or "")
                 lower_url = current_url.lower()
                 if "/login" in lower_url or "/checkpoint" in lower_url:
@@ -1422,6 +1445,8 @@ class FacebookWebSession:
                 if friendly_name:
                     form["fb_api_req_friendly_name"] = friendly_name
 
+                transport_stage = "graphql_submit"
+                request_may_have_been_sent = True
                 result = await page.evaluate(
                     """async ({endpoint, form, friendlyName, lsd}) => {
                         const body = new URLSearchParams();
@@ -1499,7 +1524,9 @@ class FacebookWebSession:
         except Exception as exc:
             raise RemoteRequestError(
                 "Facebook browser GraphQL transport failure: "
-                f"{exc.__class__.__name__}: {exc}"
+                f"{exc.__class__.__name__}: {exc}",
+                request_may_have_been_sent=request_may_have_been_sent,
+                transport_stage=transport_stage,
             ) from exc
         finally:
             if context is not None:
