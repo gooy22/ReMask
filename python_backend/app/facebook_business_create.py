@@ -939,6 +939,11 @@ async def create_business_with_docids(
         f"envelope={','.join(envelope_keys) if envelope_keys else '-'}"
     )
 
+    confirmed_cache = list_candidates(
+        CREATE_BM_OPERATION,
+        confirmed_only=True,
+    )
+
     dynamic_candidate: (
         DocIdCandidate
         | None
@@ -950,7 +955,7 @@ async def create_business_with_docids(
                 discover_current_scope_selector_create_candidate(
                     session
                 ),
-                timeout=20.0,
+                timeout=(4.0 if confirmed_cache else 20.0),
             )
         )
     except Exception:
@@ -989,11 +994,6 @@ async def create_business_with_docids(
                 enabled=True,
             )
         )
-
-    confirmed_cache = list_candidates(
-        CREATE_BM_OPERATION,
-        confirmed_only=True,
-    )
 
     ordered.extend(
         confirmed_cache
@@ -1163,8 +1163,9 @@ async def create_business_with_docids(
                 if isinstance(stored_candidate, DocIdCandidate):
                     persisted_candidate = stored_candidate
 
-            elif candidate.source.startswith(
-                "dynamic_"
+            elif (
+                candidate.source.startswith("dynamic_")
+                or candidate.source.startswith("live_capture_")
             ):
                 stored_candidate = upsert_candidate(
                     CREATE_BM_OPERATION,
@@ -1181,7 +1182,9 @@ async def create_business_with_docids(
                         candidate.variables_mode
                     ),
                     source=(
-                        "dynamic_success"
+                        "live_capture_success"
+                        if candidate.source.startswith("live_capture_")
+                        else "dynamic_success"
                     ),
                     priority=9_700,
                     observed_at=str(
