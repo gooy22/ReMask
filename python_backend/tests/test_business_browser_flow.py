@@ -516,7 +516,8 @@ class BrowserAdAccountAddProbeTests(unittest.IsolatedAsyncioTestCase):
             async def is_enabled(self):
                 return True
 
-            async def scroll_into_view_if_needed(self):
+            async def scroll_into_view_if_needed(self, **kwargs):
+                self.scroll_kwargs = kwargs
                 return None
 
             async def click(self):
