@@ -522,6 +522,7 @@ class FacebookBusinessBrowser:
         self._profile_lock: asyncio.Lock | None = None
         self._profile_lock_acquired = False
         self._last_selector_diagnostic: dict[str, Any] = {}
+        self._browser_events: list[dict[str, Any]] = []
 
     async def __aenter__(self) -> "FacebookBusinessBrowser":
         await self.open()
@@ -567,7 +568,6 @@ class FacebookBusinessBrowser:
                 "args": [
                     "--no-sandbox",
                     "--disable-dev-shm-usage",
-                    "--disable-background-networking",
                     "--disable-gpu",
                     "--disable-software-rasterizer",
                     "--disable-extensions",
@@ -589,7 +589,7 @@ class FacebookBusinessBrowser:
                 user_agent=_clean(getattr(self.context, "user_agent", "")),
                 locale="en-US",
                 viewport={"width": 1280, "height": 800},
-                service_workers="block",
+                service_workers="allow",
                 reduced_motion="reduce",
             )
 
@@ -653,6 +653,49 @@ class FacebookBusinessBrowser:
             await self._browser_context.add_cookies(cookies)
             self.page = await self._browser_context.new_page()
             self.page.set_default_timeout(self.timeout_ms)
+
+            def record_browser_event(kind: str, *, url: str = "", detail: str = "") -> None:
+                clean_url = ""
+                if url:
+                    try:
+                        parsed = urlsplit(url)
+                        clean_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"[:500]
+                    except Exception:
+                        clean_url = _clean(url).split("?", 1)[0][:500]
+                self._browser_events.append(
+                    {
+                        "kind": _clean(kind)[:80],
+                        "url": clean_url,
+                        "detail": _clean(detail)[:500],
+                    }
+                )
+                if len(self._browser_events) > 40:
+                    del self._browser_events[:-40]
+
+            def on_request_failed(request: Any) -> None:
+                try:
+                    resource_type = _clean(getattr(request, "resource_type", ""))
+                    if resource_type in {"image", "media", "font"}:
+                        return
+                    record_browser_event(
+                        "request_failed",
+                        url=_clean(getattr(request, "url", "")),
+                        detail=f"{resource_type}: {_clean(getattr(request, 'failure', ''))}",
+                    )
+                except Exception:
+                    pass
+
+            def on_page_error(error: Any) -> None:
+                try:
+                    record_browser_event(
+                        "page_error",
+                        detail=f"{error.__class__.__name__}: {error}",
+                    )
+                except Exception:
+                    pass
+
+            self.page.on("requestfailed", on_request_failed)
+            self.page.on("pageerror", on_page_error)
 
         except BrowserBusinessError:
             await self.close()
@@ -809,7 +852,7 @@ class FacebookBusinessBrowser:
         if self.page is None:
             return ""
         try:
-            return str(await self.page.locator("body").inner_text(timeout=5000) or "")
+            return str(await self.page.locator("body").inner_text(timeout=1500) or "")
         except Exception:
             return ""
 
@@ -899,6 +942,30 @@ class FacebookBusinessBrowser:
                 result["viewport"] = viewport
         except Exception:
             pass
+
+        try:
+            dom_state = await asyncio.wait_for(
+                self.page.evaluate(
+                    """() => ({
+                        readyState: document.readyState,
+                        bodyChildren: document.body ? document.body.children.length : -1,
+                        bodyTextLength: document.body ? (document.body.innerText || '').length : -1,
+                        scripts: document.scripts ? document.scripts.length : -1,
+                        inputs: document.querySelectorAll('input').length,
+                        interactive: document.querySelectorAll(
+                            'button, [role="button"], [role="menuitem"], [aria-haspopup], a[href]'
+                        ).length
+                    })"""
+                ),
+                timeout=1.5,
+            )
+            if isinstance(dom_state, dict):
+                result["dom_state"] = dom_state
+        except Exception:
+            pass
+
+        if self._browser_events:
+            result["browser_events"] = self._browser_events[-20:]
 
         try:
             body = " ".join((await self._body_text()).split())
@@ -1047,6 +1114,42 @@ class FacebookBusinessBrowser:
             pass
 
         return result
+
+    async def _quick_surface_state(self) -> dict[str, Any]:
+        if self.page is None:
+            return {"blank": True}
+
+        try:
+            state = await asyncio.wait_for(
+                self.page.evaluate(
+                    """() => {
+                        const bodyText = document.body ? (document.body.innerText || '') : '';
+                        const interactive = document.querySelectorAll(
+                            'button, [role="button"], [role="menuitem"], [aria-haspopup], a[href], input'
+                        ).length;
+                        return {
+                            ready_state: document.readyState,
+                            body_text_length: bodyText.trim().length,
+                            interactive_count: interactive,
+                            body_children: document.body ? document.body.children.length : 0,
+                            scripts: document.scripts ? document.scripts.length : 0
+                        };
+                    }"""
+                ),
+                timeout=1.5,
+            )
+        except Exception:
+            return {"blank": False, "probe_failed": True}
+
+        if not isinstance(state, dict):
+            return {"blank": False, "probe_failed": True}
+
+        body_len = int(state.get("body_text_length") or 0)
+        interactive = int(state.get("interactive_count") or 0)
+        children = int(state.get("body_children") or 0)
+        state["blank"] = bool(body_len < 20 and interactive == 0 and children <= 3)
+        return state
+
 
     async def _has_create_surface(self) -> bool:
         if self.page is None:
@@ -1642,14 +1745,14 @@ class FacebookBusinessBrowser:
         try:
             final_url = await asyncio.wait_for(
                 self._goto(requested_url),
-                timeout=18.0,
+                timeout=10.0,
             )
         except asyncio.TimeoutError:
             self._last_selector_diagnostic = {
                 **self._last_selector_diagnostic,
                 "direct_create_route": {
                     "requested_url": requested_url,
-                    "timeout": 18,
+                    "timeout": 10,
                     "url": _clean(self.page.url if self.page else ""),
                 },
             }
@@ -1670,7 +1773,7 @@ class FacebookBusinessBrowser:
 
         await self._assert_authenticated()
 
-        if await self._form_ready():
+        if await self._wait_for_form_ready(timeout_ms=2500, interval_ms=200):
             self._last_selector_diagnostic = {
                 **self._last_selector_diagnostic,
                 "direct_create_route": {
@@ -1681,7 +1784,10 @@ class FacebookBusinessBrowser:
             }
             return True
 
-        create_surface = await self._has_create_surface()
+        create_surface = await self._wait_for_create_surface(
+            timeout_ms=2500,
+            interval_ms=200,
+        )
         if create_surface and await self._click_named(self.CREATE_NAMES):
             await self._assert_authenticated()
             if await self._wait_for_form_ready(
@@ -1722,6 +1828,103 @@ class FacebookBusinessBrowser:
         return False
 
 
+    async def _try_open_overview_create_entry(self) -> bool:
+        if self.page is None:
+            return False
+
+        requested_url = self.OVERVIEW_URL
+        try:
+            final_url = await asyncio.wait_for(
+                self._goto(requested_url),
+                timeout=10.0,
+            )
+        except asyncio.TimeoutError:
+            self._last_selector_diagnostic = {
+                **self._last_selector_diagnostic,
+                "overview_route": {
+                    "requested_url": requested_url,
+                    "timeout": 10,
+                    "url": _clean(self.page.url if self.page else ""),
+                },
+            }
+            return False
+        except BrowserBusinessError as exc:
+            if exc.code != "FACEBOOK_NAVIGATION_FAILED":
+                raise
+            self._last_selector_diagnostic = {
+                **self._last_selector_diagnostic,
+                "overview_route": {
+                    "requested_url": requested_url,
+                    "navigation_error": exc.code,
+                    "message": str(exc)[:500],
+                    "url": _clean(self.page.url if self.page else ""),
+                },
+            }
+            return False
+
+        await self._assert_authenticated()
+
+        if await self._wait_for_form_ready(timeout_ms=2200, interval_ms=200):
+            self._last_selector_diagnostic = {
+                **self._last_selector_diagnostic,
+                "overview_route": {
+                    "requested_url": requested_url,
+                    "final_url": _clean(final_url or self.page.url),
+                    "form_ready": True,
+                },
+            }
+            return True
+
+        if await self._wait_for_create_surface(timeout_ms=2200, interval_ms=200):
+            if await self._click_named(self.CREATE_NAMES):
+                await self._assert_authenticated()
+                if await self._wait_for_form_ready(timeout_ms=3500, interval_ms=200):
+                    self._last_selector_diagnostic = {
+                        **self._last_selector_diagnostic,
+                        "overview_route": {
+                            "requested_url": requested_url,
+                            "final_url": _clean(self.page.url),
+                            "create_clicked": True,
+                            "form_ready": True,
+                        },
+                    }
+                    return True
+
+        menu_open = False
+        try:
+            menu_open = await asyncio.wait_for(
+                self._try_open_top_left_portfolio_menu(),
+                timeout=4.0,
+            )
+        except asyncio.TimeoutError:
+            pass
+
+        if menu_open and await self._click_named(self.CREATE_NAMES):
+            await self._assert_authenticated()
+            if await self._wait_for_form_ready(timeout_ms=3500, interval_ms=200):
+                self._last_selector_diagnostic = {
+                    **self._last_selector_diagnostic,
+                    "overview_route": {
+                        "requested_url": requested_url,
+                        "final_url": _clean(self.page.url),
+                        "menu_open": True,
+                        "form_ready": True,
+                    },
+                }
+                return True
+
+        self._last_selector_diagnostic = {
+            **self._last_selector_diagnostic,
+            "overview_route": {
+                "requested_url": requested_url,
+                "final_url": _clean(final_url or self.page.url),
+                "form_ready": False,
+                "surface": await self._quick_surface_state(),
+            },
+        }
+        return False
+
+
     async def _try_open_ads_manager_create_entry(self) -> bool:
         """
         Bounded fallback for Meta's 2026 Ads Manager Business Portfolio
@@ -1736,13 +1939,13 @@ class FacebookBusinessBrowser:
         try:
             await asyncio.wait_for(
                 self._goto(self.ADS_MANAGER_URL),
-                timeout=28.0,
+                timeout=12.0,
             )
         except asyncio.TimeoutError:
             self._last_selector_diagnostic = {
                 **self._last_selector_diagnostic,
                 "ads_manager_probe": {
-                    "navigation_timeout": 28,
+                    "navigation_timeout": 12,
                     "url": _clean(self.page.url if self.page else ""),
                 },
             }
@@ -1964,25 +2167,29 @@ class FacebookBusinessBrowser:
         )
 
         if pinned_known_asset:
+            surface_state = await self._quick_surface_state()
             self._last_selector_diagnostic = {
                 **self._last_selector_diagnostic,
                 "asset_context_fast_path": {
                     "asset_id": current_asset,
                     "url": _clean(self.page.url),
+                    "surface": surface_state,
                 },
             }
+            skip_home_selectors = bool(surface_state.get("blank"))
 
             targeted_open = False
-            try:
-                targeted_open = await asyncio.wait_for(
-                    self._try_open_known_asset_selector(),
-                    timeout=6.0,
-                )
-            except asyncio.TimeoutError:
-                self._last_selector_diagnostic = {
-                    **self._last_selector_diagnostic,
-                    "asset_selector_timeout": 6,
-                }
+            if not skip_home_selectors:
+                try:
+                    targeted_open = await asyncio.wait_for(
+                        self._try_open_known_asset_selector(),
+                        timeout=4.0,
+                    )
+                except asyncio.TimeoutError:
+                    self._last_selector_diagnostic = {
+                        **self._last_selector_diagnostic,
+                        "asset_selector_timeout": 4,
+                    }
 
             if targeted_open:
                 if await self._click_named(self.CREATE_NAMES):
@@ -1994,18 +2201,19 @@ class FacebookBusinessBrowser:
                         return True
 
             generic_open = False
-            try:
-                generic_open = await asyncio.wait_for(
-                    self._try_open_top_left_portfolio_menu(
-                        skip_known_asset=True,
-                    ),
-                    timeout=7.0,
-                )
-            except asyncio.TimeoutError:
-                self._last_selector_diagnostic = {
-                    **self._last_selector_diagnostic,
-                    "asset_generic_selector_timeout": 7,
-                }
+            if not skip_home_selectors:
+                try:
+                    generic_open = await asyncio.wait_for(
+                        self._try_open_top_left_portfolio_menu(
+                            skip_known_asset=True,
+                        ),
+                        timeout=4.0,
+                    )
+                except asyncio.TimeoutError:
+                    self._last_selector_diagnostic = {
+                        **self._last_selector_diagnostic,
+                        "asset_generic_selector_timeout": 4,
+                    }
 
             if generic_open:
                 if await self._click_named(self.CREATE_NAMES):
@@ -2019,8 +2227,32 @@ class FacebookBusinessBrowser:
             # Current Meta also exposes a direct /create route. It is distinct
             # from the legacy /reg/ route that was observed redirecting this
             # Page-pinned profile back to Home.
-            direct_create_open = await self._try_open_direct_create_url()
+            direct_create_open = False
+            try:
+                direct_create_open = await asyncio.wait_for(
+                    self._try_open_direct_create_url(),
+                    timeout=12.0,
+                )
+            except asyncio.TimeoutError:
+                self._last_selector_diagnostic = {
+                    **self._last_selector_diagnostic,
+                    "direct_create_outer_timeout": 12,
+                }
             if direct_create_open:
+                return True
+
+            overview_open = False
+            try:
+                overview_open = await asyncio.wait_for(
+                    self._try_open_overview_create_entry(),
+                    timeout=14.0,
+                )
+            except asyncio.TimeoutError:
+                self._last_selector_diagnostic = {
+                    **self._last_selector_diagnostic,
+                    "overview_outer_timeout": 14,
+                }
+            if overview_open:
                 return True
 
             # Business Suite rendered no usable selector and the direct route
@@ -2030,12 +2262,12 @@ class FacebookBusinessBrowser:
             try:
                 ads_manager_open = await asyncio.wait_for(
                     self._try_open_ads_manager_create_entry(),
-                    timeout=24.0,
+                    timeout=18.0,
                 )
             except asyncio.TimeoutError:
                 self._last_selector_diagnostic = {
                     **self._last_selector_diagnostic,
-                    "ads_manager_fallback_timeout": 24,
+                    "ads_manager_fallback_timeout": 18,
                 }
 
             if ads_manager_open:
