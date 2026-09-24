@@ -486,6 +486,11 @@ class FacebookBusinessBrowser:
         "Unternehmensportfolio erstellen",
         "Business erstellen",
         "Portfolio erstellen",
+        "Créer un portefeuille business",
+        "Créer un portefeuille professionnel",
+        "Créer un portefeuille",
+        "Créer une entreprise",
+        "Créer un compte",
     )
 
     ADD_NAMES = (
@@ -1205,6 +1210,10 @@ class FacebookBusinessBrowser:
                 "geschäftliche e-mail-adresse",
                 "geschäftliche email-adresse",
                 "geschäftliche e-mail",
+                "adresse e-mail professionnelle",
+                "adresse e-mail de l’entreprise",
+                "adresse e-mail de l'entreprise",
+                "e-mail professionnel",
             )
         )
         has_name = any(
@@ -1220,6 +1229,10 @@ class FacebookBusinessBrowser:
                 "business-portfolio-name",
                 "name des business-portfolios",
                 "unternehmensname",
+                "nom du portefeuille business",
+                "nom du portefeuille professionnel",
+                "nom de l’entreprise",
+                "nom de l'entreprise",
             )
         )
         return has_email and has_name
@@ -1571,7 +1584,7 @@ class FacebookBusinessBrowser:
                                 if (r.width < 18 || r.width > 340) continue;
                                 if (r.height < 18 || r.height > 110) continue;
                                 if (/^Meta Business Suite$/i.test(text)) continue;
-                                if (/^(Home|Startseite|Start|Главная|Головна)$/i.test(text)) continue;
+                                if (/^(Home|Accueil|Startseite|Start|Главная|Головна)$/i.test(text)) continue;
                                 if (!text && !interactive) continue;
 
                                 rows.push({el, r, text, role, tabindex, haspopup, tag, interactive});
@@ -1584,7 +1597,7 @@ class FacebookBusinessBrowser:
                         let value = Math.round(row.r.y);
                         if (row.interactive) value -= 160;
                         if (row.haspopup) value -= 180;
-                        if (/business|portfolio|account|asset|switch|select|page|profile/.test(key)) value -= 140;
+                        if (/business|portfolio|account|asset|switch|select|page|profile|entreprise|portefeuille|compte|actif|changer|sélection|selection|profil/.test(key)) value -= 140;
                         if (!row.text) value += 35;
                         return value;
                     };
@@ -1635,13 +1648,13 @@ class FacebookBusinessBrowser:
                     if await self._wait_for_create_surface():
                         return True
 
-                    diagnostic = await self._diagnostic(
-                        "portfolio_sidebar_selector_open_without_create"
-                    )
                     self._last_selector_diagnostic = {
                         **self._last_selector_diagnostic,
                         "sidebar_probe": probe,
-                        "sidebar_open_diagnostic": diagnostic,
+                        "sidebar_open_without_create": {
+                            "url": _clean(self.page.url),
+                            "surface": await self._quick_surface_state(),
+                        },
                     }
                     await self.page.keyboard.press("Escape")
                     await self.page.wait_for_timeout(120)
@@ -1698,9 +1711,30 @@ class FacebookBusinessBrowser:
                         continue
 
                     score = 0
-                    if any(token in key for token in ("business", "portfolio", "asset")):
+                    if any(
+                        token in key
+                        for token in (
+                            "business",
+                            "portfolio",
+                            "asset",
+                            "entreprise",
+                            "portefeuille",
+                            "actif",
+                        )
+                    ):
                         score -= 100
-                    if any(token in key for token in ("switch", "select", "account")):
+                    if any(
+                        token in key
+                        for token in (
+                            "switch",
+                            "select",
+                            "account",
+                            "changer",
+                            "sélection",
+                            "selection",
+                            "compte",
+                        )
+                    ):
                         score -= 50
                     score += int(y)
                     candidates.append((score, y, x, item))
@@ -1710,14 +1744,17 @@ class FacebookBusinessBrowser:
         candidates.sort(key=lambda row: (row[0], row[1], row[2]))
 
         seen: set[tuple[int, int]] = set()
-        for _, y, x, item in candidates[:10]:
+        for _, y, x, item in candidates[:4]:
             marker = (round(x), round(y))
             if marker in seen:
                 continue
             seen.add(marker)
             try:
-                await item.click(timeout=2500)
-                if await self._wait_for_create_surface():
+                await item.click(timeout=1200)
+                if await self._wait_for_create_surface(
+                    timeout_ms=1400,
+                    interval_ms=200,
+                ):
                     return True
                 await self.page.keyboard.press("Escape")
                 await self.page.wait_for_timeout(120)
@@ -2143,17 +2180,40 @@ class FacebookBusinessBrowser:
         # probes, and fail fast with diagnostics if the Create surface is not
         # reachable.
         current_asset = ""
-        try:
-            current_query = parse_qs(urlsplit(_clean(self.page.url)).query)
-            current_asset = _digits(
-                (
-                    current_query.get("asset_id")
-                    or current_query.get("assetId")
-                    or [""]
-                )[0]
-            )
-        except Exception:
-            current_asset = ""
+
+        def read_current_asset() -> str:
+            try:
+                current_query = parse_qs(urlsplit(_clean(self.page.url)).query)
+                return _digits(
+                    (
+                        current_query.get("asset_id")
+                        or current_query.get("assetId")
+                        or [""]
+                    )[0]
+                )
+            except Exception:
+                return ""
+
+        current_asset = read_current_asset()
+
+        # Meta Business Suite may add ?asset_id=<PageID> a moment after the
+        # initial DOM becomes usable. If we classify the route too early we
+        # fall into the generic menu scanner, which used to consume the whole
+        # outer CREATE timeout. Give the SPA a short bounded chance to expose
+        # its final Page context before choosing the routing branch.
+        if open_form and already_on_home and not current_asset:
+            for _ in range(8):
+                await self.page.wait_for_timeout(200)
+                current_asset = read_current_asset()
+                if current_asset:
+                    self._last_selector_diagnostic = {
+                        **self._last_selector_diagnostic,
+                        "late_asset_context": {
+                            "asset_id": current_asset,
+                            "url": _clean(self.page.url),
+                        },
+                    }
+                    break
 
         known_page_ids = {
             _digits(row.get("id"))
@@ -2281,7 +2341,19 @@ class FacebookBusinessBrowser:
             }
             return False
 
-        menu_open = await self._try_open_top_left_portfolio_menu()
+        menu_open = False
+        try:
+            menu_open = await asyncio.wait_for(
+                self._try_open_top_left_portfolio_menu(),
+                timeout=5.0,
+            )
+        except asyncio.TimeoutError:
+            self._last_selector_diagnostic = {
+                **self._last_selector_diagnostic,
+                "generic_portfolio_menu_timeout": 5,
+                "url": _clean(self.page.url if self.page else ""),
+            }
+
         if menu_open:
             if not open_form:
                 return True
@@ -2290,6 +2362,28 @@ class FacebookBusinessBrowser:
                 await self._assert_authenticated()
                 if await self._wait_for_form_ready():
                     return True
+
+        # The SPA can finish its Page redirect while the bounded generic probe
+        # is running. Re-enter once through the known-asset branch instead of
+        # continuing through the long generic fallback chain.
+        late_asset = read_current_asset()
+        if (
+            open_form
+            and late_asset
+            and late_asset in known_page_ids
+            and not pinned_known_asset
+        ):
+            self._last_selector_diagnostic = {
+                **self._last_selector_diagnostic,
+                "late_asset_reclassify": {
+                    "asset_id": late_asset,
+                    "url": _clean(self.page.url),
+                },
+            }
+            return await self._open_create_entry(
+                open_form=True,
+                already_on_home=True,
+            )
 
         # Try Meta's current direct Business Portfolio creation route before
         # falling back to older Business Suite navigation surfaces.
