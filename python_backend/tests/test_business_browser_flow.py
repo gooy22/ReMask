@@ -256,6 +256,34 @@ class BrowserAdAccountDomFallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(args[1])
 
 
+class BrowserAdAccountCreateActionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_french_sidebar_text_does_not_count_as_create_action(self):
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-rk-french-action")
+        )
+        browser.page = SimpleNamespace(
+            evaluate=AsyncMock(side_effect=[False, False, True]),
+            wait_for_timeout=AsyncMock(return_value=None),
+        )
+
+        ready = await browser._wait_for_ad_account_create_action(
+            timeout_seconds=2.0,
+        )
+
+        self.assertTrue(ready)
+        self.assertEqual(browser.page.evaluate.await_count, 3)
+
+    def test_french_add_account_labels_are_supported(self):
+        self.assertIn(
+            "Ajouter un compte publicitaire",
+            FacebookBusinessBrowser.ADD_NAMES,
+        )
+        self.assertIn(
+            "Ajouter des comptes publicitaires",
+            FacebookBusinessBrowser.ADD_NAMES,
+        )
+
+
 class BrowserAdAccountHydrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_waits_through_empty_meta_shell_until_ad_account_surface_renders(self):
         browser = FacebookBusinessBrowser(
