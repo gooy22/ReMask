@@ -217,6 +217,61 @@ class BrowserAdAccountAdditionalLocaleTests(unittest.TestCase):
         self.assertIn("जोड़ें", add_names)
 
 
+class BrowserAdAccountFillBudgetTests(unittest.IsolatedAsyncioTestCase):
+    async def test_fill_first_can_use_short_add_rk_timeout(self):
+        class _Field:
+            async def is_visible(self):
+                return True
+
+            async def fill(self, value, **kwargs):
+                self.value = value
+                self.kwargs = kwargs
+
+        class _Locator:
+            def __init__(self):
+                self.first = _Field()
+
+            async def count(self):
+                return 1
+
+        class _EmptyLocator:
+            async def count(self):
+                return 0
+
+        class _Page:
+            def __init__(self):
+                self.field = _Locator()
+
+            def get_by_label(self, pattern):
+                return self.field
+
+            def get_by_placeholder(self, pattern):
+                return _EmptyLocator()
+
+            def get_by_text(self, pattern):
+                return _EmptyLocator()
+
+            def locator(self, selector):
+                return _EmptyLocator()
+
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-rk-fill-budget")
+        )
+        browser.page = _Page()
+
+        filled = await browser._fill_first(
+            labels=("Nom du compte publicitaire",),
+            value="ReMask RK",
+            fill_timeout_ms=2500,
+        )
+
+        self.assertTrue(filled)
+        self.assertEqual(
+            browser.page.field.first.kwargs.get("timeout"),
+            2500,
+        )
+
+
 class BrowserAdAccountClickBudgetTests(unittest.IsolatedAsyncioTestCase):
     async def test_named_click_can_use_short_add_rk_timeout(self):
         class _Item:

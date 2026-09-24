@@ -4958,6 +4958,7 @@ class FacebookBusinessBrowser:
             name_filled = await self._fill_first(
                 labels=name_labels,
                 value=account_name,
+                fill_timeout_ms=2500,
             )
             if not name_filled:
                 await self.page.wait_for_timeout(250)
@@ -4992,7 +4993,10 @@ class FacebookBusinessBrowser:
                     current = _clean(await candidate.input_value())
                     if current and len(current) > 2:
                         continue
-                    await candidate.fill(account_name)
+                    await candidate.fill(
+                        account_name,
+                        timeout=2500,
+                    )
                     name_filled = True
                     break
                 except Exception:
@@ -5609,6 +5613,7 @@ class FacebookBusinessBrowser:
         labels: tuple[str, ...],
         value: str,
         input_type: str | None = None,
+        fill_timeout_ms: int | None = None,
     ) -> bool:
         if self.page is None or not value:
             return False
@@ -5618,7 +5623,16 @@ class FacebookBusinessBrowser:
             try:
                 locator = self.page.get_by_label(pattern)
                 if await locator.count() and await locator.first.is_visible():
-                    await locator.first.fill(value)
+                    if fill_timeout_ms is None:
+                        await locator.first.fill(value)
+                    else:
+                        await locator.first.fill(
+                            value,
+                            timeout=max(
+                                250,
+                                min(int(fill_timeout_ms), 10000),
+                            ),
+                        )
                     return True
             except Exception:
                 pass
@@ -5661,7 +5675,16 @@ class FacebookBusinessBrowser:
                         ).lower()
                         if candidate_type in {"hidden", "checkbox", "radio", "submit", "button"}:
                             continue
-                        await candidate.fill(value)
+                        if fill_timeout_ms is None:
+                            await candidate.fill(value)
+                        else:
+                            await candidate.fill(
+                                value,
+                                timeout=max(
+                                    250,
+                                    min(int(fill_timeout_ms), 10000),
+                                ),
+                            )
                         return True
                 except Exception:
                     continue
@@ -5687,7 +5710,16 @@ class FacebookBusinessBrowser:
                     for attr in ("name", "id", "placeholder", "aria-label")
                 ).lower()
                 if key and any(token.lower() in key for token in label_tokens):
-                    await locator.fill(value)
+                    if fill_timeout_ms is None:
+                        await locator.fill(value)
+                    else:
+                        await locator.fill(
+                            value,
+                            timeout=max(
+                                250,
+                                min(int(fill_timeout_ms), 10000),
+                            ),
+                        )
                     return True
             except Exception:
                 continue
