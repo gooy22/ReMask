@@ -2,6 +2,7 @@ import unittest
 
 from app.facebook_business_create import (
     _candidate_is_stale_or_schema_mismatch,
+    _extract_create_business_id,
     _extract_page_backed_create_docid,
 )
 
@@ -26,6 +27,37 @@ class BusinessDocIdDiscoveryTests(unittest.TestCase):
         )
         doc_id, _ = _extract_page_backed_create_docid(source)
         self.assertEqual(doc_id, "")
+
+
+    def test_extracts_current_business_create_response_shape(self) -> None:
+        business_id, path = _extract_create_business_id(
+            {
+                "data": {
+                    "business_create": {
+                        "business": {
+                            "id": "555666777888999"
+                        }
+                    }
+                }
+            }
+        )
+        self.assertEqual(business_id, "555666777888999")
+        self.assertEqual(path, "data.business_create.business.id")
+
+    def test_extracts_business_manager_create_response_shape(self) -> None:
+        business_id, path = _extract_create_business_id(
+            {
+                "data": {
+                    "business_manager_create": {
+                        "business": {
+                            "id": "555666777888999"
+                        }
+                    }
+                }
+            }
+        )
+        self.assertEqual(business_id, "555666777888999")
+        self.assertEqual(path, "data.business_manager_create.business.id")
 
     def test_1357054_not_critical_is_stale_signal(self) -> None:
         payload = {
