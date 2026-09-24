@@ -156,12 +156,9 @@ class WorkerPool:
                                     for value in (raw_steps or [])
                                 ] if isinstance(raw_steps,list) else []
 
-                                add_bm_only=normalized_steps==[
-                                    'PROXY_CHECK',
-                                    'BUSINESS',
-                                ]
+                                business_guarded='BUSINESS' in normalized_steps
 
-                                if add_bm_only:
+                                if business_guarded:
                                     try:
                                         hard_timeout=float(
                                             os.getenv(
@@ -185,7 +182,7 @@ class WorkerPool:
                                         timeout_seconds=hard_timeout,
                                         code='ADD_BM_HARD_TIMEOUT',
                                         message=(
-                                            'Add BM worker watchdog exceeded '
+                                            'BUSINESS worker watchdog exceeded '
                                             f'{int(hard_timeout)}s; '
                                             'Chromium cancellation did not complete.'
                                         ),
