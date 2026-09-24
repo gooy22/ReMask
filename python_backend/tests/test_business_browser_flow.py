@@ -408,6 +408,12 @@ class BrowserAssetContextDirectCreateFallbackTests(unittest.IsolatedAsyncioTestC
     def test_current_create_labels_include_plain_portfolio_variant(self):
         self.assertIn("Create portfolio", FacebookBusinessBrowser.CREATE_NAMES)
 
+    def test_current_create_labels_include_french_portfolio_variant(self):
+        self.assertIn(
+            "Créer un portefeuille business",
+            FacebookBusinessBrowser.CREATE_NAMES,
+        )
+
 
 class BrowserBlankAssetShellTests(unittest.IsolatedAsyncioTestCase):
     async def test_blank_page_shell_skips_home_selectors_and_uses_overview(self):
@@ -497,6 +503,56 @@ class BrowserAssetContextFastFailTests(unittest.IsolatedAsyncioTestCase):
                 "asset_context_fast_fail"
             )
         )
+
+
+class BrowserLateAssetReclassifyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_late_asset_redirect_reenters_known_page_path(self):
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(
+                profile_id="4",
+                pages=[{"id": "1301710056363524", "name": "Lucky Joker"}],
+            )
+        )
+
+        class FakePage:
+            def __init__(self):
+                self.url = browser.HOME_URL
+
+            async def wait_for_timeout(self, _ms):
+                return None
+
+        browser.page = FakePage()
+        browser._form_ready = AsyncMock(return_value=False)
+        browser._quick_surface_state = AsyncMock(return_value={"blank": False})
+        browser._try_open_known_asset_selector = AsyncMock(return_value=False)
+        browser._try_open_direct_create_url = AsyncMock(return_value=True)
+        browser._try_open_overview_create_entry = AsyncMock(return_value=False)
+        browser._try_open_ads_manager_create_entry = AsyncMock(return_value=False)
+
+        async def generic_probe(*args, **kwargs):
+            browser.page.url = (
+                browser.HOME_URL
+                + "?asset_id=1301710056363524&ir_qe_exposed=1"
+            )
+            return False
+
+        browser._try_open_top_left_portfolio_menu = AsyncMock(
+            side_effect=generic_probe
+        )
+
+        ready = await browser._open_create_entry(
+            open_form=True,
+            already_on_home=True,
+        )
+
+        self.assertTrue(ready)
+        self.assertEqual(
+            browser._last_selector_diagnostic[
+                "late_asset_reclassify"
+            ]["asset_id"],
+            "1301710056363524",
+        )
+        browser._try_open_direct_create_url.assert_awaited_once()
 
 
 class BrowserCreateEntryRoutingTests(unittest.IsolatedAsyncioTestCase):
