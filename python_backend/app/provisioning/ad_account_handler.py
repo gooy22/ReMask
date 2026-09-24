@@ -513,13 +513,39 @@ async def ad_account_handler(
             context,
             timeout_seconds=60,
         ) as browser:
-            result = await browser.create_ad_account(
-                business_id=business_id,
-                account_name=rk_name,
-                currency=currency,
-                timezone_id=timezone_id,
-                before_submit=browser_checkpoint,
-            )
+            try:
+                result = await asyncio.wait_for(
+                    browser.create_ad_account(
+                        business_id=business_id,
+                        account_name=rk_name,
+                        currency=currency,
+                        timezone_id=timezone_id,
+                        before_submit=browser_checkpoint,
+                    ),
+                    timeout=115.0,
+                )
+            except asyncio.TimeoutError as exc:
+                diagnostic = await browser.ad_account_runtime_timeout_diagnostic()
+                if browser.ad_account_create_may_have_been_sent:
+                    raise BrowserBusinessError(
+                        "AD_ACCOUNT_CREATE_RESULT_UNKNOWN",
+                        (
+                            "Meta Add-RK flow exceeded the internal 115s budget "
+                            "after CREATE may have been sent. Reconcile inventory "
+                            "before retry."
+                        ),
+                        retryable=True,
+                        diagnostic=diagnostic,
+                    ) from exc
+                raise BrowserBusinessError(
+                    "AD_ACCOUNT_CREATE_UI_TIMEOUT",
+                    (
+                        "Meta Add-RK UI exceeded the internal 115s budget "
+                        "before any CREATE request was sent."
+                    ),
+                    retryable=True,
+                    diagnostic=diagnostic,
+                ) from exc
 
     except BrowserBusinessError as exc:
         diagnostic = (
@@ -586,6 +612,7 @@ async def ad_account_handler(
         pre_submit_codes = {
             "AD_ACCOUNT_CREATE_UI_UNAVAILABLE",
             "AD_ACCOUNT_CREATE_UI_CHANGED",
+            "AD_ACCOUNT_CREATE_UI_TIMEOUT",
             "FACEBOOK_NAVIGATION_FAILED",
             "CREATE_CHECKPOINT_FAILED_BEFORE_SEND",
             "BROWSER_UNAVAILABLE",

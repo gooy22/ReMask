@@ -797,6 +797,9 @@ class FacebookBusinessBrowser:
         self._last_selector_diagnostic: dict[str, Any] = {}
         self._last_ad_account_section_diagnostic: dict[str, Any] = {}
         self._browser_events: list[dict[str, Any]] = []
+        self._ad_account_runtime_phase = "IDLE"
+        self._ad_account_phase_started_at = time.monotonic()
+        self._ad_account_create_sent = False
 
     async def __aenter__(self) -> "FacebookBusinessBrowser":
         await self.open()
@@ -4056,6 +4059,7 @@ class FacebookBusinessBrowser:
                 "menuitemradio",
                 "menuitem",
             ),
+            click_timeout_ms=2500,
         )
 
     async def _ad_account_form_candidates(self) -> list[str]:
@@ -4143,6 +4147,7 @@ class FacebookBusinessBrowser:
                     "menuitemradio",
                     "option",
                 ),
+                click_timeout_ms=2500,
             ):
                 return True
 
@@ -4386,8 +4391,8 @@ class FacebookBusinessBrowser:
                     attempts.append(attempt)
                     continue
 
-                await item.scroll_into_view_if_needed()
-                await item.click()
+                await item.scroll_into_view_if_needed(timeout=1500)
+                await item.click(timeout=2500)
                 attempt["clicked"] = True
                 await self.page.wait_for_timeout(300)
 
@@ -4687,6 +4692,7 @@ class FacebookBusinessBrowser:
                 retryable=False,
             )
 
+        self._mark_ad_account_phase("OPENING_SETTINGS")
         opened = False
         navigation_errors: list[str] = []
         hydration_attempts = 0
@@ -4747,6 +4753,7 @@ class FacebookBusinessBrowser:
         # Meta's migrated settings URL can land on the generic settings shell
         # even though the URL already contains /ad_accounts. Resolve and open
         # Meta's own sidebar href first, then require a real right-pane action.
+        self._mark_ad_account_phase("OPENING_AD_ACCOUNTS_SECTION")
         section_clicked = await self._activate_ad_account_settings_section(
             business_id=business,
         )
@@ -4837,7 +4844,8 @@ class FacebookBusinessBrowser:
                     )
 
         entry_clicked = await self._click_named(
-            self.AD_ACCOUNT_CREATE_ENTRY_NAMES
+            self.AD_ACCOUNT_CREATE_ENTRY_NAMES,
+            click_timeout_ms=2500,
         )
         if not entry_clicked:
             entry_clicked = (
@@ -4847,6 +4855,7 @@ class FacebookBusinessBrowser:
                 == "create"
             )
 
+        self._mark_ad_account_phase("ADD_PROBE")
         add_clicked = False
         post_add_candidates: list[str] = []
         add_attempts: list[dict[str, Any]] = []
@@ -4924,6 +4933,7 @@ class FacebookBusinessBrowser:
                 diagnostic=diag,
             )
 
+        self._mark_ad_account_phase("FORM_LOADING")
         await self.page.wait_for_timeout(350)
 
         name_labels = (
@@ -4988,6 +4998,9 @@ class FacebookBusinessBrowser:
                 except Exception:
                     continue
 
+        if name_filled:
+            self._mark_ad_account_phase("FORM_NAME_FILLED")
+
         if not name_filled:
             diag = await self._diagnostic("ad_account_name_input_missing")
             diag["business_id"] = business
@@ -5023,10 +5036,13 @@ class FacebookBusinessBrowser:
                 retryable=False,
             )
 
+        self._ad_account_create_sent = False
+        self._mark_ad_account_phase("OPENING_CREATE_FLOW")
         await self._open_ad_account_create_form(
             business_id=business,
             account_name=name,
         )
+        self._mark_ad_account_phase("FORM_READY")
 
         async def checkpoint(patch: dict[str, Any]) -> None:
             if before_submit is None:
@@ -5107,6 +5123,9 @@ class FacebookBusinessBrowser:
                     timezone_id=int(timezone_id),
                 )
             )
+            self._ad_account_create_sent = True
+            self._mark_ad_account_phase("CREATE_SUBMITTED")
+
             if attribution_defaults:
                 await checkpoint(
                     {
@@ -5183,13 +5202,17 @@ class FacebookBusinessBrowser:
             "बनाएं",
         )
 
+        self._mark_ad_account_phase("SUBMIT_UI")
         try:
             clicked_any = False
             for _ in range(8):
                 if gate_future.done():
                     break
 
-                next_clicked = await self._click_named(next_names)
+                next_clicked = await self._click_named(
+                    next_names,
+                    click_timeout_ms=2500,
+                )
                 if next_clicked:
                     clicked_any = True
                     await self.page.wait_for_timeout(650)
@@ -5209,6 +5232,7 @@ class FacebookBusinessBrowser:
                             "activity_at": int(time.time()),
                         }
                     ),
+                    click_timeout_ms=2500,
                 )
                 if final_clicked:
                     clicked_any = True
@@ -5253,6 +5277,7 @@ class FacebookBusinessBrowser:
                     diagnostic=diag,
                 )
 
+            self._mark_ad_account_phase("WAITING_RESPONSE")
             try:
                 response = await asyncio.wait_for(
                     asyncio.shield(response_future),
@@ -5358,6 +5383,7 @@ class FacebookBusinessBrowser:
                     },
                 )
 
+            self._mark_ad_account_phase("CREATE_CONFIRMED")
             await checkpoint(
                 {
                     "phase": "CREATE_CONFIRMED",
@@ -5668,12 +5694,40 @@ class FacebookBusinessBrowser:
 
         return False
 
+    def _mark_ad_account_phase(self, phase: str) -> None:
+        self._ad_account_runtime_phase = _clean(phase).upper() or "UNKNOWN"
+        self._ad_account_phase_started_at = time.monotonic()
+
+    @property
+    def ad_account_create_may_have_been_sent(self) -> bool:
+        return bool(self._ad_account_create_sent)
+
+    async def ad_account_runtime_timeout_diagnostic(self) -> dict[str, Any]:
+        diag = await self._diagnostic("ad_account_internal_timeout")
+        diag["runtime_phase"] = self._ad_account_runtime_phase
+        diag["phase_elapsed_seconds"] = round(
+            max(0.0, time.monotonic() - self._ad_account_phase_started_at),
+            2,
+        )
+        diag["create_may_have_been_sent"] = bool(
+            self._ad_account_create_sent
+        )
+        try:
+            diag["action_candidates"] = await asyncio.wait_for(
+                self._ad_account_action_candidates(),
+                timeout=2.0,
+            )
+        except Exception:
+            diag["action_candidates"] = []
+        return diag
+
     async def _click_named(
         self,
         names: tuple[str, ...],
         *,
         roles: tuple[str, ...] = ("button", "link", "menuitem"),
         before_click: Callable[[], Awaitable[None]] | None = None,
+        click_timeout_ms: int | None = None,
     ) -> bool:
         if self.page is None:
             return False
@@ -5689,7 +5743,15 @@ class FacebookBusinessBrowser:
                         if await item.is_visible() and await item.is_enabled():
                             if before_click is not None:
                                 await before_click()
-                            await item.click()
+                            if click_timeout_ms is None:
+                                await item.click()
+                            else:
+                                await item.click(
+                                    timeout=max(
+                                        250,
+                                        min(int(click_timeout_ms), 10000),
+                                    )
+                                )
                             return True
                 except Exception:
                     continue

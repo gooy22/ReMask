@@ -217,6 +217,73 @@ class BrowserAdAccountAdditionalLocaleTests(unittest.TestCase):
         self.assertIn("जोड़ें", add_names)
 
 
+class BrowserAdAccountClickBudgetTests(unittest.IsolatedAsyncioTestCase):
+    async def test_named_click_can_use_short_add_rk_timeout(self):
+        class _Item:
+            async def is_visible(self):
+                return True
+
+            async def is_enabled(self):
+                return True
+
+            async def click(self, **kwargs):
+                self.kwargs = kwargs
+
+        class _Locator:
+            def __init__(self):
+                self.item = _Item()
+
+            async def count(self):
+                return 1
+
+            def nth(self, index):
+                return self.item
+
+        class _Page:
+            def __init__(self):
+                self.locator = _Locator()
+
+            def get_by_role(self, role, name=None):
+                return self.locator
+
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-rk-click-budget")
+        )
+        browser.page = _Page()
+
+        clicked = await browser._click_named(
+            ("Ajouter",),
+            roles=("button",),
+            click_timeout_ms=2500,
+        )
+
+        self.assertTrue(clicked)
+        self.assertEqual(
+            browser.page.locator.item.kwargs.get("timeout"),
+            2500,
+        )
+
+    async def test_runtime_timeout_diagnostic_reports_phase_and_submit_state(self):
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-rk-timeout-diag")
+        )
+        browser.page = SimpleNamespace()
+        browser._diagnostic = AsyncMock(
+            return_value={"stage": "ad_account_internal_timeout"}
+        )
+        browser._ad_account_action_candidates = AsyncMock(
+            return_value=["Ajouter"]
+        )
+        browser._mark_ad_account_phase("ADD_PROBE")
+        browser._ad_account_create_sent = False
+
+        diag = await browser.ad_account_runtime_timeout_diagnostic()
+
+        self.assertEqual(diag["runtime_phase"], "ADD_PROBE")
+        self.assertFalse(diag["create_may_have_been_sent"])
+        self.assertEqual(diag["action_candidates"], ["Ajouter"])
+
+
 class BrowserAdAccountSectionNavigationTests(unittest.IsolatedAsyncioTestCase):
     async def test_french_ad_accounts_sidebar_is_opened_before_create(self):
         browser = FacebookBusinessBrowser(
