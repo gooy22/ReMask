@@ -235,6 +235,16 @@ async def business_handler(
                 item_id,
                 phase,
             )
+            checkpoint = await provisioning_state.checkpoint(
+                item_id,
+                profile_id,
+                scope_key,
+                ProvisioningStep.BUSINESS,
+                {
+                    "activity": "RECONCILE_CREATE",
+                    "activity_at": int(__import__("time").time()),
+                },
+            )
             recovered_result = await browser.reconcile_created_business(
                 before_ids=before_ids,
                 business_name=bm_name,
@@ -257,6 +267,16 @@ async def business_handler(
             )
 
         else:
+            await provisioning_state.checkpoint(
+                item_id,
+                profile_id,
+                scope_key,
+                ProvisioningStep.BUSINESS,
+                {
+                    "activity": "SNAPSHOT_BUSINESSES",
+                    "activity_at": int(__import__("time").time()),
+                },
+            )
             before_map = await browser.snapshot_businesses()
             checkpoint = await provisioning_state.checkpoint(
                 item_id,
@@ -323,6 +343,8 @@ async def business_handler(
                     "recovered_after_create_uncertainty": bool(
                         create_result.recovered
                     ),
+                    "activity": "VERIFY_PAGE",
+                    "activity_at": int(__import__("time").time()),
                 },
             )
 
@@ -353,6 +375,16 @@ async def business_handler(
         # anything else. We do not blindly click Add again.
         phase = _clean(checkpoint.get("phase")).upper()
         if phase in {"PAGE_ADD_SUBMITTED", "PAGE_ADD_CLICK_INTENT"}:
+            checkpoint = await provisioning_state.checkpoint(
+                item_id,
+                profile_id,
+                scope_key,
+                ProvisioningStep.BUSINESS,
+                {
+                    "activity": "VERIFY_PAGE_AFTER_SUBMIT",
+                    "activity_at": int(__import__("time").time()),
+                },
+            )
             if await browser.verify_page_attached(
                 business_id=business_id,
                 page_id=page_id,
@@ -381,6 +413,16 @@ async def business_handler(
                 )
 
         if _clean(checkpoint.get("phase")).upper() != "PAGE_CONFIRMED":
+            checkpoint = await provisioning_state.checkpoint(
+                item_id,
+                profile_id,
+                scope_key,
+                ProvisioningStep.BUSINESS,
+                {
+                    "activity": "VERIFY_PAGE",
+                    "activity_at": int(__import__("time").time()),
+                },
+            )
             if await browser.verify_page_attached(
                 business_id=business_id,
                 page_id=page_id,
@@ -397,6 +439,17 @@ async def business_handler(
                     },
                 )
             else:
+                checkpoint = await provisioning_state.checkpoint(
+                    item_id,
+                    profile_id,
+                    scope_key,
+                    ProvisioningStep.BUSINESS,
+                    {
+                        "activity": "PAGE_ATTACH_OPENING",
+                        "activity_at": int(__import__("time").time()),
+                    },
+                )
+
                 async def before_page_submit(patch: dict[str, Any]) -> None:
                     await provisioning_state.checkpoint(
                         item_id,
@@ -431,6 +484,8 @@ async def business_handler(
                         "page_already_attached": bool(
                             page_result.already_attached
                         ),
+                        "activity": "DONE",
+                        "activity_at": int(__import__("time").time()),
                     },
                 )
 
