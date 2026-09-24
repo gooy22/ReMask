@@ -405,13 +405,9 @@ async def create_ad_account_with_docids(
         else:
             ordered.insert(0, dynamic_candidate)
 
-    ordered.extend(
-        list_candidates(
-            CREATE_AD_ACCOUNT_OPERATION,
-            confirmed_only=False,
-        )
-    )
-
+    # Do not submit unconfirmed registry/static candidates. Only the live
+    # Business Settings capture, explicit job override, current discovery or a
+    # previously successful candidate may reach Meta.
     candidates = _unique_candidates(ordered)
 
     if not candidates:
@@ -523,7 +519,7 @@ async def create_ad_account_with_docids(
             persisted = candidate
             if (
                 candidate.source.startswith("dynamic_")
-                or candidate.source.startswith("legacy_static_")
+                or candidate.source == "live_ui_capture"
                 or candidate.source == "job_manual"
             ):
                 stored = upsert_candidate(
@@ -533,11 +529,11 @@ async def create_ad_account_with_docids(
                     endpoint_url=candidate.endpoint_url,
                     variables_mode=candidate.variables_mode,
                     source=(
-                        "dynamic_success"
-                        if candidate.source.startswith("dynamic_")
+                        "live_ui_capture_success"
+                        if candidate.source == "live_ui_capture"
                         else (
-                            "legacy_confirmed_success"
-                            if candidate.source.startswith("legacy_static_")
+                            "dynamic_success"
+                            if candidate.source.startswith("dynamic_")
                             else "manual_success"
                         )
                     ),
