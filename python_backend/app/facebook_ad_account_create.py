@@ -149,6 +149,47 @@ def _diagnostic(
     )
 
 
+def _replace_capture_values(
+    variables: dict[str, Any],
+    *,
+    canary_name: str,
+    business_id: str,
+    account_name: str,
+    currency: str,
+    timezone_id: int,
+) -> dict[str, Any]:
+    canary = _clean(canary_name)
+
+    def walk(value: Any) -> Any:
+        if isinstance(value, dict):
+            out: dict[str, Any] = {}
+            for key, child in value.items():
+                lowered = _clean(key).casefold().replace("-", "_")
+                if lowered in {"business_id", "businessid"}:
+                    out[key] = business_id
+                elif lowered in {"account_name", "ad_account_name", "adaccount_name"}:
+                    out[key] = account_name
+                elif lowered == "name" and (not canary or _clean(child) == canary):
+                    out[key] = account_name
+                elif lowered in {"currency", "currency_code"}:
+                    out[key] = currency
+                elif lowered in {"timezone_id", "timezoneid"}:
+                    out[key] = int(timezone_id)
+                elif lowered == "client_mutation_id":
+                    out[key] = uuid.uuid4().hex[:16]
+                else:
+                    out[key] = walk(child)
+            return out
+        if isinstance(value, list):
+            return [walk(child) for child in value]
+        if canary and isinstance(value, str) and value == canary:
+            return account_name
+        return value
+
+    result = walk(copy.deepcopy(variables))
+    return result if isinstance(result, dict) else {}
+
+
 def _unique_candidates(
     candidates: list[DocIdCandidate],
 ) -> list[DocIdCandidate]:
