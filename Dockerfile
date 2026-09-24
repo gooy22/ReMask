@@ -20,6 +20,8 @@ RUN /opt/remask-venv/bin/python -m compileall -q /opt/remask-python \
     && /opt/remask-venv/bin/python -c "import fb_worker; from app.session import ProfileSession; from app.facebook_business_browser import FacebookBusinessBrowser; from app.provisioning.business_handler import business_handler; from app.provisioning.ad_account_handler import ad_account_handler; assert fb_worker.WebSessionManager is fb_worker.FacebookWebSession; assert callable(ProfileSession.facebook_business_browser)" \
     && /opt/remask-venv/bin/python -m unittest -q tests.test_fb_worker_bootstrap tests.test_business_docid_discovery tests.test_v14_docid_policy tests.test_fb_worker_request_envelope tests.test_business_create_exact_envelope tests.test_business_browser_flow tests.test_business_create_observer tests.test_job_store_recovery \
     && grep -q 'class FacebookBusinessBrowser' /opt/remask-python/app/facebook_business_browser.py \
+    && grep -q 'DIRECT_CREATE_URL = "https://business.facebook.com/create"' /opt/remask-python/app/facebook_business_browser.py \
+    && grep -q 'business_guarded=' /opt/remask-python/app/runner.py \
     && grep -q 'CREATE_SUBMITTED' /opt/remask-python/app/provisioning/business_handler.py \
     && grep -q 'PAGE_ADD_SUBMITTED' /opt/remask-python/app/provisioning/business_handler.py \
     && grep -q 'facebook_business_suite_ui' /opt/remask-python/app/provisioning/business_handler.py \
@@ -440,4 +442,4 @@ ENV REMASK_META_CACHE_TTL=1800 \
 
 EXPOSE 80
 CMD ["/var/www/html/docker-start.sh"]
-# railway deploy trigger: worker-hard-watchdog 2026-09-24
+# railway deploy trigger: bm-direct-create-route-v2 2026-09-24
