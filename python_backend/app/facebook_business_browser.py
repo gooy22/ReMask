@@ -50,6 +50,14 @@ class BrowserCreateResult:
 
 
 @dataclass(slots=True)
+class BrowserAdAccountResult:
+    business_id: str
+    ad_account_id: str
+    response_friendly_name: str = ""
+    response_path: str = ""
+
+
+@dataclass(slots=True)
 class BrowserPageResult:
     business_id: str
     page_id: str
@@ -392,6 +400,72 @@ def _extract_created_business_id(payload: Any) -> tuple[str, str]:
         if candidate == business_id
     )
     return business_id, response_path
+
+
+def _normalize_ad_account_id(value: Any) -> str:
+    raw = _clean(value)
+    if raw.lower().startswith("act_"):
+        raw = raw[4:]
+    if not raw.isdigit() or not (5 <= len(raw) <= 30):
+        return ""
+    return "act_" + raw
+
+
+def _extract_created_ad_account_id(payload: Any) -> tuple[str, str]:
+    known_nodes = (
+        "ad_account_create",
+        "business_ad_account_create",
+        "bizkit_create_ad_account",
+        "create_ad_account",
+        "adaccount_create",
+    )
+    chunks = payload if isinstance(payload, list) else [payload]
+    matches: list[tuple[str, str]] = []
+
+    for chunk in chunks:
+        if not isinstance(chunk, dict):
+            continue
+        data = chunk.get("data")
+        if not isinstance(data, dict):
+            continue
+
+        for node_name in known_nodes:
+            node = data.get(node_name)
+            if not isinstance(node, dict):
+                continue
+
+            direct = _normalize_ad_account_id(
+                node.get("id") or node.get("account_id")
+            )
+            if direct:
+                matches.append((direct, f"data.{node_name}.id"))
+
+            for child_name in ("ad_account", "account"):
+                child = node.get(child_name)
+                if not isinstance(child, dict):
+                    continue
+                nested = _normalize_ad_account_id(
+                    child.get("id") or child.get("account_id")
+                )
+                if nested:
+                    matches.append(
+                        (
+                            nested,
+                            f"data.{node_name}.{child_name}.id",
+                        )
+                    )
+
+    unique = sorted({account_id for account_id, _ in matches})
+    if len(unique) != 1:
+        return "", ""
+
+    account_id = unique[0]
+    path = next(
+        response_path
+        for candidate, response_path in matches
+        if candidate == account_id
+    )
+    return account_id, path
 
 
 def _walk_business_ids(value: Any, path: str = "") -> list[tuple[str, str]]:
