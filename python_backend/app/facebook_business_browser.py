@@ -4411,6 +4411,30 @@ class FacebookBusinessBrowser:
                 return True
         return False
 
+    @classmethod
+    def _ad_account_option_matches(
+        cls,
+        row: dict[str, Any],
+        *,
+        tokens: tuple[str, ...] = (),
+        numeric_id: str = "",
+    ) -> bool:
+        """Match immutable RK choices without leaking numeric IDs into labels."""
+        identity = _clean(row.get("identity"))
+        label = _clean(row.get("label")) or _clean(row.get("text"))
+        identity_match = bool(
+            numeric_id
+            and cls._ad_account_choice_matches(
+                identity,
+                numeric_id=numeric_id,
+            )
+        )
+        label_match = cls._ad_account_choice_matches(
+            label,
+            tokens=tokens,
+        )
+        return identity_match or label_match
+
     async def _ad_account_visible_options(
         self,
     ) -> tuple[Any | None, list[dict[str, Any]]]:
@@ -4596,18 +4620,15 @@ class FacebookBusinessBrowser:
                         if part
                     )
                     label_text = _clean(await option.inner_text())
-                    identity_match = bool(
-                        numeric_id
-                        and self._ad_account_choice_matches(
-                            identity_text,
-                            numeric_id=numeric_id,
-                        )
-                    )
-                    label_match = self._ad_account_choice_matches(
-                        label_text,
+                    if not self._ad_account_option_matches(
+                        {
+                            "identity": identity_text,
+                            "label": label_text,
+                            "text": text,
+                        },
                         tokens=tokens,
-                    )
-                    if not identity_match and not label_match:
+                        numeric_id=numeric_id,
+                    ):
                         continue
                     value = _clean(
                         await option.get_attribute("value")
@@ -4664,18 +4685,15 @@ class FacebookBusinessBrowser:
             )
             if part
         )
-        current_identity_match = bool(
-            numeric_id
-            and self._ad_account_choice_matches(
-                current_identity,
-                numeric_id=numeric_id,
-            )
-        )
-        current_label_match = self._ad_account_choice_matches(
-            current_label,
+        if self._ad_account_option_matches(
+            {
+                "identity": current_identity,
+                "label": current_label,
+                "text": current_text,
+            },
             tokens=tokens,
-        )
-        if current_identity_match or current_label_match:
+            numeric_id=numeric_id,
+        ):
             return {
                 "field": field_name,
                 "status": "already_selected",
@@ -4701,18 +4719,11 @@ class FacebookBusinessBrowser:
             }
 
         for row in rows:
-            identity_match = bool(
-                numeric_id
-                and self._ad_account_choice_matches(
-                    row.get("identity", ""),
-                    numeric_id=numeric_id,
-                )
-            )
-            label_match = self._ad_account_choice_matches(
-                row.get("label", "") or row.get("text", ""),
+            if not self._ad_account_option_matches(
+                row,
                 tokens=tokens,
-            )
-            if not identity_match and not label_match:
+                numeric_id=numeric_id,
+            ):
                 continue
             try:
                 item = option_locator.nth(int(row["index"]))

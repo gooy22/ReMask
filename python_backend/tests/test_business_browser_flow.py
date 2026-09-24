@@ -868,16 +868,24 @@ class BrowserAdAccountFormFieldTests(unittest.IsolatedAsyncioTestCase):
 
 
 class BrowserAdAccountTimezoneSafetyTests(unittest.TestCase):
-    def test_numeric_timezone_id_does_not_match_human_offset_text(self):
+    def test_numeric_timezone_id_matches_identity_not_human_offset(self):
         self.assertFalse(
-            FacebookBusinessBrowser._ad_account_choice_matches(
-                "UTC+1 Central European Time",
+            FacebookBusinessBrowser._ad_account_option_matches(
+                {
+                    "identity": "",
+                    "label": "UTC+1 Central European Time",
+                    "text": "UTC+1 Central European Time",
+                },
                 numeric_id="1",
             )
         )
         self.assertTrue(
-            FacebookBusinessBrowser._ad_account_choice_matches(
-                "1",
+            FacebookBusinessBrowser._ad_account_option_matches(
+                {
+                    "identity": "1",
+                    "label": "Pacific Time (US & Canada)",
+                    "text": "1 Pacific Time (US & Canada)",
+                },
                 numeric_id="1",
             )
         )
