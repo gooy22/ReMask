@@ -340,9 +340,15 @@ async def business_handler(
     if page_known_not_sent:
         phase = "CREATE_CONFIRMED"
 
-    try:
-        browser = await session.facebook_business_browser()
+    browser = None
 
+    async def get_browser():
+        nonlocal browser
+        if browser is None:
+            browser = await session.facebook_business_browser()
+        return browser
+
+    try:
         # If Meta already returned an exact CREATE response ID before a worker
         # restart/cancellation, that response is authoritative. Resume at Page
         # attach instead of falling back to inventory reconciliation.
@@ -423,6 +429,7 @@ async def business_handler(
                     "activity_at": int(time.time()),
                 },
             )
+            browser = await get_browser()
             recovered_result = await browser.reconcile_created_business(
                 before_ids=before_ids,
                 business_name=bm_name,
@@ -678,6 +685,7 @@ async def business_handler(
                         },
                     )
 
+                    browser = await get_browser()
                     before_map = await browser.snapshot_businesses()
                     checkpoint = await provisioning_state.checkpoint(
                         item_id,
@@ -792,6 +800,7 @@ async def business_handler(
         # anything else. We do not blindly click Add again.
         phase = _clean(checkpoint.get("phase")).upper()
         if phase in {"PAGE_ADD_SUBMITTED", "PAGE_ADD_CLICK_INTENT"}:
+            browser = await get_browser()
             checkpoint = await provisioning_state.checkpoint(
                 item_id,
                 profile_id,
@@ -830,6 +839,7 @@ async def business_handler(
                 )
 
         if _clean(checkpoint.get("phase")).upper() != "PAGE_CONFIRMED":
+            browser = await get_browser()
             checkpoint = await provisioning_state.checkpoint(
                 item_id,
                 profile_id,
