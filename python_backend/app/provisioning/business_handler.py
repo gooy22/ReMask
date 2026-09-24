@@ -175,6 +175,23 @@ async def business_handler(
     business_id = _clean(checkpoint.get("business_id"))
     recovered = False
 
+    checkpoint_response_id = _clean(
+        checkpoint.get("create_response_business_id")
+        or checkpoint.get("response_business_id")
+    )
+    checkpoint_response_path = _clean(
+        checkpoint.get("create_response_path")
+        or checkpoint.get("response_path")
+    )
+    exact_response_paths = {
+        "data.business_create.business.id",
+        "data.business_create.id",
+        "data.bizkit_create_business.business.id",
+        "data.bizkit_create_business.id",
+        "data.business_manager_create.business.id",
+        "data.business_manager_create.id",
+    }
+
     # The network gate aborts the Meta request if the atomic SUBMITTED
     # checkpoint cannot be persisted. In that specific case we know the
     # irreversible request did NOT reach Meta, so retry may safely submit
@@ -194,6 +211,36 @@ async def business_handler(
 
     try:
         browser = await session.facebook_business_browser()
+
+        # If Meta already returned an exact CREATE response ID before a worker
+        # restart/cancellation, that response is authoritative. Resume at Page
+        # attach instead of falling back to inventory reconciliation.
+        if (
+            not business_id.isdigit()
+            and checkpoint_response_id.isdigit()
+            and checkpoint_response_path in exact_response_paths
+        ):
+            business_id = checkpoint_response_id
+            phase = "CREATE_CONFIRMED"
+            recovered = True
+            checkpoint = await provisioning_state.checkpoint(
+                item_id,
+                profile_id,
+                scope_key,
+                ProvisioningStep.BUSINESS,
+                {
+                    "phase": "CREATE_CONFIRMED",
+                    "resume_from": "PAGE_ADD",
+                    "business_id": business_id,
+                    "business_name": bm_name,
+                    "primary_page_id": page_id,
+                    "create_response_business_id": checkpoint_response_id,
+                    "create_response_path": checkpoint_response_path,
+                    "recovered_from_exact_create_response": True,
+                    "activity": "VERIFY_PAGE",
+                    "activity_at": int(time.time()),
+                },
+            )
 
         # Legacy checkpoints produced by the previous GraphQL flow already
         # contain a created business_id. They are safe to resume at Page attach.
