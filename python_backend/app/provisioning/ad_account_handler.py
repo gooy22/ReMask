@@ -10,6 +10,10 @@ from ..facebook_ad_account_create import (
     AdAccountMutationError,
     _normalize_ad_account_id,
 )
+from ..facebook_business_browser import (
+    BrowserBusinessError,
+    FacebookBusinessBrowser,
+)
 from .meta_errors import classify_meta_request_error
 from .models import ProvisioningError, ProvisioningStep
 
@@ -457,23 +461,105 @@ async def ad_account_handler(
         scope_key,
         ProvisioningStep.AD_ACCOUNT,
         {
-            "phase": "CREATE_SUBMIT_INTENT",
+            "phase": "CREATE_PREPARING",
             "resume_from": "CREATE",
             "business_id": business_id,
             "account_name": rk_name,
             "currency": currency,
             "timezone_id": timezone_id,
             "inventory_before": inventory_before,
+            "activity": "CAPTURE_PRIVATE_CREATE",
         },
     )
 
+    captured_request: dict[str, Any] = {}
+    capture_error: dict[str, Any] = {}
+
+    try:
+        async with FacebookBusinessBrowser(
+            context,
+            timeout_seconds=45,
+        ) as capture_browser:
+            captured_request = (
+                await capture_browser.capture_ad_account_create_request(
+                    business_id=business_id,
+                )
+            )
+    except BrowserBusinessError as exc:
+        capture_error = {
+            "code": exc.code,
+            "message": str(exc)[:2000],
+            "diagnostic": (
+                exc.diagnostic
+                if isinstance(exc.diagnostic, dict)
+                else {}
+            ),
+        }
+        log.warning(
+            "[%s] AD_ACCOUNT live private capture failed business=%s "
+            "code=%s: %s",
+            profile_id,
+            business_id,
+            exc.code,
+            exc,
+        )
+
+    await provisioning_state.checkpoint(
+        item_id,
+        profile_id,
+        scope_key,
+        ProvisioningStep.AD_ACCOUNT,
+        {
+            "phase": "CREATE_PREPARED",
+            "resume_from": "CREATE",
+            "business_id": business_id,
+            "account_name": rk_name,
+            "currency": currency,
+            "timezone_id": timezone_id,
+            "capture": {
+                "doc_id": _clean(captured_request.get("doc_id")),
+                "friendly_name": _clean(
+                    captured_request.get("friendly_name")
+                ),
+                "source": _clean(captured_request.get("source")),
+            },
+            "capture_error": capture_error,
+            "activity": "PRIVATE_CREATE_READY",
+        },
+    )
+
+    async def before_private_submit() -> None:
+        await provisioning_state.checkpoint(
+            item_id,
+            profile_id,
+            scope_key,
+            ProvisioningStep.AD_ACCOUNT,
+            {
+                "phase": "CREATE_SUBMITTED",
+                "resume_from": "RECONCILE_CREATE",
+                "business_id": business_id,
+                "account_name": rk_name,
+                "currency": currency,
+                "timezone_id": timezone_id,
+                "create_doc_id": _clean(
+                    captured_request.get("doc_id")
+                ),
+                "create_friendly_name": _clean(
+                    captured_request.get("friendly_name")
+                ),
+                "activity": "PRIVATE_CREATE_POST",
+            },
+        )
+
     log.info(
-        "[%s] AD_ACCOUNT submit business=%s currency=%s timezone=%s key=%s",
+        "[%s] AD_ACCOUNT private submit business=%s currency=%s timezone=%s "
+        "key=%s captured_doc_id=%s",
         profile_id,
         business_id,
         currency,
         timezone_id,
         idempotency_key,
+        _clean(captured_request.get("doc_id")) or "-",
     )
 
     try:
@@ -483,6 +569,8 @@ async def ad_account_handler(
             account_name=rk_name,
             currency=currency,
             timezone_id=timezone_id,
+            captured_request=captured_request,
+            before_submit=before_private_submit,
         )
     except AdAccountMutationError as exc:
         if exc.code in {
