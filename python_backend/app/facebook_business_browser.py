@@ -2489,10 +2489,29 @@ class FacebookBusinessBrowser:
             except Exception:
                 already_on_home = False
 
-        if not await self._open_create_entry(
-            open_form=True,
-            already_on_home=already_on_home,
-        ):
+        try:
+            create_entry_ready = await asyncio.wait_for(
+                self._open_create_entry(
+                    open_form=True,
+                    already_on_home=already_on_home,
+                ),
+                timeout=60.0,
+            )
+        except asyncio.TimeoutError as exc:
+            diag = await self._diagnostic("create_form_timeout")
+            if self._last_selector_diagnostic:
+                diag = {
+                    "selector_attempt": self._last_selector_diagnostic,
+                    **diag,
+                }
+            raise BrowserBusinessError(
+                "BUSINESS_CREATE_FORM_TIMEOUT",
+                "Meta Business portfolio creation form did not become reachable within 60s.",
+                retryable=True,
+                diagnostic=diag,
+            ) from exc
+
+        if not create_entry_ready:
             diag = await self._diagnostic("create_form_unavailable")
             if self._last_selector_diagnostic:
                 diag = {
