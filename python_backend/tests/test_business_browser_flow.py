@@ -276,6 +276,26 @@ class BrowserAdAccountDomFallbackTests(unittest.IsolatedAsyncioTestCase):
             "href",
         )
 
+    async def test_dom_action_accepts_anchor_based_french_add(self):
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-rk-french-anchor-add")
+        )
+        browser.page = SimpleNamespace(
+            evaluate=AsyncMock(return_value="add"),
+        )
+
+        action = await browser._click_ad_account_action_dom(
+            allow_generic_add=True
+        )
+
+        self.assertEqual(action, "add")
+        script = browser.page.evaluate.await_args.args[0]
+        self.assertIn(
+            'button,a,[role="button"],[role="link"]',
+            script,
+        )
+        self.assertIn("r.x < 300", script)
+
     async def test_dom_action_can_open_generic_add_button(self):
         browser = FacebookBusinessBrowser(
             SimpleNamespace(profile_id="profile-rk-french-add")

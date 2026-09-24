@@ -3961,10 +3961,20 @@ class FacebookBusinessBrowser:
 
                     const generic = rows
                         .filter(row => {
-                            const isButton = row.el.matches(
-                                'button,[role="button"]'
+                            const r = row.el.getBoundingClientRect();
+                            const isInteractive = row.el.matches(
+                                'button,a,[role="button"],[role="link"]'
                             );
-                            if (!isButton || row.text.length > 96) return false;
+                            // The Add-RK action is in Meta's right content pane.
+                            // Accept anchors/role=link as well as buttons, but
+                            // keep the x-bound so sidebar navigation cannot win.
+                            if (
+                                !isInteractive
+                                || r.x < 300
+                                || row.text.length > 96
+                            ) {
+                                return false;
+                            }
                             if (accountWords.some(x => row.text.includes(x))) {
                                 return false;
                             }
@@ -3973,7 +3983,12 @@ class FacebookBusinessBrowser:
                                     || row.text.startsWith(word + ' ')
                             );
                         })
-                        .sort((a,b) => a.text.length - b.text.length);
+                        .sort((a,b) => {
+                            const at = a.text.length - b.text.length;
+                            if (at) return at;
+                            return a.el.getBoundingClientRect().x
+                                - b.el.getBoundingClientRect().x;
+                        });
                     if (!generic.length) return '';
                     generic[0].el.scrollIntoView({block: 'center'});
                     generic[0].el.click();
@@ -4016,8 +4031,9 @@ class FacebookBusinessBrowser:
                         'जोड़ें','बनाएँ','बनाएं','विज्ञापन खाता'
                     ];
                     const out = [];
+                    const seen = new Set();
                     for (const el of document.querySelectorAll(
-                        'button,a,[role="button"],[role="menuitem"],'
+                        'button,a,[role="button"],[role="link"],[role="menuitem"],'
                         + '[role="menuitemradio"],[role="option"]'
                     )) {
                         if (!visible(el)) continue;
@@ -4029,7 +4045,24 @@ class FacebookBusinessBrowser:
                         const lower = text.toLowerCase();
                         if (!text || text.length > 180) continue;
                         if (!markers.some(x => lower.includes(x))) continue;
-                        if (!out.includes(text)) out.push(text);
+                        const r = el.getBoundingClientRect();
+                        const key = [
+                            text,
+                            el.tagName || '',
+                            el.getAttribute('role') || '',
+                            Math.round(r.x),
+                            Math.round(r.y)
+                        ].join('|');
+                        if (seen.has(key)) continue;
+                        seen.add(key);
+                        out.push(
+                            text
+                            + ' [tag=' + (el.tagName || '')
+                            + ' role=' + (el.getAttribute('role') || '')
+                            + ' x=' + Math.round(r.x)
+                            + ' y=' + Math.round(r.y)
+                            + ']'
+                        );
                         if (out.length >= 30) break;
                     }
                     return out;
