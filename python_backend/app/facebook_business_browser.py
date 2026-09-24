@@ -2176,7 +2176,22 @@ class FacebookBusinessBrowser:
         user_last_name: str,
         profile_display_name: str,
     ) -> None:
-        if not await self._open_create_entry(open_form=True):
+        already_on_home = False
+        if self.page is not None:
+            try:
+                current = urlsplit(_clean(self.page.url))
+                path = (current.path or "").rstrip("/")
+                already_on_home = (
+                    current.netloc.lower().endswith("business.facebook.com")
+                    and path.startswith("/latest/home")
+                )
+            except Exception:
+                already_on_home = False
+
+        if not await self._open_create_entry(
+            open_form=True,
+            already_on_home=already_on_home,
+        ):
             diag = await self._diagnostic("create_form_unavailable")
             raise BrowserBusinessError(
                 "BUSINESS_CREATE_UI_UNAVAILABLE",
