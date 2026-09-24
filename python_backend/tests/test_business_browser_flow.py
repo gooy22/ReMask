@@ -86,6 +86,32 @@ class BrowserCreateSurfaceVisibilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await browser._has_create_surface())
 
 
+class BrowserAuthenticationStateTests(unittest.IsolatedAsyncioTestCase):
+    async def test_temporary_feature_block_is_not_retryable(self):
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-temp-block")
+        )
+        browser.page = SimpleNamespace(
+            url="https://business.facebook.com/reg/"
+        )
+        browser._body_text = AsyncMock(
+            return_value=(
+                "You're Temporarily Blocked. It looks like you were "
+                "misusing this feature by going too fast."
+            )
+        )
+        browser._diagnostic = AsyncMock(return_value={})
+
+        with self.assertRaises(BrowserBusinessError) as caught:
+            await browser._assert_authenticated()
+
+        self.assertEqual(
+            caught.exception.code,
+            "FACEBOOK_TEMPORARILY_BLOCKED",
+        )
+        self.assertFalse(caught.exception.retryable)
+
+
 class BrowserNavigationRecoveryTests(unittest.IsolatedAsyncioTestCase):
     async def test_err_aborted_is_accepted_when_meta_surface_is_alive(self):
         class _Page:
