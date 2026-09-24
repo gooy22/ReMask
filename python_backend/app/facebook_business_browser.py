@@ -54,6 +54,7 @@ class BrowserAdAccountResult:
     business_id: str
     ad_account_id: str
     response_friendly_name: str = ""
+    response_doc_id: str = ""
     response_path: str = ""
 
 
@@ -3960,6 +3961,7 @@ class FacebookBusinessBrowser:
                 business_id=business,
                 ad_account_id=ad_account_id,
                 response_friendly_name=friendly,
+                response_doc_id=_clean(request_meta.get("doc_id")),
                 response_path=response_path,
             )
 
