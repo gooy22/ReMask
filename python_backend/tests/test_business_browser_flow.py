@@ -154,6 +154,34 @@ class BrowserNetworkGateTests(unittest.TestCase):
         )
 
 
+class BrowserAdAccountAdditionalLocaleTests(unittest.TestCase):
+    def test_bangla_vietnamese_hindi_ad_account_labels_are_supported(self):
+        section_names = FacebookBusinessBrowser.AD_ACCOUNT_SECTION_NAMES
+        create_names = FacebookBusinessBrowser.AD_ACCOUNT_CREATE_ENTRY_NAMES
+        add_names = FacebookBusinessBrowser.ADD_NAMES
+
+        self.assertIn("বিজ্ঞাপন অ্যাকাউন্ট", section_names)
+        self.assertIn("Tài khoản quảng cáo", section_names)
+        self.assertIn("विज्ञापन खाते", section_names)
+
+        self.assertIn(
+            "বিজ্ঞাপন অ্যাকাউন্ট তৈরি করুন",
+            create_names,
+        )
+        self.assertIn(
+            "Tạo tài khoản quảng cáo",
+            create_names,
+        )
+        self.assertIn(
+            "विज्ञापन खाता बनाएँ",
+            create_names,
+        )
+
+        self.assertIn("যোগ করুন", add_names)
+        self.assertIn("Thêm", add_names)
+        self.assertIn("जोड़ें", add_names)
+
+
 class BrowserAdAccountSectionNavigationTests(unittest.IsolatedAsyncioTestCase):
     async def test_french_ad_accounts_sidebar_is_opened_before_create(self):
         browser = FacebookBusinessBrowser(
