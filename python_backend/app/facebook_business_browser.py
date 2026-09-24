@@ -3509,6 +3509,89 @@ class FacebookBusinessBrowser:
         except Exception:
             return False
 
+    async def _wait_for_ad_account_settings_ready(
+        self,
+        *,
+        business_id: str,
+        timeout_seconds: float = 12.0,
+    ) -> bool:
+        """Wait for Meta Business Settings to finish client-side hydration."""
+        business = _digits(business_id)
+        if self.page is None:
+            return False
+
+        deadline = time.monotonic() + max(2.0, float(timeout_seconds))
+        saw_nonempty_body = False
+
+        while time.monotonic() < deadline:
+            try:
+                await self._assert_authenticated()
+            except BrowserBusinessError:
+                raise
+            except Exception:
+                pass
+
+            body = (await self._body_text()).casefold()
+            if body.strip():
+                saw_nonempty_body = True
+
+            markers = (
+                "ad account",
+                "advertising account",
+                "реклам",
+                "werbekonto",
+                "compte publicitaire",
+                "comptes publicitaires",
+            )
+            if any(marker in body for marker in markers):
+                return True
+
+            # Meta can render icon/button chrome before useful body text.
+            # A visible Add/Create control on the expected business URL is
+            # enough to treat the surface as hydrated.
+            try:
+                current = _clean(self.page.url)
+                has_business = bool(business and business in current)
+                visible_action = bool(
+                    await self.page.evaluate(
+                        """() => {
+                            const visible = el => {
+                                const r = el.getBoundingClientRect();
+                                const s = getComputedStyle(el);
+                                return r.width > 0 && r.height > 0
+                                    && s.display !== 'none'
+                                    && s.visibility !== 'hidden'
+                                    && s.pointerEvents !== 'none';
+                            };
+                            const nodes = [...document.querySelectorAll(
+                                'button,a,[role="button"],[role="menuitem"]'
+                            )];
+                            return nodes.some(el => {
+                                if (!visible(el)) return false;
+                                const t = (
+                                    (el.getAttribute('aria-label') || '') + ' ' +
+                                    (el.innerText || el.textContent || '')
+                                ).replace(/\\s+/g, ' ').trim().toLowerCase();
+                                return [
+                                    'add','create','ajouter','créer',
+                                    'добавить','создать','додати','створити',
+                                    'hinzufügen','erstellen'
+                                ].some(x => t.includes(x));
+                            });
+                        }"""
+                    )
+                )
+                if has_business and visible_action:
+                    return True
+            except Exception:
+                pass
+
+            await self.page.wait_for_timeout(500)
+
+        # A completely empty body after navigation is a hydration/load
+        # failure, not proof that Meta changed the UI.
+        return saw_nonempty_body and False
+
     async def _open_ad_account_create_form(
         self,
         *,
@@ -3525,22 +3608,39 @@ class FacebookBusinessBrowser:
 
         opened = False
         navigation_errors: list[str] = []
+        hydration_attempts = 0
         for template in self.SETTINGS_AD_ACCOUNTS_URLS:
             try:
-                await self._goto(template.format(business_id=business))
-                body = (await self._body_text()).casefold()
-                current = _clean(self.page.url if self.page else "")
-                if (
-                    business in current
-                    or "ad account" in body
-                    or "advertising account" in body
-                    or "реклам" in body
-                    or "werbekonto" in body
-                    or "compte publicitaire" in body
-                    or "comptes publicitaires" in body
+                target_url = template.format(business_id=business)
+                await self._goto(target_url)
+                hydration_attempts += 1
+                if await self._wait_for_ad_account_settings_ready(
+                    business_id=business,
+                    timeout_seconds=12.0,
                 ):
                     opened = True
                     break
+
+                # Meta occasionally returns the Business Settings shell first
+                # (interactive DOM, 0 body text) and hydrates only after a
+                # reload. Retry the same URL once before trying another route.
+                try:
+                    await self.page.reload(
+                        wait_until="commit",
+                        timeout=self.timeout_ms,
+                    )
+                    await self.page.wait_for_timeout(500)
+                    hydration_attempts += 1
+                    if await self._wait_for_ad_account_settings_ready(
+                        business_id=business,
+                        timeout_seconds=10.0,
+                    ):
+                        opened = True
+                        break
+                except Exception as reload_exc:
+                    navigation_errors.append(
+                        f"reload: {type(reload_exc).__name__}: {reload_exc}"
+                    )
             except BrowserBusinessError as exc:
                 navigation_errors.append(f"{exc.code}: {exc}")
                 if exc.code in {
@@ -3555,6 +3655,7 @@ class FacebookBusinessBrowser:
             diag = await self._diagnostic("ad_account_settings_unavailable")
             diag["business_id"] = business
             diag["navigation_errors"] = navigation_errors[-6:]
+            diag["hydration_attempts"] = hydration_attempts
             raise BrowserBusinessError(
                 "AD_ACCOUNT_CREATE_UI_UNAVAILABLE",
                 "Meta Business Settings Ad Accounts surface could not be opened.",
@@ -3624,8 +3725,28 @@ class FacebookBusinessBrowser:
                 entry_clicked = False
 
         if not entry_clicked:
+            # A late Meta render can happen even after the settings
+            # surface first became usable. Give the actual Add/Create controls
+            # one more short hydration window before declaring UI_CHANGED.
+            await self._wait_for_ad_account_settings_ready(
+                business_id=business,
+                timeout_seconds=6.0,
+            )
+            entry_clicked = await self._click_named(
+                self.AD_ACCOUNT_CREATE_ENTRY_NAMES
+            )
+            if not entry_clicked:
+                add_clicked = await self._click_named(self.ADD_NAMES)
+                if add_clicked:
+                    await self.page.wait_for_timeout(500)
+                    entry_clicked = await self._click_named(
+                        self.AD_ACCOUNT_CREATE_ENTRY_NAMES
+                    )
+
+        if not entry_clicked:
             diag = await self._diagnostic("ad_account_create_entry_missing")
             diag["business_id"] = business
+            diag["hydration_attempts"] = hydration_attempts
             raise BrowserBusinessError(
                 "AD_ACCOUNT_CREATE_UI_CHANGED",
                 "Meta Ad Account create entry was not found.",
