@@ -398,12 +398,10 @@ async def create_ad_account_with_docids(
         dynamic_candidate = None
 
     if dynamic_candidate is not None:
-        # A live discovery outranks unconfirmed candidates but a previously
-        # confirmed working candidate remains first.
-        if confirmed:
-            ordered.append(dynamic_candidate)
-        else:
-            ordered.insert(0, dynamic_candidate)
+        # Live Business Settings capture stays first. Dynamic HTML/script
+        # discovery is only a secondary candidate behind captured/confirmed
+        # request shapes.
+        ordered.append(dynamic_candidate)
 
     # Do not submit unconfirmed registry/static candidates. Only the live
     # Business Settings capture, explicit job override, current discovery or a
