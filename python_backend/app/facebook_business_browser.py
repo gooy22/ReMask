@@ -1106,13 +1106,32 @@ class FacebookBusinessBrowser:
         except Exception:
             current_asset = ""
 
-        # Prefer the Page Meta explicitly pinned into the current URL.
-        known_pages.sort(
-            key=lambda row: (
-                0 if current_asset and row[0] == current_asset else 1,
-                row[1].casefold(),
-            )
-        )
+        # This targeted path is deliberately limited to the live failure
+        # mode we observed: Meta redirected Business Suite into a known Page
+        # context via ?asset_id=<PageID>. Other profiles keep the generic,
+        # already-canary-tested selector path below.
+        if not current_asset:
+            return False
+
+        pinned_pages = [
+            row for row in known_pages
+            if row[0] == current_asset
+        ]
+        if not pinned_pages:
+            self._last_selector_diagnostic = {
+                **self._last_selector_diagnostic,
+                "known_asset_selector": {
+                    "current_asset_id": current_asset,
+                    "matched_known_page": False,
+                    "known_pages": [
+                        {"id": page_id, "name": page_name}
+                        for page_id, page_name in known_pages[:12]
+                    ],
+                },
+            }
+            return False
+
+        known_pages = pinned_pages
 
         diagnostic_rows: list[dict[str, Any]] = []
 
