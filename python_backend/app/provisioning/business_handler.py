@@ -195,6 +195,133 @@ async def business_handler(
         "data.business_manager_create.id",
     }
 
+    # A previous Add BM Job may have been created before stable scope keys were
+    # introduced. Recover confirmed/uncertain CREATE state by profile+Page
+    # across item/scope boundaries before any new irreversible CREATE.
+    if (
+        not business_id.isdigit()
+        and not checkpoint_response_id.isdigit()
+        and phase in {"", "BUSINESS_SNAPSHOT", "CREATE_NOT_SUBMITTED"}
+    ):
+        previous_resume = await provisioning_state.latest_business_resume_for_page(
+            profile_id,
+            page_id,
+            exclude_item_id=item_id,
+        )
+        previous_result = (
+            previous_resume.get("result")
+            if isinstance(previous_resume, dict)
+            else {}
+        )
+        if not isinstance(previous_result, dict):
+            previous_result = {}
+
+        previous_business_id = _clean(previous_result.get("business_id"))
+        previous_response_id = _clean(
+            previous_result.get("create_response_business_id")
+            or previous_result.get("response_business_id")
+        )
+        previous_response_path = _clean(
+            previous_result.get("create_response_path")
+            or previous_result.get("response_path")
+        )
+        previous_phase = _clean(
+            previous_result.get("phase")
+            or previous_result.get("resume_from")
+        ).upper()
+        previous_before_ids = [
+            str(value)
+            for value in (previous_result.get("business_ids_before") or [])
+            if str(value).isdigit()
+        ]
+        previous_name = _clean(previous_result.get("business_name"))
+
+        confirmed_cross_job_id = ""
+        confirmed_cross_job_path = ""
+        if previous_business_id.isdigit():
+            confirmed_cross_job_id = previous_business_id
+        elif (
+            previous_response_id.isdigit()
+            and previous_response_path in exact_response_paths
+        ):
+            confirmed_cross_job_id = previous_response_id
+            confirmed_cross_job_path = previous_response_path
+
+        if confirmed_cross_job_id:
+            business_id = confirmed_cross_job_id
+            checkpoint_response_id = (
+                previous_response_id
+                if previous_response_id.isdigit()
+                else confirmed_cross_job_id
+            )
+            checkpoint_response_path = previous_response_path
+            phase = "CREATE_CONFIRMED"
+            recovered = True
+            if previous_name:
+                bm_name = previous_name
+            checkpoint = await provisioning_state.checkpoint(
+                item_id,
+                profile_id,
+                scope_key,
+                ProvisioningStep.BUSINESS,
+                {
+                    "phase": "CREATE_CONFIRMED",
+                    "resume_from": "PAGE_ADD",
+                    "business_id": business_id,
+                    "business_name": bm_name,
+                    "primary_page_id": page_id,
+                    "create_response_business_id": checkpoint_response_id,
+                    "create_response_path": (
+                        checkpoint_response_path
+                        or confirmed_cross_job_path
+                    ),
+                    "recovered_cross_job": True,
+                    "recovered_from_item_id": _clean(
+                        previous_resume.get("item_id")
+                    ),
+                    "recovered_from_scope_key": _clean(
+                        previous_resume.get("scope_key")
+                    ),
+                    "activity": "VERIFY_PAGE",
+                    "activity_at": int(time.time()),
+                },
+            )
+
+        elif (
+            previous_phase in {
+                "CREATE_SUBMITTED",
+                "CREATE_CLICK_INTENT",
+                "CREATE_PENDING_SUBMIT",
+                "CREATE_RESULT_UNKNOWN",
+            }
+            and previous_before_ids
+        ):
+            phase = previous_phase
+            recovered = True
+            if previous_name:
+                bm_name = previous_name
+            checkpoint = await provisioning_state.checkpoint(
+                item_id,
+                profile_id,
+                scope_key,
+                ProvisioningStep.BUSINESS,
+                {
+                    "phase": previous_phase,
+                    "business_name": bm_name,
+                    "primary_page_id": page_id,
+                    "business_ids_before": previous_before_ids,
+                    "recovered_cross_job": True,
+                    "recovered_from_item_id": _clean(
+                        previous_resume.get("item_id")
+                    ),
+                    "recovered_from_scope_key": _clean(
+                        previous_resume.get("scope_key")
+                    ),
+                    "activity": "RECONCILE_CREATE",
+                    "activity_at": int(time.time()),
+                },
+            )
+
     # The network gate aborts the Meta request if the atomic SUBMITTED
     # checkpoint cannot be persisted. In that specific case we know the
     # irreversible request did NOT reach Meta, so retry may safely submit
