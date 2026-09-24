@@ -1173,8 +1173,8 @@ class FacebookBusinessBrowser:
 
                 await target.click(timeout=3000)
                 if await self._wait_for_create_surface(
-                    timeout_ms=3500,
-                    interval_ms=200,
+                    timeout_ms=6500,
+                    interval_ms=250,
                 ):
                     self._last_selector_diagnostic = {
                         "known_asset_selector": {
