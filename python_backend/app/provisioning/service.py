@@ -63,7 +63,7 @@ class ProvisioningService:
             entity_key = ENTITY_RESULT_KEYS.get(step)
             existing_id = getattr(snapshot, entity_key, None) if entity_key else None
 
-            if existing_id:
+            if existing_id and step is not ProvisioningStep.BUSINESS:
                 result = {entity_key: existing_id, "reused": True}
                 await self.state.complete(
                     item_id, profile_id, scope_key, step, result
