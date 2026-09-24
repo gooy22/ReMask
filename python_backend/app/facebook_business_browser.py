@@ -732,10 +732,14 @@ class FacebookBusinessBrowser:
 
     ADD_NAMES = (
         "Add",
+        "Add ad account",
+        "Add an ad account",
         "Добавить",
         "Додати",
         "Hinzufügen",
         "Ajouter",
+        "Ajouter un compte publicitaire",
+        "Ajouter des comptes publicitaires",
         "যোগ করুন",
         "Thêm",
         "जोड़ें",
@@ -3889,6 +3893,85 @@ class FacebookBusinessBrowser:
             pass
         return []
 
+    async def _wait_for_ad_account_create_action(
+        self,
+        *,
+        timeout_seconds: float = 10.0,
+    ) -> bool:
+        """Wait for a real Add/Create control in the Ad Accounts content pane.
+
+        The left settings navigation itself contains localized "Ad accounts"
+        text, so body-text hydration markers are not enough. This probe waits
+        for an actionable control in the main pane and deliberately ignores
+        sidebar-only labels.
+        """
+        if self.page is None:
+            return False
+
+        deadline = time.monotonic() + max(1.0, float(timeout_seconds))
+        while time.monotonic() < deadline:
+            try:
+                ready = bool(
+                    await self.page.evaluate(
+                        """() => {
+                            const visible = el => {
+                                const r = el.getBoundingClientRect();
+                                const s = getComputedStyle(el);
+                                return r.width > 0 && r.height > 0
+                                    && s.display !== 'none'
+                                    && s.visibility !== 'hidden'
+                                    && s.pointerEvents !== 'none';
+                            };
+                            const clean = text => (text || '')
+                                .replace(/\s+/g, ' ').trim().toLowerCase();
+                            const accountWords = [
+                                'ad account','advertising account','реклам',
+                                'werbekonto','compte publicitaire',
+                                'বিজ্ঞাপন অ্যাকাউন্ট','tài khoản quảng cáo',
+                                'विज्ञापन खाता','विज्ञापन खाते'
+                            ];
+                            const actionWords = [
+                                'add','create','ajouter','créer',
+                                'добавить','создать','додати','створити',
+                                'hinzufügen','erstellen',
+                                'যোগ করুন','তৈরি করুন',
+                                'thêm','tạo','जोड़ें','बनाएँ','बनाएं'
+                            ];
+                            const genericActions = new Set([
+                                'add','create','ajouter','créer',
+                                'добавить','создать','додати','створити',
+                                'hinzufügen','erstellen',
+                                'যোগ করুন','তৈরি করুন',
+                                'thêm','tạo','जोड़ें','बनाएँ','बनाएं'
+                            ]);
+                            const nodes = [...document.querySelectorAll(
+                                'button,a,[role="button"],[role="menuitem"],[aria-haspopup]'
+                            )];
+                            return nodes.some(el => {
+                                if (!visible(el)) return false;
+                                const r = el.getBoundingClientRect();
+                                const text = clean(
+                                    (el.getAttribute('aria-label') || '') + ' ' +
+                                    (el.getAttribute('title') || '') + ' ' +
+                                    (el.innerText || el.textContent || '')
+                                );
+                                if (!text) return false;
+                                const hasAccount = accountWords.some(x => text.includes(x));
+                                const hasAction = actionWords.some(x => text.includes(x));
+                                if (hasAccount && hasAction) return true;
+                                return r.x >= 300 && genericActions.has(text);
+                            });
+                        }"""
+                    )
+                )
+                if ready:
+                    return True
+            except Exception:
+                pass
+            await self.page.wait_for_timeout(250)
+
+        return False
+
     async def _open_ad_account_create_form(
         self,
         *,
@@ -3964,10 +4047,19 @@ class FacebookBusinessBrowser:
         # even though the URL already contains /ad_accounts. Explicitly open
         # the Ad Accounts item in the left navigation before looking for Add.
         section_clicked = await self._activate_ad_account_settings_section()
-        if section_clicked:
-            await self._wait_for_ad_account_settings_ready(
-                business_id=business,
-                timeout_seconds=6.0,
+        action_surface_ready = await self._wait_for_ad_account_create_action(
+            timeout_seconds=10.0 if section_clicked else 6.0,
+        )
+
+        # The migrated Meta settings shell can acknowledge the sidebar click
+        # before React mounts the right-hand pane. If the first probe sees no
+        # action, re-activate the section once and wait again instead of
+        # declaring UI_CHANGED from sidebar text alone.
+        if section_clicked and not action_surface_ready:
+            await self.page.wait_for_timeout(500)
+            await self._activate_ad_account_settings_section()
+            action_surface_ready = await self._wait_for_ad_account_create_action(
+                timeout_seconds=8.0,
             )
 
         entry_clicked = await self._click_named(
@@ -4009,8 +4101,7 @@ class FacebookBusinessBrowser:
             # A late Meta render can happen even after the settings
             # surface first became usable. Give the actual Add/Create controls
             # one more short hydration window before declaring UI_CHANGED.
-            await self._wait_for_ad_account_settings_ready(
-                business_id=business,
+            await self._wait_for_ad_account_create_action(
                 timeout_seconds=6.0,
             )
             entry_clicked = await self._click_named(
@@ -4052,6 +4143,7 @@ class FacebookBusinessBrowser:
             diag["business_id"] = business
             diag["hydration_attempts"] = hydration_attempts
             diag["section_clicked"] = section_clicked
+            diag["action_surface_ready"] = action_surface_ready
             diag["action_candidates"] = await self._ad_account_action_candidates()
             raise BrowserBusinessError(
                 "AD_ACCOUNT_CREATE_UI_CHANGED",
