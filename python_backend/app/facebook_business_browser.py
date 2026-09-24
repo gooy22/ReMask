@@ -1610,6 +1610,199 @@ class FacebookBusinessBrowser:
 
         return False
 
+    async def _try_open_ads_manager_create_entry(self) -> bool:
+        """
+        Bounded fallback for Meta's 2026 Ads Manager Business Portfolio
+        selector. This path is used only when Business Suite renders no usable
+        account/business selector in a known Page context.
+        """
+        if self.page is None:
+            return False
+
+        probe_rows: list[dict[str, Any]] = []
+
+        try:
+            await asyncio.wait_for(
+                self._goto(self.ADS_MANAGER_URL),
+                timeout=28.0,
+            )
+        except asyncio.TimeoutError:
+            self._last_selector_diagnostic = {
+                **self._last_selector_diagnostic,
+                "ads_manager_probe": {
+                    "navigation_timeout": 28,
+                    "url": _clean(self.page.url if self.page else ""),
+                },
+            }
+            return False
+        except BrowserBusinessError as exc:
+            self._last_selector_diagnostic = {
+                **self._last_selector_diagnostic,
+                "ads_manager_probe": {
+                    "navigation_error": exc.code,
+                    "message": str(exc)[:500],
+                    "url": _clean(self.page.url if self.page else ""),
+                },
+            }
+            return False
+
+        await self._assert_authenticated()
+
+        if await self._form_ready():
+            return True
+
+        if await self._has_create_surface():
+            if await self._click_named(self.CREATE_NAMES):
+                await self._assert_authenticated()
+                if await self._wait_for_form_ready(
+                    timeout_ms=6500,
+                    interval_ms=250,
+                ):
+                    self._last_selector_diagnostic = {
+                        **self._last_selector_diagnostic,
+                        "ads_manager_probe": {
+                            "create_surface_direct": True,
+                            "url": _clean(self.page.url),
+                        },
+                    }
+                    return True
+
+        # Current Ads Manager exposes its account/portfolio selector in the
+        # upper-left account area. Probe only that bounded region and favor
+        # controls that look like account selectors.
+        selectors = (
+            'button',
+            '[role="button"]',
+            '[role="menuitem"]',
+            '[aria-haspopup]',
+            '[aria-expanded]',
+        )
+        candidates: list[tuple[int, float, float, Any, str]] = []
+
+        for selector in selectors:
+            try:
+                locator = self.page.locator(selector)
+                count = min(await locator.count(), 100)
+            except Exception:
+                continue
+
+            for index in range(count):
+                item = locator.nth(index)
+                try:
+                    if not await item.is_visible() or not await item.is_enabled():
+                        continue
+                    box = await item.bounding_box()
+                    if not box:
+                        continue
+
+                    x = float(box.get("x") or 0)
+                    y = float(box.get("y") or 0)
+                    w = float(box.get("width") or 0)
+                    h = float(box.get("height") or 0)
+                    if x > 620 or y > 260 or w <= 0 or h <= 0:
+                        continue
+
+                    text_value = _clean(await item.inner_text(timeout=700))
+                    aria = _clean(await item.get_attribute("aria-label"))
+                    title = _clean(await item.get_attribute("title"))
+                    haspopup = _clean(await item.get_attribute("aria-haspopup"))
+                    expanded = _clean(await item.get_attribute("aria-expanded"))
+                    key = " ".join((text_value, aria, title)).casefold()
+
+                    score = int(y)
+                    if haspopup:
+                        score -= 120
+                    if expanded:
+                        score -= 40
+                    if any(
+                        token in key
+                        for token in (
+                            "account",
+                            "ad account",
+                            "business",
+                            "portfolio",
+                            "switch",
+                            "select",
+                        )
+                    ):
+                        score -= 100
+                    if re.search(r"\b\d{5,30}\b", key):
+                        score -= 60
+
+                    label = " | ".join(
+                        value
+                        for value in (text_value, aria, title)
+                        if value
+                    )[:300]
+                    probe_rows.append(
+                        {
+                            "selector": selector,
+                            "label": label,
+                            "x": round(x),
+                            "y": round(y),
+                            "w": round(w),
+                            "h": round(h),
+                            "haspopup": haspopup,
+                            "expanded": expanded,
+                            "score": score,
+                        }
+                    )
+                    candidates.append((score, y, x, item, label))
+                except Exception:
+                    continue
+
+        candidates.sort(key=lambda row: (row[0], row[1], row[2]))
+        seen: set[tuple[int, int]] = set()
+
+        for _, y, x, item, label in candidates[:8]:
+            marker = (round(x), round(y))
+            if marker in seen:
+                continue
+            seen.add(marker)
+
+            try:
+                await item.click(timeout=2200)
+                if await self._wait_for_create_surface(
+                    timeout_ms=3500,
+                    interval_ms=250,
+                ):
+                    if await self._click_named(self.CREATE_NAMES):
+                        await self._assert_authenticated()
+                        if await self._wait_for_form_ready(
+                            timeout_ms=6500,
+                            interval_ms=250,
+                        ):
+                            self._last_selector_diagnostic = {
+                                **self._last_selector_diagnostic,
+                                "ads_manager_probe": {
+                                    "selector_opened": True,
+                                    "matched_label": label,
+                                    "url": _clean(self.page.url),
+                                    "candidates": probe_rows[:30],
+                                },
+                            }
+                            return True
+                try:
+                    await self.page.keyboard.press("Escape")
+                    await self.page.wait_for_timeout(120)
+                except Exception:
+                    pass
+            except Exception:
+                try:
+                    await self.page.keyboard.press("Escape")
+                except Exception:
+                    pass
+
+        self._last_selector_diagnostic = {
+            **self._last_selector_diagnostic,
+            "ads_manager_probe": {
+                "selector_opened": False,
+                "url": _clean(self.page.url if self.page else ""),
+                "candidates": probe_rows[:30],
+            },
+        }
+        return False
+
     async def _open_create_entry(
         self,
         *,
