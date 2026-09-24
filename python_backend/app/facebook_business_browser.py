@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable
-from urllib.parse import parse_qs, unquote, unquote_plus, urlsplit
+from urllib.parse import parse_qs, unquote, unquote_plus, urlencode, urlsplit
 
 
 CheckpointCallback = Callable[[dict[str, Any]], Awaitable[None]]
@@ -159,6 +159,74 @@ def _request_graphql_meta(request: Any) -> dict[str, Any]:
         "decoded_raw": unquote_plus(raw) if raw else "",
         "body_decodable": body_decodable,
     }
+
+
+def _ad_account_required_attribution_post_data(
+    request: Any,
+    *,
+    end_advertiser: str = "NONE",
+    media_agency: str = "NONE",
+    partner: str = "NONE",
+) -> tuple[str, dict[str, str]]:
+    """Fill Meta-required attribution fields on its own Add-RK GraphQL request.
+
+    Meta's Business /adaccount contract requires end_advertiser,
+    media_agency and partner even when no external entity is involved.  The
+    Business Settings frontend can currently emit the private CREATE mutation
+    without those optional-looking UI choices.  Preserve Meta's live request
+    verbatim and only add missing required values to variables.input.
+    """
+    try:
+        raw_buffer = getattr(request, "post_data_buffer", None)
+        if raw_buffer:
+            raw = (
+                raw_buffer.decode("utf-8")
+                if isinstance(raw_buffer, bytes)
+                else str(raw_buffer)
+            )
+        else:
+            raw = str(getattr(request, "post_data", "") or "")
+    except Exception:
+        return "", {}
+
+    if not raw:
+        return "", {}
+
+    parsed = parse_qs(raw, keep_blank_values=True)
+    variables_raw = _clean((parsed.get("variables") or [""])[0])
+    if not variables_raw:
+        return raw, {}
+
+    try:
+        variables = json.loads(variables_raw)
+    except (ValueError, json.JSONDecodeError):
+        return raw, {}
+    if not isinstance(variables, dict):
+        return raw, {}
+
+    input_data = variables.get("input")
+    if not isinstance(input_data, dict):
+        return raw, {}
+
+    defaults = {
+        "end_advertiser": _clean(end_advertiser) or "NONE",
+        "media_agency": _clean(media_agency) or "NONE",
+        "partner": _clean(partner) or "NONE",
+    }
+    applied: dict[str, str] = {}
+    for key, value in defaults.items():
+        current = input_data.get(key)
+        if current is None or (isinstance(current, str) and not current.strip()):
+            input_data[key] = value
+            applied[key] = value
+
+    if not applied:
+        return raw, {}
+
+    parsed["variables"] = [
+        json.dumps(variables, ensure_ascii=False, separators=(",", ":"))
+    ]
+    return urlencode(parsed, doseq=True), applied
 
 
 def _proxy_config(raw_proxy: str | None) -> dict[str, str] | None:
@@ -3730,7 +3798,23 @@ class FacebookBusinessBrowser:
                         )
                 return
 
-            await route.continue_()
+            patched_post_data, attribution_defaults = (
+                _ad_account_required_attribution_post_data(request)
+            )
+            if attribution_defaults:
+                await checkpoint(
+                    {
+                        "phase": "CREATE_SUBMITTED",
+                        "activity": "AD_ACCOUNT_REQUIRED_ATTRIBUTION_APPLIED",
+                        "activity_at": int(time.time()),
+                        "required_attribution_defaults": sorted(
+                            attribution_defaults.keys()
+                        ),
+                    }
+                )
+                await route.continue_(post_data=patched_post_data)
+            else:
+                await route.continue_()
             if not gate_future.done():
                 gate_future.set_result(True)
 
