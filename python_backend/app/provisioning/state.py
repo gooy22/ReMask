@@ -108,6 +108,122 @@ class ProvisioningStateStore:
             data.pop("result_json", None)
             return data
 
+    async def latest_business_resume_for_page(
+        self,
+        profile_id: str,
+        page_id: str,
+        *,
+        exclude_item_id: str = "",
+    ) -> dict[str, Any]:
+        """
+        Return the newest resumable BUSINESS checkpoint for profile+Page.
+
+        This deliberately crosses scope_key/item boundaries so Jobs created
+        before stable Add-BM scopes can still protect later Jobs from duplicate
+        Business creation.
+        """
+        return await asyncio.to_thread(
+            self._latest_business_resume_for_page_sync,
+            profile_id,
+            page_id,
+            exclude_item_id,
+        )
+
+    def _latest_business_resume_for_page_sync(
+        self,
+        profile_id: str,
+        page_id: str,
+        exclude_item_id: str,
+    ) -> dict[str, Any]:
+        profile = str(profile_id or "").strip()
+        page = str(page_id or "").strip()
+        excluded = str(exclude_item_id or "").strip()
+        if not profile or not page:
+            return {}
+
+        with self._connect() as con:
+            rows = con.execute(
+                """
+                SELECT item_id,scope_key,status,result_json,error_code,error_message,
+                       created_at,updated_at
+                FROM provisioning_steps
+                WHERE profile_id=? AND step=? AND result_json IS NOT NULL
+                ORDER BY updated_at DESC
+                LIMIT 250
+                """,
+                (profile, ProvisioningStep.BUSINESS.value),
+            ).fetchall()
+
+        for row in rows:
+            if excluded and str(row["item_id"] or "") == excluded:
+                continue
+
+            raw = row["result_json"]
+            if not raw:
+                continue
+            try:
+                result = json.loads(str(raw))
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if not isinstance(result, dict):
+                continue
+
+            candidate_page = str(
+                result.get("primary_page_id")
+                or result.get("page_id")
+                or ""
+            ).strip()
+            if candidate_page != page:
+                continue
+
+            business_id = str(result.get("business_id") or "").strip()
+            response_id = str(
+                result.get("create_response_business_id")
+                or result.get("response_business_id")
+                or ""
+            ).strip()
+            response_path = str(
+                result.get("create_response_path")
+                or result.get("response_path")
+                or ""
+            ).strip()
+            phase = str(
+                result.get("phase")
+                or result.get("resume_from")
+                or ""
+            ).strip().upper()
+
+            numeric_business = (
+                business_id.isdigit()
+                and 5 <= len(business_id) <= 30
+            )
+            numeric_response = (
+                response_id.isdigit()
+                and 5 <= len(response_id) <= 30
+            )
+            uncertain_create = phase in {
+                "CREATE_SUBMITTED",
+                "CREATE_CLICK_INTENT",
+                "CREATE_PENDING_SUBMIT",
+                "CREATE_RESULT_UNKNOWN",
+            }
+
+            if not numeric_business and not numeric_response and not uncertain_create:
+                continue
+
+            return {
+                "item_id": str(row["item_id"] or ""),
+                "scope_key": str(row["scope_key"] or ""),
+                "status": str(row["status"] or ""),
+                "error_code": str(row["error_code"] or ""),
+                "error_message": str(row["error_message"] or ""),
+                "result": result,
+                "updated_at": int(row["updated_at"] or 0),
+                "response_path": response_path,
+            }
+
+        return {}
+
     async def set_running(
         self,
         item_id: str,
