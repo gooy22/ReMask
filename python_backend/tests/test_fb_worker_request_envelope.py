@@ -49,5 +49,26 @@ class FacebookRequestEnvelopeTests(unittest.TestCase):
         self.assertEqual(session._next_graphql_req(), "10")
 
 
+    def test_decodes_streamed_relay_create_response(self):
+        payload = FacebookWebSession._decode_graphql_body(
+            '{"extensions":{"is_final":false}}\n'
+            '{"data":{"business_create":{"business":{"id":"555666777888999"}}}}'
+        )
+        self.assertEqual(
+            payload["data"]["business_create"]["business"]["id"],
+            "555666777888999",
+        )
+
+    def test_merges_streamed_relay_errors(self):
+        payload = FacebookWebSession._decode_graphql_body(
+            '{"errors":[{"message":"first"}]}\n'
+            '{"errors":[{"message":"second"}]}'
+        )
+        self.assertEqual(
+            [row["message"] for row in payload["errors"]],
+            ["first", "second"],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
