@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import os
 import unittest
 
 from app.facebook_ad_account_create import (
@@ -113,3 +114,75 @@ class AdAccountCreateResponseTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BrowserQueueAwareTimeoutTests(unittest.TestCase):
+    def test_default_rk_timeout_covers_browser_queue_waves(self) -> None:
+        from unittest.mock import patch
+        from app.provisioning.models import ProvisioningStep
+        from app.provisioning.timeouts import (
+            browser_provisioning_hard_timeout,
+            browser_queue_waves,
+            browser_step_timeout,
+        )
+
+        env = {
+            "REMASK_WORKER_CONCURRENCY": "30",
+            "REMASK_BM_BROWSER_CONCURRENCY": "2",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            for key in (
+                "REMASK_AD_ACCOUNT_STEP_TIMEOUT",
+                "REMASK_BUSINESS_STEP_TIMEOUT",
+                "REMASK_ADD_RK_HARD_TIMEOUT_SECONDS",
+                "REMASK_ADD_BM_HARD_TIMEOUT_SECONDS",
+                "REMASK_BROWSER_PROVISIONING_HARD_TIMEOUT_SECONDS",
+            ):
+                os.environ.pop(key, None)
+            self.assertEqual(browser_queue_waves(), 15)
+            rk_timeout = browser_step_timeout(
+                ProvisioningStep.AD_ACCOUNT
+            )
+            self.assertGreater(rk_timeout, 150.0)
+            self.assertGreater(
+                browser_provisioning_hard_timeout(
+                    [ProvisioningStep.AD_ACCOUNT]
+                ),
+                rk_timeout,
+            )
+
+    def test_combined_browser_watchdog_covers_both_steps(self) -> None:
+        from unittest.mock import patch
+        from app.provisioning.models import ProvisioningStep
+        from app.provisioning.timeouts import (
+            browser_provisioning_hard_timeout,
+            browser_step_timeout,
+        )
+
+        env = {
+            "REMASK_WORKER_CONCURRENCY": "30",
+            "REMASK_BM_BROWSER_CONCURRENCY": "2",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            for key in (
+                "REMASK_AD_ACCOUNT_STEP_TIMEOUT",
+                "REMASK_BUSINESS_STEP_TIMEOUT",
+                "REMASK_ADD_RK_HARD_TIMEOUT_SECONDS",
+                "REMASK_ADD_BM_HARD_TIMEOUT_SECONDS",
+                "REMASK_BROWSER_PROVISIONING_HARD_TIMEOUT_SECONDS",
+            ):
+                os.environ.pop(key, None)
+            total = browser_provisioning_hard_timeout(
+                [
+                    ProvisioningStep.BUSINESS,
+                    ProvisioningStep.AD_ACCOUNT,
+                ]
+            )
+            self.assertGreater(
+                total,
+                browser_step_timeout(ProvisioningStep.BUSINESS),
+            )
+            self.assertGreater(
+                total,
+                browser_step_timeout(ProvisioningStep.AD_ACCOUNT),
+            )

@@ -8,6 +8,7 @@ from typing import Any, Awaitable, Callable
 
 from .mirror import MirrorError, SnapshotMirror
 from .provisioning import ProvisioningError, ProvisioningService, ProvisioningStateStore
+from .provisioning.timeouts import browser_provisioning_hard_timeout
 from .router import RoutePolicyError, TransparentPostRouter
 from .session import ProfileResolver, ProfileSession, ProfileContextError, ProxyCheckError
 from .store import JobStore
@@ -164,27 +165,23 @@ class WorkerPool:
                                 ad_account_guarded='AD_ACCOUNT' in normalized_steps
 
                                 if business_guarded or ad_account_guarded:
-                                    if business_guarded:
-                                        timeout_env='REMASK_ADD_BM_HARD_TIMEOUT_SECONDS'
-                                        timeout_default=210.0
+                                    browser_steps=[
+                                        value
+                                        for value in normalized_steps
+                                        if value in {'BUSINESS','AD_ACCOUNT'}
+                                    ]
+                                    hard_timeout=browser_provisioning_hard_timeout(
+                                        browser_steps
+                                    )
+                                    if business_guarded and ad_account_guarded:
+                                        watchdog_code='BROWSER_PROVISIONING_HARD_TIMEOUT'
+                                        watchdog_label='BUSINESS+AD_ACCOUNT'
+                                    elif business_guarded:
                                         watchdog_code='ADD_BM_HARD_TIMEOUT'
                                         watchdog_label='BUSINESS'
                                     else:
-                                        timeout_env='REMASK_ADD_RK_HARD_TIMEOUT_SECONDS'
-                                        timeout_default=180.0
                                         watchdog_code='ADD_RK_HARD_TIMEOUT'
                                         watchdog_label='AD_ACCOUNT'
-
-                                    try:
-                                        hard_timeout=float(
-                                            os.getenv(
-                                                timeout_env,
-                                                str(int(timeout_default)),
-                                            )
-                                        )
-                                    except (TypeError,ValueError):
-                                        hard_timeout=timeout_default
-                                    hard_timeout=max(90.0,min(hard_timeout,600.0))
 
                                     result=await _await_with_hard_watchdog(
                                         self.provisioning.run(
@@ -198,9 +195,11 @@ class WorkerPool:
                                         timeout_seconds=hard_timeout,
                                         code=watchdog_code,
                                         message=(
-                                            f'{watchdog_label} worker watchdog exceeded '
-                                            f'{int(hard_timeout)}s; '
-                                            'Chromium cancellation did not complete.'
+                                            f'{watchdog_label} total queue/runtime '
+                                            f'watchdog exceeded {int(hard_timeout)}s. '
+                                            'Active Meta phases have separate shorter '
+                                            'timeouts; this guard includes browser-slot '
+                                            'queue time.'
                                         ),
                                     )
                                 else:

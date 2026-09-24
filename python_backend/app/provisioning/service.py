@@ -8,6 +8,7 @@ import aiohttp
 
 from ..session import MetaSession, ProfileContext, ProxyCheckError
 from .models import ENTITY_RESULT_KEYS, ProvisioningError, ProvisioningStep
+from .timeouts import browser_step_timeout
 from .proxy import ProxyChecker
 from .registry import get_handler
 from .state import ProvisioningStateStore
@@ -109,28 +110,16 @@ class ProvisioningService:
                         ProvisioningStep.BUSINESS,
                         ProvisioningStep.AD_ACCOUNT,
                     }:
-                        if step is ProvisioningStep.BUSINESS:
-                            timeout_env = "REMASK_BUSINESS_STEP_TIMEOUT"
-                            timeout_default = 180.0
-                            timeout_min = 60.0
-                            timeout_code = "BUSINESS_TIMEOUT"
-                            timeout_label = "Meta Business workflow"
-                        else:
-                            timeout_env = "REMASK_AD_ACCOUNT_STEP_TIMEOUT"
-                            timeout_default = 150.0
-                            timeout_min = 45.0
-                            timeout_code = "AD_ACCOUNT_TIMEOUT"
-                            timeout_label = "Meta Ad Account workflow"
-
-                        try:
-                            step_timeout = float(
-                                os.getenv(timeout_env, str(int(timeout_default)))
-                            )
-                        except (TypeError, ValueError):
-                            step_timeout = timeout_default
-                        step_timeout = max(
-                            timeout_min,
-                            min(step_timeout, 600.0),
+                        step_timeout = browser_step_timeout(step)
+                        timeout_code = (
+                            "BUSINESS_TIMEOUT"
+                            if step is ProvisioningStep.BUSINESS
+                            else "AD_ACCOUNT_TIMEOUT"
+                        )
+                        timeout_label = (
+                            "Meta Business total queue/runtime watchdog"
+                            if step is ProvisioningStep.BUSINESS
+                            else "Meta Ad Account total queue/runtime watchdog"
                         )
 
                         try:

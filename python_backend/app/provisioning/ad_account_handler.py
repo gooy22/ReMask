@@ -517,10 +517,24 @@ async def ad_account_handler(
     )
 
     try:
+        await browser_checkpoint(
+            {
+                "phase": "WAITING_BROWSER_SLOT",
+                "activity": "AD_ACCOUNT_WAITING_BROWSER_SLOT",
+                "activity_at": int(time.time()),
+            }
+        )
         async with FacebookBusinessBrowser(
             context,
             timeout_seconds=60,
         ) as browser:
+            await browser_checkpoint(
+                {
+                    "phase": "BROWSER_SLOT_ACQUIRED",
+                    "activity": "AD_ACCOUNT_BROWSER_SLOT_ACQUIRED",
+                    "activity_at": int(time.time()),
+                }
+            )
             try:
                 result = await asyncio.wait_for(
                     browser.create_ad_account(
