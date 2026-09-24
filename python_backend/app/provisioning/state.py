@@ -108,6 +108,122 @@ class ProvisioningStateStore:
             data.pop("result_json", None)
             return data
 
+    async def latest_business_resume_for_page(
+        self,
+        profile_id: str,
+        page_id: str,
+        *,
+        exclude_item_id: str = "",
+    ) -> dict[str, Any]:
+        """
+        Return the newest resumable BUSINESS checkpoint for profile+Page.
+
+        This deliberately crosses scope_key/item boundaries so Jobs created
+        before stable Add-BM scopes can still protect later Jobs from duplicate
+        Business creation.
+        """
+        return await asyncio.to_thread(
+            self._latest_business_resume_for_page_sync,
+            profile_id,
+            page_id,
+            exclude_item_id,
+        )
+
+    def _latest_business_resume_for_page_sync(
+        self,
+        profile_id: str,
+        page_id: str,
+        exclude_item_id: str,
+    ) -> dict[str, Any]:
+        profile = str(profile_id or "").strip()
+        page = str(page_id or "").strip()
+        excluded = str(exclude_item_id or "").strip()
+        if not profile or not page:
+            return {}
+
+        with self._connect() as con:
+            rows = con.execute(
+                """
+                SELECT item_id,scope_key,status,result_json,error_code,error_message,
+                       created_at,updated_at
+                FROM provisioning_steps
+                WHERE profile_id=? AND step=? AND result_json IS NOT NULL
+                ORDER BY updated_at DESC
+                LIMIT 250
+                """,
+                (profile, ProvisioningStep.BUSINESS.value),
+            ).fetchall()
+
+        for row in rows:
+            if excluded and str(row["item_id"] or "") == excluded:
+                continue
+
+            raw = row["result_json"]
+            if not raw:
+                continue
+            try:
+                result = json.loads(str(raw))
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if not isinstance(result, dict):
+                continue
+
+            candidate_page = str(
+                result.get("primary_page_id")
+                or result.get("page_id")
+                or ""
+            ).strip()
+            if candidate_page != page:
+                continue
+
+            business_id = str(result.get("business_id") or "").strip()
+            response_id = str(
+                result.get("create_response_business_id")
+                or result.get("response_business_id")
+                or ""
+            ).strip()
+            response_path = str(
+                result.get("create_response_path")
+                or result.get("response_path")
+                or ""
+            ).strip()
+            phase = str(
+                result.get("phase")
+                or result.get("resume_from")
+                or ""
+            ).strip().upper()
+
+            numeric_business = (
+                business_id.isdigit()
+                and 5 <= len(business_id) <= 30
+            )
+            numeric_response = (
+                response_id.isdigit()
+                and 5 <= len(response_id) <= 30
+            )
+            uncertain_create = phase in {
+                "CREATE_SUBMITTED",
+                "CREATE_CLICK_INTENT",
+                "CREATE_PENDING_SUBMIT",
+                "CREATE_RESULT_UNKNOWN",
+            }
+
+            if not numeric_business and not numeric_response and not uncertain_create:
+                continue
+
+            return {
+                "item_id": str(row["item_id"] or ""),
+                "scope_key": str(row["scope_key"] or ""),
+                "status": str(row["status"] or ""),
+                "error_code": str(row["error_code"] or ""),
+                "error_message": str(row["error_message"] or ""),
+                "result": result,
+                "updated_at": int(row["updated_at"] or 0),
+                "response_path": response_path,
+            }
+
+        return {}
+
     async def set_running(
         self,
         item_id: str,
@@ -264,6 +380,72 @@ class ProvisioningStateStore:
 
             con.commit()
             return current
+
+    async def remember_entity(
+        self,
+        profile_id: str,
+        scope_key: str,
+        step: ProvisioningStep,
+        result: dict[str, Any],
+    ) -> None:
+        """
+        Persist a confirmed remote entity before a multi-phase step finishes.
+
+        BUSINESS uses this immediately after Meta confirms business_id so a
+        later Job with the same stable scope can resume Page attach instead of
+        creating a duplicate Business Portfolio.
+        """
+        entity_key = ENTITY_RESULT_KEYS.get(step)
+        entity_value = (
+            str(result.get(entity_key) or "").strip()
+            if entity_key and isinstance(result, dict)
+            else ""
+        )
+        if not entity_key or not entity_value:
+            return
+
+        await asyncio.to_thread(
+            self._remember_entity_sync,
+            profile_id,
+            scope_key,
+            entity_key,
+            entity_value,
+        )
+
+    def _remember_entity_sync(
+        self,
+        profile_id: str,
+        scope_key: str,
+        entity_key: str,
+        entity_value: str,
+    ) -> None:
+        column = {
+            "business_id": "business_id",
+            "ad_account_id": "ad_account_id",
+            "funding_source_id": "funding_source_id",
+        }.get(entity_key)
+        if not column:
+            return
+
+        now = _now()
+        with self._connect() as con:
+            con.execute("BEGIN IMMEDIATE")
+            con.execute(
+                """
+                INSERT INTO provisioning_entities(
+                    profile_id,scope_key,business_id,ad_account_id,funding_source_id,
+                    created_at,updated_at
+                ) VALUES(?,?,?,?,?,?,?)
+                ON CONFLICT(profile_id,scope_key) DO NOTHING
+                """,
+                (profile_id, scope_key, None, None, None, now, now),
+            )
+            con.execute(
+                f"UPDATE provisioning_entities SET {column}=?,updated_at=? "
+                "WHERE profile_id=? AND scope_key=?",
+                (entity_value, now, profile_id, scope_key),
+            )
+            con.commit()
 
     async def complete(
         self,
