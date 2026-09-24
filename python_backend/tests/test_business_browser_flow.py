@@ -828,6 +828,18 @@ class BrowserAdAccountSubmitTransitionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(browser._ad_account_ui_state.await_count, 2)
 
 
+class BrowserAdAccountComboboxSafetyTests(unittest.TestCase):
+    def test_custom_field_fallback_requires_dropdown_semantics(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser._select_ad_account_form_field
+        )
+        self.assertIn("@aria-haspopup or @aria-expanded", source)
+        self.assertNotIn(
+            "ancestor::*[.//button or .//*[@role=\"button\"]]",
+            source,
+        )
+
+
 class BrowserAdAccountFormFieldTests(unittest.IsolatedAsyncioTestCase):
     def test_timezone_fallbacks_cover_main_profile_geos(self):
         browser = FacebookBusinessBrowser(

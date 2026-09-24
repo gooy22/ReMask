@@ -4595,7 +4595,10 @@ class FacebookBusinessBrowser:
                     for selector in (
                         'xpath=ancestor::*[.//select][1]//select',
                         'xpath=ancestor::*[.//*[@role="combobox"]][1]//*[@role="combobox"]',
-                        'xpath=ancestor::*[.//button or .//*[@role="button"]][1]//*[self::button or @role="button"]',
+                        # Never grab an arbitrary sibling button (help/info/
+                        # close controls can live in the same Meta field row).
+                        # A button fallback must expose dropdown semantics.
+                        'xpath=ancestor::*[.//button[@aria-haspopup or @aria-expanded] or .//*[@role="button" and (@aria-haspopup or @aria-expanded)]][1]//*[self::button or @role="button"][@aria-haspopup or @aria-expanded]',
                     ):
                         try:
                             nearby = label_node.locator(selector)
