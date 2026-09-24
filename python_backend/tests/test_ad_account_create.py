@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import unittest
 
 from app.facebook_ad_account_create import (
@@ -8,7 +9,26 @@ from app.facebook_ad_account_create import (
 )
 from app.provisioning.ad_account_handler import (
     _known_pre_submit_navigation_failure,
+    ad_account_handler,
 )
+from app.provisioning.state import ProvisioningStateStore
+
+
+class AdAccountDuplicateSafetyTests(unittest.TestCase):
+    def test_click_intent_is_uncertain_in_handler(self) -> None:
+        source = inspect.getsource(ad_account_handler)
+        self.assertGreaterEqual(
+            source.count('"CREATE_CLICK_INTENT"'),
+            3,
+        )
+        self.assertIn('"RECONCILE_CREATE"', source)
+
+    def test_click_intent_is_cross_job_uncertain_in_state_store(self) -> None:
+        source = inspect.getsource(
+            ProvisioningStateStore._latest_ad_account_resume_for_business_sync
+        )
+        self.assertIn('"CREATE_CLICK_INTENT"', source)
+        self.assertIn('"CREATE_RESULT_UNKNOWN"', source)
 
 
 class AdAccountCreateResponseTests(unittest.TestCase):

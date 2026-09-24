@@ -307,6 +307,7 @@ async def ad_account_handler(
         ).upper()
         if (
             prior_phase in {
+                "CREATE_CLICK_INTENT",
                 "CREATE_SUBMIT_INTENT",
                 "CREATE_SUBMITTED",
                 "CREATE_RESULT_UNKNOWN",
@@ -354,6 +355,7 @@ async def ad_account_handler(
 
     if (
         phase in {
+            "CREATE_CLICK_INTENT",
             "CREATE_SUBMIT_INTENT",
             "CREATE_SUBMITTED",
             "CREATE_RESULT_UNKNOWN",
@@ -377,6 +379,7 @@ async def ad_account_handler(
         phase = "CREATE_NOT_SUBMITTED"
 
     if phase in {
+        "CREATE_CLICK_INTENT",
         "CREATE_SUBMIT_INTENT",
         "CREATE_SUBMITTED",
         "CREATE_RESULT_UNKNOWN",

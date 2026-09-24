@@ -269,6 +269,10 @@ class ProvisioningStateStore:
             ).fetchall()
 
         uncertain = {
+            # Final UI click may have reached Meta even if the GraphQL gate or
+            # worker process died before CREATE_SUBMITTED was persisted.
+            # Reconcile inventory before ever allowing another CREATE.
+            "CREATE_CLICK_INTENT",
             "CREATE_SUBMIT_INTENT",
             "CREATE_SUBMITTED",
             "CREATE_RESULT_UNKNOWN",
