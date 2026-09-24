@@ -1672,68 +1672,116 @@ class FacebookBusinessBrowser:
         # Meta does not switch the current portfolio after creation.
         selector_opened = False
         try:
-            selector_opened = bool(
-                await self.page.evaluate(
-                    """() => {
-                        const visible = (el) => {
-                            const r = el.getBoundingClientRect();
-                            const s = getComputedStyle(el);
-                            return r.width > 0 && r.height > 0
-                                && s.display !== 'none'
-                                && s.visibility !== 'hidden'
-                                && s.pointerEvents !== 'none';
-                        };
-                        const label = (el) => [
-                            el.getAttribute('aria-label') || '',
-                            el.getAttribute('title') || '',
-                            el.innerText || el.textContent || ''
-                        ].join(' ').replace(/\\s+/g, ' ').trim();
+            selector_probe = await self.page.evaluate(
+                """() => {
+                    const visible = (el) => {
+                        if (!el || el === document.body || el === document.documentElement) {
+                            return false;
+                        }
+                        const r = el.getBoundingClientRect();
+                        const s = getComputedStyle(el);
+                        return r.width > 0 && r.height > 0
+                            && s.display !== 'none'
+                            && s.visibility !== 'hidden'
+                            && s.pointerEvents !== 'none';
+                    };
+                    const label = (el) => [
+                        (el.getAttribute && el.getAttribute('aria-label')) || '',
+                        (el.getAttribute && el.getAttribute('title')) || '',
+                        el.innerText || el.textContent || ''
+                    ].join(' ').replace(/\\s+/g, ' ').trim();
 
-                        const all = Array.from(document.querySelectorAll('*'));
-                        const home = all
-                            .filter(visible)
-                            .map(el => ({el, r:el.getBoundingClientRect(), text:label(el)}))
-                            .filter(row =>
-                                row.r.x < 230 &&
-                                row.r.y > 120 &&
-                                row.r.y < 260 &&
-                                /^(Home|Startseite|Start|Главная|Головна)$/i.test(row.text)
-                            )
-                            .sort((a,b) => a.r.y - b.r.y)[0];
-                        const homeY = home ? home.r.y : 205;
+                    const xs = [20, 52, 88, 124, 160, 196, 228];
+                    const ys = [
+                        58, 72, 86, 100, 114, 128, 142, 156,
+                        170, 184, 198, 212, 226, 240, 254, 268
+                    ];
+                    const seen = new Set();
+                    const rows = [];
 
-                        const rows = all
-                            .filter(visible)
-                            .map(el => ({
-                                el,
-                                r:el.getBoundingClientRect(),
-                                text:label(el),
-                                role:el.getAttribute('role') || '',
-                                tabindex:el.getAttribute('tabindex') || '',
-                                tag:el.tagName
+                    for (const y of ys) {
+                        for (const x of xs) {
+                            const stack = document.elementsFromPoint(x, y) || [];
+                            for (const el of stack.slice(0, 10)) {
+                                if (seen.has(el) || !visible(el)) continue;
+                                seen.add(el);
+                                const r = el.getBoundingClientRect();
+                                const text = label(el);
+                                const role = (el.getAttribute && el.getAttribute('role')) || '';
+                                const tabindex = (el.getAttribute && el.getAttribute('tabindex')) || '';
+                                const tag = el.tagName || '';
+
+                                if (r.x > 300 || r.y < 48 || r.y > 285) continue;
+                                if (r.width < 70 || r.width > 300) continue;
+                                if (r.height < 22 || r.height > 100) continue;
+                                if (!text) continue;
+
+                                rows.push({el, r, text, role, tabindex, tag});
+                            }
+                        }
+                    }
+
+                    const homeRows = rows.filter(row =>
+                        /^(Home|Startseite|Start|Главная|Головна)$/i.test(row.text)
+                    );
+                    const homeY = homeRows.length
+                        ? Math.min(...homeRows.map(row => row.r.y))
+                        : 285;
+
+                    const candidates = rows.filter(row =>
+                        row.r.y < homeY - 2
+                        && !/^Meta Business Suite$/i.test(row.text)
+                        && !/^(Home|Startseite|Start|Главная|Головна)$/i.test(row.text)
+                        && !/^(Create|Создать|Створити|Erstellen)$/i.test(row.text)
+                    );
+
+                    candidates.sort((a,b) => {
+                        const ai = (
+                            a.role === 'button' ||
+                            a.tag === 'BUTTON' ||
+                            a.tabindex === '0'
+                        ) ? 1 : 0;
+                        const bi = (
+                            b.role === 'button' ||
+                            b.tag === 'BUTTON' ||
+                            b.tabindex === '0'
+                        ) ? 1 : 0;
+                        if (ai !== bi) return bi - ai;
+                        // Portfolio selector normally sits directly above Home.
+                        if (a.r.y !== b.r.y) return b.r.y - a.r.y;
+                        return (b.r.width * b.r.height) - (a.r.width * a.r.height);
+                    });
+
+                    const best = candidates[0];
+                    if (!best) {
+                        return {
+                            clicked:false,
+                            candidates:candidates.slice(0,12).map(row => ({
+                                text:row.text,
+                                x:Math.round(row.r.x),
+                                y:Math.round(row.r.y),
+                                w:Math.round(row.r.width),
+                                h:Math.round(row.r.height)
                             }))
-                            .filter(row => {
-                                const r=row.r;
-                                return r.x <= 220 && r.y >= 118 && r.y < homeY - 2
-                                    && r.width >= 90 && r.width <= 225
-                                    && r.height >= 28 && r.height <= 85
-                                    && row.text
-                                    && !/^Meta Business Suite$/i.test(row.text)
-                                    && !/^(Home|Startseite|Start|Главная|Головна)$/i.test(row.text);
-                            });
+                        };
+                    }
 
-                        rows.sort((a,b) => {
-                            const aa=a.r.width*a.r.height;
-                            const ba=b.r.width*b.r.height;
-                            const ap=a.role==='button'||a.tag==='BUTTON'||a.tabindex==='0' ? -100000 : 0;
-                            const bp=b.role==='button'||b.tag==='BUTTON'||b.tabindex==='0' ? -100000 : 0;
-                            return (ap+aa)-(bp+ba) || b.r.y-a.r.y;
-                        });
-                        if (!rows[0]) return false;
-                        rows[0].el.click();
-                        return true;
-                    }"""
-                )
+                    best.el.click();
+                    return {
+                        clicked:true,
+                        clickedCandidate:{
+                            text:best.text,
+                            x:Math.round(best.r.x),
+                            y:Math.round(best.r.y),
+                            w:Math.round(best.r.width),
+                            h:Math.round(best.r.height)
+                        }
+                    };
+                }"""
+            )
+            selector_opened = bool(
+                isinstance(selector_probe, dict)
+                and selector_probe.get("clicked")
             )
             if selector_opened:
                 await self.page.wait_for_timeout(550)
