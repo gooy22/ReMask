@@ -494,47 +494,55 @@ def _extract_create_business_id(
     ):
         return "", ""
 
-    node = data.get(
-        "bizkit_create_business"
+    # Meta currently returns Business creation success through more than one
+    # Relay response shape. The browser observer already supports these exact
+    # shapes; the private GraphQL path must parse the same successful payloads.
+    known_nodes = (
+        "bizkit_create_business",
+        "business_create",
+        "business_manager_create",
     )
 
-    if not isinstance(
-        node,
-        dict,
-    ):
+    matches: list[tuple[str, str]] = []
+
+    for node_name in known_nodes:
+        node = data.get(node_name)
+
+        if not isinstance(node, dict):
+            continue
+
+        direct = _clean(node.get("id"))
+        if direct.isdigit():
+            matches.append(
+                (
+                    direct,
+                    f"data.{node_name}.id",
+                )
+            )
+
+        business = node.get("business")
+        if isinstance(business, dict):
+            nested = _clean(business.get("id"))
+            if nested.isdigit():
+                matches.append(
+                    (
+                        nested,
+                        f"data.{node_name}.business.id",
+                    )
+                )
+
+    unique_ids = {
+        business_id
+        for business_id, _ in matches
+    }
+
+    if len(unique_ids) != 1:
         return "", ""
 
-    direct = _clean(
-        node.get(
-            "id"
-        )
-    )
-
-    if direct.isdigit():
-        return (
-            direct,
-            "data.bizkit_create_business.id",
-        )
-
-    business = node.get(
-        "business"
-    )
-
-    if isinstance(
-        business,
-        dict,
-    ):
-        nested = _clean(
-            business.get(
-                "id"
-            )
-        )
-
-        if nested.isdigit():
-            return (
-                nested,
-                "data.bizkit_create_business.business.id",
-            )
+    business_id = next(iter(unique_ids))
+    for value, path in matches:
+        if value == business_id:
+            return business_id, path
 
     return "", ""
 
@@ -1277,8 +1285,8 @@ async def create_business_with_docids(
             raise BusinessMutationError(
                 "CREATE_RESULT_UNKNOWN",
                 (
-                    "CREATE_BM returned data but ReMask could not prove "
-                    "data.bizkit_create_business.id. CREATE will not be retried."
+                    "CREATE_BM returned data but ReMask could not prove a Business ID "
+                    "from known create response paths. CREATE will not be retried."
                 ),
                 retryable=False,
                 payload=response,
