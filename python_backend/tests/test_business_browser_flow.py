@@ -331,9 +331,11 @@ class BrowserAssetContextAdsManagerFallbackTests(unittest.IsolatedAsyncioTestCas
             )
         )
         browser._form_ready = AsyncMock(return_value=False)
+        browser._quick_surface_state = AsyncMock(return_value={"blank": False})
         browser._try_open_known_asset_selector = AsyncMock(return_value=False)
         browser._try_open_top_left_portfolio_menu = AsyncMock(return_value=False)
         browser._try_open_direct_create_url = AsyncMock(return_value=False)
+        browser._try_open_overview_create_entry = AsyncMock(return_value=False)
         browser._try_open_ads_manager_create_entry = AsyncMock(return_value=True)
         browser._goto = AsyncMock()
 
@@ -344,6 +346,7 @@ class BrowserAssetContextAdsManagerFallbackTests(unittest.IsolatedAsyncioTestCas
 
         self.assertTrue(ready)
         browser._try_open_direct_create_url.assert_awaited_once()
+        browser._try_open_overview_create_entry.assert_awaited_once()
         browser._try_open_ads_manager_create_entry.assert_awaited_once()
         browser._goto.assert_not_awaited()
 
@@ -368,9 +371,11 @@ class BrowserAssetContextDirectCreateFallbackTests(unittest.IsolatedAsyncioTestC
             )
         )
         browser._form_ready = AsyncMock(return_value=False)
+        browser._quick_surface_state = AsyncMock(return_value={"blank": False})
         browser._try_open_known_asset_selector = AsyncMock(return_value=False)
         browser._try_open_top_left_portfolio_menu = AsyncMock(return_value=False)
         browser._try_open_direct_create_url = AsyncMock(return_value=True)
+        browser._try_open_overview_create_entry = AsyncMock(return_value=False)
         browser._try_open_ads_manager_create_entry = AsyncMock(return_value=False)
 
         ready = await browser._open_create_entry(
@@ -389,8 +394,8 @@ class BrowserAssetContextDirectCreateFallbackTests(unittest.IsolatedAsyncioTestC
         browser.page = SimpleNamespace(url=browser.HOME_URL)
         browser._goto = AsyncMock(return_value=browser.DIRECT_CREATE_URL)
         browser._assert_authenticated = AsyncMock(return_value=None)
-        browser._form_ready = AsyncMock(return_value=True)
-        browser._has_create_surface = AsyncMock(return_value=False)
+        browser._wait_for_form_ready = AsyncMock(return_value=True)
+        browser._wait_for_create_surface = AsyncMock(return_value=False)
 
         ready = await browser._try_open_direct_create_url()
 
@@ -402,6 +407,48 @@ class BrowserAssetContextDirectCreateFallbackTests(unittest.IsolatedAsyncioTestC
 
     def test_current_create_labels_include_plain_portfolio_variant(self):
         self.assertIn("Create portfolio", FacebookBusinessBrowser.CREATE_NAMES)
+
+
+class BrowserBlankAssetShellTests(unittest.IsolatedAsyncioTestCase):
+    async def test_blank_page_shell_skips_home_selectors_and_uses_overview(self):
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(
+                profile_id="4",
+                pages=[{"id": "1301710056363524", "name": "Lucky Joker"}],
+            )
+        )
+        browser.page = SimpleNamespace(
+            url=(
+                "https://business.facebook.com/latest/home"
+                "?nav_ref=bm_home_redirect&asset_id=1301710056363524"
+            )
+        )
+        browser._form_ready = AsyncMock(return_value=False)
+        browser._quick_surface_state = AsyncMock(
+            return_value={
+                "blank": True,
+                "body_text_length": 0,
+                "interactive_count": 0,
+                "body_children": 1,
+            }
+        )
+        browser._try_open_known_asset_selector = AsyncMock(return_value=False)
+        browser._try_open_top_left_portfolio_menu = AsyncMock(return_value=False)
+        browser._try_open_direct_create_url = AsyncMock(return_value=False)
+        browser._try_open_overview_create_entry = AsyncMock(return_value=True)
+        browser._try_open_ads_manager_create_entry = AsyncMock(return_value=False)
+
+        ready = await browser._open_create_entry(
+            open_form=True,
+            already_on_home=True,
+        )
+
+        self.assertTrue(ready)
+        browser._try_open_known_asset_selector.assert_not_awaited()
+        browser._try_open_top_left_portfolio_menu.assert_not_awaited()
+        browser._try_open_direct_create_url.assert_awaited_once()
+        browser._try_open_overview_create_entry.assert_awaited_once()
+        browser._try_open_ads_manager_create_entry.assert_not_awaited()
 
 
 class BrowserAssetContextFastFailTests(unittest.IsolatedAsyncioTestCase):
@@ -424,9 +471,11 @@ class BrowserAssetContextFastFailTests(unittest.IsolatedAsyncioTestCase):
             )
         )
         browser._form_ready = AsyncMock(return_value=False)
+        browser._quick_surface_state = AsyncMock(return_value={"blank": False})
         browser._try_open_known_asset_selector = AsyncMock(return_value=False)
         browser._try_open_top_left_portfolio_menu = AsyncMock(return_value=False)
         browser._try_open_direct_create_url = AsyncMock(return_value=False)
+        browser._try_open_overview_create_entry = AsyncMock(return_value=False)
         browser._try_open_ads_manager_create_entry = AsyncMock(return_value=False)
         browser._goto = AsyncMock()
 
