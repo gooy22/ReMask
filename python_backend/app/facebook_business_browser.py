@@ -3382,6 +3382,601 @@ class FacebookBusinessBrowser:
 
         return output
 
+    @staticmethod
+    def _request_matches_ad_account_create(
+        request: Any,
+        *,
+        business_id: str,
+        account_name: str,
+    ) -> bool:
+        meta = _request_graphql_meta(request)
+        if _clean(meta.get("method")).upper() != "POST":
+            return False
+        if "graphql" not in _clean(meta.get("url")).lower():
+            return False
+
+        doc_id = _clean(meta.get("doc_id"))
+        if not doc_id.isdigit():
+            return False
+
+        decoded = _clean(meta.get("decoded_raw")).casefold()
+        friendly = _clean(meta.get("friendly_name")).casefold()
+        expected_name = _clean(account_name).casefold()
+        business = _digits(business_id)
+
+        if not expected_name or expected_name not in decoded:
+            return False
+
+        operation_markers = (
+            "adaccountcreate",
+            "ad_account_create",
+            "createadaccount",
+            "create_ad_account",
+            "businessadaccountcreate",
+            "business_ad_account_create",
+            "ad account create",
+        )
+        operation_match = any(
+            marker in friendly or marker in decoded
+            for marker in operation_markers
+        )
+        business_match = bool(business and business in decoded)
+
+        return operation_match or business_match
+
+    @staticmethod
+    def _response_matches_ad_account_create(
+        response: Any,
+        *,
+        business_id: str,
+        account_name: str,
+    ) -> bool:
+        try:
+            return FacebookBusinessBrowser._request_matches_ad_account_create(
+                response.request,
+                business_id=business_id,
+                account_name=account_name,
+            )
+        except Exception:
+            return False
+
+    async def _open_ad_account_create_form(
+        self,
+        *,
+        business_id: str,
+        account_name: str,
+    ) -> None:
+        business = _digits(business_id)
+        if not business:
+            raise BrowserBusinessError(
+                "INVALID_BUSINESS_ID",
+                "Ad Account create requires a numeric Business ID.",
+                retryable=False,
+            )
+
+        opened = False
+        navigation_errors: list[str] = []
+        for template in self.SETTINGS_AD_ACCOUNTS_URLS:
+            try:
+                await self._goto(template.format(business_id=business))
+                body = (await self._body_text()).casefold()
+                current = _clean(self.page.url if self.page else "")
+                if (
+                    business in current
+                    or "ad account" in body
+                    or "advertising account" in body
+                    or "реклам" in body
+                    or "werbekonto" in body
+                    or "compte publicitaire" in body
+                    or "comptes publicitaires" in body
+                ):
+                    opened = True
+                    break
+            except BrowserBusinessError as exc:
+                navigation_errors.append(f"{exc.code}: {exc}")
+                if exc.code in {
+                    "SESSION_EXPIRED",
+                    "CHECKPOINT_REQUIRED",
+                    "TWO_FACTOR_REQUIRED",
+                    "FACEBOOK_TEMPORARILY_BLOCKED",
+                }:
+                    raise
+
+        if not opened:
+            diag = await self._diagnostic("ad_account_settings_unavailable")
+            diag["business_id"] = business
+            diag["navigation_errors"] = navigation_errors[-6:]
+            raise BrowserBusinessError(
+                "AD_ACCOUNT_CREATE_UI_UNAVAILABLE",
+                "Meta Business Settings Ad Accounts surface could not be opened.",
+                retryable=True,
+                diagnostic=diag,
+            )
+
+        entry_clicked = await self._click_named(
+            self.AD_ACCOUNT_CREATE_ENTRY_NAMES
+        )
+        if not entry_clicked:
+            add_clicked = await self._click_named(self.ADD_NAMES)
+            if add_clicked:
+                await self.page.wait_for_timeout(350)
+                entry_clicked = await self._click_named(
+                    self.AD_ACCOUNT_CREATE_ENTRY_NAMES
+                )
+
+        if not entry_clicked:
+            try:
+                entry_clicked = bool(
+                    await self.page.evaluate(
+                        """() => {
+                            const visible = el => {
+                                const r = el.getBoundingClientRect();
+                                const s = getComputedStyle(el);
+                                return r.width > 0 && r.height > 0
+                                    && s.display !== 'none'
+                                    && s.visibility !== 'hidden'
+                                    && s.pointerEvents !== 'none';
+                            };
+                            const clean = text => (text || '')
+                                .replace(/\\s+/g, ' ').trim().toLowerCase();
+                            const createWords = [
+                                'create','new ad account','add a new ad account',
+                                'создать','добавить новый реклам',
+                                'створити','додати новий реклам',
+                                'erstellen','neues werbekonto',
+                                'créer','nouveau compte publicitaire',
+                                'ajouter'
+                            ];
+                            const accountWords = [
+                                'ad account','advertising account','реклам',
+                                'werbekonto','compte publicitaire'
+                            ];
+                            const nodes = [...document.querySelectorAll(
+                                'button,a,[role="button"],[role="menuitem"]'
+                            )];
+                            const rows = nodes
+                                .filter(visible)
+                                .map(el => ({el, text: clean(
+                                    (el.getAttribute('aria-label') || '') + ' ' +
+                                    (el.innerText || el.textContent || '')
+                                )}))
+                                .filter(row =>
+                                    accountWords.some(x => row.text.includes(x))
+                                    && createWords.some(x => row.text.includes(x))
+                                )
+                                .sort((a,b) => a.text.length - b.text.length);
+                            if (!rows.length) return false;
+                            rows[0].el.click();
+                            return true;
+                        }"""
+                    )
+                )
+            except Exception:
+                entry_clicked = False
+
+        if not entry_clicked:
+            diag = await self._diagnostic("ad_account_create_entry_missing")
+            diag["business_id"] = business
+            raise BrowserBusinessError(
+                "AD_ACCOUNT_CREATE_UI_CHANGED",
+                "Meta Ad Account create entry was not found.",
+                retryable=True,
+                diagnostic=diag,
+            )
+
+        await self.page.wait_for_timeout(500)
+
+        name_filled = await self._fill_first(
+            labels=(
+                "Ad account name",
+                "Advertising account name",
+                "Account name",
+                "Название рекламного аккаунта",
+                "Название аккаунта",
+                "Назва рекламного акаунта",
+                "Назва облікового запису",
+                "Name des Werbekontos",
+                "Nom du compte publicitaire",
+                "Nom du compte",
+            ),
+            value=account_name,
+        )
+
+        if not name_filled:
+            try:
+                candidates = self.page.locator(
+                    'div[role="dialog"] input:visible, form input:visible'
+                )
+                count = min(await candidates.count(), 20)
+            except Exception:
+                count = 0
+
+            for index in range(count):
+                candidate = candidates.nth(index)
+                try:
+                    kind = _clean(
+                        await candidate.get_attribute("type")
+                    ).lower()
+                    if kind in {
+                        "hidden","checkbox","radio","submit","button"
+                    }:
+                        continue
+                    placeholder = _clean(
+                        await candidate.get_attribute("placeholder")
+                    ).casefold()
+                    aria = _clean(
+                        await candidate.get_attribute("aria-label")
+                    ).casefold()
+                    if "search" in placeholder or "search" in aria:
+                        continue
+                    current = _clean(await candidate.input_value())
+                    if current and len(current) > 2:
+                        continue
+                    await candidate.fill(account_name)
+                    name_filled = True
+                    break
+                except Exception:
+                    continue
+
+        if not name_filled:
+            diag = await self._diagnostic("ad_account_name_input_missing")
+            diag["business_id"] = business
+            raise BrowserBusinessError(
+                "AD_ACCOUNT_CREATE_UI_CHANGED",
+                "Meta Ad Account form opened but the account-name field was not found.",
+                retryable=True,
+                diagnostic=diag,
+            )
+
+    async def create_ad_account(
+        self,
+        *,
+        business_id: str,
+        account_name: str,
+        currency: str = "USD",
+        timezone_id: int = 1,
+        before_submit: CheckpointCallback | None = None,
+    ) -> BrowserAdAccountResult:
+        business = _digits(business_id)
+        name = _clean(account_name)
+        if not business:
+            raise BrowserBusinessError(
+                "INVALID_BUSINESS_ID",
+                "Ad Account create requires a numeric Business ID.",
+                retryable=False,
+            )
+        if not name:
+            raise BrowserBusinessError(
+                "INVALID_INPUT",
+                "Ad Account name is required.",
+                retryable=False,
+            )
+
+        await self._open_ad_account_create_form(
+            business_id=business,
+            account_name=name,
+        )
+
+        async def checkpoint(patch: dict[str, Any]) -> None:
+            if before_submit is None:
+                return
+            await before_submit(
+                {
+                    **patch,
+                    "business_id": business,
+                    "account_name": name,
+                    "currency": _clean(currency).upper(),
+                    "timezone_id": int(timezone_id),
+                }
+            )
+
+        await checkpoint(
+            {
+                "phase": "CREATE_PREPARED",
+                "activity": "AD_ACCOUNT_FORM_READY",
+                "activity_at": int(time.time()),
+            }
+        )
+
+        loop = asyncio.get_running_loop()
+        gate_future: asyncio.Future[bool] = loop.create_future()
+        response_future: asyncio.Future[Any] = loop.create_future()
+
+        async def gate(route: Any, request: Any) -> None:
+            if not self._request_matches_ad_account_create(
+                request,
+                business_id=business,
+                account_name=name,
+            ):
+                await route.continue_()
+                return
+
+            if gate_future.done():
+                await route.continue_()
+                return
+
+            try:
+                request_meta = _request_graphql_meta(request)
+                await checkpoint(
+                    {
+                        "phase": "CREATE_SUBMITTED",
+                        "activity": "AD_ACCOUNT_CREATE_SUBMITTED",
+                        "activity_at": int(time.time()),
+                        "network_gate": "before_meta_send",
+                        "create_doc_id": _clean(
+                            request_meta.get("doc_id")
+                        ),
+                        "create_friendly_name": _clean(
+                            request_meta.get("friendly_name")
+                        ),
+                    }
+                )
+            except Exception as exc:
+                try:
+                    await route.abort()
+                finally:
+                    if not gate_future.done():
+                        gate_future.set_exception(
+                            BrowserBusinessError(
+                                "CREATE_CHECKPOINT_FAILED_BEFORE_SEND",
+                                (
+                                    "ReMask intercepted Meta Add-RK CREATE but "
+                                    "could not persist the submitted checkpoint, "
+                                    "so the request was blocked before Meta."
+                                ),
+                                retryable=True,
+                            )
+                        )
+                return
+
+            await route.continue_()
+            if not gate_future.done():
+                gate_future.set_result(True)
+
+        def observe_response(response: Any) -> None:
+            if response_future.done():
+                return
+            if self._response_matches_ad_account_create(
+                response,
+                business_id=business,
+                account_name=name,
+            ):
+                response_future.set_result(response)
+
+        await self.page.route("**/api/graphql/**", gate)
+        self.page.on("response", observe_response)
+
+        next_names = (
+            "Next",
+            "Continue",
+            "Suivant",
+            "Continuer",
+            "Weiter",
+            "Fortfahren",
+            "Далее",
+            "Продолжить",
+            "Далі",
+            "Продовжити",
+        )
+        final_names = (
+            "Create ad account",
+            "Create account",
+            "Create",
+            "Создать рекламный аккаунт",
+            "Создать аккаунт",
+            "Создать",
+            "Створити рекламний акаунт",
+            "Створити обліковий запис",
+            "Створити",
+            "Werbekonto erstellen",
+            "Konto erstellen",
+            "Erstellen",
+            "Créer un compte publicitaire",
+            "Créer le compte publicitaire",
+            "Créer le compte",
+            "Créer",
+        )
+
+        try:
+            clicked_any = False
+            for _ in range(8):
+                if gate_future.done():
+                    break
+
+                next_clicked = await self._click_named(next_names)
+                if next_clicked:
+                    clicked_any = True
+                    await self.page.wait_for_timeout(650)
+                    if gate_future.done():
+                        break
+                    continue
+
+                final_clicked = await self._click_named(
+                    final_names,
+                    before_click=lambda: checkpoint(
+                        {
+                            "phase": "CREATE_CLICK_INTENT",
+                            "activity": "AD_ACCOUNT_CREATE_CLICK_INTENT",
+                            "activity_at": int(time.time()),
+                        }
+                    ),
+                )
+                if final_clicked:
+                    clicked_any = True
+                    try:
+                        await asyncio.wait_for(
+                            asyncio.shield(gate_future),
+                            timeout=3.0,
+                        )
+                    except asyncio.TimeoutError:
+                        await self.page.wait_for_timeout(400)
+                    if gate_future.done():
+                        break
+                    continue
+
+                break
+
+            if gate_future.done() and gate_future.exception() is not None:
+                raise gate_future.exception()
+
+            if not gate_future.done():
+                await checkpoint(
+                    {
+                        "phase": "CREATE_NOT_SUBMITTED",
+                        "activity": "AD_ACCOUNT_CREATE_NOT_SUBMITTED",
+                        "activity_at": int(time.time()),
+                    }
+                )
+                diag = await self._diagnostic(
+                    "ad_account_create_submit_missing"
+                )
+                diag["clicked_any"] = clicked_any
+                raise BrowserBusinessError(
+                    "AD_ACCOUNT_CREATE_UI_CHANGED",
+                    (
+                        "Meta Ad Account form was opened, but ReMask could not "
+                        "reach an identifiable CREATE request. No CREATE was sent."
+                    ),
+                    retryable=True,
+                    diagnostic=diag,
+                )
+
+            try:
+                response = await asyncio.wait_for(
+                    asyncio.shield(response_future),
+                    timeout=min(15.0, float(self.timeout_seconds)),
+                )
+            except asyncio.TimeoutError as exc:
+                await checkpoint(
+                    {
+                        "phase": "CREATE_RESULT_UNKNOWN",
+                        "activity": "AD_ACCOUNT_RESPONSE_UNCONFIRMED",
+                        "activity_at": int(time.time()),
+                    }
+                )
+                raise BrowserBusinessError(
+                    "AD_ACCOUNT_CREATE_RESULT_UNKNOWN",
+                    (
+                        "Meta Add-RK CREATE passed the network gate but the "
+                        "response was not observed. Reconcile inventory before retry."
+                    ),
+                    retryable=True,
+                    diagnostic=await self._diagnostic(
+                        "ad_account_create_response_missing"
+                    ),
+                ) from exc
+
+            try:
+                raw = await response.text()
+                payload = _decode_graphql_text(raw)
+            except Exception:
+                payload = None
+
+            request_meta = _request_graphql_meta(response.request)
+            friendly = _clean(request_meta.get("friendly_name"))
+
+            ad_account_id = ""
+            response_path = ""
+            if payload is not None:
+                ad_account_id, response_path = (
+                    _extract_created_ad_account_id(payload)
+                )
+
+            meta_errors = _graphql_error_details(payload)
+            if not ad_account_id and meta_errors:
+                await checkpoint(
+                    {
+                        "phase": "CREATE_REJECTED",
+                        "activity": "AD_ACCOUNT_CREATE_REJECTED",
+                        "activity_at": int(time.time()),
+                        "meta_errors": meta_errors,
+                        "create_friendly_name": friendly,
+                    }
+                )
+                parts: list[str] = []
+                for row in meta_errors[:3]:
+                    code = _clean(row.get("code"))
+                    subcode = _clean(row.get("subcode"))
+                    message = _clean(row.get("message"))
+                    prefix = "/".join(
+                        value for value in (code, subcode) if value
+                    )
+                    if prefix and message:
+                        parts.append(f"{prefix}: {message}")
+                    elif message:
+                        parts.append(message)
+                    elif prefix:
+                        parts.append(prefix)
+
+                raise BrowserBusinessError(
+                    "META_AD_ACCOUNT_CREATE_REJECTED",
+                    (
+                        " · ".join(parts)
+                        or "Meta rejected Ad Account creation."
+                    )[:2500],
+                    retryable=_meta_error_retryable(meta_errors),
+                    diagnostic={
+                        "meta_errors": meta_errors,
+                        "request": self._safe_graphql_request_summary(
+                            response.request
+                        ),
+                    },
+                )
+
+            if not ad_account_id:
+                await checkpoint(
+                    {
+                        "phase": "CREATE_RESULT_UNKNOWN",
+                        "activity": "AD_ACCOUNT_ID_UNCONFIRMED",
+                        "activity_at": int(time.time()),
+                        "create_friendly_name": friendly,
+                    }
+                )
+                raise BrowserBusinessError(
+                    "AD_ACCOUNT_CREATE_RESULT_UNKNOWN",
+                    (
+                        "Meta returned an Add-RK response but ReMask could not "
+                        "prove a numeric Ad Account ID. Reconcile inventory before retry."
+                    ),
+                    retryable=True,
+                    diagnostic={
+                        "request": self._safe_graphql_request_summary(
+                            response.request
+                        ),
+                    },
+                )
+
+            await checkpoint(
+                {
+                    "phase": "CREATE_CONFIRMED",
+                    "activity": "AD_ACCOUNT_CREATE_CONFIRMED",
+                    "activity_at": int(time.time()),
+                    "ad_account_id": ad_account_id,
+                    "create_friendly_name": friendly,
+                    "create_response_path": response_path,
+                }
+            )
+            return BrowserAdAccountResult(
+                business_id=business,
+                ad_account_id=ad_account_id,
+                response_friendly_name=friendly,
+                response_path=response_path,
+            )
+
+        finally:
+            if not gate_future.done():
+                gate_future.cancel()
+            if not response_future.done():
+                response_future.cancel()
+            try:
+                self.page.remove_listener("response", observe_response)
+            except Exception:
+                pass
+            try:
+                await self.page.unroute("**/api/graphql/**", gate)
+            except Exception:
+                pass
+
     async def capture_ad_account_create_request(
         self,
         *,
@@ -5191,6 +5786,7 @@ class FacebookBusinessBrowser:
 
 
 __all__ = [
+    "BrowserAdAccountResult",
     "BrowserBusinessError",
     "BrowserCreateResult",
     "BrowserPageResult",
