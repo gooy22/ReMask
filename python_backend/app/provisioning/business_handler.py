@@ -105,6 +105,25 @@ async def business_handler(
             retryable=False,
         )
 
+    # Older ReMask UI generated names like ReMask_BM_1. Meta now rejects that
+    # generated format (error 1690091 / Business name not allowed). Only
+    # normalize our own legacy auto-name; never rewrite a user's custom name.
+    auto_name_match = re.fullmatch(r"ReMask_BM_(\d+)", bm_name, flags=re.IGNORECASE)
+    if auto_name_match:
+        page_name = ""
+        for row in (getattr(context, "pages", None) or []):
+            if not isinstance(row, dict):
+                continue
+            if _clean(row.get("id")) == page_id:
+                page_name = _clean(row.get("name"))
+                if page_name:
+                    break
+        bm_name = (
+            page_name[:255]
+            if page_name
+            else f"ReMask Business {auto_name_match.group(1)}"
+        )
+
     user_email = _clean(
         params.get("user_email")
         or params.get("email")
