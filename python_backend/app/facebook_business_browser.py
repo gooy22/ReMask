@@ -3564,7 +3564,60 @@ class FacebookBusinessBrowser:
         )
         business_match = bool(business and business in decoded)
 
-        return operation_match and business_match
+        if operation_match and business_match:
+            return True
+
+        variables = (
+            meta.get("variables")
+            if isinstance(meta.get("variables"), dict)
+            else {}
+        )
+        queryish = any(
+            marker in friendly
+            for marker in ("query", "search", "list", "lookup", "typeahead")
+        )
+
+        def iter_dicts(value: Any):
+            if isinstance(value, dict):
+                yield value
+                for child in value.values():
+                    yield from iter_dicts(child)
+            elif isinstance(value, list):
+                for child in value:
+                    yield from iter_dicts(child)
+
+        if not queryish:
+            for node in iter_dicts(variables):
+                node_business = _digits(
+                    node.get("business_id")
+                    or node.get("businessId")
+                    or node.get("business")
+                )
+                node_name = _clean(
+                    node.get("name")
+                    or node.get("account_name")
+                    or node.get("ad_account_name")
+                ).casefold()
+                if node_business != business or node_name != expected_name:
+                    continue
+
+                create_fields = {
+                    "currency",
+                    "timezone_id",
+                    "time_zone_id",
+                    "end_advertiser",
+                    "media_agency",
+                    "partner",
+                }
+                present = create_fields.intersection(
+                    str(key) for key in node.keys()
+                )
+                if len(present) >= 2:
+                    return True
+                if "mutation" in friendly and present:
+                    return True
+
+        return False
 
     @staticmethod
     def _response_matches_ad_account_create(
@@ -4031,6 +4084,183 @@ class FacebookBusinessBrowser:
         value = _clean(result).lower()
         return value if value in {"create", "add"} else ""
 
+    async def _click_ad_account_form_action_by_visible_text(
+        self,
+        action: str,
+    ) -> dict[str, Any]:
+        """Click Next/Create/Own-business even when Meta renders a plain DIV."""
+        if self.page is None:
+            return {"clicked": False, "action": _clean(action)}
+
+        mode = _clean(action).lower()
+        if mode not in {"next", "final", "own_business"}:
+            return {"clicked": False, "action": mode}
+
+        try:
+            result = await self.page.evaluate(
+                """(mode) => {
+                    const visible = el => {
+                        if (!el) return false;
+                        const r = el.getBoundingClientRect();
+                        const s = getComputedStyle(el);
+                        return r.width > 0 && r.height > 0
+                            && s.display !== 'none'
+                            && s.visibility !== 'hidden'
+                            && s.pointerEvents !== 'none';
+                    };
+                    const clean = text => (text || '')
+                        .normalize('NFKC')
+                        .replace(/\u00a0/g, ' ')
+                        .replace(/\s+/g, ' ')
+                        .trim()
+                        .toLowerCase();
+
+                    const nextWords = [
+                        'next','continue','suivant','continuer','weiter',
+                        'fortfahren','далее','продолжить','далі','продовжити',
+                        'পরবর্তী','চালিয়ে যান','tiếp','tiếp tục',
+                        'अगला','आगे','जारी रखें'
+                    ];
+                    const createWords = [
+                        'create','create account','create ad account',
+                        'create advertising account',
+                        'créer','créer le compte','créer le compte publicitaire',
+                        'créer un compte publicitaire',
+                        'создать','создать аккаунт','создать рекламный аккаунт',
+                        'створити','створити обліковий запис',
+                        'створити рекламний акаунт',
+                        'erstellen','konto erstellen','werbekonto erstellen',
+                        'তৈরি করুন','বিজ্ঞাপন অ্যাকাউন্ট তৈরি করুন',
+                        'tạo','tạo tài khoản quảng cáo',
+                        'बनाएँ','बनाएं','विज्ञापन खाता बनाएँ',
+                        'विज्ञापन खाता बनाएं'
+                    ];
+                    const ownWords = [
+                        'my business','my business portfolio','for my business',
+                        'mon entreprise','mon portefeuille business',
+                        'pour mon entreprise',
+                        'mein unternehmen','für mein unternehmen',
+                        'мой бизнес','для моего бизнеса',
+                        'мій бізнес','для мого бізнесу',
+                        'আমার ব্যবসা','আমার ব্যবসার জন্য',
+                        'doanh nghiệp của tôi','dành cho doanh nghiệp của tôi',
+                        'मेरा व्यवसाय','मेरे व्यवसाय के लिए'
+                    ];
+
+                    const nodes = [...document.querySelectorAll(
+                        'button,a,span,div,label,[role],[tabindex]'
+                    )];
+                    const rows = [];
+                    for (const el of nodes) {
+                        if (!visible(el)) continue;
+                        const r = el.getBoundingClientRect();
+                        if (r.x < 280 || r.y < 40 || r.y > 795) continue;
+
+                        const text = clean(
+                            (el.getAttribute('aria-label') || '') + ' ' +
+                            (el.getAttribute('title') || '') + ' ' +
+                            (el.innerText || el.textContent || '')
+                        );
+                        if (!text || text.length > 180) continue;
+
+                        let match = false;
+                        if (mode === 'next') {
+                            match = nextWords.some(
+                                word => text === word
+                                    || text.startsWith(word + ' ')
+                            );
+                        } else if (mode === 'final') {
+                            match = createWords.some(
+                                word => text === word
+                                    || text.startsWith(word + ' ')
+                            );
+                        } else {
+                            match = ownWords.some(
+                                word => text === word
+                                    || text.startsWith(word + ' ')
+                                    || text.includes(word)
+                            );
+                        }
+                        if (!match) continue;
+
+                        const clickable = el.closest(
+                            'button,a,[role="button"],[role="radio"],'
+                            + '[role="option"],[role="menuitem"],'
+                            + '[role="menuitemradio"],'
+                            + '[tabindex]:not([tabindex="-1"])'
+                        ) || el;
+                        if (!visible(clickable)) continue;
+                        if (
+                            clickable.hasAttribute('disabled')
+                            || clickable.getAttribute('aria-disabled') === 'true'
+                        ) {
+                            continue;
+                        }
+
+                        const cr = clickable.getBoundingClientRect();
+                        let score = Math.round(cr.y);
+                        if (clickable !== el) score -= 80;
+                        if (clickable.tagName === 'BUTTON') score -= 80;
+                        if ((clickable.getAttribute('role') || '') === 'button') {
+                            score -= 60;
+                        }
+                        if (mode === 'final' && text.includes('compte publicitaire')) {
+                            score -= 120;
+                        }
+                        if (mode === 'own_business' && text === 'mon entreprise') {
+                            score -= 120;
+                        }
+
+                        rows.push({
+                            el: clickable,
+                            text,
+                            x: Math.round(cr.x),
+                            y: Math.round(cr.y),
+                            tag: clickable.tagName || '',
+                            role: clickable.getAttribute('role') || '',
+                            score
+                        });
+                    }
+
+                    rows.sort((a,b) => a.score - b.score);
+                    const best = rows[0];
+                    if (!best) {
+                        return {clicked:false, action:mode};
+                    }
+
+                    best.el.scrollIntoView({block:'center'});
+                    best.el.click();
+                    return {
+                        clicked:true,
+                        action:mode,
+                        text:best.text,
+                        x:best.x,
+                        y:best.y,
+                        tag:best.tag,
+                        role:best.role
+                    };
+                }""",
+                mode,
+            )
+            if isinstance(result, dict):
+                return {
+                    "clicked": bool(result.get("clicked")),
+                    "action": _clean(result.get("action")) or mode,
+                    "text": _clean(result.get("text"))[:180],
+                    "x": int(result.get("x") or 0),
+                    "y": int(result.get("y") or 0),
+                    "tag": _clean(result.get("tag"))[:40],
+                    "role": _clean(result.get("role"))[:80],
+                }
+        except Exception as exc:
+            return {
+                "clicked": False,
+                "action": mode,
+                "error": f"{exc.__class__.__name__}: {exc}"[:300],
+            }
+
+        return {"clicked": False, "action": mode}
+
     async def _select_own_business_if_present(self) -> bool:
         """Select Meta's optional 'use this ad account for my business' choice."""
         names = (
@@ -4053,7 +4283,7 @@ class FacebookBusinessBrowser:
             "मेरा व्यवसाय",
             "मेरे व्यवसाय के लिए",
         )
-        return await self._click_named(
+        clicked = await self._click_named(
             names,
             roles=(
                 "radio",
@@ -4064,6 +4294,13 @@ class FacebookBusinessBrowser:
             ),
             click_timeout_ms=2500,
         )
+        if clicked:
+            return True
+
+        fallback = await self._click_ad_account_form_action_by_visible_text(
+            "own_business"
+        )
+        return bool(fallback.get("clicked"))
 
     async def _ad_account_form_candidates(self) -> list[str]:
         """Compact visible inputs/selectors/buttons in the Add-RK dialog."""
@@ -4086,15 +4323,16 @@ class FacebookBusinessBrowser:
                         .trim();
                     const nodes = [
                         ...document.querySelectorAll(
-                            '[role="dialog"] input,[role="dialog"] select,'
-                            + '[role="dialog"] [role="combobox"],'
-                            + '[role="dialog"] button,[role="dialog"] [role="button"]'
+                            'input,select,[role="combobox"],button,'
+                            + '[role="button"],[role="radio"],[role="option"],'
+                            + '[aria-disabled],[disabled]'
                         )
                     ];
                     const out = [];
                     for (const el of nodes) {
                         if (!visible(el)) continue;
                         const r = el.getBoundingClientRect();
+                        if (r.x < 280 || r.y < 35 || r.y > 795) continue;
                         const text = clean(
                             (el.getAttribute('aria-label') || '') + ' ' +
                             (el.getAttribute('placeholder') || '') + ' ' +
@@ -4111,6 +4349,11 @@ class FacebookBusinessBrowser:
                             + (value ? ' value=' + value : '')
                             + ' [tag=' + (el.tagName || '')
                             + ' role=' + (el.getAttribute('role') || '')
+                            + ' disabled='
+                            + (
+                                el.hasAttribute('disabled')
+                                || el.getAttribute('aria-disabled') === 'true'
+                            )
                             + ' x=' + Math.round(r.x)
                             + ' y=' + Math.round(r.y)
                             + ']'
@@ -5644,8 +5887,52 @@ class FacebookBusinessBrowser:
         loop = asyncio.get_running_loop()
         gate_future: asyncio.Future[bool] = loop.create_future()
         response_future: asyncio.Future[Any] = loop.create_future()
+        graphql_candidates: list[dict[str, Any]] = []
 
         async def gate(route: Any, request: Any) -> None:
+            request_meta = _request_graphql_meta(request)
+            decoded = _clean(request_meta.get("decoded_raw")).casefold()
+            friendly = _clean(request_meta.get("friendly_name")).casefold()
+            if (
+                _clean(request_meta.get("method")).upper() == "POST"
+                and "graphql" in _clean(request_meta.get("url")).lower()
+                and (
+                    business in decoded
+                    or name.casefold() in decoded
+                    or "adaccount" in friendly
+                    or "ad_account" in friendly
+                )
+            ):
+                summary = self._safe_graphql_request_summary(request)
+                summary["business_seen"] = bool(business in decoded)
+                summary["name_seen"] = bool(name.casefold() in decoded)
+                summary["matched_create"] = bool(
+                    self._request_matches_ad_account_create(
+                        request,
+                        business_id=business,
+                        account_name=name,
+                    )
+                )
+                key = (
+                    summary.get("friendly_name"),
+                    summary.get("doc_id"),
+                    tuple(summary.get("input_keys") or []),
+                    summary.get("matched_create"),
+                )
+                if not any(
+                    (
+                        row.get("friendly_name"),
+                        row.get("doc_id"),
+                        tuple(row.get("input_keys") or []),
+                        row.get("matched_create"),
+                    )
+                    == key
+                    for row in graphql_candidates
+                ):
+                    graphql_candidates.append(summary)
+                    if len(graphql_candidates) > 24:
+                        del graphql_candidates[:-24]
+
             if not self._request_matches_ad_account_create(
                 request,
                 business_id=business,
@@ -5659,7 +5946,6 @@ class FacebookBusinessBrowser:
                 return
 
             try:
-                request_meta = _request_graphql_meta(request)
                 await checkpoint(
                     {
                         "phase": "CREATE_SUBMITTED",
@@ -5781,48 +6067,153 @@ class FacebookBusinessBrowser:
         self._mark_ad_account_phase("SUBMIT_UI")
         try:
             clicked_any = False
-            for _ in range(8):
+            own_business_attempted = False
+            submit_attempts: list[dict[str, Any]] = []
+
+            for step in range(12):
                 if gate_future.done():
+                    break
+
+                before_state = await self._ad_account_ui_state()
+                self._record_ad_account_ui_state(
+                    f"submit_step_{step}_before",
+                    before_state,
+                )
+                before_signature = _clean(before_state.get("signature"))
+
+                if _clean(before_state.get("state")).upper() == "BLOCKED":
+                    submit_attempts.append(
+                        {
+                            "step": step,
+                            "action": "blocked",
+                            "errors": list(before_state.get("errors") or [])[:3],
+                        }
+                    )
                     break
 
                 next_clicked = await self._click_named(
                     next_names,
                     click_timeout_ms=2500,
                 )
+                next_meta: dict[str, Any] = {}
+                if not next_clicked:
+                    next_meta = (
+                        await self._click_ad_account_form_action_by_visible_text(
+                            "next"
+                        )
+                    )
+                    next_clicked = bool(next_meta.get("clicked"))
+
                 if next_clicked:
                     clicked_any = True
-                    await self.page.wait_for_timeout(650)
+                    transition = await self._wait_for_ad_account_ui_transition(
+                        previous_signature=before_signature,
+                        timeout_seconds=3.5,
+                        label=f"submit_step_{step}_after_next",
+                    )
+                    submit_attempts.append(
+                        {
+                            "step": step,
+                            "action": "next",
+                            "fallback": next_meta,
+                            "state_after": _clean(transition.get("state")),
+                            "errors": list(transition.get("errors") or [])[:3],
+                        }
+                    )
                     if gate_future.done():
                         break
-                    await self._select_own_business_if_present()
+                    if not own_business_attempted:
+                        own_business_attempted = True
+                        await self._select_own_business_if_present()
                     continue
 
-                await self._select_own_business_if_present()
+                if not own_business_attempted:
+                    own_business_attempted = True
+                    own_selected = await self._select_own_business_if_present()
+                    if own_selected:
+                        clicked_any = True
+                        await self.page.wait_for_timeout(350)
+                        state_after_own = await self._ad_account_ui_state()
+                        self._record_ad_account_ui_state(
+                            f"submit_step_{step}_after_own_business",
+                            state_after_own,
+                        )
+                        submit_attempts.append(
+                            {
+                                "step": step,
+                                "action": "own_business",
+                                "state_after": _clean(
+                                    state_after_own.get("state")
+                                ),
+                            }
+                        )
+                        continue
 
+                await checkpoint(
+                    {
+                        "phase": "CREATE_CLICK_INTENT",
+                        "activity": "AD_ACCOUNT_CREATE_CLICK_INTENT",
+                        "activity_at": int(time.time()),
+                    }
+                )
                 final_clicked = await self._click_named(
                     final_names,
-                    before_click=lambda: checkpoint(
-                        {
-                            "phase": "CREATE_CLICK_INTENT",
-                            "activity": "AD_ACCOUNT_CREATE_CLICK_INTENT",
-                            "activity_at": int(time.time()),
-                        }
-                    ),
                     click_timeout_ms=2500,
                 )
+                final_meta: dict[str, Any] = {}
+                if not final_clicked:
+                    final_meta = (
+                        await self._click_ad_account_form_action_by_visible_text(
+                            "final"
+                        )
+                    )
+                    final_clicked = bool(final_meta.get("clicked"))
+
                 if final_clicked:
                     clicked_any = True
                     try:
                         await asyncio.wait_for(
                             asyncio.shield(gate_future),
-                            timeout=3.0,
+                            timeout=4.0,
                         )
                     except asyncio.TimeoutError:
-                        await self.page.wait_for_timeout(400)
+                        pass
+
                     if gate_future.done():
+                        submit_attempts.append(
+                            {
+                                "step": step,
+                                "action": "final",
+                                "fallback": final_meta,
+                                "gate": "matched",
+                            }
+                        )
                         break
+
+                    transition = await self._wait_for_ad_account_ui_transition(
+                        previous_signature=before_signature,
+                        timeout_seconds=2.5,
+                        label=f"submit_step_{step}_after_final",
+                    )
+                    submit_attempts.append(
+                        {
+                            "step": step,
+                            "action": "final",
+                            "fallback": final_meta,
+                            "gate": "not_matched",
+                            "state_after": _clean(transition.get("state")),
+                            "errors": list(transition.get("errors") or [])[:3],
+                        }
+                    )
                     continue
 
+                submit_attempts.append(
+                    {
+                        "step": step,
+                        "action": "none",
+                        "state": _clean(before_state.get("state")),
+                    }
+                )
                 break
 
             if gate_future.done() and gate_future.exception() is not None:
@@ -5840,14 +6231,18 @@ class FacebookBusinessBrowser:
                     "ad_account_create_submit_missing"
                 )
                 diag["clicked_any"] = clicked_any
+                diag["submit_attempts"] = submit_attempts[-12:]
+                diag["graphql_candidates"] = graphql_candidates[-12:]
                 diag["form_candidates"] = await self._ad_account_form_candidates()
+                diag["ui_state"] = await self._ad_account_ui_state()
+                diag["ui_trace"] = self._ad_account_ui_trace[-16:]
                 diag["requested_currency"] = _clean(currency).upper()
                 diag["requested_timezone_id"] = int(timezone_id)
                 raise BrowserBusinessError(
                     "AD_ACCOUNT_CREATE_UI_CHANGED",
                     (
                         "Meta Ad Account form was opened, but ReMask could not "
-                        "reach an identifiable CREATE request. No CREATE was sent."
+                        "reach a safely identifiable CREATE request."
                     ),
                     retryable=True,
                     diagnostic=diag,

@@ -55,6 +55,39 @@ class BrowserNetworkGateTests(unittest.TestCase):
             )
         )
 
+    def test_ad_account_gate_accepts_renamed_mutation_with_strong_create_shape(self):
+        request = _FakeRequest(
+            "fb_api_req_friendly_name=BizKitSettingsAssetMutation"
+            "&doc_id=8877665544332211"
+            "&variables=%7B%22input%22%3A%7B%22business_id%22%3A"
+            "%22555666777888999%22%2C%22name%22%3A"
+            "%22ReMask%20Ads%22%2C%22currency%22%3A%22USD%22%2C"
+            "%22timezone_id%22%3A1%7D%7D"
+        )
+        self.assertTrue(
+            FacebookBusinessBrowser._request_matches_ad_account_create(
+                request,
+                business_id="555666777888999",
+                account_name="ReMask Ads",
+            )
+        )
+
+    def test_ad_account_gate_rejects_same_name_without_create_shape(self):
+        request = _FakeRequest(
+            "fb_api_req_friendly_name=BusinessSettingsValidationMutation"
+            "&doc_id=8877665544332211"
+            "&variables=%7B%22input%22%3A%7B%22business_id%22%3A"
+            "%22555666777888999%22%2C%22name%22%3A"
+            "%22ReMask%20Ads%22%7D%7D"
+        )
+        self.assertFalse(
+            FacebookBusinessBrowser._request_matches_ad_account_create(
+                request,
+                business_id="555666777888999",
+                account_name="ReMask Ads",
+            )
+        )
+
     def test_ad_account_gate_ignores_unrelated_graphql(self):
         request = _FakeRequest(
             "fb_api_req_friendly_name=BusinessAdAccountSearchQuery"
@@ -486,6 +519,61 @@ class BrowserAdAccountDomFallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(args[1])
 
 
+class BrowserAdAccountFormActionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_plain_div_continue_fallback_is_supported(self):
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-rk-submit-div")
+        )
+        browser.page = SimpleNamespace(
+            evaluate=AsyncMock(
+                return_value={
+                    "clicked": True,
+                    "action": "next",
+                    "text": "continuer",
+                    "x": 1040,
+                    "y": 690,
+                    "tag": "DIV",
+                    "role": "",
+                }
+            )
+        )
+
+        result = await browser._click_ad_account_form_action_by_visible_text(
+            "next"
+        )
+
+        self.assertTrue(result["clicked"])
+        self.assertEqual(result["action"], "next")
+        script = browser.page.evaluate.await_args.args[0]
+        self.assertIn("continuer", script)
+        self.assertIn("aria-disabled", script)
+
+    async def test_plain_div_final_create_fallback_is_supported(self):
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-rk-submit-final-div")
+        )
+        browser.page = SimpleNamespace(
+            evaluate=AsyncMock(
+                return_value={
+                    "clicked": True,
+                    "action": "final",
+                    "text": "créer le compte publicitaire",
+                    "x": 1030,
+                    "y": 690,
+                    "tag": "DIV",
+                    "role": "",
+                }
+            )
+        )
+
+        result = await browser._click_ad_account_form_action_by_visible_text(
+            "final"
+        )
+
+        self.assertTrue(result["clicked"])
+        self.assertIn("créer", result["text"])
+
+
 class BrowserAdAccountOwnBusinessTests(unittest.IsolatedAsyncioTestCase):
     async def test_optional_french_own_business_choice_is_supported(self):
         browser = FacebookBusinessBrowser(
@@ -501,6 +589,23 @@ class BrowserAdAccountOwnBusinessTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Mon entreprise", names)
         self.assertIn("Pour mon entreprise", names)
         self.assertIn("Мой бизнес", names)
+
+    async def test_optional_own_business_uses_visible_text_fallback(self):
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-rk-own-business-div")
+        )
+        browser._click_named = AsyncMock(return_value=False)
+        browser._click_ad_account_form_action_by_visible_text = AsyncMock(
+            return_value={"clicked": True, "action": "own_business"}
+        )
+
+        selected = await browser._select_own_business_if_present()
+
+        self.assertTrue(selected)
+        browser._click_ad_account_form_action_by_visible_text.assert_awaited_once_with(
+            "own_business"
+        )
+
 
 
 class BrowserAdAccountAddProbeTests(unittest.IsolatedAsyncioTestCase):
