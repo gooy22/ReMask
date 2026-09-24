@@ -4,8 +4,10 @@ from unittest.mock import AsyncMock
 
 from app.facebook_business_browser import (
     FacebookBusinessBrowser,
+    _decode_graphql_text,
     _graphql_error_details,
     _meta_error_retryable,
+    _walk_business_ids,
 )
 
 
@@ -111,6 +113,34 @@ class BusinessCreateObserverTests(unittest.TestCase):
                 "Test Business",
             )
         )
+
+
+class RelayResponseDecodeTests(unittest.TestCase):
+    def test_decodes_xssi_prefixed_single_json(self):
+        payload = _decode_graphql_text(
+            'for (;;);{"data":{"business_create":{"business":{"id":"555666777888999"}}}}'
+        )
+        ids = _walk_business_ids(payload)
+        self.assertTrue(any(value == "555666777888999" for value, _ in ids))
+
+    def test_decodes_line_delimited_relay_payloads(self):
+        payload = _decode_graphql_text(
+            '{"extensions":{"is_final":false}}\n'
+            '{"data":{"business_create":{"business":{"id":"555666777888999"}}}}'
+        )
+        self.assertIsInstance(payload, list)
+        ids = _walk_business_ids(payload)
+        self.assertTrue(any(value == "555666777888999" for value, _ in ids))
+
+    def test_line_delimited_errors_remain_visible(self):
+        payload = _decode_graphql_text(
+            '{"extensions":{"is_final":false}}\n'
+            '{"errors":[{"message":"Server error. Please try again.",'
+            '"extensions":{"code":"INTERNAL"}}]}'
+        )
+        errors = _graphql_error_details(payload)
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(errors[0]["code"], "INTERNAL")
 
 
 class MetaCreateErrorTests(unittest.TestCase):
