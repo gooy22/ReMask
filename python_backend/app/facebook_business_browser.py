@@ -459,6 +459,7 @@ class FacebookBusinessBrowser:
     ROOT_URL = "https://business.facebook.com/"
     HOME_URL = "https://business.facebook.com/latest/home"
     OVERVIEW_URL = "https://business.facebook.com/overview"
+    DIRECT_CREATE_URL = "https://business.facebook.com/create"
     CREATE_URL = "https://business.facebook.com/reg/"
     SETTINGS_PAGES_URL = (
         "https://business.facebook.com/settings/pages/?business_id={business_id}"
@@ -1367,6 +1368,25 @@ class FacebookBusinessBrowser:
         if open_form:
             try:
                 await self._goto(self.ROOT_URL)
+            except BrowserBusinessError as exc:
+                if exc.code != "FACEBOOK_NAVIGATION_FAILED":
+                    raise
+            else:
+                if await self._form_ready():
+                    return True
+                if await self._try_open_top_left_portfolio_menu():
+                    if await self._click_named(self.CREATE_NAMES):
+                        await self._assert_authenticated()
+                        if await self._wait_for_form_ready():
+                            return True
+
+        # Current Meta documentation/2026 UI variants also expose a direct
+        # /create entry. Probe it only for an actual CREATE action (not routine
+        # preflight) so profile variants without a recognized sidebar selector
+        # can still reach Meta's own portfolio form.
+        if open_form:
+            try:
+                await self._goto(self.DIRECT_CREATE_URL)
             except BrowserBusinessError as exc:
                 if exc.code != "FACEBOOK_NAVIGATION_FAILED":
                     raise
