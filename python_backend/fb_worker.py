@@ -904,17 +904,62 @@ class FacebookWebSession:
         try:
             payload = json.loads(body)
 
-        except (json.JSONDecodeError, ValueError) as exc:
-            preview = re.sub(
-                r"\s+",
-                " ",
-                body,
-            )[:1000]
+        except (json.JSONDecodeError, ValueError):
+            # Relay may stream one JSON object per line. The browser observer
+            # already handles this shape; the private transport must normalize
+            # it too or a valid CREATE response can be misclassified as
+            # "non-JSON".
+            chunks: list[dict[str, Any]] = []
+            for raw_line in body.splitlines():
+                line = str(raw_line or "").strip()
+                if not line:
+                    continue
+                if line.startswith("for (;;);"):
+                    line = line[len("for (;;);"):].lstrip()
+                if not line:
+                    continue
+                try:
+                    decoded = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                if isinstance(decoded, dict):
+                    chunks.append(decoded)
 
-            raise RemoteRequestError(
-                "Facebook returned non-JSON response: "
-                f"{preview}"
-            ) from exc
+            if not chunks:
+                preview = re.sub(
+                    r"\s+",
+                    " ",
+                    body,
+                )[:1000]
+
+                raise RemoteRequestError(
+                    "Facebook returned non-JSON response: "
+                    f"{preview}"
+                )
+
+            def merge_dicts(
+                target: dict[str, Any],
+                source: dict[str, Any],
+            ) -> None:
+                for key, value in source.items():
+                    if (
+                        key in target
+                        and isinstance(target[key], dict)
+                        and isinstance(value, dict)
+                    ):
+                        merge_dicts(target[key], value)
+                    elif (
+                        key == "errors"
+                        and isinstance(target.get(key), list)
+                        and isinstance(value, list)
+                    ):
+                        target[key] = [*target[key], *value]
+                    else:
+                        target[key] = value
+
+            payload = {}
+            for chunk in chunks:
+                merge_dicts(payload, chunk)
 
         if not isinstance(payload, dict):
             raise RemoteRequestError(
