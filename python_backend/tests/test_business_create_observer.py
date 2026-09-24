@@ -2,7 +2,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from app.facebook_business_browser import FacebookBusinessBrowser
+from app.facebook_business_browser import (\n    FacebookBusinessBrowser,\n    _graphql_error_details,\n    _meta_error_retryable,\n)
 
 
 class _BufferedRequest:
@@ -107,6 +107,52 @@ class BusinessCreateObserverTests(unittest.TestCase):
                 "Test Business",
             )
         )
+
+
+class MetaCreateErrorTests(unittest.TestCase):
+    def test_extracts_graphql_error_code_and_message(self):
+        errors = _graphql_error_details(
+            {
+                "errors": [
+                    {
+                        "message": "You have reached the maximum number of business portfolios.",
+                        "extensions": {
+                            "code": "BUSINESS_LIMIT",
+                            "error_subcode": "12345",
+                        },
+                    }
+                ]
+            }
+        )
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(errors[0]["code"], "BUSINESS_LIMIT")
+        self.assertEqual(errors[0]["subcode"], "12345")
+        self.assertIn("maximum", errors[0]["message"].lower())
+        self.assertFalse(_meta_error_retryable(errors))
+
+    def test_transient_meta_error_is_retryable(self):
+        errors = _graphql_error_details(
+            {
+                "errors": [
+                    {
+                        "message": "Server error. Please try again.",
+                        "extensions": {"code": "INTERNAL"},
+                    }
+                ]
+            }
+        )
+        self.assertTrue(_meta_error_retryable(errors))
+
+    def test_temporary_feature_block_is_not_auto_retried(self):
+        errors = _graphql_error_details(
+            {
+                "error": {
+                    "code": "FEATURE_BLOCK",
+                    "message": "You are temporarily blocked from using this feature.",
+                }
+            }
+        )
+        self.assertFalse(_meta_error_retryable(errors))
 
 
 class BusinessInventoryProbeTests(unittest.IsolatedAsyncioTestCase):
