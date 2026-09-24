@@ -172,7 +172,10 @@ async def business_handler(
         checkpoint.get("phase")
         or checkpoint.get("resume_from")
     ).upper()
-    business_id = _clean(checkpoint.get("business_id"))
+    business_id = _clean(
+        checkpoint.get("business_id")
+        or state.get("business_id")
+    )
     recovered = False
 
     checkpoint_response_id = _clean(
@@ -402,6 +405,17 @@ async def business_handler(
                 "BUSINESS has no confirmed business_id",
                 retryable=False,
             )
+
+        # CREATE is already an irreversible remote success at this point even
+        # if Page attach later fails. Persist the confirmed BM immediately so a
+        # later Add BM Job using the same stable profile+Page scope resumes the
+        # existing Business instead of creating a duplicate.
+        await provisioning_state.remember_entity(
+            profile_id,
+            scope_key,
+            ProvisioningStep.BUSINESS,
+            {"business_id": business_id},
+        )
 
         if page_known_not_sent:
             checkpoint = await provisioning_state.checkpoint(
