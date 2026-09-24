@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from typing import Any
 
 from ..facebook_business_browser import BrowserBusinessError
@@ -242,7 +243,7 @@ async def business_handler(
                 ProvisioningStep.BUSINESS,
                 {
                     "activity": "RECONCILE_CREATE",
-                    "activity_at": int(__import__("time").time()),
+                    "activity_at": int(time.time()),
                 },
             )
             recovered_result = await browser.reconcile_created_business(
@@ -274,7 +275,7 @@ async def business_handler(
                 ProvisioningStep.BUSINESS,
                 {
                     "activity": "SNAPSHOT_BUSINESSES",
-                    "activity_at": int(__import__("time").time()),
+                    "activity_at": int(time.time()),
                 },
             )
             before_map = await browser.snapshot_businesses()
@@ -344,7 +345,7 @@ async def business_handler(
                         create_result.recovered
                     ),
                     "activity": "VERIFY_PAGE",
-                    "activity_at": int(__import__("time").time()),
+                    "activity_at": int(time.time()),
                 },
             )
 
@@ -382,7 +383,7 @@ async def business_handler(
                 ProvisioningStep.BUSINESS,
                 {
                     "activity": "VERIFY_PAGE_AFTER_SUBMIT",
-                    "activity_at": int(__import__("time").time()),
+                    "activity_at": int(time.time()),
                 },
             )
             if await browser.verify_page_attached(
@@ -420,7 +421,7 @@ async def business_handler(
                 ProvisioningStep.BUSINESS,
                 {
                     "activity": "VERIFY_PAGE",
-                    "activity_at": int(__import__("time").time()),
+                    "activity_at": int(time.time()),
                 },
             )
             if await browser.verify_page_attached(
@@ -446,7 +447,7 @@ async def business_handler(
                     ProvisioningStep.BUSINESS,
                     {
                         "activity": "PAGE_ATTACH_OPENING",
-                        "activity_at": int(__import__("time").time()),
+                        "activity_at": int(time.time()),
                     },
                 )
 
@@ -485,7 +486,7 @@ async def business_handler(
                             page_result.already_attached
                         ),
                         "activity": "DONE",
-                        "activity_at": int(__import__("time").time()),
+                        "activity_at": int(time.time()),
                     },
                 )
 
