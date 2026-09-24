@@ -802,6 +802,7 @@ class FacebookBusinessBrowser:
         self._ad_account_runtime_phase = "IDLE"
         self._ad_account_phase_started_at = time.monotonic()
         self._ad_account_create_sent = False
+        self._ad_account_ui_trace: list[dict[str, Any]] = []
 
     async def __aenter__(self) -> "FacebookBusinessBrowser":
         await self.open()
@@ -4125,6 +4126,278 @@ class FacebookBusinessBrowser:
             pass
         return []
 
+    async def _ad_account_ui_state(self) -> dict[str, Any]:
+        """Classify the current Meta Add-RK UI instead of assuming one DOM shape."""
+        if self.page is None:
+            return {"state": "NO_PAGE", "signature": ""}
+
+        try:
+            raw = await self.page.evaluate(
+                """() => {
+                    const visible = el => {
+                        if (!el) return false;
+                        const r = el.getBoundingClientRect();
+                        const s = getComputedStyle(el);
+                        return r.width > 0 && r.height > 0
+                            && s.display !== 'none'
+                            && s.visibility !== 'hidden';
+                    };
+                    const clean = text => (text || '')
+                        .normalize('NFKC')
+                        .replace(/\u00a0/g, ' ')
+                        .replace(/\s+/g, ' ')
+                        .trim();
+                    const lower = text => clean(text).toLowerCase();
+
+                    const createWords = [
+                        'create','créer','создать','створити','erstellen',
+                        'তৈরি করুন','tạo','बनाएँ','बनाएं'
+                    ];
+                    const accountWords = [
+                        'ad account','advertising account','compte publicitaire',
+                        'реклам','werbekonto','বিজ্ঞাপন অ্যাকাউন্ট',
+                        'tài khoản quảng cáo','विज्ञापन खाता','विज्ञापन खाते'
+                    ];
+                    const nameWords = [
+                        'ad account name','advertising account name','account name',
+                        'nom du compte publicitaire','nom du compte',
+                        'название рекламного аккаунта','название аккаунта',
+                        'назва рекламного акаунта','назва облікового запису',
+                        'name des werbekontos','বিজ্ঞাপন অ্যাকাউন্টের নাম',
+                        'tên tài khoản quảng cáo','विज्ञापन खाते का नाम',
+                        'विज्ञापन खाता नाम'
+                    ];
+                    const formWords = [
+                        'currency','devise','währung','валюта','валюта',
+                        'time zone','timezone','fuseau horaire','zeitzone',
+                        'часовой пояс','часовий пояс'
+                    ];
+                    const errorWords = [
+                        'not allowed','not eligible','cannot create','can\'t create',
+                        'unable to create','restricted','restriction',
+                        'maximum number','reached the maximum','limit reached',
+                        'permission','permissions','vérifier','verification',
+                        'non autorisé','pas autorisé','impossible de créer',
+                        'limite','restreint','restriction'
+                    ];
+
+                    const rightNodes = [...document.querySelectorAll(
+                        'button,a,input,select,[role],[aria-label],[title],'
+                        + '[tabindex],h1,h2,h3,label'
+                    )].filter(el => {
+                        if (!visible(el)) return false;
+                        const r = el.getBoundingClientRect();
+                        return r.x >= 280 && r.y >= 35 && r.y <= 795;
+                    });
+
+                    const controls = [];
+                    const seen = new Set();
+                    let createEntry = false;
+                    let nameInput = false;
+                    let formEvidence = false;
+                    let addSurface = false;
+
+                    for (const el of rightNodes) {
+                        const r = el.getBoundingClientRect();
+                        const text = clean(
+                            (el.getAttribute('aria-label') || '') + ' ' +
+                            (el.getAttribute('placeholder') || '') + ' ' +
+                            (el.getAttribute('title') || '') + ' ' +
+                            (el.getAttribute('name') || '') + ' ' +
+                            (el.innerText || el.textContent || '')
+                        );
+                        const low = text.toLowerCase();
+
+                        if (
+                            (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')
+                            && nameWords.some(word => low.includes(word))
+                        ) {
+                            nameInput = true;
+                        }
+                        if (nameWords.some(word => low.includes(word))) {
+                            formEvidence = true;
+                        }
+                        if (formWords.some(word => low.includes(word))) {
+                            formEvidence = true;
+                        }
+                        if (
+                            createWords.some(word => low.includes(word))
+                            && accountWords.some(word => low.includes(word))
+                        ) {
+                            createEntry = true;
+                        }
+                        if (
+                            ['add','ajouter','добавить','додати','hinzufügen',
+                             'যোগ করুন','thêm','जोड़ें'].some(
+                                word => low === word || low.startsWith(word + ' ')
+                            )
+                        ) {
+                            addSurface = true;
+                        }
+
+                        if (!text || text.length > 220) continue;
+                        const row = text
+                            + ' [tag=' + (el.tagName || '')
+                            + ' role=' + (el.getAttribute('role') || '')
+                            + ' x=' + Math.round(r.x)
+                            + ' y=' + Math.round(r.y)
+                            + ']';
+                        if (seen.has(row)) continue;
+                        seen.add(row);
+                        controls.push(row);
+                        if (controls.length >= 45) break;
+                    }
+
+                    // Form can be open even when Meta omitted a useful label
+                    // from the actual <input>. Dialog-level evidence is enough.
+                    const dialogs = [...document.querySelectorAll(
+                        '[role="dialog"],[aria-modal="true"]'
+                    )].filter(visible);
+                    const dialogTexts = dialogs
+                        .map(el => clean(el.innerText || el.textContent || ''))
+                        .filter(Boolean)
+                        .slice(0, 6);
+                    const dialogCombined = dialogTexts.join(' ').toLowerCase();
+                    if (
+                        accountWords.some(word => dialogCombined.includes(word))
+                        && (
+                            nameWords.some(word => dialogCombined.includes(word))
+                            || formWords.some(word => dialogCombined.includes(word))
+                            || dialogs.some(dialog => dialog.querySelector('input,select,[role="combobox"]'))
+                        )
+                    ) {
+                        formEvidence = true;
+                    }
+
+                    // Only treat an error as blocking when it is surfaced in an
+                    // alert/toast/dialog, not merely present in hidden app text.
+                    const errorSurfaces = [...document.querySelectorAll(
+                        '[role="alert"],[role="alertdialog"],[aria-live="assertive"],'
+                        + '[aria-live="polite"],[role="dialog"]'
+                    )].filter(visible);
+                    const errors = [];
+                    for (const el of errorSurfaces) {
+                        const text = clean(el.innerText || el.textContent || '');
+                        const low = text.toLowerCase();
+                        if (!text || text.length > 1200) continue;
+                        if (!errorWords.some(word => low.includes(word))) continue;
+                        errors.push(text.slice(0, 500));
+                        if (errors.length >= 6) break;
+                    }
+
+                    let state = 'UNKNOWN';
+                    if (errors.length) state = 'BLOCKED';
+                    else if (nameInput || formEvidence) state = 'FORM';
+                    else if (createEntry) state = 'CREATE_ENTRY';
+                    else if (addSurface) state = 'ADD_SURFACE';
+                    else if (dialogs.length) state = 'DIALOG';
+
+                    const signature = [
+                        state,
+                        location.pathname,
+                        controls.slice(0, 18).join('||'),
+                        dialogTexts.slice(0, 3).join('||')
+                    ].join('::').slice(0, 6000);
+
+                    return {
+                        state,
+                        signature,
+                        url: location.href,
+                        name_input: nameInput,
+                        form_evidence: formEvidence,
+                        create_entry: createEntry,
+                        add_surface: addSurface,
+                        errors,
+                        dialogs: dialogTexts.map(x => x.slice(0, 500)),
+                        controls: controls.slice(0, 45)
+                    };
+                }"""
+            )
+        except Exception as exc:
+            return {
+                "state": "PROBE_ERROR",
+                "signature": "",
+                "error": f"{exc.__class__.__name__}: {exc}"[:500],
+            }
+
+        if not isinstance(raw, dict):
+            return {"state": "UNKNOWN", "signature": ""}
+
+        state = {
+            "state": _clean(raw.get("state")).upper() or "UNKNOWN",
+            "signature": _clean(raw.get("signature"))[:6000],
+            "url": _clean(raw.get("url"))[:900],
+            "name_input": bool(raw.get("name_input")),
+            "form_evidence": bool(raw.get("form_evidence")),
+            "create_entry": bool(raw.get("create_entry")),
+            "add_surface": bool(raw.get("add_surface")),
+            "errors": [
+                _clean(x)[:500]
+                for x in (raw.get("errors") or [])
+                if _clean(x)
+            ][:6],
+            "dialogs": [
+                _clean(x)[:500]
+                for x in (raw.get("dialogs") or [])
+                if _clean(x)
+            ][:6],
+            "controls": [
+                _clean(x)[:300]
+                for x in (raw.get("controls") or [])
+                if _clean(x)
+            ][:45],
+        }
+        return state
+
+    def _record_ad_account_ui_state(
+        self,
+        label: str,
+        state: dict[str, Any],
+    ) -> None:
+        row = {
+            "label": _clean(label)[:80],
+            "state": _clean(state.get("state")).upper() or "UNKNOWN",
+            "url": _clean(state.get("url"))[:700],
+            "name_input": bool(state.get("name_input")),
+            "form_evidence": bool(state.get("form_evidence")),
+            "create_entry": bool(state.get("create_entry")),
+            "add_surface": bool(state.get("add_surface")),
+            "errors": list(state.get("errors") or [])[:3],
+            "dialogs": list(state.get("dialogs") or [])[:2],
+            "controls": list(state.get("controls") or [])[:8],
+        }
+        self._ad_account_ui_trace.append(row)
+        if len(self._ad_account_ui_trace) > 24:
+            self._ad_account_ui_trace = self._ad_account_ui_trace[-24:]
+
+    async def _wait_for_ad_account_ui_transition(
+        self,
+        *,
+        previous_signature: str = "",
+        timeout_seconds: float = 4.0,
+        label: str = "transition",
+    ) -> dict[str, Any]:
+        deadline = time.monotonic() + max(0.5, float(timeout_seconds))
+        last: dict[str, Any] = {"state": "UNKNOWN", "signature": ""}
+        while time.monotonic() < deadline:
+            last = await self._ad_account_ui_state()
+            current_signature = _clean(last.get("signature"))
+            current_state = _clean(last.get("state")).upper()
+            if (
+                current_state in {"FORM", "CREATE_ENTRY", "BLOCKED"}
+                or (
+                    previous_signature
+                    and current_signature
+                    and current_signature != previous_signature
+                )
+            ):
+                self._record_ad_account_ui_state(label, last)
+                return last
+            await self.page.wait_for_timeout(200)
+
+        self._record_ad_account_ui_state(label + "_timeout", last)
+        return last
+
     async def _click_ad_account_create_entry_by_visible_text(self) -> bool:
         """Click a visible Create-new-RK label even if Meta omitted ARIA roles.
 
@@ -4563,13 +4836,37 @@ class FacebookBusinessBrowser:
                     attempts.append(attempt)
                     continue
 
+                before_state = await self._ad_account_ui_state()
+                self._record_ad_account_ui_state(
+                    "before_add_click",
+                    before_state,
+                )
                 before_snapshot = set(
                     await self._ad_account_right_pane_snapshot()
                 )
                 await item.scroll_into_view_if_needed(timeout=1500)
                 await item.click(timeout=2500)
                 attempt["clicked"] = True
-                await self.page.wait_for_timeout(450)
+
+                transition = await self._wait_for_ad_account_ui_transition(
+                    previous_signature=_clean(
+                        before_state.get("signature")
+                    ),
+                    timeout_seconds=4.0,
+                    label=(
+                        "after_add_"
+                        + str(int(row.get("x") or 0))
+                        + "_"
+                        + str(int(row.get("y") or 0))
+                    ),
+                )
+                attempt["ui_state_after"] = _clean(
+                    transition.get("state")
+                ).upper()
+                attempt["ui_errors"] = list(
+                    transition.get("errors") or []
+                )[:3]
+
                 after_snapshot = await self._ad_account_right_pane_snapshot()
                 attempt["new_right_pane"] = [
                     row
@@ -4577,8 +4874,22 @@ class FacebookBusinessBrowser:
                     if row not in before_snapshot
                 ][:20]
 
-                if await self._wait_for_ad_account_create_entry(
-                    timeout_seconds=3.5,
+                if attempt["ui_state_after"] == "FORM":
+                    attempt["form_opened_directly"] = True
+                    attempt["create_entry_found"] = True
+                    attempts.append(attempt)
+                    return True, attempts
+
+                if attempt["ui_state_after"] == "BLOCKED":
+                    attempt["blocked"] = True
+                    attempts.append(attempt)
+                    return False, attempts
+
+                if (
+                    attempt["ui_state_after"] == "CREATE_ENTRY"
+                    or await self._wait_for_ad_account_create_entry(
+                        timeout_seconds=3.5,
+                    )
                 ):
                     attempt["create_entry_found"] = True
                     attempts.append(attempt)
@@ -4629,6 +4940,7 @@ class FacebookBusinessBrowser:
                 f"x={int(row.get('x') or 0)}",
                 f"y={int(row.get('y') or 0)}",
                 f"clicked={bool(row.get('clicked'))}",
+                f"state={_clean(row.get('ui_state_after')) or '-'}",
                 f"create={bool(row.get('create_entry_found'))}",
             ]
             skip = _clean(row.get("skip"))
@@ -4637,6 +4949,11 @@ class FacebookBusinessBrowser:
                 parts.append(f"skip={skip}")
             if error:
                 parts.append(f"error={error[:100]}")
+            ui_errors = row.get("ui_errors")
+            if isinstance(ui_errors, list) and ui_errors:
+                parts.append(
+                    f"ui_error={_clean(ui_errors[0])[:100]}"
+                )
             if popup_head:
                 parts.append(f"popup={popup_head}")
             if new_head:
@@ -5030,10 +5347,41 @@ class FacebookBusinessBrowser:
                         f"{target_url}:{exc.__class__.__name__}:{exc}"
                     )
 
-        entry_clicked = await self._click_named(
-            self.AD_ACCOUNT_CREATE_ENTRY_NAMES,
-            click_timeout_ms=2500,
+        current_ui = await self._ad_account_ui_state()
+        self._record_ad_account_ui_state(
+            "ad_accounts_surface_ready",
+            current_ui,
         )
+
+        entry_clicked = _clean(
+            current_ui.get("state")
+        ).upper() == "FORM"
+
+        if not entry_clicked and _clean(
+            current_ui.get("state")
+        ).upper() == "BLOCKED":
+            diag = await self._diagnostic(
+                "ad_account_create_blocked_before_add"
+            )
+            diag["business_id"] = business
+            diag["ui_state"] = current_ui
+            diag["ui_trace"] = self._ad_account_ui_trace[-12:]
+            raise BrowserBusinessError(
+                "META_AD_ACCOUNT_CREATE_UNAVAILABLE",
+                (
+                    (current_ui.get("errors") or [
+                        "Meta blocked Ad Account creation on this surface."
+                    ])[0]
+                ),
+                retryable=False,
+                diagnostic=diag,
+            )
+
+        if not entry_clicked:
+            entry_clicked = await self._click_named(
+                self.AD_ACCOUNT_CREATE_ENTRY_NAMES,
+                click_timeout_ms=2500,
+            )
         if not entry_clicked:
             entry_clicked = (
                 await self._click_ad_account_action_dom(
@@ -5088,6 +5436,38 @@ class FacebookBusinessBrowser:
                     )[:30]
 
         if not entry_clicked:
+            final_ui = await self._ad_account_ui_state()
+            self._record_ad_account_ui_state(
+                "before_create_entry_failure",
+                final_ui,
+            )
+
+            if _clean(final_ui.get("state")).upper() == "FORM":
+                entry_clicked = True
+            elif _clean(final_ui.get("state")).upper() == "BLOCKED":
+                diag = await self._diagnostic(
+                    "ad_account_create_blocked_after_add"
+                )
+                diag["business_id"] = business
+                diag["ui_state"] = final_ui
+                diag["add_attempt_summary"] = (
+                    self._summarize_ad_account_add_attempts(
+                        add_attempts
+                    )
+                )
+                diag["ui_trace"] = self._ad_account_ui_trace[-16:]
+                raise BrowserBusinessError(
+                    "META_AD_ACCOUNT_CREATE_UNAVAILABLE",
+                    (
+                        (final_ui.get("errors") or [
+                            "Meta blocked Ad Account creation after Add."
+                        ])[0]
+                    ),
+                    retryable=False,
+                    diagnostic=diag,
+                )
+
+        if not entry_clicked:
             raw_diag = await self._diagnostic(
                 "ad_account_create_entry_missing"
             )
@@ -5109,6 +5489,11 @@ class FacebookBusinessBrowser:
                 "add_attempts": add_attempts[-8:],
                 "section_route_attempts": section_route_attempts[-8:],
                 "hydration_attempts": hydration_attempts,
+                "ui_state": final_ui,
+                "ui_trace": self._ad_account_ui_trace[-16:],
+                "right_pane_snapshot": (
+                    await self._ad_account_right_pane_snapshot()
+                )[:30],
             }
             for key, value in raw_diag.items():
                 if key not in diag:
@@ -5931,6 +6316,14 @@ class FacebookBusinessBrowser:
         diag["create_may_have_been_sent"] = bool(
             self._ad_account_create_sent
         )
+        try:
+            diag["ui_state"] = await asyncio.wait_for(
+                self._ad_account_ui_state(),
+                timeout=2.0,
+            )
+        except Exception:
+            diag["ui_state"] = {}
+        diag["ui_trace"] = self._ad_account_ui_trace[-16:]
         try:
             diag["action_candidates"] = await asyncio.wait_for(
                 self._ad_account_action_candidates(),

@@ -653,6 +653,152 @@ class BrowserAdAccountAddProbeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rows[1]["y"], 97)
 
 
+class BrowserAdAccountStateMachineTests(unittest.IsolatedAsyncioTestCase):
+    async def test_ui_state_can_recognize_direct_form_open(self):
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-rk-direct-form")
+        )
+        browser.page = SimpleNamespace(
+            evaluate=AsyncMock(
+                return_value={
+                    "state": "FORM",
+                    "signature": "FORM::/settings/ad_accounts::name",
+                    "url": "https://business.facebook.com/latest/settings/ad_accounts",
+                    "name_input": True,
+                    "form_evidence": True,
+                    "create_entry": False,
+                    "add_surface": False,
+                    "errors": [],
+                    "dialogs": ["Nom du compte publicitaire Devise Fuseau horaire"],
+                    "controls": ["Nom du compte publicitaire [tag=INPUT]"],
+                }
+            )
+        )
+
+        state = await browser._ad_account_ui_state()
+
+        self.assertEqual(state["state"], "FORM")
+        self.assertTrue(state["name_input"])
+        self.assertTrue(state["form_evidence"])
+
+    async def test_transition_stops_on_blocked_state(self):
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-rk-blocked")
+        )
+        browser.page = SimpleNamespace(
+            wait_for_timeout=AsyncMock(return_value=None),
+        )
+        browser._ad_account_ui_state = AsyncMock(
+            return_value={
+                "state": "BLOCKED",
+                "signature": "BLOCKED::limit",
+                "url": "https://business.facebook.com/latest/settings/ad_accounts",
+                "errors": ["Vous avez atteint la limite."],
+                "dialogs": [],
+                "controls": [],
+            }
+        )
+
+        state = await browser._wait_for_ad_account_ui_transition(
+            previous_signature="ADD_SURFACE::old",
+            timeout_seconds=2.0,
+            label="after_add",
+        )
+
+        self.assertEqual(state["state"], "BLOCKED")
+        self.assertEqual(
+            browser._ad_account_ui_trace[-1]["label"],
+            "after_add",
+        )
+
+    async def test_add_probe_accepts_form_opened_directly(self):
+        class _Item:
+            async def is_visible(self):
+                return True
+            async def is_enabled(self):
+                return True
+            async def scroll_into_view_if_needed(self, **kwargs):
+                return None
+            async def click(self, **kwargs):
+                return None
+
+        class _Locator:
+            first = _Item()
+            async def count(self):
+                return 1
+
+        class _Keyboard:
+            async def press(self, key):
+                return None
+
+        class _Page:
+            keyboard = _Keyboard()
+            def locator(self, selector):
+                return _Locator()
+            async def wait_for_timeout(self, ms):
+                return None
+
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-rk-direct-form-probe")
+        )
+        browser.page = _Page()
+        browser._ad_account_add_button_candidates = AsyncMock(
+            side_effect=[
+                [{"probe_id":"0","text":"Ajouter","x":745,"y":631}],
+            ]
+        )
+        browser._ad_account_ui_state = AsyncMock(
+            return_value={
+                "state":"ADD_SURFACE",
+                "signature":"before",
+                "url":"",
+                "errors":[],
+                "dialogs":[],
+                "controls":[],
+            }
+        )
+        browser._ad_account_right_pane_snapshot = AsyncMock(
+            side_effect=[["Ajouter"], ["Nom du compte publicitaire"]]
+        )
+        browser._wait_for_ad_account_ui_transition = AsyncMock(
+            return_value={
+                "state":"FORM",
+                "signature":"form",
+                "url":"",
+                "errors":[],
+                "dialogs":[],
+                "controls":["Nom du compte publicitaire"],
+            }
+        )
+
+        found, attempts = await browser._probe_ad_account_add_buttons()
+
+        self.assertTrue(found)
+        self.assertTrue(attempts[0]["form_opened_directly"])
+        self.assertEqual(attempts[0]["ui_state_after"], "FORM")
+
+    def test_ui_trace_is_bounded(self):
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-rk-trace")
+        )
+        for index in range(40):
+            browser._record_ad_account_ui_state(
+                f"step-{index}",
+                {
+                    "state":"UNKNOWN",
+                    "url":"",
+                    "errors":[],
+                    "dialogs":[],
+                    "controls":[],
+                },
+            )
+        self.assertLessEqual(len(browser._ad_account_ui_trace), 24)
+        self.assertEqual(
+            browser._ad_account_ui_trace[-1]["label"],
+            "step-39",
+        )
+
+
 class BrowserAdAccountVisibleTextCreateTests(unittest.IsolatedAsyncioTestCase):
     async def test_visible_text_create_fallback_can_click_plain_meta_node(self):
         browser = FacebookBusinessBrowser(
