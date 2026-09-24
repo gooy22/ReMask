@@ -620,6 +620,11 @@ class FacebookBusinessBrowser:
         "Рекламні акаунти",
         "Werbekonten",
         "Comptes publicitaires",
+        "বিজ্ঞাপন অ্যাকাউন্ট",
+        "বিজ্ঞাপন অ্যাকাউন্টসমূহ",
+        "Tài khoản quảng cáo",
+        "विज्ञापन खाते",
+        "विज्ञापन खाता",
     )
     AD_ACCOUNT_CREATE_ENTRY_NAMES = (
         "Create a new ad account",
@@ -635,6 +640,14 @@ class FacebookBusinessBrowser:
         "Créer un nouveau compte publicitaire",
         "Créer un compte publicitaire",
         "Nouveau compte publicitaire",
+        "নতুন বিজ্ঞাপন অ্যাকাউন্ট তৈরি করুন",
+        "বিজ্ঞাপন অ্যাকাউন্ট তৈরি করুন",
+        "Tạo tài khoản quảng cáo mới",
+        "Tạo tài khoản quảng cáo",
+        "नया विज्ञापन खाता बनाएँ",
+        "नया विज्ञापन खाता बनाएं",
+        "विज्ञापन खाता बनाएँ",
+        "विज्ञापन खाता बनाएं",
     )
     AD_ACCOUNT_SUBMIT_NAMES = (
         "Create ad account",
@@ -656,6 +669,21 @@ class FacebookBusinessBrowser:
         "Créer",
         "Suivant",
         "Continuer",
+        "বিজ্ঞাপন অ্যাকাউন্ট তৈরি করুন",
+        "তৈরি করুন",
+        "পরবর্তী",
+        "চালিয়ে যান",
+        "Tạo tài khoản quảng cáo",
+        "Tạo",
+        "Tiếp",
+        "Tiếp tục",
+        "विज्ञापन खाता बनाएँ",
+        "विज्ञापन खाता बनाएं",
+        "बनाएँ",
+        "बनाएं",
+        "अगला",
+        "आगे",
+        "जारी रखें",
     )
 
     CREATE_NAMES = (
@@ -708,6 +736,9 @@ class FacebookBusinessBrowser:
         "Додати",
         "Hinzufügen",
         "Ajouter",
+        "যোগ করুন",
+        "Thêm",
+        "जोड़ें",
     )
 
     ADD_EXISTING_PAGE_NAMES = (
@@ -3550,6 +3581,10 @@ class FacebookBusinessBrowser:
                 "werbekonto",
                 "compte publicitaire",
                 "comptes publicitaires",
+                "বিজ্ঞাপন অ্যাকাউন্ট",
+                "tài khoản quảng cáo",
+                "विज्ञापन खाता",
+                "विज्ञापन खाते",
             )
             if any(marker in body for marker in markers):
                 return True
@@ -3583,7 +3618,10 @@ class FacebookBusinessBrowser:
                                 return [
                                     'add','create','ajouter','créer',
                                     'добавить','создать','додати','створити',
-                                    'hinzufügen','erstellen'
+                                    'hinzufügen','erstellen',
+                                    'যোগ করুন','তৈরি করুন',
+                                    'thêm','tạo',
+                                    'जोड़ें','बनाएँ','बनाएं'
                                 ].some(x => t.includes(x));
                             });
                         }"""
@@ -3633,7 +3671,12 @@ class FacebookBusinessBrowser:
                             'рекламные аккаунты',
                             'рекламні акаунти',
                             'werbekonten',
-                            'comptes publicitaires'
+                            'comptes publicitaires',
+                            'বিজ্ঞাপন অ্যাকাউন্ট',
+                            'বিজ্ঞাপন অ্যাকাউন্টসমূহ',
+                            'tài khoản quảng cáo',
+                            'विज्ञापन खाते',
+                            'विज्ञापन खाता'
                         ]);
                         const nodes = [...document.querySelectorAll(
                             'a,button,[role="link"],[role="menuitem"],'
@@ -3776,11 +3819,17 @@ class FacebookBusinessBrowser:
                                 'створити','додати новий реклам',
                                 'erstellen','neues werbekonto',
                                 'créer','nouveau compte publicitaire',
-                                'ajouter'
+                                'ajouter',
+                                'তৈরি করুন','নতুন বিজ্ঞাপন অ্যাকাউন্ট',
+                                'যোগ করুন',
+                                'tạo','tài khoản quảng cáo mới','thêm',
+                                'बनाएँ','बनाएं','नया विज्ञापन खाता','जोड़ें'
                             ];
                             const accountWords = [
                                 'ad account','advertising account','реклам',
-                                'werbekonto','compte publicitaire'
+                                'werbekonto','compte publicitaire',
+                                'বিজ্ঞাপন অ্যাকাউন্ট','tài khoản quảng cáo',
+                                'विज्ञापन खाता','विज्ञापन खाते'
                             ];
                             const nodes = [...document.querySelectorAll(
                                 'button,a,[role="button"],[role="menuitem"]'
@@ -3850,6 +3899,10 @@ class FacebookBusinessBrowser:
                 "Name des Werbekontos",
                 "Nom du compte publicitaire",
                 "Nom du compte",
+                "বিজ্ঞাপন অ্যাকাউন্টের নাম",
+                "Tên tài khoản quảng cáo",
+                "विज्ञापन खाते का नाम",
+                "विज्ञापन खाता नाम",
             ),
             value=account_name,
         )
@@ -4045,6 +4098,13 @@ class FacebookBusinessBrowser:
             "Продолжить",
             "Далі",
             "Продовжити",
+            "পরবর্তী",
+            "চালিয়ে যান",
+            "Tiếp",
+            "Tiếp tục",
+            "अगला",
+            "आगे",
+            "जारी रखें",
         )
         final_names = (
             "Create ad account",
@@ -4063,6 +4123,14 @@ class FacebookBusinessBrowser:
             "Créer le compte publicitaire",
             "Créer le compte",
             "Créer",
+            "বিজ্ঞাপন অ্যাকাউন্ট তৈরি করুন",
+            "তৈরি করুন",
+            "Tạo tài khoản quảng cáo",
+            "Tạo",
+            "विज्ञापन खाता बनाएँ",
+            "विज्ञापन खाता बनाएं",
+            "बनाएँ",
+            "बनाएं",
         )
 
         try:
