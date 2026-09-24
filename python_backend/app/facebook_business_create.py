@@ -30,6 +30,11 @@ CREATE_BM_FRIENDLY_NAME = (
     "useBusinessCreationMutationMutation"
 )
 
+# Captured from a live Meta Business creation request on 2026-09-24.
+# This is only used when runtime discovery/cache/manual override produced no
+# candidate at all; stale-schema handling will reject it instead of guessing.
+CAPTURED_CREATE_BM_DOC_ID = "28057338880523368"
+
 SET_PRIMARY_PAGE_FRIENDLY_NAME = (
     "BizKitSettingsUpdateBusinessBasicInfoMutation"
 )
@@ -991,16 +996,25 @@ async def create_business_with_docids(
     )
 
     if not candidates:
-        raise BusinessMutationError(
-            "CREATE_BM_MUTATION_NOT_DISCOVERED",
-            (
-                "No current CREATE_BM mutation was discovered in initial "
-                "Facebook HTML/response headers, no manual_doc_id was available, "
-                "and no previously confirmed cache candidate exists. "
-                "No CREATE request was sent."
-            ),
-            retryable=False,
-        )
+        # We already have an exact live capture of Meta's current Business
+        # creation mutation in the repository test fixture. Runtime HTML/JS
+        # discovery is not guaranteed to expose Relay metadata for every
+        # account/A-B shell, so use the same captured request doc_id as a
+        # single bounded fallback instead of failing before any CREATE reaches
+        # Meta.
+        candidates = [
+            DocIdCandidate(
+                operation=CREATE_BM_OPERATION,
+                doc_id=CAPTURED_CREATE_BM_DOC_ID,
+                friendly_name=CREATE_BM_FRIENDLY_NAME,
+                endpoint_url=BUSINESS_GRAPHQL_URL,
+                variables_mode="scope_selector_footer_v6_browser_native",
+                source="live_capture_2026_09_24",
+                priority=8_000,
+                observed_at="2026-09-24",
+                enabled=True,
+            )
+        ]
 
     diagnostics: list[str] = []
 
