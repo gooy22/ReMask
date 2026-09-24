@@ -1864,12 +1864,12 @@ class FacebookBusinessBrowser:
             try:
                 targeted_open = await asyncio.wait_for(
                     self._try_open_known_asset_selector(),
-                    timeout=15.0,
+                    timeout=8.0,
                 )
             except asyncio.TimeoutError:
                 self._last_selector_diagnostic = {
                     **self._last_selector_diagnostic,
-                    "asset_selector_timeout": 15,
+                    "asset_selector_timeout": 8,
                 }
 
             if targeted_open:
@@ -1887,12 +1887,12 @@ class FacebookBusinessBrowser:
                     self._try_open_top_left_portfolio_menu(
                         skip_known_asset=True,
                     ),
-                    timeout=20.0,
+                    timeout=10.0,
                 )
             except asyncio.TimeoutError:
                 self._last_selector_diagnostic = {
                     **self._last_selector_diagnostic,
-                    "asset_generic_selector_timeout": 20,
+                    "asset_generic_selector_timeout": 10,
                 }
 
             if generic_open:
@@ -1903,6 +1903,25 @@ class FacebookBusinessBrowser:
                         interval_ms=250,
                     ):
                         return True
+
+            # Business Suite rendered no usable selector. Current Meta Ads
+            # Manager also exposes a Business Portfolio/account selector, so
+            # try that independent UI surface before declaring this profile
+            # unable to reach the create form.
+            ads_manager_open = False
+            try:
+                ads_manager_open = await asyncio.wait_for(
+                    self._try_open_ads_manager_create_entry(),
+                    timeout=35.0,
+                )
+            except asyncio.TimeoutError:
+                self._last_selector_diagnostic = {
+                    **self._last_selector_diagnostic,
+                    "ads_manager_fallback_timeout": 35,
+                }
+
+            if ads_manager_open:
+                return True
 
             # Do not navigate to ROOT or /reg/ from the same known Page
             # context: Meta already proved that /reg/ redirects back here.
