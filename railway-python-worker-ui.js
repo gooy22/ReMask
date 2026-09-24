@@ -319,7 +319,15 @@ function pythonWorkerCurrentStep(item) {
   const runningStep = steps.find(function(step) {
     return step && String(step.status || '').toUpperCase() === 'RUNNING';
   });
-  if (runningStep) return String(runningStep.step || 'RUNNING');
+  if (runningStep) {
+    const result = runningStep.result && typeof runningStep.result === 'object'
+      ? runningStep.result
+      : {};
+    const detail = String(
+      result.activity || result.phase || ''
+    ).trim();
+    return String(runningStep.step || 'RUNNING') + (detail ? ' · ' + detail : '');
+  }
 
   const failedStep = steps.find(function(step) {
     return step && String(step.status || '').toUpperCase() === 'FAILED';
@@ -1433,7 +1441,15 @@ async function pythonWorkerPoll() {
       const running = steps.find(function(step) {
         return step && String(step.status || '').toUpperCase() === 'RUNNING';
       });
-      if (running && running.step) runningSteps.push(String(running.step));
+      if (running && running.step) {
+        const result = running.result && typeof running.result === 'object'
+          ? running.result
+          : {};
+        const detail = String(result.activity || result.phase || '').trim();
+        runningSteps.push(
+          String(running.step) + (detail ? ' · ' + detail : '')
+        );
+      }
     }
 
     if (runningSteps.length) {
