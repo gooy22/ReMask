@@ -1226,9 +1226,16 @@ class BrowserAdAccountStateMachineTests(unittest.IsolatedAsyncioTestCase):
                 "state":"FORM",
                 "signature":"form",
                 "url":"",
+                "name_input": True,
+                "form_evidence": True,
+                "editable_form_control": True,
                 "errors":[],
                 "dialogs":[],
-                "controls":["Nom du compte publicitaire"],
+                "controls":[
+                    "Nom du compte publicitaire",
+                    "Devise",
+                    "Fuseau horaire",
+                ],
             }
         )
 
@@ -1311,9 +1318,53 @@ class BrowserAdAccountCreateEntryWaitTests(unittest.IsolatedAsyncioTestCase):
         browser.page = SimpleNamespace(
             wait_for_timeout=AsyncMock(return_value=None),
         )
+        browser._ad_account_ui_state = AsyncMock(
+            side_effect=[
+                {
+                    "state":"CREATE_ENTRY",
+                    "signature":"entry-1",
+                    "name_input":False,
+                    "dialogs":[],
+                    "editable_form_control":False,
+                    "controls":[],
+                },
+                {
+                    "state":"CREATE_ENTRY",
+                    "signature":"entry-1",
+                    "name_input":False,
+                    "dialogs":[],
+                    "editable_form_control":False,
+                    "controls":[],
+                },
+                {
+                    "state":"CREATE_ENTRY",
+                    "signature":"entry-2",
+                    "name_input":False,
+                    "dialogs":[],
+                    "editable_form_control":False,
+                    "controls":[],
+                },
+            ]
+        )
         browser._click_named = AsyncMock(side_effect=[False, True])
-        browser._click_ad_account_action_dom = AsyncMock(
-            return_value=""
+        browser._click_ad_account_create_entry_by_visible_text = AsyncMock(
+            return_value=False
+        )
+        browser._click_ad_account_action_dom = AsyncMock(return_value="")
+        browser._wait_for_ad_account_ui_transition = AsyncMock(
+            return_value={
+                "state":"FORM",
+                "signature":"wizard",
+                "name_input":True,
+                "form_evidence":True,
+                "editable_form_control":True,
+                "dialogs":[],
+                "controls":[
+                    "Nom du compte publicitaire",
+                    "Devise",
+                    "Fuseau horaire",
+                ],
+            }
         )
 
         ready = await browser._wait_for_ad_account_create_entry(
