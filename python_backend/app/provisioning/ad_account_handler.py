@@ -107,6 +107,76 @@ def _known_pre_submit_usage_step_failure(result: Any) -> bool:
     )
 
 
+def _known_final_click_unmatched_empty_inventory(result: Any) -> bool:
+    """Recognize a false-uncertain final click with strong no-create evidence.
+
+    Recovery still requires a *fresh* inventory reconciliation in the new Job.
+    This helper only validates the stored prior evidence.
+    """
+    if not isinstance(result, dict):
+        return False
+
+    diagnostic = result.get("browser_diagnostic")
+    if not isinstance(diagnostic, dict):
+        diagnostic = {}
+
+    stage = _clean(diagnostic.get("stage")).lower()
+    activity = _clean(result.get("activity")).upper()
+    if not (
+        stage == "ad_account_final_click_unmatched"
+        or activity == "AD_ACCOUNT_FINAL_CLICK_UNMATCHED"
+    ):
+        return False
+
+    state_after = diagnostic.get("state_after")
+    if not isinstance(state_after, dict):
+        state_after = {}
+
+    state_text = " ".join(
+        _clean(state_after.get(key))
+        for key in ("signature", "body_excerpt")
+    ).casefold()
+    controls = state_after.get("controls")
+    if isinstance(controls, list):
+        state_text += " " + " ".join(
+            _clean(value).casefold() for value in controls
+        )
+
+    empty_inventory_markers = (
+        "aucun compte publicitaire ajouté",
+        "no ad accounts added",
+        "no advertising accounts added",
+        "нет добавленных рекламных аккаунтов",
+        "рекламних акаунтів не додано",
+        "keine werbekonten hinzugefügt",
+    )
+    if not any(marker in state_text for marker in empty_inventory_markers):
+        return False
+
+    candidates: list[dict[str, Any]] = []
+    for source in (
+        result.get("graphql_candidates"),
+        diagnostic.get("graphql_candidates"),
+    ):
+        if isinstance(source, list):
+            candidates.extend(
+                row for row in source if isinstance(row, dict)
+            )
+
+    for row in candidates:
+        if bool(row.get("matched_create")):
+            return False
+        friendly = _clean(row.get("friendly_name")).casefold()
+        if (
+            "createadaccount" in friendly
+            and "usagestep" not in friendly
+            and "query" not in friendly
+        ):
+            return False
+
+    return True
+
+
 async def _reconcile_existing(
     session: Any,
     *,
@@ -398,15 +468,33 @@ async def ad_account_handler(
                     "transport": "graph_inventory_reconciliation",
                     "reconciliation": diagnostics,
                 }
-            raise ProvisioningError(
-                "AD_ACCOUNT_CREATE_RESULT_UNKNOWN",
-                (
-                    f"A previous Job may already have submitted CREATE for "
-                    f"Business {business_id}. Inventory does not prove the RK "
-                    "yet, so ReMask will not submit a duplicate CREATE."
-                ),
-                retryable=True,
+
+            # A prior final click can be falsely uncertain when Meta's visible
+            # control did not emit a CREATE request. Only recover when the
+            # prior UI explicitly still showed an empty Ad Accounts inventory
+            # *and* this new Job's fresh Graph inventory is still empty.
+            fresh_inventory_empty = any(
+                isinstance(row, dict)
+                and row.get("stage") == "inventory"
+                and row.get("result") == "ok"
+                and int(row.get("count") or 0) == 0
+                for row in diagnostics
             )
+            if (
+                fresh_inventory_empty
+                and _known_final_click_unmatched_empty_inventory(prior)
+            ):
+                cross_job = {}
+            else:
+                raise ProvisioningError(
+                    "AD_ACCOUNT_CREATE_RESULT_UNKNOWN",
+                    (
+                        f"A previous Job may already have submitted CREATE for "
+                        f"Business {business_id}. Inventory does not prove the RK "
+                        "yet, so ReMask will not submit a duplicate CREATE."
+                    ),
+                    retryable=True,
+                )
 
     phase = _clean(
         checkpoint.get("phase") or checkpoint.get("resume_from")
