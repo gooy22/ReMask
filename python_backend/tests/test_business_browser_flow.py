@@ -1073,6 +1073,26 @@ class BrowserAdAccountComboboxSafetyTests(unittest.TestCase):
         )
 
 
+class BrowserAdAccountNearbyFieldControlTests(unittest.TestCase):
+    def test_nearby_label_field_probe_covers_french_currency_and_timezone(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser._ad_account_field_control_by_nearby_label
+        )
+        self.assertIn("data-remask-rk-field-probe", source)
+        self.assertIn('[role="combobox"]', source)
+        self.assertIn("button[aria-haspopup]", source)
+
+    def test_field_selector_uses_nearby_label_fallback_before_not_found(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser._select_ad_account_form_field
+        )
+        self.assertIn("_ad_account_field_control_by_nearby_label", source)
+        self.assertLess(
+            source.index("_ad_account_field_control_by_nearby_label"),
+            source.index('"field_not_found"'),
+        )
+
+
 class BrowserAdAccountFormFieldTests(unittest.IsolatedAsyncioTestCase):
     def test_timezone_fallbacks_cover_main_profile_geos(self):
         browser = FacebookBusinessBrowser(
