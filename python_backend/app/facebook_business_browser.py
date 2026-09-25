@@ -4259,6 +4259,65 @@ class FacebookBusinessBrowser:
         candidates: list[tuple[int, Any, dict[str, Any]]] = []
 
         try:
+            wizard_dialog_present = bool(
+                await self.page.evaluate(
+                    """() => {
+                        const visible = el => {
+                            if (!el) return false;
+                            const r = el.getBoundingClientRect();
+                            const s = getComputedStyle(el);
+                            return r.width > 0 && r.height > 0
+                                && s.display !== 'none'
+                                && s.visibility !== 'hidden';
+                        };
+                        const clean = text => (text || '')
+                            .normalize('NFKC')
+                            .replace(/\u00a0/g, ' ')
+                            .replace(/\s+/g, ' ')
+                            .trim()
+                            .toLowerCase();
+                        const wizard = [
+                            'ad account name','advertising account name',
+                            'nom du compte publicitaire','nom du compte',
+                            'name des werbekontos',
+                            'название рекламного аккаунта',
+                            'назва рекламного акаунта',
+                            'currency','devise','währung','валюта',
+                            'time zone','timezone','fuseau horaire',
+                            'zeitzone','часовой пояс','часовий пояс',
+                            'my business','my business portfolio',
+                            'for my business','mon entreprise',
+                            'mon portefeuille business','pour mon entreprise',
+                            'mein unternehmen','für mein unternehmen',
+                            'мой бизнес','для моего бизнеса',
+                            'мій бізнес','для мого бізнесу',
+                            'আমার ব্যবসা','আমার ব্যবসার জন্য',
+                            'doanh nghiệp của tôi',
+                            'dành cho doanh nghiệp của tôi',
+                            'मेरा व्यवसाय','मेरे व्यवसाय के लिए'
+                        ];
+                        const ai = [
+                            'meta ai','assistant business meta ai',
+                            'meta ai business assistant','assistant meta ai'
+                        ];
+                        return [...document.querySelectorAll(
+                            '[role="dialog"],[aria-modal="true"]'
+                        )].filter(visible).some(root => {
+                            const t = clean(
+                                (root.getAttribute('aria-label') || '') + ' ' +
+                                (root.getAttribute('title') || '') + ' ' +
+                                (root.innerText || root.textContent || '')
+                            );
+                            return !ai.some(word => t.includes(word))
+                                && wizard.some(word => t.includes(word));
+                        });
+                    }"""
+                )
+            )
+        except Exception:
+            wizard_dialog_present = False
+
+        try:
             locator = self.page.locator(
                 'button,a,[role="button"],[role="menuitem"],'
                 '[role="menuitemradio"],[tabindex]:not([tabindex="-1"])'
@@ -4309,16 +4368,76 @@ class FacebookBusinessBrowser:
                 tag = _clean(
                     await item.evaluate("(el) => el.tagName || ''")
                 ).upper()
-                in_dialog = bool(
-                    await item.evaluate(
-                        """(el) => Boolean(el.closest(
+                dialog_meta = await item.evaluate(
+                    """(el) => {
+                        const root = el.closest(
                             '[role="dialog"],[aria-modal="true"]'
-                        ))"""
-                    )
+                        );
+                        if (!root) {
+                            return {
+                                in_dialog:false,
+                                in_wizard_dialog:false,
+                                in_ai_dialog:false
+                            };
+                        }
+                        const clean = text => (text || '')
+                            .normalize('NFKC')
+                            .replace(/\u00a0/g, ' ')
+                            .replace(/\s+/g, ' ')
+                            .trim()
+                            .toLowerCase();
+                        const t = clean(
+                            (root.getAttribute('aria-label') || '') + ' ' +
+                            (root.getAttribute('title') || '') + ' ' +
+                            (root.innerText || root.textContent || '')
+                        );
+                        const wizard = [
+                            'ad account name','advertising account name',
+                            'nom du compte publicitaire','nom du compte',
+                            'name des werbekontos',
+                            'название рекламного аккаунта',
+                            'назва рекламного акаунта',
+                            'currency','devise','währung','валюта',
+                            'time zone','timezone','fuseau horaire',
+                            'zeitzone','часовой пояс','часовий пояс',
+                            'my business','my business portfolio',
+                            'for my business','mon entreprise',
+                            'mon portefeuille business','pour mon entreprise',
+                            'mein unternehmen','für mein unternehmen',
+                            'мой бизнес','для моего бизнеса',
+                            'мій бізнес','для мого бізнесу',
+                            'আমার ব্যবসা','আমার ব্যবসার জন্য',
+                            'doanh nghiệp của tôi',
+                            'dành cho doanh nghiệp của tôi',
+                            'मेरा व्यवसाय','मेरे व्यवसाय के लिए'
+                        ];
+                        const ai = [
+                            'meta ai','assistant business meta ai',
+                            'meta ai business assistant','assistant meta ai'
+                        ];
+                        const inAI = ai.some(word => t.includes(word));
+                        return {
+                            in_dialog:true,
+                            in_ai_dialog:inAI,
+                            in_wizard_dialog:
+                                !inAI && wizard.some(word => t.includes(word))
+                        };
+                    }"""
                 )
+                in_dialog = bool(dialog_meta.get("in_dialog"))
+                in_wizard_dialog = bool(
+                    dialog_meta.get("in_wizard_dialog")
+                )
+                in_ai_dialog = bool(dialog_meta.get("in_ai_dialog"))
+                if in_ai_dialog:
+                    continue
+                if wizard_dialog_present and not in_wizard_dialog:
+                    continue
                 score = 0
-                if in_dialog:
-                    score -= 300
+                if in_wizard_dialog:
+                    score -= 500
+                elif in_dialog:
+                    score -= 100
                 if tag == "BUTTON":
                     score -= 150
                 if role == "button":
@@ -4338,6 +4457,8 @@ class FacebookBusinessBrowser:
                             "tag": tag[:40],
                             "role": role[:80],
                             "in_dialog": in_dialog,
+                            "in_wizard_dialog": in_wizard_dialog,
+                            "wizard_dialog_present": wizard_dialog_present,
                             "index": index,
                         },
                     )
