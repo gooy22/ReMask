@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import inspect
+import json
 import os
 import unittest
+from types import SimpleNamespace
+from urllib.parse import urlencode
 
 from app.facebook_ad_account_create import (
     _extract_ad_account_id,
@@ -163,6 +166,66 @@ class AdAccountUsageStepRegressionTests(unittest.TestCase):
             },
         }
         self.assertFalse(_known_pre_submit_usage_step_failure(result))
+
+
+
+class AdAccountCreateRequestMatcherTests(unittest.TestCase):
+    def test_generic_operation_with_businessID_and_immutable_fields_matches(self) -> None:
+        request = SimpleNamespace(
+            method="POST",
+            url="https://business.facebook.com/api/graphql/",
+            headers={},
+            post_data=urlencode(
+                {
+                    "fb_api_req_friendly_name": "BizKitSettingsSubmitStep",
+                    "doc_id": "30132031866444376",
+                    "variables": json.dumps(
+                        {
+                            "input": {
+                                "businessID": "1056638030476027",
+                                "name": "ReMask RK",
+                                "currency": "USD",
+                                "timezone_id": 137,
+                            }
+                        }
+                    ),
+                }
+            ),
+            post_data_buffer=None,
+        )
+        self.assertTrue(
+            FacebookBusinessBrowser._request_matches_ad_account_create(
+                request,
+                business_id="1056638030476027",
+                account_name="ReMask RK",
+            )
+        )
+
+    def test_usage_query_with_only_businessID_does_not_match(self) -> None:
+        request = SimpleNamespace(
+            method="POST",
+            url="https://business.facebook.com/api/graphql/",
+            headers={},
+            post_data=urlencode(
+                {
+                    "fb_api_req_friendly_name": (
+                        "BizKitSettingsCreateAdAccountUsageStepQuery"
+                    ),
+                    "doc_id": "30132031866444376",
+                    "variables": json.dumps(
+                        {"businessID": "1056638030476027"}
+                    ),
+                }
+            ),
+            post_data_buffer=None,
+        )
+        self.assertFalse(
+            FacebookBusinessBrowser._request_matches_ad_account_create(
+                request,
+                business_id="1056638030476027",
+                account_name="ReMask RK",
+            )
+        )
 
 
 class AdAccountCreateResponseTests(unittest.TestCase):
