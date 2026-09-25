@@ -263,6 +263,40 @@ class AdAccountCreateRequestMatcherTests(unittest.TestCase):
             )
         )
 
+    def test_safe_network_summary_redacts_values(self) -> None:
+        request = SimpleNamespace(
+            method="GET",
+            url=(
+                "https://graph.facebook.com/graphql?"
+                + urlencode(
+                    {
+                        "method": "post",
+                        "fb_api_req_friendly_name": "BizKitSettingsSubmitStep",
+                        "doc_id": "123456789",
+                        "variables": '{"secret":"SHOULD_NOT_APPEAR"}',
+                        "access_token": "SECRET_TOKEN",
+                    }
+                )
+            ),
+            post_data="",
+        )
+        summary = FacebookBusinessBrowser._safe_meta_network_request_summary(
+            request
+        )
+        self.assertEqual(summary["host"], "graph.facebook.com")
+        self.assertEqual(summary["path"], "/graphql")
+        self.assertEqual(summary["browser_method"], "GET")
+        self.assertEqual(summary["effective_method"], "POST")
+        self.assertEqual(
+            summary["friendly_name"],
+            "BizKitSettingsSubmitStep",
+        )
+        self.assertEqual(summary["doc_id"], "123456789")
+        self.assertIn("variables", summary["param_keys"])
+        self.assertIn("access_token", summary["param_keys"])
+        self.assertNotIn("SECRET_TOKEN", repr(summary))
+        self.assertNotIn("SHOULD_NOT_APPEAR", repr(summary))
+
 
 class AdAccountCreateResponseTests(unittest.TestCase):
     def test_numeric_id_is_canonicalized(self) -> None:
