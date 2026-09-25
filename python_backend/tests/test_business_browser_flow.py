@@ -1135,6 +1135,17 @@ class BrowserAdAccountFinalControlTests(unittest.TestCase):
         self.assertNotIn('"Continue"', source)
 
 
+class BrowserAdAccountFinalLabelMatchingTests(unittest.TestCase):
+    def test_final_control_matches_each_label_source_separately(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser._click_ad_account_final_interactive
+        )
+        self.assertIn("aria_label =", source)
+        self.assertIn("inner_text =", source)
+        self.assertIn("matched_label = next", source)
+        self.assertNotIn('" ".join(', source)
+
+
 class BrowserAdAccountExactlyOnceSubmitTests(unittest.TestCase):
     def test_unmatched_final_click_becomes_unknown_instead_of_second_click(self):
         source = inspect.getsource(
