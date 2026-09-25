@@ -1332,6 +1332,19 @@ class BrowserAdAccountPlainDropdownSafetyTests(unittest.TestCase):
         self.assertIn("if (!sameRow || !toRight || !substantial)", source)
 
 
+class BrowserAdAccountAncestorClimbRegressionTests(unittest.TestCase):
+    def test_nearby_field_probe_does_not_stop_on_unrelated_button_ancestor(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser._ad_account_field_control_by_nearby_label
+        )
+        self.assertIn("acceptedAtThisDepth", source)
+        self.assertIn("if (acceptedAtThisDepth > 0)", source)
+        self.assertLess(
+            source.index("acceptedAtThisDepth += 1"),
+            source.index("if (acceptedAtThisDepth > 0)"),
+        )
+
+
 class BrowserAdAccountNearbyFieldControlTests(unittest.TestCase):
     def test_nearby_label_field_probe_covers_french_currency_and_timezone(self):
         source = inspect.getsource(
