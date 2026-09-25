@@ -469,21 +469,50 @@ async def ad_account_handler(
                     "reconciliation": diagnostics,
                 }
 
-            # A prior final click can be falsely uncertain when Meta's visible
-            # control did not emit a CREATE request. Only recover when the
-            # prior UI explicitly still showed an empty Ad Accounts inventory
-            # *and* this new Job's fresh Graph inventory is still empty.
-            fresh_inventory_empty = any(
-                isinstance(row, dict)
-                and row.get("stage") == "inventory"
-                and row.get("result") == "ok"
-                and int(row.get("count") or 0) == 0
-                for row in diagnostics
-            )
-            if (
-                fresh_inventory_empty
-                and _known_final_click_unmatched_empty_inventory(prior)
-            ):
+            # Do not let an old ambiguous click block this Business forever.
+            # Recheck Meta inventory three times. Only when all checks are
+            # conclusive and all report zero RK do we allow a fresh CREATE.
+            empty_checks = 0
+            inventory_evidence = list(diagnostics)
+            for retry_index in range(2):
+                if retry_index:
+                    await asyncio.sleep(1.0)
+                retry_id, retry_diag = await _reconcile_existing(
+                    session,
+                    business_id=business_id,
+                    account_name=rk_name,
+                )
+                inventory_evidence.extend(retry_diag)
+                if retry_id:
+                    await provisioning_state.remember_entity(
+                        profile_id,
+                        scope_key,
+                        ProvisioningStep.AD_ACCOUNT,
+                        {"ad_account_id": retry_id},
+                    )
+                    return {
+                        "ad_account_id": retry_id,
+                        "business_id": business_id,
+                        "name": rk_name,
+                        "currency": currency,
+                        "timezone_id": timezone_id,
+                        "reused": True,
+                        "cross_job_resume": True,
+                        "recovered_after_uncertainty": True,
+                        "transport": "graph_inventory_reconciliation",
+                        "reconciliation": inventory_evidence,
+                    }
+
+            for row in inventory_evidence:
+                if (
+                    isinstance(row, dict)
+                    and row.get("stage") == "inventory"
+                    and row.get("result") == "ok"
+                    and int(row.get("count") or 0) == 0
+                ):
+                    empty_checks += 1
+
+            if empty_checks >= 3:
                 cross_job = {}
             else:
                 raise ProvisioningError(
