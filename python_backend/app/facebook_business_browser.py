@@ -6109,6 +6109,185 @@ class FacebookBusinessBrowser:
             )
         return output
 
+    async def _ad_account_visible_create_candidates(
+        self,
+    ) -> list[dict[str, Any]]:
+        """Visible Create-RK text candidates anywhere in the right pane."""
+        if self.page is None:
+            return []
+        try:
+            rows = await self.page.evaluate(
+                """() => {
+                    const visible = el => {
+                        if (!el) return false;
+                        const r = el.getBoundingClientRect();
+                        const s = getComputedStyle(el);
+                        return r.width > 0 && r.height > 0
+                            && s.display !== 'none'
+                            && s.visibility !== 'hidden'
+                            && s.pointerEvents !== 'none';
+                    };
+                    const clean = text => (text || '')
+                        .normalize('NFKC')
+                        .replace(/\u00a0/g, ' ')
+                        .replace(/\s+/g, ' ')
+                        .trim()
+                        .toLowerCase();
+                    const createWords = [
+                        'create','créer','создать','створити','erstellen',
+                        'তৈরি করুন','tạo','बनाएँ','बनाएं'
+                    ];
+                    const accountWords = [
+                        'ad account','advertising account','compte publicitaire',
+                        'реклам','werbekonto','বিজ্ঞাপন অ্যাকাউন্ট',
+                        'tài khoản quảng cáo','विज्ञापन खाता','विज्ञापन खाते'
+                    ];
+                    for (const el of document.querySelectorAll(
+                        '[data-remask-rk-create-fresh]'
+                    )) {
+                        el.removeAttribute('data-remask-rk-create-fresh');
+                    }
+
+                    const out = [];
+                    const seen = new Set();
+                    for (const el of document.querySelectorAll(
+                        'button,a,span,div,[role],[tabindex]'
+                    )) {
+                        if (!visible(el)) continue;
+                        const r = el.getBoundingClientRect();
+                        if (r.x < 280 || r.y < 35 || r.y > 795) continue;
+                        const text = clean(
+                            (el.getAttribute('aria-label') || '') + ' ' +
+                            (el.getAttribute('title') || '') + ' ' +
+                            (el.innerText || el.textContent || '')
+                        );
+                        if (!text || text.length > 220) continue;
+                        if (!createWords.some(w => text.includes(w))) continue;
+                        if (!accountWords.some(w => text.includes(w))) continue;
+
+                        const clickable = el.closest(
+                            'button,a,[role="button"],[role="menuitem"],'
+                            + '[role="menuitemradio"],[role="option"],'
+                            + '[tabindex]:not([tabindex="-1"])'
+                        ) || el;
+                        if (!visible(clickable)) continue;
+                        if (
+                            clickable.hasAttribute('disabled')
+                            || clickable.getAttribute('aria-disabled') === 'true'
+                        ) continue;
+
+                        const cr = clickable.getBoundingClientRect();
+                        const key = [
+                            text,
+                            Math.round(cr.x),
+                            Math.round(cr.y),
+                            Math.round(cr.width),
+                            Math.round(cr.height)
+                        ].join('|');
+                        if (seen.has(key)) continue;
+                        seen.add(key);
+
+                        const id = String(out.length);
+                        clickable.setAttribute(
+                            'data-remask-rk-create-fresh',
+                            id
+                        );
+                        out.push({
+                            probe_id:id,
+                            text,
+                            x:Math.round(cr.x),
+                            y:Math.round(cr.y),
+                            w:Math.round(cr.width),
+                            h:Math.round(cr.height),
+                            tag:clickable.tagName || '',
+                            role:clickable.getAttribute('role') || ''
+                        });
+                        if (out.length >= 20) break;
+                    }
+                    return out;
+                }"""
+            )
+        except Exception:
+            return []
+
+        if not isinstance(rows, list):
+            return []
+        out: list[dict[str, Any]] = []
+        for row in rows[:20]:
+            if not isinstance(row, dict):
+                continue
+            out.append(
+                {
+                    "probe_id": _clean(row.get("probe_id")),
+                    "text": _clean(row.get("text"))[:220],
+                    "x": int(row.get("x") or 0),
+                    "y": int(row.get("y") or 0),
+                    "w": int(row.get("w") or 0),
+                    "h": int(row.get("h") or 0),
+                    "tag": _clean(row.get("tag"))[:40],
+                    "role": _clean(row.get("role"))[:80],
+                }
+            )
+        return out
+
+    @staticmethod
+    def _fresh_ad_account_create_candidates(
+        before: list[dict[str, Any]],
+        after: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        def same(a: dict[str, Any], b: dict[str, Any]) -> bool:
+            if _clean(a.get("text")) != _clean(b.get("text")):
+                return False
+            return (
+                abs(int(a.get("x") or 0) - int(b.get("x") or 0)) <= 12
+                and abs(int(a.get("y") or 0) - int(b.get("y") or 0)) <= 12
+            )
+
+        return [
+            row
+            for row in after
+            if isinstance(row, dict)
+            and not any(
+                same(row, old)
+                for old in before
+                if isinstance(old, dict)
+            )
+        ]
+
+    async def _click_fresh_ad_account_create_candidate(
+        self,
+        candidate: dict[str, Any],
+    ) -> dict[str, Any]:
+        if self.page is None:
+            return {"clicked": False}
+        probe_id = _clean(candidate.get("probe_id"))
+        if not probe_id:
+            return {"clicked": False}
+        try:
+            locator = self.page.locator(
+                f'[data-remask-rk-create-fresh="{probe_id}"]'
+            )
+            if not await locator.count():
+                return {"clicked": False, "reason": "candidate_disappeared"}
+            item = locator.first
+            if not (await item.is_visible() and await item.is_enabled()):
+                return {"clicked": False, "reason": "candidate_not_clickable"}
+            await item.scroll_into_view_if_needed(timeout=1500)
+            await item.click(timeout=2500)
+            return {
+                "clicked": True,
+                "text": _clean(candidate.get("text"))[:180],
+                "x": int(candidate.get("x") or 0),
+                "y": int(candidate.get("y") or 0),
+                "tag": _clean(candidate.get("tag"))[:40],
+                "role": _clean(candidate.get("role"))[:80],
+            }
+        except Exception as exc:
+            return {
+                "clicked": False,
+                "error": f"{exc.__class__.__name__}: {_clean(exc)}"[:300],
+            }
+
     async def _probe_ad_account_add_buttons(
         self,
     ) -> tuple[bool, list[dict[str, Any]]]:
@@ -6201,6 +6380,9 @@ class FacebookBusinessBrowser:
                 before_snapshot = set(
                     await self._ad_account_right_pane_snapshot()
                 )
+                before_create_candidates = (
+                    await self._ad_account_visible_create_candidates()
+                )
                 await item.scroll_into_view_if_needed(timeout=1500)
                 await item.click(timeout=2500)
                 attempt["clicked"] = True
@@ -6241,6 +6423,56 @@ class FacebookBusinessBrowser:
                     attempt["blocked"] = True
                     attempts.append(attempt)
                     return False, attempts
+
+                after_create_candidates = (
+                    await self._ad_account_visible_create_candidates()
+                )
+                fresh_create_candidates = (
+                    self._fresh_ad_account_create_candidates(
+                        before_create_candidates,
+                        after_create_candidates,
+                    )
+                )
+                attempt["fresh_create_candidates"] = [
+                    {
+                        "text": _clean(candidate.get("text"))[:180],
+                        "x": int(candidate.get("x") or 0),
+                        "y": int(candidate.get("y") or 0),
+                        "tag": _clean(candidate.get("tag"))[:40],
+                        "role": _clean(candidate.get("role"))[:80],
+                    }
+                    for candidate in fresh_create_candidates[:8]
+                ]
+
+                fresh_create = {"clicked": False}
+                if fresh_create_candidates:
+                    fresh_create = (
+                        await self._click_fresh_ad_account_create_candidate(
+                            fresh_create_candidates[0]
+                        )
+                    )
+                attempt["fresh_create"] = fresh_create
+
+                if fresh_create.get("clicked"):
+                    fresh_transition = (
+                        await self._wait_for_ad_account_ui_transition(
+                            previous_signature=_clean(
+                                transition.get("signature")
+                            ),
+                            timeout_seconds=4.0,
+                            label="after_fresh_create_entry",
+                            require_signature_change=True,
+                        )
+                    )
+                    attempt["fresh_create_state_after"] = _clean(
+                        fresh_transition.get("state")
+                    ).upper()
+                    if self._ad_account_create_form_confirmed(
+                        fresh_transition
+                    ):
+                        attempt["create_entry_found"] = True
+                        attempts.append(attempt)
+                        return True, attempts
 
                 attempt["post_click_candidates"] = (
                     await self._ad_account_popup_candidates()
