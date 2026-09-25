@@ -7826,6 +7826,26 @@ class FacebookBusinessBrowser:
                             "network_candidates": network_candidates[-24:],
                         }
                     )
+                    try:
+                        import logging
+                        logging.getLogger("remask_worker").warning(
+                            "[ad-account-final-unmatched] profile=%s business=%s "
+                            "network_candidates=%s graphql_candidates=%s",
+                            self.profile_id,
+                            business,
+                            json.dumps(
+                                network_candidates[-24:],
+                                ensure_ascii=False,
+                                separators=(",", ":"),
+                            ),
+                            json.dumps(
+                                new_network_candidates[-8:],
+                                ensure_ascii=False,
+                                separators=(",", ":"),
+                            ),
+                        )
+                    except Exception:
+                        pass
                     raise BrowserBusinessError(
                         "AD_ACCOUNT_CREATE_RESULT_UNKNOWN",
                         (
