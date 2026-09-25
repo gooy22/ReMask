@@ -7816,17 +7816,20 @@ timeout_seconds=4.0,
             next_clicked = False
             if selected:
                 await self.page.wait_for_timeout(200)
-                next_clicked = await self._click_named(
-                    safe_next_names,
-                    click_timeout_ms=2500,
-                )
-                if not next_clicked:
-                    meta = (
-                        await self._click_ad_account_form_action_by_visible_text(
-                            "next"
-                        )
+                # Prefer the RK-bounded semantic probe. A global
+                # role/name search can hit an unrelated "Continue" elsewhere
+                # in Business Suite when multiple dialogs/panels are mounted.
+                meta = (
+                    await self._click_ad_account_form_action_by_visible_text(
+                        "next"
                     )
-                    next_clicked = bool(meta.get("clicked"))
+                )
+                next_clicked = bool(meta.get("clicked"))
+                if not next_clicked:
+                    next_clicked = await self._click_named(
+                        safe_next_names,
+                        click_timeout_ms=2500,
+                    )
 
             pre_details_trace.append(
                 {
@@ -8357,18 +8360,17 @@ timeout_seconds=4.0,
                             )
                             last_form_setup_signature = ownership_signature
 
-                next_clicked = await self._click_named(
-                    next_names,
-                    click_timeout_ms=2500,
-                )
-                next_meta: dict[str, Any] = {}
-                if not next_clicked:
-                    next_meta = (
-                        await self._click_ad_account_form_action_by_visible_text(
-                            "next"
-                        )
+                next_meta: dict[str, Any] = (
+                    await self._click_ad_account_form_action_by_visible_text(
+                        "next"
                     )
-                    next_clicked = bool(next_meta.get("clicked"))
+                )
+                next_clicked = bool(next_meta.get("clicked"))
+                if not next_clicked:
+                    next_clicked = await self._click_named(
+                        next_names,
+                        click_timeout_ms=2500,
+                    )
 
                 if next_clicked:
                     clicked_any = True
