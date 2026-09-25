@@ -6410,6 +6410,35 @@ class FacebookBusinessBrowser:
             )
         ]
 
+    async def _wait_for_fresh_ad_account_create_candidate(
+        self,
+        *,
+        before: list[dict[str, Any]],
+        timeout_seconds: float = 3.5,
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        """Poll Meta's async Add menu until a new Create-RK entry appears."""
+        if self.page is None:
+            return [], {"state": "NO_PAGE", "signature": ""}
+
+        deadline = time.monotonic() + max(0.8, float(timeout_seconds))
+        last_state: dict[str, Any] = {}
+        while time.monotonic() < deadline:
+            last_state = await self._ad_account_ui_state()
+            if self._ad_account_create_form_confirmed(last_state):
+                return [], last_state
+
+            after = await self._ad_account_visible_create_candidates()
+            fresh = self._fresh_ad_account_create_candidates(
+                before,
+                after,
+            )
+            if fresh:
+                return fresh, last_state
+
+            await self.page.wait_for_timeout(200)
+
+        return [], last_state
+
     async def _click_fresh_ad_account_create_candidate(
         self,
         candidate: dict[str, Any],
@@ -6580,15 +6609,27 @@ class FacebookBusinessBrowser:
                     attempts.append(attempt)
                     return False, attempts
 
-                after_create_candidates = (
-                    await self._ad_account_visible_create_candidates()
+                (
+                    fresh_create_candidates,
+                    post_add_poll_state,
+                ) = await self._wait_for_fresh_ad_account_create_candidate(
+                    before=before_create_candidates,
+                    timeout_seconds=3.5,
                 )
-                fresh_create_candidates = (
-                    self._fresh_ad_account_create_candidates(
-                        before_create_candidates,
-                        after_create_candidates,
-                    )
-                )
+                attempt["post_add_poll_state"] = _clean(
+                    post_add_poll_state.get("state")
+                ).upper()
+                attempt["post_add_poll_signature"] = _clean(
+                    post_add_poll_state.get("signature")
+                )[:700]
+
+                if self._ad_account_create_form_confirmed(
+                    post_add_poll_state
+                ):
+                    attempt["form_opened_during_poll"] = True
+                    attempt["create_entry_found"] = True
+                    attempts.append(attempt)
+                    return True, attempts
                 attempt["fresh_create_candidates"] = [
                     {
                         "text": _clean(candidate.get("text"))[:180],
