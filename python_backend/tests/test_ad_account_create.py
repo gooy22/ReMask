@@ -13,6 +13,7 @@ from app.facebook_ad_account_create import (
 )
 from app.facebook_business_browser import FacebookBusinessBrowser
 from app.provisioning.ad_account_handler import (
+    _known_final_click_unmatched_empty_inventory,
     _known_pre_submit_navigation_failure,
     _known_pre_submit_usage_step_failure,
     ad_account_handler,
@@ -125,6 +126,57 @@ class AdAccountUiStateRegressionTests(unittest.TestCase):
         }
         self.assertFalse(
             FacebookBusinessBrowser._ad_account_ownership_step_present(state)
+        )
+
+
+
+class AdAccountFalseUncertaintyRecoveryTests(unittest.TestCase):
+    def test_final_click_unmatched_empty_inventory_is_recoverable_evidence(self) -> None:
+        result = {
+            "activity": "AD_ACCOUNT_FINAL_CLICK_UNMATCHED",
+            "browser_diagnostic": {
+                "stage": "ad_account_final_click_unmatched",
+                "state_after": {
+                    "state": "FORM",
+                    "signature": (
+                        "FORM::/latest/settings/ad_accounts::"
+                        "Aucun compte publicitaire ajouté"
+                    ),
+                },
+                "graphql_candidates": [
+                    {
+                        "friendly_name": (
+                            "BizKitSettingsCreateAdAccountUsageStepQuery"
+                        ),
+                        "matched_create": False,
+                    }
+                ],
+            },
+        }
+        self.assertTrue(
+            _known_final_click_unmatched_empty_inventory(result)
+        )
+
+    def test_real_create_candidate_keeps_duplicate_guard(self) -> None:
+        result = {
+            "activity": "AD_ACCOUNT_FINAL_CLICK_UNMATCHED",
+            "browser_diagnostic": {
+                "stage": "ad_account_final_click_unmatched",
+                "state_after": {
+                    "signature": "Aucun compte publicitaire ajouté",
+                },
+                "graphql_candidates": [
+                    {
+                        "friendly_name": (
+                            "BizKitSettingsCreateAdAccountMutation"
+                        ),
+                        "matched_create": True,
+                    }
+                ],
+            },
+        }
+        self.assertFalse(
+            _known_final_click_unmatched_empty_inventory(result)
         )
 
 
