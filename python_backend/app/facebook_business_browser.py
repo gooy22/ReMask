@@ -4873,6 +4873,7 @@ class FacebookBusinessBrowser:
                                 controlSelector
                             )].filter(visible);
                             if (controls.length) {
+                                let acceptedAtThisDepth = 0;
                                 for (const control of controls) {
                                     const r = control.getBoundingClientRect();
                                     if (r.x < 280 || r.y < 35 || r.y > 795) {
@@ -4917,8 +4918,15 @@ class FacebookBusinessBrowser:
                                         role: control.getAttribute('role') || '',
                                         generic
                                     });
+                                    acceptedAtThisDepth += 1;
                                 }
-                                break;
+                                // Do not stop merely because an ancestor has
+                                // some button (Meta often places help/final
+                                // action controls there). Stop only when this
+                                // ancestor produced a plausible field control.
+                                if (acceptedAtThisDepth > 0) {
+                                    break;
+                                }
                             }
                             root = root.parentElement;
                         }
