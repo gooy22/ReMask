@@ -1325,7 +1325,7 @@ class BrowserAdAccountPlainDropdownSafetyTests(unittest.TestCase):
         source = inspect.getsource(
             FacebookBusinessBrowser._ad_account_field_control_by_nearby_label
         )
-        self.assertIn("'[role="button"]'", source)
+        self.assertIn("'[role=\"button\"]'", source)
         self.assertIn("const sameRow =", source)
         self.assertIn("const toRight =", source)
         self.assertIn("const substantial =", source)
