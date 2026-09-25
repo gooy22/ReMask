@@ -5566,6 +5566,39 @@ class FacebookBusinessBrowser:
         return []
 
     @staticmethod
+    def _ad_account_ownership_step_present(state: dict[str, Any]) -> bool:
+        """Detect Meta's pre-details ownership/usage wizard step."""
+        if not isinstance(state, dict):
+            return False
+        parts: list[str] = []
+        for key in ("controls", "dialogs"):
+            values = state.get(key)
+            if isinstance(values, list):
+                parts.extend(_clean(x).casefold() for x in values if _clean(x))
+        text = " ".join(parts)
+        ownership_markers = (
+            "my business",
+            "my business portfolio",
+            "for my business",
+            "mon entreprise",
+            "mon portefeuille business",
+            "pour mon entreprise",
+            "mein unternehmen",
+            "für mein unternehmen",
+            "мой бизнес",
+            "для моего бизнеса",
+            "мій бізнес",
+            "для мого бізнесу",
+            "আমার ব্যবসা",
+            "আমার ব্যবসার জন্য",
+            "doanh nghiệp của tôi",
+            "dành cho doanh nghiệp của tôi",
+            "मेरा व्यवसाय",
+            "मेरे व्यवसाय के लिए",
+        )
+        return any(marker in text for marker in ownership_markers)
+
+    @staticmethod
     def _ad_account_create_form_confirmed(state: dict[str, Any]) -> bool:
         """Require evidence that Meta actually opened the Add-RK wizard.
 
@@ -5577,6 +5610,8 @@ class FacebookBusinessBrowser:
         if _clean(state.get("state")).upper() != "FORM":
             return False
         if bool(state.get("name_input")):
+            return True
+        if FacebookBusinessBrowser._ad_account_ownership_step_present(state):
             return True
         dialogs = state.get("dialogs")
         if isinstance(dialogs, list) and any(_clean(x) for x in dialogs):
@@ -6583,6 +6618,85 @@ class FacebookBusinessBrowser:
                 diagnostic=diag,
             )
 
+        # Meta can place an ownership/usage step before immutable RK
+        # details. Walk only safe pre-submit transitions here: choose our own
+        # business and use Next/Continue labels. Never click Create at this
+        # stage.
+        safe_next_names = (
+            "Next",
+            "Continue",
+            "Далее",
+            "Продолжить",
+            "Далі",
+            "Продовжити",
+            "Weiter",
+            "Suivant",
+            "Continuer",
+            "পরবর্তী",
+            "চালিয়ে যান",
+            "Tiếp",
+            "Tiếp tục",
+            "अगला",
+            "आगे",
+            "जारी रखें",
+        )
+        pre_details_trace: list[dict[str, Any]] = []
+        for pre_step in range(4):
+            current_pre = await self._ad_account_ui_state()
+            self._record_ad_account_ui_state(
+                f"pre_details_{pre_step}",
+                current_pre,
+            )
+            if bool(current_pre.get("name_input")):
+                break
+
+            ownership_present = self._ad_account_ownership_step_present(
+                current_pre
+            )
+            if not ownership_present:
+                break
+
+            selected = await self._select_own_business_if_present()
+            before_signature = _clean(current_pre.get("signature"))
+            next_clicked = False
+            if selected:
+                await self.page.wait_for_timeout(200)
+                next_clicked = await self._click_named(
+                    safe_next_names,
+                    click_timeout_ms=2500,
+                )
+                if not next_clicked:
+                    meta = (
+                        await self._click_ad_account_form_action_by_visible_text(
+                            "next"
+                        )
+                    )
+                    next_clicked = bool(meta.get("clicked"))
+
+            pre_details_trace.append(
+                {
+                    "step": pre_step,
+                    "ownership_present": ownership_present,
+                    "selected": selected,
+                    "next_clicked": next_clicked,
+                }
+            )
+            if not selected:
+                break
+
+            transition = await self._wait_for_ad_account_ui_transition(
+                previous_signature=before_signature,
+                timeout_seconds=4.0,
+                label=f"pre_details_{pre_step}_after",
+                require_signature_change=True,
+            )
+            if bool(transition.get("name_input")):
+                break
+            if not next_clicked and not self._ad_account_ownership_step_present(
+                transition
+            ):
+                break
+
         confirmed_form = await self._ad_account_ui_state()
         self._record_ad_account_ui_state(
             "before_form_fill",
@@ -6595,6 +6709,7 @@ class FacebookBusinessBrowser:
             raw_diag["business_id"] = business
             raw_diag["ui_state"] = confirmed_form
             raw_diag["ui_trace"] = self._ad_account_ui_trace[-16:]
+            raw_diag["pre_details_trace"] = pre_details_trace[-8:]
             raw_diag["action_candidates"] = (
                 await self._ad_account_action_candidates()
             )
