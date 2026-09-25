@@ -5975,19 +5975,36 @@ class FacebookBusinessBrowser:
                     attempts.append(attempt)
                     return False, attempts
 
-                if (
-                    attempt["ui_state_after"] == "CREATE_ENTRY"
-                    or await self._wait_for_ad_account_create_entry(
-                        timeout_seconds=3.5,
-                    )
-                ):
-                    attempt["create_entry_found"] = True
-                    attempts.append(attempt)
-                    return True, attempts
-
                 attempt["post_click_candidates"] = (
                     await self._ad_account_popup_candidates()
                 )
+
+                popup_create = (
+                    await self._click_ad_account_create_entry_in_popup()
+                )
+                attempt["popup_create"] = popup_create
+
+                if popup_create.get("clicked"):
+                    popup_transition = (
+                        await self._wait_for_ad_account_ui_transition(
+                            previous_signature=_clean(
+                                transition.get("signature")
+                            ),
+                            timeout_seconds=4.0,
+                            label="after_popup_create_entry",
+                            require_signature_change=True,
+                        )
+                    )
+                    attempt["popup_create_state_after"] = _clean(
+                        popup_transition.get("state")
+                    ).upper()
+                    if self._ad_account_create_form_confirmed(
+                        popup_transition
+                    ):
+                        attempt["create_entry_found"] = True
+                        attempts.append(attempt)
+                        return True, attempts
+
                 attempts.append(attempt)
 
                 # Wrong Add control or unrelated popup. Close it, allow Meta to
@@ -6050,6 +6067,132 @@ class FacebookBusinessBrowser:
                 parts.append(f"new={new_head}")
             summary.append(" ".join(parts))
         return summary
+
+    async def _click_ad_account_create_entry_in_popup(
+        self,
+    ) -> dict[str, Any]:
+        """Click Create RK only inside a currently visible Meta popup surface.
+
+        This deliberately refuses matching text from the normal Ad Accounts
+        content pane. It is used immediately after a concrete Add click.
+        """
+        if self.page is None:
+            return {"clicked": False}
+
+        try:
+            result = await self.page.evaluate(
+                """() => {
+                    const visible = el => {
+                        if (!el) return false;
+                        const r = el.getBoundingClientRect();
+                        const s = getComputedStyle(el);
+                        return r.width > 0 && r.height > 0
+                            && s.display !== 'none'
+                            && s.visibility !== 'hidden'
+                            && s.pointerEvents !== 'none';
+                    };
+                    const clean = text => (text || '')
+                        .normalize('NFKC')
+                        .replace(/\u00a0/g, ' ')
+                        .replace(/\s+/g, ' ')
+                        .trim()
+                        .toLowerCase();
+                    const createWords = [
+                        'create','créer','создать','створити','erstellen',
+                        'তৈরি করুন','tạo','बनाएँ','बनाएं'
+                    ];
+                    const accountWords = [
+                        'ad account','advertising account','compte publicitaire',
+                        'реклам','werbekonto','বিজ্ঞাপন অ্যাকাউন্ট',
+                        'tài khoản quảng cáo','विज्ञापन खाता','विज्ञापन खाते'
+                    ];
+
+                    const popupRoots = [...document.querySelectorAll(
+                        '[role="menu"],[role="listbox"],[role="dialog"],'
+                        + '[aria-modal="true"]'
+                    )].filter(visible);
+
+                    const rows = [];
+                    for (const root of popupRoots) {
+                        for (const el of root.querySelectorAll(
+                            'button,a,span,div,[role="button"],'
+                            + '[role="menuitem"],[role="menuitemradio"],'
+                            + '[role="option"],[tabindex]'
+                        )) {
+                            if (!visible(el)) continue;
+                            const text = clean(
+                                (el.getAttribute('aria-label') || '') + ' ' +
+                                (el.getAttribute('title') || '') + ' ' +
+                                (el.innerText || el.textContent || '')
+                            );
+                            if (!text || text.length > 220) continue;
+                            if (!createWords.some(w => text.includes(w))) continue;
+                            if (!accountWords.some(w => text.includes(w))) continue;
+
+                            const clickable = el.closest(
+                                'button,a,[role="button"],[role="menuitem"],'
+                                + '[role="menuitemradio"],[role="option"],'
+                                + '[tabindex]:not([tabindex="-1"])'
+                            ) || el;
+                            if (!visible(clickable)) continue;
+                            if (
+                                clickable.hasAttribute('disabled')
+                                || clickable.getAttribute('aria-disabled') === 'true'
+                            ) continue;
+
+                            const r = clickable.getBoundingClientRect();
+                            rows.push({
+                                el: clickable,
+                                text,
+                                x: Math.round(r.x),
+                                y: Math.round(r.y),
+                                tag: clickable.tagName || '',
+                                role: clickable.getAttribute('role') || '',
+                                score:
+                                    (clickable === el ? 100 : 0)
+                                    + Math.round(r.y)
+                            });
+                        }
+                    }
+
+                    rows.sort((a,b) => a.score - b.score);
+                    const best = rows[0];
+                    if (!best) {
+                        return {
+                            clicked:false,
+                            popup_count:popupRoots.length
+                        };
+                    }
+
+                    best.el.scrollIntoView({block:'center'});
+                    best.el.click();
+                    return {
+                        clicked:true,
+                        popup_count:popupRoots.length,
+                        text:best.text,
+                        x:best.x,
+                        y:best.y,
+                        tag:best.tag,
+                        role:best.role
+                    };
+                }"""
+            )
+            if isinstance(result, dict):
+                return {
+                    "clicked": bool(result.get("clicked")),
+                    "popup_count": int(result.get("popup_count") or 0),
+                    "text": _clean(result.get("text"))[:180],
+                    "x": int(result.get("x") or 0),
+                    "y": int(result.get("y") or 0),
+                    "tag": _clean(result.get("tag"))[:40],
+                    "role": _clean(result.get("role"))[:80],
+                }
+        except Exception as exc:
+            return {
+                "clicked": False,
+                "error": f"{exc.__class__.__name__}: {_clean(exc)}"[:300],
+            }
+        return {"clicked": False}
 
     async def _ad_account_popup_candidates(self) -> list[str]:
         """Return compact visible popup/menu text after clicking Add."""
@@ -6465,7 +6608,10 @@ class FacebookBusinessBrowser:
                 diagnostic=diag,
             )
 
-        if not entry_clicked:
+        if (
+            not entry_clicked
+            and _clean(current_ui.get("state")).upper() == "CREATE_ENTRY"
+        ):
             before_direct = await self._ad_account_ui_state()
             direct_clicked = await self._click_named(
                 self.AD_ACCOUNT_CREATE_ENTRY_NAMES,
@@ -6484,7 +6630,10 @@ class FacebookBusinessBrowser:
                     direct_transition
                 )
 
-        if not entry_clicked:
+        if (
+            not entry_clicked
+            and _clean(current_ui.get("state")).upper() == "CREATE_ENTRY"
+        ):
             before_dom = await self._ad_account_ui_state()
             dom_clicked = (
                 await self._click_ad_account_action_dom(
