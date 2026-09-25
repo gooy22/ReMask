@@ -1124,6 +1124,17 @@ class BrowserAdAccountTimezoneSafetyTests(unittest.TestCase):
         self.assertIn("Kyiv", source)
 
 
+class BrowserAdAccountFinalControlTests(unittest.TestCase):
+    def test_final_control_words_exclude_next_and_continue(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser._click_ad_account_final_interactive
+        )
+        self.assertIn("Create ad account", source)
+        self.assertIn("Créer un compte publicitaire", source)
+        self.assertNotIn('"Next"', source)
+        self.assertNotIn('"Continue"', source)
+
+
 class BrowserAdAccountExactlyOnceSubmitTests(unittest.TestCase):
     def test_unmatched_final_click_becomes_unknown_instead_of_second_click(self):
         source = inspect.getsource(
