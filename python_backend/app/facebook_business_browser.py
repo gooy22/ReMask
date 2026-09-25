@@ -5877,8 +5877,17 @@ class FacebookBusinessBrowser:
                             'input,textarea,select,[role="combobox"],[role="textbox"]'
                         )
                     );
-                    if (
+                    const dialogHasWizardMarker = (
                         accountWords.some(word => dialogCombined.includes(word))
+                        || nameWords.some(word => dialogCombined.includes(word))
+                        || formWords.some(word => dialogCombined.includes(word))
+                        || [
+                            'my business','mon entreprise','mein unternehmen',
+                            'мой бизнес','мій бізнес'
+                        ].some(word => dialogCombined.includes(word))
+                    );
+                    if (
+                        dialogHasWizardMarker
                         && dialogHasFormControl
                     ) {
                         formEvidence = true;
@@ -6239,7 +6248,37 @@ class FacebookBusinessBrowser:
         if FacebookBusinessBrowser._ad_account_ownership_step_present(state):
             return True
         dialogs = state.get("dialogs")
-        if isinstance(dialogs, list) and any(_clean(x) for x in dialogs):
+        if not isinstance(dialogs, list):
+            dialogs = []
+        dialog_text = " ".join(
+            _clean(x).casefold()
+            for x in dialogs
+            if _clean(x)
+        )
+        dialog_wizard_markers = (
+            "ad account",
+            "compte publicitaire",
+            "werbekonto",
+            "реклам",
+            "nom du compte",
+            "devise",
+            "fuseau horaire",
+            "currency",
+            "time zone",
+            "timezone",
+            "my business",
+            "mon entreprise",
+            "mein unternehmen",
+            "мой бизнес",
+            "мій бізнес",
+        )
+        if (
+            dialog_text
+            and any(
+                marker in dialog_text
+                for marker in dialog_wizard_markers
+            )
+        ):
             return True
         # Unwrapped Meta wizard variants expose multiple form controls. Do not
         # accept a lone table/search input from the normal Ad Accounts page.
