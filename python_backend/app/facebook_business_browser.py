@@ -6353,9 +6353,13 @@ class FacebookBusinessBrowser:
             current_ui,
         )
 
-        entry_clicked = _clean(
-            current_ui.get("state")
-        ).upper() == "FORM"
+        entry_clicked = (
+            _clean(current_ui.get("state")).upper() == "FORM"
+            and (
+                bool(current_ui.get("name_input"))
+                or bool(current_ui.get("dialogs"))
+            )
+        )
 
         if not entry_clicked and _clean(
             current_ui.get("state")
@@ -6442,7 +6446,13 @@ class FacebookBusinessBrowser:
                 final_ui,
             )
 
-            if _clean(final_ui.get("state")).upper() == "FORM":
+            if (
+                _clean(final_ui.get("state")).upper() == "FORM"
+                and (
+                    bool(final_ui.get("name_input"))
+                    or bool(final_ui.get("dialogs"))
+                )
+            ):
                 entry_clicked = True
             elif _clean(final_ui.get("state")).upper() == "BLOCKED":
                 diag = await self._diagnostic(
