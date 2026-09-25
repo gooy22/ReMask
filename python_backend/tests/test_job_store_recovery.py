@@ -1,4 +1,5 @@
 import asyncio
+import json
 import tempfile
 import time
 import unittest
@@ -105,6 +106,90 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
         # Let the detached cancellation cleanup finish so the test loop exits
         # without leaving a pending task.
         await asyncio.sleep(0.25)
+
+
+    async def test_latest_ad_account_resume_skips_guard_only_derivative(self):
+        now = int(time.time())
+        business_id = "1056638030476027"
+        profile_id = "4"
+
+        original_result = {
+            "business_id": business_id,
+            "phase": "CREATE_RESULT_UNKNOWN",
+            "resume_from": "RECONCILE_CREATE",
+            "activity": "AD_ACCOUNT_FINAL_CLICK_UNMATCHED",
+            "browser_diagnostic": {
+                "stage": "ad_account_final_click_unmatched",
+                "state_after": {
+                    "signature": (
+                        "FORM::/latest/settings/ad_accounts::"
+                        "Aucun compte publicitaire ajouté"
+                    )
+                },
+                "graphql_candidates": [],
+            },
+        }
+        guard_result = {
+            "business_id": business_id,
+            "phase": "CREATE_RESULT_UNKNOWN",
+            "resume_from": "RECONCILE_CREATE",
+        }
+
+        with self.provisioning_state._connect() as con:
+            con.execute(
+                """INSERT INTO provisioning_steps(
+                    item_id,profile_id,scope_key,step,status,attempt,result_json,
+                    error_code,error_message,created_at,updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    "item-original",
+                    profile_id,
+                    "rk-original",
+                    "AD_ACCOUNT",
+                    "FAILED",
+                    1,
+                    json.dumps(original_result),
+                    "AD_ACCOUNT_CREATE_RESULT_UNKNOWN",
+                    "Meta final Create was clicked but unmatched",
+                    now - 10,
+                    now - 10,
+                ),
+            )
+            con.execute(
+                """INSERT INTO provisioning_steps(
+                    item_id,profile_id,scope_key,step,status,attempt,result_json,
+                    error_code,error_message,created_at,updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    "item-guard",
+                    profile_id,
+                    "rk-guard",
+                    "AD_ACCOUNT",
+                    "FAILED",
+                    1,
+                    json.dumps(guard_result),
+                    "AD_ACCOUNT_CREATE_RESULT_UNKNOWN",
+                    (
+                        "A previous Job may already have submitted CREATE for Business "
+                        + business_id
+                        + ". Inventory does not prove the RK yet, so ReMask will not "
+                        "submit a duplicate CREATE."
+                    ),
+                    now,
+                    now,
+                ),
+            )
+
+        row = await self.provisioning_state.latest_ad_account_resume_for_business(
+            profile_id,
+            business_id,
+        )
+
+        self.assertEqual(row["item_id"], "item-original")
+        self.assertEqual(
+            row["result"]["browser_diagnostic"]["stage"],
+            "ad_account_final_click_unmatched",
+        )
 
     async def test_finalize_marks_all_success_tasks_success(self):
         job_id, item_id = self._seed(task_status="SUCCESS")
