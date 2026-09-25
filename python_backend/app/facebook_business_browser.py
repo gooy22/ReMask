@@ -4424,9 +4424,47 @@ class FacebookBusinessBrowser:
                         'मेरा व्यवसाय','मेरे व्यवसाय के लिए'
                     ];
 
-                    const nodes = [...document.querySelectorAll(
-                        'button,a,span,div,label,[role],[tabindex]'
-                    )];
+                    const wizardMarkers = [
+                        'ad account name','advertising account name',
+                        'nom du compte publicitaire','nom du compte',
+                        'name des werbekontos','название рекламного аккаунта',
+                        'назва рекламного акаунта','currency','devise',
+                        'währung','валюта','time zone','timezone',
+                        'fuseau horaire','zeitzone','часовой пояс',
+                        'часовий пояс','my business','my business portfolio',
+                        'for my business','mon entreprise',
+                        'mon portefeuille business','pour mon entreprise',
+                        'mein unternehmen','für mein unternehmen',
+                        'мой бизнес','для моего бизнеса','мій бізнес',
+                        'для мого бізнесу','আমার ব্যবসা',
+                        'আমার ব্যবসার জন্য','doanh nghiệp của tôi',
+                        'dành cho doanh nghiệp của tôi','मेरा व्यवसाय',
+                        'मेरे व्यवसाय के लिए'
+                    ];
+                    const aiMarkers = [
+                        'meta ai','assistant business meta ai',
+                        'meta ai business assistant','assistant meta ai'
+                    ];
+                    const dialogRoots = [...document.querySelectorAll(
+                        '[role="dialog"],[aria-modal="true"]'
+                    )].filter(visible);
+                    const wizardRoot = dialogRoots.find(root => {
+                        const t = clean(
+                            (root.getAttribute('aria-label') || '') + ' ' +
+                            (root.getAttribute('title') || '') + ' ' +
+                            (root.innerText || root.textContent || '')
+                        );
+                        return !aiMarkers.some(word => t.includes(word))
+                            && wizardMarkers.some(word => t.includes(word));
+                    }) || null;
+
+                    const nodes = wizardRoot
+                        ? [...wizardRoot.querySelectorAll(
+                            'button,a,span,div,label,[role],[tabindex]'
+                        )]
+                        : [...document.querySelectorAll(
+                            'button,a,span,div,label,[role],[tabindex]'
+                        )];
                     const rows = [];
                     for (const el of nodes) {
                         if (!visible(el)) continue;
