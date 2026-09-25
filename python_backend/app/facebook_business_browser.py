@@ -7100,62 +7100,17 @@ class FacebookBusinessBrowser:
 
         def observe_request(request: Any) -> None:
             try:
-                raw_url = _clean(getattr(request, "url", ""))
-                parts = urlsplit(raw_url)
-                host = _clean(parts.hostname).lower()
-                if not (
-                    host.endswith("facebook.com")
-                    or host.endswith("fbcdn.net")
-                ):
+                row = self._safe_meta_network_request_summary(request)
+                if not row:
                     return
-
-                method = _clean(getattr(request, "method", "")).upper()
-                if method not in {"GET", "POST", "PUT", "PATCH", "DELETE"}:
-                    return
-
-                query = parse_qs(parts.query, keep_blank_values=True)
-                post_raw = _clean(getattr(request, "post_data", ""))
-                post = parse_qs(post_raw, keep_blank_values=True) if post_raw else {}
-
-                merged_keys = sorted(
-                    {
-                        str(key)
-                        for key in list(query.keys()) + list(post.keys())
-                        if key
-                    }
-                )[:40]
-
-                friendly = _clean(
-                    (post.get("fb_api_req_friendly_name") or
-                     query.get("fb_api_req_friendly_name") or [""])[0]
-                )
-                doc_id = _clean(
-                    (post.get("doc_id") or query.get("doc_id") or [""])[0]
-                )
-                effective = method
-                transport_method = _clean(
-                    (post.get("method") or query.get("method") or [""])[0]
-                ).upper()
-                if method == "GET" and transport_method == "POST":
-                    effective = "POST"
-
-                row = {
-                    "host": host[:120],
-                    "path": _clean(parts.path)[:240],
-                    "browser_method": method,
-                    "effective_method": effective,
-                    "friendly_name": friendly[:180],
-                    "doc_id": doc_id[:80],
-                    "param_keys": merged_keys,
-                }
                 key = (
-                    row["host"],
-                    row["path"],
-                    row["browser_method"],
-                    row["effective_method"],
-                    row["friendly_name"],
-                    row["doc_id"],
-                    tuple(row["param_keys"]),
+                    row.get("host"),
+                    row.get("path"),
+                    row.get("browser_method"),
+                    row.get("effective_method"),
+                    row.get("friendly_name"),
+                    row.get("doc_id"),
+                    tuple(row.get("param_keys") or []),
                 )
                 if any(
                     (
@@ -9094,6 +9049,75 @@ class FacebookBusinessBrowser:
 
         body = await self._body_text()
         return page in body
+
+    @staticmethod
+    def _safe_meta_network_request_summary(request: Any) -> dict[str, Any]:
+        """Return non-secret transport metadata for Meta network diagnostics."""
+        raw_url = _clean(getattr(request, "url", ""))
+        try:
+            parts = urlsplit(raw_url)
+        except Exception:
+            return {}
+
+        host = _clean(parts.hostname).lower()
+        if not (
+            host.endswith("facebook.com")
+            or host.endswith("fbcdn.net")
+        ):
+            return {}
+
+        browser_method = _clean(
+            getattr(request, "method", "")
+        ).upper()
+        if browser_method not in {"GET", "POST", "PUT", "PATCH", "DELETE"}:
+            return {}
+
+        try:
+            query = parse_qs(parts.query, keep_blank_values=True)
+        except Exception:
+            query = {}
+        try:
+            post_raw = _clean(getattr(request, "post_data", ""))
+            post = (
+                parse_qs(post_raw, keep_blank_values=True)
+                if post_raw
+                else {}
+            )
+        except Exception:
+            post = {}
+
+        merged_keys = sorted(
+            {
+                str(key)
+                for key in list(query.keys()) + list(post.keys())
+                if key
+            }
+        )[:40]
+
+        friendly = _clean(
+            (post.get("fb_api_req_friendly_name")
+             or query.get("fb_api_req_friendly_name")
+             or [""])[0]
+        )
+        doc_id = _clean(
+            (post.get("doc_id") or query.get("doc_id") or [""])[0]
+        )
+        effective_method = browser_method
+        transport_method = _clean(
+            (post.get("method") or query.get("method") or [""])[0]
+        ).upper()
+        if browser_method == "GET" and transport_method == "POST":
+            effective_method = "POST"
+
+        return {
+            "host": host[:120],
+            "path": _clean(parts.path)[:240],
+            "browser_method": browser_method,
+            "effective_method": effective_method,
+            "friendly_name": friendly[:180],
+            "doc_id": doc_id[:80],
+            "param_keys": merged_keys,
+        }
 
     @staticmethod
     def _safe_graphql_request_summary(request: Any) -> dict[str, Any]:
