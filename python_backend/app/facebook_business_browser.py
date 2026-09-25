@@ -4859,7 +4859,10 @@ class FacebookBusinessBrowser:
                         'button[aria-haspopup]',
                         '[role="button"][aria-haspopup]',
                         'button[aria-expanded]',
-                        '[role="button"][aria-expanded]'
+                        '[role="button"][aria-expanded]',
+                        '[role="button"]',
+                        'button',
+                        '[tabindex]:not([tabindex="-1"])'
                     ].join(',');
 
                     const candidates = [];
@@ -4882,16 +4885,37 @@ class FacebookBusinessBrowser:
                                         + ' '
                                         + (control.innerText || control.textContent || '')
                                     );
+                                    const lr = labelNode.getBoundingClientRect();
+                                    // Plain Meta dropdowns can be role=button
+                                    // without aria-haspopup. Only accept such
+                                    // generic controls when they are plausibly
+                                    // the value control in the same field row.
+                                    const generic = !(
+                                        control.tagName === 'SELECT'
+                                        || control.getAttribute('role') === 'combobox'
+                                        || control.hasAttribute('aria-haspopup')
+                                        || control.hasAttribute('aria-expanded')
+                                    );
+                                    if (generic) {
+                                        const sameRow = Math.abs(r.y - lr.y) <= 80;
+                                        const toRight = r.x >= (lr.x - 20);
+                                        const substantial = r.width >= 90 && r.height >= 24;
+                                        if (!sameRow || !toRight || !substantial) {
+                                            continue;
+                                        }
+                                    }
                                     candidates.push({
                                         el: control,
                                         x: Math.round(r.x),
                                         y: Math.round(r.y),
-                                        label_y: Math.round(
-                                            labelNode.getBoundingClientRect().y
-                                        ),
+                                        w: Math.round(r.width),
+                                        h: Math.round(r.height),
+                                        label_x: Math.round(lr.x),
+                                        label_y: Math.round(lr.y),
                                         text,
                                         tag: control.tagName || '',
-                                        role: control.getAttribute('role') || ''
+                                        role: control.getAttribute('role') || '',
+                                        generic
                                     });
                                 }
                                 break;
@@ -4903,10 +4927,16 @@ class FacebookBusinessBrowser:
                     candidates.sort((a, b) => {
                         const ad = Math.abs(a.y - a.label_y);
                         const bd = Math.abs(b.y - b.label_y);
+                        if (a.generic !== b.generic) {
+                            return a.generic ? 1 : -1;
+                        }
                         if (ad !== bd) return ad - bd;
                         if (a.tag === 'SELECT' && b.tag !== 'SELECT') return -1;
                         if (b.tag === 'SELECT' && a.tag !== 'SELECT') return 1;
-                        return a.x - b.x;
+                        // Value controls usually sit to the right of the label.
+                        const ax = Math.abs(a.x - a.label_x);
+                        const bx = Math.abs(b.x - b.label_x);
+                        return bx - ax;
                     });
 
                     const best = candidates[0];
