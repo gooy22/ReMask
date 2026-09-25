@@ -693,20 +693,15 @@ class BrowserAdAccountFormActionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("continuer", script)
         self.assertIn("aria-disabled", script)
 
-    async def test_plain_div_final_create_fallback_is_supported(self):
+    async def test_plain_div_final_create_fallback_is_rejected(self):
         browser = FacebookBusinessBrowser(
             SimpleNamespace(profile_id="profile-rk-submit-final-div")
         )
         browser.page = SimpleNamespace(
             evaluate=AsyncMock(
                 return_value={
-                    "clicked": True,
+                    "clicked": False,
                     "action": "final",
-                    "text": "créer le compte publicitaire",
-                    "x": 1030,
-                    "y": 690,
-                    "tag": "DIV",
-                    "role": "",
                 }
             )
         )
@@ -715,8 +710,10 @@ class BrowserAdAccountFormActionTests(unittest.IsolatedAsyncioTestCase):
             "final"
         )
 
-        self.assertTrue(result["clicked"])
-        self.assertIn("créer", result["text"])
+        self.assertFalse(result["clicked"])
+        self.assertEqual(result["action"], "final")
+        script = browser.page.evaluate.await_args.args[0]
+        self.assertIn("mode === 'final' && !interactive", script)
 
 
 class BrowserAdAccountOwnBusinessTests(unittest.IsolatedAsyncioTestCase):
