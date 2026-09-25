@@ -4227,9 +4227,34 @@ class FacebookBusinessBrowser:
             return {"found": False, "attempted": False, "clicked": False}
 
         create_words = {
-            _clean(value).casefold()
-            for value in self.AD_ACCOUNT_SUBMIT_NAMES
-            if _clean(value)
+            value.casefold()
+            for value in (
+                "Create ad account",
+                "Create advertising account",
+                "Create account",
+                "Create",
+                "Создать рекламный аккаунт",
+                "Создать аккаунт",
+                "Создать",
+                "Створити рекламний акаунт",
+                "Створити обліковий запис",
+                "Створити",
+                "Werbekonto erstellen",
+                "Konto erstellen",
+                "Erstellen",
+                "Créer un compte publicitaire",
+                "Créer le compte publicitaire",
+                "Créer le compte",
+                "Créer",
+                "বিজ্ঞাপন অ্যাকাউন্ট তৈরি করুন",
+                "তৈরি করুন",
+                "Tạo tài khoản quảng cáo",
+                "Tạo",
+                "विज्ञापन खाता बनाएँ",
+                "विज्ञापन खाता बनाएं",
+                "बनाएँ",
+                "बनाएं",
+            )
         }
         candidates: list[tuple[int, Any, dict[str, Any]]] = []
 
