@@ -5877,17 +5877,37 @@ class FacebookBusinessBrowser:
                             'input,textarea,select,[role="combobox"],[role="textbox"]'
                         )
                     );
+                    const dialogLooksLikeMetaAI = [
+                        'meta ai',
+                        'assistant business meta ai',
+                        'meta ai business assistant',
+                        'assistant meta ai'
+                    ].some(word => dialogCombined.includes(word));
+                    // A generic "ad account" mention is not enough here.
+                    // Meta AI opens its own dialog with a textbox and can
+                    // mention the current settings surface, which previously
+                    // made us classify the assistant as the Add-RK wizard.
+                    // Require wizard-specific fields/ownership evidence from
+                    // the same dialog and explicitly reject the AI assistant.
                     const dialogHasWizardMarker = (
-                        accountWords.some(word => dialogCombined.includes(word))
-                        || nameWords.some(word => dialogCombined.includes(word))
+                        nameWords.some(word => dialogCombined.includes(word))
                         || formWords.some(word => dialogCombined.includes(word))
                         || [
-                            'my business','mon entreprise','mein unternehmen',
-                            'мой бизнес','мій бізнес'
+                            'my business','my business portfolio',
+                            'for my business','mon entreprise',
+                            'mon portefeuille business','pour mon entreprise',
+                            'mein unternehmen','für mein unternehmen',
+                            'мой бизнес','для моего бизнеса',
+                            'мій бізнес','для мого бізнесу',
+                            'আমার ব্যবসা','আমার ব্যবসার জন্য',
+                            'doanh nghiệp của tôi',
+                            'dành cho doanh nghiệp của tôi',
+                            'मेरा व्यवसाय','मेरे व्यवसाय के लिए'
                         ].some(word => dialogCombined.includes(word))
                     );
                     if (
-                        dialogHasWizardMarker
+                        !dialogLooksLikeMetaAI
+                        && dialogHasWizardMarker
                         && dialogHasFormControl
                     ) {
                         formEvidence = true;
@@ -6255,22 +6275,55 @@ class FacebookBusinessBrowser:
             for x in dialogs
             if _clean(x)
         )
+        # Do not accept the Meta AI assistant as the Add-RK wizard.
+        # It is a real dialog with a textbox and can contain generic words
+        # such as "compte publicitaire", but it has none of the immutable
+        # Ad Account fields we need.
+        ai_dialog_markers = (
+            "meta ai",
+            "assistant business meta ai",
+            "meta ai business assistant",
+            "assistant meta ai",
+        )
+        if any(marker in dialog_text for marker in ai_dialog_markers):
+            return False
+
         dialog_wizard_markers = (
-            "ad account",
-            "compte publicitaire",
-            "werbekonto",
-            "реклам",
+            "ad account name",
+            "advertising account name",
+            "nom du compte publicitaire",
             "nom du compte",
+            "name des werbekontos",
+            "название рекламного аккаунта",
+            "назва рекламного акаунта",
             "devise",
             "fuseau horaire",
             "currency",
             "time zone",
             "timezone",
+            "währung",
+            "zeitzone",
+            "валюта",
+            "часовой пояс",
+            "часовий пояс",
             "my business",
+            "my business portfolio",
+            "for my business",
             "mon entreprise",
+            "mon portefeuille business",
+            "pour mon entreprise",
             "mein unternehmen",
+            "für mein unternehmen",
             "мой бизнес",
+            "для моего бизнеса",
             "мій бізнес",
+            "для мого бізнесу",
+            "আমার ব্যবসা",
+            "আমার ব্যবসার জন্য",
+            "doanh nghiệp của tôi",
+            "dành cho doanh nghiệp của tôi",
+            "मेरा व्यवसाय",
+            "मेरे व्यवसाय के लिए",
         )
         if (
             dialog_text
