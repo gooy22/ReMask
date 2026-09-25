@@ -6600,10 +6600,28 @@ class FacebookBusinessBrowser:
 
                     const out = [];
                     const seen = new Set();
+                    const metaAIRoot = el => {
+                        const root = el.closest(
+                            '[role="dialog"],[aria-modal="true"]'
+                        );
+                        if (!root) return false;
+                        const rootText = clean(
+                            (root.getAttribute('aria-label') || '') + ' ' +
+                            (root.getAttribute('title') || '') + ' ' +
+                            (root.innerText || root.textContent || '')
+                        );
+                        return [
+                            'meta ai',
+                            'assistant business meta ai',
+                            'meta ai business assistant',
+                            'assistant meta ai'
+                        ].some(word => rootText.includes(word));
+                    };
                     for (const el of document.querySelectorAll(
                         'button,a,span,div,[role],[tabindex]'
                     )) {
                         if (!visible(el)) continue;
+                        if (metaAIRoot(el)) continue;
                         const r = el.getBoundingClientRect();
                         if (r.x < 280 || r.y < 35 || r.y > 795) continue;
                         const text = clean(
@@ -7089,6 +7107,19 @@ timeout_seconds=4.0,
 
                     const rows = [];
                     for (const root of popupRoots) {
+                        const rootText = clean(
+                            (root.getAttribute('aria-label') || '') + ' ' +
+                            (root.getAttribute('title') || '') + ' ' +
+                            (root.innerText || root.textContent || '')
+                        );
+                        if ([
+                            'meta ai',
+                            'assistant business meta ai',
+                            'meta ai business assistant',
+                            'assistant meta ai'
+                        ].some(word => rootText.includes(word))) {
+                            continue;
+                        }
                         for (const el of root.querySelectorAll(
                             'button,a,span,div,[role="button"],'
                             + '[role="menuitem"],[role="menuitemradio"],'
