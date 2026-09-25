@@ -227,6 +227,42 @@ class AdAccountCreateRequestMatcherTests(unittest.TestCase):
             )
         )
 
+    def test_graphql_get_transport_with_method_post_matches(self) -> None:
+        variables = {
+            "input": {
+                "businessID": "1056638030476027",
+                "name": "ReMask RK",
+                "currency": "USD",
+                "timezone_id": 137,
+            }
+        }
+        request = SimpleNamespace(
+            method="GET",
+            url=(
+                "https://graph.facebook.com/graphql?"
+                + urlencode(
+                    {
+                        "method": "post",
+                        "fb_api_req_friendly_name": (
+                            "BizKitSettingsCreateAdAccountMutation"
+                        ),
+                        "doc_id": "9236789956426634",
+                        "variables": json.dumps(variables),
+                    }
+                )
+            ),
+            headers={},
+            post_data="",
+            post_data_buffer=None,
+        )
+        self.assertTrue(
+            FacebookBusinessBrowser._request_matches_ad_account_create(
+                request,
+                business_id="1056638030476027",
+                account_name="ReMask RK",
+            )
+        )
+
 
 class AdAccountCreateResponseTests(unittest.TestCase):
     def test_numeric_id_is_canonicalized(self) -> None:
