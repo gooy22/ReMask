@@ -832,40 +832,48 @@ class BrowserAdAccountAddProbeTests(unittest.IsolatedAsyncioTestCase):
                 ["Créer un compte publicitaire"],
             ]
         )
-        browser._wait_for_ad_account_ui_transition = AsyncMock(
+        browser._wait_for_fresh_ad_account_create_candidate = AsyncMock(
             side_effect=[
-                {
-                    "state":"DIALOG",
-                    "signature":"popup-1",
-                    "url":"",
-                    "errors":[],
-                    "dialogs":["Unrelated popup"],
-                    "controls":[],
-                },
-                {
-                    "state":"CREATE_ENTRY",
-                    "signature":"popup-2",
-                    "url":"",
-                    "errors":[],
-                    "dialogs":["Créer un compte publicitaire"],
-                    "controls":["Créer un compte publicitaire"],
-                },
-                {
-                    "state":"FORM",
-                    "signature":"wizard",
-                    "url":"",
-                    "name_input":True,
-                    "form_evidence":True,
-                    "editable_form_control":True,
-                    "errors":[],
-                    "dialogs":[],
-                    "controls":[
-                        "Nom du compte publicitaire",
-                        "Devise",
-                        "Fuseau horaire",
-                    ],
-                },
+                (
+                    [],
+                    {
+                        "state":"DIALOG",
+                        "signature":"popup-1",
+                        "url":"",
+                        "errors":[],
+                        "dialogs":["Unrelated popup"],
+                        "controls":[],
+                    },
+                ),
+                (
+                    [],
+                    {
+                        "state":"CREATE_ENTRY",
+                        "signature":"popup-2",
+                        "url":"",
+                        "errors":[],
+                        "dialogs":["Créer un compte publicitaire"],
+                        "controls":["Créer un compte publicitaire"],
+                    },
+                ),
             ]
+        )
+        browser._wait_for_ad_account_ui_transition = AsyncMock(
+            return_value={
+                "state":"FORM",
+                "signature":"wizard",
+                "url":"",
+                "name_input":True,
+                "form_evidence":True,
+                "editable_form_control":True,
+                "errors":[],
+                "dialogs":[],
+                "controls":[
+                    "Nom du compte publicitaire",
+                    "Devise",
+                    "Fuseau horaire",
+                ],
+            }
         )
         browser._ad_account_popup_candidates = AsyncMock(
             side_effect=[
@@ -1603,28 +1611,36 @@ class BrowserAdAccountStateMachineTests(unittest.IsolatedAsyncioTestCase):
         browser._ad_account_right_pane_snapshot = AsyncMock(
             side_effect=[["Ajouter"], ["Nom du compte publicitaire"]]
         )
+        browser._wait_for_fresh_ad_account_create_candidate = AsyncMock(
+            return_value=(
+                [],
+                {
+                    "state":"FORM",
+                    "signature":"form",
+                    "url":"",
+                    "name_input": True,
+                    "form_evidence": True,
+                    "editable_form_control": True,
+                    "errors":[],
+                    "dialogs":[],
+                    "controls":[
+                        "Nom du compte publicitaire",
+                        "Devise",
+                        "Fuseau horaire",
+                    ],
+                },
+            )
+        )
         browser._wait_for_ad_account_ui_transition = AsyncMock(
-            return_value={
-                "state":"FORM",
-                "signature":"form",
-                "url":"",
-                "name_input": True,
-                "form_evidence": True,
-                "editable_form_control": True,
-                "errors":[],
-                "dialogs":[],
-                "controls":[
-                    "Nom du compte publicitaire",
-                    "Devise",
-                    "Fuseau horaire",
-                ],
-            }
+            side_effect=AssertionError(
+                "direct FORM path must not wait for another transition"
+            )
         )
 
         found, attempts = await browser._probe_ad_account_add_buttons()
 
         self.assertTrue(found)
-        self.assertTrue(attempts[0]["form_opened_directly"])
+        self.assertTrue(attempts[0]["form_opened_during_poll"])
         self.assertEqual(attempts[0]["ui_state_after"], "FORM")
 
 
@@ -1677,8 +1693,9 @@ class BrowserAdAccountStateMachineTests(unittest.IsolatedAsyncioTestCase):
         browser._ad_account_right_pane_snapshot = AsyncMock(
             side_effect=[["Ajouter"], ["Créer un compte publicitaire"]]
         )
-        browser._wait_for_ad_account_ui_transition = AsyncMock(
-            side_effect=[
+        browser._wait_for_fresh_ad_account_create_candidate = AsyncMock(
+            return_value=(
+                [],
                 {
                     "state":"CREATE_ENTRY",
                     "signature":"popup",
@@ -1687,22 +1704,24 @@ class BrowserAdAccountStateMachineTests(unittest.IsolatedAsyncioTestCase):
                     "dialogs":[],
                     "controls":["Créer un compte publicitaire"],
                 },
-                {
-                    "state":"FORM",
-                    "signature":"wizard",
-                    "url":"",
-                    "name_input":True,
-                    "form_evidence":True,
-                    "editable_form_control":True,
-                    "errors":[],
-                    "dialogs":[],
-                    "controls":[
-                        "Nom du compte publicitaire",
-                        "Devise",
-                        "Fuseau horaire",
-                    ],
-                },
-            ]
+            )
+        )
+        browser._wait_for_ad_account_ui_transition = AsyncMock(
+            return_value={
+                "state":"FORM",
+                "signature":"wizard",
+                "url":"",
+                "name_input":True,
+                "form_evidence":True,
+                "editable_form_control":True,
+                "errors":[],
+                "dialogs":[],
+                "controls":[
+                    "Nom du compte publicitaire",
+                    "Devise",
+                    "Fuseau horaire",
+                ],
+            }
         )
         browser._ad_account_popup_candidates = AsyncMock(
             return_value=[
