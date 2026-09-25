@@ -6431,17 +6431,42 @@ class FacebookBusinessBrowser:
             )
 
         if not entry_clicked:
-            entry_clicked = await self._click_named(
+            before_direct = await self._ad_account_ui_state()
+            direct_clicked = await self._click_named(
                 self.AD_ACCOUNT_CREATE_ENTRY_NAMES,
                 click_timeout_ms=2500,
             )
+            if direct_clicked:
+                direct_transition = await self._wait_for_ad_account_ui_transition(
+                    previous_signature=_clean(
+                        before_direct.get("signature")
+                    ),
+                    timeout_seconds=3.0,
+                    label="after_direct_create_named",
+                    require_signature_change=True,
+                )
+                entry_clicked = self._ad_account_create_form_confirmed(
+                    direct_transition
+                )
+
         if not entry_clicked:
-            entry_clicked = (
+            before_dom = await self._ad_account_ui_state()
+            dom_clicked = (
                 await self._click_ad_account_action_dom(
                     allow_generic_add=False
                 )
                 == "create"
             )
+            if dom_clicked:
+                dom_transition = await self._wait_for_ad_account_ui_transition(
+                    previous_signature=_clean(before_dom.get("signature")),
+                    timeout_seconds=3.0,
+                    label="after_direct_create_dom",
+                    require_signature_change=True,
+                )
+                entry_clicked = self._ad_account_create_form_confirmed(
+                    dom_transition
+                )
 
         self._mark_ad_account_phase("ADD_PROBE")
         add_clicked = False
