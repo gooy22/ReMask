@@ -969,6 +969,58 @@ class BrowserAdAccountAddProbeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rows[1]["y"], 97)
 
 
+class BrowserAdAccountFreshCreateEntryTests(unittest.TestCase):
+    def test_fresh_create_candidate_appearing_after_add_is_detected(self):
+        before = []
+        after = [
+            {
+                "probe_id":"0",
+                "text":"créer un compte publicitaire",
+                "x":760,
+                "y":520,
+                "w":240,
+                "h":36,
+                "tag":"DIV",
+                "role":"",
+            }
+        ]
+
+        fresh = FacebookBusinessBrowser._fresh_ad_account_create_candidates(
+            before,
+            after,
+        )
+
+        self.assertEqual(len(fresh), 1)
+        self.assertEqual(
+            fresh[0]["text"],
+            "créer un compte publicitaire",
+        )
+
+    def test_existing_create_candidate_is_not_treated_as_fresh(self):
+        before = [
+            {
+                "text":"créer un compte publicitaire",
+                "x":760,
+                "y":520,
+            }
+        ]
+        after = [
+            {
+                "probe_id":"0",
+                "text":"créer un compte publicitaire",
+                "x":764,
+                "y":524,
+            }
+        ]
+
+        fresh = FacebookBusinessBrowser._fresh_ad_account_create_candidates(
+            before,
+            after,
+        )
+
+        self.assertEqual(fresh, [])
+
+
 class BrowserAdAccountSubmitTransitionTests(unittest.IsolatedAsyncioTestCase):
     async def test_submit_transition_waits_for_signature_change(self):
         browser = FacebookBusinessBrowser(
