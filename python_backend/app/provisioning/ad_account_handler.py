@@ -50,6 +50,63 @@ def _known_pre_submit_navigation_failure(result: Any) -> bool:
     )
 
 
+def _known_pre_submit_usage_step_failure(result: Any) -> bool:
+    """Recognize the old false-uncertain state caused by Meta's usage-step Query.
+
+    Before the usage-step fix, ReMask treated the intermediate
+    BizKitSettingsCreateAdAccountUsageStepQuery as if the final CREATE might
+    have been submitted. That Query only advances the wizard; it is not the
+    ad-account CREATE mutation.
+    """
+    if not isinstance(result, dict):
+        return False
+
+    activity = _clean(result.get("activity")).upper()
+    diagnostic = result.get("browser_diagnostic")
+    if not isinstance(diagnostic, dict):
+        diagnostic = {}
+
+    stage = _clean(diagnostic.get("stage")).lower()
+    candidates = []
+    for source in (
+        result.get("graphql_candidates"),
+        diagnostic.get("graphql_candidates"),
+    ):
+        if isinstance(source, list):
+            candidates.extend(source)
+
+    saw_usage_query = False
+    saw_create_like = False
+    for row in candidates:
+        if not isinstance(row, dict):
+            continue
+        friendly = _clean(row.get("friendly_name")).casefold()
+        matched = bool(row.get("matched_create"))
+        if (
+            "createadaccountusagestep" in friendly
+            or "adaccountusagestep" in friendly
+        ) and "query" in friendly:
+            saw_usage_query = True
+        if matched or (
+            "createadaccount" in friendly
+            and "usagestep" not in friendly
+            and "query" not in friendly
+        ):
+            saw_create_like = True
+
+    return (
+        saw_usage_query
+        and not saw_create_like
+        and (
+            activity in {
+                "AD_ACCOUNT_FINAL_CLICK_UNMATCHED",
+                "AD_ACCOUNT_USAGE_STEP_OPENED",
+            }
+            or stage == "ad_account_final_click_unmatched"
+        )
+    )
+
+
 async def _reconcile_existing(
     session: Any,
     *,
@@ -315,6 +372,7 @@ async def ad_account_handler(
                 "RECONCILE_CREATE",
             }
             and not _known_pre_submit_navigation_failure(prior)
+            and not _known_pre_submit_usage_step_failure(prior)
         ):
             found_id, diagnostics = await _reconcile_existing(
                 session,
@@ -362,7 +420,10 @@ async def ad_account_handler(
             "CREATE_RESULT_UNKNOWN",
             "RECONCILE_CREATE",
         }
-        and _known_pre_submit_navigation_failure(checkpoint)
+        and (
+            _known_pre_submit_navigation_failure(checkpoint)
+            or _known_pre_submit_usage_step_failure(checkpoint)
+        )
     ):
         checkpoint = await provisioning_state.checkpoint(
             item_id,
@@ -373,7 +434,11 @@ async def ad_account_handler(
                 "phase": "CREATE_NOT_SUBMITTED",
                 "resume_from": "CREATE",
                 "business_id": business_id,
-                "last_error_code": "PRE_SUBMIT_NAVIGATION_TIMEOUT_RECOVERED",
+                "last_error_code": (
+                    "PRE_SUBMIT_USAGE_STEP_FALSE_UNCERTAIN_RECOVERED"
+                    if _known_pre_submit_usage_step_failure(checkpoint)
+                    else "PRE_SUBMIT_NAVIGATION_TIMEOUT_RECOVERED"
+                ),
                 "last_error": "",
             },
         )
