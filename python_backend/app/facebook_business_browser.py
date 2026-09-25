@@ -5534,6 +5534,109 @@ class FacebookBusinessBrowser:
             pass
         return []
 
+    async def _ad_account_label_control_probe(
+        self,
+    ) -> list[dict[str, Any]]:
+        """Safe live map of currency/timezone labels to nearby controls."""
+        if self.page is None:
+            return []
+        try:
+            rows = await self.page.evaluate(
+                """() => {
+                    const visible = el => {
+                        if (!el) return false;
+                        const r = el.getBoundingClientRect();
+                        const s = getComputedStyle(el);
+                        return r.width > 0 && r.height > 0
+                            && s.display !== 'none'
+                            && s.visibility !== 'hidden';
+                    };
+                    const clean = text => (text || '')
+                        .normalize('NFKC')
+                        .replace(/\u00a0/g, ' ')
+                        .replace(/\s+/g, ' ')
+                        .trim();
+                    const targets = [
+                        'Currency','Devise','Währung','Валюта','মুদ্রা',
+                        'Tiền tệ','मुद्रा','Time zone','Timezone',
+                        'Fuseau horaire','Zeitzone','Часовой пояс',
+                        'Часовий пояс','সময় অঞ্চল','Múi giờ','समय क्षेत्र'
+                    ].map(x => x.toLowerCase());
+                    const labels = [...document.querySelectorAll(
+                        'label,span,div,p,h1,h2,h3'
+                    )].filter(el => {
+                        if (!visible(el)) return false;
+                        const r = el.getBoundingClientRect();
+                        if (r.x < 280 || r.y < 35 || r.y > 795) return false;
+                        const text = clean(el.innerText || el.textContent || '');
+                        if (!text || text.length > 180) return false;
+                        const low = text.toLowerCase();
+                        return targets.some(
+                            t => low === t || low.startsWith(t + ' ')
+                                || low.includes(t)
+                        );
+                    });
+                    const controls = [...document.querySelectorAll(
+                        'input,select,button,[role="button"],[role="combobox"],'
+                        + '[tabindex]:not([tabindex="-1"])'
+                    )].filter(visible);
+
+                    const out = [];
+                    for (const label of labels.slice(0, 20)) {
+                        const lr = label.getBoundingClientRect();
+                        const nearby = [];
+                        for (const control of controls) {
+                            const r = control.getBoundingClientRect();
+                            if (r.x < 280 || r.y < 35 || r.y > 795) continue;
+                            const dy = Math.abs(r.y - lr.y);
+                            const dx = Math.abs(r.x - lr.x);
+                            if (dy > 140 || dx > 650) continue;
+                            nearby.push({
+                                text: clean(
+                                    (control.getAttribute('aria-label') || '')
+                                    + ' '
+                                    + (control.getAttribute('title') || '')
+                                    + ' '
+                                    + (control.innerText || control.textContent || '')
+                                ).slice(0, 180),
+                                value: (
+                                    typeof control.value === 'string'
+                                        ? clean(control.value).slice(0, 120)
+                                        : ''
+                                ),
+                                tag: control.tagName || '',
+                                role: control.getAttribute('role') || '',
+                                haspopup: control.getAttribute('aria-haspopup') || '',
+                                expanded: control.getAttribute('aria-expanded') || '',
+                                disabled: (
+                                    control.hasAttribute('disabled')
+                                    || control.getAttribute('aria-disabled') === 'true'
+                                ),
+                                x: Math.round(r.x),
+                                y: Math.round(r.y),
+                                w: Math.round(r.width),
+                                h: Math.round(r.height),
+                                dx: Math.round(dx),
+                                dy: Math.round(dy)
+                            });
+                        }
+                        nearby.sort((a,b) => a.dy - b.dy || a.dx - b.dx);
+                        out.push({
+                            label: clean(label.innerText || label.textContent || '').slice(0,180),
+                            x: Math.round(lr.x),
+                            y: Math.round(lr.y),
+                            nearby: nearby.slice(0,12)
+                        });
+                    }
+                    return out;
+                }"""
+            )
+            if isinstance(rows, list):
+                return [row for row in rows[:20] if isinstance(row, dict)]
+        except Exception:
+            pass
+        return []
+
     async def verify_ad_account_inventory_empty(
         self,
         *,
@@ -8417,6 +8520,7 @@ timeout_seconds=4.0,
                     "graphql_candidates": graphql_candidates[-12:],
                     "form_candidates": await self._ad_account_form_candidates(),
                     "form_probe": await self._ad_account_form_candidates(),
+                    "label_control_probe": await self._ad_account_label_control_probe(),
                     "ui_state": await self._ad_account_ui_state(),
                     "ui_trace": self._ad_account_ui_trace[-16:],
                 }
@@ -8427,7 +8531,7 @@ timeout_seconds=4.0,
                     import logging
                     logging.getLogger("remask_worker").warning(
                         "[ad-account-submit-missing] profile=%s business=%s "
-                        "form_setup=%s form_candidates=%s submit_controls=%s",
+                        "form_setup=%s form_candidates=%s label_control_probe=%s submit_controls=%s",
                         self.profile_id,
                         business,
                         json.dumps(
@@ -8437,6 +8541,11 @@ timeout_seconds=4.0,
                         ),
                         json.dumps(
                             diag.get("form_candidates") or [],
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ),
+                        json.dumps(
+                            diag.get("label_control_probe") or [],
                             ensure_ascii=False,
                             separators=(",", ":"),
                         ),
