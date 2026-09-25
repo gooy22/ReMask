@@ -1245,6 +1245,108 @@ class BrowserAdAccountStateMachineTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(attempts[0]["form_opened_directly"])
         self.assertEqual(attempts[0]["ui_state_after"], "FORM")
 
+
+    async def test_add_probe_uses_popup_scoped_create_only(self):
+        class _Item:
+            async def is_visible(self):
+                return True
+            async def is_enabled(self):
+                return True
+            async def scroll_into_view_if_needed(self, **kwargs):
+                return None
+            async def click(self, **kwargs):
+                return None
+
+        class _Locator:
+            first = _Item()
+            async def count(self):
+                return 1
+
+        class _Keyboard:
+            async def press(self, key):
+                return None
+
+        class _Page:
+            keyboard = _Keyboard()
+            def locator(self, selector):
+                return _Locator()
+            async def wait_for_timeout(self, ms):
+                return None
+
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-rk-popup-only")
+        )
+        browser.page = _Page()
+        browser._ad_account_add_button_candidates = AsyncMock(
+            side_effect=[
+                [{"probe_id":"0","text":"Ajouter","x":745,"y":631}],
+            ]
+        )
+        browser._ad_account_ui_state = AsyncMock(
+            return_value={
+                "state":"ADD_SURFACE",
+                "signature":"before",
+                "url":"",
+                "errors":[],
+                "dialogs":[],
+                "controls":[],
+            }
+        )
+        browser._ad_account_right_pane_snapshot = AsyncMock(
+            side_effect=[["Ajouter"], ["Créer un compte publicitaire"]]
+        )
+        browser._wait_for_ad_account_ui_transition = AsyncMock(
+            side_effect=[
+                {
+                    "state":"CREATE_ENTRY",
+                    "signature":"popup",
+                    "url":"",
+                    "errors":[],
+                    "dialogs":[],
+                    "controls":["Créer un compte publicitaire"],
+                },
+                {
+                    "state":"FORM",
+                    "signature":"wizard",
+                    "url":"",
+                    "name_input":True,
+                    "form_evidence":True,
+                    "editable_form_control":True,
+                    "errors":[],
+                    "dialogs":[],
+                    "controls":[
+                        "Nom du compte publicitaire",
+                        "Devise",
+                        "Fuseau horaire",
+                    ],
+                },
+            ]
+        )
+        browser._ad_account_popup_candidates = AsyncMock(
+            return_value=[
+                "Créer un compte publicitaire [tag=DIV role=menuitem]"
+            ]
+        )
+        browser._click_ad_account_create_entry_in_popup = AsyncMock(
+            return_value={
+                "clicked":True,
+                "popup_count":1,
+                "text":"Créer un compte publicitaire",
+            }
+        )
+        browser._wait_for_ad_account_create_entry = AsyncMock(
+            side_effect=AssertionError(
+                "global create-entry search must not be used after Add"
+            )
+        )
+
+        found, attempts = await browser._probe_ad_account_add_buttons()
+
+        self.assertTrue(found)
+        self.assertTrue(attempts[0]["create_entry_found"])
+        self.assertTrue(attempts[0]["popup_create"]["clicked"])
+        browser._wait_for_ad_account_create_entry.assert_not_awaited()
+
     def test_ui_trace_is_bounded(self):
         browser = FacebookBusinessBrowser(
             SimpleNamespace(profile_id="profile-rk-trace")
