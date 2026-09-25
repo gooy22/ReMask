@@ -969,6 +969,140 @@ class BrowserAdAccountAddProbeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rows[1]["y"], 97)
 
 
+class BrowserAdAccountLiveAddSequenceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_add_to_fresh_create_to_form_sequence(self):
+        class _Item:
+            async def is_visible(self):
+                return True
+            async def is_enabled(self):
+                return True
+            async def scroll_into_view_if_needed(self, **kwargs):
+                return None
+            async def click(self, **kwargs):
+                return None
+
+        class _Locator:
+            first = _Item()
+            async def count(self):
+                return 1
+
+        class _Keyboard:
+            async def press(self, key):
+                return None
+
+        class _Page:
+            keyboard = _Keyboard()
+            def locator(self, selector):
+                return _Locator()
+            async def wait_for_timeout(self, ms):
+                return None
+
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-rk-live-add-sequence")
+        )
+        browser.page = _Page()
+        browser._ad_account_add_button_candidates = AsyncMock(
+            return_value=[
+                {
+                    "probe_id":"0",
+                    "text":"Ajouter",
+                    "x":745,
+                    "y":631,
+                    "w":103,
+                    "h":36,
+                    "tag":"DIV",
+                    "role":"button",
+                }
+            ]
+        )
+        browser._ad_account_ui_state = AsyncMock(
+            return_value={
+                "state":"ADD_SURFACE",
+                "signature":"add-surface",
+                "url":"",
+                "errors":[],
+                "dialogs":[],
+                "controls":["Ajouter"],
+                "name_input":False,
+                "editable_form_control":False,
+            }
+        )
+        browser._ad_account_right_pane_snapshot = AsyncMock(
+            side_effect=[
+                ["Ajouter"],
+                ["Ajouter", "Créer un compte publicitaire"],
+            ]
+        )
+        browser._ad_account_visible_create_candidates = AsyncMock(
+            return_value=[]
+        )
+        browser._wait_for_fresh_ad_account_create_candidate = AsyncMock(
+            return_value=(
+                [
+                    {
+                        "probe_id":"0",
+                        "text":"créer un compte publicitaire",
+                        "x":760,
+                        "y":520,
+                        "tag":"DIV",
+                        "role":"",
+                    }
+                ],
+                {
+                    "state":"CREATE_ENTRY",
+                    "signature":"create-entry",
+                    "url":"",
+                    "errors":[],
+                    "dialogs":[],
+                    "controls":["Créer un compte publicitaire"],
+                    "name_input":False,
+                    "editable_form_control":False,
+                },
+            )
+        )
+        browser._click_fresh_ad_account_create_candidate = AsyncMock(
+            return_value={
+                "clicked":True,
+                "text":"créer un compte publicitaire",
+                "x":760,
+                "y":520,
+                "tag":"DIV",
+                "role":"",
+            }
+        )
+        browser._wait_for_ad_account_ui_transition = AsyncMock(
+            return_value={
+                "state":"FORM",
+                "signature":"wizard-form",
+                "url":"",
+                "name_input":True,
+                "form_evidence":True,
+                "editable_form_control":True,
+                "errors":[],
+                "dialogs":[],
+                "controls":[
+                    "Nom du compte publicitaire",
+                    "Devise",
+                    "Fuseau horaire",
+                ],
+            }
+        )
+        browser._ad_account_popup_candidates = AsyncMock(return_value=[])
+        browser._click_ad_account_create_entry_in_popup = AsyncMock(
+            return_value={"clicked":False}
+        )
+
+        found, attempts = await browser._probe_ad_account_add_buttons()
+
+        self.assertTrue(found)
+        self.assertTrue(attempts[0]["clicked"])
+        self.assertTrue(attempts[0]["fresh_create"]["clicked"])
+        self.assertTrue(attempts[0]["create_entry_found"])
+        browser._wait_for_fresh_ad_account_create_candidate.assert_awaited_once()
+        browser._click_fresh_ad_account_create_candidate.assert_awaited_once()
+        browser._wait_for_ad_account_ui_transition.assert_awaited_once()
+
+
 class BrowserAdAccountImmediatePostAddOrderTests(unittest.TestCase):
     def test_add_flow_polls_fresh_create_before_coarse_transition_wait(self):
         source = inspect.getsource(
