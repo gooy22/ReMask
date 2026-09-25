@@ -969,6 +969,75 @@ class BrowserAdAccountAddProbeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rows[1]["y"], 97)
 
 
+class BrowserAdAccountFreshCreatePollingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_waits_for_create_entry_that_appears_after_add(self):
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-rk-delayed-create")
+        )
+        browser.page = SimpleNamespace(
+            wait_for_timeout=AsyncMock(return_value=None),
+        )
+        browser._ad_account_ui_state = AsyncMock(
+            side_effect=[
+                {
+                    "state":"UNKNOWN",
+                    "signature":"s1",
+                    "name_input":False,
+                    "editable_form_control":False,
+                    "controls":[],
+                    "dialogs":[],
+                },
+                {
+                    "state":"UNKNOWN",
+                    "signature":"s2",
+                    "name_input":False,
+                    "editable_form_control":False,
+                    "controls":[],
+                    "dialogs":[],
+                },
+                {
+                    "state":"UNKNOWN",
+                    "signature":"s3",
+                    "name_input":False,
+                    "editable_form_control":False,
+                    "controls":[],
+                    "dialogs":[],
+                },
+            ]
+        )
+        browser._ad_account_visible_create_candidates = AsyncMock(
+            side_effect=[
+                [],
+                [],
+                [
+                    {
+                        "probe_id":"0",
+                        "text":"créer un compte publicitaire",
+                        "x":760,
+                        "y":520,
+                    }
+                ],
+            ]
+        )
+
+        fresh, state = (
+            await browser._wait_for_fresh_ad_account_create_candidate(
+                before=[],
+                timeout_seconds=3.5,
+            )
+        )
+
+        self.assertEqual(len(fresh), 1)
+        self.assertEqual(
+            fresh[0]["text"],
+            "créer un compte publicitaire",
+        )
+        self.assertEqual(
+            browser._ad_account_visible_create_candidates.await_count,
+            3,
+        )
+
+
 class BrowserAdAccountFreshCreateEntryTests(unittest.TestCase):
     def test_fresh_create_candidate_appearing_after_add_is_detected(self):
         before = []
