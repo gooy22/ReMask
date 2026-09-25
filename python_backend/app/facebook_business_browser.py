@@ -6572,43 +6572,10 @@ class FacebookBusinessBrowser:
                 await item.click(timeout=2500)
                 attempt["clicked"] = True
 
-                transition = await self._wait_for_ad_account_ui_transition(
-                    previous_signature=_clean(
-                        before_state.get("signature")
-                    ),
-                    timeout_seconds=4.0,
-                    label=(
-                        "after_add_"
-                        + str(int(row.get("x") or 0))
-                        + "_"
-                        + str(int(row.get("y") or 0))
-                    ),
-                )
-                attempt["ui_state_after"] = _clean(
-                    transition.get("state")
-                ).upper()
-                attempt["ui_errors"] = list(
-                    transition.get("errors") or []
-                )[:3]
-
-                after_snapshot = await self._ad_account_right_pane_snapshot()
-                attempt["new_right_pane"] = [
-                    row
-                    for row in after_snapshot
-                    if row not in before_snapshot
-                ][:20]
-
-                if self._ad_account_create_form_confirmed(transition):
-                    attempt["form_opened_directly"] = True
-                    attempt["create_entry_found"] = True
-                    attempts.append(attempt)
-                    return True, attempts
-
-                if attempt["ui_state_after"] == "BLOCKED":
-                    attempt["blocked"] = True
-                    attempts.append(attempt)
-                    return False, attempts
-
+                # IMPORTANT: Meta renders the Add menu through an async React
+                # portal. Observe it immediately after the click. Waiting for
+                # the coarse page state first can miss the transient/fresh
+                # Create-RK entry entirely.
                 (
                     fresh_create_candidates,
                     post_add_poll_state,
@@ -6622,6 +6589,19 @@ class FacebookBusinessBrowser:
                 attempt["post_add_poll_signature"] = _clean(
                     post_add_poll_state.get("signature")
                 )[:700]
+                attempt["ui_state_after"] = _clean(
+                    post_add_poll_state.get("state")
+                ).upper()
+                attempt["ui_errors"] = list(
+                    post_add_poll_state.get("errors") or []
+                )[:3]
+
+                after_snapshot = await self._ad_account_right_pane_snapshot()
+                attempt["new_right_pane"] = [
+                    snapshot_row
+                    for snapshot_row in after_snapshot
+                    if snapshot_row not in before_snapshot
+                ][:20]
 
                 if self._ad_account_create_form_confirmed(
                     post_add_poll_state
@@ -6630,6 +6610,11 @@ class FacebookBusinessBrowser:
                     attempt["create_entry_found"] = True
                     attempts.append(attempt)
                     return True, attempts
+
+                if attempt["ui_state_after"] == "BLOCKED":
+                    attempt["blocked"] = True
+                    attempts.append(attempt)
+                    return False, attempts
                 attempt["fresh_create_candidates"] = [
                     {
                         "text": _clean(candidate.get("text"))[:180],
@@ -6654,7 +6639,7 @@ class FacebookBusinessBrowser:
                     fresh_transition = (
                         await self._wait_for_ad_account_ui_transition(
                             previous_signature=_clean(
-                                transition.get("signature")
+                                post_add_poll_state.get("signature")
                             ),
                             timeout_seconds=4.0,
                             label="after_fresh_create_entry",
