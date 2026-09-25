@@ -4798,6 +4798,153 @@ class FacebookBusinessBrowser:
                 continue
         return locator, rows[:100]
 
+    async def _ad_account_field_control_by_nearby_label(
+        self,
+        labels: tuple[str, ...],
+    ) -> Any | None:
+        """Find a dropdown control in the same compact field row as a label."""
+        if self.page is None:
+            return None
+
+        folded_labels = [
+            _clean(label).casefold()
+            for label in labels
+            if _clean(label)
+        ]
+        if not folded_labels:
+            return None
+
+        try:
+            result = await self.page.evaluate(
+                """(labels) => {
+                    const visible = el => {
+                        if (!el) return false;
+                        const r = el.getBoundingClientRect();
+                        const s = getComputedStyle(el);
+                        return r.width > 0 && r.height > 0
+                            && s.display !== 'none'
+                            && s.visibility !== 'hidden';
+                    };
+                    const clean = text => (text || '')
+                        .normalize('NFKC')
+                        .replace(/\u00a0/g, ' ')
+                        .replace(/\s+/g, ' ')
+                        .trim()
+                        .toLowerCase();
+
+                    for (const el of document.querySelectorAll(
+                        '[data-remask-rk-field-probe]'
+                    )) {
+                        el.removeAttribute('data-remask-rk-field-probe');
+                    }
+
+                    const labelNodes = [...document.querySelectorAll(
+                        'label,span,div,p,h1,h2,h3'
+                    )].filter(el => {
+                        if (!visible(el)) return false;
+                        const r = el.getBoundingClientRect();
+                        if (r.x < 280 || r.y < 35 || r.y > 795) return false;
+                        const text = clean(el.innerText || el.textContent || '');
+                        if (!text || text.length > 160) return false;
+                        return labels.some(
+                            label => text === label
+                                || text.startsWith(label + ' ')
+                                || text.includes(label)
+                        );
+                    });
+
+                    const controlSelector = [
+                        'select',
+                        '[role="combobox"]',
+                        'button[aria-haspopup]',
+                        '[role="button"][aria-haspopup]',
+                        'button[aria-expanded]',
+                        '[role="button"][aria-expanded]'
+                    ].join(',');
+
+                    const candidates = [];
+                    for (const labelNode of labelNodes) {
+                        let root = labelNode;
+                        for (let depth = 0; depth < 6 && root; depth++) {
+                            const controls = [...root.querySelectorAll(
+                                controlSelector
+                            )].filter(visible);
+                            if (controls.length) {
+                                for (const control of controls) {
+                                    const r = control.getBoundingClientRect();
+                                    if (r.x < 280 || r.y < 35 || r.y > 795) {
+                                        continue;
+                                    }
+                                    const text = clean(
+                                        (control.getAttribute('aria-label') || '')
+                                        + ' '
+                                        + (control.getAttribute('title') || '')
+                                        + ' '
+                                        + (control.innerText || control.textContent || '')
+                                    );
+                                    candidates.push({
+                                        el: control,
+                                        x: Math.round(r.x),
+                                        y: Math.round(r.y),
+                                        label_y: Math.round(
+                                            labelNode.getBoundingClientRect().y
+                                        ),
+                                        text,
+                                        tag: control.tagName || '',
+                                        role: control.getAttribute('role') || ''
+                                    });
+                                }
+                                break;
+                            }
+                            root = root.parentElement;
+                        }
+                    }
+
+                    candidates.sort((a, b) => {
+                        const ad = Math.abs(a.y - a.label_y);
+                        const bd = Math.abs(b.y - b.label_y);
+                        if (ad !== bd) return ad - bd;
+                        if (a.tag === 'SELECT' && b.tag !== 'SELECT') return -1;
+                        if (b.tag === 'SELECT' && a.tag !== 'SELECT') return 1;
+                        return a.x - b.x;
+                    });
+
+                    const best = candidates[0];
+                    if (!best) return null;
+                    best.el.setAttribute(
+                        'data-remask-rk-field-probe',
+                        '1'
+                    );
+                    return {
+                        found:true,
+                        x:best.x,
+                        y:best.y,
+                        text:best.text,
+                        tag:best.tag,
+                        role:best.role
+                    };
+                }""",
+                folded_labels,
+            )
+        except Exception:
+            return None
+
+        if not isinstance(result, dict) or not result.get("found"):
+            return None
+
+        try:
+            locator = self.page.locator(
+                '[data-remask-rk-field-probe="1"]'
+            )
+            if await locator.count():
+                item = locator.first
+                if await item.is_visible():
+                    return item
+        except Exception:
+            pass
+
+        return None
+
     async def _select_ad_account_form_field(
         self,
         *,
@@ -4867,6 +5014,15 @@ class FacebookBusinessBrowser:
                                     controls.append(item)
                             except Exception:
                                 continue
+
+        if not controls:
+            nearby_control = (
+                await self._ad_account_field_control_by_nearby_label(
+                    labels
+                )
+            )
+            if nearby_control is not None:
+                controls.append(nearby_control)
 
         if not controls:
             return {
