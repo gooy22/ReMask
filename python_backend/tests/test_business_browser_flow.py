@@ -1502,6 +1502,20 @@ class BrowserAdAccountFinalLabelMatchingTests(unittest.TestCase):
         self.assertNotIn('" ".join(', source)
 
 
+class BrowserAdAccountUiStateDialogGuardTests(unittest.TestCase):
+    def test_ui_state_dialog_form_evidence_requires_wizard_marker(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser._ad_account_ui_state
+        )
+        self.assertIn("const dialogHasWizardMarker =", source)
+        self.assertIn("dialogHasWizardMarker", source)
+        self.assertIn("dialogHasFormControl", source)
+        self.assertIn(
+            "dialogHasWizardMarker\n                        && dialogHasFormControl",
+            source,
+        )
+
+
 class BrowserAdAccountDialogClassificationRegressionTests(unittest.TestCase):
     def test_meta_ai_dialog_does_not_confirm_rk_form(self):
         state = {
