@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Any
 
 from fb_worker import AuthenticationError, ProxyError, RemoteRequestError
