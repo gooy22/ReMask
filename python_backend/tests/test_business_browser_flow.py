@@ -1111,6 +1111,23 @@ class BrowserAdAccountLiveAddSequenceTests(unittest.IsolatedAsyncioTestCase):
         browser._wait_for_ad_account_ui_transition.assert_awaited_once()
 
 
+class BrowserAdAccountPopupTransitionRegressionTests(unittest.TestCase):
+    def test_popup_transition_uses_post_add_poll_state_signature(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser._probe_ad_account_add_buttons
+        )
+        popup_pos = source.index('label="after_popup_create_entry"')
+        before = source[max(0, popup_pos - 260):popup_pos]
+        self.assertIn(
+            'post_add_poll_state.get("signature")',
+            before,
+        )
+        self.assertNotIn(
+            'transition.get("signature")',
+            before,
+        )
+
+
 class BrowserAdAccountImmediatePostAddOrderTests(unittest.TestCase):
     def test_add_flow_polls_fresh_create_before_coarse_transition_wait(self):
         source = inspect.getsource(
