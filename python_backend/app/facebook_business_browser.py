@@ -4932,6 +4932,67 @@ class FacebookBusinessBrowser:
                         }
                     }
 
+                    // React can render the label and value control as
+                    // siblings whose nearest useful common ancestor is deeper
+                    // than the bounded climb above. If no ancestry candidate
+                    // survived, perform one geometry-only scan over the right
+                    // form pane. This remains conservative: same visual row,
+                    // substantial control, and never the final Create action.
+                    if (!candidates.length) {
+                        const allControls = [...document.querySelectorAll(
+                            controlSelector
+                        )].filter(visible);
+                        const finalWords = [
+                            'create','créer','создать','створити','erstellen',
+                            'তৈরি করুন','tạo','बनाएँ','बनाएं'
+                        ];
+                        for (const labelNode of labelNodes) {
+                            const lr = labelNode.getBoundingClientRect();
+                            for (const control of allControls) {
+                                const r = control.getBoundingClientRect();
+                                if (r.x < 280 || r.y < 35 || r.y > 795) continue;
+                                const text = clean(
+                                    (control.getAttribute('aria-label') || '')
+                                    + ' '
+                                    + (control.getAttribute('title') || '')
+                                    + ' '
+                                    + (control.innerText || control.textContent || '')
+                                );
+                                if (
+                                    finalWords.some(word => text === word)
+                                    || text.includes('compte publicitaire')
+                                    || text.includes('ad account')
+                                ) {
+                                    continue;
+                                }
+                                const sameRow = Math.abs(r.y - lr.y) <= 90;
+                                const samePane = Math.abs(r.x - lr.x) <= 520;
+                                const substantial = r.width >= 90 && r.height >= 24;
+                                if (!sameRow || !samePane || !substantial) continue;
+                                const generic = !(
+                                    control.tagName === 'SELECT'
+                                    || control.getAttribute('role') === 'combobox'
+                                    || control.hasAttribute('aria-haspopup')
+                                    || control.hasAttribute('aria-expanded')
+                                );
+                                candidates.push({
+                                    el: control,
+                                    x: Math.round(r.x),
+                                    y: Math.round(r.y),
+                                    w: Math.round(r.width),
+                                    h: Math.round(r.height),
+                                    label_x: Math.round(lr.x),
+                                    label_y: Math.round(lr.y),
+                                    text,
+                                    tag: control.tagName || '',
+                                    role: control.getAttribute('role') || '',
+                                    generic,
+                                    geometry_fallback: true
+                                });
+                            }
+                        }
+                    }
+
                     candidates.sort((a, b) => {
                         const ad = Math.abs(a.y - a.label_y);
                         const bd = Math.abs(b.y - b.label_y);
