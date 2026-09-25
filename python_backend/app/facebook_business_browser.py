@@ -4316,12 +4316,13 @@ class FacebookBusinessBrowser:
                         }
                         if (!match) continue;
 
-                        const clickable = el.closest(
+                        const clickableAncestor = el.closest(
                             'button,a,[role="button"],[role="radio"],'
                             + '[role="option"],[role="menuitem"],'
                             + '[role="menuitemradio"],'
                             + '[tabindex]:not([tabindex="-1"])'
-                        ) || el;
+                        );
+                        const clickable = clickableAncestor || el;
                         if (!visible(clickable)) continue;
                         if (
                             clickable.hasAttribute('disabled')
@@ -4340,6 +4341,14 @@ class FacebookBusinessBrowser:
                                 .includes(role)
                             || (tabindex !== null && tabindex !== '-1')
                         );
+
+                        // Final CREATE must be a real interactive control.
+                        // Never treat a plain text DIV/SPAN as a successful
+                        // submit click; that produces a false "clicked" state
+                        // with no network mutation.
+                        if (mode === 'final' && !interactive) {
+                            continue;
+                        }
                         let score = Math.round(cr.y);
                         if (!interactive) score += 500;
                         if (clickable !== el) score -= 80;
