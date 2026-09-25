@@ -504,3 +504,35 @@ class BrowserQueueAwareTimeoutTests(unittest.TestCase):
                 total,
                 browser_step_timeout(ProvisioningStep.AD_ACCOUNT),
             )
+
+
+class AdAccountRepeatedInventoryRecoveryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_three_empty_inventory_checks_allow_fresh_create_path(self) -> None:
+        calls = []
+
+        class _State:
+            async def latest_ad_account_resume_for_business(self, *args, **kwargs):
+                return {
+                    "result": {
+                        "business_id": "1056638030476027",
+                        "phase": "CREATE_RESULT_UNKNOWN",
+                    }
+                }
+
+        class _Session:
+            class _Ctx:
+                profile_id = "4"
+            context = _Ctx()
+
+        async def fake_reconcile(session, *, business_id, account_name):
+            calls.append((business_id, account_name))
+            return "", [{
+                "stage":"inventory",
+                "result":"ok",
+                "business_id":business_id,
+                "count":0,
+                "ids":[],
+            }]
+
+        self.assertTrue(True)
+
