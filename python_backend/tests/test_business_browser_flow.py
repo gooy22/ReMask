@@ -969,6 +969,25 @@ class BrowserAdAccountAddProbeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rows[1]["y"], 97)
 
 
+class BrowserAdAccountImmediatePostAddOrderTests(unittest.TestCase):
+    def test_add_flow_polls_fresh_create_before_coarse_transition_wait(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser._probe_ad_account_add_buttons
+        )
+        click_pos = source.index("await item.click(timeout=2500)")
+        poll_pos = source.index(
+            "_wait_for_fresh_ad_account_create_candidate",
+            click_pos,
+        )
+        transition_pos = source.find(
+            "_wait_for_ad_account_ui_transition",
+            click_pos,
+        )
+        self.assertGreater(poll_pos, click_pos)
+        if transition_pos != -1:
+            self.assertLess(poll_pos, transition_pos)
+
+
 class BrowserAdAccountFreshCreatePollingTests(unittest.IsolatedAsyncioTestCase):
     async def test_waits_for_create_entry_that_appears_after_add(self):
         browser = FacebookBusinessBrowser(
