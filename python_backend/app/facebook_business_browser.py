@@ -7096,6 +7096,85 @@ class FacebookBusinessBrowser:
         gate_future: asyncio.Future[bool] = loop.create_future()
         response_future: asyncio.Future[Any] = loop.create_future()
         graphql_candidates: list[dict[str, Any]] = []
+        network_candidates: list[dict[str, Any]] = []
+
+        def observe_request(request: Any) -> None:
+            try:
+                raw_url = _clean(getattr(request, "url", ""))
+                parts = urlsplit(raw_url)
+                host = _clean(parts.hostname).lower()
+                if not (
+                    host.endswith("facebook.com")
+                    or host.endswith("fbcdn.net")
+                ):
+                    return
+
+                method = _clean(getattr(request, "method", "")).upper()
+                if method not in {"GET", "POST", "PUT", "PATCH", "DELETE"}:
+                    return
+
+                query = parse_qs(parts.query, keep_blank_values=True)
+                post_raw = _clean(getattr(request, "post_data", ""))
+                post = parse_qs(post_raw, keep_blank_values=True) if post_raw else {}
+
+                merged_keys = sorted(
+                    {
+                        str(key)
+                        for key in list(query.keys()) + list(post.keys())
+                        if key
+                    }
+                )[:40]
+
+                friendly = _clean(
+                    (post.get("fb_api_req_friendly_name") or
+                     query.get("fb_api_req_friendly_name") or [""])[0]
+                )
+                doc_id = _clean(
+                    (post.get("doc_id") or query.get("doc_id") or [""])[0]
+                )
+                effective = method
+                transport_method = _clean(
+                    (post.get("method") or query.get("method") or [""])[0]
+                ).upper()
+                if method == "GET" and transport_method == "POST":
+                    effective = "POST"
+
+                row = {
+                    "host": host[:120],
+                    "path": _clean(parts.path)[:240],
+                    "browser_method": method,
+                    "effective_method": effective,
+                    "friendly_name": friendly[:180],
+                    "doc_id": doc_id[:80],
+                    "param_keys": merged_keys,
+                }
+                key = (
+                    row["host"],
+                    row["path"],
+                    row["browser_method"],
+                    row["effective_method"],
+                    row["friendly_name"],
+                    row["doc_id"],
+                    tuple(row["param_keys"]),
+                )
+                if any(
+                    (
+                        old.get("host"),
+                        old.get("path"),
+                        old.get("browser_method"),
+                        old.get("effective_method"),
+                        old.get("friendly_name"),
+                        old.get("doc_id"),
+                        tuple(old.get("param_keys") or []),
+                    ) == key
+                    for old in network_candidates
+                ):
+                    return
+                network_candidates.append(row)
+                if len(network_candidates) > 40:
+                    del network_candidates[:-40]
+            except Exception:
+                return
 
         async def gate(route: Any, request: Any) -> None:
             request_meta = _request_graphql_meta(request)
@@ -7218,6 +7297,7 @@ class FacebookBusinessBrowser:
                 response_future.set_result(response)
 
         await self.page.route("**/*graphql*", gate)
+        self.page.on("request", observe_request)
         self.page.on("response", observe_response)
 
         next_names = (
@@ -7467,6 +7547,7 @@ class FacebookBusinessBrowser:
                             "stage": "ad_account_final_click_exception",
                             "final_meta": final_meta,
                             "graphql_candidates": graphql_candidates[-12:],
+                            "network_candidates": network_candidates[-24:],
                             "submit_attempts": submit_attempts[-12:],
                         },
                     )
@@ -7596,6 +7677,7 @@ class FacebookBusinessBrowser:
                             "activity": "AD_ACCOUNT_FINAL_CLICK_UNMATCHED",
                             "activity_at": int(time.time()),
                             "graphql_candidates": new_network_candidates[-8:],
+                            "network_candidates": network_candidates[-24:],
                         }
                     )
                     raise BrowserBusinessError(
@@ -7611,6 +7693,7 @@ class FacebookBusinessBrowser:
                             "final_meta": final_meta,
                             "state_after": transition,
                             "graphql_candidates": graphql_candidates[-12:],
+                            "network_candidates": network_candidates[-24:],
                             "submit_attempts": submit_attempts[-12:],
                         },
                     )
@@ -7800,6 +7883,10 @@ class FacebookBusinessBrowser:
                 gate_future.cancel()
             if not response_future.done():
                 response_future.cancel()
+            try:
+                self.page.remove_listener("request", observe_request)
+            except Exception:
+                pass
             try:
                 self.page.remove_listener("response", observe_response)
             except Exception:
