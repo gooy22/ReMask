@@ -313,6 +313,36 @@ class ProvisioningStateStore:
             if not confirmed and phase not in uncertain:
                 continue
 
+            # Skip derivative duplicate-guard failures that never interacted
+            # with Meta. Otherwise a guard-only Job becomes the newest
+            # uncertain row and hides the original browser diagnostic that
+            # actually tells us whether CREATE may have been sent.
+            error_code = str(row["error_code"] or "").strip()
+            error_message = str(row["error_message"] or "").strip()
+            browser_diagnostic = (
+                result.get("browser_diagnostic")
+                if isinstance(result.get("browser_diagnostic"), dict)
+                else {}
+            )
+            activity = str(result.get("activity") or "").strip().upper()
+            guard_only = (
+                not confirmed
+                and phase in {"CREATE_RESULT_UNKNOWN", "RECONCILE_CREATE"}
+                and error_code == "AD_ACCOUNT_CREATE_RESULT_UNKNOWN"
+                and error_message.startswith(
+                    "A previous Job may already have submitted CREATE for Business "
+                )
+                and not browser_diagnostic
+                and activity not in {
+                    "AD_ACCOUNT_CREATE_CLICK_INTENT",
+                    "AD_ACCOUNT_CREATE_SUBMITTED",
+                    "AD_ACCOUNT_FINAL_CLICK_UNMATCHED",
+                    "AD_ACCOUNT_RESPONSE_UNCONFIRMED",
+                }
+            )
+            if guard_only:
+                continue
+
             return {
                 "item_id": str(row["item_id"] or ""),
                 "scope_key": str(row["scope_key"] or ""),
