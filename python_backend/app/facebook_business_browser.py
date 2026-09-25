@@ -7039,9 +7039,63 @@ class FacebookBusinessBrowser:
                 before_create_candidates = (
                     await self._ad_account_visible_create_candidates()
                 )
-                await item.scroll_into_view_if_needed(timeout=1500)
-                await item.click(timeout=2500)
-                attempt["clicked"] = True
+
+                # The Add controls are already proven visible/enabled by the
+                # fresh scan above. Do not spend the remaining Playwright
+                # action deadline on scroll_into_view_if_needed(): on Meta's
+                # virtualized settings pane that call can consume the whole
+                # deadline and even surface negative remaining time. Try one
+                # normal click, then fall back to HTMLElement.click() on the
+                # exact freshly-tagged node (opening Add is reversible).
+                click_error = ""
+                try:
+                    await item.click(timeout=1200)
+                    attempt["click_mode"] = "playwright"
+                    attempt["clicked"] = True
+                except Exception as click_exc:
+                    click_error = (
+                        f"{click_exc.__class__.__name__}:"
+                        f"{_clean(click_exc)}"
+                    )[:400]
+                    dom_click = await self.page.evaluate(
+                        """(probeId) => {
+                            const el = document.querySelector(
+                                '[data-remask-rk-add-probe="' + probeId + '"]'
+                            );
+                            if (!el || !el.isConnected) {
+                                return {clicked:false, reason:'missing'};
+                            }
+                            const r = el.getBoundingClientRect();
+                            const s = getComputedStyle(el);
+                            const visible = r.width > 0 && r.height > 0
+                                && s.display !== 'none'
+                                && s.visibility !== 'hidden'
+                                && s.pointerEvents !== 'none';
+                            const disabled = el.hasAttribute('disabled')
+                                || el.getAttribute('aria-disabled') === 'true';
+                            if (!visible || disabled) {
+                                return {
+                                    clicked:false,
+                                    reason:disabled ? 'disabled' : 'not_visible'
+                                };
+                            }
+                            el.click();
+                            return {
+                                clicked:true,
+                                x:Math.round(r.x),
+                                y:Math.round(r.y)
+                            };
+                        }""",
+                        probe_id,
+                    )
+                    if isinstance(dom_click, dict) and dom_click.get("clicked"):
+                        attempt["click_mode"] = "dom"
+                        attempt["playwright_click_error"] = click_error
+                        attempt["clicked"] = True
+                    else:
+                        attempt["playwright_click_error"] = click_error
+                        attempt["dom_click"] = dom_click
+                        raise click_exc
 
                 # IMPORTANT: Meta renders the Add menu through an async React
                 # portal. Observe it immediately after the click. Waiting for
