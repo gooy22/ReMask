@@ -3625,6 +3625,7 @@ class FacebookBusinessBrowser:
             node_business = _digits(
                 node.get("business_id")
                 or node.get("businessId")
+                or node.get("businessID")
                 or node.get("business")
             )
             if node_business != business:
@@ -3640,6 +3641,8 @@ class FacebookBusinessBrowser:
                 "currency",
                 "timezone_id",
                 "time_zone_id",
+                "timezone",
+                "time_zone",
                 "end_advertiser",
                 "media_agency",
                 "partner",
@@ -3679,13 +3682,21 @@ class FacebookBusinessBrowser:
                 and (
                     "timezone_id" in present
                     or "time_zone_id" in present
+                    or "timezone" in present
+                    or "time_zone" in present
                 )
             )
             if (
-                "mutation" in friendly
-                and immutable_pair
+                immutable_pair
                 and not has_existing_account
+                and node_business == business
             ):
+                # Strong CREATE shape fallback. Meta operation names are not
+                # stable and do not always include "Mutation"/"AdAccount".
+                # A POST GraphQL request that targets this Business and carries
+                # both immutable RK identity fields, with no existing account
+                # id, is creation-shaped. Intermediate usage queries do not
+                # carry this pair.
                 return True
 
             # Weak single-field fallback still requires the exact requested
@@ -7071,12 +7082,6 @@ class FacebookBusinessBrowser:
             if (
                 _clean(request_meta.get("method")).upper() == "POST"
                 and "graphql" in _clean(request_meta.get("url")).lower()
-                and (
-                    business in decoded
-                    or name.casefold() in decoded
-                    or "adaccount" in friendly
-                    or "ad_account" in friendly
-                )
             ):
                 summary = self._safe_graphql_request_summary(request)
                 summary["business_seen"] = bool(business in decoded)
