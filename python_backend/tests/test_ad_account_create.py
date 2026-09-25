@@ -129,6 +129,45 @@ class AdAccountUiStateRegressionTests(unittest.TestCase):
             FacebookBusinessBrowser._ad_account_ownership_step_present(state)
         )
 
+    def test_meta_ai_dialog_is_not_create_form(self) -> None:
+        state = {
+            "state": "FORM",
+            "name_input": False,
+            "dialogs": [
+                (
+                    "Assistant business Meta AI "
+                    "Posez des questions sur votre compte publicitaire"
+                )
+            ],
+            "editable_form_control": True,
+            "controls": [
+                "Assistant business Meta AI [tag=DIV role=dialog x=900 y=80]",
+                "Message [tag=INPUT role=textbox x=940 y=710]",
+            ],
+        }
+        self.assertFalse(
+            FacebookBusinessBrowser._ad_account_create_form_confirmed(state)
+        )
+
+    def test_meta_ai_generic_ad_account_text_does_not_confirm_wizard(self) -> None:
+        state = {
+            "state": "FORM",
+            "name_input": False,
+            "dialogs": [
+                (
+                    "Meta AI Business Assistant "
+                    "Ask about your ad account"
+                )
+            ],
+            "editable_form_control": True,
+            "controls": [
+                "Ask Meta AI [tag=INPUT role=textbox x=930 y=700]",
+            ],
+        }
+        self.assertFalse(
+            FacebookBusinessBrowser._ad_account_create_form_confirmed(state)
+        )
+
 
 
 class AdAccountFalseUncertaintyRecoveryTests(unittest.TestCase):
