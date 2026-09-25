@@ -1345,6 +1345,18 @@ class BrowserAdAccountAncestorClimbRegressionTests(unittest.TestCase):
         )
 
 
+class BrowserAdAccountGeometryFallbackTests(unittest.TestCase):
+    def test_nearby_field_probe_has_geometry_fallback_for_react_siblings(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser._ad_account_field_control_by_nearby_label
+        )
+        self.assertIn("geometry-only scan", source)
+        self.assertIn("const sameRow = Math.abs(r.y - lr.y) <= 90", source)
+        self.assertIn("const samePane = Math.abs(r.x - lr.x) <= 520", source)
+        self.assertIn("geometry_fallback: true", source)
+        self.assertIn("text.includes('compte publicitaire')", source)
+
+
 class BrowserAdAccountNearbyFieldControlTests(unittest.TestCase):
     def test_nearby_label_field_probe_covers_french_currency_and_timezone(self):
         source = inspect.getsource(
