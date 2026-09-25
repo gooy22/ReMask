@@ -1502,6 +1502,44 @@ class BrowserAdAccountFinalLabelMatchingTests(unittest.TestCase):
         self.assertNotIn('" ".join(', source)
 
 
+class BrowserAdAccountDialogClassificationRegressionTests(unittest.TestCase):
+    def test_meta_ai_dialog_does_not_confirm_rk_form(self):
+        state = {
+            "state":"FORM",
+            "name_input":False,
+            "editable_form_control":False,
+            "controls":[
+                "Recherchez par nom ou ID [tag=INPUT role= x=641 y=105]",
+                "Filtres [tag=DIV role=button x=1036 y=97]",
+                "Ajouter [tag=DIV role=button x=1137 y=97]",
+                "Assistant business Meta AI [tag=DIV role=button x=1202 y=719]",
+                "Fermer [tag=DIV role=button x=992 y=89]",
+            ],
+            "dialogs":[
+                "Assistant business Meta AI Fermer"
+            ],
+        }
+
+        self.assertFalse(
+            FacebookBusinessBrowser._ad_account_create_form_confirmed(state)
+        )
+
+    def test_real_ad_account_dialog_confirms_rk_form(self):
+        state = {
+            "state":"FORM",
+            "name_input":False,
+            "editable_form_control":False,
+            "controls":[],
+            "dialogs":[
+                "Créer un compte publicitaire Devise Fuseau horaire"
+            ],
+        }
+
+        self.assertTrue(
+            FacebookBusinessBrowser._ad_account_create_form_confirmed(state)
+        )
+
+
 class BrowserAdAccountExactlyOnceSubmitTests(unittest.TestCase):
     def test_unmatched_final_click_becomes_unknown_instead_of_second_click(self):
         source = inspect.getsource(
