@@ -168,9 +168,10 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
                     "FAILED",
                     1,
                     json.dumps(guard_result),
-                    "AD_ACCOUNT_CREATE_RESULT_UNKNOWN",
+                    "",
                     (
-                        "A previous Job may already have submitted CREATE for Business "
+                        "AD_ACCOUNT_CREATE_RESULT_UNKNOWN · A previous Job may already "
+                        "have submitted CREATE for Business "
                         + business_id
                         + ". Inventory does not prove the RK yet, so ReMask will not "
                         "submit a duplicate CREATE."
