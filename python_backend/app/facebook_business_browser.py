@@ -8423,6 +8423,31 @@ timeout_seconds=4.0,
                 for key, value in raw_diag.items():
                     if key not in diag:
                         diag[key] = value
+                try:
+                    import logging
+                    logging.getLogger("remask_worker").warning(
+                        "[ad-account-submit-missing] profile=%s business=%s "
+                        "form_setup=%s form_candidates=%s submit_controls=%s",
+                        self.profile_id,
+                        business,
+                        json.dumps(
+                            form_setup,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ),
+                        json.dumps(
+                            diag.get("form_candidates") or [],
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ),
+                        json.dumps(
+                            diag.get("submit_controls") or [],
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ),
+                    )
+                except Exception:
+                    pass
                 raise BrowserBusinessError(
                     "AD_ACCOUNT_CREATE_UI_CHANGED",
                     (
