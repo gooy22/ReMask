@@ -5565,22 +5565,62 @@ class FacebookBusinessBrowser:
             pass
         return []
 
+    @staticmethod
+    def _ad_account_create_form_confirmed(state: dict[str, Any]) -> bool:
+        """Require evidence that Meta actually opened the Add-RK wizard.
+
+        A successful click alone is not enough: Meta can expose matching text
+        in the normal Ad Accounts surface without opening the creation wizard.
+        """
+        if not isinstance(state, dict):
+            return False
+        if _clean(state.get("state")).upper() != "FORM":
+            return False
+        if bool(state.get("name_input")):
+            return True
+        dialogs = state.get("dialogs")
+        if isinstance(dialogs, list) and any(_clean(x) for x in dialogs):
+            return True
+        # Unwrapped Meta wizard variants expose multiple form controls. Do not
+        # accept a lone table/search input from the normal Ad Accounts page.
+        controls = state.get("controls")
+        if not isinstance(controls, list):
+            controls = []
+        folded = " ".join(_clean(x).casefold() for x in controls)
+        form_markers = (
+            "devise",
+            "currency",
+            "fuseau horaire",
+            "time zone",
+            "timezone",
+            "nom du compte publicitaire",
+            "ad account name",
+            "werbekonto",
+            "часовой пояс",
+            "валюта",
+            "часовий пояс",
+        )
+        marker_count = sum(1 for marker in form_markers if marker in folded)
+        return bool(
+            state.get("editable_form_control")
+            and marker_count >= 2
+        )
+
     async def _wait_for_ad_account_create_entry(
         self,
         *,
         timeout_seconds: float = 6.0,
     ) -> bool:
-        """Wait specifically for the Create-new-Ad-Account menu entry.
-
-        This must not treat the persistent generic Add button as readiness,
-        otherwise a second Add click can toggle Meta's popup closed.
-        """
+        """Click Create-new-Ad-Account and verify that the wizard really opens."""
         if self.page is None:
             return False
 
         deadline = time.monotonic() + max(1.0, float(timeout_seconds))
         while time.monotonic() < deadline:
-            if await self._click_named(
+            before = await self._ad_account_ui_state()
+            before_signature = _clean(before.get("signature"))
+
+            clicked = await self._click_named(
                 self.AD_ACCOUNT_CREATE_ENTRY_NAMES,
                 roles=(
                     "button",
@@ -5590,20 +5630,35 @@ class FacebookBusinessBrowser:
                     "option",
                 ),
                 click_timeout_ms=2500,
-            ):
-                return True
+            )
+            if not clicked:
+                clicked = await self._click_ad_account_create_entry_by_visible_text()
+            if not clicked:
+                try:
+                    clicked = (
+                        await self._click_ad_account_action_dom(
+                            allow_generic_add=False
+                        )
+                        == "create"
+                    )
+                except Exception:
+                    clicked = False
 
-            if await self._click_ad_account_create_entry_by_visible_text():
-                return True
-
-            try:
-                action = await self._click_ad_account_action_dom(
-                    allow_generic_add=False
+            if clicked:
+                transition = await self._wait_for_ad_account_ui_transition(
+                    previous_signature=before_signature,
+                    timeout_seconds=3.0,
+                    label="after_create_entry_click",
                 )
-                if action == "create":
+                if self._ad_account_create_form_confirmed(transition):
                     return True
-            except Exception:
-                pass
+                # Click landed on matching text/wrapper but did not open the
+                # wizard. Keep probing instead of treating click success as
+                # form success.
+
+            current = await self._ad_account_ui_state()
+            if self._ad_account_create_form_confirmed(current):
+                return True
 
             await self.page.wait_for_timeout(250)
 
@@ -5874,7 +5929,7 @@ class FacebookBusinessBrowser:
                     if row not in before_snapshot
                 ][:20]
 
-                if attempt["ui_state_after"] == "FORM":
+                if self._ad_account_create_form_confirmed(transition):
                     attempt["form_opened_directly"] = True
                     attempt["create_entry_found"] = True
                     attempts.append(attempt)
@@ -6353,13 +6408,7 @@ class FacebookBusinessBrowser:
             current_ui,
         )
 
-        entry_clicked = (
-            _clean(current_ui.get("state")).upper() == "FORM"
-            and (
-                bool(current_ui.get("name_input"))
-                or bool(current_ui.get("dialogs"))
-            )
-        )
+        entry_clicked = self._ad_account_create_form_confirmed(current_ui)
 
         if not entry_clicked and _clean(
             current_ui.get("state")
@@ -6446,13 +6495,7 @@ class FacebookBusinessBrowser:
                 final_ui,
             )
 
-            if (
-                _clean(final_ui.get("state")).upper() == "FORM"
-                and (
-                    bool(final_ui.get("name_input"))
-                    or bool(final_ui.get("dialogs"))
-                )
-            ):
+            if self._ad_account_create_form_confirmed(final_ui):
                 entry_clicked = True
             elif _clean(final_ui.get("state")).upper() == "BLOCKED":
                 diag = await self._diagnostic(
@@ -6513,6 +6556,32 @@ class FacebookBusinessBrowser:
                 "Meta Ad Account create entry was not found.",
                 retryable=True,
                 diagnostic=diag,
+            )
+
+        confirmed_form = await self._ad_account_ui_state()
+        self._record_ad_account_ui_state(
+            "before_form_fill",
+            confirmed_form,
+        )
+        if not self._ad_account_create_form_confirmed(confirmed_form):
+            raw_diag = await self._diagnostic(
+                "ad_account_create_click_no_form"
+            )
+            raw_diag["business_id"] = business
+            raw_diag["ui_state"] = confirmed_form
+            raw_diag["ui_trace"] = self._ad_account_ui_trace[-16:]
+            raw_diag["action_candidates"] = (
+                await self._ad_account_action_candidates()
+            )
+            raise BrowserBusinessError(
+                "AD_ACCOUNT_CREATE_UI_CHANGED",
+                (
+                    "Meta Create action was clicked, but the Add-RK wizard "
+                    "did not open. ReMask will not guess an account-name field "
+                    "on the normal Ad Accounts page."
+                ),
+                retryable=True,
+                diagnostic=raw_diag,
             )
 
         self._mark_ad_account_phase("FORM_LOADING")
