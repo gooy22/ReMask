@@ -6698,10 +6698,10 @@ class FacebookBusinessBrowser:
                 if popup_create.get("clicked"):
                     popup_transition = (
                         await self._wait_for_ad_account_ui_transition(
-                            previous_signature=_clean(
-                                transition.get("signature")
+                                                        previous_signature=_clean(
+                                post_add_poll_state.get("signature")
                             ),
-                            timeout_seconds=4.0,
+timeout_seconds=4.0,
                             label="after_popup_create_entry",
                             require_signature_change=True,
                         )
