@@ -1303,6 +1303,18 @@ class BrowserAdAccountComboboxSafetyTests(unittest.TestCase):
         )
 
 
+class BrowserAdAccountPlainDropdownSafetyTests(unittest.TestCase):
+    def test_nearby_field_probe_allows_plain_role_button_only_with_geometry_guard(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser._ad_account_field_control_by_nearby_label
+        )
+        self.assertIn("'[role="button"]'", source)
+        self.assertIn("const sameRow =", source)
+        self.assertIn("const toRight =", source)
+        self.assertIn("const substantial =", source)
+        self.assertIn("if (!sameRow || !toRight || !substantial)", source)
+
+
 class BrowserAdAccountNearbyFieldControlTests(unittest.TestCase):
     def test_nearby_label_field_probe_covers_french_currency_and_timezone(self):
         source = inspect.getsource(
