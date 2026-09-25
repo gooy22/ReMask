@@ -817,11 +817,79 @@ class BrowserAdAccountAddProbeTests(unittest.IsolatedAsyncioTestCase):
                 ],
             ]
         )
-        browser._wait_for_ad_account_create_entry = AsyncMock(
-            side_effect=[False, True]
+        browser._ad_account_ui_state = AsyncMock(
+            return_value={
+                "state":"ADD_SURFACE",
+                "signature":"surface",
+                "url":"",
+                "errors":[],
+                "dialogs":[],
+                "controls":[],
+            }
+        )
+        browser._ad_account_right_pane_snapshot = AsyncMock(
+            side_effect=[
+                ["Ajouter"],
+                ["Unrelated popup"],
+                ["Ajouter"],
+                ["Créer un compte publicitaire"],
+            ]
+        )
+        browser._wait_for_ad_account_ui_transition = AsyncMock(
+            side_effect=[
+                {
+                    "state":"DIALOG",
+                    "signature":"popup-1",
+                    "url":"",
+                    "errors":[],
+                    "dialogs":["Unrelated popup"],
+                    "controls":[],
+                },
+                {
+                    "state":"CREATE_ENTRY",
+                    "signature":"popup-2",
+                    "url":"",
+                    "errors":[],
+                    "dialogs":["Créer un compte publicitaire"],
+                    "controls":["Créer un compte publicitaire"],
+                },
+                {
+                    "state":"FORM",
+                    "signature":"wizard",
+                    "url":"",
+                    "name_input":True,
+                    "form_evidence":True,
+                    "editable_form_control":True,
+                    "errors":[],
+                    "dialogs":[],
+                    "controls":[
+                        "Nom du compte publicitaire",
+                        "Devise",
+                        "Fuseau horaire",
+                    ],
+                },
+            ]
         )
         browser._ad_account_popup_candidates = AsyncMock(
-            return_value=["Unrelated popup"]
+            side_effect=[
+                ["Unrelated popup"],
+                ["Créer un compte publicitaire"],
+            ]
+        )
+        browser._click_ad_account_create_entry_in_popup = AsyncMock(
+            side_effect=[
+                {"clicked":False,"popup_count":1},
+                {
+                    "clicked":True,
+                    "popup_count":1,
+                    "text":"Créer un compte publicitaire",
+                },
+            ]
+        )
+        browser._wait_for_ad_account_create_entry = AsyncMock(
+            side_effect=AssertionError(
+                "global create-entry search must not run after Add"
+            )
         )
 
         found, attempts = await browser._probe_ad_account_add_buttons()
@@ -835,6 +903,7 @@ class BrowserAdAccountAddProbeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(browser.page.keyboard.keys, ["Escape"])
         self.assertFalse(attempts[0]["create_entry_found"])
         self.assertTrue(attempts[1]["create_entry_found"])
+        browser._wait_for_ad_account_create_entry.assert_not_awaited()
 
     def test_add_attempt_summary_is_compact_and_ordered(self):
         rows = FacebookBusinessBrowser._summarize_ad_account_add_attempts(
