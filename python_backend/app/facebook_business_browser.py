@@ -6536,43 +6536,93 @@ class FacebookBusinessBrowser:
                 await self.page.wait_for_timeout(250)
 
         if not name_filled:
+            # Meta may render the Add-RK wizard directly in the right settings
+            # pane without a semantic <form> or role=dialog wrapper. Collect
+            # editable candidates from the whole right pane, but only use a
+            # unique safe text control so we never guess a search/filter box.
             try:
                 candidates = self.page.locator(
-                    'div[role="dialog"] input:visible, form input:visible'
+                    'input:visible,textarea:visible,'
+                    '[role="textbox"]:visible,[contenteditable="true"]:visible'
                 )
-                count = min(await candidates.count(), 20)
+                count = min(await candidates.count(), 30)
             except Exception:
                 count = 0
 
+            safe_candidates: list[Any] = []
             for index in range(count):
                 candidate = candidates.nth(index)
                 try:
+                    box = await candidate.bounding_box()
+                    if (
+                        not isinstance(box, dict)
+                        or float(box.get("x") or 0) < 280
+                        or float(box.get("y") or 0) < 35
+                        or float(box.get("y") or 0) > 795
+                    ):
+                        continue
+
                     kind = _clean(
                         await candidate.get_attribute("type")
                     ).lower()
                     if kind in {
-                        "hidden","checkbox","radio","submit","button"
+                        "hidden","checkbox","radio","submit","button","file"
                     }:
                         continue
-                    placeholder = _clean(
-                        await candidate.get_attribute("placeholder")
+
+                    meta_text = " ".join(
+                        _clean(await candidate.get_attribute(attr))
+                        for attr in (
+                            "placeholder","aria-label","name","id","title"
+                        )
                     ).casefold()
-                    aria = _clean(
-                        await candidate.get_attribute("aria-label")
-                    ).casefold()
-                    if "search" in placeholder or "search" in aria:
+                    if any(
+                        marker in meta_text
+                        for marker in (
+                            "search","recherche","chercher","поиск","пошук",
+                            "suchen","অনুসন্ধান","tìm kiếm","खोज"
+                        )
+                    ):
                         continue
-                    current = _clean(await candidate.input_value())
+
+                    try:
+                        if not await candidate.is_editable():
+                            continue
+                    except Exception:
+                        # contenteditable nodes do not always expose the same
+                        # editable semantics through every Playwright build.
+                        if _clean(
+                            await candidate.get_attribute("contenteditable")
+                        ).lower() != "true":
+                            continue
+
+                    current = ""
+                    try:
+                        current = _clean(await candidate.input_value())
+                    except Exception:
+                        try:
+                            current = _clean(await candidate.inner_text())
+                        except Exception:
+                            current = ""
                     if current and len(current) > 2:
                         continue
-                    await candidate.fill(
-                        account_name,
-                        timeout=2500,
-                    )
-                    name_filled = True
-                    break
+
+                    safe_candidates.append(candidate)
                 except Exception:
                     continue
+
+            if len(safe_candidates) == 1:
+                candidate = safe_candidates[0]
+                try:
+                    try:
+                        await candidate.fill(account_name, timeout=2500)
+                    except Exception:
+                        await candidate.click(timeout=1500)
+                        await self.page.keyboard.press("Control+A")
+                        await self.page.keyboard.type(account_name)
+                    name_filled = True
+                except Exception:
+                    name_filled = False
 
         if name_filled:
             self._mark_ad_account_phase("FORM_NAME_FILLED")
