@@ -122,6 +122,27 @@ def _request_graphql_meta(request: Any) -> dict[str, Any]:
             raw = ""
 
     parsed = parse_qs(raw, keep_blank_values=True) if raw else {}
+    try:
+        url_query = parse_qs(
+            urlsplit(url).query,
+            keep_blank_values=True,
+        )
+    except Exception:
+        url_query = {}
+
+    # Meta may encode Relay GraphQL metadata in the URL query even when the
+    # browser-level request method is GET (for example graph.facebook.com/graphql
+    # with method=post). Merge query params without overwriting an explicit
+    # request-body value.
+    for key, values in url_query.items():
+        if key not in parsed and isinstance(values, list):
+            parsed[key] = values
+
+    effective_method = method
+    query_method = _clean((parsed.get("method") or [""])[0]).upper()
+    if method == "GET" and query_method == "POST":
+        effective_method = "POST"
+
     friendly = _clean(
         (parsed.get("fb_api_req_friendly_name") or [""])[0]
     )
@@ -150,7 +171,8 @@ def _request_graphql_meta(request: Any) -> dict[str, Any]:
     input_data = raw_input if isinstance(raw_input, dict) else {}
 
     return {
-        "method": method,
+        "method": effective_method,
+        "browser_method": method,
         "url": url,
         "friendly_name": friendly,
         "doc_id": doc_id,
@@ -7195,7 +7217,7 @@ class FacebookBusinessBrowser:
             ):
                 response_future.set_result(response)
 
-        await self.page.route("**/api/graphql/**", gate)
+        await self.page.route("**/*graphql*", gate)
         self.page.on("response", observe_response)
 
         next_names = (
@@ -7783,7 +7805,7 @@ class FacebookBusinessBrowser:
             except Exception:
                 pass
             try:
-                await self.page.unroute("**/api/graphql/**", gate)
+                await self.page.unroute("**/*graphql*", gate)
             except Exception:
                 pass
 
