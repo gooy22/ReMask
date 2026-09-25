@@ -92,6 +92,38 @@ class AdAccountUiStateRegressionTests(unittest.TestCase):
             FacebookBusinessBrowser._ad_account_create_form_confirmed(bad)
         )
 
+    def test_ownership_step_counts_as_wizard(self) -> None:
+        state = {
+            "state": "FORM",
+            "name_input": False,
+            "dialogs": [],
+            "editable_form_control": False,
+            "controls": [
+                "Pour mon entreprise [tag=DIV role=radio x=640 y=420]"
+            ],
+        }
+        self.assertTrue(
+            FacebookBusinessBrowser._ad_account_ownership_step_present(state)
+        )
+        self.assertTrue(
+            FacebookBusinessBrowser._ad_account_create_form_confirmed(state)
+        )
+
+    def test_plain_ad_accounts_page_is_not_ownership_step(self) -> None:
+        state = {
+            "state": "ADD_SURFACE",
+            "name_input": False,
+            "dialogs": [],
+            "editable_form_control": False,
+            "controls": [
+                "Comptes publicitaires [tag=H2 role= x=430 y=120]",
+                "Ajouter [tag=DIV role=button x=790 y=630]",
+            ],
+        }
+        self.assertFalse(
+            FacebookBusinessBrowser._ad_account_ownership_step_present(state)
+        )
+
 
 class AdAccountUsageStepRegressionTests(unittest.TestCase):
     def test_old_usage_step_query_is_safe_pre_submit_recovery(self) -> None:
