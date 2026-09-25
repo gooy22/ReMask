@@ -1133,7 +1133,7 @@ class BrowserAdAccountExactlyOnceSubmitTests(unittest.TestCase):
         self.assertIn('"action": "final_blocked_duplicate"', source)
         self.assertIn("AD_ACCOUNT_FINAL_CLICK_UNMATCHED", source)
         self.assertIn('"phase": "CREATE_RESULT_UNKNOWN"', source)
-        self.assertIn("_click_named_single_attempt", source)
+        self.assertIn("_click_ad_account_final_interactive", source)
         self.assertIn("AD_ACCOUNT_FINAL_CLICK_EXCEPTION", source)
 
 
