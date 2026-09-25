@@ -762,7 +762,7 @@ async def ad_account_handler(
                         timezone_id=timezone_id,
                         before_submit=browser_checkpoint,
                     ),
-                    timeout=115.0,
+                    timeout=180.0,
                 )
             except asyncio.TimeoutError as exc:
                 diagnostic = await browser.ad_account_runtime_timeout_diagnostic()
@@ -770,7 +770,7 @@ async def ad_account_handler(
                     raise BrowserBusinessError(
                         "AD_ACCOUNT_CREATE_RESULT_UNKNOWN",
                         (
-                            "Meta Add-RK flow exceeded the internal 115s budget "
+                            "Meta Add-RK flow exceeded the internal 180s budget "
                             "after CREATE may have been sent. Reconcile inventory "
                             "before retry."
                         ),
@@ -780,7 +780,7 @@ async def ad_account_handler(
                 raise BrowserBusinessError(
                     "AD_ACCOUNT_CREATE_UI_TIMEOUT",
                     (
-                        "Meta Add-RK UI exceeded the internal 115s budget "
+                        "Meta Add-RK UI exceeded the internal 180s budget "
                         "before any CREATE request was sent."
                     ),
                     retryable=True,
