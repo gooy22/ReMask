@@ -325,20 +325,30 @@ class ProvisioningStateStore:
                 else {}
             )
             activity = str(result.get("activity") or "").strip().upper()
+
+            guard_message = "previous job may already have submitted create for business"
+            combined_error = " ".join(
+                [
+                    error_code,
+                    error_message,
+                    str(result.get("last_error_code") or ""),
+                    str(result.get("last_error") or ""),
+                ]
+            ).strip().casefold()
+
+            has_real_browser_evidence = bool(browser_diagnostic) or activity in {
+                "AD_ACCOUNT_CREATE_CLICK_INTENT",
+                "AD_ACCOUNT_CREATE_SUBMITTED",
+                "AD_ACCOUNT_FINAL_CLICK_UNMATCHED",
+                "AD_ACCOUNT_RESPONSE_UNCONFIRMED",
+                "AD_ACCOUNT_USAGE_STEP_OPENED",
+            }
+
             guard_only = (
                 not confirmed
                 and phase in {"CREATE_RESULT_UNKNOWN", "RECONCILE_CREATE"}
-                and error_code == "AD_ACCOUNT_CREATE_RESULT_UNKNOWN"
-                and error_message.startswith(
-                    "A previous Job may already have submitted CREATE for Business "
-                )
-                and not browser_diagnostic
-                and activity not in {
-                    "AD_ACCOUNT_CREATE_CLICK_INTENT",
-                    "AD_ACCOUNT_CREATE_SUBMITTED",
-                    "AD_ACCOUNT_FINAL_CLICK_UNMATCHED",
-                    "AD_ACCOUNT_RESPONSE_UNCONFIRMED",
-                }
+                and guard_message in combined_error
+                and not has_real_browser_evidence
             )
             if guard_only:
                 continue
