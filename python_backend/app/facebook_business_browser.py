@@ -5126,6 +5126,87 @@ class FacebookBusinessBrowser:
             pass
         return []
 
+    async def verify_ad_account_inventory_empty(
+        self,
+        *,
+        business_id: str,
+    ) -> dict[str, Any]:
+        """Read-only proof that Meta Business Settings currently shows zero RK."""
+        business = _digits(business_id)
+        if not business:
+            return {
+                "confirmed_empty": False,
+                "reason": "invalid_business_id",
+            }
+
+        empty_markers = (
+            "aucun compte publicitaire ajouté",
+            "no ad accounts added",
+            "no advertising accounts added",
+            "нет добавленных рекламных аккаунтов",
+            "рекламних акаунтів не додано",
+            "keine werbekonten hinzugefügt",
+        )
+
+        attempts: list[dict[str, Any]] = []
+        for template in self.SETTINGS_AD_ACCOUNTS_URLS:
+            target = template.format(business_id=business)
+            try:
+                await self._goto(target)
+                await self.page.wait_for_timeout(1200)
+                state = await self._ad_account_ui_state()
+                body = _clean(await self._body_text()).casefold()
+                signature = _clean(state.get("signature")).casefold()
+                controls = " ".join(
+                    _clean(x).casefold()
+                    for x in (state.get("controls") or [])
+                )
+                dialogs = " ".join(
+                    _clean(x).casefold()
+                    for x in (state.get("dialogs") or [])
+                )
+                combined = " ".join((body, signature, controls, dialogs))
+
+                matched_marker = next(
+                    (
+                        marker
+                        for marker in empty_markers
+                        if marker in combined
+                    ),
+                    "",
+                )
+                attempts.append(
+                    {
+                        "url": _clean(state.get("url") or target)[:700],
+                        "state": _clean(state.get("state")).upper(),
+                        "empty_marker": matched_marker,
+                    }
+                )
+                if matched_marker:
+                    return {
+                        "confirmed_empty": True,
+                        "business_id": business,
+                        "source": "business_settings_ui",
+                        "marker": matched_marker,
+                        "attempts": attempts,
+                    }
+            except Exception as exc:
+                attempts.append(
+                    {
+                        "url": target[:700],
+                        "error": (
+                            f"{exc.__class__.__name__}: {_clean(exc)}"
+                        )[:500],
+                    }
+                )
+
+        return {
+            "confirmed_empty": False,
+            "business_id": business,
+            "source": "business_settings_ui",
+            "attempts": attempts,
+        }
+
     async def _ad_account_ui_state(self) -> dict[str, Any]:
         """Classify the current Meta Add-RK UI instead of assuming one DOM shape."""
         if self.page is None:
