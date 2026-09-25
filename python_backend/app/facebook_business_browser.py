@@ -3702,6 +3702,24 @@ class FacebookBusinessBrowser:
         return False
 
     @staticmethod
+    def _request_is_ad_account_usage_step(request: Any) -> bool:
+        """True for Meta's intermediate Add-RK usage/ownership step query.
+
+        This request is not the CREATE mutation. Seeing it after clicking the
+        visible "Create ad account" control means Meta advanced the wizard and
+        ReMask must continue instead of marking CREATE as uncertain.
+        """
+        meta = _request_graphql_meta(request)
+        friendly = _clean(meta.get("friendly_name")).casefold()
+        if "query" not in friendly:
+            return False
+        return (
+            "createadaccountusagestep" in friendly
+            or "create_ad_account_usage_step" in friendly
+            or "adaccountusagestep" in friendly
+        )
+
+    @staticmethod
     def _response_matches_ad_account_create(
         response: Any,
         *,
@@ -5122,7 +5140,7 @@ class FacebookBusinessBrowser:
                         'часовой пояс','часовий пояс'
                     ];
                     const errorWords = [
-                        'not allowed','not eligible','cannot create','can\'t create',
+                        'not allowed','not eligible','cannot create',"can't create",
                         'unable to create','restricted','restriction',
                         'maximum number','reached the maximum','limit reached',
                         'permission','permissions','vérifier','verification',
@@ -7082,17 +7100,49 @@ class FacebookBusinessBrowser:
                     new_network_candidates = graphql_candidates[
                         candidate_count_before_wait:
                     ]
+                    usage_step_seen = any(
+                        "createadaccountusagestep" in _clean(
+                            row.get("friendly_name")
+                        ).casefold()
+                        or "adaccountusagestep" in _clean(
+                            row.get("friendly_name")
+                        ).casefold()
+                        for row in new_network_candidates
+                        if isinstance(row, dict)
+                    )
                     submit_attempts.append(
                         {
                             "step": step,
                             "action": "final",
                             "fallback": final_meta,
-                            "gate": "not_matched",
+                            "gate": (
+                                "usage_step"
+                                if usage_step_seen
+                                else "not_matched"
+                            ),
                             "state_after": _clean(transition.get("state")),
                             "errors": list(transition.get("errors") or [])[:3],
                             "new_graphql_candidates": new_network_candidates[-8:],
                         }
                     )
+
+                    if usage_step_seen:
+                        # The visible "Create ad account" control can advance
+                        # Meta to a usage/ownership step before the real CREATE
+                        # mutation. It is safe to continue: the network gate
+                        # observed only the intermediate Query, not CREATE.
+                        final_click_attempted = False
+                        await checkpoint(
+                            {
+                                "phase": "CREATE_PREPARED",
+                                "resume_from": "CREATE",
+                                "activity": "AD_ACCOUNT_USAGE_STEP_OPENED",
+                                "activity_at": int(time.time()),
+                                "graphql_candidates": new_network_candidates[-8:],
+                            }
+                        )
+                        await self.page.wait_for_timeout(300)
+                        continue
 
                     await checkpoint(
                         {
