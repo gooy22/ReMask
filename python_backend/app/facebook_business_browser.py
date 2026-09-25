@@ -4217,6 +4217,116 @@ class FacebookBusinessBrowser:
         value = _clean(result).lower()
         return value if value in {"create", "add"} else ""
 
+    async def _click_ad_account_final_interactive(
+        self,
+        *,
+        before_click: Callable[[], Awaitable[None]] | None = None,
+    ) -> dict[str, Any]:
+        """Click exactly one real final CREATE control in the Add-RK surface."""
+        if self.page is None:
+            return {"found": False, "attempted": False, "clicked": False}
+
+        create_words = {
+            _clean(value).casefold()
+            for value in self.AD_ACCOUNT_SUBMIT_NAMES
+            if _clean(value)
+        }
+        candidates: list[tuple[int, Any, dict[str, Any]]] = []
+
+        try:
+            locator = self.page.locator(
+                'button,a,[role="button"],[role="menuitem"],'
+                '[role="menuitemradio"],[tabindex]:not([tabindex="-1"])'
+            )
+            count = min(await locator.count(), 120)
+        except Exception as exc:
+            return {
+                "found": False,
+                "attempted": False,
+                "clicked": False,
+                "error": f"{exc.__class__.__name__}: {exc}"[:500],
+            }
+
+        for index in range(count):
+            item = locator.nth(index)
+            try:
+                if not (await item.is_visible() and await item.is_enabled()):
+                    continue
+                box = await item.bounding_box()
+                if not box:
+                    continue
+                x = float(box.get("x") or 0)
+                y = float(box.get("y") or 0)
+                if x < 280 or y < 40 or y > 795:
+                    continue
+                text = _clean(
+                    " ".join(
+                        [
+                            _clean(await item.get_attribute("aria-label")),
+                            _clean(await item.get_attribute("title")),
+                            _clean(await item.inner_text()),
+                        ]
+                    )
+                )
+                folded = text.casefold()
+                if not folded or folded not in create_words:
+                    continue
+                role = _clean(await item.get_attribute("role"))
+                tag = _clean(
+                    await item.evaluate("(el) => el.tagName || ''")
+                ).upper()
+                in_dialog = bool(
+                    await item.evaluate(
+                        """(el) => Boolean(el.closest(
+                            '[role="dialog"],[aria-modal="true"]'
+                        ))"""
+                    )
+                )
+                score = 0
+                if in_dialog:
+                    score -= 300
+                if tag == "BUTTON":
+                    score -= 150
+                if role == "button":
+                    score -= 100
+                score += int(y)
+                candidates.append(
+                    (
+                        score,
+                        item,
+                        {
+                            "found": True,
+                            "attempted": False,
+                            "clicked": False,
+                            "text": text[:180],
+                            "x": int(x),
+                            "y": int(y),
+                            "tag": tag[:40],
+                            "role": role[:80],
+                            "in_dialog": in_dialog,
+                            "index": index,
+                        },
+                    )
+                )
+            except Exception:
+                continue
+
+        if not candidates:
+            return {"found": False, "attempted": False, "clicked": False}
+
+        candidates.sort(key=lambda row: row[0])
+        _, item, meta = candidates[0]
+        try:
+            if before_click is not None:
+                await before_click()
+            meta["attempted"] = True
+            await item.click(timeout=2500)
+            meta["clicked"] = True
+            return meta
+        except Exception as exc:
+            meta["error"] = f"{exc.__class__.__name__}: {exc}"[:500]
+            return meta
+
     async def _click_ad_account_form_action_by_visible_text(
         self,
         action: str,
@@ -7558,14 +7668,12 @@ class FacebookBusinessBrowser:
                         }
                     )
 
-                direct_final = await self._click_named_single_attempt(
-                    final_names,
+                direct_final = await self._click_ad_account_final_interactive(
                     before_click=persist_final_click_intent,
-                    click_timeout_ms=2500,
                 )
                 final_clicked = bool(direct_final.get("clicked"))
                 final_meta: dict[str, Any] = {
-                    "direct": direct_final,
+                    "interactive": direct_final,
                 }
 
                 if (
@@ -7596,47 +7704,6 @@ class FacebookBusinessBrowser:
                             "submit_attempts": submit_attempts[-12:],
                         },
                     )
-
-                if not final_clicked and not direct_final.get("found"):
-                    # The role-independent fallback clicks inside page.evaluate.
-                    # Persist uncertainty first. If evaluate itself errors, the
-                    # DOM click may already have fired, so that is uncertain.
-                    await persist_final_click_intent()
-                    fallback_meta = (
-                        await self._click_ad_account_form_action_by_visible_text(
-                            "final"
-                        )
-                    )
-                    final_meta["fallback"] = fallback_meta
-                    final_clicked = bool(fallback_meta.get("clicked"))
-
-                    if (
-                        not final_clicked
-                        and _clean(fallback_meta.get("error"))
-                    ):
-                        await checkpoint(
-                            {
-                                "phase": "CREATE_RESULT_UNKNOWN",
-                                "resume_from": "RECONCILE_CREATE",
-                                "activity": "AD_ACCOUNT_FINAL_FALLBACK_EXCEPTION",
-                                "activity_at": int(time.time()),
-                            }
-                        )
-                        raise BrowserBusinessError(
-                            "AD_ACCOUNT_CREATE_RESULT_UNKNOWN",
-                            (
-                                "Meta final Create fallback may have clicked "
-                                "before its browser context changed. Duplicate "
-                                "CREATE is blocked; reconcile inventory."
-                            ),
-                            retryable=True,
-                            diagnostic={
-                                "stage": "ad_account_final_fallback_exception",
-                                "final_meta": final_meta,
-                                "graphql_candidates": graphql_candidates[-12:],
-                                "submit_attempts": submit_attempts[-12:],
-                            },
-                        )
 
                 if final_clicked:
                     clicked_any = True
