@@ -1416,6 +1416,44 @@ class BrowserAdAccountStateMachineTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(attempts[0]["popup_create"]["clicked"])
         browser._wait_for_ad_account_create_entry.assert_not_awaited()
 
+
+    async def test_verify_ad_account_inventory_empty_from_business_settings(self):
+        class _Page:
+            async def wait_for_timeout(self, ms):
+                return None
+
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-empty-rk")
+        )
+        browser.page = _Page()
+        browser._goto = AsyncMock(return_value=None)
+        browser._body_text = AsyncMock(
+            return_value="Aucun compte publicitaire ajouté"
+        )
+        browser._ad_account_ui_state = AsyncMock(
+            return_value={
+                "state":"ADD_SURFACE",
+                "url":(
+                    "https://business.facebook.com/latest/settings/"
+                    "ad_accounts?business_id=1056638030476027"
+                ),
+                "signature":"ADD_SURFACE::Aucun compte publicitaire ajouté",
+                "controls":["Ajouter"],
+                "dialogs":[],
+            }
+        )
+
+        result = await browser.verify_ad_account_inventory_empty(
+            business_id="1056638030476027"
+        )
+
+        self.assertTrue(result["confirmed_empty"])
+        self.assertEqual(result["source"], "business_settings_ui")
+        self.assertEqual(
+            result["marker"],
+            "aucun compte publicitaire ajouté",
+        )
+
     def test_ui_trace_is_bounded(self):
         browser = FacebookBusinessBrowser(
             SimpleNamespace(profile_id="profile-rk-trace")
