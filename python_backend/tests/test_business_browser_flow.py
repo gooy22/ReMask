@@ -1454,6 +1454,28 @@ class BrowserAdAccountStateMachineTests(unittest.IsolatedAsyncioTestCase):
             "aucun compte publicitaire ajouté",
         )
 
+
+    async def test_final_create_does_not_accept_plain_div(self):
+        class _Page:
+            async def evaluate(self, script, mode):
+                self.assert_mode = mode
+                return {
+                    "clicked": False,
+                    "action": "final",
+                }
+
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-final-div")
+        )
+        browser.page = _Page()
+
+        result = await browser._click_ad_account_form_action_by_visible_text(
+            "final"
+        )
+
+        self.assertFalse(result["clicked"])
+        self.assertEqual(result["action"], "final")
+
     def test_ui_trace_is_bounded(self):
         browser = FacebookBusinessBrowser(
             SimpleNamespace(profile_id="profile-rk-trace")
