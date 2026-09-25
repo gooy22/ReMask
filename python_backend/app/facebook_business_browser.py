@@ -8416,6 +8416,7 @@ timeout_seconds=4.0,
                     "last_form_setup_signature": last_form_setup_signature[:1000],
                     "graphql_candidates": graphql_candidates[-12:],
                     "form_candidates": await self._ad_account_form_candidates(),
+                    "form_probe": await self._ad_account_form_candidates(),
                     "ui_state": await self._ad_account_ui_state(),
                     "ui_trace": self._ad_account_ui_trace[-16:],
                 }
