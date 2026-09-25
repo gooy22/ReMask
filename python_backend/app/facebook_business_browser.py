@@ -4284,18 +4284,27 @@ class FacebookBusinessBrowser:
                 y = float(box.get("y") or 0)
                 if x < 280 or y < 40 or y > 795:
                     continue
-                text = _clean(
-                    " ".join(
-                        [
-                            _clean(await item.get_attribute("aria-label")),
-                            _clean(await item.get_attribute("title")),
-                            _clean(await item.inner_text()),
-                        ]
-                    )
+                aria_label = _clean(
+                    await item.get_attribute("aria-label")
                 )
-                folded = text.casefold()
-                if not folded or folded not in create_words:
+                title = _clean(await item.get_attribute("title"))
+                inner_text = _clean(await item.inner_text())
+                labels = [
+                    value
+                    for value in (aria_label, title, inner_text)
+                    if value
+                ]
+                matched_label = next(
+                    (
+                        value
+                        for value in labels
+                        if value.casefold() in create_words
+                    ),
+                    "",
+                )
+                if not matched_label:
                     continue
+                text = matched_label
                 role = _clean(await item.get_attribute("role"))
                 tag = _clean(
                     await item.evaluate("(el) => el.tagName || ''")
