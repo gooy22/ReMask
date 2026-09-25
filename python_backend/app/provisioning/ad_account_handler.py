@@ -177,6 +177,26 @@ def _known_final_click_unmatched_empty_inventory(result: Any) -> bool:
     return True
 
 
+def _inventory_repeatedly_confirms_empty(
+    diagnostics: Any,
+    *,
+    required_checks: int = 3,
+) -> bool:
+    if not isinstance(diagnostics, list) or required_checks < 1:
+        return False
+    empty_checks = 0
+    for row in diagnostics:
+        if not isinstance(row, dict):
+            continue
+        if (
+            row.get("stage") == "inventory"
+            and row.get("result") == "ok"
+            and int(row.get("count") or 0) == 0
+        ):
+            empty_checks += 1
+    return empty_checks >= required_checks
+
+
 async def _reconcile_existing(
     session: Any,
     *,
@@ -472,7 +492,6 @@ async def ad_account_handler(
             # Do not let an old ambiguous click block this Business forever.
             # Recheck Meta inventory three times. Only when all checks are
             # conclusive and all report zero RK do we allow a fresh CREATE.
-            empty_checks = 0
             inventory_evidence = list(diagnostics)
             for retry_index in range(2):
                 if retry_index:
@@ -503,16 +522,10 @@ async def ad_account_handler(
                         "reconciliation": inventory_evidence,
                     }
 
-            for row in inventory_evidence:
-                if (
-                    isinstance(row, dict)
-                    and row.get("stage") == "inventory"
-                    and row.get("result") == "ok"
-                    and int(row.get("count") or 0) == 0
-                ):
-                    empty_checks += 1
-
-            if empty_checks >= 3:
+            if _inventory_repeatedly_confirms_empty(
+                inventory_evidence,
+                required_checks=3,
+            ):
                 cross_job = {}
             else:
                 raise ProvisioningError(
