@@ -13,6 +13,7 @@ from app.facebook_ad_account_create import (
 )
 from app.facebook_business_browser import FacebookBusinessBrowser
 from app.provisioning.ad_account_handler import (
+    _inventory_repeatedly_confirms_empty,
     _known_final_click_unmatched_empty_inventory,
     _known_pre_submit_navigation_failure,
     _known_pre_submit_usage_step_failure,
@@ -506,33 +507,43 @@ class BrowserQueueAwareTimeoutTests(unittest.TestCase):
             )
 
 
-class AdAccountRepeatedInventoryRecoveryTests(unittest.IsolatedAsyncioTestCase):
-    async def test_three_empty_inventory_checks_allow_fresh_create_path(self) -> None:
-        calls = []
+class AdAccountRepeatedInventoryRecoveryTests(unittest.TestCase):
+    def test_three_empty_inventory_checks_allow_recovery(self) -> None:
+        diagnostics = [
+            {"stage":"inventory","result":"ok","count":0},
+            {"stage":"inventory","result":"ok","count":0},
+            {"stage":"inventory","result":"ok","count":0},
+        ]
+        self.assertTrue(
+            _inventory_repeatedly_confirms_empty(
+                diagnostics,
+                required_checks=3,
+            )
+        )
 
-        class _State:
-            async def latest_ad_account_resume_for_business(self, *args, **kwargs):
-                return {
-                    "result": {
-                        "business_id": "1056638030476027",
-                        "phase": "CREATE_RESULT_UNKNOWN",
-                    }
-                }
+    def test_two_empty_and_one_unavailable_do_not_allow_recovery(self) -> None:
+        diagnostics = [
+            {"stage":"inventory","result":"ok","count":0},
+            {"stage":"inventory","result":"unavailable"},
+            {"stage":"inventory","result":"ok","count":0},
+        ]
+        self.assertFalse(
+            _inventory_repeatedly_confirms_empty(
+                diagnostics,
+                required_checks=3,
+            )
+        )
 
-        class _Session:
-            class _Ctx:
-                profile_id = "4"
-            context = _Ctx()
-
-        async def fake_reconcile(session, *, business_id, account_name):
-            calls.append((business_id, account_name))
-            return "", [{
-                "stage":"inventory",
-                "result":"ok",
-                "business_id":business_id,
-                "count":0,
-                "ids":[],
-            }]
-
-        self.assertTrue(True)
+    def test_nonempty_inventory_does_not_count_as_empty(self) -> None:
+        diagnostics = [
+            {"stage":"inventory","result":"ok","count":0},
+            {"stage":"inventory","result":"ok","count":1},
+            {"stage":"inventory","result":"ok","count":0},
+        ]
+        self.assertFalse(
+            _inventory_repeatedly_confirms_empty(
+                diagnostics,
+                required_checks=3,
+            )
+        )
 
