@@ -926,3 +926,36 @@ class AdAccountExactlyOnceSystemRegressionTests(unittest.TestCase):
         self.assertIn("for reconcile_attempt in range(3):", source)
         self.assertIn("await asyncio.sleep(2.0)", source)
         self.assertIn("AD_ACCOUNT_RECONCILE_EXHAUSTED", source)
+
+
+class AdAccountUnknownCaptureExceptionRecoveryTests(unittest.TestCase):
+    def test_unknown_capture_exception_reconciles_before_retry(self) -> None:
+        source = inspect.getsource(ad_account_handler)
+        marker = source.index(
+            'code": "AD_ACCOUNT_CAPTURE_BROWSER_EXCEPTION"'
+        )
+        tail = source[marker:marker + 12000]
+        self.assertIn(
+            "capture_exception_inventory_reconciliation",
+            tail,
+        )
+        self.assertIn(
+            "capture_exception_business_settings_inventory",
+            tail,
+        )
+        self.assertIn(
+            "graph_empty",
+            tail,
+        )
+        self.assertIn(
+            "secondary_empty",
+            tail,
+        )
+        self.assertIn(
+            "continue",
+            tail,
+        )
+        self.assertIn(
+            "Duplicate CREATE remains blocked",
+            tail,
+        )
