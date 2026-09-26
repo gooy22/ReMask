@@ -83,6 +83,39 @@ class AdAccountCreateEntryTargetTests(unittest.TestCase):
         self.assertIn("business_id={business_id}", first)
 
 
+class AdAccountDetailsExpansionTests(unittest.TestCase):
+    def test_browser_has_read_only_details_expander(self) -> None:
+        source = inspect.getsource(
+            FacebookBusinessBrowser._expand_ad_account_details_if_present
+        )
+        self.assertIn("Afficher les détails", source)
+        self.assertIn("Show details", source)
+        self.assertIn("_ad_account_ui_state()", source)
+
+    def test_add_probe_expands_details_after_direct_create_click(self) -> None:
+        source = inspect.getsource(
+            FacebookBusinessBrowser._probe_ad_account_add_buttons
+        )
+        self.assertIn("details_markers", source)
+        self.assertIn(
+            "_expand_ad_account_details_if_present()",
+            source,
+        )
+        self.assertIn("details_state", source)
+        self.assertIn("details_errors", source)
+
+    def test_final_failure_rechecks_expanded_meta_state(self) -> None:
+        source = inspect.getsource(
+            FacebookBusinessBrowser._open_ad_account_create_form
+        )
+        self.assertIn("after_create_entry_details", source)
+        self.assertIn(
+            "_expand_ad_account_details_if_present()",
+            source,
+        )
+        self.assertIn("META_AD_ACCOUNT_CREATE_UNAVAILABLE", source)
+
+
 class AdAccountCreateTransportTests(unittest.TestCase):
     def test_handler_requires_live_capture_then_private_replay(self) -> None:
         source = inspect.getsource(ad_account_handler)
