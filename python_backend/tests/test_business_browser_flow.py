@@ -4383,3 +4383,55 @@ class BrowserAdAccountLocalizedInventoryProofTests(unittest.TestCase):
             "अनुमति नहीं",
         ):
             self.assertIn(marker, source)
+
+
+class BrowserAdAccountIntroDialogRegressionTests(unittest.TestCase):
+    def test_ui_state_separates_intro_modal_from_create_entry_heading(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser._ad_account_ui_state
+        )
+        self.assertIn("insideDialog", source)
+        self.assertIn("explicitlyInteractive", source)
+        self.assertIn("INTRO_DIALOG", source)
+        self.assertIn("dialog_form_control_count", source)
+        self.assertIn("dialogHasCreateAccountMarker", source)
+
+    def test_intro_modal_has_dedicated_bounded_advance(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser._advance_ad_account_intro_dialog
+        )
+        self.assertIn('get("state")).upper() != "INTRO_DIALOG"', source)
+        self.assertIn(
+            "_click_ad_account_form_action_by_visible_text",
+            source,
+        )
+        self.assertIn('"next"', source)
+        self.assertIn('"final"', source)
+        self.assertIn(
+            "_ad_account_create_form_confirmed",
+            source,
+        )
+
+    def test_create_entry_wait_advances_intro_instead_of_reclicking_title(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser._wait_for_ad_account_create_entry
+        )
+        intro_pos = source.index('== "INTRO_DIALOG"')
+        advance_pos = source.index(
+            "_advance_ad_account_intro_dialog",
+            intro_pos,
+        )
+        self.assertLess(intro_pos, advance_pos)
+
+    def test_add_probe_advances_intro_immediately_after_exact_create_click(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser._probe_ad_account_add_buttons
+        )
+        direct_pos = source.index("direct_transition")
+        intro_pos = source.index('"INTRO_DIALOG"', direct_pos)
+        advance_pos = source.index(
+            "_advance_ad_account_intro_dialog",
+            intro_pos,
+        )
+        self.assertLess(intro_pos, advance_pos)
+        self.assertIn("intro_dialog_advanced", source)
