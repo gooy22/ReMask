@@ -3644,7 +3644,76 @@ class FacebookBusinessBrowser:
                 for child in value:
                     yield from iter_dicts(child)
 
-        for node in iter_dicts(variables):
+        # Current Relay builds can split the target Business and the
+        # immutable RK payload across sibling/nested variable objects, e.g.
+        # {businessID: "...", adAccountData: {name,currency,timezone_id}}.
+        # The older matcher required them in the same dict and therefore let a
+        # real CREATE pass through unmatched. Build a conservative whole-tree
+        # shape before the per-node checks.
+        all_nodes = list(iter_dicts(variables))
+        all_business_ids: set[str] = set()
+        all_names: set[str] = set()
+        all_keys: set[str] = set()
+        has_existing_account_anywhere = False
+        for node in all_nodes:
+            all_keys.update(str(key) for key in node.keys())
+            candidate_business = _digits(
+                node.get("business_id")
+                or node.get("businessId")
+                or node.get("businessID")
+                or node.get("business")
+                or node.get("selectedBusinessID")
+            )
+            if candidate_business:
+                all_business_ids.add(candidate_business)
+            candidate_name = _clean(
+                node.get("name")
+                or node.get("account_name")
+                or node.get("ad_account_name")
+                or node.get("adAccountName")
+            ).casefold()
+            if candidate_name:
+                all_names.add(candidate_name)
+            for key in (
+                "account_id",
+                "ad_account_id",
+                "adAccountId",
+                "adaccount_id",
+            ):
+                if _clean(node.get(key)):
+                    has_existing_account_anywhere = True
+
+        cross_level_business_match = bool(
+            business and business in all_business_ids
+        )
+        cross_level_name_match = bool(
+            expected_name and expected_name in all_names
+        )
+        cross_level_currency = "currency" in all_keys
+        cross_level_timezone = bool(
+            {
+                "timezone_id",
+                "time_zone_id",
+                "timezone",
+                "time_zone",
+                "timezoneId",
+                "timeZoneId",
+            }.intersection(all_keys)
+        )
+        if (
+            cross_level_business_match
+            and cross_level_currency
+            and cross_level_timezone
+            and not has_existing_account_anywhere
+            and (
+                cross_level_name_match
+                or operation_match
+                or "mutation" in friendly
+            )
+        ):
+            return True
+
+        for node in all_nodes:
             node_business = _digits(
                 node.get("business_id")
                 or node.get("businessId")
@@ -6330,6 +6399,182 @@ class FacebookBusinessBrowser:
             "currency": currency_result,
             "timezone": timezone_result,
             "timezone_name": timezone_name,
+        }
+
+    async def _reconcile_created_ad_account_from_ui(
+        self,
+        *,
+        business_id: str,
+        account_name: str,
+    ) -> dict[str, Any]:
+        """Read-only confirmation of a just-created RK from Business Settings.
+
+        After Meta accepts the final Create click it commonly closes the wizard
+        and returns to the Ad Accounts table. If our private GraphQL matcher
+        missed the mutation, use the visible row/href/attributes to prove the
+        account exactly once instead of forcing a duplicate retry.
+        """
+        if self.page is None:
+            return {"confirmed": False}
+
+        business = _digits(business_id)
+        expected = _clean(account_name)
+        if not business or not expected:
+            return {"confirmed": False}
+
+        try:
+            rows = await self.page.evaluate(
+                """(expectedName) => {
+                    const visible = el => {
+                        if (!el) return false;
+                        const r = el.getBoundingClientRect();
+                        const s = getComputedStyle(el);
+                        return r.width > 0 && r.height > 0
+                            && s.display !== 'none'
+                            && s.visibility !== 'hidden';
+                    };
+                    const clean = text => (text || '')
+                        .normalize('NFKC')
+                        .replace(/[\u200b\u200c\u200d\ufeff]/g, '')
+                        .replace(/\u00a0/g, ' ')
+                        .replace(/\s+/g, ' ')
+                        .trim();
+                    const expected = clean(expectedName).toLowerCase();
+                    const out = [];
+                    const seen = new Set();
+
+                    for (const el of document.querySelectorAll(
+                        'a,button,[role="row"],[role="button"],div,span'
+                    )) {
+                        if (!visible(el)) continue;
+                        const r = el.getBoundingClientRect();
+                        if (r.x < 280 || r.y < 80 || r.y > 790) continue;
+
+                        const own = clean(
+                            (el.getAttribute('aria-label') || '') + ' ' +
+                            (el.getAttribute('title') || '') + ' ' +
+                            (el.innerText || el.textContent || '')
+                        );
+                        if (!own || !own.toLowerCase().includes(expected)) {
+                            continue;
+                        }
+
+                        let root = el;
+                        let bestText = own;
+                        let bestHref = '';
+                        let attrs = '';
+                        for (
+                            let depth = 0;
+                            root && depth < 7;
+                            depth++, root = root.parentElement
+                        ) {
+                            if (!visible(root)) continue;
+                            const rr = root.getBoundingClientRect();
+                            if (
+                                rr.x < 280 || rr.width > 1050
+                                || rr.height > 320
+                            ) continue;
+                            const text = clean(
+                                (root.getAttribute('aria-label') || '') + ' ' +
+                                (root.getAttribute('title') || '') + ' ' +
+                                (root.innerText || root.textContent || '')
+                            );
+                            if (text && text.toLowerCase().includes(expected)) {
+                                bestText = text;
+                            }
+                            const link = root.matches?.('a[href]')
+                                ? root
+                                : root.querySelector?.('a[href]');
+                            if (link && link.href) bestHref = link.href;
+
+                            attrs += ' '
+                                + (root.getAttribute('data-id') || '')
+                                + ' ' + (root.getAttribute('data-key') || '')
+                                + ' ' + (root.getAttribute('id') || '')
+                                + ' ' + (root.getAttribute('href') || '');
+                        }
+
+                        const evidence = clean(
+                            bestText + ' ' + bestHref + ' ' + attrs
+                        );
+                        const ids = [];
+                        for (const match of evidence.matchAll(
+                            /(?:act_)?(\d{5,30})/g
+                        )) {
+                            ids.push(match[1]);
+                        }
+                        const uniqueIds = [...new Set(ids)];
+                        const key = bestText + '|' + bestHref + '|'
+                            + uniqueIds.join(',');
+                        if (seen.has(key)) continue;
+                        seen.add(key);
+
+                        out.push({
+                            text: bestText.slice(0, 600),
+                            href: bestHref.slice(0, 1000),
+                            ids: uniqueIds.slice(0, 12),
+                            x: Math.round(r.x),
+                            y: Math.round(r.y)
+                        });
+                        if (out.length >= 20) break;
+                    }
+                    return out;
+                }""",
+                expected,
+            )
+        except Exception as exc:
+            return {
+                "confirmed": False,
+                "error": f"{exc.__class__.__name__}: {exc}"[:500],
+            }
+
+        if not isinstance(rows, list):
+            return {"confirmed": False}
+
+        candidates: list[dict[str, Any]] = []
+        for row in rows[:20]:
+            if not isinstance(row, dict):
+                continue
+            text_value = _clean(row.get("text"))
+            if expected.casefold() not in text_value.casefold():
+                continue
+            ids = []
+            for raw_id in row.get("ids") or []:
+                normalized = _normalize_ad_account_id(raw_id)
+                if normalized and normalized not in ids:
+                    ids.append(normalized)
+            candidates.append(
+                {
+                    "text": text_value[:600],
+                    "href": _clean(row.get("href"))[:1000],
+                    "ids": ids,
+                    "x": int(row.get("x") or 0),
+                    "y": int(row.get("y") or 0),
+                }
+            )
+
+        unique_ids = sorted(
+            {
+                account_id
+                for row in candidates
+                for account_id in row.get("ids") or []
+            }
+        )
+        if len(unique_ids) == 1:
+            return {
+                "confirmed": True,
+                "business_id": business,
+                "ad_account_id": unique_ids[0],
+                "source": "business_settings_ui",
+                "candidates": candidates[:8],
+            }
+
+        return {
+            "confirmed": False,
+            "business_id": business,
+            "source": "business_settings_ui",
+            "candidates": candidates[:8],
+            "unique_ids": unique_ids[:12],
         }
 
     async def _ad_account_submit_controls(
@@ -9672,6 +9917,42 @@ timeout_seconds=4.0,
                         await self.page.wait_for_timeout(300)
                         continue
 
+                    # Meta closed the wizard after the final click. Before
+                    # declaring uncertainty, inspect the resulting Ad Accounts
+                    # table for the exact requested name and a unique account ID.
+                    # This is read-only and cannot submit a duplicate CREATE.
+                    await self.page.wait_for_timeout(900)
+                    ui_reconcile = (
+                        await self._reconcile_created_ad_account_from_ui(
+                            business_id=business,
+                            account_name=name,
+                        )
+                    )
+                    if bool(ui_reconcile.get("confirmed")):
+                        reconciled_id = _clean(
+                            ui_reconcile.get("ad_account_id")
+                        )
+                        await checkpoint(
+                            {
+                                "phase": "CREATE_CONFIRMED",
+                                "activity": "AD_ACCOUNT_CREATE_CONFIRMED_UI",
+                                "activity_at": int(time.time()),
+                                "ad_account_id": reconciled_id,
+                                "create_friendly_name": "",
+                                "create_response_path": (
+                                    "business_settings_ui"
+                                ),
+                            }
+                        )
+                        self._mark_ad_account_phase("CREATE_CONFIRMED")
+                        return BrowserAdAccountResult(
+                            business_id=business,
+                            ad_account_id=reconciled_id,
+                            response_friendly_name="",
+                            response_doc_id="",
+                            response_path="business_settings_ui",
+                        )
+
                     await checkpoint(
                         {
                             "phase": "CREATE_RESULT_UNKNOWN",
@@ -9680,6 +9961,7 @@ timeout_seconds=4.0,
                             "activity_at": int(time.time()),
                             "graphql_candidates": new_network_candidates[-8:],
                             "network_candidates": network_candidates[-24:],
+                            "ui_reconcile": ui_reconcile,
                         }
                     )
                     try:
@@ -9716,6 +9998,7 @@ timeout_seconds=4.0,
                             "state_after": transition,
                             "graphql_candidates": graphql_candidates[-12:],
                             "network_candidates": network_candidates[-24:],
+                            "ui_reconcile": ui_reconcile,
                             "submit_attempts": submit_attempts[-12:],
                         },
                     )
@@ -11245,6 +11528,16 @@ timeout_seconds=4.0,
             if isinstance(raw_input, dict)
             else []
         )
+        recursive_keys: set[str] = set()
+        def collect_keys(value: Any) -> None:
+            if isinstance(value, dict):
+                for key, child in value.items():
+                    recursive_keys.add(str(key))
+                    collect_keys(child)
+            elif isinstance(value, list):
+                for child in value:
+                    collect_keys(child)
+        collect_keys(variables)
         return {
             "url": _clean(meta.get("url")),
             "method": _clean(meta.get("method")),
@@ -11252,6 +11545,7 @@ timeout_seconds=4.0,
             "doc_id": _clean(meta.get("doc_id")),
             "variable_keys": sorted(str(key) for key in variables),
             "input_keys": input_keys,
+            "recursive_keys": sorted(recursive_keys)[:80],
             "body_decodable": bool(meta.get("body_decodable")),
         }
 
