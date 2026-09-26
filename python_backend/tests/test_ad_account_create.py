@@ -25,6 +25,14 @@ from app.provisioning.ad_account_handler import (
 from app.provisioning.state import ProvisioningStateStore
 
 
+class AdAccountRuntimeDiagnosticTests(unittest.TestCase):
+    def test_handler_logs_full_browser_diagnostic(self) -> None:
+        source = inspect.getsource(ad_account_handler)
+        self.assertIn("AD_ACCOUNT live-capture browser failure", source)
+        self.assertIn("json.dumps(", source)
+        self.assertIn("exc.diagnostic", source)
+
+
 class AdAccountToolbarIsolationTests(unittest.TestCase):
     def test_add_candidates_reject_unrelated_top_toolbar(self) -> None:
         source = inspect.getsource(
