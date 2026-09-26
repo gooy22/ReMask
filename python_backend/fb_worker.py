@@ -1507,6 +1507,8 @@ class FacebookWebSession:
                         )[:4000],
                         http_status=status,
                         meta_payload=payload,
+                        request_may_have_been_sent=True,
+                        transport_stage="graphql_response",
                     )
 
                 log.info(
@@ -1520,11 +1522,23 @@ class FacebookWebSession:
                 )
                 return payload
 
-        except (AuthenticationError, RemoteRequestError):
+        except AuthenticationError:
+            raise
+        except RemoteRequestError as exc:
+            # Preserve explicit send-state when already attached. For legacy
+            # RemoteRequestError sites inside this method, enrich the exception
+            # with the current transport state instead of losing exactly-once
+            # information at the boundary.
+            if exc.request_may_have_been_sent is None:
+                exc.request_may_have_been_sent = request_may_have_been_sent
+            if not exc.transport_stage:
+                exc.transport_stage = transport_stage
             raise
         except asyncio.TimeoutError as exc:
             raise RemoteRequestError(
-                "Facebook browser GraphQL request timeout"
+                "Facebook browser GraphQL request timeout",
+                request_may_have_been_sent=request_may_have_been_sent,
+                transport_stage=transport_stage,
             ) from exc
         except Exception as exc:
             raise RemoteRequestError(
