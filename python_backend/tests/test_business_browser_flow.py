@@ -716,6 +716,26 @@ class BrowserAdAccountFormActionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("mode === 'final' && !interactive", script)
 
 
+class BrowserAdAccountConfirmTermsRegressionTests(unittest.TestCase):
+    def test_confirm_terms_are_scoped_to_rk_wizard(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser._accept_ad_account_terms_if_present
+        )
+        self.assertIn("_ad_account_wizard_rect", source)
+        self.assertIn("terms of service", source)
+        self.assertIn("advertising policies", source)
+        self.assertIn("conditions d'utilisation", source)
+        self.assertIn("data-remask-rk-terms", source)
+
+    def test_submit_loop_accepts_terms_before_final_create(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser.create_ad_account
+        )
+        terms_pos = source.index("_accept_ad_account_terms_if_present")
+        final_pos = source.index("_click_ad_account_final_interactive", terms_pos)
+        self.assertLess(terms_pos, final_pos)
+
+
 class BrowserAdAccountAnchoredFinalCreateRegressionTests(unittest.TestCase):
     def test_final_create_can_recover_plain_text_inside_wizard_anchor(self):
         source = inspect.getsource(
