@@ -716,6 +716,27 @@ class BrowserAdAccountFormActionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("mode === 'final' && !interactive", script)
 
 
+class BrowserAdAccountWizardGeometryRegressionTests(unittest.TestCase):
+    def test_browser_tracks_rk_wizard_geometry(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser._capture_ad_account_wizard_rect
+        )
+        self.assertIn("nom du compte publicitaire", source)
+        self.assertIn("fuseau horaire", source)
+        self.assertIn("meta ai", source)
+
+    def test_submit_helpers_use_wizard_geometry_anchor(self):
+        semantic = inspect.getsource(
+            FacebookBusinessBrowser._click_ad_account_form_action_by_visible_text
+        )
+        final = inspect.getsource(
+            FacebookBusinessBrowser._click_ad_account_final_interactive
+        )
+        self.assertIn("_ad_account_wizard_rect", semantic)
+        self.assertIn("_ad_account_wizard_rect", final)
+        self.assertIn("in_wizard_anchor", final)
+
+
 class BrowserAdAccountSubmitScopeRegressionTests(unittest.TestCase):
     def test_submit_actions_require_wizard_surface(self):
         source = inspect.getsource(
