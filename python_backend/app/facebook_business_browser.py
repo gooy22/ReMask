@@ -738,14 +738,30 @@ def _extract_named_ad_account_ids(
     payload: Any,
     account_name: str,
 ) -> list[str]:
-    """Extract numeric RK ids only from nodes matching the exact account name."""
+    """Extract RK ids only from exact-name nodes inside RK inventory context."""
     expected = _clean(account_name).casefold()
     if not expected:
         return []
 
     found: set[str] = set()
+    ad_markers = (
+        "ad_account",
+        "adaccount",
+        "ad_accounts",
+        "adaccounts",
+        "advertising_account",
+        "advertisingaccount",
+    )
 
-    def walk(value: Any) -> None:
+    def is_ad_context(path: str, value: dict[str, Any]) -> bool:
+        folded = path.casefold()
+        typename = _clean(value.get("__typename")).casefold()
+        return any(
+            marker in folded or marker in typename
+            for marker in ad_markers
+        )
+
+    def walk(value: Any, path: str = "root") -> None:
         if isinstance(value, dict):
             node_name = _clean(
                 value.get("name")
@@ -754,7 +770,7 @@ def _extract_named_ad_account_ids(
                 or value.get("adAccountName")
             ).casefold()
 
-            if node_name == expected:
+            if node_name == expected and is_ad_context(path, value):
                 for key in (
                     "id",
                     "account_id",
@@ -787,24 +803,22 @@ def _extract_named_ad_account_ids(
                             if normalized:
                                 found.add(normalized)
 
-            for child in value.values():
-                walk(child)
+            for key, child in value.items():
+                walk(child, f"{path}.{key}")
 
         elif isinstance(value, list):
-            for child in value:
-                walk(child)
+            for index, child in enumerate(value):
+                walk(child, f"{path}[{index}]")
 
     walk(payload)
     return sorted(found)
 
-
 def _extract_inventory_ad_account_ids(payload: Any) -> list[str]:
-    """Extract RK ids from structurally identified ad-account inventory nodes.
+    """Extract RK ids only from structurally identified RK inventory nodes.
 
-    Generic numeric id values are ignored unless their parent/path clearly
-    belongs to an ad-account collection/node. This keeps Business/Page IDs out
-    of reconciliation while allowing Relay inventory shapes where the account
-    name is absent or localized differently.
+    A bare ad_account_id somewhere in a Relay payload is not evidence that
+    the current Business owns that RK. IDs are accepted only when their node
+    or traversal path is already inside an ad-account collection/context.
     """
     found: set[str] = set()
 
@@ -834,19 +848,14 @@ def _extract_inventory_ad_account_ids(payload: Any) -> list[str]:
         if isinstance(value, dict):
             ad_context = path_is_ad_account(path, value)
 
-            for key in (
-                "ad_account_id",
-                "adAccountId",
-                "adaccount_id",
-            ):
-                if key in value:
-                    add(value.get(key))
-
             if ad_context:
                 for key in (
                     "id",
                     "account_id",
                     "accountId",
+                    "ad_account_id",
+                    "adAccountId",
+                    "adaccount_id",
                 ):
                     if key in value:
                         add(value.get(key))
@@ -875,7 +884,6 @@ def _extract_inventory_ad_account_ids(payload: Any) -> list[str]:
 
     walk(payload)
     return sorted(found)
-
 
 def _has_ad_account_inventory_container(payload: Any) -> bool:
     """Return True only when a payload exposes an RK inventory collection.
@@ -7741,11 +7749,10 @@ class FacebookBusinessBrowser:
 
         This is intentionally independent from CREATE mutation names.  It
         reloads the Ad Accounts inventory and observes the GraphQL responses
-        Meta uses to paint the table. It first accepts an exact-name match;
-        under ReMask's 1 BM = 1 RK invariant it also accepts one unique
-        structurally identified RK from a read-only query targeting the exact
-        Business. Two explicit empty inventory observations are accepted as
-        proof that a stale previous CREATE did not leave an RK behind.
+        Meta uses to paint the table. Existing RK reuse is allowed only for an
+        exact-name match inside a structurally identified RK inventory node,
+        or for an exact expected RK id that also matches that name. A random
+        unique numeric id elsewhere in Relay payloads is never treated as an RK.
         """
         business = _digits(business_id)
         expected = _clean(account_name)
@@ -7863,7 +7870,7 @@ class FacebookBusinessBrowser:
                 if (
                     exact_business_context
                     and expected_id
-                    and expected_id in set(exact_name_ids + inventory_ids)
+                    and expected_id in set(exact_name_ids)
                     and not found_future.done()
                 ):
                     found_future.set_result(
@@ -7896,28 +7903,6 @@ class FacebookBusinessBrowser:
                             "account_name": expected,
                             "source": (
                                 "business_settings_graphql_inventory_name"
-                            ),
-                            "evidence": row,
-                        }
-                    )
-                    return
-
-                if (
-                    exact_business_context
-                    and not expected_id
-                    and not mutation_like
-                    and len(inventory_ids) == 1
-                    and not found_future.done()
-                ):
-                    found_future.set_result(
-                        {
-                            "confirmed": True,
-                            "confirmed_empty": False,
-                            "business_id": business,
-                            "ad_account_id": inventory_ids[0],
-                            "account_name": expected,
-                            "source": (
-                                "business_settings_graphql_inventory_unique"
                             ),
                             "evidence": row,
                         }

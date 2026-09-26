@@ -17,7 +17,11 @@ from app.facebook_ad_account_create import (
     create_ad_account_with_docids,
     discover_current_ad_account_create_candidate,
 )
-from app.facebook_business_browser import FacebookBusinessBrowser
+from app.facebook_business_browser import (
+    FacebookBusinessBrowser,
+    _extract_inventory_ad_account_ids,
+    _extract_named_ad_account_ids,
+)
 from app.provisioning.ad_account_handler import (
     AD_ACCOUNT_SAFE_CAPTURE_RETRY_CODES,
     _inventory_repeatedly_confirms_empty,
@@ -33,6 +37,62 @@ from app.provisioning.ad_account_handler import (
 )
 from app.provisioning.state import ProvisioningStateStore
 
+
+
+class AdAccountInventoryParserSafetyTests(unittest.TestCase):
+    def test_bare_relay_ad_account_id_is_not_inventory(self) -> None:
+        payload = {
+            "data": {
+                "viewer": {
+                    "name": "ReMask RK",
+                    "ad_account_id": "120249247450460488",
+                    "__typename": "User",
+                }
+            }
+        }
+        self.assertEqual(_extract_inventory_ad_account_ids(payload), [])
+        self.assertEqual(
+            _extract_named_ad_account_ids(payload, "ReMask RK"),
+            [],
+        )
+
+    def test_structural_inventory_node_is_accepted(self) -> None:
+        payload = {
+            "data": {
+                "business": {
+                    "ad_accounts": {
+                        "nodes": [
+                            {
+                                "__typename": "AdAccount",
+                                "id": "act_1111111111",
+                                "name": "ReMask RK",
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+        self.assertEqual(
+            _extract_inventory_ad_account_ids(payload),
+            ["act_1111111111"],
+        )
+        self.assertEqual(
+            _extract_named_ad_account_ids(payload, "ReMask RK"),
+            ["act_1111111111"],
+        )
+
+    def test_browser_inventory_has_no_unique_id_shortcut(self) -> None:
+        source = inspect.getsource(
+            FacebookBusinessBrowser.find_ad_account_in_inventory
+        )
+        self.assertNotIn(
+            "business_settings_graphql_inventory_unique",
+            source,
+        )
+        self.assertIn(
+            "expected_id in set(exact_name_ids)",
+            source,
+        )
 
 
 class AdAccountPostCreateVerificationTests(unittest.IsolatedAsyncioTestCase):
@@ -1260,6 +1320,14 @@ class AdAccountInventoryPreflightRegressionTests(unittest.TestCase):
         )
         self.assertIn(
             "browser_inventory_attempts",
+            window,
+        )
+        self.assertIn(
+            "browser_candidate_confirmations",
+            window,
+        )
+        self.assertIn(
+            "business_settings_single_candidate_rejected",
             window,
         )
         self.assertIn(

@@ -1216,6 +1216,8 @@ async def ad_account_handler(
         # read-only GraphQL inventory and give it one fresh-session retry
         # before falling back to localized UI evidence.
         browser_found_id = ""
+        browser_candidate_id = ""
+        browser_candidate_confirmations = 0
         for browser_inventory_attempt in range(2):
             (
                 browser_found_id,
@@ -1237,34 +1239,65 @@ async def ad_account_handler(
             )
 
             if browser_found_id:
-                await provisioning_state.remember_entity(
-                    profile_id,
-                    scope_key,
-                    ProvisioningStep.AD_ACCOUNT,
-                    {"ad_account_id": browser_found_id},
-                )
-                return {
-                    "ad_account_id": browser_found_id,
-                    "business_id": business_id,
-                    "name": rk_name,
-                    "currency": currency,
-                    "timezone_id": timezone_id,
-                    "reused": True,
-                    "transport": (
-                        "business_settings_graphql_inventory_preflight"
-                    ),
-                    "reconciliation": inventory_before,
-                    "browser_inventory": browser_inventory_before,
-                    "browser_inventory_attempts": (
-                        browser_inventory_attempts
-                    ),
-                }
+                if not browser_candidate_id:
+                    browser_candidate_id = browser_found_id
+                    browser_candidate_confirmations = 1
+                elif browser_candidate_id == browser_found_id:
+                    browser_candidate_confirmations += 1
+                else:
+                    browser_candidate_id = ""
+                    browser_candidate_confirmations = 0
 
-            if bool(browser_inventory_before.get("confirmed_empty")):
+                if browser_candidate_confirmations >= 2:
+                    await provisioning_state.remember_entity(
+                        profile_id,
+                        scope_key,
+                        ProvisioningStep.AD_ACCOUNT,
+                        {"ad_account_id": browser_found_id},
+                    )
+                    return {
+                        "ad_account_id": browser_found_id,
+                        "business_id": business_id,
+                        "name": rk_name,
+                        "currency": currency,
+                        "timezone_id": timezone_id,
+                        "reused": True,
+                        "transport": (
+                            "business_settings_graphql_inventory_preflight_consensus"
+                        ),
+                        "reconciliation": inventory_before,
+                        "browser_inventory": browser_inventory_before,
+                        "browser_inventory_attempts": (
+                            browser_inventory_attempts
+                        ),
+                    }
+
+            if (
+                bool(browser_inventory_before.get("confirmed_empty"))
+                and not browser_candidate_id
+            ):
                 break
 
             if browser_inventory_attempt == 0:
                 await asyncio.sleep(0.75)
+
+        # A single observed candidate can no longer suppress CREATE. Relay
+        # occasionally exposes unrelated ad-account-shaped ids while painting
+        # Business Settings. Without two fresh exact-name confirmations, keep
+        # the result inconclusive and require the explicit empty UI fallback.
+        if browser_candidate_id and browser_candidate_confirmations < 2:
+            browser_inventory_before = {
+                **(
+                    browser_inventory_before
+                    if isinstance(browser_inventory_before, dict)
+                    else {}
+                ),
+                "confirmed": False,
+                "confirmed_empty": False,
+                "source": "business_settings_single_candidate_rejected",
+                "candidate_ad_account_id": browser_candidate_id,
+                "candidate_confirmations": browser_candidate_confirmations,
+            }
 
         if not bool(browser_inventory_before.get("confirmed_empty")):
             try:
