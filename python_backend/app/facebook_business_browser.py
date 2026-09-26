@@ -7585,7 +7585,13 @@ class FacebookBusinessBrowser:
                 except asyncio.TimeoutError:
                     pass
 
-            confirmed_empty = empty_observations >= 2
+            # Every counted observation is already constrained to:
+            # exact requested Business ID + read-only GraphQL request +
+            # structurally recognized ad-account inventory container + zero
+            # RK IDs. One such snapshot is authoritative for a pre-submit
+            # inventory check. Ambiguous post-submit paths still require
+            # repeated/independent evidence in ad_account_handler.
+            confirmed_empty = empty_observations >= 1
             return {
                 "confirmed": False,
                 "confirmed_empty": confirmed_empty,
