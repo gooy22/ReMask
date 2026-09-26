@@ -968,6 +968,25 @@ class FacebookBusinessBrowser:
     SETTINGS_PAGES_URL = (
         "https://business.facebook.com/settings/pages/?business_id={business_id}"
     )
+    FAN_PAGE_CREATE_URLS = (
+        "https://www.facebook.com/pages/create",
+        "https://www.facebook.com/pages/creation/",
+    )
+    FAN_PAGE_CREATE_NAMES = (
+        "Create Page",
+        "Create page",
+        "Создать Страницу",
+        "Создать страницу",
+        "Створити сторінку",
+        "Créer une Page",
+        "Créer la Page",
+        "Seite erstellen",
+        "পৃষ্ঠা তৈরি করুন",
+        "Tạo Trang",
+        "Tạo trang",
+        "पेज बनाएँ",
+        "पेज बनाएं",
+    )
     SETTINGS_AD_ACCOUNTS_URLS = (
         # Exact migrated Business Settings route observed on current profiles.
         "https://business.facebook.com/latest/settings/ad_accounts/?nav_ref=bm_settings_redirect_migration&bm_redirect_migration=true&business_id={business_id}",
@@ -3306,6 +3325,389 @@ class FacebookBusinessBrowser:
                             return True
 
         return False
+
+    async def _fill_fan_page_category(self, category: str) -> bool:
+        if self.page is None or not _clean(category):
+            return False
+
+        labels = (
+            "Category",
+            "Categories",
+            "Категория",
+            "Категорія",
+            "Kategorie",
+            "Catégorie",
+            "বিভাগ",
+            "Danh mục",
+            "श्रेणी",
+        )
+        field = None
+
+        for label in labels:
+            pattern = re.compile(re.escape(label), re.IGNORECASE)
+            for getter in (
+                lambda: self.page.get_by_label(pattern),
+                lambda: self.page.get_by_placeholder(pattern),
+            ):
+                try:
+                    locator = getter()
+                    for index in range(min(await locator.count(), 8)):
+                        candidate = locator.nth(index)
+                        if await candidate.is_visible() and await candidate.is_editable():
+                            field = candidate
+                            break
+                except Exception:
+                    continue
+                if field is not None:
+                    break
+            if field is not None:
+                break
+
+        if field is None:
+            try:
+                inputs = self.page.locator(
+                    'input:visible, [role="combobox"]:visible, [contenteditable="true"]:visible'
+                )
+                for index in range(min(await inputs.count(), 24)):
+                    candidate = inputs.nth(index)
+                    if not await candidate.is_visible():
+                        continue
+                    key = " ".join(
+                        _clean(await candidate.get_attribute(attr))
+                        for attr in ("name", "id", "placeholder", "aria-label", "role")
+                    ).casefold()
+                    if any(token.casefold() in key for token in labels):
+                        field = candidate
+                        break
+            except Exception:
+                field = None
+
+        if field is None:
+            return False
+
+        try:
+            await field.fill(_clean(category))
+        except Exception:
+            try:
+                await field.click()
+                await field.press("Control+A")
+                await field.type(_clean(category), delay=15)
+            except Exception:
+                return False
+
+        await self.page.wait_for_timeout(700)
+
+        try:
+            options = self.page.get_by_role("option")
+            count = min(await options.count(), 20)
+            exact = None
+            fallback = None
+            for index in range(count):
+                option = options.nth(index)
+                if not await option.is_visible():
+                    continue
+                if fallback is None:
+                    fallback = option
+                text = _clean(await option.inner_text())
+                if _clean(category).casefold() in text.casefold():
+                    exact = option
+                    break
+            chosen = exact or fallback
+            if chosen is not None:
+                await chosen.click()
+                await self.page.wait_for_timeout(350)
+                return True
+        except Exception:
+            pass
+
+        try:
+            await field.press("ArrowDown")
+            await field.press("Enter")
+            await self.page.wait_for_timeout(350)
+            return True
+        except Exception:
+            return False
+
+    async def _fan_page_snapshot(self) -> list[dict[str, Any]]:
+        try:
+            return await self.discover_managed_pages(fast=True)
+        except BrowserBusinessError as exc:
+            if exc.code == "FAN_PAGES_NOT_DISCOVERED":
+                return []
+            raise
+
+    async def create_fan_page(
+        self,
+        *,
+        page_name: str,
+        category: str,
+        bio: str = "",
+        before_submit: CheckpointCallback | None = None,
+    ) -> dict[str, Any]:
+        """Create one Facebook Page through Meta's own profile-bound UI."""
+        name = _clean(page_name)
+        category_name = _clean(category)
+        if not name:
+            raise BrowserBusinessError(
+                "FAN_PAGE_NAME_REQUIRED",
+                "Fan Page name is required.",
+                retryable=False,
+            )
+        if not category_name:
+            raise BrowserBusinessError(
+                "FAN_PAGE_CATEGORY_REQUIRED",
+                "Fan Page category is required.",
+                retryable=False,
+            )
+
+        before_pages = await self._fan_page_snapshot()
+        before_ids = {
+            _digits(row.get("id"))
+            for row in before_pages
+            if isinstance(row, dict) and _digits(row.get("id"))
+        }
+
+        existing = [
+            row
+            for row in before_pages
+            if isinstance(row, dict)
+            and _clean(row.get("name")).casefold() == name.casefold()
+            and not _clean(row.get("business_id"))
+            and _digits(row.get("id"))
+        ]
+        if len(existing) == 1:
+            page_id = _digits(existing[0].get("id"))
+            return {
+                "page_id": page_id,
+                "name": name,
+                "category": category_name,
+                "reused": True,
+                "before_ids": sorted(before_ids),
+                "after_ids": sorted(before_ids),
+                "transport": "facebook_pages_inventory_exact_name",
+            }
+
+        opened = False
+        form_diagnostics: list[dict[str, Any]] = []
+
+        for target in self.FAN_PAGE_CREATE_URLS:
+            try:
+                await self._goto(target)
+                name_filled = await self._fill_first(
+                    labels=(
+                        "Page name",
+                        "Page Name",
+                        "Название Страницы",
+                        "Название страницы",
+                        "Назва сторінки",
+                        "Seitenname",
+                        "Nom de la Page",
+                        "Nom de la page",
+                        "পেজের নাম",
+                        "Tên Trang",
+                        "Tên trang",
+                        "पेज का नाम",
+                    ),
+                    value=name,
+                    fill_timeout_ms=3500,
+                )
+                category_filled = await self._fill_fan_page_category(category_name)
+                form_diagnostics.append(
+                    {
+                        "target": target,
+                        "url": _clean(getattr(self.page, "url", "")),
+                        "name_filled": name_filled,
+                        "category_filled": category_filled,
+                    }
+                )
+                if name_filled and category_filled:
+                    opened = True
+                    break
+            except BrowserBusinessError:
+                raise
+            except Exception as exc:
+                form_diagnostics.append(
+                    {
+                        "target": target,
+                        "error": f"{exc.__class__.__name__}: {_clean(exc)}"[:500],
+                    }
+                )
+
+        if not opened:
+            diag = await self._diagnostic("fan_page_create_form_unavailable")
+            diag["form_attempts"] = form_diagnostics[-6:]
+            raise BrowserBusinessError(
+                "FAN_PAGE_CREATE_UI_CHANGED",
+                "Facebook Page creation form did not expose usable name/category fields.",
+                retryable=True,
+                diagnostic=diag,
+            )
+
+        clean_bio = _clean(bio)
+        if clean_bio:
+            await self._fill_first(
+                labels=(
+                    "Bio",
+                    "Description",
+                    "Биография",
+                    "Описание",
+                    "Біографія",
+                    "Опис",
+                    "Beschreibung",
+                    "Giới thiệu",
+                    "Tiểu sử",
+                    "बायो",
+                ),
+                value=clean_bio[:255],
+                fill_timeout_ms=2500,
+            )
+
+        await self.page.wait_for_timeout(500)
+
+        async def mark_submit_intent() -> None:
+            if before_submit is not None:
+                await before_submit(
+                    {
+                        "phase": "PAGE_CREATE_CLICK_INTENT",
+                        "page_name": name,
+                        "category": category_name,
+                        "before_ids": sorted(before_ids),
+                        "current_url": _clean(getattr(self.page, "url", "")),
+                    }
+                )
+
+        click_meta = await self._click_named_single_attempt(
+            self.FAN_PAGE_CREATE_NAMES,
+            roles=("button",),
+            before_click=mark_submit_intent,
+            click_timeout_ms=5000,
+        )
+
+        if not bool(click_meta.get("found")):
+            diag = await self._diagnostic("fan_page_create_submit_missing")
+            diag["click_meta"] = click_meta
+            raise BrowserBusinessError(
+                "FAN_PAGE_CREATE_UI_CHANGED",
+                "Facebook Page creation form was filled but Create Page was not found.",
+                retryable=True,
+                diagnostic=diag,
+            )
+
+        if click_meta.get("error"):
+            raise BrowserBusinessError(
+                "FAN_PAGE_CREATE_RESULT_UNKNOWN",
+                (
+                    "Create Page click was attempted, but Playwright lost a "
+                    "definitive final state. Reconciliation is required before "
+                    "another CREATE. " + _clean(click_meta.get("error"))
+                ),
+                retryable=True,
+                diagnostic={
+                    "stage": "fan_page_final_click_unknown",
+                    "click_meta": click_meta,
+                    "before_ids": sorted(before_ids),
+                    "page_name": name,
+                },
+            )
+
+        try:
+            await self.page.wait_for_timeout(1400)
+        except Exception:
+            pass
+
+        try:
+            body = (await self._body_text()).casefold()
+        except Exception:
+            body = ""
+        reject_markers = (
+            "couldn't create page",
+            "could not create page",
+            "unable to create page",
+            "не удалось создать страницу",
+            "не вдалося створити сторінку",
+            "page creation failed",
+        )
+        if any(marker in body for marker in reject_markers):
+            diag = await self._diagnostic("fan_page_create_rejected")
+            raise BrowserBusinessError(
+                "FAN_PAGE_CREATE_REJECTED",
+                "Facebook explicitly rejected Page creation.",
+                retryable=False,
+                diagnostic=diag,
+            )
+
+        successful_inventory_reads = 0
+        last_pages: list[dict[str, Any]] = []
+        for attempt in range(4):
+            try:
+                after_pages = await self.discover_managed_pages(fast=True)
+                successful_inventory_reads += 1
+                last_pages = after_pages
+            except BrowserBusinessError as exc:
+                if exc.code != "FAN_PAGES_NOT_DISCOVERED" and attempt >= 3:
+                    raise
+                after_pages = []
+
+            after_ids = {
+                _digits(row.get("id"))
+                for row in after_pages
+                if isinstance(row, dict) and _digits(row.get("id"))
+            }
+            new_ids = sorted(after_ids - before_ids)
+            exact_new = [
+                row
+                for row in after_pages
+                if isinstance(row, dict)
+                and _digits(row.get("id")) in new_ids
+                and _clean(row.get("name")).casefold() == name.casefold()
+            ]
+
+            if len(exact_new) == 1:
+                page_id = _digits(exact_new[0].get("id"))
+                return {
+                    "page_id": page_id,
+                    "name": name,
+                    "category": category_name,
+                    "reused": False,
+                    "before_ids": sorted(before_ids),
+                    "after_ids": sorted(after_ids),
+                    "transport": "facebook_pages_ui_inventory_diff",
+                }
+
+            if len(new_ids) == 1:
+                return {
+                    "page_id": new_ids[0],
+                    "name": name,
+                    "category": category_name,
+                    "reused": False,
+                    "before_ids": sorted(before_ids),
+                    "after_ids": sorted(after_ids),
+                    "transport": "facebook_pages_ui_inventory_unique_diff",
+                }
+
+            if attempt < 3:
+                await asyncio.sleep(1.5 + (0.5 * attempt))
+
+        raise BrowserBusinessError(
+            "FAN_PAGE_CREATE_RESULT_UNKNOWN",
+            (
+                "Create Page was clicked, but the managed-Page inventory did "
+                "not expose one definitive new Page ID. Reconciliation is "
+                "required before another CREATE."
+            ),
+            retryable=True,
+            diagnostic={
+                "stage": "fan_page_inventory_unconfirmed",
+                "page_name": name,
+                "before_ids": sorted(before_ids),
+                "successful_inventory_reads": successful_inventory_reads,
+                "last_ids": sorted(
+                    _digits(row.get("id"))
+                    for row in last_pages
+                    if isinstance(row, dict) and _digits(row.get("id"))
+                ),
+            },
+        )
 
     async def discover_managed_pages(
         self,
