@@ -6,7 +6,11 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from app.facebook_business_browser import FacebookBusinessBrowser
-from app.provisioning.fan_pages_handler import (\n    _reconcile_uncertain_page,\n    _target_names,\n    fan_pages_handler,\n)
+from app.provisioning.fan_pages_handler import (
+    _reconcile_uncertain_page,
+    _target_names,
+    fan_pages_handler,
+)
 from app.provisioning.models import ProvisioningStep
 from app.provisioning.registry import PROVISIONING_HANDLERS
 
