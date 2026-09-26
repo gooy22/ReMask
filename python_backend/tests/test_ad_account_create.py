@@ -33,21 +33,38 @@ class AdAccountRuntimeDiagnosticTests(unittest.TestCase):
         self.assertIn("exc.diagnostic", source)
 
 
-class AdAccountToolbarIsolationTests(unittest.TestCase):
-    def test_add_candidates_reject_unrelated_top_toolbar(self) -> None:
+class AdAccountCreateEntryTargetTests(unittest.TestCase):
+    def test_add_candidates_keep_top_add_for_meta_create_surface(self) -> None:
         source = inspect.getsource(
             FacebookBusinessBrowser._ad_account_add_button_candidates
         )
-        self.assertIn("hasLocalAccountContext", source)
-        self.assertIn("if (r.y < 180 && !localAccountContext)", source)
-        self.assertIn("local_account_context", source)
-
-    def test_create_action_readiness_rejects_global_toolbar_add(self) -> None:
-        source = inspect.getsource(
-            FacebookBusinessBrowser._wait_for_ad_account_create_action
+        self.assertNotIn(
+            "if (r.y < 180 && !localAccountContext)",
+            source,
         )
-        self.assertIn("localAccountContext", source)
-        self.assertIn("return r.y >= 180 || localAccountContext(el)", source)
+
+    def test_create_entry_state_clicks_exact_tagged_target(self) -> None:
+        source = inspect.getsource(
+            FacebookBusinessBrowser._wait_for_ad_account_create_entry
+        )
+        self.assertIn(
+            "_click_state_detected_ad_account_create_entry()",
+            source,
+        )
+        clicker = inspect.getsource(
+            FacebookBusinessBrowser._click_state_detected_ad_account_create_entry
+        )
+        self.assertIn(
+            '[data-remask-rk-create-state="1"]',
+            clicker,
+        )
+
+    def test_ui_state_exposes_concrete_create_target(self) -> None:
+        source = inspect.getsource(
+            FacebookBusinessBrowser._ad_account_ui_state
+        )
+        self.assertIn("data-remask-rk-create-state", source)
+        self.assertIn("create_target", source)
 
     def test_exact_migrated_ad_accounts_route_is_preferred(self) -> None:
         first = FacebookBusinessBrowser.SETTINGS_AD_ACCOUNTS_URLS[0]
