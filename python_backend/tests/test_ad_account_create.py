@@ -25,6 +25,7 @@ from app.facebook_business_browser import (
 from app.provisioning.ad_account_handler import (
     AD_ACCOUNT_SAFE_CAPTURE_RETRY_CODES,
     _inventory_repeatedly_confirms_empty,
+    _reconcile_existing,
     _inventory_proof_summary,
     _reconcile_existing_browser_inventory,
     _verify_expected_ad_account_in_business,
@@ -1297,6 +1298,41 @@ class AdAccountNestedCapturedPayloadTests(unittest.TestCase):
         )
         self.assertNotIn("end_advertiser", rewritten["left"])
         self.assertNotIn("end_advertiser", rewritten["right"])
+
+
+class AdAccountGraphInventoryTrustRegressionTests(unittest.TestCase):
+    def test_graph_inventory_never_reuses_single_row_by_count(self) -> None:
+        source = inspect.getsource(_reconcile_existing)
+        self.assertNotIn("if len(normalized) == 1", source)
+        self.assertIn("graph_candidates_untrusted", source)
+
+    def test_preflight_never_returns_raw_graph_candidate(self) -> None:
+        source = inspect.getsource(ad_account_handler)
+        preflight_pos = source.index(
+            "# Read-only preflight enforces the 1 BM = 1 RK invariant."
+        )
+        preparing_pos = source.index(
+            '"phase": "CREATE_PREPARING"',
+            preflight_pos,
+        )
+        window = source[preflight_pos:preparing_pos]
+        self.assertNotIn('"transport": "graph_inventory_preflight"', window)
+        self.assertIn(
+            '"transport": "graph_candidate_business_settings_verified"',
+            window,
+        )
+        self.assertIn("_verify_expected_ad_account_in_business(", window)
+
+    def test_uncertainty_graph_candidate_requires_browser_verification(self) -> None:
+        source = inspect.getsource(_prove_empty_after_uncertainty)
+        self.assertIn(
+            "graph_then_business_settings_verified",
+            source,
+        )
+        self.assertIn(
+            "not_confirmed_in_business_settings",
+            source,
+        )
 
 
 class AdAccountInventoryPreflightRegressionTests(unittest.TestCase):

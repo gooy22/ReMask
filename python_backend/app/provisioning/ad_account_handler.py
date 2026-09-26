@@ -310,11 +310,10 @@ async def _reconcile_existing(
     if not normalized:
         return "", diagnostics
 
-    # User's invariant: one BM must have only one RK. If there is exactly one,
-    # reuse it regardless of name. A unique exact-name match is also safe.
-    if len(normalized) == 1:
-        return str(normalized[0]["id"]), diagnostics
-
+    # Graph inventory is advisory only. Never turn a lone numeric ID into an
+    # existing RK just because it is the only row returned by the token.
+    # At most expose an exact-name candidate; the caller must still verify that
+    # same ID through live Business Settings before it can suppress CREATE.
     name_matches = [
         row
         for row in normalized
@@ -323,15 +322,11 @@ async def _reconcile_existing(
     if len(name_matches) == 1:
         return str(name_matches[0]["id"]), diagnostics
 
-    raise ProvisioningError(
-        "AD_ACCOUNT_INVENTORY_AMBIGUOUS",
-        (
-            f"Business {business_id} already exposes {len(normalized)} ad "
-            "accounts. ReMask will not create another RK because the configured "
-            "model is 1 BM = 1 RK."
-        ),
-        retryable=False,
-    )
+    diagnostics[-1]["graph_candidates_untrusted"] = [
+        row["id"] for row in normalized[:20]
+    ]
+    diagnostics[-1]["reason"] = "no_exact_name_match"
+    return "", diagnostics
 
 
 async def _reconcile_existing_browser_inventory(
@@ -529,11 +524,32 @@ async def _prove_empty_after_uncertainty(
         )
         graph_evidence.extend(diagnostics)
         if found_id:
-            return found_id, False, {
-                "strategy": "uncertain_inventory_v2",
-                "found_via": "graph_inventory",
-                "graph": graph_evidence[-16:],
-            }
+            graph_verified, graph_verify_evidence = (
+                await _verify_expected_ad_account_in_business(
+                    session,
+                    business_id=business_id,
+                    account_name=account_name,
+                    expected_ad_account_id=found_id,
+                    checks=2,
+                    delay_seconds=delay_seconds,
+                )
+            )
+            if graph_verified:
+                return found_id, False, {
+                    "strategy": "uncertain_inventory_v2",
+                    "found_via": "graph_then_business_settings_verified",
+                    "graph": graph_evidence[-16:],
+                    "graph_candidate_verification": graph_verify_evidence,
+                }
+            graph_evidence.append(
+                {
+                    "stage": "inventory",
+                    "result": "candidate_rejected",
+                    "candidate_ad_account_id": found_id,
+                    "reason": "not_confirmed_in_business_settings",
+                    "browser_verification": graph_verify_evidence,
+                }
+            )
         if attempt < graph_attempts_needed - 1:
             await asyncio.sleep(max(0.25, float(delay_seconds)))
 
@@ -1182,174 +1198,196 @@ async def ad_account_handler(
         business_id=business_id,
         account_name=rk_name,
     )
-    if found_id:
-        await provisioning_state.remember_entity(
-            profile_id,
-            scope_key,
-            ProvisioningStep.AD_ACCOUNT,
-            {"ad_account_id": found_id},
-        )
-        return {
-            "ad_account_id": found_id,
-            "business_id": business_id,
-            "name": rk_name,
-            "currency": currency,
-            "timezone_id": timezone_id,
-            "reused": True,
-            "transport": "graph_inventory_preflight",
-            "reconciliation": inventory_before,
-        }
 
-    graph_inventory_conclusive = any(
+    graph_candidate_id = _normalize_ad_account_id(found_id)
+    graph_candidate_verification: list[dict[str, Any]] = []
+    if graph_candidate_id:
+        graph_verified, graph_candidate_verification = (
+            await _verify_expected_ad_account_in_business(
+                session,
+                business_id=business_id,
+                account_name=rk_name,
+                expected_ad_account_id=graph_candidate_id,
+                checks=2,
+                delay_seconds=0.75,
+            )
+        )
+        if graph_verified:
+            await provisioning_state.remember_entity(
+                profile_id,
+                scope_key,
+                ProvisioningStep.AD_ACCOUNT,
+                {"ad_account_id": graph_candidate_id},
+            )
+            return {
+                "ad_account_id": graph_candidate_id,
+                "business_id": business_id,
+                "name": rk_name,
+                "currency": currency,
+                "timezone_id": timezone_id,
+                "reused": True,
+                "transport": "graph_candidate_business_settings_verified",
+                "reconciliation": inventory_before,
+                "graph_candidate_verification": graph_candidate_verification,
+            }
+
+        inventory_before.append(
+            {
+                "stage": "inventory",
+                "result": "candidate_rejected",
+                "candidate_ad_account_id": graph_candidate_id,
+                "reason": "not_confirmed_in_business_settings",
+                "browser_verification": graph_candidate_verification,
+            }
+        )
+
+    graph_inventory_empty = any(
         isinstance(row, dict)
         and row.get("stage") == "inventory"
         and row.get("result") == "ok"
+        and int(row.get("count") or 0) == 0
         for row in inventory_before
     )
     browser_inventory_before: dict[str, Any] = {}
     browser_inventory_attempts: list[dict[str, Any]] = []
     ui_inventory_before: dict[str, Any] = {}
 
-    if not graph_inventory_conclusive:
-        # The public/Graph inventory transport is frequently unavailable for
-        # browser-only Meta sessions. Prefer Meta Business Settings' own
-        # read-only GraphQL inventory and give it one fresh-session retry
-        # before falling back to localized UI evidence.
-        browser_found_id = ""
-        browser_candidate_id = ""
-        browser_candidate_confirmations = 0
-        for browser_inventory_attempt in range(2):
-            (
-                browser_found_id,
-                browser_inventory_before,
-            ) = await _reconcile_existing_browser_inventory(
-                session,
-                business_id=business_id,
-                account_name=rk_name,
-            )
-            browser_inventory_attempts.append(
-                {
-                    "attempt": browser_inventory_attempt + 1,
-                    **(
-                        browser_inventory_before
-                        if isinstance(browser_inventory_before, dict)
-                        else {}
-                    ),
-                }
-            )
-
-            if browser_found_id:
-                if not browser_candidate_id:
-                    browser_candidate_id = browser_found_id
-                    browser_candidate_confirmations = 1
-                elif browser_candidate_id == browser_found_id:
-                    browser_candidate_confirmations += 1
-                else:
-                    browser_candidate_id = ""
-                    browser_candidate_confirmations = 0
-
-                if browser_candidate_confirmations >= 2:
-                    await provisioning_state.remember_entity(
-                        profile_id,
-                        scope_key,
-                        ProvisioningStep.AD_ACCOUNT,
-                        {"ad_account_id": browser_found_id},
-                    )
-                    return {
-                        "ad_account_id": browser_found_id,
-                        "business_id": business_id,
-                        "name": rk_name,
-                        "currency": currency,
-                        "timezone_id": timezone_id,
-                        "reused": True,
-                        "transport": (
-                            "business_settings_graphql_inventory_preflight_consensus"
-                        ),
-                        "reconciliation": inventory_before,
-                        "browser_inventory": browser_inventory_before,
-                        "browser_inventory_attempts": (
-                            browser_inventory_attempts
-                        ),
-                    }
-
-            if (
-                bool(browser_inventory_before.get("confirmed_empty"))
-                and not browser_candidate_id
-            ):
-                break
-
-            if browser_inventory_attempt == 0:
-                await asyncio.sleep(0.75)
-
-        # A single observed candidate can no longer suppress CREATE. Relay
-        # occasionally exposes unrelated ad-account-shaped ids while painting
-        # Business Settings. Without two fresh exact-name confirmations, keep
-        # the result inconclusive and require the explicit empty UI fallback.
-        if browser_candidate_id and browser_candidate_confirmations < 2:
-            browser_inventory_before = {
+    # Business Settings is authoritative for pre-submit reuse/absence. Graph
+    # responses can be stale, token-scoped, or contain accounts not visible in
+    # the selected BM. Never let Graph alone suppress CREATE.
+    browser_found_id = ""
+    browser_candidate_id = ""
+    browser_candidate_confirmations = 0
+    for browser_inventory_attempt in range(2):
+        (
+            browser_found_id,
+            browser_inventory_before,
+        ) = await _reconcile_existing_browser_inventory(
+            session,
+            business_id=business_id,
+            account_name=rk_name,
+        )
+        browser_inventory_attempts.append(
+            {
+                "attempt": browser_inventory_attempt + 1,
                 **(
                     browser_inventory_before
                     if isinstance(browser_inventory_before, dict)
                     else {}
                 ),
-                "confirmed": False,
-                "confirmed_empty": False,
-                "source": "business_settings_single_candidate_rejected",
-                "candidate_ad_account_id": browser_candidate_id,
-                "candidate_confirmations": browser_candidate_confirmations,
             }
+        )
 
-        if not bool(browser_inventory_before.get("confirmed_empty")):
-            try:
-                async with FacebookBusinessBrowser(
-                    session.context,
-                    timeout_seconds=45,
-                ) as inventory_browser:
-                    ui_inventory_before = (
-                        await inventory_browser.verify_ad_account_inventory_empty(
-                            business_id=business_id,
-                        )
-                    )
-            except Exception as exc:
-                ui_inventory_before = {
-                    "confirmed_empty": False,
-                    "error": (
-                        f"{exc.__class__.__name__}: {_clean(exc)}"
-                    )[:500],
-                }
+        if browser_found_id:
+            if not browser_candidate_id:
+                browser_candidate_id = browser_found_id
+                browser_candidate_confirmations = 1
+            elif browser_candidate_id == browser_found_id:
+                browser_candidate_confirmations += 1
+            else:
+                browser_candidate_id = ""
+                browser_candidate_confirmations = 0
 
-            if not bool(ui_inventory_before.get("confirmed_empty")):
-                await provisioning_state.checkpoint(
-                    item_id,
+            if browser_candidate_confirmations >= 2:
+                await provisioning_state.remember_entity(
                     profile_id,
                     scope_key,
                     ProvisioningStep.AD_ACCOUNT,
-                    {
-                        "phase": "CREATE_NOT_SUBMITTED",
-                        "resume_from": "CREATE",
-                        "business_id": business_id,
-                        "account_name": rk_name,
-                        "currency": currency,
-                        "timezone_id": timezone_id,
-                        "last_error_code": "AD_ACCOUNT_INVENTORY_UNAVAILABLE",
-                        "last_error": (
-                            "RK inventory is inconclusive before CREATE; "
-                            "duplicate-safe preflight blocked submission."
-                        ),
-                        "inventory_before": inventory_before,
-                        "browser_inventory_before": browser_inventory_before,
-                        "browser_inventory_attempts": browser_inventory_attempts,
-                        "ui_inventory_before": ui_inventory_before,
-                    },
+                    {"ad_account_id": browser_found_id},
                 )
-                raise ProvisioningError(
-                    "AD_ACCOUNT_INVENTORY_UNAVAILABLE",
-                    (
-                        f"Business {business_id} inventory could not prove "
-                        "that no RK exists. CREATE was not submitted."
+                return {
+                    "ad_account_id": browser_found_id,
+                    "business_id": business_id,
+                    "name": rk_name,
+                    "currency": currency,
+                    "timezone_id": timezone_id,
+                    "reused": True,
+                    "transport": (
+                        "business_settings_graphql_inventory_preflight_consensus"
                     ),
-                    retryable=True,
+                    "reconciliation": inventory_before,
+                    "browser_inventory": browser_inventory_before,
+                    "browser_inventory_attempts": browser_inventory_attempts,
+                }
+
+        if (
+            bool(browser_inventory_before.get("confirmed_empty"))
+            and not browser_candidate_id
+        ):
+            break
+
+        if browser_inventory_attempt == 0:
+            await asyncio.sleep(0.75)
+
+    if browser_candidate_id and browser_candidate_confirmations < 2:
+        browser_inventory_before = {
+            **(
+                browser_inventory_before
+                if isinstance(browser_inventory_before, dict)
+                else {}
+            ),
+            "confirmed": False,
+            "confirmed_empty": False,
+            "source": "business_settings_single_candidate_rejected",
+            "candidate_ad_account_id": browser_candidate_id,
+            "candidate_confirmations": browser_candidate_confirmations,
+        }
+
+    if not bool(browser_inventory_before.get("confirmed_empty")):
+        try:
+            async with FacebookBusinessBrowser(
+                session.context,
+                timeout_seconds=45,
+            ) as inventory_browser:
+                ui_inventory_before = (
+                    await inventory_browser.verify_ad_account_inventory_empty(
+                        business_id=business_id,
+                    )
                 )
+        except Exception as exc:
+            ui_inventory_before = {
+                "confirmed_empty": False,
+                "error": (
+                    f"{exc.__class__.__name__}: {_clean(exc)}"
+                )[:500],
+            }
+
+        if not bool(ui_inventory_before.get("confirmed_empty")):
+            await provisioning_state.checkpoint(
+                item_id,
+                profile_id,
+                scope_key,
+                ProvisioningStep.AD_ACCOUNT,
+                {
+                    "phase": "CREATE_NOT_SUBMITTED",
+                    "resume_from": "CREATE",
+                    "business_id": business_id,
+                    "account_name": rk_name,
+                    "currency": currency,
+                    "timezone_id": timezone_id,
+                    "last_error_code": "AD_ACCOUNT_INVENTORY_UNAVAILABLE",
+                    "last_error": (
+                        "RK inventory is inconclusive before CREATE; "
+                        "duplicate-safe preflight blocked submission."
+                    ),
+                    "inventory_before": inventory_before,
+                    "graph_inventory_empty": graph_inventory_empty,
+                    "graph_candidate_verification": (
+                        graph_candidate_verification
+                    ),
+                    "browser_inventory_before": browser_inventory_before,
+                    "browser_inventory_attempts": browser_inventory_attempts,
+                    "ui_inventory_before": ui_inventory_before,
+                },
+            )
+            raise ProvisioningError(
+                "AD_ACCOUNT_INVENTORY_UNAVAILABLE",
+                (
+                    f"Business {business_id} inventory could not prove "
+                    "that no RK exists. CREATE was not submitted."
+                ),
+                retryable=True,
+            )
 
     await provisioning_state.checkpoint(
         item_id,
