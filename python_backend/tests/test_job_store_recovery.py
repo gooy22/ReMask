@@ -1,14 +1,19 @@
 import asyncio
 import json
+import os
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
+
+import aiohttp
 from pathlib import Path
 
 from app.store import JobStore
 from app.provisioning.state import ProvisioningStateStore
 from app.runner import _await_with_hard_watchdog
 from app.provisioning.models import ProvisioningError
+from app.session import ProfileContextError, ProfileResolver
 
 
 class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
@@ -257,6 +262,114 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
         job = await self.store.job_view(job_id)
         self.assertEqual(item["status"], "SUCCESS")
         self.assertEqual(job["status"], "SUCCESS")
+
+
+class ProfileResolverRecoveryTests(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    def _payload() -> dict:
+        return {
+            "cookies": {"c_user": "123", "xs": "session"},
+            "user_agent": "Mozilla/5.0",
+            "proxy": "http://127.0.0.1:8888",
+            "display_name": "Profile Five",
+            "pages": [],
+        }
+
+    async def test_loopback_transport_recovers_before_job_failure(self):
+        calls = {"count": 0}
+        payload = self._payload()
+
+        class Response:
+            status = 200
+
+            async def json(self, content_type=None):
+                return payload
+
+        class RequestContext:
+            async def __aenter__(self):
+                calls["count"] += 1
+                if calls["count"] < 3:
+                    raise aiohttp.ClientConnectionError("resolver not listening")
+                return Response()
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        class Client:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            def get(self, *args, **kwargs):
+                return RequestContext()
+
+        with patch.dict(
+            os.environ,
+            {
+                "REMASK_PROFILE_RESOLVER_ATTEMPTS": "3",
+                "REMASK_PROFILE_RESOLVER_BACKOFF_SECONDS": "0",
+            },
+            clear=False,
+        ), patch("app.session.aiohttp.ClientSession", Client):
+            resolver = ProfileResolver(
+                "http://127.0.0.1/ajax/pythonProfileContext.php",
+                "internal-key",
+            )
+            context = await resolver.resolve("5")
+
+        self.assertEqual(calls["count"], 3)
+        self.assertEqual(context.profile_id, "5")
+        self.assertEqual(context.cookies["c_user"], "123")
+
+    async def test_exhausted_transport_error_stays_retryable(self):
+        calls = {"count": 0}
+
+        class RequestContext:
+            async def __aenter__(self):
+                calls["count"] += 1
+                raise aiohttp.ClientConnectionError("resolver unavailable")
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        class Client:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            def get(self, *args, **kwargs):
+                return RequestContext()
+
+        with patch.dict(
+            os.environ,
+            {
+                "REMASK_PROFILE_RESOLVER_ATTEMPTS": "2",
+                "REMASK_PROFILE_RESOLVER_BACKOFF_SECONDS": "0",
+            },
+            clear=False,
+        ), patch("app.session.aiohttp.ClientSession", Client):
+            resolver = ProfileResolver(
+                "http://127.0.0.1/ajax/pythonProfileContext.php",
+                "internal-key",
+            )
+            with self.assertRaises(ProfileContextError) as raised:
+                await resolver.resolve("5")
+
+        self.assertEqual(calls["count"], 2)
+        self.assertTrue(raised.exception.retryable)
+        self.assertEqual(raised.exception.category, "resolver_transport")
+        self.assertIn("ClientConnectionError", str(raised.exception))
+
 
 
 if __name__ == "__main__":
