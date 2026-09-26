@@ -55,7 +55,7 @@ class AdAccountPrivateGraphqlPrimaryTests(unittest.TestCase):
             "9236789956426634",
         )
         source = inspect.getsource(create_ad_account_with_docids)
-        self.assertIn('"source="corroborated_20260926"', source)
+        self.assertIn('source="corroborated_20260926"', source.replace("'", '"'))
         self.assertIn(
             '"bizkit_settings_create_ad_account_flat_v3"',
             source,
