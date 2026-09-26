@@ -599,80 +599,82 @@ async def ad_account_handler(
                         "reconciliation": inventory_evidence,
                     }
 
-            if _inventory_repeatedly_confirms_empty(
+            graph_empty_confirmed = _inventory_repeatedly_confirms_empty(
                 inventory_evidence,
                 required_checks=3,
-            ):
+            )
+
+            # Never clear a cross-Job duplicate guard from one inventory
+            # transport alone. Meta can delay propagation differently across
+            # surfaces. Require Business Settings/UI to independently confirm
+            # the exact Business is empty before a fresh CREATE is allowed.
+            browser_found_id, browser_inventory = (
+                await _reconcile_existing_browser_inventory(
+                    session,
+                    business_id=business_id,
+                    account_name=rk_name,
+                )
+            )
+            if browser_found_id:
+                await provisioning_state.remember_entity(
+                    profile_id,
+                    scope_key,
+                    ProvisioningStep.AD_ACCOUNT,
+                    {"ad_account_id": browser_found_id},
+                )
+                return {
+                    "ad_account_id": browser_found_id,
+                    "business_id": business_id,
+                    "name": rk_name,
+                    "currency": currency,
+                    "timezone_id": timezone_id,
+                    "reused": True,
+                    "cross_job_resume": True,
+                    "recovered_after_uncertainty": True,
+                    "transport": "business_settings_graphql_inventory",
+                    "reconciliation": inventory_evidence,
+                    "browser_inventory": browser_inventory,
+                }
+
+            secondary_empty_confirmed = bool(
+                browser_inventory.get("confirmed_empty")
+            )
+            ui_inventory: dict[str, Any] = {}
+            if not secondary_empty_confirmed:
+                try:
+                    async with FacebookBusinessBrowser(
+                        session.context,
+                        timeout_seconds=45,
+                    ) as inventory_browser:
+                        ui_inventory = (
+                            await inventory_browser.verify_ad_account_inventory_empty(
+                                business_id=business_id,
+                            )
+                        )
+                except Exception as exc:
+                    ui_inventory = {
+                        "confirmed_empty": False,
+                        "error": (
+                            f"{exc.__class__.__name__}: {_clean(exc)}"
+                        )[:500],
+                    }
+                secondary_empty_confirmed = bool(
+                    ui_inventory.get("confirmed_empty")
+                )
+
+            if graph_empty_confirmed and secondary_empty_confirmed:
                 cross_job = {}
             else:
-                browser_found_id, browser_inventory = (
-                    await _reconcile_existing_browser_inventory(
-                        session,
-                        business_id=business_id,
-                        account_name=rk_name,
-                    )
+                raise ProvisioningError(
+                    "AD_ACCOUNT_CREATE_RESULT_UNKNOWN",
+                    (
+                        f"A previous Job may already have submitted CREATE for "
+                        f"Business {business_id}. Independent inventory checks "
+                        "do not yet prove the RK is absent, so ReMask will not "
+                        "submit a duplicate CREATE."
+                    ),
+                    retryable=True,
                 )
-                if browser_found_id:
-                    await provisioning_state.remember_entity(
-                        profile_id,
-                        scope_key,
-                        ProvisioningStep.AD_ACCOUNT,
-                        {"ad_account_id": browser_found_id},
-                    )
-                    return {
-                        "ad_account_id": browser_found_id,
-                        "business_id": business_id,
-                        "name": rk_name,
-                        "currency": currency,
-                        "timezone_id": timezone_id,
-                        "reused": True,
-                        "cross_job_resume": True,
-                        "recovered_after_uncertainty": True,
-                        "transport": (
-                            "business_settings_graphql_inventory"
-                        ),
-                        "reconciliation": inventory_evidence,
-                        "browser_inventory": browser_inventory,
-                    }
-
-                # Meta's own read-only Business Settings inventory is stronger
-                # than localized UI text. Two exact-Business empty inventory
-                # observations prove that the old ambiguous click left no RK,
-                # so the stale cross-Job duplicate guard can be cleared.
-                if bool(browser_inventory.get("confirmed_empty")):
-                    cross_job = {}
-                else:
-                    ui_inventory = {}
-                    try:
-                        async with FacebookBusinessBrowser(
-                            session.context,
-                            timeout_seconds=45,
-                        ) as inventory_browser:
-                            ui_inventory = (
-                                await inventory_browser.verify_ad_account_inventory_empty(
-                                    business_id=business_id,
-                                )
-                            )
-                    except Exception as exc:
-                        ui_inventory = {
-                            "confirmed_empty": False,
-                            "error": (
-                                f"{exc.__class__.__name__}: {_clean(exc)}"
-                            )[:500],
-                        }
-
-                    if bool(ui_inventory.get("confirmed_empty")):
-                        cross_job = {}
-                    else:
-                        raise ProvisioningError(
-                            "AD_ACCOUNT_CREATE_RESULT_UNKNOWN",
-                            (
-                                f"A previous Job may already have submitted CREATE for "
-                                f"Business {business_id}. Inventory does not prove the RK "
-                                "yet, so ReMask will not submit a duplicate CREATE."
-                            ),
-                            retryable=True,
-                        )
 
     phase = _clean(
         checkpoint.get("phase") or checkpoint.get("resume_from")
