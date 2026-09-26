@@ -144,6 +144,8 @@ RUN set -eux; \
     php -l /var/www/html/ajax/pythonWorkerBusinesses.php; \
     ! grep -q 'pythonProvisionAdAccount' /var/www/html/workspace.php; \
     grep -q 'pythonWorkerEnhanceProfileThreeDots' /var/www/html/scripts/workspace.js; \
+    grep -q 'data-python-worker-fp-menu' /var/www/html/scripts/workspace.js; \
+    grep -q 'pythonWorkerOpenOwnFanPageModal' /var/www/html/scripts/workspace.js; \
     grep -q 'data-python-worker-rk-menu' /var/www/html/scripts/workspace.js; \
     grep -q 'pythonWorkerOpenOwnAdAccountModal' /var/www/html/scripts/workspace.js; \
     grep -q 'latest_ad_account_resume_for_business' /opt/remask-python/app/provisioning/state.py; \
