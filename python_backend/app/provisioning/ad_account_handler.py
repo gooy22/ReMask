@@ -1887,13 +1887,27 @@ async def ad_account_handler(
 
         except asyncio.TimeoutError as exc:
             if submit_started:
-                return await reconcile_after_uncertain(
+                reconciled = await reconcile_after_uncertain(
                     reason=(
                         "Live-captured private CREATE timed out after submit "
                         f"intent on replay attempt {replay_attempt}; inventory "
                         "reconciliation is required before retry."
                     )
                 )
+                if reconciled.get("_remask_reconciled_empty"):
+                    if replay_attempt < replay_attempt_limit:
+                        await asyncio.sleep(0.75)
+                        continue
+                    raise ProvisioningError(
+                        "CREATE_AD_ACCOUNT_SAFE_RETRY_REQUIRED",
+                        (
+                            "CREATE timed out, but strong inventory proof "
+                            "confirmed that no RK exists. The checkpoint is "
+                            "safe for a fresh retry."
+                        ),
+                        retryable=True,
+                    ) from exc
+                return reconciled
 
             failure = {
                 "attempt": replay_attempt,
@@ -1929,7 +1943,23 @@ async def ad_account_handler(
 
         except AdAccountMutationError as exc:
             if exc.code == "CREATE_AD_ACCOUNT_RESULT_UNKNOWN":
-                return await reconcile_after_uncertain(reason=str(exc))
+                reconciled = await reconcile_after_uncertain(
+                    reason=str(exc)
+                )
+                if reconciled.get("_remask_reconciled_empty"):
+                    if replay_attempt < replay_attempt_limit:
+                        await asyncio.sleep(0.75)
+                        continue
+                    raise ProvisioningError(
+                        "CREATE_AD_ACCOUNT_SAFE_RETRY_REQUIRED",
+                        (
+                            "Meta returned an unknown CREATE result, but "
+                            "strong inventory proof confirmed that no RK "
+                            "exists. The checkpoint is safe for a fresh retry."
+                        ),
+                        retryable=True,
+                    ) from exc
+                return reconciled
 
             pre_submit_codes = {
                 "CREATE_AD_ACCOUNT_LIVE_CAPTURE_REQUIRED",
@@ -2128,12 +2158,23 @@ async def ad_account_handler(
 
     rk_id = _normalize_ad_account_id(result.ad_account_id)
     if not rk_id:
-        return await reconcile_after_uncertain(
+        reconciled = await reconcile_after_uncertain(
             reason=(
                 "Live-captured private CREATE returned no provable "
                 "Ad Account ID."
             )
         )
+        if reconciled.get("_remask_reconciled_empty"):
+            raise ProvisioningError(
+                "CREATE_AD_ACCOUNT_SAFE_RETRY_REQUIRED",
+                (
+                    "CREATE returned no RK ID, but strong inventory proof "
+                    "confirmed that no RK exists. The checkpoint is safe "
+                    "for a fresh retry."
+                ),
+                retryable=True,
+            )
+        return reconciled
 
     await provisioning_state.checkpoint(
         item_id,
