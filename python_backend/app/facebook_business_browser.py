@@ -1136,6 +1136,7 @@ class FacebookBusinessBrowser:
         self._ad_account_runtime_phase = "IDLE"
         self._ad_account_phase_started_at = time.monotonic()
         self._ad_account_create_sent = False
+        self._ad_account_final_capture_armed = False
         self._ad_account_ui_trace: list[dict[str, Any]] = []
         self._ad_account_wizard_rect: dict[str, float] = {}
         self._lease_watchdog_task: asyncio.Task[Any] | None = None
@@ -12104,6 +12105,7 @@ timeout_seconds=4.0,
             await self.open()
 
         self._ad_account_create_sent = False
+        self._ad_account_final_capture_armed = False
         self._mark_ad_account_phase("CAPTURE_OPENING_CREATE_FLOW")
         await self._open_ad_account_create_form(
             business_id=business,
@@ -12341,8 +12343,13 @@ timeout_seconds=4.0,
                     await self.page.wait_for_timeout(200)
 
                 capture_final_armed = True
+                self._ad_account_final_capture_armed = True
+                self._mark_ad_account_phase("CAPTURE_FINAL_ARMED")
                 final_meta = await self._click_ad_account_final_interactive()
                 final_clicked = bool(final_meta.get("clicked"))
+                final_attempted = bool(
+                    final_meta.get("attempted") or final_clicked
+                )
                 if not final_clicked:
                     fallback = (
                         await self._click_ad_account_form_action_by_visible_text(
@@ -12350,8 +12357,18 @@ timeout_seconds=4.0,
                         )
                     )
                     final_clicked = bool(fallback.get("clicked"))
+                    final_attempted = bool(
+                        final_attempted
+                        or fallback.get("attempted")
+                        or final_clicked
+                    )
                     if fallback:
                         final_meta["fallback"] = fallback
+
+                if not final_attempted:
+                    capture_final_armed = False
+                    self._ad_account_final_capture_armed = False
+                    self._mark_ad_account_phase("CAPTURE_FORM_READY")
 
                 submit_attempts.append(
                     {
@@ -12575,6 +12592,14 @@ timeout_seconds=4.0,
     @property
     def ad_account_create_may_have_been_sent(self) -> bool:
         return bool(self._ad_account_create_sent)
+
+    @property
+    def ad_account_final_capture_armed(self) -> bool:
+        return bool(self._ad_account_final_capture_armed)
+
+    @property
+    def ad_account_runtime_phase(self) -> str:
+        return _clean(self._ad_account_runtime_phase).upper() or "UNKNOWN"
 
     async def ad_account_runtime_timeout_diagnostic(self) -> dict[str, Any]:
         diag = await self._diagnostic("ad_account_internal_timeout")
