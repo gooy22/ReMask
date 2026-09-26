@@ -7725,6 +7725,7 @@ class FacebookBusinessBrowser:
                     const controls = [];
                     const seen = new Set();
                     let createEntry = false;
+                    let createTarget = null;
                     let nameInput = false;
                     let formEvidence = false;
                     let editableFormControl = false;
@@ -7775,13 +7776,6 @@ class FacebookBusinessBrowser:
                             formEvidence = true;
                         }
                         if (
-                            !metaAIRoot(el)
-                            && createWords.some(word => low.includes(word))
-                            && accountWords.some(word => low.includes(word))
-                        ) {
-                            createEntry = true;
-                        }
-                        if (
                             ['add','ajouter','добавить','додати','hinzufügen',
                              'যোগ করুন','thêm','जोड़ें'].some(
                                 word => low === word || low.startsWith(word + ' ')
@@ -7801,6 +7795,124 @@ class FacebookBusinessBrowser:
                         seen.add(row);
                         controls.push(row);
                         if (controls.length >= 45) break;
+                    }
+
+                    // CREATE_ENTRY must be backed by a concrete click target.
+                    // The old classifier could set CREATE_ENTRY from an entire
+                    // dialog whose long text merely contained the localized
+                    // Create Ad Account wording, while later clickers discarded
+                    // that same container as too broad. Scan deep text nodes,
+                    // choose the most specific visible target, and tag it.
+                    for (const el of document.querySelectorAll(
+                        'button,a,span,div,p,strong,label,[role],[tabindex]'
+                    )) {
+                        el.removeAttribute('data-remask-rk-create-state');
+                    }
+                    const createTargets = [];
+                    for (const el of document.querySelectorAll(
+                        'button,a,span,div,p,strong,label,[role],[tabindex]'
+                    )) {
+                        if (!visible(el) || metaAIRoot(el)) continue;
+                        const r = el.getBoundingClientRect();
+                        if (r.x < 280 || r.y < 35 || r.y > 795) continue;
+
+                        const text = clean(
+                            (el.getAttribute('aria-label') || '') + ' ' +
+                            (el.getAttribute('title') || '') + ' ' +
+                            (el.innerText || el.textContent || '')
+                        );
+                        const low = text.toLowerCase();
+                        if (!text || text.length > 1400) continue;
+                        if (!createWords.some(word => low.includes(word))) continue;
+                        if (!accountWords.some(word => low.includes(word))) continue;
+
+                        const semantic = el.closest(
+                            'button,a,[role="button"],[role="link"],'
+                            + '[role="menuitem"],[role="menuitemradio"],'
+                            + '[role="option"],[tabindex]:not([tabindex="-1"])'
+                        );
+                        const clickable = semantic || el;
+                        if (!visible(clickable)) continue;
+                        if (
+                            clickable.hasAttribute('disabled')
+                            || clickable.getAttribute('aria-disabled') === 'true'
+                        ) continue;
+
+                        const cr = clickable.getBoundingClientRect();
+                        if (
+                            cr.x < 280 || cr.y < 35 || cr.y > 795
+                            || cr.width < 24 || cr.height < 16
+                        ) continue;
+
+                        const role = (
+                            clickable.getAttribute('role') || ''
+                        ).toLowerCase();
+                        const tag = (clickable.tagName || '').toUpperCase();
+                        const exact = [
+                            'create a new ad account',
+                            'create new ad account',
+                            'create ad account',
+                            'créer un nouveau compte publicitaire',
+                            'créer un compte publicitaire',
+                            'nouveau compte publicitaire',
+                            'создать новый рекламный аккаунт',
+                            'создать рекламный аккаунт',
+                            'створити новий рекламний акаунт',
+                            'створити рекламний акаунт',
+                            'neues werbekonto erstellen',
+                            'werbekonto erstellen',
+                            'নতুন বিজ্ঞাপন অ্যাকাউন্ট তৈরি করুন',
+                            'বিজ্ঞাপন অ্যাকাউন্ট তৈরি করুন',
+                            'tạo tài khoản quảng cáo mới',
+                            'tạo tài khoản quảng cáo',
+                            'नया विज्ञापन खाता बनाएँ',
+                            'नया विज्ञापन खाता बनाएं',
+                            'विज्ञापन खाता बनाएँ',
+                            'विज्ञापन खाता बनाएं'
+                        ].some(value => low === value);
+
+                        const area = cr.width * cr.height;
+                        let score = 0;
+                        if (exact) score -= 3000;
+                        if (semantic) score -= 900;
+                        if (tag === 'BUTTON' || tag === 'A') score -= 500;
+                        if (
+                            role === 'button'
+                            || role === 'menuitem'
+                            || role === 'menuitemradio'
+                            || role === 'option'
+                        ) score -= 450;
+                        score += Math.min(text.length, 1400) * 2;
+                        score += Math.min(area / 120, 3500);
+                        score += Math.round(cr.y / 8);
+
+                        createTargets.push({
+                            el:clickable,
+                            text,
+                            x:Math.round(cr.x),
+                            y:Math.round(cr.y),
+                            w:Math.round(cr.width),
+                            h:Math.round(cr.height),
+                            tag,
+                            role,
+                            score
+                        });
+                    }
+                    createTargets.sort((a,b) => a.score - b.score);
+                    if (createTargets.length) {
+                        const best = createTargets[0];
+                        best.el.setAttribute('data-remask-rk-create-state', '1');
+                        createEntry = true;
+                        createTarget = {
+                            text:best.text.slice(0, 500),
+                            x:best.x,
+                            y:best.y,
+                            w:best.w,
+                            h:best.h,
+                            tag:best.tag,
+                            role:best.role,
+                            score:Math.round(best.score)
+                        };
                     }
 
                     // Form can be open even when Meta omitted a useful label
@@ -7904,6 +8016,7 @@ class FacebookBusinessBrowser:
                         form_evidence: formEvidence,
                         editable_form_control: editableFormControl,
                         create_entry: createEntry,
+                        create_target: createTarget,
                         add_surface: addSurface,
                         errors,
                         dialogs: dialogTexts.map(x => x.slice(0, 500)),
@@ -7931,6 +8044,20 @@ class FacebookBusinessBrowser:
                 raw.get("editable_form_control")
             ),
             "create_entry": bool(raw.get("create_entry")),
+            "create_target": (
+                {
+                    "text": _clean((raw.get("create_target") or {}).get("text"))[:500],
+                    "x": int((raw.get("create_target") or {}).get("x") or 0),
+                    "y": int((raw.get("create_target") or {}).get("y") or 0),
+                    "w": int((raw.get("create_target") or {}).get("w") or 0),
+                    "h": int((raw.get("create_target") or {}).get("h") or 0),
+                    "tag": _clean((raw.get("create_target") or {}).get("tag"))[:40],
+                    "role": _clean((raw.get("create_target") or {}).get("role"))[:80],
+                    "score": int((raw.get("create_target") or {}).get("score") or 0),
+                }
+                if isinstance(raw.get("create_target"), dict)
+                else {}
+            ),
             "add_surface": bool(raw.get("add_surface")),
             "errors": [
                 _clean(x)[:500]
@@ -8004,6 +8131,80 @@ class FacebookBusinessBrowser:
 
         self._record_ad_account_ui_state(label + "_timeout", last)
         return last
+
+    async def _click_state_detected_ad_account_create_entry(
+        self,
+    ) -> dict[str, Any]:
+        """Click the exact node that caused the latest CREATE_ENTRY state."""
+        if self.page is None:
+            return {"clicked": False}
+
+        try:
+            locator = self.page.locator(
+                '[data-remask-rk-create-state="1"]'
+            )
+            if not await locator.count():
+                return {"clicked": False, "reason": "tag_missing"}
+            item = locator.first
+            if not await item.is_visible():
+                return {"clicked": False, "reason": "tag_not_visible"}
+            if not await item.is_enabled():
+                return {"clicked": False, "reason": "tag_disabled"}
+
+            meta = await item.evaluate(
+                """el => {
+                    const r = el.getBoundingClientRect();
+                    const text = (
+                        (el.getAttribute('aria-label') || '') + ' ' +
+                        (el.getAttribute('title') || '') + ' ' +
+                        (el.innerText || el.textContent || '')
+                    ).normalize('NFKC')
+                     .replace(/[\u200b\u200c\u200d\ufeff]/g, '')
+                     .replace(/\u00a0/g, ' ')
+                     .replace(/\s+/g, ' ')
+                     .trim();
+                    return {
+                        text:text.slice(0, 500),
+                        x:Math.round(r.x),
+                        y:Math.round(r.y),
+                        w:Math.round(r.width),
+                        h:Math.round(r.height),
+                        tag:el.tagName || '',
+                        role:el.getAttribute('role') || ''
+                    };
+                }"""
+            )
+            try:
+                await item.click(timeout=1800)
+                mode = "playwright"
+            except Exception as exc:
+                dom = await item.evaluate(
+                    """el => {
+                        if (!el || !el.isConnected) return false;
+                        el.click();
+                        return true;
+                    }"""
+                )
+                if not dom:
+                    return {
+                        "clicked": False,
+                        "reason": "click_failed",
+                        "error": f"{exc.__class__.__name__}: {_clean(exc)}"[:300],
+                        "target": meta if isinstance(meta, dict) else {},
+                    }
+                mode = "dom"
+
+            return {
+                "clicked": True,
+                "mode": mode,
+                "target": meta if isinstance(meta, dict) else {},
+            }
+        except Exception as exc:
+            return {
+                "clicked": False,
+                "reason": "exception",
+                "error": f"{exc.__class__.__name__}: {_clean(exc)}"[:300],
+            }
 
     async def _click_ad_account_create_entry_by_visible_text(self) -> bool:
         """Click a visible Create-new-RK label even if Meta omitted ARIA roles.
@@ -8327,8 +8528,16 @@ class FacebookBusinessBrowser:
             before = await self._ad_account_ui_state()
             before_signature = _clean(before.get("signature"))
 
-            clicked = await self._click_named(
-                self.AD_ACCOUNT_CREATE_ENTRY_NAMES,
+            tagged_click = {"clicked": False}
+            if _clean(before.get("state")).upper() == "CREATE_ENTRY":
+                tagged_click = (
+                    await self._click_state_detected_ad_account_create_entry()
+                )
+            clicked = bool(tagged_click.get("clicked"))
+
+            if not clicked:
+                clicked = await self._click_named(
+                    self.AD_ACCOUNT_CREATE_ENTRY_NAMES,
                 roles=(
                     "button",
                     "link",
@@ -8336,8 +8545,8 @@ class FacebookBusinessBrowser:
                     "menuitemradio",
                     "option",
                 ),
-                click_timeout_ms=2500,
-            )
+                    click_timeout_ms=2500,
+                )
             if not clicked:
                 clicked = await self._click_ad_account_create_entry_by_visible_text()
             if not clicked:
@@ -8923,6 +9132,9 @@ class FacebookBusinessBrowser:
                 attempt["ui_errors"] = list(
                     post_add_poll_state.get("errors") or []
                 )[:3]
+                attempt["create_target"] = dict(
+                    post_add_poll_state.get("create_target") or {}
+                )
 
                 after_snapshot = await self._ad_account_right_pane_snapshot()
                 attempt["new_right_pane"] = [
