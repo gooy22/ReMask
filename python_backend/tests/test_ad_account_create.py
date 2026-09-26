@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from urllib.parse import urlencode
 
 from app.facebook_ad_account_create import (
+    CORROBORATED_CREATE_AD_ACCOUNT_DOC_ID,
     CREATE_AD_ACCOUNT_FRIENDLY_NAMES,
     _extract_ad_account_id,
     _normalize_ad_account_id,
@@ -47,6 +48,44 @@ class AdAccountPrivateGraphqlPrimaryTests(unittest.TestCase):
         self.assertIn('"businessID": business', source)
         self.assertIn('"timezone_id": timezone', source)
         self.assertIn("default_variables_for(candidate)", source)
+
+    def test_current_corroborated_doc_id_is_available_as_safe_fallback(self) -> None:
+        self.assertEqual(
+            CORROBORATED_CREATE_AD_ACCOUNT_DOC_ID,
+            "9236789956426634",
+        )
+        source = inspect.getsource(create_ad_account_with_docids)
+        self.assertIn('"source="corroborated_20260926"', source)
+        self.assertIn(
+            '"bizkit_settings_create_ad_account_flat_v3"',
+            source,
+        )
+
+    def test_current_bizkit_payload_is_flat_and_complete(self) -> None:
+        source = inspect.getsource(create_ad_account_with_docids)
+        self.assertIn('"businessID": business', source)
+        self.assertIn('"adAccountName": name', source)
+        self.assertIn('"timezoneID": str(timezone)', source)
+        self.assertIn('"currency": currency_code', source)
+        self.assertIn('"endAdvertiserID": business', source)
+        self.assertNotIn('"input": {\n                    "businessID"', source)
+
+    def test_current_response_node_is_recognized(self) -> None:
+        account_id, path = _extract_ad_account_id(
+            {
+                "data": {
+                    "business_settings_create_ad_account": {
+                        "id": "555666777"
+                    }
+                }
+            }
+        )
+        self.assertEqual(account_id, "act_555666777")
+        self.assertEqual(
+            path,
+            "data.business_settings_create_ad_account.id",
+        )
+
 
 
 class AdAccountDuplicateSafetyTests(unittest.TestCase):
