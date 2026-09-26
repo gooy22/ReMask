@@ -4815,6 +4815,196 @@ class FacebookBusinessBrowser:
             except Exception:
                 continue
 
+        if not candidates and self._ad_account_wizard_rect:
+            # Meta sometimes renders the final localized Create text in a plain
+            # DIV/SPAN while the actual click handler lives on an ancestor.
+            # The generic CREATE_ENTRY classifier can see that text, but the
+            # interactive-only locator above cannot. Recover only when the
+            # text and its actionable ancestor are inside the verified RK
+            # wizard rectangle; never use this as a page-global Create click.
+            try:
+                anchored = await self.page.evaluate(
+                    """(payload) => {
+                        const anchor = payload.anchor || null;
+                        if (!anchor) {
+                            return {found:false};
+                        }
+                        const visible = el => {
+                            if (!el) return false;
+                            const r = el.getBoundingClientRect();
+                            const s = getComputedStyle(el);
+                            return r.width > 0 && r.height > 0
+                                && s.display !== 'none'
+                                && s.visibility !== 'hidden'
+                                && s.pointerEvents !== 'none';
+                        };
+                        const clean = text => (text || '')
+                            .normalize('NFKC')
+                            .replace(/[\u200b\u200c\u200d\ufeff]/g, '')
+                            .replace(/\u00a0/g, ' ')
+                            .replace(/\s+/g, ' ')
+                            .trim()
+                            .toLowerCase();
+                        const createWords = [
+                            'create','create account','create ad account',
+                            'create advertising account',
+                            'créer','créer le compte',
+                            'créer le compte publicitaire',
+                            'créer un compte publicitaire',
+                            'создать','создать аккаунт',
+                            'создать рекламный аккаунт',
+                            'створити','створити обліковий запис',
+                            'створити рекламний акаунт',
+                            'erstellen','konto erstellen',
+                            'werbekonto erstellen',
+                            'তৈরি করুন','বিজ্ঞাপন অ্যাকাউন্ট তৈরি করুন',
+                            'tạo','tạo tài khoản quảng cáo',
+                            'बनाएँ','बनाएं','विज्ञापन खाता बनाएँ',
+                            'विज्ञापन खाता बनाएं'
+                        ];
+                        const accountWords = [
+                            'ad account','advertising account',
+                            'compte publicitaire','werbekonto','реклам',
+                            'বিজ্ঞাপন অ্যাকাউন্ট',
+                            'tài khoản quảng cáo','विज्ञापन खाता'
+                        ];
+                        const ai = [
+                            'meta ai','assistant business meta ai',
+                            'meta ai business assistant','assistant meta ai'
+                        ];
+                        const insideAnchor = el => {
+                            const r = el.getBoundingClientRect();
+                            const cx = r.x + r.width / 2;
+                            const cy = r.y + r.height / 2;
+                            const pad = 24;
+                            return (
+                                cx >= Number(anchor.x || 0) - pad
+                                && cx <= Number(anchor.x || 0)
+                                    + Number(anchor.width || 0) + pad
+                                && cy >= Number(anchor.y || 0) - pad
+                                && cy <= Number(anchor.y || 0)
+                                    + Number(anchor.height || 0) + pad
+                            );
+                        };
+
+                        const rows = [];
+                        for (const el of document.querySelectorAll(
+                            'span,div,label,p,strong,a,button,[role],[tabindex]'
+                        )) {
+                            if (!visible(el) || !insideAnchor(el)) continue;
+                            const text = clean(
+                                (el.getAttribute('aria-label') || '') + ' ' +
+                                (el.getAttribute('title') || '') + ' ' +
+                                (el.innerText || el.textContent || '')
+                            );
+                            if (!text || text.length > 220) continue;
+                            if (ai.some(word => text.includes(word))) continue;
+                            const createMatch = createWords.some(
+                                word => text === word
+                                    || text.startsWith(word + ' ')
+                            );
+                            const accountMatch = accountWords.some(
+                                word => text.includes(word)
+                            );
+                            if (!createMatch && !(accountMatch && text.includes('créer'))) {
+                                continue;
+                            }
+
+                            const clickable = el.closest(
+                                'button,a,[role="button"],[role="menuitem"],'
+                                + '[tabindex]:not([tabindex="-1"])'
+                            );
+                            if (!clickable || !visible(clickable)) continue;
+                            if (!insideAnchor(clickable)) continue;
+                            if (
+                                clickable.hasAttribute('disabled')
+                                || clickable.getAttribute('aria-disabled') === 'true'
+                            ) continue;
+
+                            const r = clickable.getBoundingClientRect();
+                            rows.push({
+                                el: clickable,
+                                text,
+                                x:Math.round(r.x),
+                                y:Math.round(r.y),
+                                tag:clickable.tagName || '',
+                                role:clickable.getAttribute('role') || '',
+                                score:Math.round(r.y)
+                                    - (clickable.tagName === 'BUTTON' ? 100 : 0)
+                                    - (
+                                        clickable.getAttribute('role') === 'button'
+                                        ? 80 : 0
+                                    )
+                                    - (
+                                        text.includes('compte publicitaire')
+                                        ? 120 : 0
+                                    )
+                            });
+                        }
+                        rows.sort((a,b) => a.score - b.score);
+                        const best = rows[0];
+                        if (!best) return {found:false};
+                        best.el.setAttribute(
+                            'data-remask-rk-final-anchor',
+                            '1'
+                        );
+                        return {
+                            found:true,
+                            text:best.text,
+                            x:best.x,
+                            y:best.y,
+                            tag:best.tag,
+                            role:best.role
+                        };
+                    }""",
+                    {"anchor": self._ad_account_wizard_rect},
+                )
+            except Exception:
+                anchored = {}
+
+            if isinstance(anchored, dict) and bool(anchored.get("found")):
+                locator = self.page.locator(
+                    '[data-remask-rk-final-anchor="1"]'
+                ).first
+                meta = {
+                    "found": True,
+                    "attempted": False,
+                    "clicked": False,
+                    "text": _clean(anchored.get("text"))[:180],
+                    "x": int(anchored.get("x") or 0),
+                    "y": int(anchored.get("y") or 0),
+                    "tag": _clean(anchored.get("tag"))[:40],
+                    "role": _clean(anchored.get("role"))[:80],
+                    "in_dialog": False,
+                    "in_wizard_dialog": False,
+                    "in_wizard_surface": False,
+                    "in_wizard_anchor": True,
+                    "wizard_dialog_present": wizard_dialog_present,
+                    "anchor_recovered": True,
+                }
+                try:
+                    if before_click is not None:
+                        await before_click()
+                    meta["attempted"] = True
+                    await locator.click(timeout=2500)
+                    meta["clicked"] = True
+                    return meta
+                except Exception as exc:
+                    meta["error"] = (
+                        f"{exc.__class__.__name__}: {exc}"
+                    )[:500]
+                    return meta
+                finally:
+                    try:
+                        await self.page.locator(
+                            '[data-remask-rk-final-anchor="1"]'
+                        ).evaluate_all(
+                            "(els) => els.forEach(el => "
+                            "el.removeAttribute('data-remask-rk-final-anchor'))"
+                        )
+                    except Exception:
+                        pass
+
         if not candidates:
             return {"found": False, "attempted": False, "clicked": False}
 
