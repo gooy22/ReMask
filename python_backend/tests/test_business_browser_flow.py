@@ -4232,3 +4232,30 @@ class BusinessBrowserFlowTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BrowserAdAccountCreateSurfacePersistenceRegressionTests(unittest.TestCase):
+    def test_add_probe_consumes_detected_create_target_before_fresh_rescan(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser._probe_ad_account_add_buttons
+        )
+        direct_pos = source.index(
+            "_click_state_detected_ad_account_create_entry"
+        )
+        fresh_pos = source.index(
+            "_click_fresh_ad_account_create_candidate"
+        )
+        self.assertLess(direct_pos, fresh_pos)
+        self.assertIn('attempt["create_surface_seen"]', source)
+        self.assertIn('attempt["preserve_create_surface"] = True', source)
+
+    def test_active_create_surface_blocks_stale_add_reload(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser._open_ad_account_create_form
+        )
+        self.assertIn("create_surface_active = any(", source)
+        self.assertIn("and not create_surface_active", source)
+        self.assertIn("preserved_create_surface_", source)
+        recovery_pos = source.index("if not entry_clicked and create_surface_active:")
+        reload_pos = source.index("post_add_stale_reload")
+        self.assertLess(recovery_pos, reload_pos)
