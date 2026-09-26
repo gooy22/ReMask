@@ -12,6 +12,7 @@ from app.facebook_business_browser import (
     FacebookBusinessBrowser,
     _ad_account_required_attribution_post_data,
     _extract_created_ad_account_id,
+    _extract_named_ad_account_ids,
 )
 from app.provisioning.business_handler import business_handler
 from app.provisioning.models import ProvisioningError, ProvisioningStep
@@ -24,6 +25,44 @@ class _FakeRequest:
         self.method = "POST"
         self.url = "https://business.facebook.com/api/graphql/"
         self.post_data = post_data
+
+
+class BrowserInventoryPayloadTests(unittest.TestCase):
+    def test_extract_named_ad_account_id_from_inventory_payload(self):
+        ids = _extract_named_ad_account_ids(
+            {
+                "data": {
+                    "business": {
+                        "ad_accounts": {
+                            "edges": [
+                                {
+                                    "node": {
+                                        "id": "123456789012345",
+                                        "name": "ReMask Ads",
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            },
+            "ReMask Ads",
+        )
+        self.assertEqual(ids, ["act_123456789012345"])
+
+    def test_extract_named_ad_account_id_rejects_wrong_name(self):
+        ids = _extract_named_ad_account_ids(
+            {
+                "data": {
+                    "node": {
+                        "id": "123456789012345",
+                        "name": "Another Account",
+                    }
+                }
+            },
+            "ReMask Ads",
+        )
+        self.assertEqual(ids, [])
 
 
 class BrowserNetworkGateTests(unittest.TestCase):
@@ -766,6 +805,66 @@ class BrowserAdAccountFormActionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["action"], "final")
         script = browser.page.evaluate.await_args.args[0]
         self.assertIn("mode === 'final' && !interactive", script)
+
+
+class BrowserAdAccountGraphqlInventoryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_inventory_lookup_confirms_exact_name_from_graphql_response(self):
+        class _Response:
+            url = "https://business.facebook.com/api/graphql/"
+
+            async def text(self):
+                return (
+                    '{"data":{"business":{"ad_accounts":{"edges":['
+                    '{"node":{"id":"123456789012345","name":"ReMask Ads"}}'
+                    ']}}}}'
+                )
+
+            request = _FakeRequest(
+                "fb_api_req_friendly_name=BusinessAdAccountsQuery"
+                "&doc_id=1122334455667788"
+                "&variables=%7B%22businessID%22%3A"
+                "%22555666777888999%22%7D"
+            )
+
+        class _Page:
+            def __init__(self):
+                self.url = (
+                    "https://business.facebook.com/latest/settings/ad_accounts"
+                    "?business_id=555666777888999"
+                )
+                self._listener = None
+
+            def on(self, event, callback):
+                if event == "response":
+                    self._listener = callback
+
+            def remove_listener(self, event, callback):
+                if event == "response" and self._listener == callback:
+                    self._listener = None
+
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-rk-inventory-graphql")
+        )
+        browser.page = _Page()
+
+        async def fake_goto(target):
+            browser.page.url = target
+            browser.page._listener(_Response())
+            await asyncio.sleep(0)
+
+        browser._goto = AsyncMock(side_effect=fake_goto)
+
+        result = await browser.find_ad_account_in_inventory(
+            business_id="555666777888999",
+            account_name="ReMask Ads",
+            timeout_seconds=2.0,
+        )
+
+        self.assertTrue(result["confirmed"])
+        self.assertEqual(
+            result["ad_account_id"],
+            "act_123456789012345",
+        )
 
 
 class BrowserAdAccountUiReconcileTests(unittest.IsolatedAsyncioTestCase):
