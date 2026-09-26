@@ -441,6 +441,66 @@ class FacebookGraphApi:
                 output.append(row)
         return output
 
+    async def create_ad_account_for_business(
+        self,
+        *,
+        business_id: str,
+        name: str,
+        currency: str,
+        timezone_id: int,
+        end_advertiser: str = "NONE",
+        media_agency: str = "NONE",
+        partner: str = "NONE",
+    ) -> str:
+        """Create one Business-owned Ad Account through the official Graph API."""
+        business = str(business_id or "").strip()
+        account_name = str(name or "").strip()
+        currency_code = str(currency or "").strip().upper()
+
+        if not business.isdigit():
+            raise ValueError("business_id must be numeric")
+        if not account_name:
+            raise ValueError("Ad Account name is required")
+        if not currency_code:
+            raise ValueError("Ad Account currency is required")
+
+        try:
+            tz = int(timezone_id)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("timezone_id must be an integer") from exc
+
+        body = {
+            "name": account_name,
+            "currency": currency_code,
+            "timezone_id": str(tz),
+            "end_advertiser": str(end_advertiser or "NONE").strip() or "NONE",
+            "media_agency": str(media_agency or "NONE").strip() or "NONE",
+            "partner": str(partner or "NONE").strip() or "NONE",
+        }
+
+        payload = await self._request(
+            "POST",
+            f"{business}/adaccount",
+            data=body,
+            mutation=True,
+        )
+
+        raw_id = str(
+            payload.get("id")
+            or payload.get("account_id")
+            or payload.get("ad_account_id")
+            or ""
+        ).strip()
+        if raw_id.lower().startswith("act_"):
+            raw_id = raw_id[4:]
+        if not raw_id.isdigit():
+            raise GraphMutationUncertain(
+                "Meta create-ad-account returned no numeric account id; "
+                "result is unknown"
+            )
+        return "act_" + raw_id
+
+
     async def create_business(
         self,
         *,
