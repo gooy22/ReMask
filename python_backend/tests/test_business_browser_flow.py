@@ -1619,7 +1619,8 @@ class BrowserAdAccountSubmitProgressionTests(unittest.TestCase):
             "own_selected_now = ("
         )
         next_pos = source.index(
-            "next_clicked = await self._click_named("
+            'await self._click_ad_account_form_action_by_visible_text(\n'
+            '                        "next"'
         )
         self.assertLess(own_pos, next_pos)
 
