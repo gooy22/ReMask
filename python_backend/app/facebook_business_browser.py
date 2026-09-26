@@ -7836,6 +7836,7 @@ class FacebookBusinessBrowser:
                         'button,a,span,div,p,strong,label,[role],[tabindex]'
                     )) {
                         el.removeAttribute('data-remask-rk-create-state');
+                        el.removeAttribute('data-remask-rk-create-leaf');
                     }
                     const createTargets = [];
                     for (const el of document.querySelectorAll(
@@ -7915,22 +7916,42 @@ class FacebookBusinessBrowser:
                         score += Math.min(area / 120, 3500);
                         score += Math.round(cr.y / 8);
 
+                        const sourceRect = el.getBoundingClientRect();
                         createTargets.push({
                             el:clickable,
+                            source:el,
                             text,
                             x:Math.round(cr.x),
                             y:Math.round(cr.y),
                             w:Math.round(cr.width),
                             h:Math.round(cr.height),
+                            source_x:Math.round(sourceRect.x),
+                            source_y:Math.round(sourceRect.y),
+                            source_w:Math.round(sourceRect.width),
+                            source_h:Math.round(sourceRect.height),
+                            source_tag:(el.tagName || '').toUpperCase(),
                             tag,
                             role,
-                            score
+                            // Prefer the deepest/smallest text node for the
+                            // physical click. React often puts the actual
+                            // handler on an ancestor, and a browser click on
+                            // the leaf bubbles to it reliably.
+                            score: score + Math.min(
+                                (sourceRect.width * sourceRect.height) / 200,
+                                900
+                            )
                         });
                     }
                     createTargets.sort((a,b) => a.score - b.score);
                     if (createTargets.length) {
                         const best = createTargets[0];
                         best.el.setAttribute('data-remask-rk-create-state', '1');
+                        if (best.source && best.source.isConnected) {
+                            best.source.setAttribute(
+                                'data-remask-rk-create-leaf',
+                                '1'
+                            );
+                        }
                         createEntry = true;
                         createTarget = {
                             text:best.text.slice(0, 500),
@@ -7938,6 +7959,11 @@ class FacebookBusinessBrowser:
                             y:best.y,
                             w:best.w,
                             h:best.h,
+                            source_x:best.source_x,
+                            source_y:best.source_y,
+                            source_w:best.source_w,
+                            source_h:best.source_h,
+                            source_tag:best.source_tag,
                             tag:best.tag,
                             role:best.role,
                             score:Math.round(best.score)
@@ -8080,6 +8106,11 @@ class FacebookBusinessBrowser:
                     "y": int((raw.get("create_target") or {}).get("y") or 0),
                     "w": int((raw.get("create_target") or {}).get("w") or 0),
                     "h": int((raw.get("create_target") or {}).get("h") or 0),
+                    "source_x": int((raw.get("create_target") or {}).get("source_x") or 0),
+                    "source_y": int((raw.get("create_target") or {}).get("source_y") or 0),
+                    "source_w": int((raw.get("create_target") or {}).get("source_w") or 0),
+                    "source_h": int((raw.get("create_target") or {}).get("source_h") or 0),
+                    "source_tag": _clean((raw.get("create_target") or {}).get("source_tag"))[:40],
                     "tag": _clean((raw.get("create_target") or {}).get("tag"))[:40],
                     "role": _clean((raw.get("create_target") or {}).get("role"))[:80],
                     "score": int((raw.get("create_target") or {}).get("score") or 0),
@@ -8165,21 +8196,25 @@ class FacebookBusinessBrowser:
     async def _click_state_detected_ad_account_create_entry(
         self,
     ) -> dict[str, Any]:
-        """Click the exact node that caused the latest CREATE_ENTRY state."""
+        """Physically click the exact leaf that proved CREATE_ENTRY exists.
+
+        The classifier keeps both the deepest matching text node and its
+        semantic ancestor. Clicking the leaf is deliberate: Playwright sends a
+        real pointer event at that text, which then bubbles to Meta's React
+        handler even when the handler lives on a parent DIV. A broad parent
+        locator is retained only as a fallback.
+        """
         if self.page is None:
             return {"clicked": False}
 
-        try:
-            locator = self.page.locator(
-                '[data-remask-rk-create-state="1"]'
-            )
+        async def click_locator(locator: Any, target_kind: str) -> dict[str, Any]:
             if not await locator.count():
-                return {"clicked": False, "reason": "tag_missing"}
+                return {"clicked": False, "reason": f"{target_kind}_missing"}
             item = locator.first
             if not await item.is_visible():
-                return {"clicked": False, "reason": "tag_not_visible"}
+                return {"clicked": False, "reason": f"{target_kind}_not_visible"}
             if not await item.is_enabled():
-                return {"clicked": False, "reason": "tag_disabled"}
+                return {"clicked": False, "reason": f"{target_kind}_disabled"}
 
             meta = await item.evaluate(
                 """el => {
@@ -8193,6 +8228,10 @@ class FacebookBusinessBrowser:
                      .replace(/\u00a0/g, ' ')
                      .replace(/\s+/g, ' ')
                      .trim();
+                    const top = document.elementFromPoint(
+                        r.left + r.width / 2,
+                        r.top + r.height / 2
+                    );
                     return {
                         text:text.slice(0, 500),
                         x:Math.round(r.x),
@@ -8200,34 +8239,81 @@ class FacebookBusinessBrowser:
                         w:Math.round(r.width),
                         h:Math.round(r.height),
                         tag:el.tagName || '',
-                        role:el.getAttribute('role') || ''
+                        role:el.getAttribute('role') || '',
+                        center_top_tag:top ? (top.tagName || '') : '',
+                        center_top_text:top ? (
+                            top.innerText || top.textContent || ''
+                        ).slice(0, 180) : ''
                     };
                 }"""
             )
             try:
-                await item.click(timeout=1800)
-                mode = "playwright"
-            except Exception as exc:
-                dom = await item.evaluate(
-                    """el => {
-                        if (!el || !el.isConnected) return false;
-                        el.click();
-                        return true;
-                    }"""
+                await item.click(
+                    timeout=1800,
+                    position={
+                        "x": max(1, int((meta or {}).get("w") or 2) // 2),
+                        "y": max(1, int((meta or {}).get("h") or 2) // 2),
+                    },
                 )
-                if not dom:
+                return {
+                    "clicked": True,
+                    "mode": "playwright_physical",
+                    "target_kind": target_kind,
+                    "target": meta if isinstance(meta, dict) else {},
+                }
+            except Exception as exc:
+                # HTMLElement.click() on the leaf still bubbles through React's
+                # ancestor chain and is safer than synthesizing a click on a
+                # broad container.
+                try:
+                    dom = await item.evaluate(
+                        """el => {
+                            if (!el || !el.isConnected) return false;
+                            el.click();
+                            return true;
+                        }"""
+                    )
+                except Exception:
+                    dom = False
+                if dom:
                     return {
-                        "clicked": False,
-                        "reason": "click_failed",
-                        "error": f"{exc.__class__.__name__}: {_clean(exc)}"[:300],
+                        "clicked": True,
+                        "mode": "leaf_dom",
+                        "target_kind": target_kind,
                         "target": meta if isinstance(meta, dict) else {},
+                        "playwright_error": (
+                            f"{exc.__class__.__name__}: {_clean(exc)}"[:300]
+                        ),
                     }
-                mode = "dom"
+                return {
+                    "clicked": False,
+                    "reason": "click_failed",
+                    "target_kind": target_kind,
+                    "error": f"{exc.__class__.__name__}: {_clean(exc)}"[:300],
+                    "target": meta if isinstance(meta, dict) else {},
+                }
+
+        try:
+            leaf_result = await click_locator(
+                self.page.locator('[data-remask-rk-create-leaf="1"]'),
+                "leaf",
+            )
+            if leaf_result.get("clicked"):
+                return leaf_result
+
+            parent_result = await click_locator(
+                self.page.locator('[data-remask-rk-create-state="1"]'),
+                "parent",
+            )
+            if parent_result.get("clicked"):
+                parent_result["leaf_failure"] = leaf_result
+                return parent_result
 
             return {
-                "clicked": True,
-                "mode": mode,
-                "target": meta if isinstance(meta, dict) else {},
+                "clicked": False,
+                "reason": "no_clickable_create_target",
+                "leaf": leaf_result,
+                "parent": parent_result,
             }
         except Exception as exc:
             return {
