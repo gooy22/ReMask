@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from typing import Any
@@ -938,6 +939,25 @@ async def ad_account_handler(
                 timezone_id=timezone_id,
             )
     except BrowserBusinessError as exc:
+        try:
+            log.warning(
+                "[%s] AD_ACCOUNT live-capture browser failure "
+                "item=%s business=%s code=%s retryable=%s diagnostic=%s",
+                profile_id,
+                item_id,
+                business_id,
+                exc.code,
+                exc.retryable,
+                json.dumps(
+                    exc.diagnostic if isinstance(exc.diagnostic, dict) else {},
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    default=str,
+                )[:12000],
+            )
+        except Exception:
+            pass
+
         await provisioning_state.checkpoint(
             item_id,
             profile_id,
