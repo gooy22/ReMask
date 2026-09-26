@@ -4969,7 +4969,7 @@ class FacebookBusinessBrowser:
                         'ad account','advertising account','реклам',
                         'werbekonto','compte publicitaire',
                         'বিজ্ঞাপন অ্যাকাউন্ট','tài khoản quảng cáo',
-                        'विज्ञापन खाता','विज्ञापन खाते',
+                        'विज्ञापन खाता','विज्ञापन खाते','विज्ञापन अकाउंट','विज्ञापन अकाउंट्स',
                         'विज्ञापन अकाउंट','विज्ञापन अकाउंट्स'
                     ];
                     const createWords = [
@@ -4990,7 +4990,7 @@ class FacebookBusinessBrowser:
                         'compte publicitaire','comptes publicitaires',
                         'реклам','werbekonto','werbekonten',
                         'বিজ্ঞাপন অ্যাকাউন্ট','tài khoản quảng cáo',
-                        'विज्ञापन खाता','विज्ञापन खाते',
+                        'विज्ञापन खाता','विज्ञापन खाते','विज्ञापन अकाउंट','विज्ञापन अकाउंट्स',
                         'विज्ञापन अकाउंट','विज्ञापन अकाउंट्स'
                     ];
                     const hasLocalAccountContext = el => {
@@ -8215,7 +8215,7 @@ class FacebookBusinessBrowser:
                     const accountWords = [
                         'ad account','advertising account','compte publicitaire',
                         'реклам','werbekonto','বিজ্ঞাপন অ্যাকাউন্ট',
-                        'tài khoản quảng cáo','विज्ञापन खाता','विज्ञापन खाते'
+                        'tài khoản quảng cáo','विज्ञापन खाता','विज्ञापन खाते','विज्ञापन अकाउंट','विज्ञापन अकाउंट्स'
                     ];
                     const nameWords = [
                         'ad account name','advertising account name','account name',
@@ -8949,7 +8949,7 @@ class FacebookBusinessBrowser:
                     const accountWords = [
                         'ad account','advertising account','compte publicitaire',
                         'реклам','werbekonto','বিজ্ঞাপন অ্যাকাউন্ট',
-                        'tài khoản quảng cáo','विज्ञापन खाता','विज्ञापन खाते'
+                        'tài khoản quảng cáo','विज्ञापन खाता','विज्ञापन खाते','विज्ञापन अकाउंट','विज्ञापन अकाउंट्स'
                     ];
 
                     const nodes = [...document.querySelectorAll(
@@ -9542,7 +9542,7 @@ class FacebookBusinessBrowser:
                     const accountWords = [
                         'ad account','advertising account','compte publicitaire',
                         'реклам','werbekonto','বিজ্ঞাপন অ্যাকাউন্ট',
-                        'tài khoản quảng cáo','विज्ञापन खाता','विज्ञापन खाते'
+                        'tài khoản quảng cáo','विज्ञापन खाता','विज्ञापन खाते','विज्ञापन अकाउंट','विज्ञापन अकाउंट्स'
                     ];
                     const hasLocalAccountContext = el => {
                         let cur = el;
@@ -9716,7 +9716,7 @@ class FacebookBusinessBrowser:
                     const accountWords = [
                         'ad account','advertising account','compte publicitaire',
                         'реклам','werbekonto','বিজ্ঞাপন অ্যাকাউন্ট',
-                        'tài khoản quảng cáo','विज्ञापन खाता','विज्ञापन खाते'
+                        'tài khoản quảng cáo','विज्ञापन खाता','विज्ञापन खाते','विज्ञापन अकाउंट','विज्ञापन अकाउंट्स'
                     ];
                     for (const el of document.querySelectorAll(
                         '[data-remask-rk-create-fresh]'
@@ -10522,7 +10522,7 @@ timeout_seconds=4.0,
                     const accountWords = [
                         'ad account','advertising account','compte publicitaire',
                         'реклам','werbekonto','বিজ্ঞাপন অ্যাকাউন্ট',
-                        'tài khoản quảng cáo','विज्ञापन खाता','विज्ञापन खाते'
+                        'tài khoản quảng cáo','विज्ञापन खाता','विज्ञापन खाते','विज्ञापन अकाउंट','विज्ञापन अकाउंट्स'
                     ];
 
                     const popupRoots = [...document.querySelectorAll(
@@ -10807,7 +10807,7 @@ timeout_seconds=4.0,
                                 'ad account','advertising account','реклам',
                                 'werbekonto','compte publicitaire',
                                 'বিজ্ঞাপন অ্যাকাউন্ট','tài khoản quảng cáo',
-                                'विज्ञापन खाता','विज्ञापन खाते',
+                                'विज्ञापन खाता','विज्ञापन खाते','विज्ञापन अकाउंट','विज्ञापन अकाउंट्स',
                         'विज्ञापन अकाउंट','विज्ञापन अकाउंट्स'
                             ];
                             const actionWords = [
