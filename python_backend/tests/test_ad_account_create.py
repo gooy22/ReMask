@@ -166,11 +166,15 @@ class AdAccountDuplicateSafetyTests(unittest.TestCase):
 
     def test_proven_empty_browser_inventory_unlocks_stale_cross_job_guard(self) -> None:
         source = inspect.getsource(ad_account_handler)
-        empty_check = 'browser_inventory.get("confirmed_empty")'
-        guard_message = "previous Job may already have submitted CREATE"
-        self.assertIn(empty_check, source)
-        self.assertIn(guard_message, source)
-        self.assertLess(source.index(empty_check), source.index(guard_message))
+        proof = inspect.getsource(_prove_empty_after_uncertainty)
+        self.assertIn("_prove_empty_after_uncertainty(", source)
+        self.assertIn(
+            "CROSS_JOB_UNKNOWN_CLEARED_BY_INVENTORY",
+            source,
+        )
+        self.assertIn("browser_consensus", proof)
+        self.assertIn("browser_plus_ui", proof)
+        self.assertIn("proven_empty", proof)
 
 
 
