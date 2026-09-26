@@ -7396,6 +7396,7 @@ class FacebookBusinessBrowser:
                     };
                     const clean = text => (text || '')
                         .normalize('NFKC')
+                        .replace(/[\u200b\u200c\u200d\ufeff]/g, '')
                         .replace(/\u00a0/g, ' ')
                         .replace(/\s+/g, ' ')
                         .trim();
@@ -7536,6 +7537,7 @@ class FacebookBusinessBrowser:
                     };
                     const clean = text => (text || '')
                         .normalize('NFKC')
+                        .replace(/[\u200b\u200c\u200d\ufeff]/g, '')
                         .replace(/\u00a0/g, ' ')
                         .replace(/\s+/g, ' ')
                         .trim()
@@ -8051,9 +8053,16 @@ timeout_seconds=4.0,
                 f"x={int(row.get('x') or 0)}",
                 f"y={int(row.get('y') or 0)}",
                 f"clicked={bool(row.get('clicked'))}",
+                f"mode={_clean(row.get('click_mode')) or '-'}",
                 f"state={_clean(row.get('ui_state_after')) or '-'}",
                 f"create={bool(row.get('create_entry_found'))}",
             ]
+            popup_create = row.get("popup_create")
+            if isinstance(popup_create, dict):
+                parts.append(
+                    "popup_count="
+                    f"{int(popup_create.get('popup_count') or 0)}"
+                )
             skip = _clean(row.get("skip"))
             error = _clean(row.get("error"))
             if skip:
@@ -8097,6 +8106,7 @@ timeout_seconds=4.0,
                     };
                     const clean = text => (text || '')
                         .normalize('NFKC')
+                        .replace(/[\u200b\u200c\u200d\ufeff]/g, '')
                         .replace(/\u00a0/g, ' ')
                         .replace(/\s+/g, ' ')
                         .trim()
@@ -8687,6 +8697,89 @@ timeout_seconds=4.0,
                 post_add_candidates = list(
                     last_attempt.get("post_click_candidates") or []
                 )[:30]
+
+        if (
+            not entry_clicked
+            and add_clicked
+            and not section_reload_attempted
+        ):
+            # Meta sometimes leaves the Ad Accounts pane in a stale React
+            # state: the visible Add controls accept the click but no menu or
+            # Create-RK entry is mounted. Previously this path failed
+            # immediately because add_clicked=True skipped the only reload
+            # fallback. Reload the exact Ad Accounts route once, reactivate the
+            # section, and probe the fresh controls again.
+            current_url = _clean(self.page.url)
+            if (
+                "/settings/ad_accounts" in current_url
+                or "/settings/ad-accounts" in current_url
+            ):
+                try:
+                    await self.page.reload(
+                        wait_until="commit",
+                        timeout=self.timeout_ms,
+                    )
+                    section_reload_attempted = True
+                    section_route_attempts.append(
+                        "post_add_stale_reload"
+                    )
+                    await self.page.wait_for_timeout(700)
+                    await self._assert_authenticated()
+                    activated = await self._activate_ad_account_settings_section(
+                        business_id=business,
+                    )
+                    ready_after_reload = (
+                        await self._wait_for_ad_account_create_action(
+                            timeout_seconds=8.0 if activated else 4.0,
+                        )
+                    )
+                    action_surface_ready = (
+                        action_surface_ready or ready_after_reload
+                    )
+                    section_clicked = section_clicked or activated
+
+                    refreshed_ui = await self._ad_account_ui_state()
+                    self._record_ad_account_ui_state(
+                        "after_stale_add_reload",
+                        refreshed_ui,
+                    )
+                    if self._ad_account_create_form_confirmed(
+                        refreshed_ui
+                    ):
+                        entry_clicked = True
+                    else:
+                        retry_entry, retry_attempts = (
+                            await self._probe_ad_account_add_buttons()
+                        )
+                        add_attempts.extend(retry_attempts)
+                        add_clicked = any(
+                            bool(row.get("clicked"))
+                            for row in add_attempts
+                            if isinstance(row, dict)
+                        )
+                        entry_clicked = retry_entry
+                        if not entry_clicked and retry_attempts:
+                            post_add_candidates = list(
+                                retry_attempts[-1].get(
+                                    "post_click_candidates"
+                                ) or []
+                            )[:30]
+                except BrowserBusinessError as exc:
+                    section_route_attempts.append(
+                        f"post_add_reload:{exc.code}:{exc}"
+                    )
+                    if exc.code in {
+                        "SESSION_EXPIRED",
+                        "CHECKPOINT_REQUIRED",
+                        "TWO_FACTOR_REQUIRED",
+                        "FACEBOOK_TEMPORARILY_BLOCKED",
+                    }:
+                        raise
+                except Exception as exc:
+                    section_route_attempts.append(
+                        "post_add_reload:"
+                        f"{exc.__class__.__name__}:{exc}"
+                    )
 
         if not entry_clicked and not add_clicked:
             # No Add candidate was usable yet. Give Meta one late hydration
