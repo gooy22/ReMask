@@ -1329,12 +1329,9 @@ async def ad_account_handler(
                 retryable=exc.retryable,
             ) from exc
         except Exception as exc:
-            # Unknown exceptions do not carry enough evidence to prove where
-            # the browser was relative to the final CTA. Expected pre-submit
-            # UI/transport failures have explicit BrowserBusinessError codes
-            # above and self-heal there. Never auto-repeat an unknown exception
-            # through an irreversible flow merely because capture normally
-            # aborts the mutation.
+            # Unknown exceptions do not prove whether the browser had reached
+            # the final CTA. Reconcile immediately instead of either blindly
+            # retrying or forcing a manual Retry Failed.
             failure = {
                 "attempt": capture_attempt,
                 "code": "AD_ACCOUNT_CAPTURE_BROWSER_EXCEPTION",
@@ -1344,6 +1341,126 @@ async def ad_account_handler(
                 )[:1200],
             }
             capture_failures.append(failure)
+
+            unknown_inventory: list[dict[str, Any]] = []
+            unknown_found = ""
+            for inventory_attempt in range(3):
+                unknown_found, inventory_diag = await _reconcile_existing(
+                    session,
+                    business_id=business_id,
+                    account_name=rk_name,
+                )
+                unknown_inventory.extend(inventory_diag)
+                if unknown_found:
+                    break
+                if inventory_attempt < 2:
+                    await asyncio.sleep(2.0)
+
+            if unknown_found:
+                await provisioning_state.remember_entity(
+                    profile_id,
+                    scope_key,
+                    ProvisioningStep.AD_ACCOUNT,
+                    {"ad_account_id": unknown_found},
+                )
+                return {
+                    "ad_account_id": unknown_found,
+                    "business_id": business_id,
+                    "name": rk_name,
+                    "currency": currency,
+                    "timezone_id": timezone_id,
+                    "reused": True,
+                    "recovered_after_uncertainty": True,
+                    "transport": "capture_exception_inventory_reconciliation",
+                    "reconciliation": unknown_inventory,
+                }
+
+            graph_empty = _inventory_repeatedly_confirms_empty(
+                unknown_inventory,
+                required_checks=3,
+            )
+            browser_found, browser_inventory = (
+                await _reconcile_existing_browser_inventory(
+                    session,
+                    business_id=business_id,
+                    account_name=rk_name,
+                )
+            )
+            if browser_found:
+                await provisioning_state.remember_entity(
+                    profile_id,
+                    scope_key,
+                    ProvisioningStep.AD_ACCOUNT,
+                    {"ad_account_id": browser_found},
+                )
+                return {
+                    "ad_account_id": browser_found,
+                    "business_id": business_id,
+                    "name": rk_name,
+                    "currency": currency,
+                    "timezone_id": timezone_id,
+                    "reused": True,
+                    "recovered_after_uncertainty": True,
+                    "transport": "capture_exception_business_settings_inventory",
+                    "reconciliation": unknown_inventory,
+                    "browser_inventory": browser_inventory,
+                }
+
+            secondary_empty = bool(browser_inventory.get("confirmed_empty"))
+            ui_inventory: dict[str, Any] = {}
+            if not secondary_empty:
+                try:
+                    async with FacebookBusinessBrowser(
+                        session.context,
+                        timeout_seconds=45,
+                    ) as inventory_browser:
+                        ui_inventory = (
+                            await inventory_browser.verify_ad_account_inventory_empty(
+                                business_id=business_id,
+                            )
+                        )
+                except Exception as inventory_exc:
+                    ui_inventory = {
+                        "confirmed_empty": False,
+                        "error": (
+                            f"{inventory_exc.__class__.__name__}: "
+                            f"{_clean(inventory_exc)}"
+                        )[:500],
+                    }
+                secondary_empty = bool(ui_inventory.get("confirmed_empty"))
+
+            if (
+                graph_empty
+                and secondary_empty
+                and capture_attempt < capture_attempt_limit
+            ):
+                failure["uncertain_reconciled_empty"] = True
+                await provisioning_state.checkpoint(
+                    item_id,
+                    profile_id,
+                    scope_key,
+                    ProvisioningStep.AD_ACCOUNT,
+                    {
+                        "phase": "CREATE_NOT_SUBMITTED",
+                        "resume_from": "CREATE",
+                        "business_id": business_id,
+                        "account_name": rk_name,
+                        "currency": currency,
+                        "timezone_id": timezone_id,
+                        "capture_attempt": capture_attempt,
+                        "capture_attempt_limit": capture_attempt_limit,
+                        "capture_failures": capture_failures[-3:],
+                        "last_error_code": failure["code"],
+                        "last_error": failure["message"],
+                        "reconciliation": unknown_inventory,
+                        "browser_inventory": browser_inventory,
+                        "ui_inventory": ui_inventory,
+                        "transport": "business_suite_live_capture",
+                    },
+                )
+                await asyncio.sleep(0.75 * capture_attempt)
+                continue
+
             await provisioning_state.checkpoint(
                 item_id,
                 profile_id,
@@ -1361,15 +1478,18 @@ async def ad_account_handler(
                     "capture_failures": capture_failures[-3:],
                     "last_error_code": failure["code"],
                     "last_error": failure["message"],
+                    "reconciliation": unknown_inventory,
+                    "browser_inventory": browser_inventory,
+                    "ui_inventory": ui_inventory,
                     "transport": "business_suite_live_capture",
                 },
             )
             raise ProvisioningError(
-                "AD_ACCOUNT_CAPTURE_BROWSER_EXCEPTION",
+                "AD_ACCOUNT_CREATE_RESULT_UNKNOWN",
                 (
                     "Unexpected live Add-RK capture exception has unknown "
-                    "final-click state. ReMask will not auto-repeat CREATE; "
-                    "inventory reconciliation is required. "
+                    "final-click state and independent inventory checks are "
+                    "not conclusive. Duplicate CREATE remains blocked. "
                     + failure["message"]
                 ),
                 retryable=True,
