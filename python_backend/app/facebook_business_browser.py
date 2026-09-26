@@ -9726,6 +9726,28 @@ timeout_seconds=4.0,
                     "state_direct="
                     f"{bool(state_direct.get('clicked'))}"
                 )
+                direct_kind = _clean(state_direct.get("target_kind"))
+                direct_mode = _clean(state_direct.get("mode"))
+                direct_target = state_direct.get("target")
+                if direct_kind:
+                    parts.append(f"target={direct_kind}")
+                if direct_mode:
+                    parts.append(f"click_mode={direct_mode}")
+                if isinstance(direct_target, dict):
+                    direct_text = _clean(direct_target.get("text"))[:90]
+                    top_tag = _clean(
+                        direct_target.get("center_top_tag")
+                    )[:24]
+                    top_text = _clean(
+                        direct_target.get("center_top_text")
+                    )[:70]
+                    if direct_text:
+                        parts.append(f"target_text={direct_text}")
+                    if top_tag or top_text:
+                        parts.append(
+                            "center_top="
+                            f"{top_tag}:{top_text}"[:100]
+                        )
             if bool(row.get("preserve_create_surface")):
                 parts.append("preserved=True")
             skip = _clean(row.get("skip"))
