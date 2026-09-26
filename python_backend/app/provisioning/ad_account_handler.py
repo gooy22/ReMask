@@ -980,9 +980,38 @@ async def ad_account_handler(
                 "transport": "business_suite_live_capture",
             },
         )
+        browser_diag = (
+            exc.diagnostic if isinstance(exc.diagnostic, dict) else {}
+        )
+        compact_diag = {
+            key: browser_diag.get(key)
+            for key in (
+                "stage",
+                "add_attempt_summary",
+                "add_clicked",
+                "action_surface_ready",
+                "post_add_candidates",
+                "section_clicked",
+                "section_reload_attempted",
+                "section_activation",
+                "action_candidates",
+                "ui_state",
+                "right_pane_snapshot",
+            )
+            if key in browser_diag
+        }
+        detail = str(exc)
+        if compact_diag:
+            detail += " diagnostic=" + json.dumps(
+                compact_diag,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                default=str,
+            )[:3500]
+
         raise ProvisioningError(
             exc.code,
-            str(exc),
+            detail,
             retryable=exc.retryable,
         ) from exc
 
