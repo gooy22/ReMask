@@ -7894,6 +7894,31 @@ class FacebookBusinessBrowser:
                             || clickable.getAttribute('aria-disabled') === 'true'
                         ) continue;
 
+                        const insideDialog = !!el.closest(
+                            '[role="dialog"],[aria-modal="true"]'
+                        );
+                        const clickableRole = (
+                            clickable.getAttribute('role') || ''
+                        ).toLowerCase();
+                        const clickableTag = (
+                            clickable.tagName || ''
+                        ).toUpperCase();
+                        const clickableStyle = getComputedStyle(clickable);
+                        const explicitlyInteractive = !!semantic
+                            || clickableTag === 'BUTTON'
+                            || clickableTag === 'A'
+                            || [
+                                'button','link','menuitem','menuitemradio',
+                                'option','radio'
+                            ].includes(clickableRole)
+                            || clickable.hasAttribute('onclick')
+                            || clickableStyle.cursor === 'pointer';
+
+                        // Once Meta opens the modal, its title can itself be
+                        // "Create ad account". A plain heading DIV/SPAN inside
+                        // the modal is not the CREATE_ENTRY action.
+                        if (insideDialog && !explicitlyInteractive) continue;
+
                         const cr = clickable.getBoundingClientRect();
                         if (
                             cr.x < 280 || cr.y < 35 || cr.y > 795
@@ -8006,11 +8031,16 @@ class FacebookBusinessBrowser:
                         .filter(Boolean)
                         .slice(0, 6);
                     const dialogCombined = dialogTexts.join(' ').toLowerCase();
-                    const dialogHasFormControl = dialogs.some(
-                        dialog => dialog.querySelector(
-                            'input,textarea,select,[role="combobox"],[role="textbox"]'
-                        )
+                    const visibleDialogFormControls = dialogs.flatMap(
+                        dialog => [...dialog.querySelectorAll(
+                            'input,textarea,select,[role="combobox"],'
+                            + '[role="textbox"],[role="spinbutton"]'
+                        )].filter(visible)
                     );
+                    const dialogFormControlCount =
+                        visibleDialogFormControls.length;
+                    const dialogHasFormControl =
+                        dialogFormControlCount > 0;
                     const dialogLooksLikeMetaAI = dialogs.some(dialog => {
                         const headings = [...dialog.querySelectorAll(
                             'h1,h2,h3,[role="heading"]'
@@ -8051,13 +8081,27 @@ class FacebookBusinessBrowser:
                             'मेरा व्यवसाय','मेरे व्यवसाय के लिए'
                         ].some(word => dialogCombined.includes(word))
                     );
+                    const dialogHasCreateAccountMarker = (
+                        createWords.some(word => dialogCombined.includes(word))
+                        && accountWords.some(word => dialogCombined.includes(word))
+                    );
+
                     if (
                         !dialogLooksLikeMetaAI
-                        && dialogHasWizardMarker
                         && dialogHasFormControl
+                        && (
+                            dialogHasWizardMarker
+                            || dialogHasCreateAccountMarker
+                        )
                     ) {
                         formEvidence = true;
                     }
+
+                    const introDialog = (
+                        !dialogLooksLikeMetaAI
+                        && dialogHasCreateAccountMarker
+                        && !formEvidence
+                    );
 
                     // Only treat an error as blocking when it is surfaced in an
                     // alert/toast/dialog, not merely present in hidden app text.
@@ -8078,6 +8122,7 @@ class FacebookBusinessBrowser:
                     let state = 'UNKNOWN';
                     if (errors.length) state = 'BLOCKED';
                     else if (nameInput || formEvidence) state = 'FORM';
+                    else if (introDialog) state = 'INTRO_DIALOG';
                     else if (createEntry) state = 'CREATE_ENTRY';
                     else if (addSurface) state = 'ADD_SURFACE';
                     else if (dialogs.length) state = 'DIALOG';
@@ -8096,6 +8141,8 @@ class FacebookBusinessBrowser:
                         name_input: nameInput,
                         form_evidence: formEvidence,
                         editable_form_control: editableFormControl,
+                        intro_dialog: introDialog,
+                        dialog_form_control_count: dialogFormControlCount,
                         create_entry: createEntry,
                         create_target: createTarget,
                         add_surface: addSurface,
@@ -8123,6 +8170,10 @@ class FacebookBusinessBrowser:
             "form_evidence": bool(raw.get("form_evidence")),
             "editable_form_control": bool(
                 raw.get("editable_form_control")
+            ),
+            "intro_dialog": bool(raw.get("intro_dialog")),
+            "dialog_form_control_count": int(
+                raw.get("dialog_form_control_count") or 0
             ),
             "create_entry": bool(raw.get("create_entry")),
             "create_target": (
