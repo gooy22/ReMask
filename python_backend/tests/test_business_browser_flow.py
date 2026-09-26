@@ -1561,6 +1561,135 @@ class BrowserAdAccountLiveAddSequenceTests(unittest.IsolatedAsyncioTestCase):
         browser._wait_for_ad_account_ui_transition.assert_awaited_once()
 
 
+
+class BrowserAdAccountStateCreateRecoveryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_create_entry_state_recovers_plain_meta_card_after_add(self):
+        class _Item:
+            async def is_visible(self):
+                return True
+            async def is_enabled(self):
+                return True
+            async def click(self, **kwargs):
+                return None
+
+        class _Locator:
+            first = _Item()
+            async def count(self):
+                return 1
+
+        class _Keyboard:
+            async def press(self, key):
+                return None
+
+        class _Page:
+            keyboard = _Keyboard()
+            def locator(self, selector):
+                return _Locator()
+            async def wait_for_timeout(self, ms):
+                return None
+            async def evaluate(self, script, *args):
+                return {"clicked": False}
+
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-rk-state-create")
+        )
+        browser.page = _Page()
+        browser._ad_account_add_button_candidates = AsyncMock(
+            return_value=[
+                {
+                    "probe_id":"0",
+                    "text":"Ajouter",
+                    "x":1137,
+                    "y":97,
+                    "w":103,
+                    "h":36,
+                    "tag":"DIV",
+                    "role":"button",
+                    "haspopup":"",
+                    "toolbar_penalty":1,
+                }
+            ]
+        )
+        browser._ad_account_ui_state = AsyncMock(
+            return_value={
+                "state":"ADD_SURFACE",
+                "signature":"before-add",
+                "url":"",
+                "errors":[],
+                "dialogs":[],
+                "controls":["Ajouter"],
+            }
+        )
+        browser._ad_account_right_pane_snapshot = AsyncMock(
+            side_effect=[
+                ["Ajouter"],
+                ["Ajouter", "Créer un compte publicitaire"],
+            ]
+        )
+        browser._ad_account_visible_create_candidates = AsyncMock(
+            return_value=[]
+        )
+        browser._wait_for_fresh_ad_account_create_candidate = AsyncMock(
+            return_value=(
+                [],
+                {
+                    "state":"CREATE_ENTRY",
+                    "signature":"create-card",
+                    "url":"",
+                    "errors":[],
+                    "dialogs":[],
+                    "controls":["Créer un compte publicitaire"],
+                    "name_input":False,
+                    "editable_form_control":False,
+                },
+            )
+        )
+        browser._click_ad_account_action_dom = AsyncMock(
+            return_value="create"
+        )
+        browser._wait_for_ad_account_ui_transition = AsyncMock(
+            return_value={
+                "state":"FORM",
+                "signature":"wizard",
+                "url":"",
+                "name_input":True,
+                "form_evidence":True,
+                "editable_form_control":True,
+                "errors":[],
+                "dialogs":[],
+                "controls":[
+                    "Nom du compte publicitaire",
+                    "Devise",
+                    "Fuseau horaire",
+                ],
+            }
+        )
+        browser._ad_account_popup_candidates = AsyncMock(
+            return_value=["Assistant business Meta AI"]
+        )
+        browser._click_ad_account_create_entry_in_popup = AsyncMock(
+            return_value={"clicked":False}
+        )
+
+        found, attempts = await browser._probe_ad_account_add_buttons()
+
+        self.assertTrue(found)
+        self.assertEqual(attempts[0]["state_dom_create"], "create")
+        self.assertTrue(attempts[0]["create_entry_found"])
+        browser._click_ad_account_action_dom.assert_awaited_once_with(
+            allow_generic_add=False
+        )
+        browser._click_ad_account_create_entry_in_popup.assert_not_awaited()
+
+    def test_create_dom_matcher_supports_plain_cards_and_excludes_meta_ai(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser._click_ad_account_action_dom
+        )
+        self.assertIn("button,a,span,div,h1,h2,h3,label", source)
+        self.assertIn("metaAIRoot", source)
+        self.assertIn("const clickable = semantic || el", source)
+
+
 class BrowserAdAccountPopupTransitionRegressionTests(unittest.TestCase):
     def test_popup_transition_uses_post_add_poll_state_signature(self):
         source = inspect.getsource(
