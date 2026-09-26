@@ -1311,6 +1311,110 @@ async def ad_account_handler(
                     await asyncio.sleep(0.75)
                     continue
 
+                needs_fresh_capture = (
+                    exc.code in {
+                        "CREATE_AD_ACCOUNT_LIVE_CAPTURE_REQUIRED",
+                        "CREATE_AD_ACCOUNT_LIVE_CAPTURE_INVALID",
+                        "CREATE_AD_ACCOUNT_LIVE_CAPTURE_STALE",
+                    }
+                    and bool(exc.retryable)
+                    and replay_attempt < replay_attempt_limit
+                )
+                if needs_fresh_capture:
+                    await browser_checkpoint(
+                        {
+                            "phase": "CREATE_CAPTURE_PREPARING",
+                            "activity": "AD_ACCOUNT_LIVE_RECAPTURE_AFTER_STALE",
+                            "activity_at": int(time.time()),
+                            "replay_attempt": replay_attempt,
+                            "recapture_reason": exc.code,
+                            "transport": "business_suite_live_capture",
+                        }
+                    )
+                    try:
+                        async with FacebookBusinessBrowser(
+                            session.context,
+                            timeout_seconds=90,
+                        ) as browser:
+                            refreshed_capture = (
+                                await browser.capture_ad_account_create_request(
+                                    business_id=business_id,
+                                    account_name=rk_name,
+                                    currency=currency,
+                                    timezone_id=timezone_id,
+                                )
+                            )
+                    except BrowserBusinessError as recapture_exc:
+                        recapture_diag = _compact_browser_diagnostic(
+                            recapture_exc.diagnostic
+                            if isinstance(recapture_exc.diagnostic, dict)
+                            else {}
+                        )
+                        raise ProvisioningError(
+                            recapture_exc.code,
+                            (
+                                "Automatic re-capture after stale private "
+                                "mutation failed: "
+                                + str(recapture_exc)
+                                + (
+                                    " diagnostic="
+                                    + json.dumps(
+                                        recapture_diag,
+                                        ensure_ascii=False,
+                                        separators=(",", ":"),
+                                        default=str,
+                                    )[:2500]
+                                    if recapture_diag
+                                    else ""
+                                )
+                            ),
+                            retryable=recapture_exc.retryable,
+                        ) from recapture_exc
+
+                    refreshed_doc_id = _clean(
+                        refreshed_capture.get("doc_id")
+                    )
+                    refreshed_variables = refreshed_capture.get("variables")
+                    if (
+                        not refreshed_doc_id.isdigit()
+                        or not isinstance(refreshed_variables, dict)
+                        or not refreshed_variables
+                    ):
+                        raise ProvisioningError(
+                            "CREATE_AD_ACCOUNT_LIVE_CAPTURE_INVALID",
+                            (
+                                "Automatic re-capture after stale mutation "
+                                "did not produce doc_id + variables. "
+                                "No CREATE was sent."
+                            ),
+                            retryable=True,
+                        )
+
+                    captured_request = refreshed_capture
+                    capture_doc_id = refreshed_doc_id
+                    capture_friendly = _clean(
+                        refreshed_capture.get("friendly_name")
+                    )
+                    capture_variables = refreshed_variables
+
+                    await browser_checkpoint(
+                        {
+                            "phase": "CREATE_CAPTURED",
+                            "activity": "AD_ACCOUNT_LIVE_RECAPTURE_CONFIRMED",
+                            "activity_at": int(time.time()),
+                            "capture_doc_id": capture_doc_id,
+                            "capture_friendly_name": capture_friendly,
+                            "capture_variable_keys": sorted(
+                                capture_variables.keys()
+                            ),
+                            "replay_attempt": replay_attempt,
+                            "recapture_reason": exc.code,
+                            "transport": "business_suite_live_capture",
+                        }
+                    )
+                    await asyncio.sleep(0.5)
+                    continue
+
                 raise ProvisioningError(
                     exc.code,
                     str(exc),
