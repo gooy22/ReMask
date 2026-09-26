@@ -8243,6 +8243,10 @@ class FacebookBusinessBrowser:
             "editable_form_control": bool(
                 state.get("editable_form_control")
             ),
+            "intro_dialog": bool(state.get("intro_dialog")),
+            "dialog_form_control_count": int(
+                state.get("dialog_form_control_count") or 0
+            ),
             "create_entry": bool(state.get("create_entry")),
             "create_target": dict(state.get("create_target") or {}),
             "add_surface": bool(state.get("add_surface")),
@@ -8275,7 +8279,11 @@ class FacebookBusinessBrowser:
             )
             terminal_state = current_state == "BLOCKED" or (
                 not require_signature_change
-                and current_state in {"FORM", "CREATE_ENTRY"}
+                and current_state in {
+                    "FORM",
+                    "CREATE_ENTRY",
+                    "INTRO_DIALOG",
+                }
             )
             if terminal_state or signature_changed:
                 self._record_ad_account_ui_state(label, last)
@@ -8473,12 +8481,32 @@ class FacebookBusinessBrowser:
                         const hasAccount = accountWords.some(word => text.includes(word));
                         if (!hasCreate || !hasAccount) continue;
 
-                        const clickable = el.closest(
+                        const semantic = el.closest(
                             'button,a,[role="button"],[role="menuitem"],'
                             + '[role="menuitemradio"],[role="option"],'
                             + '[tabindex]:not([tabindex="-1"])'
-                        ) || el;
+                        );
+                        const clickable = semantic || el;
                         if (!visible(clickable)) continue;
+
+                        const insideDialog = !!el.closest(
+                            '[role="dialog"],[aria-modal="true"]'
+                        );
+                        const style = getComputedStyle(clickable);
+                        const role = (
+                            clickable.getAttribute('role') || ''
+                        ).toLowerCase();
+                        const tag = (clickable.tagName || '').toUpperCase();
+                        const explicitlyInteractive = !!semantic
+                            || tag === 'BUTTON'
+                            || tag === 'A'
+                            || [
+                                'button','menuitem','menuitemradio','option'
+                            ].includes(role)
+                            || clickable.hasAttribute('onclick')
+                            || style.cursor === 'pointer';
+                        if (insideDialog && !explicitlyInteractive) continue;
+
                         const cr = clickable.getBoundingClientRect();
 
                         let score = 0;
@@ -8911,9 +8939,18 @@ class FacebookBusinessBrowser:
         while time.monotonic() < deadline:
             before = await self._ad_account_ui_state()
             before_signature = _clean(before.get("signature"))
+            before_state = _clean(before.get("state")).upper()
+
+            if before_state == "INTRO_DIALOG":
+                return await self._advance_ad_account_intro_dialog(
+                    timeout_seconds=max(
+                        1.0,
+                        min(3.5, deadline - time.monotonic()),
+                    )
+                )
 
             tagged_click = {"clicked": False}
-            if _clean(before.get("state")).upper() == "CREATE_ENTRY":
+            if before_state == "CREATE_ENTRY":
                 tagged_click = (
                     await self._click_state_detected_ad_account_create_entry()
                 )
