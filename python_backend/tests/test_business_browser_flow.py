@@ -1154,6 +1154,32 @@ class BrowserAdAccountPopupTransitionRegressionTests(unittest.TestCase):
         )
 
 
+class BrowserAdAccountSubmitScopeRegressionTests(unittest.TestCase):
+    def test_submit_loop_has_no_page_global_next_fallback(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser.create_ad_account
+        )
+        submit_pos = source.index("for step in range(12):")
+        submit_tail = source[submit_pos:]
+        self.assertNotIn(
+            "next_clicked = await self._click_named(",
+            submit_tail,
+        )
+
+    def test_ownership_selection_has_no_page_global_fallback(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser._select_own_business_if_present
+        )
+        self.assertNotIn("await self._click_named(", source)
+        self.assertIn("return False", source)
+
+    def test_final_matcher_accepts_prefixed_create_label(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser._click_ad_account_final_interactive
+        )
+        self.assertIn("startswith(word + \" \")", source)
+
+
 class BrowserAdAccountZeroWidthSubmitRegressionTests(unittest.TestCase):
     def test_submit_matchers_strip_meta_zero_width_characters(self):
         semantic = inspect.getsource(
