@@ -4509,7 +4509,14 @@ class FacebookBusinessBrowser:
         *,
         allow_generic_add: bool = False,
     ) -> str:
-        """Click Meta's current Ad Account Create/Add control by visible DOM text."""
+        """Click Meta's current Ad Account Create/Add control by visible DOM text.
+
+        Meta increasingly renders the Create-RK choice as a plain DIV/SPAN card
+        rather than a semantic button/menuitem.  For CREATE we may safely click
+        the visible text node (the browser click bubbles to React's parent
+        handler), but only when the same node contains both a create verb and
+        an ad-account marker in the right settings pane.
+        """
         if self.page is None:
             return ""
 
@@ -4517,6 +4524,7 @@ class FacebookBusinessBrowser:
             result = await self.page.evaluate(
                 """(allowGenericAdd) => {
                     const visible = el => {
+                        if (!el) return false;
                         const r = el.getBoundingClientRect();
                         const s = getComputedStyle(el);
                         return r.width > 0 && r.height > 0
@@ -4526,6 +4534,7 @@ class FacebookBusinessBrowser:
                     };
                     const clean = text => (text || '')
                         .normalize('NFKC')
+                        .replace(/[\u200b\u200c\u200d\ufeff]/g, '')
                         .replace(/\u00a0/g, ' ')
                         .replace(/\s+/g, ' ')
                         .trim()
@@ -4548,28 +4557,90 @@ class FacebookBusinessBrowser:
                         'add','ajouter','добавить','додати',
                         'hinzufügen','যোগ করুন','thêm','जोड़ें'
                     ];
+                    const metaAIRoot = el => {
+                        const root = el.closest(
+                            '[role="dialog"],[aria-modal="true"]'
+                        );
+                        if (!root) return false;
+                        const text = clean(
+                            (root.getAttribute('aria-label') || '') + ' ' +
+                            (root.getAttribute('title') || '') + ' ' +
+                            (root.innerText || root.textContent || '')
+                        );
+                        return [
+                            'meta ai',
+                            'assistant business meta ai',
+                            'meta ai business assistant',
+                            'assistant meta ai'
+                        ].some(word => text.includes(word));
+                    };
                     const nodes = [...document.querySelectorAll(
-                        'button,a,[role="button"],[role="menuitem"],'
-                        + '[role="menuitemradio"],[role="option"]'
+                        'button,a,span,div,h1,h2,h3,label,'
+                        + '[role="button"],[role="link"],[role="menuitem"],'
+                        + '[role="menuitemradio"],[role="option"],[tabindex]'
                     )];
-                    const rows = nodes
-                        .filter(visible)
-                        .map(el => ({
-                            el,
-                            text: clean(
-                                (el.getAttribute('aria-label') || '') + ' ' +
-                                (el.getAttribute('title') || '') + ' ' +
-                                (el.innerText || el.textContent || '')
-                            )
-                        }))
-                        .filter(row => row.text);
+
+                    const rows = [];
+                    const seen = new Set();
+                    for (const el of nodes) {
+                        if (!visible(el) || metaAIRoot(el)) continue;
+                        const text = clean(
+                            (el.getAttribute('aria-label') || '') + ' ' +
+                            (el.getAttribute('placeholder') || '') + ' ' +
+                            (el.getAttribute('title') || '') + ' ' +
+                            (el.innerText || el.textContent || '')
+                        );
+                        if (!text || text.length > 240) continue;
+
+                        const semantic = el.closest(
+                            'button,a,[role="button"],[role="link"],'
+                            + '[role="menuitem"],[role="menuitemradio"],'
+                            + '[role="option"],[tabindex]:not([tabindex="-1"])'
+                        );
+                        const clickable = semantic || el;
+                        if (!visible(clickable)) continue;
+                        if (
+                            clickable.hasAttribute('disabled')
+                            || clickable.getAttribute('aria-disabled') === 'true'
+                        ) continue;
+
+                        const r = clickable.getBoundingClientRect();
+                        if (r.x < 280 || r.y < 30 || r.y > 795) continue;
+
+                        const key = [
+                            text,
+                            Math.round(r.x),
+                            Math.round(r.y),
+                            Math.round(r.width),
+                            Math.round(r.height)
+                        ].join('|');
+                        if (seen.has(key)) continue;
+                        seen.add(key);
+                        rows.push({el:clickable,text,r});
+                    }
 
                     const direct = rows
                         .filter(row =>
                             accountWords.some(x => row.text.includes(x))
                             && createWords.some(x => row.text.includes(x))
                         )
-                        .sort((a,b) => a.text.length - b.text.length);
+                        .sort((a,b) => {
+                            const semanticA = a.el.matches(
+                                'button,a,[role="button"],[role="menuitem"],'
+                                + '[role="menuitemradio"],[role="option"]'
+                            ) ? 0 : 1;
+                            const semanticB = b.el.matches(
+                                'button,a,[role="button"],[role="menuitem"],'
+                                + '[role="menuitemradio"],[role="option"]'
+                            ) ? 0 : 1;
+                            if (semanticA !== semanticB) {
+                                return semanticA - semanticB;
+                            }
+                            if (a.text.length !== b.text.length) {
+                                return a.text.length - b.text.length;
+                            }
+                            return a.r.y - b.r.y;
+                        });
                     if (direct.length) {
                         direct[0].el.scrollIntoView({block: 'center'});
                         direct[0].el.click();
@@ -4580,18 +4651,10 @@ class FacebookBusinessBrowser:
 
                     const generic = rows
                         .filter(row => {
-                            const r = row.el.getBoundingClientRect();
                             const isInteractive = row.el.matches(
                                 'button,a,[role="button"],[role="link"]'
                             );
-                            // The Add-RK action is in Meta's right content pane.
-                            // Accept anchors/role=link as well as buttons, but
-                            // keep the x-bound so sidebar navigation cannot win.
-                            if (
-                                !isInteractive
-                                || r.x < 300
-                                || row.text.length > 96
-                            ) {
+                            if (!isInteractive || row.text.length > 96) {
                                 return false;
                             }
                             if (accountWords.some(x => row.text.includes(x))) {
@@ -4605,8 +4668,7 @@ class FacebookBusinessBrowser:
                         .sort((a,b) => {
                             const at = a.text.length - b.text.length;
                             if (at) return at;
-                            return a.el.getBoundingClientRect().x
-                                - b.el.getBoundingClientRect().x;
+                            return a.r.x - b.r.x;
                         });
                     if (!generic.length) return '';
                     generic[0].el.scrollIntoView({block: 'center'});
@@ -8842,6 +8904,43 @@ class FacebookBusinessBrowser:
                     ).upper()
                     if self._ad_account_create_form_confirmed(
                         fresh_transition
+                    ):
+                        attempt["create_entry_found"] = True
+                        attempts.append(attempt)
+                        return True, attempts
+
+                # Critical recovery for Meta's current Add-RK card UI:
+                # the coarse state machine can already prove CREATE_ENTRY even
+                # when the card is not a *fresh* semantic menu item (for
+                # example a plain DIV/SPAN rendered by a portal).  Use that
+                # proof to run the bounded CREATE-only DOM matcher before
+                # treating the Add click as a miss.  This cannot submit the
+                # final RK CREATE; it only opens the wizard.
+                state_dom_create = ""
+                if attempt["ui_state_after"] == "CREATE_ENTRY":
+                    state_dom_create = (
+                        await self._click_ad_account_action_dom(
+                            allow_generic_add=False
+                        )
+                    )
+                attempt["state_dom_create"] = state_dom_create
+
+                if state_dom_create == "create":
+                    state_dom_transition = (
+                        await self._wait_for_ad_account_ui_transition(
+                            previous_signature=_clean(
+                                post_add_poll_state.get("signature")
+                            ),
+                            timeout_seconds=4.0,
+                            label="after_state_create_entry",
+                            require_signature_change=True,
+                        )
+                    )
+                    attempt["state_dom_create_state_after"] = _clean(
+                        state_dom_transition.get("state")
+                    ).upper()
+                    if self._ad_account_create_form_confirmed(
+                        state_dom_transition
                     ):
                         attempt["create_entry_found"] = True
                         attempts.append(attempt)
