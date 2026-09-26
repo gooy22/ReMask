@@ -873,6 +873,79 @@ def _extract_inventory_ad_account_ids(payload: Any) -> list[str]:
     return sorted(found)
 
 
+def _has_ad_account_inventory_container(payload: Any) -> bool:
+    """Return True only when a payload exposes an RK inventory collection.
+
+    This is used to distinguish an authoritative empty Ad Accounts inventory
+    from an unrelated GraphQL response that simply happens to contain no RK id.
+    """
+    collection_keys = (
+        "ad_accounts",
+        "adaccounts",
+        "advertising_accounts",
+        "advertisingaccounts",
+        "owned_ad_accounts",
+        "ownedadaccounts",
+        "client_ad_accounts",
+        "clientadaccounts",
+    )
+
+    def walk(value: Any) -> bool:
+        if isinstance(value, dict):
+            typename = _clean(value.get("__typename")).casefold()
+            compact_type = (
+                typename.replace("_", "").replace("-", "").replace(" ", "")
+            )
+            if "adaccountconnection" in compact_type:
+                return True
+
+            for key, child in value.items():
+                folded = str(key).casefold()
+                compact = (
+                    folded.replace("_", "").replace("-", "").replace(" ", "")
+                )
+                plural_key = any(
+                    marker.replace("_", "") in compact
+                    for marker in collection_keys
+                )
+                connection_shape = (
+                    isinstance(child, dict)
+                    and any(
+                        field in child
+                        for field in (
+                            "edges",
+                            "nodes",
+                            "items",
+                            "count",
+                            "total_count",
+                            "totalCount",
+                            "page_info",
+                            "pageInfo",
+                        )
+                    )
+                    and (
+                        "adaccount" in compact
+                        or "advertisingaccount" in compact
+                    )
+                )
+                if (
+                    isinstance(child, (dict, list))
+                    and (plural_key or connection_shape)
+                ):
+                    return True
+                if walk(child):
+                    return True
+
+        elif isinstance(value, list):
+            for child in value:
+                if walk(child):
+                    return True
+
+        return False
+
+    return walk(payload)
+
+
 class FacebookBusinessBrowser:
     """
     Browser-first Meta Business workflow.
@@ -7111,13 +7184,15 @@ class FacebookBusinessBrowser:
         Meta uses to paint the table. It first accepts an exact-name match;
         under ReMask's 1 BM = 1 RK invariant it also accepts one unique
         structurally identified RK from a read-only query targeting the exact
-        Business.
+        Business. Two explicit empty inventory observations are accepted as
+        proof that a stale previous CREATE did not leave an RK behind.
         """
         business = _digits(business_id)
         expected = _clean(account_name)
         if self.page is None or not business or not expected:
             return {
                 "confirmed": False,
+                "confirmed_empty": False,
                 "reason": "invalid_input",
             }
 
@@ -7125,8 +7200,10 @@ class FacebookBusinessBrowser:
         found_future: asyncio.Future[dict[str, Any]] = loop.create_future()
         response_tasks: set[asyncio.Task[Any]] = set()
         diagnostics: list[dict[str, Any]] = []
+        empty_observations = 0
 
         async def inspect_response(response: Any) -> None:
+            nonlocal empty_observations
             if found_future.done():
                 return
             try:
@@ -7153,6 +7230,9 @@ class FacebookBusinessBrowser:
                     expected,
                 )
                 inventory_ids = _extract_inventory_ad_account_ids(payload)
+                inventory_observed = _has_ad_account_inventory_container(
+                    payload
+                )
 
                 target_business_ids = {
                     candidate
@@ -7181,6 +7261,7 @@ class FacebookBusinessBrowser:
                 row = {
                     "exact_name_ids": exact_name_ids[:8],
                     "inventory_ids": inventory_ids[:12],
+                    "inventory_observed": inventory_observed,
                     "targets_business": targets_business,
                     "friendly_name": _clean(
                         meta.get("friendly_name")
@@ -7189,7 +7270,9 @@ class FacebookBusinessBrowser:
                 }
 
                 if exact_name_ids or (
-                    targets_business and inventory_ids
+                    targets_business
+                    and not mutation_like
+                    and (inventory_ids or inventory_observed)
                 ):
                     diagnostics.append(row)
 
@@ -7200,6 +7283,7 @@ class FacebookBusinessBrowser:
                     found_future.set_result(
                         {
                             "confirmed": True,
+                            "confirmed_empty": False,
                             "business_id": business,
                             "ad_account_id": exact_name_ids[0],
                             "account_name": expected,
@@ -7220,6 +7304,7 @@ class FacebookBusinessBrowser:
                     found_future.set_result(
                         {
                             "confirmed": True,
+                            "confirmed_empty": False,
                             "business_id": business,
                             "ad_account_id": inventory_ids[0],
                             "account_name": expected,
@@ -7229,6 +7314,16 @@ class FacebookBusinessBrowser:
                             "evidence": row,
                         }
                     )
+                    return
+
+                if (
+                    targets_business
+                    and not mutation_like
+                    and inventory_observed
+                    and not inventory_ids
+                ):
+                    empty_observations += 1
+
             except Exception as exc:
                 diagnostics.append(
                     {
@@ -7274,6 +7369,7 @@ class FacebookBusinessBrowser:
                 if time.monotonic() >= deadline:
                     break
                 try:
+                    empty_before = empty_observations
                     await self._goto(target)
                     attempts.append(
                         {
@@ -7281,6 +7377,21 @@ class FacebookBusinessBrowser:
                             "result": "loaded",
                         }
                     )
+
+                    # Response observers are scheduled as tasks. Give them one
+                    # event-loop turn before deciding whether this navigation
+                    # already produced an authoritative inventory observation.
+                    await asyncio.sleep(0)
+                    if found_future.done():
+                        result = found_future.result()
+                        result["attempts"] = attempts
+                        return result
+
+                    if empty_observations > empty_before:
+                        # Do not burn the whole timeout on a page that already
+                        # proved an explicit empty Ad Accounts collection.
+                        continue
+
                     remaining = max(
                         0.2,
                         min(3.0, deadline - time.monotonic()),
@@ -7322,11 +7433,14 @@ class FacebookBusinessBrowser:
                 except asyncio.TimeoutError:
                     pass
 
+            confirmed_empty = empty_observations >= 2
             return {
                 "confirmed": False,
+                "confirmed_empty": confirmed_empty,
                 "business_id": business,
                 "account_name": expected,
                 "source": "business_settings_graphql_inventory",
+                "empty_observations": empty_observations,
                 "attempts": attempts,
                 "diagnostics": diagnostics[-12:],
             }
