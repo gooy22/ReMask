@@ -118,7 +118,7 @@ if [ "$USE_EXTERNAL_PYTHON_WORKER" != "1" ]; then
   (
     cd /opt/remask-python
     exec /opt/remask-venv/bin/uvicorn main:app --host 127.0.0.1 --port "$PYTHON_WORKER_PORT" --workers 1
-  ) >> "$DATA_DIR/python-worker.log" 2>&1 &
+  ) > >(tee -a "$DATA_DIR/python-worker.log") 2> >(tee -a "$DATA_DIR/python-worker.log" >&2) &
   PYTHON_WORKER_PID="$!"
   echo "$PYTHON_WORKER_PID" > "$DATA_DIR/python-worker.pid"
 
@@ -203,7 +203,7 @@ PY
       (
         cd /opt/remask-python
         exec /opt/remask-venv/bin/uvicorn main:app --host 127.0.0.1 --port "$PYTHON_WORKER_PORT" --workers 1
-      ) >> "$DATA_DIR/python-worker.log" 2>&1 &
+      ) > >(tee -a "$DATA_DIR/python-worker.log") 2> >(tee -a "$DATA_DIR/python-worker.log" >&2) &
       echo "$!" > "$DATA_DIR/python-worker.pid"
       FAIL_COUNT=0
       sleep 5
