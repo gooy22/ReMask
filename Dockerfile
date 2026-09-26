@@ -158,6 +158,8 @@ RUN set -eux; \
     grep -q 'PRE_SUBMIT_NAVIGATION_TIMEOUT_RECOVERED' /opt/remask-python/app/provisioning/ad_account_handler.py; \
     grep -q 'list_ad_accounts_for_business' /opt/remask-python/app/facebook_graph_api.py; \
     grep -q 'pythonWorkerOpenOwnBmModal' /var/www/html/scripts/workspace.js; \
+    grep -q 'REMASK_BM_MENU_PYTHON_ONLY_V1' /var/www/html/scripts/workspace.js; \
+    grep -q 'data-python-worker-bm-menu' /var/www/html/scripts/workspace.js; \
     grep -q 'REMASK_PYTHON_WORKER_URL' /var/www/html/ajax/pythonWorkerJobs.php; \
     grep -q 'retry-failed' /var/www/html/ajax/pythonWorkerJobs.php; \
     grep -q 'internalAuthorized' /var/www/html/ajax/pythonWorkerJobs.php; \

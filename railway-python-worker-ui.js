@@ -2435,6 +2435,29 @@ function pythonWorkerEnhanceProfileThreeDots() {
     const parent=addBm.parentNode;
     if (!parent || parent.nodeType !== 1) continue;
 
+    // REMASK_BM_MENU_PYTHON_ONLY_V1
+    // The legacy Add BM item used to open the packed-runtime modal
+    // (Vertical / Timezone ID) and only later tried to bridge its submit
+    // button into the Python worker. That left two competing creation paths.
+    // Intercept the menu item itself so Business creation has one route only.
+    if (!addBm.hasAttribute('data-python-worker-bm-menu')) {
+      addBm.setAttribute('data-python-worker-bm-menu','1');
+      addBm.removeAttribute('onclick');
+      if (addBm.tagName === 'A') addBm.setAttribute('href','#');
+      if (addBm.tagName === 'BUTTON') addBm.type='button';
+      addBm.addEventListener('click',function(event){
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        pythonWorkerOpenOwnBmModal().catch(function(error){
+          pythonWorkerSetText(
+            'pythonPwStatus',
+            'Add BM: ' + String((error && error.message) || error)
+          );
+        });
+      },true);
+    }
+
     if (!parent.querySelector('[data-python-worker-fp-menu="1"]')) {
       const addFp=addBm.cloneNode(true);
       addFp.removeAttribute('id'); addFp.removeAttribute('onclick'); addFp.removeAttribute('data-action');
