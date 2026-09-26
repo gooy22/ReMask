@@ -838,34 +838,64 @@ async def ad_account_handler(
         for row in inventory_before
     )
     browser_inventory_before: dict[str, Any] = {}
+    browser_inventory_attempts: list[dict[str, Any]] = []
     ui_inventory_before: dict[str, Any] = {}
 
     if not graph_inventory_conclusive:
-        browser_found_id, browser_inventory_before = (
-            await _reconcile_existing_browser_inventory(
+        # The public/Graph inventory transport is frequently unavailable for
+        # browser-only Meta sessions. Prefer Meta Business Settings' own
+        # read-only GraphQL inventory and give it one fresh-session retry
+        # before falling back to localized UI evidence.
+        browser_found_id = ""
+        for browser_inventory_attempt in range(2):
+            (
+                browser_found_id,
+                browser_inventory_before,
+            ) = await _reconcile_existing_browser_inventory(
                 session,
                 business_id=business_id,
                 account_name=rk_name,
             )
-        )
-        if browser_found_id:
-            await provisioning_state.remember_entity(
-                profile_id,
-                scope_key,
-                ProvisioningStep.AD_ACCOUNT,
-                {"ad_account_id": browser_found_id},
+            browser_inventory_attempts.append(
+                {
+                    "attempt": browser_inventory_attempt + 1,
+                    **(
+                        browser_inventory_before
+                        if isinstance(browser_inventory_before, dict)
+                        else {}
+                    ),
+                }
             )
-            return {
-                "ad_account_id": browser_found_id,
-                "business_id": business_id,
-                "name": rk_name,
-                "currency": currency,
-                "timezone_id": timezone_id,
-                "reused": True,
-                "transport": "business_settings_graphql_inventory_preflight",
-                "reconciliation": inventory_before,
-                "browser_inventory": browser_inventory_before,
-            }
+
+            if browser_found_id:
+                await provisioning_state.remember_entity(
+                    profile_id,
+                    scope_key,
+                    ProvisioningStep.AD_ACCOUNT,
+                    {"ad_account_id": browser_found_id},
+                )
+                return {
+                    "ad_account_id": browser_found_id,
+                    "business_id": business_id,
+                    "name": rk_name,
+                    "currency": currency,
+                    "timezone_id": timezone_id,
+                    "reused": True,
+                    "transport": (
+                        "business_settings_graphql_inventory_preflight"
+                    ),
+                    "reconciliation": inventory_before,
+                    "browser_inventory": browser_inventory_before,
+                    "browser_inventory_attempts": (
+                        browser_inventory_attempts
+                    ),
+                }
+
+            if bool(browser_inventory_before.get("confirmed_empty")):
+                break
+
+            if browser_inventory_attempt == 0:
+                await asyncio.sleep(0.75)
 
         if not bool(browser_inventory_before.get("confirmed_empty")):
             try:
@@ -906,6 +936,7 @@ async def ad_account_handler(
                         ),
                         "inventory_before": inventory_before,
                         "browser_inventory_before": browser_inventory_before,
+                        "browser_inventory_attempts": browser_inventory_attempts,
                         "ui_inventory_before": ui_inventory_before,
                     },
                 )
