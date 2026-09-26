@@ -978,7 +978,7 @@ class BrowserAdAccountGraphqlInventoryTests(unittest.IsolatedAsyncioTestCase):
         )
 
 
-    async def test_inventory_lookup_confirms_repeated_explicit_empty_business_inventory(self):
+    async def test_inventory_lookup_confirms_exact_empty_business_inventory(self):
         class _Response:
             url = "https://business.facebook.com/api/graphql/"
 
@@ -1030,7 +1030,7 @@ class BrowserAdAccountGraphqlInventoryTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(result["confirmed"])
         self.assertTrue(result["confirmed_empty"])
-        self.assertGreaterEqual(result["empty_observations"], 2)
+        self.assertGreaterEqual(result["empty_observations"], 1)
 
     def test_inventory_container_requires_ad_account_structure(self):
         self.assertTrue(
@@ -4486,3 +4486,18 @@ class BrowserAdAccountIntroDialogRegressionTests(unittest.TestCase):
             "if (insideDialog && !explicitlyInteractive) continue;",
             source,
         )
+
+
+class BrowserAdAccountInventoryPreflightPolicyTests(unittest.TestCase):
+    def test_exact_business_empty_snapshot_requires_only_one_observation(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser.find_ad_account_in_inventory
+        )
+        self.assertIn(
+            "confirmed_empty = empty_observations >= 1",
+            source,
+        )
+        self.assertIn("targets_business", source)
+        self.assertIn("inventory_observed", source)
+        self.assertIn("not mutation_like", source)
+
