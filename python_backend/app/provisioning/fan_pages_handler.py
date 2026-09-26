@@ -107,9 +107,17 @@ async def _fresh_page_inventory(session: Any) -> list[dict[str, Any]]:
         session.context,
         timeout_seconds=60,
     ) as browser:
-        return _normalize_pages(
-            await browser.discover_managed_pages(fast=True)
-        )
+        try:
+            rows = await browser.discover_managed_pages(fast=True)
+        except BrowserBusinessError as exc:
+            # A freshly authenticated Your Pages surface with no parseable
+            # Pages is the expected state for a brand-new FB account. Treat it
+            # as an empty inventory; uncertain CREATE recovery still requires
+            # several independent fresh reads before another CREATE is allowed.
+            if exc.code == "FAN_PAGES_NOT_DISCOVERED":
+                return []
+            raise
+        return _normalize_pages(rows)
 
 
 async def _reconcile_uncertain_page(
@@ -140,8 +148,10 @@ async def _reconcile_uncertain_page(
             )
             if found:
                 return found, False, diagnostics
-            if rows:
-                conclusive_absent += 1
+            # Reaching this line means a fresh authenticated inventory read
+            # completed. An empty list is meaningful for accounts that started
+            # with zero Pages, so it counts toward the multi-read absence proof.
+            conclusive_absent += 1
         except BrowserBusinessError as exc:
             diagnostics.append(
                 {

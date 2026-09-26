@@ -331,7 +331,7 @@ class JobStore:
                         if not isinstance(pstep, dict):
                             continue
                         step = str(pstep.get('step') or '').strip().upper()
-                        if step not in {'PROXY_CHECK','BUSINESS','AD_ACCOUNT','FUNDING'}:
+                        if step not in {'PROXY_CHECK','FAN_PAGES','BUSINESS','AD_ACCOUNT','FUNDING'}:
                             continue
                         scope_key = str(pstep.get('scope_key') or 'default').strip() or 'default'
                         presult = pstep.get('result') if isinstance(pstep.get('result'), dict) else None
