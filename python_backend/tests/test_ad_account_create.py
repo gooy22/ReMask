@@ -1302,6 +1302,31 @@ class AdAccountNestedCapturedPayloadTests(unittest.TestCase):
         self.assertNotIn("end_advertiser", rewritten["right"])
 
 
+class AdAccountProvisioningServiceRegressionTests(unittest.TestCase):
+    def test_service_never_auto_completes_ad_account_from_cached_entity(self) -> None:
+        import app.provisioning.service as service_module
+        source = inspect.getsource(service_module.ProvisioningService.run)
+        self.assertIn(
+            "ProvisioningStep.AD_ACCOUNT",
+            source,
+        )
+        self.assertIn(
+            "not in {",
+            source,
+        )
+        shortcut_pos = source.index("if (\n                existing_id")
+        handler_pos = source.index("handler = get_handler(step.value)")
+        window = source[shortcut_pos:handler_pos]
+        self.assertIn(
+            "ProvisioningStep.AD_ACCOUNT",
+            window,
+        )
+        self.assertIn(
+            "ProvisioningStep.BUSINESS",
+            window,
+        )
+
+
 class AdAccountButtonSemanticsRegressionTests(unittest.TestCase):
     def test_add_rk_does_not_reuse_persistent_state_as_success(self) -> None:
         source = inspect.getsource(ad_account_handler)

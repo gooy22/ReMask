@@ -1880,8 +1880,9 @@ async function pythonWorkerStartAdAccounts(options) {
             idempotency_key: 'add-rk-' + nonce + '-' + index,
             payload: {
               steps: ['PROXY_CHECK', 'AD_ACCOUNT'],
-              // One stable RK slot per BM. Once ad_account_id is confirmed,
-              // ProvisioningService reuses it instead of creating a duplicate.
+              // Stable scope keeps duplicate-protection history only.
+              // AD_ACCOUNT is never auto-completed from cached entity state;
+              // every Add RK request reaches the create handler.
               scope_key: 'add-rk-bm-' + businessId,
               parameters: {
                 AD_ACCOUNT: {
@@ -1968,7 +1969,7 @@ async function pythonWorkerOpenOwnAdAccountModal() {
   const note = document.createElement('div');
   note.className = 'pwbm-note';
   note.textContent =
-    'Модель: 1 BM = 1 RK. Выбери BM; повторный Add RK для того же BM переиспользует уже подтверждённый ad_account_id.';
+    'Модель: 1 BM = 1 RK. Add RK всегда запускает create-handler; если в выбранном BM уже есть реальный RK, Job вернёт AD_ACCOUNT_ALREADY_EXISTS.';
   body.appendChild(note);
 
   const rows = {};
