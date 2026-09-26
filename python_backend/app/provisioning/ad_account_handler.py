@@ -423,6 +423,60 @@ async def _reconcile_existing_browser_inventory(
         }
 
 
+def _browser_inventory_confirms_nonempty(value: Any) -> bool:
+    """Return True when exact Business Settings inventory structurally has RK.
+
+    This deliberately does not choose or trust any ad-account ID. It only
+    answers the question needed by Add RK: is the selected Business already
+    non-empty?
+    """
+    if not isinstance(value, dict):
+        return False
+
+    candidates: list[dict[str, Any]] = []
+    evidence = value.get("evidence")
+    if isinstance(evidence, dict):
+        candidates.append(evidence)
+    diagnostics = value.get("diagnostics")
+    if isinstance(diagnostics, list):
+        candidates.extend(
+            row for row in diagnostics if isinstance(row, dict)
+        )
+
+    for row in candidates:
+        if not bool(row.get("exact_business_context")):
+            continue
+        inventory_ids = row.get("inventory_ids")
+        if isinstance(inventory_ids, list) and any(
+            _normalize_ad_account_id(item) for item in inventory_ids
+        ):
+            return True
+        exact_name_ids = row.get("exact_name_ids")
+        if isinstance(exact_name_ids, list) and any(
+            _normalize_ad_account_id(item) for item in exact_name_ids
+        ):
+            return True
+    return False
+
+
+def _raise_rk_already_exists(
+    *,
+    business_id: str,
+    ad_account_id: str = "",
+) -> None:
+    rk = _normalize_ad_account_id(ad_account_id)
+    suffix = f" ({rk})" if rk else ""
+    raise ProvisioningError(
+        "AD_ACCOUNT_ALREADY_EXISTS",
+        (
+            f"Business {business_id} already has an RK{suffix}. "
+            "Add RK only creates a new advertising account and never reuses "
+            "an existing one."
+        ),
+        retryable=False,
+    )
+
+
 async def _verify_expected_ad_account_in_business(
     session: Any,
     *,
@@ -781,16 +835,10 @@ async def ad_account_handler(
             )
         )
         if state_verified:
-            return {
-                "ad_account_id": existing_state_id,
-                "business_id": business_id,
-                "name": rk_name,
-                "currency": currency,
-                "timezone_id": timezone_id,
-                "reused": True,
-                "transport": "provisioning_state_verified",
-                "post_create_verification": state_evidence,
-            }
+            _raise_rk_already_exists(
+                business_id=business_id,
+                ad_account_id=existing_state_id,
+            )
 
         await provisioning_state.forget_entity(
             profile_id,
@@ -921,26 +969,10 @@ async def ad_account_handler(
                 )
             )
             if prior_verified:
-                await provisioning_state.remember_entity(
-                    profile_id,
-                    scope_key,
-                    ProvisioningStep.AD_ACCOUNT,
-                    {"ad_account_id": prior_id},
+                _raise_rk_already_exists(
+                    business_id=business_id,
+                    ad_account_id=prior_id,
                 )
-                return {
-                    "ad_account_id": prior_id,
-                    "business_id": business_id,
-                    "name": rk_name,
-                    "currency": currency,
-                    "timezone_id": timezone_id,
-                    "reused": True,
-                    "cross_job_resume": True,
-                    "transport": (
-                        _clean(prior.get("transport"))
-                        or "checkpoint_verified"
-                    ),
-                    "post_create_verification": prior_evidence,
-                }
 
             prior_scope = _clean(cross_job.get("scope_key"))
             if prior_scope:
@@ -990,27 +1022,10 @@ async def ad_account_handler(
                     )
                 )
                 if cross_graph_verified:
-                    await provisioning_state.remember_entity(
-                        profile_id,
-                        scope_key,
-                        ProvisioningStep.AD_ACCOUNT,
-                        {"ad_account_id": found_id},
+                    _raise_rk_already_exists(
+                        business_id=business_id,
+                        ad_account_id=found_id,
                     )
-                    return {
-                        "ad_account_id": found_id,
-                        "business_id": business_id,
-                        "name": rk_name,
-                        "currency": currency,
-                        "timezone_id": timezone_id,
-                        "reused": True,
-                        "cross_job_resume": True,
-                        "recovered_after_uncertainty": True,
-                        "transport": (
-                            "cross_job_graph_candidate_business_settings_verified"
-                        ),
-                        "reconciliation": diagnostics,
-                        "graph_candidate_verification": cross_graph_evidence,
-                    }
 
                 diagnostics.append(
                     {
@@ -1031,24 +1046,10 @@ async def ad_account_handler(
                 )
             )
             if proof_found_id:
-                await provisioning_state.remember_entity(
-                    profile_id,
-                    scope_key,
-                    ProvisioningStep.AD_ACCOUNT,
-                    {"ad_account_id": proof_found_id},
+                _raise_rk_already_exists(
+                    business_id=business_id,
+                    ad_account_id=proof_found_id,
                 )
-                return {
-                    "ad_account_id": proof_found_id,
-                    "business_id": business_id,
-                    "name": rk_name,
-                    "currency": currency,
-                    "timezone_id": timezone_id,
-                    "reused": True,
-                    "cross_job_resume": True,
-                    "recovered_after_uncertainty": True,
-                    "transport": "uncertain_inventory_v2_reconciliation",
-                    "inventory_proof": inventory_proof,
-                }
 
             if proven_empty:
                 checkpoint = await provisioning_state.checkpoint(
@@ -1237,23 +1238,10 @@ async def ad_account_handler(
             )
         )
         if graph_verified:
-            await provisioning_state.remember_entity(
-                profile_id,
-                scope_key,
-                ProvisioningStep.AD_ACCOUNT,
-                {"ad_account_id": graph_candidate_id},
+            _raise_rk_already_exists(
+                business_id=business_id,
+                ad_account_id=graph_candidate_id,
             )
-            return {
-                "ad_account_id": graph_candidate_id,
-                "business_id": business_id,
-                "name": rk_name,
-                "currency": currency,
-                "timezone_id": timezone_id,
-                "reused": True,
-                "transport": "graph_candidate_business_settings_verified",
-                "reconciliation": inventory_before,
-                "graph_candidate_verification": graph_candidate_verification,
-            }
 
         inventory_before.append(
             {
@@ -1313,26 +1301,10 @@ async def ad_account_handler(
                 browser_candidate_confirmations = 0
 
             if browser_candidate_confirmations >= 2:
-                await provisioning_state.remember_entity(
-                    profile_id,
-                    scope_key,
-                    ProvisioningStep.AD_ACCOUNT,
-                    {"ad_account_id": browser_found_id},
+                _raise_rk_already_exists(
+                    business_id=business_id,
+                    ad_account_id=browser_found_id,
                 )
-                return {
-                    "ad_account_id": browser_found_id,
-                    "business_id": business_id,
-                    "name": rk_name,
-                    "currency": currency,
-                    "timezone_id": timezone_id,
-                    "reused": True,
-                    "transport": (
-                        "business_settings_graphql_inventory_preflight_consensus"
-                    ),
-                    "reconciliation": inventory_before,
-                    "browser_inventory": browser_inventory_before,
-                    "browser_inventory_attempts": browser_inventory_attempts,
-                }
 
         if (
             bool(browser_inventory_before.get("confirmed_empty"))
@@ -1356,6 +1328,11 @@ async def ad_account_handler(
             "candidate_ad_account_id": browser_candidate_id,
             "candidate_confirmations": browser_candidate_confirmations,
         }
+
+    if _browser_inventory_confirms_nonempty(browser_inventory_before):
+        _raise_rk_already_exists(
+            business_id=business_id,
+        )
 
     if not bool(browser_inventory_before.get("confirmed_empty")):
         try:

@@ -27,6 +27,8 @@ from app.provisioning.ad_account_handler import (
     _inventory_repeatedly_confirms_empty,
     _reconcile_existing,
     _inventory_proof_summary,
+    _browser_inventory_confirms_nonempty,
+    _raise_rk_already_exists,
     _reconcile_existing_browser_inventory,
     _verify_expected_ad_account_in_business,
     _known_final_click_unmatched_empty_inventory,
@@ -1298,6 +1300,47 @@ class AdAccountNestedCapturedPayloadTests(unittest.TestCase):
         )
         self.assertNotIn("end_advertiser", rewritten["left"])
         self.assertNotIn("end_advertiser", rewritten["right"])
+
+
+class AdAccountButtonSemanticsRegressionTests(unittest.TestCase):
+    def test_add_rk_does_not_reuse_persistent_state_as_success(self) -> None:
+        source = inspect.getsource(ad_account_handler)
+        self.assertNotIn(
+            '"transport": "provisioning_state_verified"',
+            source,
+        )
+        self.assertIn("AD_ACCOUNT_ALREADY_EXISTS", source)
+
+    def test_add_rk_preflight_existing_rk_is_error_not_success(self) -> None:
+        source = inspect.getsource(ad_account_handler)
+        preflight = source[source.index(
+            "# Read-only preflight enforces the 1 BM = 1 RK invariant."
+        ):source.index(
+            '"phase": "CREATE_PREPARING"',
+            source.index("# Read-only preflight enforces the 1 BM = 1 RK invariant.")
+        )]
+        self.assertIn("_raise_rk_already_exists(", preflight)
+        self.assertNotIn('"reused": True', preflight)
+        self.assertIn(
+            "_browser_inventory_confirms_nonempty(",
+            preflight,
+        )
+
+    def test_only_current_job_checkpoint_may_resume_success_without_new_create(self) -> None:
+        source = inspect.getsource(ad_account_handler)
+        checkpoint_pos = source.index("checkpoint_id =")
+        cross_job_pos = source.index(
+            "latest_ad_account_resume_for_business",
+            checkpoint_pos,
+        )
+        checkpoint_window = source[checkpoint_pos:cross_job_pos]
+        self.assertIn('"reused": True', checkpoint_window)
+        self.assertIn("checkpoint_verified", checkpoint_window)
+
+    def test_already_exists_error_is_non_retryable(self) -> None:
+        source = inspect.getsource(_raise_rk_already_exists)
+        self.assertIn('"AD_ACCOUNT_ALREADY_EXISTS"', source)
+        self.assertIn("retryable=False", source)
 
 
 class AdAccountCrossJobGraphTrustRegressionTests(unittest.TestCase):
