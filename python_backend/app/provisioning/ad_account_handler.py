@@ -790,9 +790,10 @@ async def ad_account_handler(
             retryable=True,
         )
 
-    # Read-only preflight enforces the 1 BM = 1 RK invariant. If Graph inventory
-    # is unavailable, diagnostics are kept but an initial CREATE is still
-    # allowed; only an uncertain previous submit blocks future CREATEs.
+    # Read-only preflight enforces the 1 BM = 1 RK invariant. A CREATE must
+    # never proceed merely because one inventory transport is unavailable:
+    # fall back to Meta Business Settings inventory first so mass jobs cannot
+    # create a second RK when Graph permissions/cache are temporarily missing.
     found_id, inventory_before = await _reconcile_existing(
         session,
         business_id=business_id,
@@ -815,6 +816,93 @@ async def ad_account_handler(
             "transport": "graph_inventory_preflight",
             "reconciliation": inventory_before,
         }
+
+    graph_inventory_conclusive = any(
+        isinstance(row, dict)
+        and row.get("stage") == "inventory"
+        and row.get("result") == "ok"
+        for row in inventory_before
+    )
+    browser_inventory_before: dict[str, Any] = {}
+    ui_inventory_before: dict[str, Any] = {}
+
+    if not graph_inventory_conclusive:
+        browser_found_id, browser_inventory_before = (
+            await _reconcile_existing_browser_inventory(
+                session,
+                business_id=business_id,
+                account_name=rk_name,
+            )
+        )
+        if browser_found_id:
+            await provisioning_state.remember_entity(
+                profile_id,
+                scope_key,
+                ProvisioningStep.AD_ACCOUNT,
+                {"ad_account_id": browser_found_id},
+            )
+            return {
+                "ad_account_id": browser_found_id,
+                "business_id": business_id,
+                "name": rk_name,
+                "currency": currency,
+                "timezone_id": timezone_id,
+                "reused": True,
+                "transport": "business_settings_graphql_inventory_preflight",
+                "reconciliation": inventory_before,
+                "browser_inventory": browser_inventory_before,
+            }
+
+        if not bool(browser_inventory_before.get("confirmed_empty")):
+            try:
+                async with FacebookBusinessBrowser(
+                    session.context,
+                    timeout_seconds=45,
+                ) as inventory_browser:
+                    ui_inventory_before = (
+                        await inventory_browser.verify_ad_account_inventory_empty(
+                            business_id=business_id,
+                        )
+                    )
+            except Exception as exc:
+                ui_inventory_before = {
+                    "confirmed_empty": False,
+                    "error": (
+                        f"{exc.__class__.__name__}: {_clean(exc)}"
+                    )[:500],
+                }
+
+            if not bool(ui_inventory_before.get("confirmed_empty")):
+                await provisioning_state.checkpoint(
+                    item_id,
+                    profile_id,
+                    scope_key,
+                    ProvisioningStep.AD_ACCOUNT,
+                    {
+                        "phase": "CREATE_NOT_SUBMITTED",
+                        "resume_from": "CREATE",
+                        "business_id": business_id,
+                        "account_name": rk_name,
+                        "currency": currency,
+                        "timezone_id": timezone_id,
+                        "last_error_code": "AD_ACCOUNT_INVENTORY_UNAVAILABLE",
+                        "last_error": (
+                            "RK inventory is inconclusive before CREATE; "
+                            "duplicate-safe preflight blocked submission."
+                        ),
+                        "inventory_before": inventory_before,
+                        "browser_inventory_before": browser_inventory_before,
+                        "ui_inventory_before": ui_inventory_before,
+                    },
+                )
+                raise ProvisioningError(
+                    "AD_ACCOUNT_INVENTORY_UNAVAILABLE",
+                    (
+                        f"Business {business_id} inventory could not prove "
+                        "that no RK exists. CREATE was not submitted."
+                    ),
+                    retryable=True,
+                )
 
     await provisioning_state.checkpoint(
         item_id,
