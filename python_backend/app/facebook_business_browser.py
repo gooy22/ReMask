@@ -65,7 +65,11 @@ class BrowserPageResult:
     already_attached: bool = False
 
 
-_BROWSER_LIMIT = max(1, int(os.getenv("REMASK_BM_BROWSER_CONCURRENCY") or "2"))
+# Meta Business Suite Chromium is memory-heavy. ReMask production currently
+# runs in a ~1 GB container; two concurrent renderers can push the service to
+# the memory ceiling and crash a page mid-wizard. Default to one browser lease
+# at a time and allow larger hosts to opt in explicitly via the env override.
+_BROWSER_LIMIT = max(1, int(os.getenv("REMASK_BM_BROWSER_CONCURRENCY") or "1"))
 _BROWSER_SEMAPHORE = asyncio.Semaphore(_BROWSER_LIMIT)
 _PROFILE_LOCKS: dict[str, asyncio.Lock] = {}
 _PROFILE_LOCKS_GUARD = asyncio.Lock()
