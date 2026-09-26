@@ -1044,3 +1044,39 @@ class AdAccountInventoryPreflightRegressionTests(unittest.TestCase):
             "AD_ACCOUNT_RECONCILE_EXHAUSTED",
             source,
         )
+
+
+class AdAccountRendererCrashRecoveryTests(unittest.TestCase):
+    def test_handler_distinguishes_pre_final_renderer_crash(self) -> None:
+        source = inspect.getsource(ad_account_handler)
+        self.assertIn(
+            "AD_ACCOUNT_CAPTURE_PAGE_CRASH_PRE_FINAL",
+            source,
+        )
+        self.assertIn("ad_account_runtime_phase", source)
+        self.assertIn("ad_account_final_capture_armed", source)
+        self.assertIn("ad_account_create_may_have_been_sent", source)
+        self.assertIn("page_crashed", source)
+        self.assertIn(
+            "and not final_capture_armed",
+            source,
+        )
+        self.assertIn(
+            "and not create_may_have_been_sent",
+            source,
+        )
+
+    def test_post_final_renderer_crash_does_not_take_safe_retry_branch(self) -> None:
+        source = inspect.getsource(ad_account_handler)
+        crash_pos = source.index(
+            'failure["page_crashed"] = page_crashed'
+        )
+        reconcile_pos = source.index(
+            "unknown_inventory: list[dict[str, Any]] = []",
+            crash_pos,
+        )
+        branch = source[crash_pos:reconcile_pos]
+        self.assertIn("not final_capture_armed", branch)
+        self.assertIn("not create_may_have_been_sent", branch)
+        self.assertIn("continue", branch)
+
