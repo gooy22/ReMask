@@ -9197,6 +9197,57 @@ class FacebookBusinessBrowser:
                 attempt["create_target"] = dict(
                     post_add_poll_state.get("create_target") or {}
                 )
+                attempt["create_surface_seen"] = bool(
+                    attempt["ui_state_after"] == "CREATE_ENTRY"
+                    or attempt["create_target"]
+                )
+
+                # If the state classifier has already identified and tagged a
+                # concrete Create-RK target, consume THAT exact target before
+                # any broad rescans.  Re-running the classifier first can
+                # retag a parent/wrapper after Meta's React portal rerenders,
+                # which is how a real CREATE_ENTRY used to be missed even
+                # though the diagnostic had already proved it was visible.
+                state_create_direct: dict[str, Any] = {"clicked": False}
+                if (
+                    attempt["ui_state_after"] == "CREATE_ENTRY"
+                    and attempt["create_target"]
+                ):
+                    state_create_direct = (
+                        await self._click_state_detected_ad_account_create_entry()
+                    )
+                    attempt["state_create_direct"] = state_create_direct
+                    if state_create_direct.get("clicked"):
+                        direct_transition = (
+                            await self._wait_for_ad_account_ui_transition(
+                                previous_signature=_clean(
+                                    post_add_poll_state.get("signature")
+                                ),
+                                timeout_seconds=4.0,
+                                label="after_state_create_entry_direct",
+                                require_signature_change=True,
+                            )
+                        )
+                        attempt["state_create_direct_state_after"] = _clean(
+                            direct_transition.get("state")
+                        ).upper()
+                        if self._ad_account_create_form_confirmed(
+                            direct_transition
+                        ):
+                            attempt["create_entry_found"] = True
+                            attempts.append(attempt)
+                            return True, attempts
+
+                        # Continue recovery from the state produced by the
+                        # exact Create-card click, not from the stale pre-click
+                        # snapshot.
+                        post_add_poll_state = direct_transition
+                        attempt["ui_state_after"] = _clean(
+                            direct_transition.get("state")
+                        ).upper()
+                        attempt["create_target"] = dict(
+                            direct_transition.get("create_target") or {}
+                        )
 
                 after_snapshot = await self._ad_account_right_pane_snapshot()
                 attempt["new_right_pane"] = [
@@ -9229,7 +9280,10 @@ class FacebookBusinessBrowser:
                 ]
 
                 fresh_create = {"clicked": False}
-                if fresh_create_candidates:
+                if (
+                    fresh_create_candidates
+                    and not state_create_direct.get("clicked")
+                ):
                     fresh_create = (
                         await self._click_fresh_ad_account_create_candidate(
                             fresh_create_candidates[0]
@@ -9264,10 +9318,10 @@ class FacebookBusinessBrowser:
                 # visible plain DIV/SPAN text, and the bounded DOM fallback,
                 # then *verifies the wizard opened* before returning success.
                 state_create_verified = False
-                if attempt["ui_state_after"] == "CREATE_ENTRY":
+                if attempt["create_surface_seen"]:
                     state_create_verified = (
                         await self._wait_for_ad_account_create_entry(
-                            timeout_seconds=2.5,
+                            timeout_seconds=3.5,
                         )
                     )
                 attempt["state_create_verified"] = state_create_verified
@@ -9306,6 +9360,28 @@ timeout_seconds=4.0,
                         attempt["create_entry_found"] = True
                         attempts.append(attempt)
                         return True, attempts
+
+                # Never click Add again while Meta is still presenting the
+                # Create-RK surface we just opened.  The old flow pressed
+                # Escape here, reopened Add, and could turn one valid popup
+                # into two stacked dialogs (exactly the popup_count=1 -> 2
+                # failure seen in production).  Preserve the live surface and
+                # let the caller run bounded Create-entry recovery on it.
+                recovery_state = await self._ad_account_ui_state()
+                recovery_name = _clean(
+                    recovery_state.get("state")
+                ).upper()
+                attempt["post_recovery_state"] = recovery_name
+                attempt["post_recovery_signature"] = _clean(
+                    recovery_state.get("signature")
+                )[:700]
+                if (
+                    attempt["create_surface_seen"]
+                    and recovery_name in {"CREATE_ENTRY", "DIALOG"}
+                ):
+                    attempt["preserve_create_surface"] = True
+                    attempts.append(attempt)
+                    return False, attempts
 
                 attempts.append(attempt)
 
@@ -9359,6 +9435,16 @@ timeout_seconds=4.0,
                     "popup_count="
                     f"{int(popup_create.get('popup_count') or 0)}"
                 )
+            if bool(row.get("create_surface_seen")):
+                parts.append("create_surface=True")
+            state_direct = row.get("state_create_direct")
+            if isinstance(state_direct, dict):
+                parts.append(
+                    "state_direct="
+                    f"{bool(state_direct.get('clicked'))}"
+                )
+            if bool(row.get("preserve_create_surface")):
+                parts.append("preserved=True")
             skip = _clean(row.get("skip"))
             error = _clean(row.get("error"))
             if skip:
@@ -10030,9 +10116,44 @@ timeout_seconds=4.0,
                     last_attempt.get("post_click_candidates") or []
                 )[:30]
 
+        create_surface_active = any(
+            bool(row.get("preserve_create_surface"))
+            for row in add_attempts
+            if isinstance(row, dict)
+        )
+
+        if not entry_clicked and create_surface_active:
+            # Add already worked and Meta is visibly on CREATE_ENTRY/DIALOG.
+            # Stay on that state and retry only the Create-entry transition.
+            # Do not reload the page or click Add again while this surface is
+            # mounted.
+            for recovery_index in range(2):
+                entry_clicked = (
+                    await self._wait_for_ad_account_create_entry(
+                        timeout_seconds=3.5,
+                    )
+                )
+                if entry_clicked:
+                    break
+
+                recovery_ui = await self._ad_account_ui_state()
+                self._record_ad_account_ui_state(
+                    f"preserved_create_surface_{recovery_index}",
+                    recovery_ui,
+                )
+                recovery_state = _clean(
+                    recovery_ui.get("state")
+                ).upper()
+                if recovery_state == "BLOCKED":
+                    break
+                if recovery_state not in {"CREATE_ENTRY", "DIALOG"}:
+                    create_surface_active = False
+                    break
+
         if (
             not entry_clicked
             and add_clicked
+            and not create_surface_active
             and not section_reload_attempted
         ):
             # Meta sometimes leaves the Ad Accounts pane in a stale React
