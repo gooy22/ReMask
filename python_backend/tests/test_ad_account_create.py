@@ -5,6 +5,7 @@ import json
 import os
 import unittest
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 from urllib.parse import urlencode
 
 from app.facebook_ad_account_create import (
@@ -730,6 +731,100 @@ class BrowserQueueAwareTimeoutTests(unittest.TestCase):
                 total,
                 browser_step_timeout(ProvisioningStep.AD_ACCOUNT),
             )
+
+
+class AdAccountInventoryProofV2RuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_graph_unavailable_three_browser_empties_prove_absence(self) -> None:
+        graph_unavailable = [
+            {
+                "stage": "inventory",
+                "result": "unavailable",
+                "reason": "browser-only session",
+            }
+        ]
+        browser_empty = {"confirmed_empty": True, "count": 0}
+
+        with (
+            patch(
+                "app.provisioning.ad_account_handler._reconcile_existing",
+                new=AsyncMock(
+                    return_value=("", graph_unavailable)
+                ),
+            ) as graph_check,
+            patch(
+                "app.provisioning.ad_account_handler."
+                "_reconcile_existing_browser_inventory",
+                new=AsyncMock(
+                    side_effect=[
+                        ("", dict(browser_empty)),
+                        ("", dict(browser_empty)),
+                        ("", dict(browser_empty)),
+                    ]
+                ),
+            ) as browser_check,
+            patch(
+                "app.provisioning.ad_account_handler.FacebookBusinessBrowser"
+            ) as ui_browser,
+        ):
+            found_id, proven_empty, proof = (
+                await _prove_empty_after_uncertainty(
+                    SimpleNamespace(),
+                    business_id="1056638030476027",
+                    account_name="ReMask RK",
+                    delay_seconds=0,
+                )
+            )
+
+        self.assertEqual(found_id, "")
+        self.assertTrue(proven_empty)
+        self.assertEqual(proof["proof_path"], "browser_consensus")
+        self.assertEqual(proof["browser_empty_confirmations"], 3)
+        self.assertFalse(proof["graph_empty_confirmed"])
+        self.assertEqual(graph_check.await_count, 3)
+        self.assertEqual(browser_check.await_count, 3)
+        ui_browser.assert_not_called()
+
+    async def test_browser_inventory_finding_rk_wins_immediately(self) -> None:
+        with (
+            patch(
+                "app.provisioning.ad_account_handler._reconcile_existing",
+                new=AsyncMock(
+                    return_value=(
+                        "",
+                        [{"stage": "inventory", "result": "unavailable"}],
+                    )
+                ),
+            ),
+            patch(
+                "app.provisioning.ad_account_handler."
+                "_reconcile_existing_browser_inventory",
+                new=AsyncMock(
+                    return_value=(
+                        "act_987654321",
+                        {
+                            "confirmed_empty": False,
+                            "count": 1,
+                        },
+                    )
+                ),
+            ) as browser_check,
+        ):
+            found_id, proven_empty, proof = (
+                await _prove_empty_after_uncertainty(
+                    SimpleNamespace(),
+                    business_id="1056638030476027",
+                    account_name="ReMask RK",
+                    delay_seconds=0,
+                )
+            )
+
+        self.assertEqual(found_id, "act_987654321")
+        self.assertFalse(proven_empty)
+        self.assertEqual(
+            proof["found_via"],
+            "business_settings_graphql_inventory",
+        )
+        self.assertEqual(browser_check.await_count, 1)
 
 
 class AdAccountRepeatedInventoryRecoveryTests(unittest.TestCase):
