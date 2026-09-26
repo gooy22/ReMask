@@ -8,8 +8,11 @@ from types import SimpleNamespace
 from urllib.parse import urlencode
 
 from app.facebook_ad_account_create import (
+    CREATE_AD_ACCOUNT_FRIENDLY_NAMES,
     _extract_ad_account_id,
     _normalize_ad_account_id,
+    create_ad_account_with_docids,
+    discover_current_ad_account_create_candidate,
 )
 from app.facebook_business_browser import FacebookBusinessBrowser
 from app.provisioning.ad_account_handler import (
@@ -20,6 +23,30 @@ from app.provisioning.ad_account_handler import (
     ad_account_handler,
 )
 from app.provisioning.state import ProvisioningStateStore
+
+
+class AdAccountPrivateGraphqlPrimaryTests(unittest.TestCase):
+    def test_handler_uses_private_graphql_as_primary_create_transport(self) -> None:
+        source = inspect.getsource(ad_account_handler)
+        self.assertIn("create_ad_account_with_docids(", source)
+        self.assertIn('"facebook_private_graphql"', source)
+        self.assertNotIn("browser.create_ad_account(", source)
+
+    def test_current_bizkit_friendly_name_is_discovered_first(self) -> None:
+        self.assertEqual(
+            CREATE_AD_ACCOUNT_FRIENDLY_NAMES[0],
+            "BizKitSettingsCreateAdAccountMutation",
+        )
+        source = inspect.getsource(
+            discover_current_ad_account_create_candidate
+        )
+        self.assertIn("CREATE_AD_ACCOUNT_FRIENDLY_NAMES", source)
+
+    def test_current_bizkit_payload_uses_businessID_shape(self) -> None:
+        source = inspect.getsource(create_ad_account_with_docids)
+        self.assertIn('"businessID": business', source)
+        self.assertIn('"timezone_id": timezone', source)
+        self.assertIn("default_variables_for(candidate)", source)
 
 
 class AdAccountDuplicateSafetyTests(unittest.TestCase):
