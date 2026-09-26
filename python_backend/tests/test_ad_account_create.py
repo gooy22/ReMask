@@ -11,6 +11,8 @@ from app.facebook_ad_account_create import (
     CREATE_AD_ACCOUNT_FRIENDLY_NAMES,
     _extract_ad_account_id,
     _normalize_ad_account_id,
+    _replace_capture_values,
+    _validate_rewritten_capture_variables,
     create_ad_account_with_docids,
     discover_current_ad_account_create_candidate,
 )
@@ -797,3 +799,82 @@ class AdAccountSelfHealingPipelineRegressionTests(unittest.TestCase):
             "META_AD_ACCOUNT_CREATE_REJECTED",
             AD_ACCOUNT_SAFE_CAPTURE_RETRY_CODES,
         )
+
+
+class AdAccountCapturedVariableSafetyTests(unittest.TestCase):
+    def test_rewrite_preserves_integer_timezone_and_business_id_types(self) -> None:
+        rewritten = _replace_capture_values(
+            {
+                "input": {
+                    "businessID": 111222333444555,
+                    "name": "capture-canary",
+                    "currency": "EUR",
+                    "time_zone_id": 57,
+                }
+            },
+            canary_name="capture-canary",
+            business_id="1056638030476027",
+            account_name="ReMask RK",
+            currency="USD",
+            timezone_id=137,
+        )
+        payload = rewritten["input"]
+        self.assertEqual(payload["businessID"], 1056638030476027)
+        self.assertIsInstance(payload["businessID"], int)
+        self.assertEqual(payload["time_zone_id"], 137)
+        self.assertIsInstance(payload["time_zone_id"], int)
+        self.assertEqual(payload["name"], "ReMask RK")
+        self.assertEqual(payload["currency"], "USD")
+
+    def test_rewrite_keeps_string_scalar_types_when_meta_captured_strings(self) -> None:
+        rewritten = _replace_capture_values(
+            {
+                "input": {
+                    "business_id": "111222333444555",
+                    "ad_account_name": "capture-canary",
+                    "currency_code": "EUR",
+                    "timezoneId": "57",
+                }
+            },
+            canary_name="capture-canary",
+            business_id="1056638030476027",
+            account_name="ReMask RK",
+            currency="USD",
+            timezone_id=137,
+        )
+        payload = rewritten["input"]
+        self.assertEqual(payload["business_id"], "1056638030476027")
+        self.assertEqual(payload["timezoneId"], "137")
+
+    def test_rewritten_payload_validation_requires_all_immutable_values(self) -> None:
+        valid = _validate_rewritten_capture_variables(
+            {
+                "input": {
+                    "businessID": "1056638030476027",
+                    "name": "ReMask RK",
+                    "currency": "USD",
+                    "timezone_id": 137,
+                }
+            },
+            business_id="1056638030476027",
+            account_name="ReMask RK",
+            currency="USD",
+            timezone_id=137,
+        )
+        self.assertTrue(valid["ok"])
+
+        invalid = _validate_rewritten_capture_variables(
+            {
+                "input": {
+                    "businessID": "1056638030476027",
+                    "name": "ReMask RK",
+                    "currency": "USD",
+                }
+            },
+            business_id="1056638030476027",
+            account_name="ReMask RK",
+            currency="USD",
+            timezone_id=137,
+        )
+        self.assertFalse(invalid["ok"])
+        self.assertIn("timezone", invalid["missing"])
