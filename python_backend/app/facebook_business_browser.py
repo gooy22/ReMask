@@ -4366,7 +4366,14 @@ class FacebookBusinessBrowser:
                     (
                         value
                         for value in normalized_labels
-                        if value.casefold() in create_words
+                        if (
+                            value.casefold() in create_words
+                            or any(
+                                value.casefold().startswith(word + " ")
+                                for word in create_words
+                                if len(word) >= 5
+                            )
+                        )
                     ),
                     "",
                 )
@@ -4596,6 +4603,65 @@ class FacebookBusinessBrowser:
                         : [...document.querySelectorAll(
                             'button,a,span,div,label,[role],[tabindex]'
                         )];
+
+                    const accountWords = [
+                        'ad account','advertising account','compte publicitaire',
+                        'werbekonto','реклам','বিজ্ঞাপন অ্যাকাউন্ট',
+                        'tài khoản quảng cáo','विज्ञापन खाता'
+                    ];
+                    const nameMarkers = [
+                        'ad account name','advertising account name',
+                        'nom du compte publicitaire','name des werbekontos',
+                        'название рекламного аккаунта','назва рекламного акаунта'
+                    ];
+                    const currencyMarkers = [
+                        'currency','devise','währung','валюта','মুদ্রা',
+                        'tiền tệ','मुद्रा'
+                    ];
+                    const timezoneMarkers = [
+                        'time zone','timezone','fuseau horaire','zeitzone',
+                        'часовой пояс','часовий пояс','সময় অঞ্চল',
+                        'múi giờ','समय क्षेत्र'
+                    ];
+
+                    const belongsToWizardSurface = el => {
+                        if (wizardRoot) return wizardRoot.contains(el);
+                        let cur = el;
+                        for (let depth = 0; cur && depth < 9; depth++, cur = cur.parentElement) {
+                            if (!visible(cur)) continue;
+                            const r = cur.getBoundingClientRect();
+                            if (r.width < 180 || r.height < 80) continue;
+                            // Avoid accepting the whole application shell/body.
+                            if (r.width > 1050 || r.height > 780) continue;
+                            const t = clean(
+                                (cur.getAttribute('aria-label') || '') + ' ' +
+                                (cur.getAttribute('title') || '') + ' ' +
+                                (cur.innerText || cur.textContent || '')
+                            );
+                            if (!t || aiMarkers.some(word => t.includes(word))) {
+                                continue;
+                            }
+                            const hasAccount = accountWords.some(word => t.includes(word));
+                            const hasName = nameMarkers.some(word => t.includes(word));
+                            const hasCurrency = currencyMarkers.some(word => t.includes(word));
+                            const hasTimezone = timezoneMarkers.some(word => t.includes(word));
+                            const hasOwnership = ownWords.some(word => t.includes(word));
+
+                            // First wizard screen: name + currency/timezone.
+                            // Later wizard screen: explicit ownership + ad-account
+                            // context. A normal Business Settings page does not
+                            // satisfy either shape.
+                            if (
+                                (hasName && (hasCurrency || hasTimezone))
+                                || (hasCurrency && hasTimezone)
+                                || (hasOwnership && hasAccount)
+                            ) {
+                                return true;
+                            }
+                        }
+                        return false;
+                    };
+
                     const rows = [];
                     for (const el of nodes) {
                         if (!visible(el)) continue;
@@ -4637,6 +4703,7 @@ class FacebookBusinessBrowser:
                         );
                         const clickable = clickableAncestor || el;
                         if (!visible(clickable)) continue;
+                        if (!belongsToWizardSurface(clickable)) continue;
                         if (
                             clickable.hasAttribute('disabled')
                             || clickable.getAttribute('aria-disabled') === 'true'
@@ -4756,18 +4823,12 @@ class FacebookBusinessBrowser:
         if fallback.get("clicked"):
             return True
 
-        clicked = await self._click_named(
-            names,
-            roles=(
-                "radio",
-                "option",
-                "button",
-                "menuitemradio",
-                "menuitem",
-            ),
-            click_timeout_ms=2500,
-        )
-        return bool(clicked)
+        # Never fall back to a page-global "My business" click.
+        # Meta Business Settings contains similarly named navigation/actions;
+        # clicking one can close the RK wizard and leave us on the normal
+        # Ad Accounts surface. The scoped semantic probe above is the only
+        # safe ownership action.
+        return False
 
     @staticmethod
     def _timezone_name_for_id(timezone_id: int) -> str:
@@ -8590,11 +8651,6 @@ timeout_seconds=4.0,
                     )
                 )
                 next_clicked = bool(next_meta.get("clicked"))
-                if not next_clicked:
-                    next_clicked = await self._click_named(
-                        next_names,
-                        click_timeout_ms=2500,
-                    )
 
                 if next_clicked:
                     clicked_any = True
