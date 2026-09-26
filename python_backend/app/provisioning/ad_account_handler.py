@@ -23,6 +23,44 @@ from .models import ProvisioningError, ProvisioningStep
 
 log = logging.getLogger("remask_worker")
 
+AD_ACCOUNT_SAFE_CAPTURE_RETRY_CODES = {
+    "AD_ACCOUNT_CREATE_UI_CHANGED",
+    "AD_ACCOUNT_CREATE_UI_UNAVAILABLE",
+    "AD_ACCOUNT_CREATE_REQUEST_NOT_OBSERVED",
+    "AD_ACCOUNT_CREATE_MUTATION_NOT_CAPTURED",
+}
+
+AD_ACCOUNT_SAFE_REPLAY_RETRY_CODES = {
+    "CREATE_AD_ACCOUNT_LIVE_CAPTURE_REQUIRED",
+    "CREATE_AD_ACCOUNT_LIVE_CAPTURE_INVALID",
+    "CREATE_AD_ACCOUNT_LIVE_CAPTURE_STALE",
+    "CREATE_AD_ACCOUNT_PRE_SUBMIT_TRANSPORT",
+}
+
+
+def _compact_browser_diagnostic(value: Any) -> dict[str, Any]:
+    diagnostic = value if isinstance(value, dict) else {}
+    return {
+        key: diagnostic.get(key)
+        for key in (
+            "stage",
+            "add_attempt_summary",
+            "add_clicked",
+            "action_surface_ready",
+            "post_add_candidates",
+            "section_clicked",
+            "section_reload_attempted",
+            "section_activation",
+            "action_candidates",
+            "ui_state",
+            "right_pane_snapshot",
+            "submit_attempts",
+            "graphql_candidates",
+        )
+        if key in diagnostic
+    }
+
+
 
 def _clean(value: Any) -> str:
     return str(value or "").strip()
@@ -919,101 +957,181 @@ async def ad_account_handler(
 
     # Phase 1: reproduce Meta's own current wizard and capture the exact
     # private CREATE request. The interceptor aborts it BEFORE Meta receives it.
-    try:
+    #
+    # This phase is intentionally self-healing. UI churn before the definitive
+    # CREATE request is observed is safe to retry because the interceptor never
+    # lets the CREATE mutation reach Meta. A single flaky React render must not
+    # force the operator to launch a brand-new Job manually.
+    captured_request: dict[str, Any] = {}
+    capture_failures: list[dict[str, Any]] = []
+    capture_attempt_limit = 3
+
+    for capture_attempt in range(1, capture_attempt_limit + 1):
         await browser_checkpoint(
             {
                 "phase": "CREATE_CAPTURE_PREPARING",
                 "activity": "AD_ACCOUNT_LIVE_CAPTURE_OPENING",
                 "activity_at": int(time.time()),
+                "capture_attempt": capture_attempt,
+                "capture_attempt_limit": capture_attempt_limit,
+                "capture_failures": capture_failures[-3:],
                 "transport": "business_suite_live_capture",
             }
         )
-        async with FacebookBusinessBrowser(
-            session.context,
-            timeout_seconds=90,
-        ) as browser:
-            captured_request = await browser.capture_ad_account_create_request(
-                business_id=business_id,
-                account_name=rk_name,
-                currency=currency,
-                timezone_id=timezone_id,
-            )
-    except BrowserBusinessError as exc:
         try:
-            log.warning(
-                "[%s] AD_ACCOUNT live-capture browser failure "
-                "item=%s business=%s code=%s retryable=%s diagnostic=%s",
-                profile_id,
+            async with FacebookBusinessBrowser(
+                session.context,
+                timeout_seconds=90,
+            ) as browser:
+                captured_request = await browser.capture_ad_account_create_request(
+                    business_id=business_id,
+                    account_name=rk_name,
+                    currency=currency,
+                    timezone_id=timezone_id,
+                )
+            break
+        except BrowserBusinessError as exc:
+            browser_diag = (
+                exc.diagnostic if isinstance(exc.diagnostic, dict) else {}
+            )
+            compact_diag = _compact_browser_diagnostic(browser_diag)
+            failure = {
+                "attempt": capture_attempt,
+                "code": exc.code,
+                "retryable": bool(exc.retryable),
+                "message": str(exc)[:1200],
+                "diagnostic": compact_diag,
+            }
+            capture_failures.append(failure)
+
+            try:
+                log.warning(
+                    "[%s] AD_ACCOUNT live-capture browser failure "
+                    "item=%s business=%s attempt=%s/%s code=%s "
+                    "retryable=%s diagnostic=%s",
+                    profile_id,
+                    item_id,
+                    business_id,
+                    capture_attempt,
+                    capture_attempt_limit,
+                    exc.code,
+                    exc.retryable,
+                    json.dumps(
+                        compact_diag,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                        default=str,
+                    )[:12000],
+                )
+            except Exception:
+                pass
+
+            safe_retry = (
+                bool(exc.retryable)
+                and exc.code in AD_ACCOUNT_SAFE_CAPTURE_RETRY_CODES
+                and capture_attempt < capture_attempt_limit
+            )
+
+            await provisioning_state.checkpoint(
                 item_id,
-                business_id,
-                exc.code,
-                exc.retryable,
-                json.dumps(
-                    exc.diagnostic if isinstance(exc.diagnostic, dict) else {},
+                profile_id,
+                scope_key,
+                ProvisioningStep.AD_ACCOUNT,
+                {
+                    "phase": "CREATE_NOT_SUBMITTED",
+                    "resume_from": "CREATE",
+                    "business_id": business_id,
+                    "account_name": rk_name,
+                    "currency": currency,
+                    "timezone_id": timezone_id,
+                    "capture_attempt": capture_attempt,
+                    "capture_attempt_limit": capture_attempt_limit,
+                    "capture_failures": capture_failures[-3:],
+                    "last_error_code": exc.code,
+                    "last_error": str(exc)[:4000],
+                    "browser_diagnostic": browser_diag,
+                    "transport": "business_suite_live_capture",
+                },
+            )
+
+            if safe_retry:
+                await asyncio.sleep(0.75 * capture_attempt)
+                continue
+
+            detail = str(exc)
+            if compact_diag:
+                detail += " diagnostic=" + json.dumps(
+                    compact_diag,
                     ensure_ascii=False,
                     separators=(",", ":"),
                     default=str,
-                )[:12000],
-            )
-        except Exception:
-            pass
+                )[:3500]
+            if len(capture_failures) > 1:
+                detail += " capture_attempts=" + json.dumps(
+                    capture_failures[-3:],
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    default=str,
+                )[:2500]
 
-        await provisioning_state.checkpoint(
-            item_id,
-            profile_id,
-            scope_key,
-            ProvisioningStep.AD_ACCOUNT,
-            {
-                "phase": "CREATE_NOT_SUBMITTED",
-                "resume_from": "CREATE",
-                "business_id": business_id,
-                "account_name": rk_name,
-                "currency": currency,
-                "timezone_id": timezone_id,
-                "last_error_code": exc.code,
-                "last_error": str(exc)[:4000],
-                "browser_diagnostic": (
-                    exc.diagnostic
-                    if isinstance(exc.diagnostic, dict)
-                    else {}
+            raise ProvisioningError(
+                exc.code,
+                detail,
+                retryable=exc.retryable,
+            ) from exc
+        except Exception as exc:
+            # Any unexpected exception in the capture-only browser pass is
+            # still pre-submit: the definitive CREATE request is routed through
+            # an aborting interceptor. Restart the browser session and retry
+            # before surfacing an infrastructure failure.
+            failure = {
+                "attempt": capture_attempt,
+                "code": "AD_ACCOUNT_CAPTURE_BROWSER_EXCEPTION",
+                "retryable": True,
+                "message": (
+                    f"{exc.__class__.__name__}: {_clean(exc)}"
+                )[:1200],
+            }
+            capture_failures.append(failure)
+            await provisioning_state.checkpoint(
+                item_id,
+                profile_id,
+                scope_key,
+                ProvisioningStep.AD_ACCOUNT,
+                {
+                    "phase": "CREATE_NOT_SUBMITTED",
+                    "resume_from": "CREATE",
+                    "business_id": business_id,
+                    "account_name": rk_name,
+                    "currency": currency,
+                    "timezone_id": timezone_id,
+                    "capture_attempt": capture_attempt,
+                    "capture_attempt_limit": capture_attempt_limit,
+                    "capture_failures": capture_failures[-3:],
+                    "last_error_code": "AD_ACCOUNT_CAPTURE_BROWSER_EXCEPTION",
+                    "last_error": failure["message"],
+                    "transport": "business_suite_live_capture",
+                },
+            )
+            if capture_attempt < capture_attempt_limit:
+                await asyncio.sleep(0.75 * capture_attempt)
+                continue
+            raise ProvisioningError(
+                "AD_ACCOUNT_CAPTURE_BROWSER_EXCEPTION",
+                (
+                    "Live Add-RK capture failed before submit after "
+                    f"{capture_attempt_limit} browser attempts. "
+                    + failure["message"]
                 ),
-                "transport": "business_suite_live_capture",
-            },
-        )
-        browser_diag = (
-            exc.diagnostic if isinstance(exc.diagnostic, dict) else {}
-        )
-        compact_diag = {
-            key: browser_diag.get(key)
-            for key in (
-                "stage",
-                "add_attempt_summary",
-                "add_clicked",
-                "action_surface_ready",
-                "post_add_candidates",
-                "section_clicked",
-                "section_reload_attempted",
-                "section_activation",
-                "action_candidates",
-                "ui_state",
-                "right_pane_snapshot",
-            )
-            if key in browser_diag
-        }
-        detail = str(exc)
-        if compact_diag:
-            detail += " diagnostic=" + json.dumps(
-                compact_diag,
-                ensure_ascii=False,
-                separators=(",", ":"),
-                default=str,
-            )[:3500]
+                retryable=True,
+            ) from exc
 
+    if not captured_request:
         raise ProvisioningError(
-            exc.code,
-            detail,
-            retryable=exc.retryable,
-        ) from exc
+            "AD_ACCOUNT_CAPTURE_EXHAUSTED",
+            "Live Add-RK capture exhausted without a request. No CREATE was sent.",
+            retryable=True,
+        )
 
     capture_doc_id = _clean(captured_request.get("doc_id"))
     capture_friendly = _clean(captured_request.get("friendly_name"))
