@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Awaitable, Callable
 
+from .fan_pages_handler import fan_pages_handler
 from .business_handler import business_handler
 from .ad_account_handler import ad_account_handler
 from .funding_handler import funding_handler
@@ -9,6 +10,7 @@ from .funding_handler import funding_handler
 Handler = Callable[..., Awaitable[dict[str, Any]]]
 
 PROVISIONING_HANDLERS: dict[str, Handler] = {
+    "FAN_PAGES": fan_pages_handler,
     "BUSINESS": business_handler,
     "AD_ACCOUNT": ad_account_handler,
     "FUNDING": funding_handler,
