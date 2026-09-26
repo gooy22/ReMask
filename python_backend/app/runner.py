@@ -157,25 +157,43 @@ class WorkerPool:
                                     for value in (raw_steps or [])
                                 ] if isinstance(raw_steps,list) else []
 
-                                # CREATE_BM and CREATE_AD_ACCOUNT both use
-                                # profile-bound Chromium and need a hard wall
-                                # clock watchdog independent of Playwright
-                                # cooperative cancellation.
+                                # FAN_PAGES, CREATE_BM and CREATE_AD_ACCOUNT
+                                # all use profile-bound Chromium and need a hard
+                                # wall-clock watchdog independent of Playwright.
+                                fan_pages_guarded='FAN_PAGES' in normalized_steps
                                 business_guarded='BUSINESS' in normalized_steps
                                 ad_account_guarded='AD_ACCOUNT' in normalized_steps
 
-                                if business_guarded or ad_account_guarded:
+                                if fan_pages_guarded or business_guarded or ad_account_guarded:
                                     browser_steps=[
                                         value
                                         for value in normalized_steps
-                                        if value in {'BUSINESS','AD_ACCOUNT'}
+                                        if value in {'FAN_PAGES','BUSINESS','AD_ACCOUNT'}
                                     ]
                                     hard_timeout=browser_provisioning_hard_timeout(
                                         browser_steps
                                     )
-                                    if business_guarded and ad_account_guarded:
+                                    guarded_count=sum(
+                                        1 for enabled in (
+                                            fan_pages_guarded,
+                                            business_guarded,
+                                            ad_account_guarded,
+                                        ) if enabled
+                                    )
+                                    if guarded_count > 1:
                                         watchdog_code='BROWSER_PROVISIONING_HARD_TIMEOUT'
-                                        watchdog_label='BUSINESS+AD_ACCOUNT'
+                                        watchdog_label='+'.join(
+                                            value
+                                            for value,enabled in (
+                                                ('FAN_PAGES',fan_pages_guarded),
+                                                ('BUSINESS',business_guarded),
+                                                ('AD_ACCOUNT',ad_account_guarded),
+                                            )
+                                            if enabled
+                                        )
+                                    elif fan_pages_guarded:
+                                        watchdog_code='ADD_FP_HARD_TIMEOUT'
+                                        watchdog_label='FAN_PAGES'
                                     elif business_guarded:
                                         watchdog_code='ADD_BM_HARD_TIMEOUT'
                                         watchdog_label='BUSINESS'
