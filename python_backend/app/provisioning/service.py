@@ -107,17 +107,22 @@ class ProvisioningService:
                     handler = get_handler(step.value)
 
                     if step in {
+                        ProvisioningStep.FAN_PAGES,
                         ProvisioningStep.BUSINESS,
                         ProvisioningStep.AD_ACCOUNT,
                     }:
                         step_timeout = browser_step_timeout(step)
                         timeout_code = (
-                            "BUSINESS_TIMEOUT"
+                            "FAN_PAGES_TIMEOUT"
+                            if step is ProvisioningStep.FAN_PAGES
+                            else "BUSINESS_TIMEOUT"
                             if step is ProvisioningStep.BUSINESS
                             else "AD_ACCOUNT_TIMEOUT"
                         )
                         timeout_label = (
-                            "Meta Business total queue/runtime watchdog"
+                            "Facebook Fan Page total queue/runtime watchdog"
+                            if step is ProvisioningStep.FAN_PAGES
+                            else "Meta Business total queue/runtime watchdog"
                             if step is ProvisioningStep.BUSINESS
                             else "Meta Ad Account total queue/runtime watchdog"
                         )
