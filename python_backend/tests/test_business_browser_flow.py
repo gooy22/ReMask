@@ -1342,9 +1342,7 @@ class BrowserAdAccountAddProbeTests(unittest.IsolatedAsyncioTestCase):
             ]
         )
         browser._wait_for_ad_account_create_entry = AsyncMock(
-            side_effect=AssertionError(
-                "global create-entry search must not run after Add"
-            )
+            return_value=False
         )
 
         found, attempts = await browser._probe_ad_account_add_buttons()
@@ -1358,7 +1356,9 @@ class BrowserAdAccountAddProbeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(browser.page.keyboard.keys, ["Escape"])
         self.assertFalse(attempts[0]["create_entry_found"])
         self.assertTrue(attempts[1]["create_entry_found"])
-        browser._wait_for_ad_account_create_entry.assert_not_awaited()
+        browser._wait_for_ad_account_create_entry.assert_awaited_once_with(
+            timeout_seconds=2.5
+        )
 
     def test_add_attempt_summary_is_compact_and_ordered(self):
         rows = FacebookBusinessBrowser._summarize_ad_account_add_attempts(
@@ -2491,9 +2491,7 @@ class BrowserAdAccountStateMachineTests(unittest.IsolatedAsyncioTestCase):
             }
         )
         browser._wait_for_ad_account_create_entry = AsyncMock(
-            side_effect=AssertionError(
-                "global create-entry search must not be used after Add"
-            )
+            return_value=False
         )
 
         found, attempts = await browser._probe_ad_account_add_buttons()
@@ -2501,7 +2499,9 @@ class BrowserAdAccountStateMachineTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(found)
         self.assertTrue(attempts[0]["create_entry_found"])
         self.assertTrue(attempts[0]["popup_create"]["clicked"])
-        browser._wait_for_ad_account_create_entry.assert_not_awaited()
+        browser._wait_for_ad_account_create_entry.assert_awaited_once_with(
+            timeout_seconds=2.5
+        )
 
 
     async def test_verify_ad_account_inventory_empty_from_business_settings(self):
