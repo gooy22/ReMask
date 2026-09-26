@@ -7614,6 +7614,12 @@ class FacebookBusinessBrowser:
             "нет добавленных рекламных аккаунтов",
             "рекламних акаунтів не додано",
             "keine werbekonten hinzugefügt",
+            "কোনো বিজ্ঞাপন অ্যাকাউন্ট যোগ করা হয়নি",
+            "কোনও বিজ্ঞাপন অ্যাকাউন্ট যোগ করা হয়নি",
+            "chưa thêm tài khoản quảng cáo nào",
+            "không có tài khoản quảng cáo nào được thêm",
+            "कोई विज्ञापन खाता नहीं जोड़ा गया",
+            "कोई विज्ञापन खाते नहीं जोड़े गए",
         )
 
         attempts: list[dict[str, Any]] = []
@@ -7719,7 +7725,10 @@ class FacebookBusinessBrowser:
                     const formWords = [
                         'currency','devise','währung','валюта','валюта',
                         'time zone','timezone','fuseau horaire','zeitzone',
-                        'часовой пояс','часовий пояс'
+                        'часовой пояс','часовий пояс',
+                        'মুদ্রা','সময় অঞ্চল',
+                        'tiền tệ','múi giờ',
+                        'मुद्रा','समय क्षेत्र'
                     ];
                     const errorWords = [
                         'not allowed','not eligible','cannot create',"can't create",
@@ -7727,7 +7736,13 @@ class FacebookBusinessBrowser:
                         'maximum number','reached the maximum','limit reached',
                         'permission','permissions','vérifier','verification',
                         'non autorisé','pas autorisé','impossible de créer',
-                        'limite','restreint','restriction'
+                        'limite','restreint','restriction',
+                        'অনুমতি নেই','যোগ্য নয়','তৈরি করা যাবে না',
+                        'সীমা','সীমাবদ্ধ',
+                        'không được phép','không đủ điều kiện',
+                        'không thể tạo','giới hạn','bị hạn chế',
+                        'अनुमति नहीं','पात्र नहीं','नहीं बना सकते',
+                        'सीमा','प्रतिबंधित'
                     ];
 
                     const metaAIRoot = el => {
