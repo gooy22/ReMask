@@ -5821,7 +5821,22 @@ class FacebookBusinessBrowser:
                         'для мого бізнесу','আমার ব্যবসা',
                         'আমার ব্যবসার জন্য','doanh nghiệp của tôi',
                         'dành cho doanh nghiệp của tôi','मेरा व्यवसाय',
-                        'मेरे व्यवसाय के लिए'
+                        'मेरे व्यवसाय के लिए',
+                        'create a new ad account','create new ad account',
+                        'create ad account','créer un nouveau compte publicitaire',
+                        'créer un compte publicitaire','nouveau compte publicitaire',
+                        'создать новый рекламный аккаунт',
+                        'создать рекламный аккаунт',
+                        'створити новий рекламний акаунт',
+                        'створити рекламний акаунт',
+                        'neues werbekonto erstellen','werbekonto erstellen',
+                        'নতুন বিজ্ঞাপন অ্যাকাউন্ট তৈরি করুন',
+                        'বিজ্ঞাপন অ্যাকাউন্ট তৈরি করুন',
+                        'tạo tài khoản quảng cáo mới',
+                        'tạo tài khoản quảng cáo',
+                        'नया विज्ञापन खाता बनाएँ',
+                        'नया विज्ञापन खाता बनाएं',
+                        'विज्ञापन खाता बनाएँ','विज्ञापन खाता बनाएं'
                     ];
                     const aiMarkers = [
                         'meta ai','assistant business meta ai',
@@ -8828,6 +8843,61 @@ class FacebookBusinessBrowser:
             and marker_count >= 2
         )
 
+    async def _advance_ad_account_intro_dialog(
+        self,
+        *,
+        timeout_seconds: float = 4.0,
+    ) -> bool:
+        """Advance Meta's intermediate Create-RK modal to the real form.
+
+        Current Business Settings variants may use:
+        Add -> Create ad account -> intro modal -> Next/Continue -> fields.
+        Only controls inside the recognized non-AI modal are used here.
+        """
+        if self.page is None:
+            return False
+
+        deadline = time.monotonic() + max(1.0, float(timeout_seconds))
+        for attempt in range(2):
+            if time.monotonic() >= deadline:
+                break
+
+            state = await self._ad_account_ui_state()
+            if self._ad_account_create_form_confirmed(state):
+                return True
+            if _clean(state.get("state")).upper() != "INTRO_DIALOG":
+                return False
+
+            before_signature = _clean(state.get("signature"))
+            action_meta = (
+                await self._click_ad_account_form_action_by_visible_text(
+                    "next"
+                )
+            )
+            if not bool(action_meta.get("clicked")):
+                action_meta = (
+                    await self._click_ad_account_form_action_by_visible_text(
+                        "final"
+                    )
+                )
+            if not bool(action_meta.get("clicked")):
+                return False
+
+            remaining = max(1.0, deadline - time.monotonic())
+            transition = await self._wait_for_ad_account_ui_transition(
+                previous_signature=before_signature,
+                timeout_seconds=min(3.5, remaining),
+                label=f"after_intro_dialog_advance_{attempt}",
+                require_signature_change=True,
+            )
+            if self._ad_account_create_form_confirmed(transition):
+                return True
+            if _clean(transition.get("state")).upper() == "BLOCKED":
+                return False
+
+        final_state = await self._ad_account_ui_state()
+        return self._ad_account_create_form_confirmed(final_state)
+
     async def _wait_for_ad_account_create_entry(
         self,
         *,
@@ -8882,6 +8952,13 @@ class FacebookBusinessBrowser:
                 )
                 if self._ad_account_create_form_confirmed(transition):
                     return True
+                if _clean(
+                    transition.get("state")
+                ).upper() == "INTRO_DIALOG":
+                    if await self._advance_ad_account_intro_dialog(
+                        timeout_seconds=3.5,
+                    ):
+                        return True
                 # Click landed on matching text/wrapper but did not open the
                 # wizard. Keep probing instead of treating click success as
                 # form success.
