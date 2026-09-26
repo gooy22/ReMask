@@ -27,6 +27,20 @@ class _FakeRequest:
         self.post_data = post_data
 
 
+class BrowserLeaseRegressionTests(unittest.TestCase):
+    def test_browser_open_bounds_profile_lock_and_active_lease(self):
+        source = inspect.getsource(FacebookBusinessBrowser.open)
+        self.assertIn("REMASK_BROWSER_ACTIVE_LEASE_SECONDS", source)
+        self.assertIn("lease_seconds", source)
+        self.assertIn("timeout=30.0", source)
+        self.assertIn("PROFILE_BROWSER_LOCK_TIMEOUT", source)
+
+    def test_browser_close_cancels_lease_watchdog(self):
+        source = inspect.getsource(FacebookBusinessBrowser.close)
+        self.assertIn("_lease_watchdog_task", source)
+        self.assertIn("watchdog.cancel()", source)
+
+
 class BrowserInventoryPayloadTests(unittest.TestCase):
     def test_extract_named_ad_account_id_from_inventory_payload(self):
         ids = _extract_named_ad_account_ids(
