@@ -7405,6 +7405,24 @@ class FacebookBusinessBrowser:
                 )
                 targets_business = business in target_business_ids
 
+                # Some current Meta Relay inventory queries inherit the
+                # selected Business from the Business Settings route and no
+                # longer repeat business_id inside GraphQL variables. The
+                # exact ad-accounts route is still authoritative read-only
+                # context, so accept it as a second way to bind the inventory
+                # payload to the requested Business.
+                page_url = _clean(getattr(self.page, "url", ""))
+                page_targets_business = (
+                    business in _business_ids_from_text(page_url)
+                    and (
+                        "/settings/ad_accounts" in page_url.casefold()
+                        or "/settings/ad-accounts" in page_url.casefold()
+                    )
+                )
+                exact_business_context = bool(
+                    targets_business or page_targets_business
+                )
+
                 friendly = _clean(
                     meta.get("friendly_name")
                 ).casefold()
@@ -7420,21 +7438,26 @@ class FacebookBusinessBrowser:
                     "inventory_ids": inventory_ids[:12],
                     "inventory_observed": inventory_observed,
                     "targets_business": targets_business,
+                    "page_targets_business": page_targets_business,
+                    "exact_business_context": exact_business_context,
                     "friendly_name": _clean(
                         meta.get("friendly_name")
                     )[:180],
                     "request": request_summary,
                 }
 
-                if exact_name_ids or (
-                    targets_business
-                    and not mutation_like
-                    and (inventory_ids or inventory_observed)
+                if exact_business_context and (
+                    exact_name_ids
+                    or (
+                        not mutation_like
+                        and (inventory_ids or inventory_observed)
+                    )
                 ):
                     diagnostics.append(row)
 
                 if (
-                    len(exact_name_ids) == 1
+                    exact_business_context
+                    and len(exact_name_ids) == 1
                     and not found_future.done()
                 ):
                     found_future.set_result(
@@ -7453,7 +7476,7 @@ class FacebookBusinessBrowser:
                     return
 
                 if (
-                    targets_business
+                    exact_business_context
                     and not mutation_like
                     and len(inventory_ids) == 1
                     and not found_future.done()
@@ -7474,7 +7497,7 @@ class FacebookBusinessBrowser:
                     return
 
                 if (
-                    targets_business
+                    exact_business_context
                     and not mutation_like
                     and inventory_observed
                     and not inventory_ids
@@ -7646,11 +7669,39 @@ class FacebookBusinessBrowser:
             "không có tài khoản quảng cáo nào được thêm",
             "कोई विज्ञापन खाता नहीं जोड़ा गया",
             "कोई विज्ञापन खाते नहीं जोड़े गए",
+            "no ad accounts",
+            "you haven't added any ad accounts",
+            "you have not added any ad accounts",
+            "aucun compte publicitaire",
+            "no se han añadido cuentas publicitarias",
+            "no hay cuentas publicitarias añadidas",
+            "nenhuma conta de anúncios adicionada",
+            "nenhuma conta publicitária adicionada",
+            "belum ada akun iklan yang ditambahkan",
+            "nie dodano kont reklamowych",
+            "reklam hesabı eklenmedi",
         )
 
         attempts: list[dict[str, Any]] = []
-        for template in self.SETTINGS_AD_ACCOUNTS_URLS:
-            target = template.format(business_id=business)
+        targets = [
+            template.format(business_id=business)
+            for template in self.SETTINGS_AD_ACCOUNTS_URLS
+        ]
+        current = _clean(self.page.url)
+        if (
+            business in _business_ids_from_text(current)
+            and (
+                "/settings/ad_accounts" in current.casefold()
+                or "/settings/ad-accounts" in current.casefold()
+            )
+        ):
+            targets.insert(0, current)
+
+        seen_targets: set[str] = set()
+        for target in targets:
+            if target in seen_targets:
+                continue
+            seen_targets.add(target)
             try:
                 await self._goto(target)
                 await self.page.wait_for_timeout(1200)

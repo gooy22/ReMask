@@ -22,6 +22,7 @@ from app.provisioning.ad_account_handler import (
     AD_ACCOUNT_SAFE_CAPTURE_RETRY_CODES,
     _inventory_repeatedly_confirms_empty,
     _inventory_proof_summary,
+    _reconcile_existing_browser_inventory,
     _known_final_click_unmatched_empty_inventory,
     _known_pre_submit_capture_crash,
     _prove_empty_after_uncertainty,
@@ -753,6 +754,56 @@ class AdAccountInventoryProofDiagnosticTests(unittest.TestCase):
 
 
 class AdAccountInventoryProofV2RuntimeTests(unittest.IsolatedAsyncioTestCase):
+    def test_browser_inventory_accepts_exact_business_page_context(self) -> None:
+        source = inspect.getsource(
+            FacebookBusinessBrowser.find_ad_account_in_inventory
+        )
+        self.assertIn("page_targets_business", source)
+        self.assertIn("exact_business_context", source)
+        self.assertIn("/settings/ad_accounts", source)
+
+    async def test_graphql_inconclusive_ui_empty_becomes_browser_empty_proof(self) -> None:
+        browser = AsyncMock()
+        browser.__aenter__.return_value = browser
+        browser.__aexit__.return_value = False
+        browser.find_ad_account_in_inventory.return_value = {
+            "confirmed": False,
+            "confirmed_empty": False,
+            "source": "business_settings_graphql_inventory",
+            "reason": "relay_business_id_implicit",
+        }
+        browser.verify_ad_account_inventory_empty.return_value = {
+            "confirmed_empty": True,
+            "business_id": "1056638030476027",
+            "source": "business_settings_ui",
+            "marker": "no ad accounts",
+        }
+
+        with patch(
+            "app.provisioning.ad_account_handler.FacebookBusinessBrowser",
+            return_value=browser,
+        ):
+            found_id, evidence = (
+                await _reconcile_existing_browser_inventory(
+                    SimpleNamespace(context=object()),
+                    business_id="1056638030476027",
+                    account_name="ReMask RK",
+                )
+            )
+
+        self.assertEqual(found_id, "")
+        self.assertTrue(evidence["confirmed_empty"])
+        self.assertEqual(
+            evidence["source"],
+            "business_settings_inventory_ui_fallback",
+        )
+        self.assertEqual(
+            evidence["ui_fallback"]["source"],
+            "business_settings_ui",
+        )
+        browser.find_ad_account_in_inventory.assert_awaited_once()
+        browser.verify_ad_account_inventory_empty.assert_awaited_once()
+
     async def test_graph_unavailable_three_browser_empties_prove_absence(self) -> None:
         graph_unavailable = [
             {

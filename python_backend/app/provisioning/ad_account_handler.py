@@ -340,35 +340,90 @@ async def _reconcile_existing_browser_inventory(
     business_id: str,
     account_name: str,
 ) -> tuple[str, dict[str, Any]]:
-    """Read-only fallback using Meta Business Settings GraphQL inventory."""
+    """Read-only fallback using Meta Business Settings inventory surfaces.
+
+    Prefer Meta's own GraphQL inventory. If Relay no longer exposes enough
+    request metadata to bind the response conclusively, use the exact same
+    fresh browser session to verify Meta's explicit empty-state UI. Three
+    independent fresh sessions are still required by the uncertainty proof
+    when Graph API is unavailable, so a single transient UI state cannot
+    unlock a duplicate CREATE guard.
+    """
     try:
         async with FacebookBusinessBrowser(
             session.context,
             timeout_seconds=45,
         ) as browser:
-            result = await browser.find_ad_account_in_inventory(
+            raw_result = await browser.find_ad_account_in_inventory(
                 business_id=business_id,
                 account_name=account_name,
                 timeout_seconds=10.0,
             )
+            result = (
+                dict(raw_result)
+                if isinstance(raw_result, dict)
+                else {
+                    "confirmed": False,
+                    "confirmed_empty": False,
+                    "source": "business_settings_graphql_inventory",
+                    "reason": "invalid_result",
+                }
+            )
+
+            found_id = _normalize_ad_account_id(
+                result.get("ad_account_id")
+            )
+            if bool(result.get("confirmed")) and found_id:
+                return found_id, result
+
+            if bool(result.get("confirmed_empty")):
+                return "", result
+
+            try:
+                ui_inventory = (
+                    await browser.verify_ad_account_inventory_empty(
+                        business_id=business_id,
+                    )
+                )
+            except Exception as ui_exc:
+                ui_inventory = {
+                    "confirmed_empty": False,
+                    "source": "business_settings_ui",
+                    "error": (
+                        f"{ui_exc.__class__.__name__}: {_clean(ui_exc)}"
+                    )[:500],
+                }
+
+            if (
+                isinstance(ui_inventory, dict)
+                and bool(ui_inventory.get("confirmed_empty"))
+            ):
+                return "", {
+                    **result,
+                    "confirmed": False,
+                    "confirmed_empty": True,
+                    "source": "business_settings_inventory_ui_fallback",
+                    "primary_source": _clean(result.get("source")),
+                    "ui_fallback": ui_inventory,
+                }
+
+            result["ui_fallback"] = (
+                ui_inventory
+                if isinstance(ui_inventory, dict)
+                else {
+                    "confirmed_empty": False,
+                    "source": "business_settings_ui",
+                    "reason": "invalid_result",
+                }
+            )
+            return "", result
     except Exception as exc:
         return "", {
             "confirmed": False,
-            "source": "business_settings_graphql_inventory",
+            "confirmed_empty": False,
+            "source": "business_settings_inventory",
             "error": f"{exc.__class__.__name__}: {_clean(exc)}"[:500],
         }
-
-    if not isinstance(result, dict):
-        return "", {
-            "confirmed": False,
-            "source": "business_settings_graphql_inventory",
-            "reason": "invalid_result",
-        }
-
-    found_id = _normalize_ad_account_id(result.get("ad_account_id"))
-    if bool(result.get("confirmed")) and found_id:
-        return found_id, result
-    return "", result
 
 
 async def _prove_empty_after_uncertainty(
