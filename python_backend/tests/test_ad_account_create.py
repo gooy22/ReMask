@@ -21,6 +21,7 @@ from app.facebook_business_browser import FacebookBusinessBrowser
 from app.provisioning.ad_account_handler import (
     AD_ACCOUNT_SAFE_CAPTURE_RETRY_CODES,
     _inventory_repeatedly_confirms_empty,
+    _inventory_proof_summary,
     _known_final_click_unmatched_empty_inventory,
     _known_pre_submit_capture_crash,
     _prove_empty_after_uncertainty,
@@ -731,6 +732,24 @@ class BrowserQueueAwareTimeoutTests(unittest.TestCase):
                 total,
                 browser_step_timeout(ProvisioningStep.AD_ACCOUNT),
             )
+
+
+class AdAccountInventoryProofDiagnosticTests(unittest.TestCase):
+    def test_compact_proof_summary_exposes_all_decision_surfaces(self) -> None:
+        summary = _inventory_proof_summary(
+            {
+                "proof_path": "inconclusive",
+                "graph_empty_confirmed": False,
+                "browser_empty_confirmations": 2,
+                "browser_required_checks": 3,
+                "ui_empty_confirmed": False,
+            }
+        )
+        self.assertEqual(
+            summary,
+            "proof_path=inconclusive graph_empty=0 "
+            "browser_empty=2/3 ui_empty=0",
+        )
 
 
 class AdAccountInventoryProofV2RuntimeTests(unittest.IsolatedAsyncioTestCase):
