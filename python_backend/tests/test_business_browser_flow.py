@@ -1133,11 +1133,17 @@ class BrowserAdAccountImmediatePostAddOrderTests(unittest.TestCase):
         source = inspect.getsource(
             FacebookBusinessBrowser._probe_ad_account_add_buttons
         )
-        click_pos = source.index("await item.click(timeout=2500)")
+        click_pos = source.index("await item.click(timeout=1200)")
+        dom_fallback_pos = source.index(
+            "data-remask-rk-add-probe",
+            click_pos,
+        )
         poll_pos = source.index(
             "_wait_for_fresh_ad_account_create_candidate",
             click_pos,
         )
+        self.assertGreater(dom_fallback_pos, click_pos)
+        self.assertLess(dom_fallback_pos, poll_pos)
         transition_pos = source.find(
             "_wait_for_ad_account_ui_transition",
             click_pos,
