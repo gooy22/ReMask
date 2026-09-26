@@ -915,7 +915,7 @@ class BrowserAdAccountGraphqlInventoryTests(unittest.IsolatedAsyncioTestCase):
         )
 
 
-    async def test_inventory_lookup_accepts_one_unique_rk_for_exact_business(self):
+    async def test_inventory_lookup_rejects_one_unnamed_unique_rk(self):
         class _Response:
             url = "https://business.facebook.com/api/graphql/"
 
@@ -967,14 +967,14 @@ class BrowserAdAccountGraphqlInventoryTests(unittest.IsolatedAsyncioTestCase):
             timeout_seconds=2.0,
         )
 
-        self.assertTrue(result["confirmed"])
-        self.assertEqual(
-            result["ad_account_id"],
-            "act_123456789012345",
-        )
-        self.assertEqual(
-            result["source"],
-            "business_settings_graphql_inventory_unique",
+        self.assertFalse(result["confirmed"])
+        self.assertFalse(result["confirmed_empty"])
+        self.assertNotIn("ad_account_id", result)
+        self.assertTrue(
+            any(
+                "act_123456789012345" in row.get("inventory_ids", [])
+                for row in result.get("diagnostics", [])
+            )
         )
 
 
