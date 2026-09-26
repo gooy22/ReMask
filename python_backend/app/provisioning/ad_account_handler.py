@@ -1166,67 +1166,93 @@ async def ad_account_handler(
                 "currency": currency,
                 "timezone_id": timezone_id,
                 "last_error": reason[:4000],
+                "activity": "AD_ACCOUNT_RESULT_UNCERTAIN",
+                "activity_at": int(time.time()),
                 "transport": "facebook_private_graphql_live_capture",
             },
         )
 
-        last_diagnostics: list[dict[str, Any]] = []
-        for attempt in range(3):
-            found_id, diagnostics = await _reconcile_existing(
-                session,
-                business_id=business_id,
-                account_name=rk_name,
-            )
-            last_diagnostics = diagnostics
-            if found_id:
-                await provisioning_state.remember_entity(
-                    profile_id,
-                    scope_key,
-                    ProvisioningStep.AD_ACCOUNT,
-                    {"ad_account_id": found_id},
-                )
-                return {
-                    "ad_account_id": found_id,
-                    "business_id": business_id,
-                    "name": rk_name,
-                    "currency": currency,
-                    "timezone_id": timezone_id,
-                    "recovered_after_uncertainty": True,
-                    "transport": "graph_inventory_reconciliation",
-                    "reconciliation": diagnostics,
-                }
-            if attempt < 2:
-                await asyncio.sleep(2.0)
-
-        browser_found_id, browser_inventory = (
-            await _reconcile_existing_browser_inventory(
+        found_id, proven_empty, inventory_proof = (
+            await _prove_empty_after_uncertainty(
                 session,
                 business_id=business_id,
                 account_name=rk_name,
             )
         )
-        if browser_found_id:
+        if found_id:
             await provisioning_state.remember_entity(
                 profile_id,
                 scope_key,
                 ProvisioningStep.AD_ACCOUNT,
-                {"ad_account_id": browser_found_id},
+                {"ad_account_id": found_id},
             )
             return {
-                "ad_account_id": browser_found_id,
+                "ad_account_id": found_id,
                 "business_id": business_id,
                 "name": rk_name,
                 "currency": currency,
                 "timezone_id": timezone_id,
                 "recovered_after_uncertainty": True,
-                "transport": "business_settings_graphql_inventory",
-                "reconciliation": last_diagnostics,
-                "browser_inventory": browser_inventory,
+                "transport": "uncertain_inventory_v2_reconciliation",
+                "inventory_proof": inventory_proof,
             }
 
+        if proven_empty:
+            await provisioning_state.checkpoint(
+                item_id,
+                profile_id,
+                scope_key,
+                ProvisioningStep.AD_ACCOUNT,
+                {
+                    "phase": "CREATE_NOT_SUBMITTED",
+                    "resume_from": "CREATE",
+                    "business_id": business_id,
+                    "account_name": rk_name,
+                    "currency": currency,
+                    "timezone_id": timezone_id,
+                    "last_error_code": (
+                        "AD_ACCOUNT_UNCERTAIN_RECONCILED_EMPTY"
+                    ),
+                    "last_error": "",
+                    "inventory_proof": inventory_proof,
+                    "activity": "AD_ACCOUNT_UNCERTAIN_RECONCILED_EMPTY",
+                    "activity_at": int(time.time()),
+                    "transport": "facebook_private_graphql_live_capture",
+                },
+            )
+            return {
+                "_remask_reconciled_empty": True,
+                "business_id": business_id,
+                "inventory_proof": inventory_proof,
+            }
+
+        await provisioning_state.checkpoint(
+            item_id,
+            profile_id,
+            scope_key,
+            ProvisioningStep.AD_ACCOUNT,
+            {
+                "phase": "CREATE_RESULT_UNKNOWN",
+                "resume_from": "RECONCILE_CREATE",
+                "business_id": business_id,
+                "account_name": rk_name,
+                "currency": currency,
+                "timezone_id": timezone_id,
+                "last_error_code": "AD_ACCOUNT_CREATE_RESULT_UNKNOWN",
+                "last_error": reason[:4000],
+                "inventory_proof": inventory_proof,
+                "activity": "AD_ACCOUNT_RECONCILE_EXHAUSTED",
+                "activity_at": int(time.time()),
+                "transport": "facebook_private_graphql_live_capture",
+            },
+        )
         raise ProvisioningError(
             "AD_ACCOUNT_CREATE_RESULT_UNKNOWN",
-            reason,
+            (
+                reason
+                + " Strong read-only inventory proof is still inconclusive; "
+                "duplicate CREATE remains blocked."
+            ),
             retryable=True,
         )
 
@@ -1550,13 +1576,11 @@ async def ad_account_handler(
 
             # Renderer crashes before the final CREATE gate are provably
             # pre-submit. No final CTA was armed and no CREATE transport was
-            # marked sent, so restart Chromium and continue the same Job
-            # instead of converting a safe crash into RESULT_UNKNOWN.
+            # marked sent, so this state must NEVER become RESULT_UNKNOWN.
             if (
                 page_crashed
                 and not final_capture_armed
                 and not create_may_have_been_sent
-                and capture_attempt < capture_attempt_limit
             ):
                 await provisioning_state.checkpoint(
                     item_id,
@@ -1580,13 +1604,14 @@ async def ad_account_handler(
                         "browser_phase": browser_phase,
                         "final_capture_armed": False,
                         "create_may_have_been_sent": False,
+                        "page_crashed": True,
                         "transport": "business_suite_live_capture",
                     },
                 )
                 try:
                     log.warning(
                         "[%s] AD_ACCOUNT renderer crashed pre-final; "
-                        "restarting capture item=%s business=%s "
+                        "safe pre-submit recovery item=%s business=%s "
                         "attempt=%s/%s phase=%s",
                         profile_id,
                         item_id,
@@ -1597,8 +1622,19 @@ async def ad_account_handler(
                     )
                 except Exception:
                     pass
-                await asyncio.sleep(1.0 * capture_attempt)
-                continue
+
+                if capture_attempt < capture_attempt_limit:
+                    await asyncio.sleep(1.0 * capture_attempt)
+                    continue
+
+                raise ProvisioningError(
+                    "AD_ACCOUNT_CAPTURE_PAGE_CRASH_PRE_FINAL",
+                    (
+                        "Meta renderer crashed before the final CREATE gate. "
+                        "No CREATE was sent; the Job is safe to retry."
+                    ),
+                    retryable=True,
+                ) from exc
 
             unknown_inventory: list[dict[str, Any]] = []
             unknown_found = ""
