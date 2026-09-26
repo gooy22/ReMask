@@ -1085,6 +1085,21 @@ class AdAccountRendererCrashRecoveryTests(unittest.TestCase):
             source,
         )
 
+    def test_last_pre_final_crash_stays_create_not_submitted(self) -> None:
+        source = inspect.getsource(ad_account_handler)
+        self.assertIn(
+            '"Meta renderer crashed before the final CREATE gate. "',
+            source,
+        )
+        self.assertIn(
+            '"No CREATE was sent; the Job is safe to retry."',
+            source,
+        )
+        self.assertIn(
+            '"CREATE_AD_ACCOUNT_SAFE_RETRY_REQUIRED"',
+            source,
+        )
+
     def test_post_final_renderer_crash_does_not_take_safe_retry_branch(self) -> None:
         source = inspect.getsource(ad_account_handler)
         crash_pos = source.index(
