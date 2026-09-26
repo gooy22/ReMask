@@ -2176,6 +2176,22 @@ class BrowserAdAccountDialogClassificationRegressionTests(unittest.TestCase):
             FacebookBusinessBrowser._ad_account_create_form_confirmed(state)
         )
 
+
+    def test_structural_form_evidence_confirms_unlabelled_meta_form(self):
+        state = {
+            "state":"FORM",
+            "name_input":False,
+            "form_evidence":True,
+            "dialog_form_control_count":1,
+            "editable_form_control":False,
+            "controls":[],
+            "dialogs":["Créer un compte publicitaire"],
+        }
+
+        self.assertTrue(
+            FacebookBusinessBrowser._ad_account_create_form_confirmed(state)
+        )
+
     def test_real_rk_dialog_with_embedded_meta_ai_button_still_confirms(self):
         state = {
             "state":"FORM",
