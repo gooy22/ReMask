@@ -2716,6 +2716,89 @@ class BrowserAdAccountCreateEntryWaitTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Créer un compte publicitaire", rows[0])
 
 
+    async def test_state_detected_create_target_is_clicked_before_generic_search(self):
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-rk-state-tag")
+        )
+        browser.page = SimpleNamespace(
+            wait_for_timeout=AsyncMock(return_value=None),
+        )
+        browser._ad_account_ui_state = AsyncMock(
+            side_effect=[
+                {
+                    "state":"CREATE_ENTRY",
+                    "signature":"entry-tagged",
+                    "create_target":{
+                        "text":"Créer un compte publicitaire avec une description longue",
+                        "x":760,
+                        "y":420,
+                        "w":320,
+                        "h":96,
+                        "tag":"DIV",
+                        "role":"",
+                    },
+                    "name_input":False,
+                    "dialogs":[],
+                    "editable_form_control":False,
+                    "controls":[],
+                },
+            ]
+        )
+        browser._click_state_detected_ad_account_create_entry = AsyncMock(
+            return_value={
+                "clicked":True,
+                "mode":"dom",
+                "target":{"text":"Créer un compte publicitaire"},
+            }
+        )
+        browser._click_named = AsyncMock(
+            side_effect=AssertionError(
+                "generic named search must not run when tagged target clicks"
+            )
+        )
+        browser._click_ad_account_create_entry_by_visible_text = AsyncMock(
+            return_value=False
+        )
+        browser._click_ad_account_action_dom = AsyncMock(return_value="")
+        browser._wait_for_ad_account_ui_transition = AsyncMock(
+            return_value={
+                "state":"FORM",
+                "signature":"wizard",
+                "name_input":True,
+                "form_evidence":True,
+                "editable_form_control":True,
+                "dialogs":[],
+                "controls":[
+                    "Nom du compte publicitaire",
+                    "Devise",
+                    "Fuseau horaire",
+                ],
+            }
+        )
+
+        ready = await browser._wait_for_ad_account_create_entry(
+            timeout_seconds=2.0,
+        )
+
+        self.assertTrue(ready)
+        browser._click_state_detected_ad_account_create_entry.assert_awaited_once()
+        browser._click_named.assert_not_awaited()
+
+    def test_state_classifier_tags_concrete_create_target(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser._ad_account_ui_state
+        )
+        self.assertIn("data-remask-rk-create-state", source)
+        self.assertIn("createTarget", source)
+        self.assertIn("text.length > 1400", source)
+        self.assertNotIn(
+            "createEntry = true;\n                        }\n"
+            "                        if (\n"
+            "                            ['add'",
+            source,
+        )
+
+
 class BrowserAdAccountCreateActionTests(unittest.IsolatedAsyncioTestCase):
     async def test_french_sidebar_text_does_not_count_as_create_action(self):
         browser = FacebookBusinessBrowser(
