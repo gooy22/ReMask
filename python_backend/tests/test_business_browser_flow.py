@@ -23,6 +23,16 @@ from app.provisioning.service import ProvisioningService
 
 
 
+class HindiAdAccountNameFieldRegressionTests(unittest.TestCase):
+    def test_hindi_meta_account_name_labels_are_fillable(self) -> None:
+        source = inspect.getsource(
+            FacebookBusinessBrowser._open_ad_account_create_form
+        )
+        self.assertIn("विज्ञापन अकाउंट का नाम", source)
+        self.assertIn("विज्ञापन अकाउंट नाम", source)
+        self.assertIn("strong_name_candidates", source)
+        self.assertIn("name_meta_markers", source)
+
 class HindiAdAccountLocaleRegressionTests(unittest.TestCase):
     def test_hindi_meta_account_transliteration_is_supported(self) -> None:
         source = inspect.getsource(FacebookBusinessBrowser)

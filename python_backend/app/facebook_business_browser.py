@@ -11506,6 +11506,8 @@ timeout_seconds=4.0,
             "Tên tài khoản quảng cáo",
             "विज्ञापन खाते का नाम",
             "विज्ञापन खाता नाम",
+            "विज्ञापन अकाउंट का नाम",
+            "विज्ञापन अकाउंट नाम",
         )
         name_filled = False
         name_deadline = time.monotonic() + 6.0
@@ -11533,6 +11535,25 @@ timeout_seconds=4.0,
                 count = 0
 
             safe_candidates: list[Any] = []
+            strong_name_candidates: list[Any] = []
+            name_meta_markers = (
+                "ad account name",
+                "advertising account name",
+                "account name",
+                "nom du compte publicitaire",
+                "nom du compte",
+                "название рекламного аккаунта",
+                "название аккаунта",
+                "назва рекламного акаунта",
+                "назва облікового запису",
+                "name des werbekontos",
+                "বিজ্ঞাপন অ্যাকাউন্টের নাম",
+                "tên tài khoản quảng cáo",
+                "विज्ञापन खाते का नाम",
+                "विज्ञापन खाता नाम",
+                "विज्ञापन अकाउंट का नाम",
+                "विज्ञापन अकाउंट नाम",
+            )
             for index in range(count):
                 candidate = candidates.nth(index)
                 try:
@@ -11591,11 +11612,21 @@ timeout_seconds=4.0,
                         continue
 
                     safe_candidates.append(candidate)
+                    if any(
+                        marker in meta_text
+                        for marker in name_meta_markers
+                    ):
+                        strong_name_candidates.append(candidate)
                 except Exception:
                     continue
 
-            if len(safe_candidates) == 1:
-                candidate = safe_candidates[0]
+            preferred_candidates = (
+                strong_name_candidates
+                if strong_name_candidates
+                else safe_candidates
+            )
+            if len(preferred_candidates) == 1:
+                candidate = preferred_candidates[0]
                 try:
                     try:
                         await candidate.fill(account_name, timeout=2500)
@@ -11614,6 +11645,7 @@ timeout_seconds=4.0,
             diag = await self._diagnostic("ad_account_name_input_missing")
             diag["business_id"] = business
             diag["form_candidates"] = await self._ad_account_form_candidates()
+            diag["name_labels"] = list(name_labels)
             raise BrowserBusinessError(
                 "AD_ACCOUNT_CREATE_UI_CHANGED",
                 "Meta Ad Account form opened but the account-name field was not found.",
