@@ -8341,6 +8341,127 @@ class FacebookBusinessBrowser:
         except Exception:
             return False
 
+    async def _expand_ad_account_details_if_present(
+        self,
+    ) -> dict[str, Any]:
+        """Open Meta's read-only 'Show details' surface and return fresh UI state.
+
+        Meta can replace the expected Add-RK wizard with an informational or
+        restriction card after Create-entry is clicked. Expanding details is
+        read-only and exposes the actual Meta reason so it can be classified
+        instead of being reported as a generic UI change.
+        """
+        if self.page is None:
+            return {"clicked": False, "state": {}}
+
+        detail_names = (
+            "Show details",
+            "View details",
+            "Afficher les détails",
+            "Voir les détails",
+            "Показать подробности",
+            "Подробнее",
+            "Показати деталі",
+            "Докладніше",
+            "Details anzeigen",
+            "Weitere Details",
+            "বিস্তারিত দেখুন",
+            "Xem chi tiết",
+            "विवरण देखें",
+        )
+
+        clicked = False
+        clicked_text = ""
+        try:
+            for name in detail_names:
+                locator = self.page.get_by_text(name, exact=True)
+                count = await locator.count()
+                for i in range(min(count, 4)):
+                    item = locator.nth(i)
+                    try:
+                        if not await item.is_visible():
+                            continue
+                        await item.click(timeout=1800)
+                        clicked = True
+                        clicked_text = name
+                        break
+                    except Exception:
+                        continue
+                if clicked:
+                    break
+
+            if not clicked:
+                result = await self.page.evaluate(
+                    """() => {
+                        const visible = el => {
+                            if (!el) return false;
+                            const r = el.getBoundingClientRect();
+                            const s = getComputedStyle(el);
+                            return r.width > 0 && r.height > 0
+                                && s.display !== 'none'
+                                && s.visibility !== 'hidden'
+                                && s.pointerEvents !== 'none';
+                        };
+                        const clean = text => (text || '')
+                            .normalize('NFKC')
+                            .replace(/[\u200b\u200c\u200d\ufeff]/g, '')
+                            .replace(/\u00a0/g, ' ')
+                            .replace(/\s+/g, ' ')
+                            .trim();
+                        const names = [
+                            'show details','view details',
+                            'afficher les détails','voir les détails',
+                            'показать подробности','подробнее',
+                            'показати деталі','докладніше',
+                            'details anzeigen','weitere details',
+                            'বিস্তারিত দেখুন','xem chi tiết','विवरण देखें'
+                        ];
+                        const nodes = [...document.querySelectorAll(
+                            'button,a,div,span,[role="button"],[role="link"],[tabindex]'
+                        )];
+                        for (const el of nodes) {
+                            if (!visible(el)) continue;
+                            const r = el.getBoundingClientRect();
+                            if (r.x < 280 || r.y < 35 || r.y > 795) continue;
+                            const text = clean(
+                                (el.getAttribute('aria-label') || '') + ' ' +
+                                (el.getAttribute('title') || '') + ' ' +
+                                (el.innerText || el.textContent || '')
+                            );
+                            const low = text.toLowerCase();
+                            if (!names.some(name => low === name)) continue;
+                            const clickable = el.closest(
+                                'button,a,[role="button"],[role="link"],'
+                                + '[tabindex]:not([tabindex="-1"])'
+                            ) || el;
+                            if (!visible(clickable)) continue;
+                            clickable.click();
+                            return {clicked:true,text};
+                        }
+                        return {clicked:false,text:''};
+                    }"""
+                )
+                if isinstance(result, dict):
+                    clicked = bool(result.get("clicked"))
+                    clicked_text = _clean(result.get("text"))[:120]
+        except Exception:
+            clicked = False
+
+        if clicked:
+            try:
+                await self.page.wait_for_timeout(350)
+            except Exception:
+                pass
+
+        state = await self._ad_account_ui_state()
+        snapshot = await self._ad_account_right_pane_snapshot()
+        return {
+            "clicked": clicked,
+            "text": clicked_text,
+            "state": state,
+            "snapshot": snapshot[:30],
+        }
+
     async def _ad_account_right_pane_snapshot(self) -> list[str]:
         """Capture compact visible text/controls from Meta's right pane."""
         if self.page is None:
