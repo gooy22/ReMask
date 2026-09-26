@@ -1560,7 +1560,9 @@ async def ad_account_handler(
     # force the operator to launch a brand-new Job manually.
     captured_request: dict[str, Any] = {}
     capture_failures: list[dict[str, Any]] = []
-    capture_attempt_limit = 3
+    capture_attempt_limit = 2
+    capture_attempt_timeout_seconds = 75.0
+    capture_stage_deadline = time.monotonic() + 150.0
 
     for capture_attempt in range(1, capture_attempt_limit + 1):
         await browser_checkpoint(
@@ -1576,17 +1578,150 @@ async def ad_account_handler(
         )
         browser: FacebookBusinessBrowser | None = None
         try:
-            async with FacebookBusinessBrowser(
-                session.context,
-                timeout_seconds=90,
-            ) as browser:
-                captured_request = await browser.capture_ad_account_create_request(
-                    business_id=business_id,
-                    account_name=rk_name,
-                    currency=currency,
-                    timezone_id=timezone_id,
-                )
+            remaining_capture_seconds = max(
+                5.0,
+                capture_stage_deadline - time.monotonic(),
+            )
+            attempt_timeout_seconds = min(
+                capture_attempt_timeout_seconds,
+                remaining_capture_seconds,
+            )
+
+            async def _run_capture_attempt() -> dict[str, Any]:
+                nonlocal browser
+                async with FacebookBusinessBrowser(
+                    session.context,
+                    timeout_seconds=90,
+                ) as active_browser:
+                    browser = active_browser
+                    return await active_browser.capture_ad_account_create_request(
+                        business_id=business_id,
+                        account_name=rk_name,
+                        currency=currency,
+                        timezone_id=timezone_id,
+                    )
+
+            captured_request = await asyncio.wait_for(
+                _run_capture_attempt(),
+                timeout=attempt_timeout_seconds,
+            )
             break
+        except asyncio.TimeoutError as exc:
+            browser_phase = (
+                browser.ad_account_runtime_phase
+                if browser is not None
+                else "BROWSER_NOT_ENTERED"
+            )
+            final_capture_armed = bool(
+                browser is not None
+                and browser.ad_account_final_capture_armed
+            )
+            create_may_have_been_sent = bool(
+                browser is not None
+                and browser.ad_account_create_may_have_been_sent
+            )
+
+            timeout_diag: dict[str, Any] = {}
+            if browser is not None:
+                try:
+                    timeout_diag = await asyncio.wait_for(
+                        browser.ad_account_runtime_timeout_diagnostic(),
+                        timeout=6.0,
+                    )
+                except Exception:
+                    timeout_diag = {}
+
+            failure = {
+                "attempt": capture_attempt,
+                "code": "AD_ACCOUNT_LIVE_CAPTURE_TIMEOUT",
+                "retryable": True,
+                "message": (
+                    "Live Add-RK capture exceeded "
+                    f"{attempt_timeout_seconds:.0f}s at phase={browser_phase}."
+                ),
+                "browser_phase": browser_phase,
+                "final_capture_armed": final_capture_armed,
+                "create_may_have_been_sent": create_may_have_been_sent,
+                "diagnostic": _compact_browser_diagnostic(timeout_diag),
+            }
+            capture_failures.append(failure)
+
+            # Before the final CTA the capture pass cannot have submitted
+            # CREATE. Fail/retry directly instead of spending more minutes in
+            # inventory reconciliation for a request that was never sent.
+            if not final_capture_armed and not create_may_have_been_sent:
+                await provisioning_state.checkpoint(
+                    item_id,
+                    profile_id,
+                    scope_key,
+                    ProvisioningStep.AD_ACCOUNT,
+                    {
+                        "phase": "CREATE_NOT_SUBMITTED",
+                        "resume_from": "CREATE",
+                        "business_id": business_id,
+                        "account_name": rk_name,
+                        "currency": currency,
+                        "timezone_id": timezone_id,
+                        "capture_attempt": capture_attempt,
+                        "capture_attempt_limit": capture_attempt_limit,
+                        "capture_failures": capture_failures[-2:],
+                        "last_error_code": "AD_ACCOUNT_LIVE_CAPTURE_TIMEOUT",
+                        "last_error": failure["message"],
+                        "browser_phase": browser_phase,
+                        "final_capture_armed": False,
+                        "create_may_have_been_sent": False,
+                        "browser_diagnostic": timeout_diag,
+                        "transport": "business_suite_live_capture",
+                    },
+                )
+
+                has_time_for_retry = (
+                    capture_attempt < capture_attempt_limit
+                    and time.monotonic() + 10.0 < capture_stage_deadline
+                )
+                if has_time_for_retry:
+                    await asyncio.sleep(0.5)
+                    continue
+
+                raise ProvisioningError(
+                    "AD_ACCOUNT_LIVE_CAPTURE_TIMEOUT",
+                    (
+                        failure["message"]
+                        + " No CREATE was sent. The Job stopped instead of "
+                        "remaining stuck in live capture."
+                    ),
+                    retryable=True,
+                ) from exc
+
+            # If the timeout happened after the final gate was armed, preserve
+            # exactly-once safety: never click again until inventory proves
+            # whether Meta created anything.
+            reconciled = await reconcile_after_uncertain(
+                reason=(
+                    failure["message"]
+                    + " Final CREATE gate had already been armed; inventory "
+                    "reconciliation is required before any retry."
+                )
+            )
+            if reconciled.get("_remask_reconciled_empty"):
+                has_time_for_retry = (
+                    capture_attempt < capture_attempt_limit
+                    and time.monotonic() + 10.0 < capture_stage_deadline
+                )
+                if has_time_for_retry:
+                    await asyncio.sleep(0.5)
+                    continue
+                raise ProvisioningError(
+                    "CREATE_AD_ACCOUNT_SAFE_RETRY_REQUIRED",
+                    (
+                        "Live capture timed out after the final gate, but "
+                        "strong inventory proof confirmed that no RK exists. "
+                        "The checkpoint is safe for a fresh retry."
+                    ),
+                    retryable=True,
+                ) from exc
+            return reconciled
+
         except BrowserBusinessError as exc:
             browser_diag = (
                 exc.diagnostic if isinstance(exc.diagnostic, dict) else {}

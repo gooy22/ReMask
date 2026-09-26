@@ -1071,7 +1071,9 @@ class AdAccountRepeatedInventoryRecoveryTests(unittest.TestCase):
 class AdAccountSelfHealingPipelineRegressionTests(unittest.TestCase):
     def test_capture_phase_retries_safe_pre_submit_ui_failures(self) -> None:
         source = inspect.getsource(ad_account_handler)
-        self.assertIn("capture_attempt_limit = 3", source)
+        self.assertIn("capture_attempt_limit = 2", source)
+        self.assertIn("capture_attempt_timeout_seconds = 75.0", source)
+        self.assertIn("capture_stage_deadline = time.monotonic() + 150.0", source)
         self.assertIn("AD_ACCOUNT_SAFE_CAPTURE_RETRY_CODES", source)
         self.assertIn("capture_failures", source)
         self.assertIn("await asyncio.sleep(0.75 * capture_attempt)", source)
@@ -1110,6 +1112,47 @@ class AdAccountSelfHealingPipelineRegressionTests(unittest.TestCase):
             "META_AD_ACCOUNT_CREATE_REJECTED",
             AD_ACCOUNT_SAFE_CAPTURE_RETRY_CODES,
         )
+
+
+class AdAccountLiveCaptureTimeoutRegressionTests(unittest.TestCase):
+    def test_live_capture_has_whole_attempt_hard_timeout(self) -> None:
+        source = inspect.getsource(ad_account_handler)
+        self.assertIn(
+            "captured_request = await asyncio.wait_for(",
+            source,
+        )
+        self.assertIn(
+            "timeout=attempt_timeout_seconds",
+            source,
+        )
+        self.assertIn(
+            '"AD_ACCOUNT_LIVE_CAPTURE_TIMEOUT"',
+            source,
+        )
+
+    def test_pre_final_timeout_is_create_not_submitted(self) -> None:
+        source = inspect.getsource(ad_account_handler)
+        timeout_pos = source.index("except asyncio.TimeoutError as exc:")
+        browser_error_pos = source.index(
+            "except BrowserBusinessError as exc:",
+            timeout_pos,
+        )
+        branch = source[timeout_pos:browser_error_pos]
+        self.assertIn("not final_capture_armed", branch)
+        self.assertIn("not create_may_have_been_sent", branch)
+        self.assertIn('"phase": "CREATE_NOT_SUBMITTED"', branch)
+        self.assertIn("No CREATE was sent", branch)
+
+    def test_post_final_timeout_reconciles_before_retry(self) -> None:
+        source = inspect.getsource(ad_account_handler)
+        timeout_pos = source.index("except asyncio.TimeoutError as exc:")
+        browser_error_pos = source.index(
+            "except BrowserBusinessError as exc:",
+            timeout_pos,
+        )
+        branch = source[timeout_pos:browser_error_pos]
+        self.assertIn("reconcile_after_uncertain(", branch)
+        self.assertIn("Final CREATE gate had already been armed", branch)
 
 
 class AdAccountCapturedVariableSafetyTests(unittest.TestCase):
