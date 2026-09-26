@@ -4306,3 +4306,50 @@ class BrowserAdAccountFinalCaptureGateRegressionTests(unittest.TestCase):
         blocked_section = source[plausible_pos:definitive_pos]
         self.assertIn("await route.abort()", blocked_section)
         self.assertNotIn("captured.set_result", blocked_section)
+
+
+class BrowserAdAccountFullFlowHardeningTests(unittest.TestCase):
+    def test_open_form_consumes_tagged_create_entry_without_global_name_click(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser._open_ad_account_create_form
+        )
+        create_state_pos = source.index(
+            'current_ui.get("state")).upper() == "CREATE_ENTRY"'
+        )
+        window = source[create_state_pos:create_state_pos + 1800]
+        self.assertIn(
+            "_click_state_detected_ad_account_create_entry",
+            window,
+        )
+        self.assertNotIn(
+            "_click_named(\n                self.AD_ACCOUNT_CREATE_ENTRY_NAMES",
+            window,
+        )
+
+    def test_terms_cover_primary_target_account_locales(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser._accept_ad_account_terms_if_present
+        )
+        for marker in (
+            "পরিষেবার শর্তাবলী",
+            "বিজ্ঞাপন নীতি",
+            "điều khoản dịch vụ",
+            "chính sách quảng cáo",
+            "सेवा की शर्तें",
+            "विज्ञापन नीति",
+        ):
+            self.assertIn(marker, source)
+
+    def test_currency_timezone_labels_cover_primary_target_locales(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser._prepare_ad_account_form_fields
+        )
+        for marker in (
+            "মুদ্রা",
+            "সময় অঞ্চল",
+            "Tiền tệ",
+            "Múi giờ",
+            "मुद्रा",
+            "समय क्षेत्र",
+        ):
+            self.assertIn(marker, source)
