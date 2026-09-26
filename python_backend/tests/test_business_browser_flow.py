@@ -716,21 +716,45 @@ class BrowserAdAccountFormActionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("mode === 'final' && !interactive", script)
 
 
+class BrowserAdAccountSubmitScopeRegressionTests(unittest.TestCase):
+    def test_submit_actions_require_wizard_surface(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser._click_ad_account_form_action_by_visible_text
+        )
+        self.assertIn("belongsToWizardSurface", source)
+        self.assertIn("hasCurrency && hasTimezone", source)
+        self.assertIn("hasOwnership && hasAccount", source)
+
+    def test_final_create_accepts_meta_suffix_text(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser._click_ad_account_final_interactive
+        )
+        self.assertIn('startswith(word + " ")', source)
+
+    def test_submit_loop_has_no_page_global_next_fallback(self):
+        source = inspect.getsource(FacebookBusinessBrowser.create_ad_account)
+        submit_start = source.index("for step in range(12):")
+        submit_source = source[submit_start:]
+        self.assertNotIn(
+            "next_clicked = await self._click_named",
+            submit_source,
+        )
+
+
 class BrowserAdAccountOwnBusinessTests(unittest.IsolatedAsyncioTestCase):
-    async def test_optional_french_own_business_choice_is_supported(self):
+    async def test_ownership_does_not_fall_back_to_page_global_click(self):
         browser = FacebookBusinessBrowser(
             SimpleNamespace(profile_id="profile-rk-own-business")
         )
         browser._click_named = AsyncMock(return_value=True)
+        browser._click_ad_account_form_action_by_visible_text = AsyncMock(
+            return_value={"clicked": False, "action": "own_business"}
+        )
 
         selected = await browser._select_own_business_if_present()
 
-        self.assertTrue(selected)
-        names = browser._click_named.await_args.args[0]
-        self.assertIn("My business", names)
-        self.assertIn("Mon entreprise", names)
-        self.assertIn("Pour mon entreprise", names)
-        self.assertIn("Мой бизнес", names)
+        self.assertFalse(selected)
+        browser._click_named.assert_not_awaited()
 
     async def test_optional_own_business_uses_visible_text_fallback(self):
         browser = FacebookBusinessBrowser(
