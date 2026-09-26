@@ -11292,116 +11292,98 @@ timeout_seconds=4.0,
         self,
         *,
         business_id: str,
+        account_name: str,
+        currency: str = "USD",
+        timezone_id: int = 1,
     ) -> dict[str, Any]:
-        """Capture Meta's current Add-RK private GraphQL request without sending CREATE."""
+        """Capture the exact current Add-RK GraphQL request without sending it.
+
+        This mirrors the proven BM strategy: drive Meta's own Business Settings
+        flow in the profile session, intercept the definitive CREATE request,
+        abort it before Meta receives it, and return the exact doc_id, variables
+        and request envelope for one controlled browser-native replay.
+        """
         business = _digits(business_id)
+        name = _clean(account_name)
+        currency_code = _clean(currency).upper()
+        try:
+            timezone = int(timezone_id)
+        except (TypeError, ValueError) as exc:
+            raise BrowserBusinessError(
+                "INVALID_INPUT",
+                "Ad Account capture requires an integer timezone_id.",
+                retryable=False,
+            ) from exc
+
         if not business:
             raise BrowserBusinessError(
                 "INVALID_BUSINESS_ID",
                 "Ad Account capture requires a numeric Business ID.",
                 retryable=False,
             )
+        if not name:
+            raise BrowserBusinessError(
+                "INVALID_INPUT",
+                "Ad Account capture requires an account name.",
+                retryable=False,
+            )
+        if not currency_code:
+            raise BrowserBusinessError(
+                "INVALID_INPUT",
+                "Ad Account capture requires a currency.",
+                retryable=False,
+            )
         if self.page is None:
             await self.open()
 
-        canary_name = f"ReMask RK Canary {int(time.time())}"
-        opened = False
-        for template in self.SETTINGS_AD_ACCOUNTS_URLS:
-            try:
-                await self._goto(template.format(business_id=business))
-                body = (await self._body_text()).casefold()
-                if (
-                    business in _clean(self.page.url)
-                    or "ad account" in body
-                    or "реклам" in body
-                    or "werbekonto" in body
-                    or "compte publicitaire" in body
-                ):
-                    opened = True
-                    break
-            except BrowserBusinessError as exc:
-                if exc.code in {
-                    "SESSION_EXPIRED",
-                    "CHECKPOINT_REQUIRED",
-                    "TWO_FACTOR_REQUIRED",
-                    "FACEBOOK_TEMPORARILY_BLOCKED",
-                }:
-                    raise
-
-        if not opened:
-            raise BrowserBusinessError(
-                "AD_ACCOUNT_CREATE_UI_UNAVAILABLE",
-                "Meta Business Settings Ad Accounts surface could not be opened.",
-                retryable=True,
-                diagnostic=await self._diagnostic("ad_account_settings_unavailable"),
-            )
-
-        entry_clicked = await self._click_named(self.AD_ACCOUNT_CREATE_ENTRY_NAMES)
-        if not entry_clicked:
-            if await self._click_named(self.ADD_NAMES):
-                await self.page.wait_for_timeout(350)
-                entry_clicked = await self._click_named(
-                    self.AD_ACCOUNT_CREATE_ENTRY_NAMES
-                )
-        if not entry_clicked:
-            raise BrowserBusinessError(
-                "AD_ACCOUNT_CREATE_UI_CHANGED",
-                "Meta Ad Account create entry was not found.",
-                retryable=True,
-                diagnostic=await self._diagnostic("ad_account_create_entry_missing"),
-            )
-
-        await self.page.wait_for_timeout(500)
-        name_filled = await self._fill_first(
-            labels=(
-                "Ad account name",
-                "Advertising account name",
-                "Account name",
-                "Название рекламного аккаунта",
-                "Название аккаунта",
-                "Назва рекламного акаунта",
-                "Name des Werbekontos",
-                "Nom du compte publicitaire",
-            ),
-            value=canary_name,
+        self._ad_account_create_sent = False
+        self._mark_ad_account_phase("CAPTURE_OPENING_CREATE_FLOW")
+        await self._open_ad_account_create_form(
+            business_id=business,
+            account_name=name,
         )
-        if not name_filled:
-            raise BrowserBusinessError(
-                "AD_ACCOUNT_CREATE_UI_CHANGED",
-                "Meta Ad Account form opened but the account-name field was not found.",
-                retryable=True,
-                diagnostic=await self._diagnostic("ad_account_name_input_missing"),
-            )
+        self._mark_ad_account_phase("CAPTURE_FORM_READY")
+
+        # Put the wizard into the requested immutable state before capture.
+        form_setup = await self._prepare_ad_account_form_fields(
+            currency=currency_code,
+            timezone_id=timezone,
+        )
+        self._ad_account_wizard_rect = (
+            await self._capture_ad_account_wizard_rect()
+        )
 
         loop = asyncio.get_running_loop()
         captured: asyncio.Future[dict[str, Any]] = loop.create_future()
+        graphql_candidates: list[dict[str, Any]] = []
 
         async def intercept(route: Any, request: Any) -> None:
-            try:
-                method = _clean(request.method).upper()
-                host = _clean(urlsplit(_clean(request.url)).hostname).lower()
-            except Exception:
-                await route.continue_()
-                return
-            if method != "POST" or not (
-                host == "facebook.com" or host.endswith(".facebook.com")
+            request_meta = _request_graphql_meta(request)
+            if (
+                _clean(request_meta.get("method")).upper() == "POST"
+                and "graphql" in _clean(request_meta.get("url")).lower()
+            ):
+                summary = self._safe_graphql_request_summary(request)
+                summary["matched_create"] = bool(
+                    self._request_matches_ad_account_create(
+                        request,
+                        business_id=business,
+                        account_name=name,
+                    )
+                )
+                graphql_candidates.append(summary)
+                if len(graphql_candidates) > 24:
+                    del graphql_candidates[:-24]
+
+            if not self._request_matches_ad_account_create(
+                request,
+                business_id=business,
+                account_name=name,
             ):
                 await route.continue_()
                 return
 
-            meta = _request_graphql_meta(request)
             raw = _clean(getattr(request, "post_data", ""))
-            decoded = unquote_plus(raw).casefold()
-            friendly = _clean(meta.get("friendly_name"))
-            looks_like_create = (
-                "adaccount" in friendly.casefold()
-                and "create" in friendly.casefold()
-            )
-            contains_canary = canary_name.casefold() in decoded
-            if not (contains_canary or looks_like_create):
-                await route.continue_()
-                return
-
             parsed = parse_qs(raw, keep_blank_values=True) if raw else {}
             allowed = {
                 "__aaid","__bid","__hs","__hblp","__hsdp","__rev","__s",
@@ -11412,67 +11394,196 @@ timeout_seconds=4.0,
             envelope = {
                 key: _clean(values[0])
                 for key, values in parsed.items()
-                if key in allowed and isinstance(values, list) and values and _clean(values[0])
+                if (
+                    key in allowed
+                    and isinstance(values, list)
+                    and values
+                    and _clean(values[0])
+                )
             }
             row = {
-                "doc_id": _clean(meta.get("doc_id")),
-                "friendly_name": friendly,
+                "doc_id": _clean(request_meta.get("doc_id")),
+                "friendly_name": _clean(
+                    request_meta.get("friendly_name")
+                ),
                 "endpoint_url": _clean(getattr(request, "url", "")),
                 "variables": (
-                    meta.get("variables")
-                    if isinstance(meta.get("variables"), dict)
+                    request_meta.get("variables")
+                    if isinstance(request_meta.get("variables"), dict)
                     else {}
                 ),
                 "request_envelope": envelope,
-                "canary_name": canary_name,
+                "canary_name": name,
                 "business_id": business,
+                "currency": currency_code,
+                "timezone_id": timezone,
                 "source": "live_business_settings_capture",
             }
+
+            # Critical invariant: the capture pass NEVER sends CREATE to Meta.
             await route.abort()
             if not captured.done():
                 captured.set_result(row)
 
-        await self.page.route("**/*", intercept)
+        await self.page.route("**/*graphql*", intercept)
+        submit_attempts: list[dict[str, Any]] = []
         try:
-            for _ in range(6):
+            for step in range(12):
                 if captured.done():
                     break
-                if not await self._click_named(self.AD_ACCOUNT_SUBMIT_NAMES):
+
+                before_state = await self._ad_account_ui_state()
+                before_signature = _clean(before_state.get("signature"))
+
+                if _clean(before_state.get("state")).upper() == "BLOCKED":
+                    submit_attempts.append(
+                        {
+                            "step": step,
+                            "action": "blocked",
+                            "errors": list(
+                                before_state.get("errors") or []
+                            )[:3],
+                        }
+                    )
                     break
-                try:
-                    await asyncio.wait_for(asyncio.shield(captured), timeout=1.8)
+
+                selected = await self._select_own_business_if_present()
+                if selected:
+                    await self.page.wait_for_timeout(200)
+
+                # Re-apply immutable fields after every wizard transition.
+                form_setup = await self._prepare_ad_account_form_fields(
+                    currency=currency_code,
+                    timezone_id=timezone,
+                )
+
+                next_meta = (
+                    await self._click_ad_account_form_action_by_visible_text(
+                        "next"
+                    )
+                )
+                if bool(next_meta.get("clicked")):
+                    submit_attempts.append(
+                        {
+                            "step": step,
+                            "action": "next",
+                            "meta": next_meta,
+                        }
+                    )
+                    await self._wait_for_ad_account_ui_transition(
+                        previous_signature=before_signature,
+                        timeout_seconds=3.5,
+                        label=f"capture_step_{step}_after_next",
+                        require_signature_change=True,
+                    )
+                    continue
+
+                terms_meta = await self._accept_ad_account_terms_if_present()
+                if bool(terms_meta.get("clicked")):
+                    submit_attempts.append(
+                        {
+                            "step": step,
+                            "action": "terms",
+                            "meta": terms_meta,
+                        }
+                    )
+                    await self.page.wait_for_timeout(200)
+
+                final_meta = await self._click_ad_account_final_interactive()
+                final_clicked = bool(final_meta.get("clicked"))
+                if not final_clicked:
+                    fallback = (
+                        await self._click_ad_account_form_action_by_visible_text(
+                            "final"
+                        )
+                    )
+                    final_clicked = bool(fallback.get("clicked"))
+                    if fallback:
+                        final_meta["fallback"] = fallback
+
+                submit_attempts.append(
+                    {
+                        "step": step,
+                        "action": "final" if final_clicked else "none",
+                        "meta": final_meta,
+                    }
+                )
+
+                if final_clicked:
+                    try:
+                        await asyncio.wait_for(
+                            asyncio.shield(captured),
+                            timeout=3.0,
+                        )
+                    except asyncio.TimeoutError:
+                        await self.page.wait_for_timeout(250)
+                    if captured.done():
+                        break
+
+                if not final_clicked:
                     break
-                except asyncio.TimeoutError:
-                    await self.page.wait_for_timeout(250)
 
             if not captured.done():
                 try:
                     row = await asyncio.wait_for(
                         asyncio.shield(captured),
-                        timeout=6.0,
+                        timeout=5.0,
                     )
                 except asyncio.TimeoutError as exc:
+                    diag = await self._diagnostic(
+                        "ad_account_create_request_missing"
+                    )
+                    diag["business_id"] = business
+                    diag["account_name"] = name
+                    diag["form_setup"] = form_setup
+                    diag["submit_attempts"] = submit_attempts[-12:]
+                    diag["graphql_candidates"] = graphql_candidates[-12:]
+                    diag["ui_state"] = await self._ad_account_ui_state()
+                    diag["ui_trace"] = self._ad_account_ui_trace[-16:]
                     raise BrowserBusinessError(
                         "AD_ACCOUNT_CREATE_REQUEST_NOT_OBSERVED",
-                        "Meta Ad Account form was filled, but no private CREATE request was observed. No CREATE reached Meta.",
+                        (
+                            "Meta Add-RK wizard was driven to the final action, "
+                            "but ReMask did not observe a definitive private "
+                            "CREATE request. No CREATE reached Meta."
+                        ),
                         retryable=True,
-                        diagnostic=await self._diagnostic("ad_account_create_request_missing"),
+                        diagnostic=diag,
                     ) from exc
             else:
                 row = captured.result()
         finally:
             try:
-                await self.page.unroute("**/*", intercept)
+                await self.page.unroute("**/*graphql*", intercept)
             except Exception:
                 pass
 
-        if not _digits(row.get("doc_id")) or not isinstance(row.get("variables"), dict):
+        if (
+            not _digits(row.get("doc_id"))
+            or not isinstance(row.get("variables"), dict)
+            or not row.get("variables")
+        ):
+            diag = await self._diagnostic(
+                "ad_account_create_request_not_graphql"
+            )
+            diag["captured"] = {
+                "doc_id": _clean(row.get("doc_id")),
+                "friendly_name": _clean(row.get("friendly_name")),
+                "variable_keys": sorted(
+                    (row.get("variables") or {}).keys()
+                ) if isinstance(row.get("variables"), dict) else [],
+            }
             raise BrowserBusinessError(
                 "AD_ACCOUNT_CREATE_MUTATION_NOT_CAPTURED",
-                "Blocked Add-RK action did not expose a usable GraphQL doc_id and variables. No CREATE reached Meta.",
+                (
+                    "Blocked Add-RK action did not expose a usable GraphQL "
+                    "doc_id and variables. No CREATE reached Meta."
+                ),
                 retryable=True,
-                diagnostic=await self._diagnostic("ad_account_create_request_not_graphql"),
+                diagnostic=diag,
             )
+
+        self._mark_ad_account_phase("CAPTURE_CONFIRMED")
         return row
 
     async def _fill_first(
