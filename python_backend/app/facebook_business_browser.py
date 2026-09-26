@@ -4218,13 +4218,14 @@ class FacebookBusinessBrowser:
         value = _clean(result).lower()
         return value if value in {"create", "add"} else ""
 
-    async def _capture_ad_account_wizard_rect(self) -> dict[str, float]:
-        """Remember the visual bounds of the active Add-RK wizard.
+    async def _capture_ad_account_wizard_rect(self) -> dict[str, Any]:
+        """Remember the full visual bounds of the active Add-RK wizard.
 
-        Meta can replace all field labels after Continue while keeping the same
-        drawer/modal geometry. Text-only wizard detection then loses the flow.
-        A geometry anchor lets later Next/Create actions stay inside the exact
-        UI surface that contained the verified name/currency/timezone fields.
+        Prefer a real dialog/modal root. When Meta renders the wizard as plain
+        nested DIVs, prefer the smallest common ancestor that contains both the
+        verified RK detail fields and a Next/Create action. This keeps the
+        footer (where Meta places Suivant/Create) inside the anchor instead of
+        capturing only the inner field card.
         """
         if self.page is None:
             return {}
@@ -4264,43 +4265,132 @@ class FacebookBusinessBrowser:
                         'часовой пояс','часовий пояс','সময় অঞ্চল',
                         'múi giờ','समय क्षेत्र'
                     ];
+                    const nextWords = [
+                        'next','continue','suivant','continuer','weiter',
+                        'fortfahren','далее','продолжить','далі','продовжити',
+                        'পরবর্তী','চালিয়ে যান','tiếp','tiếp tục',
+                        'अगला','आगे','जारी रखें'
+                    ];
+                    const createWords = [
+                        'create','create account','create ad account',
+                        'create advertising account','créer',
+                        'créer le compte','créer le compte publicitaire',
+                        'créer un compte publicitaire','создать',
+                        'создать аккаунт','создать рекламный аккаунт',
+                        'створити','створити обліковий запис',
+                        'створити рекламний акаунт','erstellen',
+                        'konto erstellen','werbekonto erstellen',
+                        'তৈরি করুন','বিজ্ঞাপন অ্যাকাউন্ট তৈরি করুন',
+                        'tạo','tạo tài khoản quảng cáo',
+                        'बनाएँ','बनाएं','विज्ञापन खाता बनाएँ',
+                        'विज्ञापन खाता बनाएं'
+                    ];
                     const ai = [
                         'meta ai','assistant business meta ai',
                         'meta ai business assistant','assistant meta ai'
                     ];
 
-                    const roots = [];
-                    const addRoot = root => {
-                        if (!root || !visible(root)) return;
-                        const r = root.getBoundingClientRect();
-                        if (
-                            r.x < 250 || r.y < 20 || r.width < 220 || r.height < 120
-                            || r.width > 1050 || r.height > 790
-                        ) return;
+                    const fieldShape = root => {
                         const t = clean(
                             (root.getAttribute('aria-label') || '') + ' ' +
                             (root.getAttribute('title') || '') + ' ' +
                             (root.innerText || root.textContent || '')
                         );
-                        if (!t || ai.some(word => t.includes(word))) return;
+                        if (!t || ai.some(word => t.includes(word))) {
+                            return {ok:false,text:t};
+                        }
                         const hasName = name.some(word => t.includes(word));
                         const hasCurrency = currency.some(word => t.includes(word));
                         const hasTimezone = timezone.some(word => t.includes(word));
-                        if (
-                            (hasName && (hasCurrency || hasTimezone))
-                            || (hasCurrency && hasTimezone)
-                        ) {
-                            roots.push({
-                                x:r.x,y:r.y,width:r.width,height:r.height,
-                                area:r.width*r.height
-                            });
-                        }
+                        return {
+                            ok:(
+                                (hasName && (hasCurrency || hasTimezone))
+                                || (hasCurrency && hasTimezone)
+                            ),
+                            text:t,
+                            hasName,
+                            hasCurrency,
+                            hasTimezone
+                        };
                     };
 
+                    const roots = [];
+                    const seen = new Set();
+                    const addRoot = (root, priority, source, actionText='') => {
+                        if (!root || !visible(root) || seen.has(root)) return;
+                        const r = root.getBoundingClientRect();
+                        if (
+                            r.x < 250 || r.y < 20 || r.width < 220 || r.height < 120
+                            || r.width > 1050 || r.height > 790
+                        ) return;
+                        const shape = fieldShape(root);
+                        if (!shape.ok) return;
+                        seen.add(root);
+                        roots.push({
+                            x:r.x,y:r.y,width:r.width,height:r.height,
+                            area:r.width*r.height,
+                            priority,
+                            source,
+                            action_text:actionText
+                        });
+                    };
+
+                    // Best case: Meta gives us an actual modal/dialog. Always
+                    // prefer the full dialog over an inner card containing only
+                    // the immutable fields.
                     for (const root of document.querySelectorAll(
                         '[role="dialog"],[aria-modal="true"]'
-                    )) addRoot(root);
+                    )) {
+                        addRoot(root, 0, 'dialog');
+                    }
 
+                    const actionNodes = [...document.querySelectorAll(
+                        'button,a,[role="button"],[role="menuitem"],'
+                        + '[tabindex]:not([tabindex="-1"])'
+                    )].filter(el => {
+                        if (!visible(el)) return false;
+                        const r = el.getBoundingClientRect();
+                        if (r.x < 280 || r.y < 40 || r.y > 795) return false;
+                        const text = clean(
+                            (el.getAttribute('aria-label') || '') + ' ' +
+                            (el.getAttribute('title') || '') + ' ' +
+                            (el.innerText || el.textContent || '')
+                        );
+                        if (!text || text.length > 180) return false;
+                        return nextWords.some(
+                            word => text === word || text.startsWith(word + ' ')
+                        ) || createWords.some(
+                            word => text === word || text.startsWith(word + ' ')
+                        );
+                    });
+
+                    // If no semantic dialog exists, bind the field area to the
+                    // action footer by their smallest shared ancestor. This is
+                    // the critical shape for Meta's current French RK wizard.
+                    for (const action of actionNodes.slice(0, 20)) {
+                        const actionText = clean(
+                            (action.getAttribute('aria-label') || '') + ' ' +
+                            (action.getAttribute('title') || '') + ' ' +
+                            (action.innerText || action.textContent || '')
+                        );
+                        let cur = action;
+                        for (
+                            let depth = 0;
+                            cur && depth < 12;
+                            depth++, cur = cur.parentElement
+                        ) {
+                            addRoot(
+                                cur,
+                                1,
+                                'fields_plus_action',
+                                actionText
+                            );
+                        }
+                    }
+
+                    // Last-resort evidence: field-only container. Keep it so
+                    // diagnostics still have an anchor even on a UI variant
+                    // with no visible footer action yet.
                     const markerNodes = [...document.querySelectorAll(
                         'label,span,div,p,h1,h2,h3,input,select,[role="combobox"]'
                     )].filter(el => {
@@ -4319,19 +4409,30 @@ class FacebookBusinessBrowser:
 
                     for (const node of markerNodes.slice(0, 30)) {
                         let cur = node;
-                        for (let depth = 0; cur && depth < 9; depth++, cur = cur.parentElement) {
-                            addRoot(cur);
+                        for (
+                            let depth = 0;
+                            cur && depth < 9;
+                            depth++, cur = cur.parentElement
+                        ) {
+                            addRoot(cur, 2, 'fields_only');
                         }
                     }
 
-                    roots.sort((a,b) => a.area - b.area);
+                    roots.sort((a,b) => {
+                        if (a.priority !== b.priority) {
+                            return a.priority - b.priority;
+                        }
+                        return a.area - b.area;
+                    });
                     const best = roots[0];
                     if (!best) return {};
                     return {
                         x:Math.round(best.x),
                         y:Math.round(best.y),
                         width:Math.round(best.width),
-                        height:Math.round(best.height)
+                        height:Math.round(best.height),
+                        source:best.source,
+                        action_text:best.action_text || ''
                     };
                 }"""
             )
@@ -4350,6 +4451,8 @@ class FacebookBusinessBrowser:
                 "y": float(rect.get("y") or 0),
                 "width": width,
                 "height": height,
+                "source": _clean(rect.get("source"))[:80],
+                "action_text": _clean(rect.get("action_text"))[:180],
             }
         except (TypeError, ValueError):
             return {}
