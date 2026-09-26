@@ -7,11 +7,8 @@ from typing import Any
 
 from fb_worker import AuthenticationError, ProxyError, RemoteRequestError
 
-from ..facebook_ad_account_create import (
-    AdAccountMutationError,
-    _normalize_ad_account_id,
-    create_ad_account_with_docids,
-)
+from ..facebook_ad_account_create import _normalize_ad_account_id
+from ..facebook_graph_api import GraphApiError, GraphMutationUncertain
 from ..facebook_business_browser import (
     BrowserBusinessError,
     FacebookBusinessBrowser,
@@ -835,273 +832,179 @@ async def ad_account_handler(
         idempotency_key,
     )
 
-    private_submit_started = False
+    graph_submit_started = False
 
-    async def private_before_submit() -> None:
-        nonlocal private_submit_started
-        private_submit_started = True
-        await browser_checkpoint(
-            {
-                "phase": "CREATE_SUBMIT_INTENT",
-                "activity": "AD_ACCOUNT_PRIVATE_GRAPHQL_SUBMIT_INTENT",
-                "activity_at": int(time.time()),
-                "transport": "facebook_private_graphql",
-            }
-        )
-
-    try:
-        await browser_checkpoint(
-            {
-                "phase": "CREATE_DISCOVERING",
-                "activity": "AD_ACCOUNT_PRIVATE_GRAPHQL_DISCOVERY",
-                "activity_at": int(time.time()),
-                "transport": "facebook_private_graphql",
-            }
-        )
-        web_session = await session.facebook_web()
-        result = await asyncio.wait_for(
-            create_ad_account_with_docids(
-                web_session,
-                business_id=business_id,
-                account_name=rk_name,
-                currency=currency,
-                timezone_id=timezone_id,
-                profile_id=profile_id,
-                before_submit=private_before_submit,
-            ),
-            timeout=120.0,
-        )
-
-    except asyncio.TimeoutError as exc:
-        code = (
-            "CREATE_AD_ACCOUNT_RESULT_UNKNOWN"
-            if private_submit_started
-            else "CREATE_AD_ACCOUNT_MUTATION_NOT_DISCOVERED"
-        )
-        mutation_exc = AdAccountMutationError(
-            code,
-            (
-                "Private CREATE_AD_ACCOUNT timed out after submit; "
-                "inventory reconciliation is required before retry."
-                if private_submit_started
-                else (
-                    "Private CREATE_AD_ACCOUNT discovery/transport timed out "
-                    "before any CREATE was submitted."
-                )
-            ),
-            retryable=True,
-        )
-        mutation_exc.__cause__ = exc
-        exc = mutation_exc
-
-        if exc.code == "CREATE_AD_ACCOUNT_RESULT_UNKNOWN":
-            await provisioning_state.checkpoint(
-                item_id,
-                profile_id,
-                scope_key,
-                ProvisioningStep.AD_ACCOUNT,
-                {
-                    "phase": "CREATE_RESULT_UNKNOWN",
-                    "resume_from": "RECONCILE_CREATE",
-                    "business_id": business_id,
-                    "account_name": rk_name,
-                    "currency": currency,
-                    "timezone_id": timezone_id,
-                    "last_error_code": exc.code,
-                    "last_error": str(exc)[:4000],
-                    "transport": "facebook_private_graphql",
-                },
-            )
-
-            last_diagnostics: list[dict[str, Any]] = []
-            for attempt in range(3):
-                found_id, diagnostics = await _reconcile_existing(
-                    session,
-                    business_id=business_id,
-                    account_name=rk_name,
-                )
-                last_diagnostics = diagnostics
-                if found_id:
-                    await provisioning_state.remember_entity(
-                        profile_id,
-                        scope_key,
-                        ProvisioningStep.AD_ACCOUNT,
-                        {"ad_account_id": found_id},
-                    )
-                    return {
-                        "ad_account_id": found_id,
-                        "business_id": business_id,
-                        "name": rk_name,
-                        "currency": currency,
-                        "timezone_id": timezone_id,
-                        "recovered_after_uncertainty": True,
-                        "transport": "graph_inventory_reconciliation",
-                        "reconciliation": diagnostics,
-                    }
-                if attempt < 2:
-                    await asyncio.sleep(2.0)
-
-            browser_found_id, browser_inventory = (
-                await _reconcile_existing_browser_inventory(
-                    session,
-                    business_id=business_id,
-                    account_name=rk_name,
-                )
-            )
-            if browser_found_id:
-                await provisioning_state.remember_entity(
-                    profile_id,
-                    scope_key,
-                    ProvisioningStep.AD_ACCOUNT,
-                    {"ad_account_id": browser_found_id},
-                )
-                return {
-                    "ad_account_id": browser_found_id,
-                    "business_id": business_id,
-                    "name": rk_name,
-                    "currency": currency,
-                    "timezone_id": timezone_id,
-                    "recovered_after_uncertainty": True,
-                    "transport": "business_settings_graphql_inventory",
-                    "reconciliation": last_diagnostics,
-                    "browser_inventory": browser_inventory,
-                }
-
-            raise ProvisioningError(
-                "AD_ACCOUNT_CREATE_RESULT_UNKNOWN",
-                str(exc),
-                retryable=True,
-            ) from exc
-
+    async def reconcile_after_uncertain(
+        *,
+        reason: str,
+    ) -> dict[str, Any]:
         await provisioning_state.checkpoint(
             item_id,
             profile_id,
             scope_key,
             ProvisioningStep.AD_ACCOUNT,
             {
-                "phase": "CREATE_NOT_SUBMITTED",
-                "resume_from": "CREATE",
+                "phase": "CREATE_RESULT_UNKNOWN",
+                "resume_from": "RECONCILE_CREATE",
                 "business_id": business_id,
-                "last_error_code": exc.code,
-                "last_error": str(exc)[:4000],
-                "transport": "facebook_private_graphql",
+                "account_name": rk_name,
+                "currency": currency,
+                "timezone_id": timezone_id,
+                "last_error": reason[:4000],
+                "transport": "facebook_graph_api",
             },
         )
-        raise ProvisioningError(
-            exc.code,
-            str(exc),
-            retryable=True,
-        ) from exc
 
-    except AdAccountMutationError as exc:
-        if exc.code == "CREATE_AD_ACCOUNT_RESULT_UNKNOWN":
-            await provisioning_state.checkpoint(
-                item_id,
-                profile_id,
-                scope_key,
-                ProvisioningStep.AD_ACCOUNT,
-                {
-                    "phase": "CREATE_RESULT_UNKNOWN",
-                    "resume_from": "RECONCILE_CREATE",
-                    "business_id": business_id,
-                    "account_name": rk_name,
-                    "currency": currency,
-                    "timezone_id": timezone_id,
-                    "last_error_code": exc.code,
-                    "last_error": str(exc)[:4000],
-                    "mutation_payload": (
-                        exc.payload if isinstance(exc.payload, dict) else {}
-                    ),
-                    "transport": "facebook_private_graphql",
-                },
+        last_diagnostics: list[dict[str, Any]] = []
+        for attempt in range(3):
+            found_id, diagnostics = await _reconcile_existing(
+                session,
+                business_id=business_id,
+                account_name=rk_name,
             )
-
-            last_diagnostics: list[dict[str, Any]] = []
-            for attempt in range(3):
-                found_id, diagnostics = await _reconcile_existing(
-                    session,
-                    business_id=business_id,
-                    account_name=rk_name,
-                )
-                last_diagnostics = diagnostics
-                if found_id:
-                    await provisioning_state.remember_entity(
-                        profile_id,
-                        scope_key,
-                        ProvisioningStep.AD_ACCOUNT,
-                        {"ad_account_id": found_id},
-                    )
-                    return {
-                        "ad_account_id": found_id,
-                        "business_id": business_id,
-                        "name": rk_name,
-                        "currency": currency,
-                        "timezone_id": timezone_id,
-                        "recovered_after_uncertainty": True,
-                        "transport": "graph_inventory_reconciliation",
-                        "reconciliation": diagnostics,
-                    }
-                if attempt < 2:
-                    await asyncio.sleep(2.0)
-
-            browser_found_id, browser_inventory = (
-                await _reconcile_existing_browser_inventory(
-                    session,
-                    business_id=business_id,
-                    account_name=rk_name,
-                )
-            )
-            if browser_found_id:
+            last_diagnostics = diagnostics
+            if found_id:
                 await provisioning_state.remember_entity(
                     profile_id,
                     scope_key,
                     ProvisioningStep.AD_ACCOUNT,
-                    {"ad_account_id": browser_found_id},
+                    {"ad_account_id": found_id},
                 )
                 return {
-                    "ad_account_id": browser_found_id,
+                    "ad_account_id": found_id,
                     "business_id": business_id,
                     "name": rk_name,
                     "currency": currency,
                     "timezone_id": timezone_id,
                     "recovered_after_uncertainty": True,
-                    "transport": "business_settings_graphql_inventory",
-                    "reconciliation": last_diagnostics,
-                    "browser_inventory": browser_inventory,
+                    "transport": "graph_inventory_reconciliation",
+                    "reconciliation": diagnostics,
                 }
+            if attempt < 2:
+                await asyncio.sleep(2.0)
 
-            raise ProvisioningError(
-                "AD_ACCOUNT_CREATE_RESULT_UNKNOWN",
-                str(exc),
-                retryable=True,
-            ) from exc
-
-        safe_pre_submit_codes = {
-            "CREATE_AD_ACCOUNT_MUTATION_NOT_DISCOVERED",
-            "CREATE_AD_ACCOUNT_PRE_SUBMIT_TRANSPORT",
-            "CREATE_AD_ACCOUNT_BROWSER_TRANSPORT_UNAVAILABLE",
-            "SESSION_EXPIRED",
-        }
-        if exc.code in safe_pre_submit_codes:
-            await provisioning_state.checkpoint(
-                item_id,
+        browser_found_id, browser_inventory = (
+            await _reconcile_existing_browser_inventory(
+                session,
+                business_id=business_id,
+                account_name=rk_name,
+            )
+        )
+        if browser_found_id:
+            await provisioning_state.remember_entity(
                 profile_id,
                 scope_key,
                 ProvisioningStep.AD_ACCOUNT,
-                {
-                    "phase": "CREATE_NOT_SUBMITTED",
-                    "resume_from": "CREATE",
-                    "business_id": business_id,
-                    "last_error_code": exc.code,
-                    "last_error": str(exc)[:4000],
-                    "transport": "facebook_private_graphql",
-                },
+                {"ad_account_id": browser_found_id},
             )
-            raise ProvisioningError(
-                exc.code,
+            return {
+                "ad_account_id": browser_found_id,
+                "business_id": business_id,
+                "name": rk_name,
+                "currency": currency,
+                "timezone_id": timezone_id,
+                "recovered_after_uncertainty": True,
+                "transport": "business_settings_graphql_inventory",
+                "reconciliation": last_diagnostics,
+                "browser_inventory": browser_inventory,
+            }
+
+        raise ProvisioningError(
+            "AD_ACCOUNT_CREATE_RESULT_UNKNOWN",
+            reason,
+            retryable=True,
+        )
+
+    try:
+        await browser_checkpoint(
+            {
+                "phase": "CREATE_SUBMIT_INTENT",
+                "activity": "AD_ACCOUNT_GRAPH_API_SUBMIT_INTENT",
+                "activity_at": int(time.time()),
+                "transport": "facebook_graph_api",
+            }
+        )
+        graph_submit_started = True
+
+        graph = await session.graph_api()
+        rk_id = await asyncio.wait_for(
+            graph.create_ad_account_for_business(
+                business_id=business_id,
+                name=rk_name,
+                currency=currency,
+                timezone_id=timezone_id,
+                end_advertiser="NONE",
+                media_agency="NONE",
+                partner="NONE",
+            ),
+            timeout=60.0,
+        )
+
+    except GraphMutationUncertain as exc:
+        return await reconcile_after_uncertain(reason=str(exc))
+
+    except asyncio.TimeoutError as exc:
+        if graph_submit_started:
+            return await reconcile_after_uncertain(
+                reason="Official Graph API create-ad-account timed out after submit."
+            )
+        raise ProvisioningError(
+            "AD_ACCOUNT_CREATE_PRE_SUBMIT_TIMEOUT",
+            "Official Graph API create-ad-account timed out before submit.",
+            retryable=True,
+        ) from exc
+
+    except GraphApiError as exc:
+        code = exc.code
+        subcode = exc.subcode
+        payload = exc.payload if isinstance(exc.payload, dict) else {}
+
+        text = " ".join(
+            [
                 str(exc),
-                retryable=exc.retryable,
-            ) from exc
+                str(payload.get("error") or ""),
+            ]
+        ).casefold()
+
+        retryable = bool(
+            code in {1, 2, 4, 17, 32, 613}
+            or exc.http_status in {408, 425, 429, 500, 502, 503, 504}
+        )
+
+        if code in {10, 200} or any(
+            marker in text
+            for marker in (
+                "permission",
+                "not authorized",
+                "not authorised",
+                "non autorisée",
+                "non autorise",
+            )
+        ):
+            stable_code = "AD_ACCOUNT_PERMISSION_DENIED"
+            retryable = False
+        elif any(
+            marker in text
+            for marker in (
+                "maximum ad account",
+                "ad account limit",
+                "too many ad accounts",
+                "account count",
+            )
+        ):
+            stable_code = "AD_ACCOUNT_LIMIT_REACHED"
+            retryable = False
+        elif retryable:
+            stable_code = "AD_ACCOUNT_REMOTE_RETRYABLE"
+        else:
+            stable_code = "AD_ACCOUNT_META_ERROR"
+
+        diagnostic = (
+            f"Graph API code={code if code is not None else '-'} "
+            f"subcode={subcode if subcode is not None else '-'} "
+            f"http={exc.http_status if exc.http_status is not None else '-'} "
+            f"message={str(exc)} payload={str(payload)[:3500]}"
+        )
 
         await provisioning_state.checkpoint(
             item_id,
@@ -1110,28 +1013,26 @@ async def ad_account_handler(
             ProvisioningStep.AD_ACCOUNT,
             {
                 "phase": "CREATE_REJECTED",
-                "resume_from": "STOP",
+                "resume_from": "STOP" if not retryable else "CREATE",
                 "business_id": business_id,
-                "last_error_code": exc.code,
-                "last_error": str(exc)[:4000],
-                "mutation_payload": (
-                    exc.payload if isinstance(exc.payload, dict) else {}
-                ),
-                "transport": "facebook_private_graphql",
+                "last_error_code": stable_code,
+                "last_error": diagnostic,
+                "graph_error_code": code,
+                "graph_error_subcode": subcode,
+                "graph_error_payload": payload,
+                "transport": "facebook_graph_api",
             },
         )
         raise ProvisioningError(
-            exc.code,
-            str(exc),
-            retryable=exc.retryable,
+            stable_code,
+            diagnostic,
+            retryable=retryable,
         ) from exc
 
-    rk_id = _normalize_ad_account_id(result.ad_account_id)
+    rk_id = _normalize_ad_account_id(rk_id)
     if not rk_id:
-        raise ProvisioningError(
-            "INVALID_RESULT",
-            "Facebook returned invalid Ad Account ID",
-            retryable=False,
+        return await reconcile_after_uncertain(
+            reason="Official Graph API returned an invalid Ad Account ID."
         )
 
     await provisioning_state.checkpoint(
@@ -1145,10 +1046,7 @@ async def ad_account_handler(
             "business_id": business_id,
             "ad_account_id": rk_id,
             "create_response_ad_account_id": rk_id,
-            "create_response_friendly_name": result.candidate.friendly_name,
-            "create_response_doc_id": result.candidate.doc_id,
-            "create_response_path": result.response_path,
-            "transport": "facebook_private_graphql",
+            "transport": "facebook_graph_api",
         },
     )
     await provisioning_state.remember_entity(
@@ -1164,8 +1062,5 @@ async def ad_account_handler(
         "name": rk_name,
         "currency": currency,
         "timezone_id": timezone_id,
-        "transport": "facebook_private_graphql",
-        "create_response_friendly_name": result.candidate.friendly_name,
-        "create_response_doc_id": result.candidate.doc_id,
-        "create_response_path": result.response_path,
+        "transport": "facebook_graph_api",
     }
