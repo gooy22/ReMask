@@ -4353,10 +4353,19 @@ class FacebookBusinessBrowser:
                     for value in (aria_label, title, inner_text)
                     if value
                 ]
+                normalized_labels = [
+                    value
+                    .replace("\u200b", "")
+                    .replace("\u200c", "")
+                    .replace("\u200d", "")
+                    .replace("\ufeff", "")
+                    .strip()
+                    for value in labels
+                ]
                 matched_label = next(
                     (
                         value
-                        for value in labels
+                        for value in normalized_labels
                         if value.casefold() in create_words
                     ),
                     "",
@@ -4508,6 +4517,7 @@ class FacebookBusinessBrowser:
                     };
                     const clean = text => (text || '')
                         .normalize('NFKC')
+                        .replace(/[\u200b\u200c\u200d\ufeff]/g, '')
                         .replace(/\u00a0/g, ' ')
                         .replace(/\s+/g, ' ')
                         .trim()
@@ -4986,6 +4996,7 @@ class FacebookBusinessBrowser:
                     };
                     const clean = text => (text || '')
                         .normalize('NFKC')
+                        .replace(/[\u200b\u200c\u200d\ufeff]/g, '')
                         .replace(/\u00a0/g, ' ')
                         .replace(/\s+/g, ' ')
                         .trim()
