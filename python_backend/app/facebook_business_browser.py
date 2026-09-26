@@ -10363,18 +10363,21 @@ timeout_seconds=4.0,
             not entry_clicked
             and _clean(current_ui.get("state")).upper() == "CREATE_ENTRY"
         ):
-            before_direct = await self._ad_account_ui_state()
-            direct_clicked = await self._click_named(
-                self.AD_ACCOUNT_CREATE_ENTRY_NAMES,
-                click_timeout_ms=2500,
+            # CREATE_ENTRY is produced only when _ad_account_ui_state tagged a
+            # concrete target. Consume that exact target; never run a global
+            # localized text click here because Business Suite can mount same-
+            # named actions in background/assistant surfaces.
+            before_direct = current_ui
+            direct_meta = (
+                await self._click_state_detected_ad_account_create_entry()
             )
-            if direct_clicked:
+            if direct_meta.get("clicked"):
                 direct_transition = await self._wait_for_ad_account_ui_transition(
                     previous_signature=_clean(
                         before_direct.get("signature")
                     ),
                     timeout_seconds=3.0,
-                    label="after_direct_create_named",
+                    label="after_direct_create_tagged",
                     require_signature_change=True,
                 )
                 entry_clicked = self._ad_account_create_form_confirmed(
