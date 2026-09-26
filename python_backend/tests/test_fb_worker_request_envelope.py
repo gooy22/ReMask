@@ -1,3 +1,4 @@
+import inspect
 import unittest
 
 from fb_worker import FacebookWebSession, WebProfile
@@ -72,3 +73,32 @@ class FacebookRequestEnvelopeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FacebookBrowserGraphqlExactlyOnceTests(unittest.TestCase):
+    def test_browser_graphql_preserves_submit_state_on_timeout_and_http_error(self):
+        source = inspect.getsource(FacebookWebSession.graphql_browser_native)
+        self.assertIn(
+            'request_may_have_been_sent=request_may_have_been_sent',
+            source,
+        )
+        self.assertIn('transport_stage=transport_stage', source)
+        self.assertIn(
+            'request_may_have_been_sent=True',
+            source,
+        )
+        self.assertIn(
+            'transport_stage="graphql_response"',
+            source,
+        )
+
+    def test_legacy_remote_errors_are_enriched_instead_of_losing_send_state(self):
+        source = inspect.getsource(FacebookWebSession.graphql_browser_native)
+        self.assertIn(
+            "if exc.request_may_have_been_sent is None:",
+            source,
+        )
+        self.assertIn(
+            "exc.request_may_have_been_sent = request_may_have_been_sent",
+            source,
+        )
