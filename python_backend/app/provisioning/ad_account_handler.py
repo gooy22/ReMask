@@ -717,28 +717,36 @@ async def ad_account_handler(
         "CREATE_RESULT_UNKNOWN",
         "RECONCILE_CREATE",
     }:
-        found_id, diagnostics = await _reconcile_existing(
-            session,
-            business_id=business_id,
-            account_name=rk_name,
-        )
-        if found_id:
-            await provisioning_state.remember_entity(
-                profile_id,
-                scope_key,
-                ProvisioningStep.AD_ACCOUNT,
-                {"ad_account_id": found_id},
+        # A submit may have reached Meta. Stay strictly read-only and poll
+        # inventory inside this Job so normal Meta propagation delay does not
+        # force the operator to press Retry Failed repeatedly.
+        reconciliation_rounds: list[dict[str, Any]] = []
+        for reconcile_attempt in range(3):
+            found_id, diagnostics = await _reconcile_existing(
+                session,
+                business_id=business_id,
+                account_name=rk_name,
             )
-            return {
-                "ad_account_id": found_id,
-                "business_id": business_id,
-                "name": rk_name,
-                "currency": currency,
-                "timezone_id": timezone_id,
-                "recovered_after_uncertainty": True,
-                "transport": "graph_inventory_reconciliation",
-                "reconciliation": diagnostics,
-            }
+            reconciliation_rounds.extend(diagnostics)
+            if found_id:
+                await provisioning_state.remember_entity(
+                    profile_id,
+                    scope_key,
+                    ProvisioningStep.AD_ACCOUNT,
+                    {"ad_account_id": found_id},
+                )
+                return {
+                    "ad_account_id": found_id,
+                    "business_id": business_id,
+                    "name": rk_name,
+                    "currency": currency,
+                    "timezone_id": timezone_id,
+                    "recovered_after_uncertainty": True,
+                    "transport": "graph_inventory_reconciliation",
+                    "reconciliation": reconciliation_rounds,
+                }
+            if reconcile_attempt < 2:
+                await asyncio.sleep(2.0)
 
         browser_found_id, browser_inventory = (
             await _reconcile_existing_browser_inventory(
@@ -762,7 +770,7 @@ async def ad_account_handler(
                 "timezone_id": timezone_id,
                 "recovered_after_uncertainty": True,
                 "transport": "business_settings_graphql_inventory",
-                "reconciliation": diagnostics,
+                "reconciliation": reconciliation_rounds,
                 "browser_inventory": browser_inventory,
             }
 
@@ -778,14 +786,19 @@ async def ad_account_handler(
                 "account_name": rk_name,
                 "currency": currency,
                 "timezone_id": timezone_id,
-                "reconciliation": diagnostics,
+                "reconciliation": reconciliation_rounds,
+                "browser_inventory": browser_inventory,
+                "activity": "AD_ACCOUNT_RECONCILE_EXHAUSTED",
+                "activity_at": int(time.time()),
             },
         )
         raise ProvisioningError(
             "AD_ACCOUNT_CREATE_RESULT_UNKNOWN",
             (
                 f"CREATE for Business {business_id} may already have reached "
-                "Meta. Inventory is not conclusive; duplicate CREATE blocked."
+                "Meta. ReMask polled inventory three times plus Business "
+                "Settings and still could not prove the RK; duplicate CREATE "
+                "remains blocked."
             ),
             retryable=True,
         )
