@@ -729,6 +729,71 @@ def _business_ids_from_text(text: str) -> set[str]:
     return {value for value in output if _digits(value)}
 
 
+
+def _extract_named_ad_account_ids(
+    payload: Any,
+    account_name: str,
+) -> list[str]:
+    """Extract numeric RK ids only from nodes matching the exact account name."""
+    expected = _clean(account_name).casefold()
+    if not expected:
+        return []
+
+    found: set[str] = set()
+
+    def walk(value: Any) -> None:
+        if isinstance(value, dict):
+            node_name = _clean(
+                value.get("name")
+                or value.get("account_name")
+                or value.get("ad_account_name")
+                or value.get("adAccountName")
+            ).casefold()
+
+            if node_name == expected:
+                for key in (
+                    "id",
+                    "account_id",
+                    "ad_account_id",
+                    "accountId",
+                    "adAccountId",
+                ):
+                    normalized = _normalize_ad_account_id(value.get(key))
+                    if normalized:
+                        found.add(normalized)
+
+                for child_key in (
+                    "ad_account",
+                    "adAccount",
+                    "advertising_account",
+                    "account",
+                ):
+                    child = value.get(child_key)
+                    if isinstance(child, dict):
+                        for key in (
+                            "id",
+                            "account_id",
+                            "ad_account_id",
+                            "accountId",
+                            "adAccountId",
+                        ):
+                            normalized = _normalize_ad_account_id(
+                                child.get(key)
+                            )
+                            if normalized:
+                                found.add(normalized)
+
+            for child in value.values():
+                walk(child)
+
+        elif isinstance(value, list):
+            for child in value:
+                walk(child)
+
+    walk(payload)
+    return sorted(found)
+
+
 class FacebookBusinessBrowser:
     """
     Browser-first Meta Business workflow.
@@ -6899,6 +6964,182 @@ class FacebookBusinessBrowser:
             pass
         return []
 
+    async def find_ad_account_in_inventory(
+        self,
+        *,
+        business_id: str,
+        account_name: str,
+        timeout_seconds: float = 10.0,
+    ) -> dict[str, Any]:
+        """Read-only RK lookup from Meta's own Business Settings responses.
+
+        This is intentionally independent from CREATE mutation names.  It
+        reloads the Ad Accounts inventory, observes the GraphQL responses Meta
+        uses to paint the table, and confirms only an exact-name node with one
+        unique numeric account id.
+        """
+        business = _digits(business_id)
+        expected = _clean(account_name)
+        if self.page is None or not business or not expected:
+            return {
+                "confirmed": False,
+                "reason": "invalid_input",
+            }
+
+        loop = asyncio.get_running_loop()
+        found_future: asyncio.Future[dict[str, Any]] = loop.create_future()
+        response_tasks: set[asyncio.Task[Any]] = set()
+        diagnostics: list[dict[str, Any]] = []
+
+        async def inspect_response(response: Any) -> None:
+            if found_future.done():
+                return
+            try:
+                url = _clean(getattr(response, "url", ""))
+                if "graphql" not in url.casefold():
+                    return
+                raw = await response.text()
+                payload = _decode_graphql_text(raw)
+                ids = _extract_named_ad_account_ids(payload, expected)
+                if not ids:
+                    return
+
+                request = getattr(response, "request", None)
+                request_summary = (
+                    self._safe_graphql_request_summary(request)
+                    if request is not None
+                    else {}
+                )
+                row = {
+                    "ids": ids[:8],
+                    "request": request_summary,
+                }
+                diagnostics.append(row)
+                if len(ids) == 1 and not found_future.done():
+                    found_future.set_result(
+                        {
+                            "confirmed": True,
+                            "business_id": business,
+                            "ad_account_id": ids[0],
+                            "account_name": expected,
+                            "source": "business_settings_graphql_inventory",
+                            "evidence": row,
+                        }
+                    )
+            except Exception as exc:
+                diagnostics.append(
+                    {
+                        "error": (
+                            f"{exc.__class__.__name__}: {_clean(exc)}"
+                        )[:500]
+                    }
+                )
+
+        def on_response(response: Any) -> None:
+            if found_future.done():
+                return
+            try:
+                task = asyncio.create_task(inspect_response(response))
+                response_tasks.add(task)
+                task.add_done_callback(response_tasks.discard)
+            except Exception:
+                return
+
+        self.page.on("response", on_response)
+        attempts: list[dict[str, Any]] = []
+        try:
+            targets = [
+                template.format(business_id=business)
+                for template in self.SETTINGS_AD_ACCOUNTS_URLS
+            ]
+            current = _clean(self.page.url)
+            if (
+                "/settings/ad_accounts" in current
+                or "/settings/ad-accounts" in current
+            ):
+                targets.insert(0, current)
+
+            deadline = time.monotonic() + max(
+                2.0,
+                float(timeout_seconds),
+            )
+            seen_targets: set[str] = set()
+            for target in targets:
+                if target in seen_targets:
+                    continue
+                seen_targets.add(target)
+                if time.monotonic() >= deadline:
+                    break
+                try:
+                    await self._goto(target)
+                    attempts.append(
+                        {
+                            "url": _clean(self.page.url)[:700],
+                            "result": "loaded",
+                        }
+                    )
+                    remaining = max(
+                        0.2,
+                        min(3.0, deadline - time.monotonic()),
+                    )
+                    try:
+                        result = await asyncio.wait_for(
+                            asyncio.shield(found_future),
+                            timeout=remaining,
+                        )
+                        result["attempts"] = attempts
+                        return result
+                    except asyncio.TimeoutError:
+                        pass
+                except Exception as exc:
+                    attempts.append(
+                        {
+                            "url": target[:700],
+                            "result": "error",
+                            "error": (
+                                f"{exc.__class__.__name__}: {_clean(exc)}"
+                            )[:500],
+                        }
+                    )
+
+            if not found_future.done():
+                # One final bounded hydration window for late Relay responses.
+                try:
+                    remaining = max(
+                        0.1,
+                        min(2.0, deadline - time.monotonic()),
+                    )
+                    if remaining > 0.1:
+                        result = await asyncio.wait_for(
+                            asyncio.shield(found_future),
+                            timeout=remaining,
+                        )
+                        result["attempts"] = attempts
+                        return result
+                except asyncio.TimeoutError:
+                    pass
+
+            return {
+                "confirmed": False,
+                "business_id": business,
+                "account_name": expected,
+                "source": "business_settings_graphql_inventory",
+                "attempts": attempts,
+                "diagnostics": diagnostics[-12:],
+            }
+        finally:
+            try:
+                self.page.remove_listener("response", on_response)
+            except Exception:
+                pass
+            if not found_future.done():
+                found_future.cancel()
+            if response_tasks:
+                await asyncio.gather(
+                    *list(response_tasks),
+                    return_exceptions=True,
+                )
+
     async def verify_ad_account_inventory_empty(
         self,
         *,
@@ -9985,6 +10226,42 @@ timeout_seconds=4.0,
                     # table for the exact requested name and a unique account ID.
                     # This is read-only and cannot submit a duplicate CREATE.
                     await self.page.wait_for_timeout(900)
+                    browser_inventory = (
+                        await self.find_ad_account_in_inventory(
+                            business_id=business,
+                            account_name=name,
+                            timeout_seconds=7.0,
+                        )
+                    )
+                    if bool(browser_inventory.get("confirmed")):
+                        reconciled_id = _clean(
+                            browser_inventory.get("ad_account_id")
+                        )
+                        await checkpoint(
+                            {
+                                "phase": "CREATE_CONFIRMED",
+                                "activity": (
+                                    "AD_ACCOUNT_CREATE_CONFIRMED_BROWSER_INVENTORY"
+                                ),
+                                "activity_at": int(time.time()),
+                                "ad_account_id": reconciled_id,
+                                "create_friendly_name": "",
+                                "create_response_path": (
+                                    "business_settings_graphql_inventory"
+                                ),
+                            }
+                        )
+                        self._mark_ad_account_phase("CREATE_CONFIRMED")
+                        return BrowserAdAccountResult(
+                            business_id=business,
+                            ad_account_id=reconciled_id,
+                            response_friendly_name="",
+                            response_doc_id="",
+                            response_path=(
+                                "business_settings_graphql_inventory"
+                            ),
+                        )
+
                     ui_reconcile = (
                         await self._reconcile_created_ad_account_from_ui(
                             business_id=business,
@@ -10024,6 +10301,7 @@ timeout_seconds=4.0,
                             "activity_at": int(time.time()),
                             "graphql_candidates": new_network_candidates[-8:],
                             "network_candidates": network_candidates[-24:],
+                            "browser_inventory": browser_inventory,
                             "ui_reconcile": ui_reconcile,
                         }
                     )
@@ -10061,6 +10339,7 @@ timeout_seconds=4.0,
                             "state_after": transition,
                             "graphql_candidates": graphql_candidates[-12:],
                             "network_candidates": network_candidates[-24:],
+                            "browser_inventory": browser_inventory,
                             "ui_reconcile": ui_reconcile,
                             "submit_attempts": submit_attempts[-12:],
                         },
