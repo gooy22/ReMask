@@ -8092,6 +8092,7 @@ class FacebookBusinessBrowser:
                 state.get("editable_form_control")
             ),
             "create_entry": bool(state.get("create_entry")),
+            "create_target": dict(state.get("create_target") or {}),
             "add_surface": bool(state.get("add_surface")),
             "errors": list(state.get("errors") or [])[:3],
             "dialogs": list(state.get("dialogs") or [])[:2],
@@ -8538,13 +8539,13 @@ class FacebookBusinessBrowser:
             if not clicked:
                 clicked = await self._click_named(
                     self.AD_ACCOUNT_CREATE_ENTRY_NAMES,
-                roles=(
-                    "button",
-                    "link",
-                    "menuitem",
-                    "menuitemradio",
-                    "option",
-                ),
+                    roles=(
+                        "button",
+                        "link",
+                        "menuitem",
+                        "menuitemradio",
+                        "option",
+                    ),
                     click_timeout_ms=2500,
                 )
             if not clicked:
