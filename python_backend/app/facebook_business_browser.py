@@ -965,7 +965,8 @@ class FacebookBusinessBrowser:
         "https://business.facebook.com/settings/pages/?business_id={business_id}"
     )
     SETTINGS_AD_ACCOUNTS_URLS = (
-        # Live 2026 Business Suite route observed on current ReMask profiles.
+        # Exact migrated Business Settings route observed on current profiles.
+        "https://business.facebook.com/latest/settings/ad_accounts/?nav_ref=bm_settings_redirect_migration&bm_redirect_migration=true&business_id={business_id}",
         "https://business.facebook.com/latest/settings/ad_accounts?business_id={business_id}",
         "https://business.facebook.com/latest/settings/ad_accounts/?business_id={business_id}",
         # Legacy settings route remains only as a final fallback.
@@ -4557,6 +4558,34 @@ class FacebookBusinessBrowser:
                         'add','ajouter','добавить','додати',
                         'hinzufügen','যোগ করুন','thêm','जोड़ें'
                     ];
+                    const accountWords = [
+                        'ad account','advertising account',
+                        'compte publicitaire','comptes publicitaires',
+                        'реклам','werbekonto','werbekonten',
+                        'বিজ্ঞাপন অ্যাকাউন্ট','tài khoản quảng cáo',
+                        'विज्ञापन खाता','विज्ञापन खाते'
+                    ];
+                    const hasLocalAccountContext = el => {
+                        let cur = el;
+                        for (
+                            let depth = 0;
+                            cur && depth < 7;
+                            depth++, cur = cur.parentElement
+                        ) {
+                            if (!visible(cur)) continue;
+                            const rr = cur.getBoundingClientRect();
+                            if (rr.width > 1050 || rr.height > 520) continue;
+                            const t = clean(
+                                (cur.getAttribute('aria-label') || '') + ' ' +
+                                (cur.getAttribute('title') || '') + ' ' +
+                                (cur.innerText || cur.textContent || '')
+                            ).toLowerCase();
+                            if (accountWords.some(word => t.includes(word))) {
+                                return true;
+                            }
+                        }
+                        return false;
+                    };
                     const metaAIRoot = el => {
                         const root = el.closest(
                             '[role="dialog"],[aria-modal="true"]'
@@ -8641,6 +8670,17 @@ class FacebookBusinessBrowser:
                             continue;
                         }
 
+                        const localAccountContext = hasLocalAccountContext(el);
+                        // The top Business Suite toolbar also exposes a
+                        // localized generic Add button. On current Meta UI it
+                        // opens unrelated surfaces (Meta AI / details), not
+                        // the Ad Account creation menu. Never treat that as an
+                        // RK Add unless its local container explicitly belongs
+                        // to the Ad Accounts section.
+                        if (r.y < 180 && !localAccountContext) {
+                            continue;
+                        }
+
                         const key = [
                             text,
                             Math.round(r.x),
@@ -8660,8 +8700,9 @@ class FacebookBusinessBrowser:
                             tag: el.tagName || '',
                             role: el.getAttribute('role') || '',
                             haspopup: el.getAttribute('aria-haspopup') || '',
+                            local_account_context: localAccountContext,
                             // A control inside the content body is a better
-                            // first probe than a global top-toolbar Add.
+                            // first probe than a section-header Add.
                             toolbar_penalty: r.y < 180 ? 1 : 0
                         });
                     }
@@ -8692,6 +8733,7 @@ class FacebookBusinessBrowser:
                             tag: row.tag,
                             role: row.role,
                             haspopup: row.haspopup,
+                            local_account_context: row.local_account_context,
                             toolbar_penalty: row.toolbar_penalty
                         };
                     });
@@ -8718,6 +8760,9 @@ class FacebookBusinessBrowser:
                     "tag": _clean(row.get("tag")),
                     "role": _clean(row.get("role")),
                     "haspopup": _clean(row.get("haspopup")),
+                    "local_account_context": bool(
+                        row.get("local_account_context")
+                    ),
                     "toolbar_penalty": int(
                         row.get("toolbar_penalty") or 0
                     ),
@@ -9654,6 +9699,27 @@ timeout_seconds=4.0,
                                 'যোগ করুন','তৈরি করুন',
                                 'thêm','tạo','जोड़ें','बनाएँ','बनाएं'
                             ]);
+                            const localAccountContext = el => {
+                                let cur = el;
+                                for (
+                                    let depth = 0;
+                                    cur && depth < 7;
+                                    depth++, cur = cur.parentElement
+                                ) {
+                                    if (!visible(cur)) continue;
+                                    const rr = cur.getBoundingClientRect();
+                                    if (rr.width > 1050 || rr.height > 520) continue;
+                                    const t = clean(
+                                        (cur.getAttribute('aria-label') || '') + ' ' +
+                                        (cur.getAttribute('title') || '') + ' ' +
+                                        (cur.innerText || cur.textContent || '')
+                                    );
+                                    if (accountWords.some(x => t.includes(x))) {
+                                        return true;
+                                    }
+                                }
+                                return false;
+                            };
                             const nodes = [...document.querySelectorAll(
                                 'button,a,[role="button"],[role="menuitem"],[aria-haspopup]'
                             )];
@@ -9669,7 +9735,10 @@ timeout_seconds=4.0,
                                 const hasAccount = accountWords.some(x => text.includes(x));
                                 const hasAction = actionWords.some(x => text.includes(x));
                                 if (hasAccount && hasAction) return true;
-                                return r.x >= 300 && genericActions.has(text);
+                                if (r.x < 300 || !genericActions.has(text)) {
+                                    return false;
+                                }
+                                return r.y >= 180 || localAccountContext(el);
                             });
                         }"""
                     )
