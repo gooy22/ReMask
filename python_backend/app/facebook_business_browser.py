@@ -11883,30 +11883,114 @@ timeout_seconds=4.0,
         loop = asyncio.get_running_loop()
         captured: asyncio.Future[dict[str, Any]] = loop.create_future()
         graphql_candidates: list[dict[str, Any]] = []
+        capture_final_armed = False
+        blocked_unclassified_create = False
+
+        def plausible_final_create(request_meta: dict[str, Any]) -> bool:
+            """Conservative safety gate for an unknown final CREATE mutation.
+
+            During the final-click window it is safer to abort a strong unknown
+            mutation than to let a renamed Meta CREATE reach production. This
+            does NOT make the request replayable; only the definitive matcher
+            can produce a captured request.
+            """
+            method = _clean(request_meta.get("method")).upper()
+            url = _clean(request_meta.get("url")).lower()
+            if method != "POST" or "graphql" not in url:
+                return False
+
+            friendly = _clean(request_meta.get("friendly_name")).casefold()
+            decoded = _clean(request_meta.get("decoded_raw")).casefold()
+            if any(
+                marker in friendly
+                for marker in (
+                    "query","usage","search","list","lookup","typeahead",
+                    "preview","validate",
+                )
+            ):
+                return False
+
+            variables = (
+                request_meta.get("variables")
+                if isinstance(request_meta.get("variables"), dict)
+                else {}
+            )
+            variable_text = json.dumps(
+                variables,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                default=str,
+            ).casefold()
+
+            business_match = bool(
+                business
+                and (
+                    business in decoded
+                    or business in variable_text
+                )
+            )
+            if not business_match:
+                return False
+
+            immutable_hits = 0
+            if name.casefold() in variable_text:
+                immutable_hits += 1
+            if currency_code.casefold() in variable_text:
+                immutable_hits += 1
+            if any(
+                marker in variable_text
+                for marker in (
+                    "timezone_id","timezoneid","time_zone_id",
+                    "timezone","time_zone",
+                )
+            ):
+                immutable_hits += 1
+
+            mutationish = any(
+                marker in friendly or marker in decoded
+                for marker in (
+                    "create","submit","mutation","adaccount",
+                    "ad_account",
+                )
+            )
+            return mutationish and immutable_hits >= 2
 
         async def intercept(route: Any, request: Any) -> None:
+            nonlocal blocked_unclassified_create
             request_meta = _request_graphql_meta(request)
+            definitive_match = self._request_matches_ad_account_create(
+                request,
+                business_id=business,
+                account_name=name,
+            )
+            plausible_unknown = bool(
+                capture_final_armed
+                and not definitive_match
+                and plausible_final_create(request_meta)
+            )
+
             if (
                 _clean(request_meta.get("method")).upper() == "POST"
                 and "graphql" in _clean(request_meta.get("url")).lower()
             ):
                 summary = self._safe_graphql_request_summary(request)
-                summary["matched_create"] = bool(
-                    self._request_matches_ad_account_create(
-                        request,
-                        business_id=business,
-                        account_name=name,
-                    )
-                )
+                summary["matched_create"] = bool(definitive_match)
+                summary["plausible_final_create"] = bool(plausible_unknown)
+                summary["final_gate_armed"] = bool(capture_final_armed)
                 graphql_candidates.append(summary)
                 if len(graphql_candidates) > 24:
                     del graphql_candidates[:-24]
 
-            if not self._request_matches_ad_account_create(
-                request,
-                business_id=business,
-                account_name=name,
-            ):
+            if plausible_unknown:
+                # Critical exactly-once invariant: a strong unknown mutation
+                # observed after the final CTA is never allowed to escape the
+                # capture pass. We abort it, but deliberately do not replay it
+                # because the matcher could not prove its identity.
+                blocked_unclassified_create = True
+                await route.abort()
+                return
+
+            if not definitive_match:
                 await route.continue_()
                 return
 
@@ -12016,6 +12100,7 @@ timeout_seconds=4.0,
                     )
                     await self.page.wait_for_timeout(200)
 
+                capture_final_armed = True
                 final_meta = await self._click_ad_account_final_interactive()
                 final_clicked = bool(final_meta.get("clicked"))
                 if not final_clicked:
@@ -12065,6 +12150,9 @@ timeout_seconds=4.0,
                     diag["form_setup"] = form_setup
                     diag["submit_attempts"] = submit_attempts[-12:]
                     diag["graphql_candidates"] = graphql_candidates[-12:]
+                    diag["blocked_unclassified_create"] = bool(
+                        blocked_unclassified_create
+                    )
                     diag["ui_state"] = await self._ad_account_ui_state()
                     diag["ui_trace"] = self._ad_account_ui_trace[-16:]
                     raise BrowserBusinessError(
@@ -12072,7 +12160,9 @@ timeout_seconds=4.0,
                         (
                             "Meta Add-RK wizard was driven to the final action, "
                             "but ReMask did not observe a definitive private "
-                            "CREATE request. No CREATE reached Meta."
+                            "CREATE request. The final capture gate blocked any "
+                            "strong unknown CREATE candidate; no captured CREATE "
+                            "was intentionally allowed to reach Meta."
                         ),
                         retryable=True,
                         diagnostic=diag,
