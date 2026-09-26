@@ -33,6 +33,13 @@ BUSINESS_GRAPHQL_URL = "https://business.facebook.com/api/graphql/"
 # real Ad Account ID through a known response path.
 LEGACY_CREATE_AD_ACCOUNT_DOC_ID = "684920184730193"
 
+# Corroborated current BizKit Settings CREATE document observed in multiple
+# fresh external implementations on 2026-09-26. This is NOT treated as
+# permanently trusted: Meta must either execute it and return one RK id, or
+# reject it as stale schema. On success it is promoted into the confirmed
+# candidate registry.
+CORROBORATED_CREATE_AD_ACCOUNT_DOC_ID = "9236789956426634"
+
 
 class AdAccountMutationError(RuntimeError):
     def __init__(
@@ -100,6 +107,7 @@ def _extract_ad_account_id(payload: dict[str, Any]) -> tuple[str, str]:
         "business_ad_account_create",
         "bizkit_create_ad_account",
         "bizkit_settings_create_ad_account",
+        "business_settings_create_ad_account",
         "create_ad_account",
         "adaccount_create",
     )
@@ -222,14 +230,21 @@ def _replace_capture_values(
                 lowered = _clean(key).casefold().replace("-", "_")
                 if lowered in {"business_id", "businessid"}:
                     out[key] = business_id
-                elif lowered in {"account_name", "ad_account_name", "adaccount_name"}:
+                elif lowered in {
+                    "account_name",
+                    "ad_account_name",
+                    "adaccount_name",
+                    "adaccountname",
+                }:
                     out[key] = account_name
                 elif lowered == "name" and (not canary or _clean(child) == canary):
                     out[key] = account_name
                 elif lowered in {"currency", "currency_code"}:
                     out[key] = currency
                 elif lowered in {"timezone_id", "timezoneid"}:
-                    out[key] = int(timezone_id)
+                    out[key] = str(int(timezone_id))
+                elif lowered in {"end_advertiser_id", "endadvertiserid"}:
+                    out[key] = business_id
                 elif lowered == "client_mutation_id":
                     out[key] = uuid.uuid4().hex[:16]
                 else:
@@ -397,17 +412,13 @@ async def create_ad_account_with_docids(
     def default_variables_for(candidate: DocIdCandidate) -> dict[str, Any]:
         friendly = _clean(candidate.friendly_name).casefold()
         if "bizkitsettingscreateadaccount" in friendly:
-            # Current Business Settings flow observed by ReMask itself.
-            # Keep this minimal: these are the immutable fields carried by the
-            # real Meta CREATE mutation, and avoiding legacy extras makes the
-            # payload less sensitive to schema churn.
+            # Current BizKit Settings mutation uses flat variables.
             return {
-                "input": {
-                    "businessID": business,
-                    "name": name,
-                    "currency": currency_code,
-                    "timezone_id": timezone,
-                }
+                "businessID": business,
+                "adAccountName": name,
+                "timezoneID": str(timezone),
+                "currency": currency_code,
+                "endAdvertiserID": business,
             }
 
         return {
@@ -492,6 +503,26 @@ async def create_ad_account_with_docids(
         # discovery is only a secondary candidate behind captured/confirmed
         # request shapes.
         ordered.append(dynamic_candidate)
+
+    # The current CREATE mutation is not guaranteed to be present in the
+    # initial Business Settings HTML/JS, so pure persisted-query discovery can
+    # legitimately return nothing. Keep one freshly corroborated BizKit
+    # candidate as a self-validating fallback. A stale-schema response is safe:
+    # Meta did not execute CREATE and the candidate is discarded. A successful
+    # response promotes it into the confirmed registry.
+    ordered.append(
+        DocIdCandidate(
+            operation=CREATE_AD_ACCOUNT_OPERATION,
+            doc_id=CORROBORATED_CREATE_AD_ACCOUNT_DOC_ID,
+            friendly_name="BizKitSettingsCreateAdAccountMutation",
+            endpoint_url=BUSINESS_GRAPHQL_URL,
+            variables_mode="bizkit_settings_create_ad_account_flat_v3",
+            source="corroborated_20260926",
+            priority=15_000,
+            observed_at=str(int(time.time())),
+            enabled=True,
+        )
+    )
 
     # Do not submit unconfirmed registry/static candidates. Only the live
     # Business Settings capture, explicit job override, current discovery or a
@@ -612,6 +643,7 @@ async def create_ad_account_with_docids(
             persisted = candidate
             if (
                 candidate.source.startswith("dynamic_")
+                or candidate.source.startswith("corroborated_")
                 or candidate.source == "live_ui_capture"
                 or candidate.source == "job_manual"
             ):
@@ -627,7 +659,11 @@ async def create_ad_account_with_docids(
                         else (
                             "dynamic_success"
                             if candidate.source.startswith("dynamic_")
-                            else "manual_success"
+                            else (
+                                "corroborated_success"
+                                if candidate.source.startswith("corroborated_")
+                                else "manual_success"
+                            )
                         )
                     ),
                     priority=9_700,
