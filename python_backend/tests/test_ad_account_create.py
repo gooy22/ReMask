@@ -763,3 +763,36 @@ class AdAccountRepeatedInventoryRecoveryTests(unittest.TestCase):
             )
         )
 
+
+
+class AdAccountSelfHealingPipelineRegressionTests(unittest.TestCase):
+    def test_capture_phase_retries_safe_pre_submit_ui_failures(self) -> None:
+        source = inspect.getsource(ad_account_handler)
+        self.assertIn("capture_attempt_limit = 3", source)
+        self.assertIn("AD_ACCOUNT_SAFE_CAPTURE_RETRY_CODES", source)
+        self.assertIn("capture_failures", source)
+        self.assertIn("await asyncio.sleep(0.75 * capture_attempt)", source)
+
+    def test_replay_retries_only_proven_pre_submit_transport_failure(self) -> None:
+        source = inspect.getsource(ad_account_handler)
+        self.assertIn("replay_attempt_limit = 2", source)
+        self.assertIn(
+            'exc.code == "CREATE_AD_ACCOUNT_PRE_SUBMIT_TRANSPORT"',
+            source,
+        )
+        self.assertIn("safe_same_capture_retry", source)
+        self.assertIn("return await reconcile_after_uncertain", source)
+
+    def test_safe_capture_codes_exclude_uncertain_and_rejected_results(self) -> None:
+        self.assertIn(
+            "AD_ACCOUNT_CREATE_UI_CHANGED",
+            AD_ACCOUNT_SAFE_CAPTURE_RETRY_CODES,
+        )
+        self.assertNotIn(
+            "AD_ACCOUNT_CREATE_RESULT_UNKNOWN",
+            AD_ACCOUNT_SAFE_CAPTURE_RETRY_CODES,
+        )
+        self.assertNotIn(
+            "META_AD_ACCOUNT_CREATE_REJECTED",
+            AD_ACCOUNT_SAFE_CAPTURE_RETRY_CODES,
+        )
