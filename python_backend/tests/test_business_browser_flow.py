@@ -2118,17 +2118,25 @@ class BrowserAdAccountFinalLabelMatchingTests(unittest.TestCase):
 
 
 class BrowserAdAccountUiStateDialogGuardTests(unittest.TestCase):
-    def test_ui_state_dialog_form_evidence_requires_wizard_marker(self):
+    def test_ui_state_dialog_form_evidence_requires_non_ai_create_context(self):
         source = inspect.getsource(
             FacebookBusinessBrowser._ad_account_ui_state
         )
         self.assertIn("const dialogHasWizardMarker =", source)
-        self.assertIn("dialogHasWizardMarker", source)
+        self.assertIn("const dialogHasCreateAccountMarker =", source)
         self.assertIn("dialogHasFormControl", source)
-        self.assertIn(
-            "dialogHasWizardMarker\n                        && dialogHasFormControl",
-            source,
+        self.assertIn("!dialogLooksLikeMetaAI", source)
+        self.assertIn("dialogHasWizardMarker", source)
+        self.assertIn("dialogHasCreateAccountMarker", source)
+        self.assertIn("visibleDialogFormControls", source)
+
+    def test_intro_dialog_is_separate_when_create_modal_has_no_fields(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser._ad_account_ui_state
         )
+        self.assertIn("const introDialog = (", source)
+        self.assertIn("&& !formEvidence", source)
+        self.assertIn("state = 'INTRO_DIALOG'", source)
 
 
 class BrowserAdAccountDialogClassificationRegressionTests(unittest.TestCase):
