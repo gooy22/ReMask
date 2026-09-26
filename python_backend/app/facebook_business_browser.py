@@ -230,7 +230,57 @@ def _ad_account_required_attribution_post_data(
 
     input_data = variables.get("input")
     if not isinstance(input_data, dict):
-        return raw, {}
+        # New Relay variants may wrap the create payload under names such as
+        # adAccountData while keeping businessID at a sibling/top level.
+        # Select exactly one strong creation-shaped dict: currency + timezone,
+        # with no existing account ID. Never patch an ambiguous payload.
+        candidates: list[dict[str, Any]] = []
+
+        def walk_dicts(value: Any) -> None:
+            if isinstance(value, dict):
+                keys = {str(key) for key in value.keys()}
+                has_currency = "currency" in keys
+                has_timezone = bool(
+                    {
+                        "timezone_id",
+                        "time_zone_id",
+                        "timezone",
+                        "time_zone",
+                        "timezoneId",
+                        "timeZoneId",
+                    }.intersection(keys)
+                )
+                has_existing = any(
+                    _clean(value.get(key))
+                    for key in (
+                        "account_id",
+                        "ad_account_id",
+                        "adAccountId",
+                        "adaccount_id",
+                    )
+                    if key in value
+                )
+                if has_currency and has_timezone and not has_existing:
+                    candidates.append(value)
+                for child in value.values():
+                    walk_dicts(child)
+            elif isinstance(value, list):
+                for child in value:
+                    walk_dicts(child)
+
+        walk_dicts(variables)
+        unique_candidates: list[dict[str, Any]] = []
+        seen_ids: set[int] = set()
+        for candidate in candidates:
+            ident = id(candidate)
+            if ident in seen_ids:
+                continue
+            seen_ids.add(ident)
+            unique_candidates.append(candidate)
+
+        if len(unique_candidates) != 1:
+            return raw, {}
+        input_data = unique_candidates[0]
 
     defaults = {
         "end_advertiser": _clean(end_advertiser) or "NONE",
@@ -253,17 +303,30 @@ def _ad_account_required_attribution_post_data(
             input_data["currency"] = requested_currency
             applied["currency"] = requested_currency
 
-    if timezone_id is not None and "timezone_id" in input_data:
+    timezone_key = next(
+        (
+            key
+            for key in (
+                "timezone_id",
+                "time_zone_id",
+                "timezoneId",
+                "timeZoneId",
+            )
+            if key in input_data
+        ),
+        "",
+    )
+    if timezone_id is not None and timezone_key:
         try:
             requested_timezone = int(timezone_id)
         except (TypeError, ValueError):
             requested_timezone = None
         if (
             requested_timezone is not None
-            and input_data.get("timezone_id") != requested_timezone
+            and input_data.get(timezone_key) != requested_timezone
         ):
-            input_data["timezone_id"] = requested_timezone
-            applied["timezone_id"] = requested_timezone
+            input_data[timezone_key] = requested_timezone
+            applied[timezone_key] = requested_timezone
 
     if not applied:
         return raw, {}
