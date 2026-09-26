@@ -8781,6 +8781,16 @@ class FacebookBusinessBrowser:
             return True
         if FacebookBusinessBrowser._ad_account_ownership_step_present(state):
             return True
+
+        # _ad_account_ui_state only sets form_evidence from a non-AI dialog
+        # with real visible editable controls. Accept that structural proof
+        # even when Meta omits/renames the visible field labels.
+        if (
+            bool(state.get("form_evidence"))
+            and int(state.get("dialog_form_control_count") or 0) > 0
+        ):
+            return True
+
         dialogs = state.get("dialogs")
         if not isinstance(dialogs, list):
             dialogs = []
