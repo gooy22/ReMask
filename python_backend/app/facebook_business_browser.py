@@ -794,6 +794,85 @@ def _extract_named_ad_account_ids(
     return sorted(found)
 
 
+def _extract_inventory_ad_account_ids(payload: Any) -> list[str]:
+    """Extract RK ids from structurally identified ad-account inventory nodes.
+
+    Generic numeric id values are ignored unless their parent/path clearly
+    belongs to an ad-account collection/node. This keeps Business/Page IDs out
+    of reconciliation while allowing Relay inventory shapes where the account
+    name is absent or localized differently.
+    """
+    found: set[str] = set()
+
+    ad_markers = (
+        "ad_account",
+        "adaccount",
+        "ad_accounts",
+        "adaccounts",
+        "advertising_account",
+        "advertisingaccount",
+    )
+
+    def path_is_ad_account(path: str, value: dict[str, Any]) -> bool:
+        folded = path.casefold()
+        typename = _clean(value.get("__typename")).casefold()
+        return any(
+            marker in folded or marker in typename
+            for marker in ad_markers
+        )
+
+    def add(value: Any) -> None:
+        normalized = _normalize_ad_account_id(value)
+        if normalized:
+            found.add(normalized)
+
+    def walk(value: Any, path: str = "root") -> None:
+        if isinstance(value, dict):
+            ad_context = path_is_ad_account(path, value)
+
+            for key in (
+                "ad_account_id",
+                "adAccountId",
+                "adaccount_id",
+            ):
+                if key in value:
+                    add(value.get(key))
+
+            if ad_context:
+                for key in (
+                    "id",
+                    "account_id",
+                    "accountId",
+                ):
+                    if key in value:
+                        add(value.get(key))
+
+            for key, child in value.items():
+                child_path = f"{path}.{key}"
+                if (
+                    isinstance(child, dict)
+                    and str(key).casefold() in {
+                        "ad_account",
+                        "adaccount",
+                        "advertising_account",
+                    }
+                ):
+                    add(
+                        child.get("id")
+                        or child.get("account_id")
+                        or child.get("ad_account_id")
+                        or child.get("adAccountId")
+                    )
+                walk(child, child_path)
+
+        elif isinstance(value, list):
+            for index, child in enumerate(value):
+                walk(child, f"{path}[{index}]")
+
+    walk(payload)
+    return sorted(found)
+
+
 class FacebookBusinessBrowser:
     """
     Browser-first Meta Business workflow.
@@ -7028,9 +7107,11 @@ class FacebookBusinessBrowser:
         """Read-only RK lookup from Meta's own Business Settings responses.
 
         This is intentionally independent from CREATE mutation names.  It
-        reloads the Ad Accounts inventory, observes the GraphQL responses Meta
-        uses to paint the table, and confirms only an exact-name node with one
-        unique numeric account id.
+        reloads the Ad Accounts inventory and observes the GraphQL responses
+        Meta uses to paint the table. It first accepts an exact-name match;
+        under ReMask's 1 BM = 1 RK invariant it also accepts one unique
+        structurally identified RK from a read-only query targeting the exact
+        Business.
         """
         business = _digits(business_id)
         expected = _clean(account_name)
@@ -7054,9 +7135,6 @@ class FacebookBusinessBrowser:
                     return
                 raw = await response.text()
                 payload = _decode_graphql_text(raw)
-                ids = _extract_named_ad_account_ids(payload, expected)
-                if not ids:
-                    return
 
                 request = getattr(response, "request", None)
                 request_summary = (
@@ -7064,19 +7142,90 @@ class FacebookBusinessBrowser:
                     if request is not None
                     else {}
                 )
+                meta = (
+                    _request_graphql_meta(request)
+                    if request is not None
+                    else {}
+                )
+
+                exact_name_ids = _extract_named_ad_account_ids(
+                    payload,
+                    expected,
+                )
+                inventory_ids = _extract_inventory_ad_account_ids(payload)
+
+                target_business_ids = {
+                    candidate
+                    for candidate, _ in _walk_business_ids(
+                        meta.get("variables") or {}
+                    )
+                    if candidate
+                }
+                target_business_ids.update(
+                    _business_ids_from_text(
+                        _clean(meta.get("decoded_raw"))
+                    )
+                )
+                targets_business = business in target_business_ids
+
+                friendly = _clean(
+                    meta.get("friendly_name")
+                ).casefold()
+                mutation_like = (
+                    "mutation" in friendly
+                    or "create" in friendly
+                    or "update" in friendly
+                    or "delete" in friendly
+                )
+
                 row = {
-                    "ids": ids[:8],
+                    "exact_name_ids": exact_name_ids[:8],
+                    "inventory_ids": inventory_ids[:12],
+                    "targets_business": targets_business,
+                    "friendly_name": _clean(
+                        meta.get("friendly_name")
+                    )[:180],
                     "request": request_summary,
                 }
-                diagnostics.append(row)
-                if len(ids) == 1 and not found_future.done():
+
+                if exact_name_ids or (
+                    targets_business and inventory_ids
+                ):
+                    diagnostics.append(row)
+
+                if (
+                    len(exact_name_ids) == 1
+                    and not found_future.done()
+                ):
                     found_future.set_result(
                         {
                             "confirmed": True,
                             "business_id": business,
-                            "ad_account_id": ids[0],
+                            "ad_account_id": exact_name_ids[0],
                             "account_name": expected,
-                            "source": "business_settings_graphql_inventory",
+                            "source": (
+                                "business_settings_graphql_inventory_name"
+                            ),
+                            "evidence": row,
+                        }
+                    )
+                    return
+
+                if (
+                    targets_business
+                    and not mutation_like
+                    and len(inventory_ids) == 1
+                    and not found_future.done()
+                ):
+                    found_future.set_result(
+                        {
+                            "confirmed": True,
+                            "business_id": business,
+                            "ad_account_id": inventory_ids[0],
+                            "account_name": expected,
+                            "source": (
+                                "business_settings_graphql_inventory_unique"
+                            ),
                             "evidence": row,
                         }
                     )
