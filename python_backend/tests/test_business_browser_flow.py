@@ -4443,3 +4443,30 @@ class BrowserAdAccountIntroDialogRegressionTests(unittest.TestCase):
         )
         self.assertLess(intro_pos, advance_pos)
         self.assertIn("intro_dialog_advanced", source)
+
+
+    def test_wait_helper_advances_existing_intro_before_any_create_reclick(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser._wait_for_ad_account_create_entry
+        )
+        intro_pos = source.index('before_state == "INTRO_DIALOG"')
+        advance_pos = source.index(
+            "_advance_ad_account_intro_dialog",
+            intro_pos,
+        )
+        tagged_pos = source.index(
+            "_click_state_detected_ad_account_create_entry",
+            intro_pos,
+        )
+        self.assertLess(advance_pos, tagged_pos)
+
+    def test_visible_text_fallback_does_not_click_plain_dialog_heading(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser._click_ad_account_create_entry_by_visible_text
+        )
+        self.assertIn("insideDialog", source)
+        self.assertIn("explicitlyInteractive", source)
+        self.assertIn(
+            "if (insideDialog && !explicitlyInteractive) continue;",
+            source,
+        )
