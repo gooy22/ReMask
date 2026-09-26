@@ -538,6 +538,24 @@ async def _prove_empty_after_uncertainty(
     return "", proven_empty, proof
 
 
+def _inventory_proof_summary(proof: Any) -> str:
+    """Compact diagnostics safe to surface in retryable UI errors."""
+    if not isinstance(proof, dict):
+        return "proof=unavailable"
+    return (
+        "proof_path="
+        + _clean(proof.get("proof_path") or "inconclusive")
+        + " graph_empty="
+        + ("1" if bool(proof.get("graph_empty_confirmed")) else "0")
+        + " browser_empty="
+        + str(int(proof.get("browser_empty_confirmations") or 0))
+        + "/"
+        + str(int(proof.get("browser_required_checks") or 0))
+        + " ui_empty="
+        + ("1" if bool(proof.get("ui_empty_confirmed")) else "0")
+    )
+
+
 async def ad_account_handler(
     session: Any,
     params: dict[str, Any],
@@ -815,7 +833,8 @@ async def ad_account_handler(
                         f"A previous Job may already have submitted CREATE for "
                         f"Business {business_id}. Strong read-only inventory "
                         "proof is still inconclusive, so ReMask will not submit "
-                        "a duplicate CREATE."
+                        "a duplicate CREATE. "
+                        + _inventory_proof_summary(inventory_proof)
                     ),
                     retryable=True,
                 )
@@ -941,7 +960,8 @@ async def ad_account_handler(
                 (
                     f"CREATE for Business {business_id} may already have reached "
                     "Meta. Strong read-only inventory proof is still "
-                    "inconclusive; duplicate CREATE remains blocked."
+                    "inconclusive; duplicate CREATE remains blocked. "
+                    + _inventory_proof_summary(inventory_proof)
                 ),
                 retryable=True,
             )
@@ -1251,7 +1271,8 @@ async def ad_account_handler(
             (
                 reason
                 + " Strong read-only inventory proof is still inconclusive; "
-                "duplicate CREATE remains blocked."
+                "duplicate CREATE remains blocked. "
+                + _inventory_proof_summary(inventory_proof)
             ),
             retryable=True,
         )
@@ -1408,7 +1429,8 @@ async def ad_account_handler(
                             "Meta final capture action was not matched to a "
                             "definitive CREATE. Strong read-only inventory "
                             "proof is inconclusive, so duplicate CREATE "
-                            "remains blocked."
+                            "remains blocked. "
+                            + _inventory_proof_summary(inventory_proof)
                         ),
                         retryable=True,
                     ) from exc
@@ -1679,6 +1701,8 @@ async def ad_account_handler(
                     f"{create_may_have_been_sent}. Strong read-only inventory "
                     "proof is still inconclusive, so duplicate CREATE remains "
                     "blocked. "
+                    + _inventory_proof_summary(inventory_proof)
+                    + " "
                     + failure["message"]
                 ),
                 retryable=True,
