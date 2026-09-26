@@ -8641,6 +8641,32 @@ class FacebookBusinessBrowser:
                         'add','ajouter','добавить','додати',
                         'hinzufügen','যোগ করুন','thêm','जोड़ें'
                     ];
+                    const accountWords = [
+                        'ad account','advertising account','compte publicitaire',
+                        'реклам','werbekonto','বিজ্ঞাপন অ্যাকাউন্ট',
+                        'tài khoản quảng cáo','विज्ञापन खाता','विज्ञापन खाते'
+                    ];
+                    const hasLocalAccountContext = el => {
+                        let cur = el;
+                        for (
+                            let depth = 0;
+                            cur && depth < 7;
+                            depth++, cur = cur.parentElement
+                        ) {
+                            if (!visible(cur)) continue;
+                            const rr = cur.getBoundingClientRect();
+                            if (rr.width > 1050 || rr.height > 520) continue;
+                            const t = clean(
+                                (cur.getAttribute('aria-label') || '') + ' ' +
+                                (cur.getAttribute('title') || '') + ' ' +
+                                (cur.innerText || cur.textContent || '')
+                            ).toLowerCase();
+                            if (accountWords.some(word => t.includes(word))) {
+                                return true;
+                            }
+                        }
+                        return false;
+                    };
                     for (const el of document.querySelectorAll(
                         '[data-remask-rk-add-probe]'
                     )) {
