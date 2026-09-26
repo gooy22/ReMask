@@ -275,11 +275,70 @@ def _replace_capture_values(
     result = walk(copy.deepcopy(variables))
     if not isinstance(result, dict):
         return {}
+
+    # Meta's current Relay variants do not consistently use variables.input.
+    # Some keep businessID at the top level and immutable RK fields inside
+    # adAccountData (or another renamed wrapper). Apply required attribution
+    # defaults to exactly one creation-shaped payload dict; never guess when
+    # more than one candidate exists.
     input_data = result.get("input")
-    if isinstance(input_data, dict):
-        input_data.setdefault("end_advertiser", "NONE")
-        input_data.setdefault("media_agency", "NONE")
-        input_data.setdefault("partner", "NONE")
+    attribution_target: dict[str, Any] | None = (
+        input_data if isinstance(input_data, dict) else None
+    )
+
+    if attribution_target is None:
+        candidates: list[dict[str, Any]] = []
+
+        def collect_create_payloads(value: Any) -> None:
+            if isinstance(value, dict):
+                keys = {str(key) for key in value.keys()}
+                has_currency = bool(
+                    {"currency", "currency_code", "currencyCode"}.intersection(keys)
+                )
+                has_timezone = bool(
+                    {
+                        "timezone_id",
+                        "time_zone_id",
+                        "timezone",
+                        "time_zone",
+                        "timezoneId",
+                        "timeZoneId",
+                    }.intersection(keys)
+                )
+                has_existing_account = any(
+                    _clean(value.get(key))
+                    for key in (
+                        "account_id",
+                        "ad_account_id",
+                        "adAccountId",
+                        "adaccount_id",
+                    )
+                    if key in value
+                )
+                if has_currency and has_timezone and not has_existing_account:
+                    candidates.append(value)
+                for child in value.values():
+                    collect_create_payloads(child)
+            elif isinstance(value, list):
+                for child in value:
+                    collect_create_payloads(child)
+
+        collect_create_payloads(result)
+        unique_candidates: list[dict[str, Any]] = []
+        seen_ids: set[int] = set()
+        for candidate_payload in candidates:
+            ident = id(candidate_payload)
+            if ident in seen_ids:
+                continue
+            seen_ids.add(ident)
+            unique_candidates.append(candidate_payload)
+        if len(unique_candidates) == 1:
+            attribution_target = unique_candidates[0]
+
+    if isinstance(attribution_target, dict):
+        attribution_target.setdefault("end_advertiser", "NONE")
+        attribution_target.setdefault("media_agency", "NONE")
+        attribution_target.setdefault("partner", "NONE")
     return result
 
 
