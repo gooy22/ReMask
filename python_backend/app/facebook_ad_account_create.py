@@ -21,7 +21,11 @@ from .facebook_query_discovery import discover_persisted_query
 
 
 CREATE_AD_ACCOUNT_OPERATION = "CREATE_AD_ACCOUNT"
-CREATE_AD_ACCOUNT_FRIENDLY_NAME = "AdAccountCreateMutation"
+CREATE_AD_ACCOUNT_FRIENDLY_NAMES = (
+    "BizKitSettingsCreateAdAccountMutation",
+    "AdAccountCreateMutation",
+)
+CREATE_AD_ACCOUNT_FRIENDLY_NAME = CREATE_AD_ACCOUNT_FRIENDLY_NAMES[0]
 BUSINESS_GRAPHQL_URL = "https://business.facebook.com/api/graphql/"
 
 # Old ReMask value. It remains an unconfirmed LAST fallback only, after current
@@ -234,36 +238,43 @@ async def discover_current_ad_account_create_candidate(
             f"?business_id={business}",
         )
 
-    discovered = await discover_persisted_query(
-        session,
-        friendly_name=CREATE_AD_ACCOUNT_FRIENDLY_NAME,
-        entry_urls=entry_urls,
-        max_scripts_per_entry=32,
-        script_max_bytes=3_000_000,
-        cache_ttl_seconds=0,
-    )
-    if discovered is None:
-        return None
+    for friendly_name in CREATE_AD_ACCOUNT_FRIENDLY_NAMES:
+        discovered = await discover_persisted_query(
+            session,
+            friendly_name=friendly_name,
+            entry_urls=entry_urls,
+            max_scripts_per_entry=32,
+            script_max_bytes=3_000_000,
+            cache_ttl_seconds=0,
+        )
+        if discovered is None:
+            continue
 
-    return DocIdCandidate(
-        operation=CREATE_AD_ACCOUNT_OPERATION,
-        doc_id=discovered.doc_id,
-        friendly_name=CREATE_AD_ACCOUNT_FRIENDLY_NAME,
-        endpoint_url=BUSINESS_GRAPHQL_URL,
-        variables_mode="business_ad_account_create_v1",
-        source=(
-            "dynamic_html"
-            if discovered.source_kind == "html"
-            else (
-                "dynamic_script"
-                if discovered.source_kind == "script"
-                else "dynamic_response_headers"
-            )
-        ),
-        priority=20_000,
-        observed_at=str(int(time.time())),
-        enabled=True,
-    )
+        return DocIdCandidate(
+            operation=CREATE_AD_ACCOUNT_OPERATION,
+            doc_id=discovered.doc_id,
+            friendly_name=friendly_name,
+            endpoint_url=BUSINESS_GRAPHQL_URL,
+            variables_mode=(
+                "bizkit_settings_create_ad_account_v2"
+                if "BizKitSettings" in friendly_name
+                else "business_ad_account_create_v1"
+            ),
+            source=(
+                "dynamic_html"
+                if discovered.source_kind == "html"
+                else (
+                    "dynamic_script"
+                    if discovered.source_kind == "script"
+                    else "dynamic_response_headers"
+                )
+            ),
+            priority=20_000,
+            observed_at=str(int(time.time())),
+            enabled=True,
+        )
+
+    return None
 
 
 async def create_ad_account_with_docids(
@@ -319,7 +330,7 @@ async def create_ad_account_with_docids(
         if isinstance(capture.get("variables"), dict)
         else {}
     )
-    variables = (
+    captured_variables_rewritten = (
         _replace_capture_values(
             captured_variables,
             canary_name=_clean(capture.get("canary_name")),
@@ -329,7 +340,26 @@ async def create_ad_account_with_docids(
             timezone_id=timezone,
         )
         if captured_variables
-        else {
+        else {}
+    )
+
+    def default_variables_for(candidate: DocIdCandidate) -> dict[str, Any]:
+        friendly = _clean(candidate.friendly_name).casefold()
+        if "bizkitsettingscreateadaccount" in friendly:
+            # Current Business Settings flow observed by ReMask itself.
+            # Keep this minimal: these are the immutable fields carried by the
+            # real Meta CREATE mutation, and avoiding legacy extras makes the
+            # payload less sensitive to schema churn.
+            return {
+                "input": {
+                    "businessID": business,
+                    "name": name,
+                    "currency": currency_code,
+                    "timezone_id": timezone,
+                }
+            }
+
+        return {
             "input": {
                 "client_mutation_id": uuid.uuid4().hex[:16],
                 "business_id": business,
@@ -341,7 +371,6 @@ async def create_ad_account_with_docids(
                 "partner": "NONE",
             }
         }
-    )
 
     ordered: list[DocIdCandidate] = []
 
@@ -444,9 +473,14 @@ async def create_ad_account_with_docids(
         try:
             # From this call onward, a transport exception cannot prove whether
             # the POST reached Meta. Treat it as UNKNOWN, never as a safe retry.
+            candidate_variables = (
+                captured_variables_rewritten
+                if captured_variables_rewritten
+                else default_variables_for(candidate)
+            )
             response = await browser_graphql(
                 candidate.doc_id,
-                variables,
+                candidate_variables,
                 friendly_name=candidate.friendly_name,
                 endpoint_url=candidate.endpoint_url,
                 request_envelope=(
