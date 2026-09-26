@@ -7655,6 +7655,24 @@ class FacebookBusinessBrowser:
                         'limite','restreint','restriction'
                     ];
 
+                    const metaAIRoot = el => {
+                        const root = el.closest(
+                            '[role="dialog"],[aria-modal="true"]'
+                        );
+                        if (!root) return false;
+                        const rootText = lower(
+                            (root.getAttribute('aria-label') || '') + ' ' +
+                            (root.getAttribute('title') || '') + ' ' +
+                            (root.innerText || root.textContent || '')
+                        );
+                        return [
+                            'meta ai',
+                            'assistant business meta ai',
+                            'meta ai business assistant',
+                            'assistant meta ai'
+                        ].some(word => rootText.includes(word));
+                    };
+
                     const rightNodes = [...document.querySelectorAll(
                         'button,a,input,select,[role],[aria-label],[title],'
                         + '[tabindex],h1,h2,h3,label'
@@ -7717,7 +7735,8 @@ class FacebookBusinessBrowser:
                             formEvidence = true;
                         }
                         if (
-                            createWords.some(word => low.includes(word))
+                            !metaAIRoot(el)
+                            && createWords.some(word => low.includes(word))
                             && accountWords.some(word => low.includes(word))
                         ) {
                             createEntry = true;
@@ -8910,41 +8929,23 @@ class FacebookBusinessBrowser:
                         return True, attempts
 
                 # Critical recovery for Meta's current Add-RK card UI:
-                # the coarse state machine can already prove CREATE_ENTRY even
-                # when the card is not a *fresh* semantic menu item (for
-                # example a plain DIV/SPAN rendered by a portal).  Use that
-                # proof to run the bounded CREATE-only DOM matcher before
-                # treating the Add click as a miss.  This cannot submit the
-                # final RK CREATE; it only opens the wizard.
-                state_dom_create = ""
+                # once the state machine proves CREATE_ENTRY, use the complete
+                # verified Create-entry helper.  It tries semantic names,
+                # visible plain DIV/SPAN text, and the bounded DOM fallback,
+                # then *verifies the wizard opened* before returning success.
+                state_create_verified = False
                 if attempt["ui_state_after"] == "CREATE_ENTRY":
-                    state_dom_create = (
-                        await self._click_ad_account_action_dom(
-                            allow_generic_add=False
+                    state_create_verified = (
+                        await self._wait_for_ad_account_create_entry(
+                            timeout_seconds=2.5,
                         )
                     )
-                attempt["state_dom_create"] = state_dom_create
+                attempt["state_create_verified"] = state_create_verified
 
-                if state_dom_create == "create":
-                    state_dom_transition = (
-                        await self._wait_for_ad_account_ui_transition(
-                            previous_signature=_clean(
-                                post_add_poll_state.get("signature")
-                            ),
-                            timeout_seconds=4.0,
-                            label="after_state_create_entry",
-                            require_signature_change=True,
-                        )
-                    )
-                    attempt["state_dom_create_state_after"] = _clean(
-                        state_dom_transition.get("state")
-                    ).upper()
-                    if self._ad_account_create_form_confirmed(
-                        state_dom_transition
-                    ):
-                        attempt["create_entry_found"] = True
-                        attempts.append(attempt)
-                        return True, attempts
+                if state_create_verified:
+                    attempt["create_entry_found"] = True
+                    attempts.append(attempt)
+                    return True, attempts
 
                 attempt["post_click_candidates"] = (
                     await self._ad_account_popup_candidates()
@@ -9621,6 +9622,16 @@ timeout_seconds=4.0,
                 entry_clicked = self._ad_account_create_form_confirmed(
                     direct_transition
                 )
+
+        if (
+            not entry_clicked
+            and _clean(current_ui.get("state")).upper() == "CREATE_ENTRY"
+        ):
+            entry_clicked = (
+                await self._wait_for_ad_account_create_entry(
+                    timeout_seconds=2.5,
+                )
+            )
 
         if (
             not entry_clicked
