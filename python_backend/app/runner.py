@@ -265,13 +265,24 @@ class WorkerPool:
                             )
                             break
             except ProfileContextError as exc:
+                retryable=bool(getattr(exc,'retryable',False))
+                category=str(getattr(exc,'category','profile_context') or 'profile_context')
+                log.warning(
+                    'profile context failure job=%s item=%s profile=%s category=%s retryable=%s detail=%s',
+                    str(item.get('job_id') or ''),
+                    item_id,
+                    profile_id,
+                    category,
+                    retryable,
+                    str(exc),
+                )
                 if tasks:
                     first=next((t for t in tasks if t['status']!='SUCCESS'),tasks[0])
                     await self.store.set_task_failed(
                         first['id'],
                         'PROFILE_CONTEXT_ERROR',
                         str(exc),
-                        retryable=False,
+                        retryable=retryable,
                     )
             finally:
                 await self.store.finalize_item(item_id)
