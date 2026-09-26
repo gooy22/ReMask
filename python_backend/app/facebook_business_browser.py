@@ -4457,6 +4457,182 @@ class FacebookBusinessBrowser:
         except (TypeError, ValueError):
             return {}
 
+    async def _accept_ad_account_terms_if_present(self) -> dict[str, Any]:
+        """Accept the RK confirmation terms only inside the verified wizard.
+
+        Meta's current flow is Details -> Usage -> Confirm -> Done.  On Confirm
+        the final Create control stays disabled until the terms checkbox is
+        selected.  Never click page-global consent/checkbox controls.
+        """
+        if self.page is None or not self._ad_account_wizard_rect:
+            return {"found": False, "clicked": False}
+
+        try:
+            result = await self.page.evaluate(
+                """(anchor) => {
+                    const visible = el => {
+                        if (!el) return false;
+                        const r = el.getBoundingClientRect();
+                        const s = getComputedStyle(el);
+                        return r.width > 0 && r.height > 0
+                            && s.display !== 'none'
+                            && s.visibility !== 'hidden'
+                            && s.pointerEvents !== 'none';
+                    };
+                    const clean = text => (text || '')
+                        .normalize('NFKC')
+                        .replace(/[\u200b\u200c\u200d\ufeff]/g, '')
+                        .replace(/\u00a0/g, ' ')
+                        .replace(/\s+/g, ' ')
+                        .trim()
+                        .toLowerCase();
+                    const inside = el => {
+                        const r = el.getBoundingClientRect();
+                        const cx = r.x + r.width / 2;
+                        const cy = r.y + r.height / 2;
+                        const pad = 30;
+                        return (
+                            cx >= Number(anchor.x || 0) - pad
+                            && cx <= Number(anchor.x || 0)
+                                + Number(anchor.width || 0) + pad
+                            && cy >= Number(anchor.y || 0) - pad
+                            && cy <= Number(anchor.y || 0)
+                                + Number(anchor.height || 0) + pad
+                        );
+                    };
+                    const terms = [
+                        'terms of service',
+                        'advertising policies',
+                        'advertising policy',
+                        'meta terms',
+                        'i agree',
+                        'agree to',
+                        'conditions d’utilisation',
+                        "conditions d'utilisation",
+                        'conditions de service',
+                        'conditions générales',
+                        'politiques publicitaires',
+                        'politique publicitaire',
+                        'j’accepte',
+                        "j'accepte",
+                        'accepte les conditions',
+                        'nutzungsbedingungen',
+                        'werberichtlinien',
+                        'условия использования',
+                        'рекламной политики',
+                        'умови використання',
+                        'рекламної політики'
+                    ];
+
+                    const controls = [...document.querySelectorAll(
+                        'input[type="checkbox"],[role="checkbox"],'
+                        + '[aria-checked],[data-testid*="checkbox"]'
+                    )].filter(el => visible(el) && inside(el));
+
+                    const rows = [];
+                    for (const control of controls) {
+                        let root = control;
+                        let context = '';
+                        for (
+                            let depth = 0;
+                            root && depth < 7;
+                            depth++, root = root.parentElement
+                        ) {
+                            if (!inside(root)) continue;
+                            const t = clean(
+                                (root.getAttribute('aria-label') || '') + ' ' +
+                                (root.getAttribute('title') || '') + ' ' +
+                                (root.innerText || root.textContent || '')
+                            );
+                            if (terms.some(word => t.includes(word))) {
+                                context = t;
+                                break;
+                            }
+                        }
+                        if (!context) continue;
+
+                        const checked = Boolean(
+                            control.checked
+                            || control.getAttribute('aria-checked') === 'true'
+                            || control.getAttribute('data-state') === 'checked'
+                        );
+                        const r = control.getBoundingClientRect();
+                        rows.push({
+                            el: control,
+                            checked,
+                            text: context.slice(0, 240),
+                            x: Math.round(r.x),
+                            y: Math.round(r.y)
+                        });
+                    }
+
+                    rows.sort((a,b) => a.y - b.y);
+                    const best = rows[0];
+                    if (!best) return {found:false,clicked:false};
+                    if (best.checked) {
+                        return {
+                            found:true,
+                            clicked:false,
+                            already_checked:true,
+                            text:best.text,
+                            x:best.x,
+                            y:best.y
+                        };
+                    }
+
+                    best.el.setAttribute('data-remask-rk-terms', '1');
+                    return {
+                        found:true,
+                        clicked:false,
+                        already_checked:false,
+                        text:best.text,
+                        x:best.x,
+                        y:best.y
+                    };
+                }""",
+                self._ad_account_wizard_rect,
+            )
+        except Exception as exc:
+            return {
+                "found": False,
+                "clicked": False,
+                "error": f"{exc.__class__.__name__}: {exc}"[:500],
+            }
+
+        if not isinstance(result, dict) or not bool(result.get("found")):
+            return {"found": False, "clicked": False}
+
+        meta = {
+            "found": True,
+            "clicked": False,
+            "already_checked": bool(result.get("already_checked")),
+            "text": _clean(result.get("text"))[:240],
+            "x": int(result.get("x") or 0),
+            "y": int(result.get("y") or 0),
+        }
+        if meta["already_checked"]:
+            return meta
+
+        locator = self.page.locator('[data-remask-rk-terms="1"]').first
+        try:
+            await locator.click(timeout=2500)
+            meta["clicked"] = True
+            await self.page.wait_for_timeout(250)
+            return meta
+        except Exception as exc:
+            meta["error"] = f"{exc.__class__.__name__}: {exc}"[:500]
+            return meta
+        finally:
+            try:
+                await self.page.locator(
+                    '[data-remask-rk-terms="1"]'
+                ).evaluate_all(
+                    "(els) => els.forEach(el => "
+                    "el.removeAttribute('data-remask-rk-terms'))"
+                )
+            except Exception:
+                pass
+
     async def _click_ad_account_final_interactive(
         self,
         *,
@@ -5077,6 +5253,9 @@ class FacebookBusinessBrowser:
                     ];
                     const ownWords = [
                         'my business','my business portfolio','for my business',
+                        'this ad account will be used for my business',
+                        'ce compte publicitaire sera utilisé pour mon entreprise',
+                        'ce compte publicitaire sera utilise pour mon entreprise',
                         'mon entreprise','mon portefeuille business',
                         'pour mon entreprise',
                         'mein unternehmen','für mein unternehmen',
@@ -7009,6 +7188,9 @@ class FacebookBusinessBrowser:
             "my business",
             "my business portfolio",
             "for my business",
+            "this ad account will be used for my business",
+            "ce compte publicitaire sera utilisé pour mon entreprise",
+            "ce compte publicitaire sera utilise pour mon entreprise",
             "mon entreprise",
             "mon portefeuille business",
             "pour mon entreprise",
@@ -9260,6 +9442,19 @@ timeout_seconds=4.0,
                         }
                     )
                     break
+
+                terms_meta = await self._accept_ad_account_terms_if_present()
+                if bool(terms_meta.get("found")):
+                    submit_attempts.append(
+                        {
+                            "step": step,
+                            "action": "terms",
+                            "terms": terms_meta,
+                        }
+                    )
+                    if bool(terms_meta.get("clicked")):
+                        clicked_any = True
+                        await self.page.wait_for_timeout(250)
 
                 async def persist_final_click_intent() -> None:
                     await checkpoint(
