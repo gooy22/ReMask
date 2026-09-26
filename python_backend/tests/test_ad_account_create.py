@@ -465,6 +465,53 @@ class AdAccountCreateResponseTests(unittest.TestCase):
         self.assertEqual(account_id, "act_987654321")
         self.assertEqual(path, "data.business_ad_account_create.ad_account.id")
 
+    def test_current_bizkit_renamed_node_shape(self) -> None:
+        account_id, path = _extract_ad_account_id(
+            {
+                "data": {
+                    "bizkit_settings_create_ad_account": {
+                        "created_ad_account": {
+                            "account_id": "765432109"
+                        }
+                    }
+                }
+            }
+        )
+        self.assertEqual(account_id, "act_765432109")
+        self.assertIn("account_id", path)
+
+    def test_recursive_ad_account_parent_id_is_accepted(self) -> None:
+        account_id, path = _extract_ad_account_id(
+            {
+                "data": {
+                    "some_new_relay_payload": {
+                        "advertising_account": {
+                            "id": "765432110"
+                        }
+                    }
+                }
+            }
+        )
+        self.assertEqual(account_id, "act_765432110")
+        self.assertEqual(
+            path,
+            "data.some_new_relay_payload.advertising_account.id",
+        )
+
+    def test_unrelated_numeric_ids_are_not_mistaken_for_rk(self) -> None:
+        account_id, path = _extract_ad_account_id(
+            {
+                "data": {
+                    "bizkit_settings_create_ad_account": {
+                        "business": {"id": "1056638030476027"},
+                        "actor": {"id": "123456789"},
+                    }
+                }
+            }
+        )
+        self.assertEqual(account_id, "")
+        self.assertEqual(path, "")
+
     def test_ambiguous_ids_are_rejected(self) -> None:
         account_id, path = _extract_ad_account_id(
             {
