@@ -4353,3 +4353,33 @@ class BrowserAdAccountFullFlowHardeningTests(unittest.TestCase):
             "समय क्षेत्र",
         ):
             self.assertIn(marker, source)
+
+
+class BrowserAdAccountLocalizedInventoryProofTests(unittest.TestCase):
+    def test_empty_inventory_markers_cover_target_locales(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser.verify_ad_account_inventory_empty
+        )
+        for marker in (
+            "কোনো বিজ্ঞাপন অ্যাকাউন্ট যোগ করা হয়নি",
+            "chưa thêm tài khoản quảng cáo nào",
+            "कोई विज्ञापन खाता नहीं जोड़ा गया",
+        ):
+            self.assertIn(marker, source)
+
+    def test_state_machine_form_and_blocked_words_cover_target_locales(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser._ad_account_ui_state
+        )
+        for marker in (
+            "মুদ্রা",
+            "সময় অঞ্চল",
+            "tiền tệ",
+            "múi giờ",
+            "मुद्रा",
+            "समय क्षेत्र",
+            "অনুমতি নেই",
+            "không được phép",
+            "अनुमति नहीं",
+        ):
+            self.assertIn(marker, source)
