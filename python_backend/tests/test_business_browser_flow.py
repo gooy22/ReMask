@@ -73,6 +73,58 @@ class BrowserNetworkGateTests(unittest.TestCase):
             )
         )
 
+    def test_ad_account_gate_matches_split_relay_create_shape(self):
+        request = _FakeRequest(
+            "fb_api_req_friendly_name=BizKitSettingsAssetMutation"
+            "&doc_id=8877665544332211"
+            "&variables=%7B%22businessID%22%3A%22555666777888999%22%2C"
+            "%22adAccountData%22%3A%7B%22name%22%3A%22ReMask%20Ads%22%2C"
+            "%22currency%22%3A%22USD%22%2C%22timezoneId%22%3A1%7D%7D"
+        )
+        self.assertTrue(
+            FacebookBusinessBrowser._request_matches_ad_account_create(
+                request,
+                business_id="555666777888999",
+                account_name="ReMask Ads",
+            )
+        )
+
+    def test_ad_account_gate_rejects_split_relay_update_shape(self):
+        request = _FakeRequest(
+            "fb_api_req_friendly_name=BizKitSettingsAssetMutation"
+            "&doc_id=8877665544332211"
+            "&variables=%7B%22businessID%22%3A%22555666777888999%22%2C"
+            "%22adAccountData%22%3A%7B%22name%22%3A%22ReMask%20Ads%22%2C"
+            "%22adAccountId%22%3A%221234567890%22%2C"
+            "%22currency%22%3A%22USD%22%2C%22timezoneId%22%3A1%7D%7D"
+        )
+        self.assertFalse(
+            FacebookBusinessBrowser._request_matches_ad_account_create(
+                request,
+                business_id="555666777888999",
+                account_name="ReMask Ads",
+            )
+        )
+
+    def test_nested_relay_create_payload_gets_required_defaults(self):
+        request = _FakeRequest(
+            "doc_id=8877665544332211"
+            "&variables=%7B%22businessID%22%3A%22555666777888999%22%2C"
+            "%22adAccountData%22%3A%7B%22name%22%3A%22ReMask%20Ads%22%2C"
+            "%22currency%22%3A%22EUR%22%2C%22timezoneId%22%3A10%7D%7D"
+        )
+        post_data, applied = _ad_account_required_attribution_post_data(
+            request,
+            currency="USD",
+            timezone_id=1,
+        )
+        self.assertEqual(applied["currency"], "USD")
+        self.assertEqual(applied["timezoneId"], 1)
+        self.assertEqual(applied["end_advertiser"], "NONE")
+        self.assertIn("media_agency", applied)
+        self.assertIn("partner", applied)
+        self.assertIn("%22adAccountData%22", post_data)
+
     def test_ad_account_gate_accepts_known_create_without_name_in_envelope(self):
         request = _FakeRequest(
             "fb_api_req_friendly_name=AdAccountCreateMutation"
@@ -714,6 +766,40 @@ class BrowserAdAccountFormActionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["action"], "final")
         script = browser.page.evaluate.await_args.args[0]
         self.assertIn("mode === 'final' && !interactive", script)
+
+
+class BrowserAdAccountUiReconcileTests(unittest.IsolatedAsyncioTestCase):
+    async def test_ui_reconcile_confirms_unique_created_account_id(self):
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-rk-ui-reconcile")
+        )
+        browser.page = SimpleNamespace(
+            evaluate=AsyncMock(
+                return_value=[
+                    {
+                        "text": "ReMask Ads 123456789012345",
+                        "href": (
+                            "https://business.facebook.com/latest/settings/"
+                            "ad_accounts?asset_id=123456789012345"
+                        ),
+                        "ids": ["123456789012345"],
+                        "x": 700,
+                        "y": 320,
+                    }
+                ]
+            )
+        )
+
+        result = await browser._reconcile_created_ad_account_from_ui(
+            business_id="555666777888999",
+            account_name="ReMask Ads",
+        )
+
+        self.assertTrue(result["confirmed"])
+        self.assertEqual(
+            result["ad_account_id"],
+            "act_123456789012345",
+        )
 
 
 class BrowserAdAccountConfirmTermsRegressionTests(unittest.TestCase):
