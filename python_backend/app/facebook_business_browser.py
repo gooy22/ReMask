@@ -4386,57 +4386,115 @@ class FacebookBusinessBrowser:
                 ).upper()
                 dialog_meta = await item.evaluate(
                     """(el) => {
-                        const root = el.closest(
-                            '[role="dialog"],[aria-modal="true"]'
-                        );
-                        if (!root) {
-                            return {
-                                in_dialog:false,
-                                in_wizard_dialog:false,
-                                in_ai_dialog:false
-                            };
-                        }
                         const clean = text => (text || '')
                             .normalize('NFKC')
+                            .replace(/[\u200b\u200c\u200d\ufeff]/g, '')
                             .replace(/\u00a0/g, ' ')
                             .replace(/\s+/g, ' ')
                             .trim()
                             .toLowerCase();
-                        const t = clean(
-                            (root.getAttribute('aria-label') || '') + ' ' +
-                            (root.getAttribute('title') || '') + ' ' +
-                            (root.innerText || root.textContent || '')
-                        );
-                        const wizard = [
-                            'ad account name','advertising account name',
-                            'nom du compte publicitaire','nom du compte',
-                            'name des werbekontos',
-                            'название рекламного аккаунта',
-                            'назва рекламного акаунта',
-                            'currency','devise','währung','валюта',
-                            'time zone','timezone','fuseau horaire',
-                            'zeitzone','часовой пояс','часовий пояс',
-                            'my business','my business portfolio',
-                            'for my business','mon entreprise',
-                            'mon portefeuille business','pour mon entreprise',
-                            'mein unternehmen','für mein unternehmen',
-                            'мой бизнес','для моего бизнеса',
-                            'мій бізнес','для мого бізнесу',
-                            'আমার ব্যবসা','আমার ব্যবসার জন্য',
-                            'doanh nghiệp của tôi',
-                            'dành cho doanh nghiệp của tôi',
-                            'मेरा व्यवसाय','मेरे व्यवसाय के लिए'
-                        ];
                         const ai = [
                             'meta ai','assistant business meta ai',
                             'meta ai business assistant','assistant meta ai'
                         ];
-                        const inAI = ai.some(word => t.includes(word));
+                        const account = [
+                            'ad account','advertising account',
+                            'compte publicitaire','werbekonto','реклам',
+                            'বিজ্ঞাপন অ্যাকাউন্ট','tài khoản quảng cáo',
+                            'विज्ञापन खाता'
+                        ];
+                        const name = [
+                            'ad account name','advertising account name',
+                            'nom du compte publicitaire','name des werbekontos',
+                            'название рекламного аккаунта',
+                            'назва рекламного акаунта'
+                        ];
+                        const currency = [
+                            'currency','devise','währung','валюта','মুদ্রা',
+                            'tiền tệ','मुद्रा'
+                        ];
+                        const timezone = [
+                            'time zone','timezone','fuseau horaire','zeitzone',
+                            'часовой пояс','часовий пояс','সময় অঞ্চল',
+                            'múi giờ','समय क्षेत्र'
+                        ];
+                        const ownership = [
+                            'my business','my business portfolio','for my business',
+                            'mon entreprise','mon portefeuille business',
+                            'pour mon entreprise','mein unternehmen',
+                            'für mein unternehmen','мой бизнес','для моего бизнеса',
+                            'мій бізнес','для мого бізнесу','আমার ব্যবসা',
+                            'আমার ব্যবসার জন্য','doanh nghiệp của tôi',
+                            'dành cho doanh nghiệp của tôi','मेरा व्यवसाय',
+                            'मेरे व्यवसाय के लिए'
+                        ];
+
+                        const root = el.closest(
+                            '[role="dialog"],[aria-modal="true"]'
+                        );
+                        let inDialog = false;
+                        let inWizardDialog = false;
+                        let inAI = false;
+                        if (root) {
+                            inDialog = true;
+                            const t = clean(
+                                (root.getAttribute('aria-label') || '') + ' ' +
+                                (root.getAttribute('title') || '') + ' ' +
+                                (root.innerText || root.textContent || '')
+                            );
+                            inAI = ai.some(word => t.includes(word));
+                            const hasName = name.some(word => t.includes(word));
+                            const hasCurrency = currency.some(word => t.includes(word));
+                            const hasTimezone = timezone.some(word => t.includes(word));
+                            const hasOwnership = ownership.some(word => t.includes(word));
+                            const hasAccount = account.some(word => t.includes(word));
+                            inWizardDialog = !inAI && (
+                                (hasName && (hasCurrency || hasTimezone))
+                                || (hasCurrency && hasTimezone)
+                                || (hasOwnership && hasAccount)
+                            );
+                        }
+
+                        let inWizardSurface = inWizardDialog;
+                        if (!inWizardSurface && !inAI) {
+                            let cur = el;
+                            for (let depth = 0; cur && depth < 9; depth++, cur = cur.parentElement) {
+                                const r = cur.getBoundingClientRect();
+                                if (
+                                    r.width < 180 || r.height < 80
+                                    || r.width > 1050 || r.height > 780
+                                ) {
+                                    continue;
+                                }
+                                const t = clean(
+                                    (cur.getAttribute('aria-label') || '') + ' ' +
+                                    (cur.getAttribute('title') || '') + ' ' +
+                                    (cur.innerText || cur.textContent || '')
+                                );
+                                if (!t || ai.some(word => t.includes(word))) {
+                                    continue;
+                                }
+                                const hasName = name.some(word => t.includes(word));
+                                const hasCurrency = currency.some(word => t.includes(word));
+                                const hasTimezone = timezone.some(word => t.includes(word));
+                                const hasOwnership = ownership.some(word => t.includes(word));
+                                const hasAccount = account.some(word => t.includes(word));
+                                if (
+                                    (hasName && (hasCurrency || hasTimezone))
+                                    || (hasCurrency && hasTimezone)
+                                    || (hasOwnership && hasAccount)
+                                ) {
+                                    inWizardSurface = true;
+                                    break;
+                                }
+                            }
+                        }
+
                         return {
-                            in_dialog:true,
-                            in_ai_dialog:inAI,
-                            in_wizard_dialog:
-                                !inAI && wizard.some(word => t.includes(word))
+                            in_dialog:inDialog,
+                            in_wizard_dialog:inWizardDialog,
+                            in_wizard_surface:inWizardSurface,
+                            in_ai_dialog:inAI
                         };
                     }"""
                 )
@@ -4444,10 +4502,15 @@ class FacebookBusinessBrowser:
                 in_wizard_dialog = bool(
                     dialog_meta.get("in_wizard_dialog")
                 )
+                in_wizard_surface = bool(
+                    dialog_meta.get("in_wizard_surface")
+                )
                 in_ai_dialog = bool(dialog_meta.get("in_ai_dialog"))
                 if in_ai_dialog:
                     continue
                 if wizard_dialog_present and not in_wizard_dialog:
+                    continue
+                if not wizard_dialog_present and not in_wizard_surface:
                     continue
                 score = 0
                 if in_wizard_dialog:
@@ -4474,6 +4537,7 @@ class FacebookBusinessBrowser:
                             "role": role[:80],
                             "in_dialog": in_dialog,
                             "in_wizard_dialog": in_wizard_dialog,
+                            "in_wizard_surface": in_wizard_surface,
                             "wizard_dialog_present": wizard_dialog_present,
                             "index": index,
                         },
