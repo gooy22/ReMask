@@ -716,6 +716,17 @@ class BrowserAdAccountFormActionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("mode === 'final' && !interactive", script)
 
 
+class BrowserAdAccountAnchoredFinalCreateRegressionTests(unittest.TestCase):
+    def test_final_create_can_recover_plain_text_inside_wizard_anchor(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser._click_ad_account_final_interactive
+        )
+        self.assertIn("data-remask-rk-final-anchor", source)
+        self.assertIn("anchor_recovered", source)
+        self.assertIn("compte publicitaire", source)
+        self.assertIn("_ad_account_wizard_rect", source)
+
+
 class BrowserAdAccountWizardGeometryRegressionTests(unittest.TestCase):
     def test_browser_tracks_rk_wizard_geometry(self):
         source = inspect.getsource(
