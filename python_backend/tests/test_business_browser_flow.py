@@ -12,6 +12,7 @@ from app.facebook_business_browser import (
     FacebookBusinessBrowser,
     _ad_account_required_attribution_post_data,
     _extract_created_ad_account_id,
+    _extract_inventory_ad_account_ids,
     _extract_named_ad_account_ids,
 )
 from app.provisioning.business_handler import business_handler
@@ -75,6 +76,38 @@ class BrowserInventoryPayloadTests(unittest.TestCase):
                 }
             },
             "ReMask Ads",
+        )
+        self.assertEqual(ids, [])
+
+    def test_extract_unique_inventory_ad_account_without_name(self):
+        ids = _extract_inventory_ad_account_ids(
+            {
+                "data": {
+                    "business": {
+                        "ad_accounts": {
+                            "edges": [
+                                {
+                                    "node": {
+                                        "id": "123456789012345",
+                                        "__typename": "AdAccount",
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        )
+        self.assertEqual(ids, ["act_123456789012345"])
+
+    def test_inventory_extractor_ignores_business_and_page_ids(self):
+        ids = _extract_inventory_ad_account_ids(
+            {
+                "data": {
+                    "business": {"id": "555666777888999"},
+                    "page": {"id": "999888777666555"},
+                }
+            }
         )
         self.assertEqual(ids, [])
 
@@ -878,6 +911,69 @@ class BrowserAdAccountGraphqlInventoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             result["ad_account_id"],
             "act_123456789012345",
+        )
+
+
+    async def test_inventory_lookup_accepts_one_unique_rk_for_exact_business(self):
+        class _Response:
+            url = "https://business.facebook.com/api/graphql/"
+
+            async def text(self):
+                return (
+                    '{"data":{"business":{"ad_accounts":{"edges":['
+                    '{"node":{"id":"123456789012345",'
+                    '"__typename":"AdAccount"}}]}}}}'
+                )
+
+            request = _FakeRequest(
+                "fb_api_req_friendly_name=BusinessAdAccountsQuery"
+                "&doc_id=1122334455667788"
+                "&variables=%7B%22businessID%22%3A"
+                "%22555666777888999%22%7D"
+            )
+
+        class _Page:
+            def __init__(self):
+                self.url = (
+                    "https://business.facebook.com/latest/settings/ad_accounts"
+                    "?business_id=555666777888999"
+                )
+                self._listener = None
+
+            def on(self, event, callback):
+                if event == "response":
+                    self._listener = callback
+
+            def remove_listener(self, event, callback):
+                if event == "response" and self._listener == callback:
+                    self._listener = None
+
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-rk-inventory-unique")
+        )
+        browser.page = _Page()
+
+        async def fake_goto(target):
+            browser.page.url = target
+            browser.page._listener(_Response())
+            await asyncio.sleep(0)
+
+        browser._goto = AsyncMock(side_effect=fake_goto)
+
+        result = await browser.find_ad_account_in_inventory(
+            business_id="555666777888999",
+            account_name="Different Generated Name",
+            timeout_seconds=2.0,
+        )
+
+        self.assertTrue(result["confirmed"])
+        self.assertEqual(
+            result["ad_account_id"],
+            "act_123456789012345",
+        )
+        self.assertEqual(
+            result["source"],
+            "business_settings_graphql_inventory_unique",
         )
 
 
