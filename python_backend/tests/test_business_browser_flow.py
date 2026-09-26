@@ -4501,3 +4501,34 @@ class BrowserAdAccountInventoryPreflightPolicyTests(unittest.TestCase):
         self.assertIn("inventory_observed", source)
         self.assertIn("not mutation_like", source)
 
+
+
+class BrowserAdAccountCaptureCrashStateTests(unittest.TestCase):
+    def test_capture_exposes_runtime_and_final_arm_state(self):
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-rk-crash-state")
+        )
+        self.assertFalse(browser.ad_account_final_capture_armed)
+        self.assertFalse(browser.ad_account_create_may_have_been_sent)
+        self.assertEqual(browser.ad_account_runtime_phase, "IDLE")
+
+        source = inspect.getsource(
+            FacebookBusinessBrowser.capture_ad_account_create_request
+        )
+        self.assertIn(
+            "self._ad_account_final_capture_armed = False",
+            source,
+        )
+        self.assertIn(
+            'self._mark_ad_account_phase("CAPTURE_FINAL_ARMED")',
+            source,
+        )
+        self.assertIn(
+            "self._ad_account_final_capture_armed = True",
+            source,
+        )
+        self.assertIn(
+            "if not final_attempted:",
+            source,
+        )
+
