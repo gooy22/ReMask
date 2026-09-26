@@ -215,30 +215,53 @@ def _replace_capture_values(
     timezone_id: int,
 ) -> dict[str, Any]:
     canary = _clean(canary_name)
+    timezone_value = int(timezone_id)
+
+    def same_scalar_type(original: Any, *, text: str, number: int | None = None) -> Any:
+        # GraphQL input coercion is stricter than JSON itself. Preserve the
+        # scalar type Meta used in the live-captured request instead of turning
+        # an Int timezone/business id into a String.
+        if number is not None and isinstance(original, int) and not isinstance(original, bool):
+            return int(number)
+        return text
 
     def walk(value: Any) -> Any:
         if isinstance(value, dict):
             out: dict[str, Any] = {}
             for key, child in value.items():
                 lowered = _clean(key).casefold().replace("-", "_")
-                if lowered in {"business_id", "businessid"}:
-                    out[key] = business_id
-                elif lowered in {
-                    "account_name",
-                    "ad_account_name",
-                    "adaccount_name",
+                compact = lowered.replace("_", "")
+
+                if compact == "businessid":
+                    out[key] = same_scalar_type(
+                        child,
+                        text=business_id,
+                        number=int(business_id),
+                    )
+                elif compact in {
+                    "accountname",
                     "adaccountname",
                 }:
                     out[key] = account_name
-                elif lowered == "name" and (not canary or _clean(child) == canary):
+                elif compact == "name" and (
+                    not canary or _clean(child) == canary
+                ):
                     out[key] = account_name
-                elif lowered in {"currency", "currency_code"}:
+                elif compact in {"currency", "currencycode"}:
                     out[key] = currency
-                elif lowered in {"timezone_id", "timezoneid"}:
-                    out[key] = str(int(timezone_id))
-                elif lowered in {"end_advertiser_id", "endadvertiserid"}:
-                    out[key] = business_id
-                elif lowered == "client_mutation_id":
+                elif compact == "timezoneid":
+                    out[key] = same_scalar_type(
+                        child,
+                        text=str(timezone_value),
+                        number=timezone_value,
+                    )
+                elif compact == "endadvertiserid":
+                    out[key] = same_scalar_type(
+                        child,
+                        text=business_id,
+                        number=int(business_id),
+                    )
+                elif compact == "clientmutationid":
                     out[key] = uuid.uuid4().hex[:16]
                 else:
                     out[key] = walk(child)
@@ -258,6 +281,92 @@ def _replace_capture_values(
         input_data.setdefault("media_agency", "NONE")
         input_data.setdefault("partner", "NONE")
     return result
+
+
+def _validate_rewritten_capture_variables(
+    variables: dict[str, Any],
+    *,
+    business_id: str,
+    account_name: str,
+    currency: str,
+    timezone_id: int,
+) -> dict[str, Any]:
+    """Prove the one-shot replay still contains the requested immutable RK data.
+
+    This is deliberately schema-tolerant: known key names are recognized, but
+    exact scalar-value presence is also accepted so a harmless Relay key rename
+    does not brick the flow. No request is sent when the requested values cannot
+    be proven in the rewritten live-captured payload.
+    """
+    expected_business = _clean(business_id)
+    expected_name = _clean(account_name)
+    expected_currency = _clean(currency).upper()
+    expected_timezone = str(int(timezone_id))
+
+    scalars: list[str] = []
+    keyed: dict[str, list[str]] = {
+        "business": [],
+        "name": [],
+        "currency": [],
+        "timezone": [],
+    }
+
+    def add_scalar(value: Any) -> str:
+        if isinstance(value, bool) or value is None:
+            return ""
+        text = _clean(value)
+        if text:
+            scalars.append(text)
+        return text
+
+    def walk(value: Any) -> None:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                lowered = _clean(key).casefold().replace("-", "_")
+                compact = lowered.replace("_", "")
+                child_text = add_scalar(child) if not isinstance(child, (dict, list)) else ""
+                if compact in {"businessid", "endadvertiserid"} and child_text:
+                    keyed["business"].append(child_text)
+                elif compact in {"name", "accountname", "adaccountname"} and child_text:
+                    keyed["name"].append(child_text)
+                elif compact in {"currency", "currencycode"} and child_text:
+                    keyed["currency"].append(child_text.upper())
+                elif compact == "timezoneid" and child_text:
+                    keyed["timezone"].append(child_text)
+                walk(child)
+        elif isinstance(value, list):
+            for child in value:
+                walk(child)
+        else:
+            add_scalar(value)
+
+    walk(variables)
+    scalar_set = set(scalars)
+
+    checks = {
+        "business": (
+            expected_business in keyed["business"]
+            or expected_business in scalar_set
+        ),
+        "name": (
+            expected_name in keyed["name"]
+            or expected_name in scalar_set
+        ),
+        "currency": (
+            expected_currency in keyed["currency"]
+            or expected_currency in {value.upper() for value in scalar_set}
+        ),
+        "timezone": (
+            expected_timezone in keyed["timezone"]
+            or expected_timezone in scalar_set
+        ),
+    }
+    missing = [key for key, ok in checks.items() if not ok]
+    return {
+        "ok": not missing,
+        "missing": missing,
+        "checks": checks,
+    }
 
 
 def _unique_candidates(
@@ -424,6 +533,26 @@ async def create_ad_account_with_docids(
                 "No CREATE was sent."
             ),
             retryable=True,
+        )
+
+    rewritten_validation = _validate_rewritten_capture_variables(
+        captured_variables_rewritten,
+        business_id=business,
+        account_name=name,
+        currency=currency_code,
+        timezone_id=timezone,
+    )
+    if not bool(rewritten_validation.get("ok")):
+        raise AdAccountMutationError(
+            "CREATE_AD_ACCOUNT_LIVE_CAPTURE_INVALID",
+            (
+                "The live Add-RK payload could not prove the requested "
+                "business/name/currency/timezone after rewrite. No CREATE was "
+                "sent. missing="
+                + ",".join(rewritten_validation.get("missing") or [])
+            ),
+            retryable=True,
+            payload={"rewrite_validation": rewritten_validation},
         )
 
     candidate = DocIdCandidate(
@@ -635,6 +764,8 @@ __all__ = [
     "CreateAdAccountResult",
     "_extract_ad_account_id",
     "_normalize_ad_account_id",
+    "_replace_capture_values",
+    "_validate_rewritten_capture_variables",
     "create_ad_account_with_docids",
     "discover_current_ad_account_create_candidate",
 ]
