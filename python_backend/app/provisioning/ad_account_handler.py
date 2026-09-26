@@ -979,24 +979,48 @@ async def ad_account_handler(
                 account_name=rk_name,
             )
             if found_id:
-                await provisioning_state.remember_entity(
-                    profile_id,
-                    scope_key,
-                    ProvisioningStep.AD_ACCOUNT,
-                    {"ad_account_id": found_id},
+                cross_graph_verified, cross_graph_evidence = (
+                    await _verify_expected_ad_account_in_business(
+                        session,
+                        business_id=business_id,
+                        account_name=rk_name,
+                        expected_ad_account_id=found_id,
+                        checks=2,
+                        delay_seconds=0.75,
+                    )
                 )
-                return {
-                    "ad_account_id": found_id,
-                    "business_id": business_id,
-                    "name": rk_name,
-                    "currency": currency,
-                    "timezone_id": timezone_id,
-                    "reused": True,
-                    "cross_job_resume": True,
-                    "recovered_after_uncertainty": True,
-                    "transport": "graph_inventory_reconciliation",
-                    "reconciliation": diagnostics,
-                }
+                if cross_graph_verified:
+                    await provisioning_state.remember_entity(
+                        profile_id,
+                        scope_key,
+                        ProvisioningStep.AD_ACCOUNT,
+                        {"ad_account_id": found_id},
+                    )
+                    return {
+                        "ad_account_id": found_id,
+                        "business_id": business_id,
+                        "name": rk_name,
+                        "currency": currency,
+                        "timezone_id": timezone_id,
+                        "reused": True,
+                        "cross_job_resume": True,
+                        "recovered_after_uncertainty": True,
+                        "transport": (
+                            "cross_job_graph_candidate_business_settings_verified"
+                        ),
+                        "reconciliation": diagnostics,
+                        "graph_candidate_verification": cross_graph_evidence,
+                    }
+
+                diagnostics.append(
+                    {
+                        "stage": "inventory",
+                        "result": "candidate_rejected",
+                        "candidate_ad_account_id": found_id,
+                        "reason": "not_confirmed_in_business_settings",
+                        "browser_verification": cross_graph_evidence,
+                    }
+                )
 
             proof_found_id, proven_empty, inventory_proof = (
                 await _prove_empty_after_uncertainty(

@@ -1300,6 +1300,27 @@ class AdAccountNestedCapturedPayloadTests(unittest.TestCase):
         self.assertNotIn("end_advertiser", rewritten["right"])
 
 
+class AdAccountCrossJobGraphTrustRegressionTests(unittest.TestCase):
+    def test_cross_job_graph_candidate_cannot_return_without_browser_verify(self) -> None:
+        source = inspect.getsource(ad_account_handler)
+        marker = source.index(
+            "latest_ad_account_resume_for_business"
+        )
+        tail = source[marker:]
+        self.assertNotIn(
+            '"transport": "graph_inventory_reconciliation"',
+            tail,
+        )
+        self.assertIn(
+            "cross_job_graph_candidate_business_settings_verified",
+            tail,
+        )
+        self.assertIn(
+            "_verify_expected_ad_account_in_business(",
+            tail,
+        )
+
+
 class AdAccountGraphInventoryTrustRegressionTests(unittest.TestCase):
     def test_graph_inventory_never_reuses_single_row_by_count(self) -> None:
         source = inspect.getsource(_reconcile_existing)
