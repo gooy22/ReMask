@@ -276,6 +276,7 @@ class ProvisioningStateStore:
             "CREATE_SUBMIT_INTENT",
             "CREATE_SUBMITTED",
             "CREATE_RESULT_UNKNOWN",
+            "CREATE_RESULT_UNVERIFIED",
             "RECONCILE_CREATE",
         }
 
@@ -296,19 +297,19 @@ class ProvisioningStateStore:
             if str(result.get("business_id") or "").strip() != business:
                 continue
 
-            raw_id = str(
-                result.get("ad_account_id")
-                or result.get("create_response_ad_account_id")
-                or ""
-            ).strip()
+            raw_id = str(result.get("ad_account_id") or "").strip()
             numeric_id = raw_id[4:] if raw_id.lower().startswith("act_") else raw_id
-            confirmed = numeric_id.isdigit() and 5 <= len(numeric_id) <= 30
 
             phase = str(
                 result.get("phase")
                 or result.get("resume_from")
                 or ""
             ).strip().upper()
+            confirmed = (
+                numeric_id.isdigit()
+                and 5 <= len(numeric_id) <= 30
+                and phase != "CREATE_RESULT_UNVERIFIED"
+            )
 
             # A newer explicit CREATE_NOT_SUBMITTED checkpoint is authoritative
             # evidence that this later Job did not send CREATE. Because rows are
@@ -678,6 +679,54 @@ class ProvisioningStateStore:
                 (entity_value, now, profile_id, scope_key),
             )
             con.commit()
+
+
+    async def forget_entity(
+        self,
+        profile_id: str,
+        scope_key: str,
+        step: ProvisioningStep,
+        *,
+        expected_value: str = "",
+    ) -> None:
+        """Clear a cached entity that failed independent live verification."""
+        entity_key = ENTITY_RESULT_KEYS.get(step)
+        column = {
+            "business_id": "business_id",
+            "ad_account_id": "ad_account_id",
+            "funding_source_id": "funding_source_id",
+        }.get(entity_key or "")
+        if not column:
+            return
+        await asyncio.to_thread(
+            self._forget_entity_sync,
+            profile_id,
+            scope_key,
+            column,
+            str(expected_value or "").strip(),
+        )
+
+    def _forget_entity_sync(
+        self,
+        profile_id: str,
+        scope_key: str,
+        column: str,
+        expected_value: str,
+    ) -> None:
+        now = _now()
+        with self._connect() as con:
+            if expected_value:
+                con.execute(
+                    f"UPDATE provisioning_entities SET {column}=NULL,updated_at=? "
+                    f"WHERE profile_id=? AND scope_key=? AND {column}=?",
+                    (now, profile_id, scope_key, expected_value),
+                )
+            else:
+                con.execute(
+                    f"UPDATE provisioning_entities SET {column}=NULL,updated_at=? "
+                    "WHERE profile_id=? AND scope_key=?",
+                    (now, profile_id, scope_key),
+                )
 
     async def complete(
         self,

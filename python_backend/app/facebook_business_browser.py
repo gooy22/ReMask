@@ -7734,6 +7734,7 @@ class FacebookBusinessBrowser:
         *,
         business_id: str,
         account_name: str,
+        expected_ad_account_id: str = "",
         timeout_seconds: float = 10.0,
     ) -> dict[str, Any]:
         """Read-only RK lookup from Meta's own Business Settings responses.
@@ -7748,6 +7749,7 @@ class FacebookBusinessBrowser:
         """
         business = _digits(business_id)
         expected = _clean(account_name)
+        expected_id = _normalize_ad_account_id(expected_ad_account_id)
         if self.page is None or not business or not expected:
             return {
                 "confirmed": False,
@@ -7845,6 +7847,7 @@ class FacebookBusinessBrowser:
                     "friendly_name": _clean(
                         meta.get("friendly_name")
                     )[:180],
+                    "expected_ad_account_id": expected_id,
                     "request": request_summary,
                 }
 
@@ -7859,6 +7862,28 @@ class FacebookBusinessBrowser:
 
                 if (
                     exact_business_context
+                    and expected_id
+                    and expected_id in set(exact_name_ids + inventory_ids)
+                    and not found_future.done()
+                ):
+                    found_future.set_result(
+                        {
+                            "confirmed": True,
+                            "confirmed_empty": False,
+                            "business_id": business,
+                            "ad_account_id": expected_id,
+                            "account_name": expected,
+                            "source": (
+                                "business_settings_graphql_inventory_expected_id"
+                            ),
+                            "evidence": row,
+                        }
+                    )
+                    return
+
+                if (
+                    exact_business_context
+                    and not expected_id
                     and len(exact_name_ids) == 1
                     and not found_future.done()
                 ):
@@ -7879,6 +7904,7 @@ class FacebookBusinessBrowser:
 
                 if (
                     exact_business_context
+                    and not expected_id
                     and not mutation_like
                     and len(inventory_ids) == 1
                     and not found_future.done()

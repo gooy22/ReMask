@@ -23,6 +23,7 @@ from app.provisioning.ad_account_handler import (
     _inventory_repeatedly_confirms_empty,
     _inventory_proof_summary,
     _reconcile_existing_browser_inventory,
+    _verify_expected_ad_account_in_business,
     _known_final_click_unmatched_empty_inventory,
     _known_pre_submit_capture_crash,
     _prove_empty_after_uncertainty,
@@ -31,6 +32,71 @@ from app.provisioning.ad_account_handler import (
     ad_account_handler,
 )
 from app.provisioning.state import ProvisioningStateStore
+
+
+
+class AdAccountPostCreateVerificationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_expected_id_requires_exact_business_inventory_match(self) -> None:
+        evidence = {
+            "confirmed": True,
+            "ad_account_id": "act_2222222222",
+            "source": "business_settings_graphql_inventory_unique",
+        }
+        with patch(
+            "app.provisioning.ad_account_handler._reconcile_existing_browser_inventory",
+            new=AsyncMock(return_value=("act_2222222222", evidence)),
+        ) as reconcile:
+            verified, observations = await _verify_expected_ad_account_in_business(
+                SimpleNamespace(),
+                business_id="1056638030476027",
+                account_name="ReMask RK",
+                expected_ad_account_id="act_1111111111",
+                checks=2,
+                delay_seconds=0,
+            )
+
+        self.assertFalse(verified)
+        self.assertEqual(reconcile.await_count, 2)
+        self.assertEqual(len(observations), 2)
+
+    async def test_expected_id_confirms_only_same_id(self) -> None:
+        evidence = {
+            "confirmed": True,
+            "ad_account_id": "act_1111111111",
+            "source": "business_settings_graphql_inventory_expected_id",
+        }
+        with patch(
+            "app.provisioning.ad_account_handler._reconcile_existing_browser_inventory",
+            new=AsyncMock(return_value=("act_1111111111", evidence)),
+        ):
+            verified, observations = await _verify_expected_ad_account_in_business(
+                SimpleNamespace(),
+                business_id="1056638030476027",
+                account_name="ReMask RK",
+                expected_ad_account_id="act_1111111111",
+                checks=3,
+                delay_seconds=0,
+            )
+
+        self.assertTrue(verified)
+        self.assertEqual(len(observations), 1)
+
+    def test_generic_unrelated_account_id_is_not_create_result(self) -> None:
+        payload = {
+            "data": {
+                "viewer": {
+                    "account_id": "120251310771460564",
+                    "__typename": "User",
+                }
+            }
+        }
+        self.assertEqual(_extract_ad_account_id(payload), ("", ""))
+
+    def test_handler_requires_inventory_verification_before_success(self) -> None:
+        source = inspect.getsource(ad_account_handler)
+        self.assertIn("AD_ACCOUNT_CREATE_RESULT_UNVERIFIED", source)
+        self.assertIn("AD_ACCOUNT_POST_CREATE_VERIFIED", source)
+        self.assertIn("_verify_expected_ad_account_in_business(", source)
 
 
 class AdAccountRuntimeDiagnosticTests(unittest.TestCase):

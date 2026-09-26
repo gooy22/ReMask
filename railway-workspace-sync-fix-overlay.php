@@ -339,6 +339,37 @@ $syncProfileReplacement = <<<'PHP'
         // Business Manager enumeration is optional enrichment and must not make
         // an otherwise valid FB profile fail synchronization.
         $preflight = MetaEndpoint::cachedPreflight($profile, true);
+
+        // A saved token and saved browser cookies must represent the same
+        // Facebook user. Otherwise me/adaccounts can silently inject RK from a
+        // different account into this Workspace profile.
+        $store = AccountStoreFactory::create(ACCOUNTSFILENAME);
+        $savedAccount = $store->getAccountByName($profile);
+        $cookieUserId = '';
+        if ($savedAccount instanceof FbAccount) {
+            foreach ((array)$savedAccount->cookies as $cookie) {
+                if (!is_array($cookie)) continue;
+                if ((string)($cookie['name'] ?? '') !== 'c_user') continue;
+                $cookieUserId = trim((string)($cookie['value'] ?? ''));
+                if ($cookieUserId !== '') break;
+            }
+        }
+        $graphUserId = trim((string)($preflight['identity']['id'] ?? ''));
+        if (
+            $cookieUserId !== ''
+            && $graphUserId !== ''
+            && !hash_equals($cookieUserId, $graphUserId)
+        ) {
+            MetaEndpoint::invalidateProfileCache($profile);
+            $snapshot = hierarchy_profile_snapshot($profile);
+            $snapshot['sync_source'] = 'profile_identity_guard';
+            $snapshot['identity_mismatch'] = true;
+            $snapshot['sync_warnings'] = [
+                'PROFILE_IDENTITY_MISMATCH: token and saved FB session belong to different users. Cached BM/RK data was cleared; update token or cookies before sync.',
+            ];
+            MetaEndpoint::ok($snapshot);
+        }
+
         $syncWarnings = [];
         if (!empty($preflight['ad_accounts']['_funding_enrichment_warning'])) {
             $syncWarnings[] = 'RK funding/payment metadata unavailable; RK list kept';
