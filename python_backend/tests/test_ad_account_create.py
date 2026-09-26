@@ -1327,6 +1327,26 @@ class AdAccountProvisioningServiceRegressionTests(unittest.TestCase):
         )
 
 
+class AdAccountStructuralInventoryRegressionTests(unittest.TestCase):
+    def test_structural_inventory_ids_cannot_block_create_as_already_exists(self) -> None:
+        source = inspect.getsource(ad_account_handler)
+        preflight_pos = source.index(
+            "# Read-only preflight enforces the 1 BM = 1 RK invariant."
+        )
+        preparing_pos = source.index(
+            '"phase": "CREATE_PREPARING"',
+            preflight_pos,
+        )
+        window = source[preflight_pos:preparing_pos]
+        self.assertNotIn(
+            "_browser_inventory_confirms_nonempty(browser_inventory_before)",
+            window,
+        )
+        self.assertIn(
+            "verify_ad_account_inventory_empty(",
+            window,
+        )
+
 class AdAccountButtonSemanticsRegressionTests(unittest.TestCase):
     def test_add_rk_does_not_reuse_persistent_state_as_success(self) -> None:
         source = inspect.getsource(ad_account_handler)

@@ -1329,11 +1329,6 @@ async def ad_account_handler(
             "candidate_confirmations": browser_candidate_confirmations,
         }
 
-    if _browser_inventory_confirms_nonempty(browser_inventory_before):
-        _raise_rk_already_exists(
-            business_id=business_id,
-        )
-
     if not bool(browser_inventory_before.get("confirmed_empty")):
         try:
             async with FacebookBusinessBrowser(
