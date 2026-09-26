@@ -270,6 +270,43 @@ async def _reconcile_existing(
     )
 
 
+async def _reconcile_existing_browser_inventory(
+    session: Any,
+    *,
+    business_id: str,
+    account_name: str,
+) -> tuple[str, dict[str, Any]]:
+    """Read-only fallback using Meta Business Settings GraphQL inventory."""
+    try:
+        async with FacebookBusinessBrowser(
+            session.context,
+            timeout_seconds=45,
+        ) as browser:
+            result = await browser.find_ad_account_in_inventory(
+                business_id=business_id,
+                account_name=account_name,
+                timeout_seconds=10.0,
+            )
+    except Exception as exc:
+        return "", {
+            "confirmed": False,
+            "source": "business_settings_graphql_inventory",
+            "error": f"{exc.__class__.__name__}: {_clean(exc)}"[:500],
+        }
+
+    if not isinstance(result, dict):
+        return "", {
+            "confirmed": False,
+            "source": "business_settings_graphql_inventory",
+            "reason": "invalid_result",
+        }
+
+    found_id = _normalize_ad_account_id(result.get("ad_account_id"))
+    if bool(result.get("confirmed")) and found_id:
+        return found_id, result
+    return "", result
+
+
 async def ad_account_handler(
     session: Any,
     params: dict[str, Any],
@@ -528,6 +565,36 @@ async def ad_account_handler(
             ):
                 cross_job = {}
             else:
+                browser_found_id, browser_inventory = (
+                    await _reconcile_existing_browser_inventory(
+                        session,
+                        business_id=business_id,
+                        account_name=rk_name,
+                    )
+                )
+                if browser_found_id:
+                    await provisioning_state.remember_entity(
+                        profile_id,
+                        scope_key,
+                        ProvisioningStep.AD_ACCOUNT,
+                        {"ad_account_id": browser_found_id},
+                    )
+                    return {
+                        "ad_account_id": browser_found_id,
+                        "business_id": business_id,
+                        "name": rk_name,
+                        "currency": currency,
+                        "timezone_id": timezone_id,
+                        "reused": True,
+                        "cross_job_resume": True,
+                        "recovered_after_uncertainty": True,
+                        "transport": (
+                            "business_settings_graphql_inventory"
+                        ),
+                        "reconciliation": inventory_evidence,
+                        "browser_inventory": browser_inventory,
+                    }
+
                 ui_inventory = {}
                 try:
                     async with FacebookBusinessBrowser(
@@ -624,6 +691,32 @@ async def ad_account_handler(
                 "recovered_after_uncertainty": True,
                 "transport": "graph_inventory_reconciliation",
                 "reconciliation": diagnostics,
+            }
+
+        browser_found_id, browser_inventory = (
+            await _reconcile_existing_browser_inventory(
+                session,
+                business_id=business_id,
+                account_name=rk_name,
+            )
+        )
+        if browser_found_id:
+            await provisioning_state.remember_entity(
+                profile_id,
+                scope_key,
+                ProvisioningStep.AD_ACCOUNT,
+                {"ad_account_id": browser_found_id},
+            )
+            return {
+                "ad_account_id": browser_found_id,
+                "business_id": business_id,
+                "name": rk_name,
+                "currency": currency,
+                "timezone_id": timezone_id,
+                "recovered_after_uncertainty": True,
+                "transport": "business_settings_graphql_inventory",
+                "reconciliation": diagnostics,
+                "browser_inventory": browser_inventory,
             }
 
         await provisioning_state.checkpoint(
@@ -813,12 +906,14 @@ async def ad_account_handler(
                 },
             )
 
+            last_diagnostics: list[dict[str, Any]] = []
             for attempt in range(3):
                 found_id, diagnostics = await _reconcile_existing(
                     session,
                     business_id=business_id,
                     account_name=rk_name,
                 )
+                last_diagnostics = diagnostics
                 if found_id:
                     await provisioning_state.remember_entity(
                         profile_id,
@@ -838,6 +933,32 @@ async def ad_account_handler(
                     }
                 if attempt < 2:
                     await asyncio.sleep(2.0)
+
+            browser_found_id, browser_inventory = (
+                await _reconcile_existing_browser_inventory(
+                    session,
+                    business_id=business_id,
+                    account_name=rk_name,
+                )
+            )
+            if browser_found_id:
+                await provisioning_state.remember_entity(
+                    profile_id,
+                    scope_key,
+                    ProvisioningStep.AD_ACCOUNT,
+                    {"ad_account_id": browser_found_id},
+                )
+                return {
+                    "ad_account_id": browser_found_id,
+                    "business_id": business_id,
+                    "name": rk_name,
+                    "currency": currency,
+                    "timezone_id": timezone_id,
+                    "recovered_after_uncertainty": True,
+                    "transport": "business_settings_graphql_inventory",
+                    "reconciliation": last_diagnostics,
+                    "browser_inventory": browser_inventory,
+                }
 
             raise ProvisioningError(
                 "AD_ACCOUNT_CREATE_RESULT_UNKNOWN",
