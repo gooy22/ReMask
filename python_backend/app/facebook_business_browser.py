@@ -8671,16 +8671,6 @@ class FacebookBusinessBrowser:
                         }
 
                         const localAccountContext = hasLocalAccountContext(el);
-                        // The top Business Suite toolbar also exposes a
-                        // localized generic Add button. On current Meta UI it
-                        // opens unrelated surfaces (Meta AI / details), not
-                        // the Ad Account creation menu. Never treat that as an
-                        // RK Add unless its local container explicitly belongs
-                        // to the Ad Accounts section.
-                        if (r.y < 180 && !localAccountContext) {
-                            continue;
-                        }
-
                         const key = [
                             text,
                             Math.round(r.x),
@@ -9735,10 +9725,7 @@ timeout_seconds=4.0,
                                 const hasAccount = accountWords.some(x => text.includes(x));
                                 const hasAction = actionWords.some(x => text.includes(x));
                                 if (hasAccount && hasAction) return true;
-                                if (r.x < 300 || !genericActions.has(text)) {
-                                    return false;
-                                }
-                                return r.y >= 180 || localAccountContext(el);
+                                return r.x >= 300 && genericActions.has(text);
                             });
                         }"""
                     )
