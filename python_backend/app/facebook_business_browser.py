@@ -4562,17 +4562,22 @@ class FacebookBusinessBrowser:
                             '[role="dialog"],[aria-modal="true"]'
                         );
                         if (!root) return false;
-                        const text = clean(
+                        const headings = [...root.querySelectorAll(
+                            'h1,h2,h3,[role="heading"]'
+                        )].filter(visible).slice(0, 3).map(node =>
+                            node.innerText || node.textContent || ''
+                        ).join(' ');
+                        const identity = clean(
                             (root.getAttribute('aria-label') || '') + ' ' +
                             (root.getAttribute('title') || '') + ' ' +
-                            (root.innerText || root.textContent || '')
+                            headings
                         );
                         return [
                             'meta ai',
                             'assistant business meta ai',
                             'meta ai business assistant',
                             'assistant meta ai'
-                        ].some(word => text.includes(word));
+                        ].some(word => identity.includes(word));
                     };
                     const nodes = [...document.querySelectorAll(
                         'button,a,span,div,h1,h2,h3,label,'
@@ -4761,7 +4766,17 @@ class FacebookBusinessBrowser:
                             (root.getAttribute('title') || '') + ' ' +
                             (root.innerText || root.textContent || '')
                         );
-                        if (!t || ai.some(word => t.includes(word))) {
+                        const headings = [...root.querySelectorAll(
+                            'h1,h2,h3,[role="heading"]'
+                        )].filter(visible).slice(0, 3).map(node =>
+                            node.innerText || node.textContent || ''
+                        ).join(' ');
+                        const identity = clean(
+                            (root.getAttribute('aria-label') || '') + ' ' +
+                            (root.getAttribute('title') || '') + ' ' +
+                            headings
+                        );
+                        if (!t || ai.some(word => identity.includes(word))) {
                             return {ok:false,text:t};
                         }
                         const hasName = name.some(word => t.includes(word));
@@ -5189,7 +5204,17 @@ class FacebookBusinessBrowser:
                                 (root.getAttribute('title') || '') + ' ' +
                                 (root.innerText || root.textContent || '')
                             );
-                            return !ai.some(word => t.includes(word))
+                            const headings = [...root.querySelectorAll(
+                                'h1,h2,h3,[role="heading"]'
+                            )].filter(visible).slice(0, 3).map(node =>
+                                node.innerText || node.textContent || ''
+                            ).join(' ');
+                            const identity = clean(
+                                (root.getAttribute('aria-label') || '') + ' ' +
+                                (root.getAttribute('title') || '') + ' ' +
+                                headings
+                            );
+                            return !ai.some(word => identity.includes(word))
                                 && wizard.some(word => t.includes(word));
                         });
                     }"""
@@ -5341,7 +5366,17 @@ class FacebookBusinessBrowser:
                                 (root.getAttribute('title') || '') + ' ' +
                                 (root.innerText || root.textContent || '')
                             );
-                            inAI = ai.some(word => t.includes(word));
+                            const headings = [...root.querySelectorAll(
+                                'h1,h2,h3,[role="heading"]'
+                            )].filter(visible).slice(0, 3).map(node =>
+                                node.innerText || node.textContent || ''
+                            ).join(' ');
+                            const identity = clean(
+                                (root.getAttribute('aria-label') || '') + ' ' +
+                                (root.getAttribute('title') || '') + ' ' +
+                                headings
+                            );
+                            inAI = ai.some(word => identity.includes(word));
                             const hasName = name.some(word => t.includes(word));
                             const hasCurrency = currency.some(word => t.includes(word));
                             const hasTimezone = timezone.some(word => t.includes(word));
@@ -5370,7 +5405,7 @@ class FacebookBusinessBrowser:
                                     (cur.getAttribute('title') || '') + ' ' +
                                     (cur.innerText || cur.textContent || '')
                                 );
-                                if (!t || ai.some(word => t.includes(word))) {
+                                if (!t) {
                                     continue;
                                 }
                                 const hasName = name.some(word => t.includes(word));
@@ -7660,17 +7695,22 @@ class FacebookBusinessBrowser:
                             '[role="dialog"],[aria-modal="true"]'
                         );
                         if (!root) return false;
-                        const rootText = lower(
+                        const headings = [...root.querySelectorAll(
+                            'h1,h2,h3,[role="heading"]'
+                        )].filter(visible).slice(0, 3).map(node =>
+                            node.innerText || node.textContent || ''
+                        ).join(' ');
+                        const identity = lower(
                             (root.getAttribute('aria-label') || '') + ' ' +
                             (root.getAttribute('title') || '') + ' ' +
-                            (root.innerText || root.textContent || '')
+                            headings
                         );
                         return [
                             'meta ai',
                             'assistant business meta ai',
                             'meta ai business assistant',
                             'assistant meta ai'
-                        ].some(word => rootText.includes(word));
+                        ].some(word => identity.includes(word));
                     };
 
                     const rightNodes = [...document.querySelectorAll(
@@ -7778,12 +7818,24 @@ class FacebookBusinessBrowser:
                             'input,textarea,select,[role="combobox"],[role="textbox"]'
                         )
                     );
-                    const dialogLooksLikeMetaAI = [
-                        'meta ai',
-                        'assistant business meta ai',
-                        'meta ai business assistant',
-                        'assistant meta ai'
-                    ].some(word => dialogCombined.includes(word));
+                    const dialogLooksLikeMetaAI = dialogs.some(dialog => {
+                        const headings = [...dialog.querySelectorAll(
+                            'h1,h2,h3,[role="heading"]'
+                        )].filter(visible).slice(0, 3).map(node =>
+                            node.innerText || node.textContent || ''
+                        ).join(' ');
+                        const identity = lower(
+                            (dialog.getAttribute('aria-label') || '') + ' ' +
+                            (dialog.getAttribute('title') || '') + ' ' +
+                            headings
+                        );
+                        return [
+                            'meta ai',
+                            'assistant business meta ai',
+                            'meta ai business assistant',
+                            'assistant meta ai'
+                        ].some(word => identity.includes(word));
+                    });
                     // A generic "ad account" mention is not enough here.
                     // Meta AI opens its own dialog with a textbox and can
                     // mention the current settings surface, which previously
@@ -8189,9 +8241,6 @@ class FacebookBusinessBrowser:
             "meta ai business assistant",
             "assistant meta ai",
         )
-        if any(marker in dialog_text for marker in ai_dialog_markers):
-            return False
-
         dialog_wizard_markers = (
             "ad account name",
             "advertising account name",
@@ -8237,6 +8286,8 @@ class FacebookBusinessBrowser:
             )
         ):
             return True
+        if any(marker in dialog_text for marker in ai_dialog_markers):
+            return False
         # Unwrapped Meta wizard variants expose multiple form controls. Do not
         # accept a lone table/search input from the normal Ad Accounts page.
         controls = state.get("controls")
@@ -8511,17 +8562,22 @@ class FacebookBusinessBrowser:
                             '[role="dialog"],[aria-modal="true"]'
                         );
                         if (!root) return false;
-                        const rootText = clean(
+                        const headings = [...root.querySelectorAll(
+                            'h1,h2,h3,[role="heading"]'
+                        )].filter(visible).slice(0, 3).map(node =>
+                            node.innerText || node.textContent || ''
+                        ).join(' ');
+                        const identity = clean(
                             (root.getAttribute('aria-label') || '') + ' ' +
                             (root.getAttribute('title') || '') + ' ' +
-                            (root.innerText || root.textContent || '')
+                            headings
                         );
                         return [
                             'meta ai',
                             'assistant business meta ai',
                             'meta ai business assistant',
                             'assistant meta ai'
-                        ].some(word => rootText.includes(word));
+                        ].some(word => identity.includes(word));
                     };
                     for (const el of document.querySelectorAll(
                         'button,a,span,div,[role],[tabindex]'
@@ -9094,17 +9150,22 @@ timeout_seconds=4.0,
 
                     const rows = [];
                     for (const root of popupRoots) {
-                        const rootText = clean(
+                        const headings = [...root.querySelectorAll(
+                            'h1,h2,h3,[role="heading"]'
+                        )].filter(visible).slice(0, 3).map(node =>
+                            node.innerText || node.textContent || ''
+                        ).join(' ');
+                        const rootIdentity = clean(
                             (root.getAttribute('aria-label') || '') + ' ' +
                             (root.getAttribute('title') || '') + ' ' +
-                            (root.innerText || root.textContent || '')
+                            headings
                         );
                         if ([
                             'meta ai',
                             'assistant business meta ai',
                             'meta ai business assistant',
                             'assistant meta ai'
-                        ].some(word => rootText.includes(word))) {
+                        ].some(word => rootIdentity.includes(word))) {
                             continue;
                         }
                         for (const el of root.querySelectorAll(
