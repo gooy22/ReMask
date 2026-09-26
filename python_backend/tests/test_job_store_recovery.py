@@ -192,6 +192,62 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
             "ad_account_final_click_unmatched",
         )
 
+    async def test_newer_create_not_submitted_supersedes_older_uncertainty(self):
+        now = int(time.time())
+        business_id = "1056638030476027"
+        profile_id = "4"
+
+        older_uncertain = {
+            "business_id": business_id,
+            "phase": "CREATE_RESULT_UNKNOWN",
+            "resume_from": "RECONCILE_CREATE",
+            "activity": "AD_ACCOUNT_FINAL_CLICK_UNMATCHED",
+            "browser_diagnostic": {
+                "stage": "ad_account_final_click_unmatched",
+            },
+        }
+        newer_safe = {
+            "business_id": business_id,
+            "phase": "CREATE_NOT_SUBMITTED",
+            "resume_from": "CREATE",
+            "last_error_code": "AD_ACCOUNT_CREATE_UI_CHANGED",
+            "browser_diagnostic": {
+                "stage": "ad_account_create_submit_missing",
+                "final_click_attempted": False,
+            },
+        }
+
+        with self.provisioning_state._connect() as con:
+            for item_id, result, updated_at in (
+                ("item-old", older_uncertain, now - 10),
+                ("item-new", newer_safe, now),
+            ):
+                con.execute(
+                    """INSERT INTO provisioning_steps(
+                        item_id,profile_id,scope_key,step,status,attempt,result_json,
+                        error_code,error_message,created_at,updated_at
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                    (
+                        item_id,
+                        profile_id,
+                        "rk-scope",
+                        "AD_ACCOUNT",
+                        "FAILED",
+                        1,
+                        json.dumps(result),
+                        result.get("last_error_code", ""),
+                        "",
+                        updated_at,
+                        updated_at,
+                    ),
+                )
+
+        row = await self.provisioning_state.latest_ad_account_resume_for_business(
+            profile_id,
+            business_id,
+        )
+        self.assertEqual(row, {})
+
     async def test_finalize_marks_all_success_tasks_success(self):
         job_id, item_id = self._seed(task_status="SUCCESS")
 
