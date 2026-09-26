@@ -730,6 +730,8 @@ class BrowserAdAccountSubmitScopeRegressionTests(unittest.TestCase):
             FacebookBusinessBrowser._click_ad_account_final_interactive
         )
         self.assertIn('startswith(word + " ")', source)
+        self.assertIn("in_wizard_surface", source)
+        self.assertIn("not in_wizard_surface", source)
 
     def test_submit_loop_has_no_page_global_next_fallback(self):
         source = inspect.getsource(FacebookBusinessBrowser.create_ad_account)
