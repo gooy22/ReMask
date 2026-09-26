@@ -985,6 +985,8 @@ class FacebookBusinessBrowser:
         self._ad_account_create_sent = False
         self._ad_account_ui_trace: list[dict[str, Any]] = []
         self._ad_account_wizard_rect: dict[str, float] = {}
+        self._lease_watchdog_task: asyncio.Task[Any] | None = None
+        self._browser_slot_acquired_at = 0.0
 
     async def __aenter__(self) -> "FacebookBusinessBrowser":
         await self.open()
@@ -1003,9 +1005,54 @@ class FacebookBusinessBrowser:
 
         await _BROWSER_SEMAPHORE.acquire()
         self._semaphore_acquired = True
+        self._browser_slot_acquired_at = time.monotonic()
+
+        # Once a Chromium slot is acquired, it must never be held forever.
+        # Queue wait is intentionally unbounded for large bulk waves, but the
+        # active lease is bounded because all Meta/browser operations already
+        # have much shorter step-level timeouts.
+        lease_raw = _clean(
+            os.getenv("REMASK_BROWSER_ACTIVE_LEASE_SECONDS") or "300"
+        )
+        try:
+            lease_seconds = float(lease_raw)
+        except (TypeError, ValueError):
+            lease_seconds = 300.0
+        lease_seconds = max(120.0, min(lease_seconds, 900.0))
+
+        async def expire_browser_lease() -> None:
+            try:
+                await asyncio.sleep(lease_seconds)
+                if self._semaphore_acquired:
+                    await self.close()
+            except asyncio.CancelledError:
+                raise
+            except BaseException:
+                # Lease cleanup is best effort; close() itself is bounded and
+                # the outer provisioning watchdog will still fail the task.
+                pass
+
+        self._lease_watchdog_task = asyncio.create_task(
+            expire_browser_lease(),
+            name=f"remask-browser-lease-{self.profile_id or 'unknown'}",
+        )
 
         self._profile_lock = await _get_profile_lock(self.profile_id)
-        await self._profile_lock.acquire()
+        try:
+            await asyncio.wait_for(
+                self._profile_lock.acquire(),
+                timeout=30.0,
+            )
+        except asyncio.TimeoutError as exc:
+            await self.close()
+            raise BrowserBusinessError(
+                "PROFILE_BROWSER_LOCK_TIMEOUT",
+                (
+                    "Profile browser lock did not become available within 30s. "
+                    "A previous browser task may be stuck; no Meta action was sent."
+                ),
+                retryable=True,
+            ) from exc
         self._profile_lock_acquired = True
 
         try:
@@ -1173,9 +1220,16 @@ class FacebookBusinessBrowser:
     def _release_semaphore(self) -> None:
         if self._semaphore_acquired:
             self._semaphore_acquired = False
+            self._browser_slot_acquired_at = 0.0
             _BROWSER_SEMAPHORE.release()
 
     async def close(self) -> None:
+        watchdog = self._lease_watchdog_task
+        self._lease_watchdog_task = None
+        current = asyncio.current_task()
+        if watchdog is not None and watchdog is not current:
+            watchdog.cancel()
+
         async def bounded_cleanup(awaitable: Any, *, timeout: float) -> None:
             try:
                 await asyncio.wait_for(awaitable, timeout=timeout)
