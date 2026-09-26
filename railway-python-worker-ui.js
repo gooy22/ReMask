@@ -1530,6 +1530,19 @@ async function pythonWorkerPoll() {
       pythonWorkerUiState.jobId = '';
       localStorage.removeItem('remask_python_worker_job_v1');
     } else {
+      const isAdAccountJob = items.some(function(item) {
+        if (item && String(item.step || '').toUpperCase() === 'AD_ACCOUNT') {
+          return true;
+        }
+        return (Array.isArray(item && item.provisioning_steps) ? item.provisioning_steps : [])
+          .some(function(step) {
+            return step && String(step.step || '').toUpperCase() === 'AD_ACCOUNT';
+          });
+      });
+      const entityLabel = isAdAccountJob ? 'RK' : 'BM';
+      const entityFailureLabel = isAdAccountJob
+        ? 'Создание рекламного кабинета завершилось ошибкой: '
+        : 'Создание BM завершилось ошибкой: ';
       const errors = items
         .filter(function(item) {
           return item && String(item.status || '').toUpperCase() === 'FAILED';
@@ -1546,8 +1559,8 @@ async function pythonWorkerPoll() {
       pythonWorkerSetText(
         'pythonPwStatus',
         status === 'PARTIAL'
-          ? 'Часть BM создана. Ошибки: ' + (errors.join(' · ') || 'неизвестная ошибка')
-          : 'Создание BM завершилось ошибкой: ' + (errors.join(' · ') || 'неизвестная ошибка')
+          ? 'Часть ' + entityLabel + ' создана. Ошибки: ' + (errors.join(' · ') || 'неизвестная ошибка')
+          : entityFailureLabel + (errors.join(' · ') || 'неизвестная ошибка')
       );
 
       if (status === 'PARTIAL') {
@@ -1555,9 +1568,17 @@ async function pythonWorkerPoll() {
         if (unconfirmed.length) {
           pythonWorkerSetText(
             'pythonPwStatus',
-            'Часть BM создана. Успешные BM ID сохранены в Job; Meta inventory ' +
-            'sync не подтвердил: ' + unconfirmed.join(', ') +
-            '. Ошибки остальных: ' + (errors.join(' · ') || 'неизвестная ошибка')
+            isAdAccountJob
+              ? (
+                  'Часть RK создана. Успешные ad_account_id сохранены в Job; ' +
+                  'Workspace sync не подтвердил: ' + unconfirmed.join(', ') +
+                  '. Ошибки остальных: ' + (errors.join(' · ') || 'неизвестная ошибка')
+                )
+              : (
+                  'Часть BM создана. Успешные BM ID сохранены в Job; Meta inventory ' +
+                  'sync не подтвердил: ' + unconfirmed.join(', ') +
+                  '. Ошибки остальных: ' + (errors.join(' · ') || 'неизвестная ошибка')
+                )
           );
         }
       }
