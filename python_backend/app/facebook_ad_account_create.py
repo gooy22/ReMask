@@ -83,6 +83,14 @@ def _graphql_errors(payload: dict[str, Any]) -> list[Any]:
 
 
 def _extract_ad_account_id(payload: dict[str, Any]) -> tuple[str, str]:
+    """Extract exactly one RK id from a CREATE response.
+
+    Prefer known response nodes, then use a conservative recursive fallback so
+    Relay/BizKit node renames do not turn a successful Meta CREATE into an
+    artificial RESULT_UNKNOWN. Generic numeric ids are never accepted unless
+    the field itself is account_id/ad_account_id or its immediate parent
+    explicitly identifies an ad account.
+    """
     data = payload.get("data")
     if not isinstance(data, dict):
         return "", ""
@@ -91,41 +99,82 @@ def _extract_ad_account_id(payload: dict[str, Any]) -> tuple[str, str]:
         "ad_account_create",
         "business_ad_account_create",
         "bizkit_create_ad_account",
+        "bizkit_settings_create_ad_account",
         "create_ad_account",
         "adaccount_create",
     )
     matches: list[tuple[str, str]] = []
 
+    def add(candidate: Any, path: str) -> None:
+        account_id = _normalize_ad_account_id(candidate)
+        if not account_id:
+            return
+        row = (account_id, path)
+        if row not in matches:
+            matches.append(row)
+
     for node_name in known_nodes:
         node = data.get(node_name)
         if not isinstance(node, dict):
             continue
-
-        direct = _normalize_ad_account_id(node.get("id") or node.get("account_id"))
-        if direct:
-            matches.append((direct, f"data.{node_name}.id"))
-
-        for child_name in ("ad_account", "account"):
+        add(
+            node.get("id") or node.get("account_id") or node.get("ad_account_id"),
+            f"data.{node_name}.id",
+        )
+        for child_name in (
+            "ad_account",
+            "account",
+            "created_ad_account",
+            "advertising_account",
+        ):
             child = node.get(child_name)
             if not isinstance(child, dict):
                 continue
-            nested = _normalize_ad_account_id(
-                child.get("id") or child.get("account_id")
+            add(
+                child.get("id")
+                or child.get("account_id")
+                or child.get("ad_account_id"),
+                f"data.{node_name}.{child_name}.id",
             )
-            if nested:
-                matches.append(
-                    (nested, f"data.{node_name}.{child_name}.id")
-                )
 
-    unique_ids = {value for value, _ in matches}
+    def walk(value: Any, path: str = "data") -> None:
+        if isinstance(value, dict):
+            parent_key = path.rsplit(".", 1)[-1].casefold()
+            for key, child in value.items():
+                key_text = str(key or "")
+                key_folded = key_text.casefold()
+                child_path = f"{path}.{key_text}"
+
+                if key_folded in {"account_id", "ad_account_id"}:
+                    add(child, child_path)
+                elif (
+                    key_folded == "id"
+                    and (
+                        "ad_account" in parent_key
+                        or "adaccount" in parent_key
+                        or "advertising_account" in parent_key
+                    )
+                ):
+                    add(child, child_path)
+
+                walk(child, child_path)
+        elif isinstance(value, list):
+            for index, child in enumerate(value):
+                walk(child, f"{path}[{index}]")
+
+    walk(data)
+
+    unique_ids = sorted({value for value, _ in matches})
     if len(unique_ids) != 1:
         return "", ""
 
-    account_id = next(iter(unique_ids))
-    for value, path in matches:
-        if value == account_id:
-            return account_id, path
-    return "", ""
+    account_id = unique_ids[0]
+    response_path = next(
+        path
+        for value, path in matches
+        if value == account_id
+    )
+    return account_id, response_path
 
 
 def _diagnostic(
