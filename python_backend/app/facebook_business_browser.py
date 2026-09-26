@@ -9321,7 +9321,7 @@ class FacebookBusinessBrowser:
                 if attempt["create_surface_seen"]:
                     state_create_verified = (
                         await self._wait_for_ad_account_create_entry(
-                            timeout_seconds=3.5,
+                            timeout_seconds=2.5,
                         )
                     )
                 attempt["state_create_verified"] = state_create_verified
