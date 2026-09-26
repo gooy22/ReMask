@@ -1128,6 +1128,19 @@ class BrowserAdAccountPopupTransitionRegressionTests(unittest.TestCase):
         )
 
 
+class BrowserAdAccountZeroWidthSubmitRegressionTests(unittest.TestCase):
+    def test_submit_matchers_strip_meta_zero_width_characters(self):
+        semantic = inspect.getsource(
+            FacebookBusinessBrowser._click_ad_account_form_action_by_visible_text
+        )
+        final = inspect.getsource(
+            FacebookBusinessBrowser._click_ad_account_final_interactive
+        )
+        self.assertIn("u200b", semantic)
+        self.assertIn('replace("\\u200b", "")', final)
+        self.assertIn("Créer un compte publicitaire", final)
+
+
 class BrowserAdAccountImmediatePostAddOrderTests(unittest.TestCase):
     def test_add_flow_polls_fresh_create_before_coarse_transition_wait(self):
         source = inspect.getsource(
