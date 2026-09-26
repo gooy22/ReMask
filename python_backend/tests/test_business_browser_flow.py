@@ -14,6 +14,7 @@ from app.facebook_business_browser import (
     _extract_created_ad_account_id,
     _extract_inventory_ad_account_ids,
     _extract_named_ad_account_ids,
+    _has_ad_account_inventory_container,
 )
 from app.provisioning.business_handler import business_handler
 from app.provisioning.models import ProvisioningError, ProvisioningStep
@@ -974,6 +975,73 @@ class BrowserAdAccountGraphqlInventoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             result["source"],
             "business_settings_graphql_inventory_unique",
+        )
+
+
+    async def test_inventory_lookup_confirms_repeated_explicit_empty_business_inventory(self):
+        class _Response:
+            url = "https://business.facebook.com/api/graphql/"
+
+            async def text(self):
+                return (
+                    '{"data":{"business":{"ad_accounts":{"edges":[]}}}}'
+                )
+
+            request = _FakeRequest(
+                "fb_api_req_friendly_name=BusinessAdAccountsQuery"
+                "&doc_id=1122334455667788"
+                "&variables=%7B%22businessID%22%3A"
+                "%22555666777888999%22%7D"
+            )
+
+        class _Page:
+            def __init__(self):
+                self.url = (
+                    "https://business.facebook.com/latest/settings/ad_accounts"
+                    "?business_id=555666777888999"
+                )
+                self._listener = None
+
+            def on(self, event, callback):
+                if event == "response":
+                    self._listener = callback
+
+            def remove_listener(self, event, callback):
+                if event == "response" and self._listener == callback:
+                    self._listener = None
+
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-rk-inventory-empty")
+        )
+        browser.page = _Page()
+
+        async def fake_goto(target):
+            browser.page.url = target
+            browser.page._listener(_Response())
+            await asyncio.sleep(0)
+
+        browser._goto = AsyncMock(side_effect=fake_goto)
+
+        result = await browser.find_ad_account_in_inventory(
+            business_id="555666777888999",
+            account_name="ReMask Ads",
+            timeout_seconds=2.0,
+        )
+
+        self.assertFalse(result["confirmed"])
+        self.assertTrue(result["confirmed_empty"])
+        self.assertGreaterEqual(result["empty_observations"], 2)
+
+    def test_inventory_container_requires_ad_account_structure(self):
+        self.assertTrue(
+            _has_ad_account_inventory_container(
+                {"data":{"business":{"ad_accounts":{"edges":[]}}}}
+            )
+        )
+        self.assertFalse(
+            _has_ad_account_inventory_container(
+                {"data":{"business":{"pages":{"edges":[]}}}}
+            )
         )
 
 
