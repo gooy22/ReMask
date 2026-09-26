@@ -4279,3 +4279,30 @@ class BrowserAdAccountExactCreateLeafRegressionTests(unittest.TestCase):
         self.assertLess(leaf_pos, parent_pos)
         self.assertIn('"playwright_physical"', source)
         self.assertIn('"leaf_dom"', source)
+
+
+class BrowserAdAccountFinalCaptureGateRegressionTests(unittest.TestCase):
+    def test_final_capture_arms_unknown_mutation_gate_before_final_click(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser.capture_ad_account_create_request
+        )
+        armed_pos = source.index("capture_final_armed = True")
+        click_pos = source.index(
+            "await self._click_ad_account_final_interactive()",
+            armed_pos,
+        )
+        self.assertLess(armed_pos, click_pos)
+        self.assertIn("def plausible_final_create(", source)
+        self.assertIn("blocked_unclassified_create", source)
+        self.assertIn("await route.abort()", source)
+        self.assertIn('"plausible_final_create"', source)
+
+    def test_unknown_final_candidate_is_not_made_replayable(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser.capture_ad_account_create_request
+        )
+        plausible_pos = source.index("if plausible_unknown:")
+        definitive_pos = source.index("if not definitive_match:", plausible_pos)
+        blocked_section = source[plausible_pos:definitive_pos]
+        self.assertIn("await route.abort()", blocked_section)
+        self.assertNotIn("captured.set_result", blocked_section)
