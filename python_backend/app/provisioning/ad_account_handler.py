@@ -26,7 +26,6 @@ log = logging.getLogger("remask_worker")
 AD_ACCOUNT_SAFE_CAPTURE_RETRY_CODES = {
     "AD_ACCOUNT_CREATE_UI_CHANGED",
     "AD_ACCOUNT_CREATE_UI_UNAVAILABLE",
-    "AD_ACCOUNT_CREATE_REQUEST_NOT_OBSERVED",
     "AD_ACCOUNT_CREATE_MUTATION_NOT_CAPTURED",
 }
 
@@ -1134,6 +1133,153 @@ async def ad_account_handler(
                 and exc.code in AD_ACCOUNT_SAFE_CAPTURE_RETRY_CODES
                 and capture_attempt < capture_attempt_limit
             )
+
+            # A final CTA was involved but the definitive mutation was not
+            # observed. Even though the capture gate aborts strong unknown
+            # candidates, treat this as potentially escaped CREATE until two
+            # independent inventory paths prove the Business is still empty.
+            if (
+                exc.code == "AD_ACCOUNT_CREATE_REQUEST_NOT_OBSERVED"
+                and bool(exc.retryable)
+            ):
+                uncertain_inventory: list[dict[str, Any]] = []
+                uncertain_found = ""
+                for inventory_attempt in range(3):
+                    uncertain_found, inventory_diag = await _reconcile_existing(
+                        session,
+                        business_id=business_id,
+                        account_name=rk_name,
+                    )
+                    uncertain_inventory.extend(inventory_diag)
+                    if uncertain_found:
+                        break
+                    if inventory_attempt < 2:
+                        await asyncio.sleep(2.0)
+
+                if uncertain_found:
+                    await provisioning_state.remember_entity(
+                        profile_id,
+                        scope_key,
+                        ProvisioningStep.AD_ACCOUNT,
+                        {"ad_account_id": uncertain_found},
+                    )
+                    return {
+                        "ad_account_id": uncertain_found,
+                        "business_id": business_id,
+                        "name": rk_name,
+                        "currency": currency,
+                        "timezone_id": timezone_id,
+                        "reused": True,
+                        "recovered_after_uncertainty": True,
+                        "transport": "capture_escape_inventory_reconciliation",
+                        "reconciliation": uncertain_inventory,
+                    }
+
+                graph_empty = _inventory_repeatedly_confirms_empty(
+                    uncertain_inventory,
+                    required_checks=3,
+                )
+                browser_found, browser_inventory = (
+                    await _reconcile_existing_browser_inventory(
+                        session,
+                        business_id=business_id,
+                        account_name=rk_name,
+                    )
+                )
+                if browser_found:
+                    await provisioning_state.remember_entity(
+                        profile_id,
+                        scope_key,
+                        ProvisioningStep.AD_ACCOUNT,
+                        {"ad_account_id": browser_found},
+                    )
+                    return {
+                        "ad_account_id": browser_found,
+                        "business_id": business_id,
+                        "name": rk_name,
+                        "currency": currency,
+                        "timezone_id": timezone_id,
+                        "reused": True,
+                        "recovered_after_uncertainty": True,
+                        "transport": "capture_escape_business_settings_inventory",
+                        "reconciliation": uncertain_inventory,
+                        "browser_inventory": browser_inventory,
+                    }
+
+                secondary_empty = bool(
+                    browser_inventory.get("confirmed_empty")
+                )
+                ui_inventory: dict[str, Any] = {}
+                if not secondary_empty:
+                    try:
+                        async with FacebookBusinessBrowser(
+                            session.context,
+                            timeout_seconds=45,
+                        ) as inventory_browser:
+                            ui_inventory = (
+                                await inventory_browser.verify_ad_account_inventory_empty(
+                                    business_id=business_id,
+                                )
+                            )
+                    except Exception as inventory_exc:
+                        ui_inventory = {
+                            "confirmed_empty": False,
+                            "error": (
+                                f"{inventory_exc.__class__.__name__}: "
+                                f"{_clean(inventory_exc)}"
+                            )[:500],
+                        }
+                    secondary_empty = bool(
+                        ui_inventory.get("confirmed_empty")
+                    )
+
+                if (
+                    graph_empty
+                    and secondary_empty
+                    and capture_attempt < capture_attempt_limit
+                ):
+                    safe_retry = True
+                    failure["uncertain_reconciled_empty"] = True
+                    failure["browser_inventory"] = browser_inventory
+                    failure["ui_inventory"] = ui_inventory
+                else:
+                    await provisioning_state.checkpoint(
+                        item_id,
+                        profile_id,
+                        scope_key,
+                        ProvisioningStep.AD_ACCOUNT,
+                        {
+                            "phase": "CREATE_RESULT_UNKNOWN",
+                            "resume_from": "RECONCILE_CREATE",
+                            "business_id": business_id,
+                            "account_name": rk_name,
+                            "currency": currency,
+                            "timezone_id": timezone_id,
+                            "capture_attempt": capture_attempt,
+                            "last_error_code": (
+                                "AD_ACCOUNT_CREATE_RESULT_UNKNOWN"
+                            ),
+                            "last_error": (
+                                "Final capture action was not observed as a "
+                                "definitive mutation and inventory is not "
+                                "independently conclusive."
+                            ),
+                            "reconciliation": uncertain_inventory,
+                            "browser_inventory": browser_inventory,
+                            "ui_inventory": ui_inventory,
+                            "browser_diagnostic": browser_diag,
+                        },
+                    )
+                    raise ProvisioningError(
+                        "AD_ACCOUNT_CREATE_RESULT_UNKNOWN",
+                        (
+                            "Meta final capture action was not matched to a "
+                            "definitive CREATE. Independent inventory checks "
+                            "do not safely prove the Business is empty, so "
+                            "ReMask will not risk a duplicate CREATE."
+                        ),
+                        retryable=True,
+                    ) from exc
 
             await provisioning_state.checkpoint(
                 item_id,
