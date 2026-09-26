@@ -4223,7 +4223,7 @@ class FacebookBusinessBrowser:
             # A visible Add/Create control on the expected business URL is
             # enough to treat the surface as hydrated.
             try:
-                current = _clean(self.page.url)
+                current = _clean(getattr(self.page, "url", ""))
                 has_business = bool(business and business in current)
                 visible_action = bool(
                     await self.page.evaluate(
@@ -7530,7 +7530,7 @@ class FacebookBusinessBrowser:
                 template.format(business_id=business)
                 for template in self.SETTINGS_AD_ACCOUNTS_URLS
             ]
-            current = _clean(self.page.url)
+            current = _clean(getattr(self.page, "url", ""))
             if (
                 "/settings/ad_accounts" in current
                 or "/settings/ad-accounts" in current
@@ -7687,7 +7687,7 @@ class FacebookBusinessBrowser:
             template.format(business_id=business)
             for template in self.SETTINGS_AD_ACCOUNTS_URLS
         ]
-        current = _clean(self.page.url)
+        current = _clean(getattr(self.page, "url", ""))
         if (
             business in _business_ids_from_text(current)
             and (
