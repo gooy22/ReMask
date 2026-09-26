@@ -9377,6 +9377,82 @@ class FacebookBusinessBrowser:
                     if snapshot_row not in before_snapshot
                 ][:20]
 
+                # Meta may replace the expected wizard with a read-only
+                # informational/restriction card after the exact Create-entry
+                # click.  "Afficher les détails" is the current French
+                # variant seen in production. Expand it before deciding this
+                # is a UI mismatch so the real Meta reason becomes visible to
+                # the state classifier.
+                details_markers = (
+                    "show details",
+                    "view details",
+                    "afficher les détails",
+                    "voir les détails",
+                    "показать подробности",
+                    "подробнее",
+                    "показати деталі",
+                    "докладніше",
+                    "details anzeigen",
+                    "weitere details",
+                    "বিস্তারিত দেখুন",
+                    "xem chi tiết",
+                    "विवरण देखें",
+                )
+                new_surface_text = " ".join(
+                    _clean(row).casefold()
+                    for row in attempt["new_right_pane"]
+                )
+                if (
+                    state_create_direct.get("clicked")
+                    and any(
+                        marker in new_surface_text
+                        for marker in details_markers
+                    )
+                ):
+                    details_result = (
+                        await self._expand_ad_account_details_if_present()
+                    )
+                    attempt["details_result"] = {
+                        "clicked": bool(details_result.get("clicked")),
+                        "text": _clean(details_result.get("text"))[:120],
+                    }
+                    details_state = (
+                        details_result.get("state")
+                        if isinstance(details_result.get("state"), dict)
+                        else {}
+                    )
+                    attempt["details_state"] = _clean(
+                        details_state.get("state")
+                    ).upper()
+                    attempt["details_errors"] = list(
+                        details_state.get("errors") or []
+                    )[:4]
+                    attempt["details_dialogs"] = list(
+                        details_state.get("dialogs") or []
+                    )[:4]
+                    attempt["details_snapshot"] = list(
+                        details_result.get("snapshot") or []
+                    )[:20]
+
+                    if self._ad_account_create_form_confirmed(details_state):
+                        attempt["create_entry_found"] = True
+                        attempts.append(attempt)
+                        return True, attempts
+
+                    if _clean(details_state.get("state")).upper() == "BLOCKED":
+                        attempt["blocked"] = True
+                        attempts.append(attempt)
+                        return False, attempts
+
+                    if details_result.get("clicked"):
+                        post_add_poll_state = details_state
+                        attempt["ui_state_after"] = _clean(
+                            details_state.get("state")
+                        ).upper()
+                        attempt["create_target"] = dict(
+                            details_state.get("create_target") or {}
+                        )
+
                 if self._ad_account_create_form_confirmed(
                     post_add_poll_state
                 ):
@@ -10387,6 +10463,25 @@ timeout_seconds=4.0,
                 "before_create_entry_failure",
                 final_ui,
             )
+
+            # One final read-only expansion for Meta's informational card.
+            # This is safe because it cannot submit/create anything.
+            if not self._ad_account_create_form_confirmed(final_ui):
+                final_details = (
+                    await self._expand_ad_account_details_if_present()
+                )
+                if final_details.get("clicked"):
+                    expanded_state = (
+                        final_details.get("state")
+                        if isinstance(final_details.get("state"), dict)
+                        else {}
+                    )
+                    if expanded_state:
+                        final_ui = expanded_state
+                        self._record_ad_account_ui_state(
+                            "after_create_entry_details",
+                            final_ui,
+                        )
 
             if self._ad_account_create_form_confirmed(final_ui):
                 entry_clicked = True
