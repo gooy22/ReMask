@@ -4735,7 +4735,9 @@ class FacebookBusinessBrowser:
                         'বিজ্ঞাপন অ্যাকাউন্টসমূহ',
                         'tài khoản quảng cáo',
                         'विज्ञापन खाते',
-                        'विज्ञापन खाता'
+                        'विज्ञापन खाता',
+                        'विज्ञापन अकाउंट',
+                        'विज्ञापन अकाउंट्स'
                     ];
                     const interactive = [
                         ...document.querySelectorAll(
@@ -5186,12 +5188,12 @@ class FacebookBusinessBrowser:
                     ];
                     const currency = [
                         'currency','devise','währung','валюта','মুদ্রা',
-                        'tiền tệ','मुद्रा'
+                        'কারেন্সি','tiền tệ','मुद्रा','करेंसी'
                     ];
                     const timezone = [
                         'time zone','timezone','fuseau horaire','zeitzone',
-                        'часовой пояс','часовий пояс','সময় অঞ্চল',
-                        'múi giờ','समय क्षेत्र'
+                        'часовой пояс','часовий пояс','সময় অঞ্চল','টাইম জোন',
+                        'múi giờ','समय क्षेत्र','टाइम ज़ोन','टाइम जोन'
                     ];
                     const nextWords = [
                         'next','continue','suivant','continuer','weiter',
@@ -5211,7 +5213,8 @@ class FacebookBusinessBrowser:
                         'তৈরি করুন','বিজ্ঞাপন অ্যাকাউন্ট তৈরি করুন',
                         'tạo','tạo tài khoản quảng cáo',
                         'बनाएँ','बनाएं','विज्ञापन खाता बनाएँ',
-                        'विज्ञापन खाता बनाएं'
+                        'विज्ञापन खाता बनाएं','विज्ञापन अकाउंट बनाएँ',
+                        'विज्ञापन अकाउंट बनाएं'
                     ];
                     const ai = [
                         'meta ai','assistant business meta ai',
@@ -5617,6 +5620,8 @@ class FacebookBusinessBrowser:
                 "Tạo",
                 "विज्ञापन खाता बनाएँ",
                 "विज्ञापन खाता बनाएं",
+                "विज्ञापन अकाउंट बनाएँ",
+                "विज्ञापन अकाउंट बनाएं",
                 "बनाएँ",
                 "बनाएं",
             )
@@ -5657,9 +5662,12 @@ class FacebookBusinessBrowser:
                             'мой бизнес','для моего бизнеса',
                             'мій бізнес','для мого бізнесу',
                             'আমার ব্যবসা','আমার ব্যবসার জন্য',
+                            'আমার বিজনেস','আমার বিজনেসের জন্য',
                             'doanh nghiệp của tôi',
                             'dành cho doanh nghiệp của tôi',
-                            'मेरा व्यवसाय','मेरे व्यवसाय के लिए'
+                            'मेरा व्यवसाय','मेरे व्यवसाय के लिए',
+                            'मेरा बिज़नेस','मेरे बिज़नेस के लिए',
+                            'मेरा बिजनेस','मेरे बिजनेस के लिए'
                         ];
                         const ai = [
                             'meta ai','assistant business meta ai',
@@ -5794,7 +5802,7 @@ class FacebookBusinessBrowser:
                             'ad account','advertising account',
                             'compte publicitaire','werbekonto','реклам',
                             'বিজ্ঞাপন অ্যাকাউন্ট','tài khoản quảng cáo',
-                            'विज्ञापन खाता'
+                            'विज्ञापन खाता','विज्ञापन अकाउंट'
                         ];
                         const name = [
                             'ad account name','advertising account name',
@@ -5804,12 +5812,12 @@ class FacebookBusinessBrowser:
                         ];
                         const currency = [
                             'currency','devise','währung','валюта','মুদ্রা',
-                            'tiền tệ','मुद्रा'
+                            'কারেন্সি','tiền tệ','मुद्रा','करेंसी'
                         ];
                         const timezone = [
                             'time zone','timezone','fuseau horaire','zeitzone',
-                            'часовой пояс','часовий пояс','সময় অঞ্চল',
-                            'múi giờ','समय क्षेत्र'
+                            'часовой пояс','часовий пояс','সময় অঞ্চল','টাইম জোন',
+                            'múi giờ','समय क्षेत्र','टाइम ज़ोन','टाइम जोन'
                         ];
                         const ownership = [
                             'my business','my business portfolio','for my business',
@@ -6005,7 +6013,8 @@ class FacebookBusinessBrowser:
                             'তৈরি করুন','বিজ্ঞাপন অ্যাকাউন্ট তৈরি করুন',
                             'tạo','tạo tài khoản quảng cáo',
                             'बनाएँ','बनाएं','विज्ञापन खाता बनाएँ',
-                            'विज्ञापन खाता बनाएं'
+                            'विज्ञापन खाता बनाएं','विज्ञापन अकाउंट बनाएँ',
+                            'विज्ञापन अकाउंट बनाएं'
                         ];
                         const accountWords = [
                             'ad account','advertising account',
@@ -6218,7 +6227,8 @@ class FacebookBusinessBrowser:
                         'তৈরি করুন','বিজ্ঞাপন অ্যাকাউন্ট তৈরি করুন',
                         'tạo','tạo tài khoản quảng cáo',
                         'बनाएँ','बनाएं','विज्ञापन खाता बनाएँ',
-                        'विज्ञापन खाता बनाएं'
+                        'विज्ञापन खाता बनाएं','विज्ञापन अकाउंट बनाएँ',
+                        'विज्ञापन अकाउंट बनाएं'
                     ];
                     const ownWords = [
                         'my business','my business portfolio','for my business',
@@ -6231,8 +6241,11 @@ class FacebookBusinessBrowser:
                         'мой бизнес','для моего бизнеса',
                         'мій бізнес','для мого бізнесу',
                         'আমার ব্যবসা','আমার ব্যবসার জন্য',
+                        'আমার বিজনেস','আমার বিজনেসের জন্য',
                         'doanh nghiệp của tôi','dành cho doanh nghiệp của tôi',
-                        'मेरा व्यवसाय','मेरे व्यवसाय के लिए'
+                        'मेरा व्यवसाय','मेरे व्यवसाय के लिए',
+                        'मेरा बिज़नेस','मेरे बिज़नेस के लिए',
+                        'मेरा बिजनेस','मेरे बिजनेस के लिए'
                     ];
 
                     const wizardMarkers = [
@@ -6295,7 +6308,8 @@ class FacebookBusinessBrowser:
                     const accountWords = [
                         'ad account','advertising account','compte publicitaire',
                         'werbekonto','реклам','বিজ্ঞাপন অ্যাকাউন্ট',
-                        'tài khoản quảng cáo','विज्ञापन खाता'
+                        'tài khoản quảng cáo','विज्ञापन खाता',
+                        'विज्ञापन अकाउंट'
                     ];
                     const nameMarkers = [
                         'ad account name','advertising account name',
@@ -6304,12 +6318,12 @@ class FacebookBusinessBrowser:
                     ];
                     const currencyMarkers = [
                         'currency','devise','währung','валюта','মুদ্রা',
-                        'tiền tệ','मुद्रा'
+                        'কারেন্সি','tiền tệ','मुद्रा','करेंसी'
                     ];
                     const timezoneMarkers = [
                         'time zone','timezone','fuseau horaire','zeitzone',
-                        'часовой пояс','часовий пояс','সময় অঞ্চল',
-                        'múi giờ','समय क्षेत्र'
+                        'часовой пояс','часовий пояс','সময় অঞ্চল','টাইম জোন',
+                        'múi giờ','समय क्षेत्र','टाइम ज़ोन','टाइम जोन'
                     ];
 
                     const belongsToWizardSurface = el => {
@@ -6982,6 +6996,149 @@ class FacebookBusinessBrowser:
 
         return None
 
+
+    async def _ad_account_structural_form_field_control(
+        self,
+        field_name: str,
+    ) -> Any | None:
+        """Resolve currency/timezone only inside the verified Add-RK wizard.
+
+        This is the locale-independent fallback. If labels disappear, ReMask
+        accepts a positional guess only when the wizard contains exactly two
+        dropdown-like controls, in Meta's Details order: currency, timezone.
+        """
+        if self.page is None or not self._ad_account_wizard_rect:
+            return None
+
+        mode = _clean(field_name).lower()
+        if mode not in {"currency", "timezone"}:
+            return None
+
+        try:
+            result = await self.page.evaluate(
+                """(payload) => {
+                    const mode = payload.mode;
+                    const anchor = payload.anchor || null;
+                    if (!anchor) return {found:false};
+                    const visible = el => {
+                        if (!el) return false;
+                        const r = el.getBoundingClientRect();
+                        const s = getComputedStyle(el);
+                        return r.width > 0 && r.height > 0
+                            && s.display !== 'none'
+                            && s.visibility !== 'hidden'
+                            && s.pointerEvents !== 'none';
+                    };
+                    const clean = text => (text || '')
+                        .normalize('NFKC')
+                        .replace(/[\u200b\u200c\u200d\ufeff]/g, '')
+                        .replace(/\u00a0/g, ' ')
+                        .replace(/\s+/g, ' ')
+                        .trim()
+                        .toLowerCase();
+                    const inside = el => {
+                        const r = el.getBoundingClientRect();
+                        const cx = r.x + r.width / 2;
+                        const cy = r.y + r.height / 2;
+                        const pad = 24;
+                        return cx >= Number(anchor.x || 0) - pad
+                            && cx <= Number(anchor.x || 0)
+                                + Number(anchor.width || 0) + pad
+                            && cy >= Number(anchor.y || 0) - pad
+                            && cy <= Number(anchor.y || 0)
+                                + Number(anchor.height || 0) + pad;
+                    };
+                    const currencyWords = [
+                        'currency','devise','währung','валюта','মুদ্রা',
+                        'কারেন্সি','tiền tệ','मुद्रा','करेंसी'
+                    ];
+                    const timezoneWords = [
+                        'time zone','timezone','fuseau horaire','zeitzone',
+                        'часовой пояс','часовий пояс','সময় অঞ্চল','টাইম জোন',
+                        'múi giờ','समय क्षेत्र','टाइम ज़ोन','टाइम जोन'
+                    ];
+                    for (const el of document.querySelectorAll(
+                        '[data-remask-rk-structural-field]'
+                    )) {
+                        el.removeAttribute('data-remask-rk-structural-field');
+                    }
+                    const selector = [
+                        'select',
+                        '[role="combobox"]',
+                        'button[aria-haspopup]',
+                        '[role="button"][aria-haspopup]',
+                        'button[aria-expanded]',
+                        '[role="button"][aria-expanded]'
+                    ].join(',');
+                    const rows = [...document.querySelectorAll(selector)]
+                        .filter(el => visible(el) && inside(el))
+                        .map(el => {
+                            const r = el.getBoundingClientRect();
+                            const text = clean(
+                                (el.getAttribute('aria-label') || '') + ' '
+                                + (el.getAttribute('placeholder') || '') + ' '
+                                + (el.getAttribute('title') || '') + ' '
+                                + (el.getAttribute('name') || '') + ' '
+                                + (el.getAttribute('value') || '') + ' '
+                                + (el.innerText || el.textContent || '')
+                            );
+                            return {
+                                el, text, x:r.x, y:r.y,
+                                currency:currencyWords.some(w => text.includes(w)),
+                                timezone:timezoneWords.some(w => text.includes(w))
+                            };
+                        });
+                    let matches = rows.filter(row =>
+                        mode === 'currency' ? row.currency : row.timezone
+                    );
+                    if (matches.length !== 1) {
+                        const ordered = rows.slice().sort(
+                            (a,b) => a.y - b.y || a.x - b.x
+                        );
+                        if (ordered.length === 2) {
+                            matches = [
+                                mode === 'currency' ? ordered[0] : ordered[1]
+                            ];
+                        }
+                    }
+                    if (matches.length !== 1) {
+                        return {found:false,count:rows.length};
+                    }
+                    const best = matches[0];
+                    best.el.setAttribute(
+                        'data-remask-rk-structural-field',
+                        mode
+                    );
+                    return {
+                        found:true,
+                        text:best.text,
+                        x:Math.round(best.x),
+                        y:Math.round(best.y)
+                    };
+                }""",
+                {
+                    "mode": mode,
+                    "anchor": self._ad_account_wizard_rect,
+                },
+            )
+        except Exception:
+            return None
+
+        if not isinstance(result, dict) or not result.get("found"):
+            return None
+        try:
+            locator = self.page.locator(
+                f'[data-remask-rk-structural-field="{mode}"]'
+            )
+            if await locator.count():
+                item = locator.first
+                if await item.is_visible():
+                    return item
+        except Exception:
+            pass
+        return None
+
+
     async def _select_ad_account_form_field(
         self,
         *,
@@ -7060,6 +7217,15 @@ class FacebookBusinessBrowser:
             )
             if nearby_control is not None:
                 controls.append(nearby_control)
+
+        if not controls:
+            structural_control = (
+                await self._ad_account_structural_form_field_control(
+                    field_name
+                )
+            )
+            if structural_control is not None:
+                controls.append(structural_control)
 
         if not controls:
             return {
@@ -7251,8 +7417,10 @@ class FacebookBusinessBrowser:
             "Währung",
             "Валюта",
             "মুদ্রা",
+            "কারেন্সি",
             "Tiền tệ",
             "मुद्रा",
+            "करेंसी",
         )
         timezone_labels = (
             "Time zone",
@@ -7262,8 +7430,11 @@ class FacebookBusinessBrowser:
             "Часовой пояс",
             "Часовий пояс",
             "সময় অঞ্চল",
+            "টাইম জোন",
             "Múi giờ",
             "समय क्षेत्र",
+            "टाइम ज़ोन",
+            "टाइम जोन",
         )
 
         requested_currency = _clean(currency).upper()
@@ -8096,6 +8267,8 @@ class FacebookBusinessBrowser:
             "không có tài khoản quảng cáo nào được thêm",
             "कोई विज्ञापन खाता नहीं जोड़ा गया",
             "कोई विज्ञापन खाते नहीं जोड़े गए",
+            "कोई विज्ञापन अकाउंट नहीं जोड़ा गया",
+            "कोई विज्ञापन अकाउंट्स नहीं जोड़े गए",
             "no ad accounts",
             "you haven't added any ad accounts",
             "you have not added any ad accounts",
@@ -8454,7 +8627,11 @@ class FacebookBusinessBrowser:
                             'नया विज्ञापन खाता बनाएँ',
                             'नया विज्ञापन खाता बनाएं',
                             'विज्ञापन खाता बनाएँ',
-                            'विज्ञापन खाता बनाएं'
+                            'विज्ञापन खाता बनाएं',
+                            'नया विज्ञापन अकाउंट बनाएँ',
+                            'नया विज्ञापन अकाउंट बनाएं',
+                            'विज्ञापन अकाउंट बनाएँ',
+                            'विज्ञापन अकाउंट बनाएं'
                         ].some(value => low === value);
 
                         const area = cr.width * cr.height;
@@ -10726,7 +10903,8 @@ timeout_seconds=4.0,
                         'hinzufügen','erstellen','werbekonto',
                         'যোগ করুন','তৈরি করুন','বিজ্ঞাপন অ্যাকাউন্ট',
                         'thêm','tạo','tài khoản quảng cáo',
-                        'जोड़ें','बनाएँ','बनाएं','विज्ञापन खाता'
+                        'जोड़ें','बनाएँ','बनाएं','विज्ञापन खाता',
+                        'विज्ञापन अकाउंट'
                     ];
                     const out = [];
                     const seen = new Set();
@@ -11565,6 +11743,27 @@ timeout_seconds=4.0,
                         or float(box.get("y") or 0) > 795
                     ):
                         continue
+                    if self._ad_account_wizard_rect:
+                        anchor = self._ad_account_wizard_rect
+                        cx = float(box.get("x") or 0) + float(
+                            box.get("width") or 0
+                        ) / 2
+                        cy = float(box.get("y") or 0) + float(
+                            box.get("height") or 0
+                        ) / 2
+                        if not (
+                            float(anchor.get("x") or 0) - 30
+                            <= cx
+                            <= float(anchor.get("x") or 0)
+                            + float(anchor.get("width") or 0)
+                            + 30
+                            and float(anchor.get("y") or 0) - 30
+                            <= cy
+                            <= float(anchor.get("y") or 0)
+                            + float(anchor.get("height") or 0)
+                            + 30
+                        ):
+                            continue
 
                     kind = _clean(
                         await candidate.get_attribute("type")
@@ -11911,18 +12110,20 @@ timeout_seconds=4.0,
             "Tạo",
             "विज्ञापन खाता बनाएँ",
             "विज्ञापन खाता बनाएं",
+            "विज्ञापन अकाउंट बनाएँ",
+            "विज्ञापन अकाउंट बनाएं",
             "बनाएँ",
             "बनाएं",
         )
 
         self._mark_ad_account_phase("SUBMIT_UI")
         last_form_setup_signature = ""
+        self._ad_account_wizard_rect = (
+            await self._capture_ad_account_wizard_rect()
+        )
         form_setup = await self._prepare_ad_account_form_fields(
             currency=currency,
             timezone_id=timezone_id,
-        )
-        self._ad_account_wizard_rect = (
-            await self._capture_ad_account_wizard_rect()
         )
         initial_form_state = await self._ad_account_ui_state()
         last_form_setup_signature = _clean(
@@ -11993,6 +12194,9 @@ timeout_seconds=4.0,
                             and ownership_signature
                             != last_form_setup_signature
                         ):
+                            self._ad_account_wizard_rect = (
+                                await self._capture_ad_account_wizard_rect()
+                            )
                             form_setup = (
                                 await self._prepare_ad_account_form_fields(
                                     currency=currency,
@@ -12054,6 +12258,9 @@ timeout_seconds=4.0,
                         and transition_signature
                         and transition_signature != last_form_setup_signature
                     ):
+                        self._ad_account_wizard_rect = (
+                            await self._capture_ad_account_wizard_rect()
+                        )
                         form_setup = await self._prepare_ad_account_form_fields(
                             currency=currency,
                             timezone_id=timezone_id,

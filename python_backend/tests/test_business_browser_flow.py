@@ -23,6 +23,67 @@ from app.provisioning.service import ProvisioningService
 
 
 
+class AdAccountEndToEndLocaleSystemRegressionTests(unittest.TestCase):
+    def test_hindi_account_variant_reaches_all_critical_rk_stages(self) -> None:
+        critical = (
+            FacebookBusinessBrowser._activate_ad_account_settings_section,
+            FacebookBusinessBrowser._capture_ad_account_wizard_rect,
+            FacebookBusinessBrowser._click_ad_account_final_interactive,
+            FacebookBusinessBrowser._click_ad_account_form_action_by_visible_text,
+            FacebookBusinessBrowser._ad_account_ui_state,
+            FacebookBusinessBrowser._ad_account_action_candidates,
+            FacebookBusinessBrowser._open_ad_account_create_form,
+            FacebookBusinessBrowser.create_ad_account,
+        )
+        for fn in critical:
+            source = inspect.getsource(fn)
+            self.assertIn(
+                "विज्ञापन अकाउंट",
+                source,
+                msg=f"Hindi account transliteration missing in {fn.__name__}",
+            )
+
+    def test_bulk_profile_locales_cover_fields_and_actions(self) -> None:
+        source = inspect.getsource(FacebookBusinessBrowser)
+        required = (
+            "বিজ্ঞাপন অ্যাকাউন্ট",
+            "বিজ্ঞাপন অ্যাকাউন্টের নাম",
+            "মুদ্রা",
+            "সময় অঞ্চল",
+            "Tài khoản quảng cáo",
+            "Tên tài khoản quảng cáo",
+            "Tiền tệ",
+            "Múi giờ",
+            "विज्ञापन अकाउंट",
+            "विज्ञापन अकाउंट नाम",
+            "करेंसी",
+            "टाइम ज़ोन",
+            "मेरा बिज़नेस",
+        )
+        for token in required:
+            self.assertIn(token, source)
+
+    def test_currency_timezone_structural_fallback_is_wizard_bounded(self) -> None:
+        source = inspect.getsource(
+            FacebookBusinessBrowser._ad_account_structural_form_field_control
+        )
+        self.assertIn("exactly two", source)
+        self.assertIn("data-remask-rk-structural-field", source)
+        select_source = inspect.getsource(
+            FacebookBusinessBrowser._select_ad_account_form_field
+        )
+        self.assertIn(
+            "_ad_account_structural_form_field_control",
+            select_source,
+        )
+
+    def test_wizard_anchor_is_captured_before_immutable_field_selection(self) -> None:
+        source = inspect.getsource(FacebookBusinessBrowser.create_ad_account)
+        first_capture = source.index("_capture_ad_account_wizard_rect()")
+        first_fields = source.index("_prepare_ad_account_form_fields(")
+        self.assertLess(first_capture, first_fields)
+
+
 class HindiAdAccountNameFieldRegressionTests(unittest.TestCase):
     def test_hindi_meta_account_name_labels_are_fillable(self) -> None:
         source = inspect.getsource(
