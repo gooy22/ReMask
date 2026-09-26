@@ -16,6 +16,7 @@ from app.facebook_ad_account_create import (
 )
 from app.facebook_business_browser import FacebookBusinessBrowser
 from app.provisioning.ad_account_handler import (
+    AD_ACCOUNT_SAFE_CAPTURE_RETRY_CODES,
     _inventory_repeatedly_confirms_empty,
     _known_final_click_unmatched_empty_inventory,
     _known_pre_submit_navigation_failure,
