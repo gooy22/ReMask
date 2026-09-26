@@ -1111,6 +1111,7 @@ async def ad_account_handler(
                 "transport": "business_suite_live_capture",
             }
         )
+        browser: FacebookBusinessBrowser | None = None
         try:
             async with FacebookBusinessBrowser(
                 session.context,
@@ -1373,6 +1374,90 @@ async def ad_account_handler(
             }
             capture_failures.append(failure)
 
+            browser_phase = (
+                browser.ad_account_runtime_phase
+                if browser is not None
+                else "BROWSER_NOT_ENTERED"
+            )
+            final_capture_armed = bool(
+                browser is not None
+                and browser.ad_account_final_capture_armed
+            )
+            create_may_have_been_sent = bool(
+                browser is not None
+                and browser.ad_account_create_may_have_been_sent
+            )
+            failure["browser_phase"] = browser_phase
+            failure["final_capture_armed"] = final_capture_armed
+            failure["create_may_have_been_sent"] = (
+                create_may_have_been_sent
+            )
+
+            exception_text = (
+                f"{exc.__class__.__name__}: {_clean(exc)}"
+            ).casefold()
+            page_crashed = any(
+                marker in exception_text
+                for marker in (
+                    "page crashed",
+                    "targetclosederror",
+                    "target page, context or browser has been closed",
+                )
+            )
+            failure["page_crashed"] = page_crashed
+
+            # Renderer crashes before the final CREATE gate are provably
+            # pre-submit. No final CTA was armed and no CREATE transport was
+            # marked sent, so restart Chromium and continue the same Job
+            # instead of converting a safe crash into RESULT_UNKNOWN.
+            if (
+                page_crashed
+                and not final_capture_armed
+                and not create_may_have_been_sent
+                and capture_attempt < capture_attempt_limit
+            ):
+                await provisioning_state.checkpoint(
+                    item_id,
+                    profile_id,
+                    scope_key,
+                    ProvisioningStep.AD_ACCOUNT,
+                    {
+                        "phase": "CREATE_NOT_SUBMITTED",
+                        "resume_from": "CREATE",
+                        "business_id": business_id,
+                        "account_name": rk_name,
+                        "currency": currency,
+                        "timezone_id": timezone_id,
+                        "capture_attempt": capture_attempt,
+                        "capture_attempt_limit": capture_attempt_limit,
+                        "capture_failures": capture_failures[-3:],
+                        "last_error_code": (
+                            "AD_ACCOUNT_CAPTURE_PAGE_CRASH_PRE_FINAL"
+                        ),
+                        "last_error": failure["message"],
+                        "browser_phase": browser_phase,
+                        "final_capture_armed": False,
+                        "create_may_have_been_sent": False,
+                        "transport": "business_suite_live_capture",
+                    },
+                )
+                try:
+                    log.warning(
+                        "[%s] AD_ACCOUNT renderer crashed pre-final; "
+                        "restarting capture item=%s business=%s "
+                        "attempt=%s/%s phase=%s",
+                        profile_id,
+                        item_id,
+                        business_id,
+                        capture_attempt,
+                        capture_attempt_limit,
+                        browser_phase,
+                    )
+                except Exception:
+                    pass
+                await asyncio.sleep(1.0 * capture_attempt)
+                continue
+
             unknown_inventory: list[dict[str, Any]] = []
             unknown_found = ""
             for inventory_attempt in range(3):
@@ -1509,6 +1594,12 @@ async def ad_account_handler(
                     "capture_failures": capture_failures[-3:],
                     "last_error_code": failure["code"],
                     "last_error": failure["message"],
+                    "browser_phase": browser_phase,
+                    "final_capture_armed": final_capture_armed,
+                    "create_may_have_been_sent": (
+                        create_may_have_been_sent
+                    ),
+                    "page_crashed": page_crashed,
                     "reconciliation": unknown_inventory,
                     "browser_inventory": browser_inventory,
                     "ui_inventory": ui_inventory,
@@ -1518,9 +1609,12 @@ async def ad_account_handler(
             raise ProvisioningError(
                 "AD_ACCOUNT_CREATE_RESULT_UNKNOWN",
                 (
-                    "Unexpected live Add-RK capture exception has unknown "
-                    "final-click state and independent inventory checks are "
-                    "not conclusive. Duplicate CREATE remains blocked. "
+                    "Unexpected live Add-RK capture exception occurred "
+                    f"at phase={browser_phase} final_armed="
+                    f"{final_capture_armed} sent="
+                    f"{create_may_have_been_sent}. Independent inventory "
+                    "checks are not conclusive, so duplicate CREATE remains "
+                    "blocked. "
                     + failure["message"]
                 ),
                 retryable=True,
