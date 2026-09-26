@@ -21,6 +21,8 @@ from app.provisioning.ad_account_handler import (
     AD_ACCOUNT_SAFE_CAPTURE_RETRY_CODES,
     _inventory_repeatedly_confirms_empty,
     _known_final_click_unmatched_empty_inventory,
+    _known_pre_submit_capture_crash,
+    _prove_empty_after_uncertainty,
     _known_pre_submit_navigation_failure,
     _known_pre_submit_usage_step_failure,
     ad_account_handler,
@@ -908,23 +910,21 @@ class AdAccountExactlyOnceSystemRegressionTests(unittest.TestCase):
             source,
         )
 
-    def test_cross_job_guard_requires_graph_and_secondary_empty_proof(self) -> None:
+    def test_cross_job_guard_uses_multi_surface_empty_proof(self) -> None:
         source = inspect.getsource(ad_account_handler)
-        self.assertIn("graph_empty_confirmed =", source)
-        self.assertIn("secondary_empty_confirmed =", source)
-        self.assertIn(
-            "if graph_empty_confirmed and secondary_empty_confirmed:",
-            source,
-        )
-        self.assertIn(
-            "Independent inventory checks",
-            source,
-        )
+        proof = inspect.getsource(_prove_empty_after_uncertainty)
+        self.assertIn("_prove_empty_after_uncertainty(", source)
+        self.assertIn("CROSS_JOB_UNKNOWN_CLEARED_BY_INVENTORY", source)
+        self.assertIn("browser_required_checks: int = 3", proof)
+        self.assertIn("graph_plus_browser", proof)
+        self.assertIn("browser_consensus", proof)
+        self.assertIn("browser_plus_ui", proof)
+        self.assertIn("_reconcile_existing_browser_inventory(", proof)
 
-    def test_uncertain_current_job_polls_inventory_before_failure(self) -> None:
+    def test_uncertain_current_job_can_clear_safe_empty_checkpoint(self) -> None:
         source = inspect.getsource(ad_account_handler)
-        self.assertIn("for reconcile_attempt in range(3):", source)
-        self.assertIn("await asyncio.sleep(2.0)", source)
+        self.assertIn("CURRENT_JOB_UNKNOWN_CLEARED_BY_INVENTORY", source)
+        self.assertIn("AD_ACCOUNT_UNCERTAINTY_CLEARED", source)
         self.assertIn("AD_ACCOUNT_RECONCILE_EXHAUSTED", source)
 
 
@@ -1030,18 +1030,38 @@ class AdAccountInventoryPreflightRegressionTests(unittest.TestCase):
         )
 
     def test_post_submit_uncertainty_still_requires_strong_evidence(self) -> None:
+        proof = inspect.getsource(_prove_empty_after_uncertainty)
         source = inspect.getsource(ad_account_handler)
-        self.assertIn(
-            "if graph_empty_confirmed and secondary_empty_confirmed:",
-            source,
+        self.assertIn("graph_plus_browser", proof)
+        self.assertIn("browser_consensus", proof)
+        self.assertIn("browser_plus_ui", proof)
+        self.assertIn('"proof_path"', proof)
+        self.assertIn("AD_ACCOUNT_RECONCILE_EXHAUSTED", source)
+
+
+class AdAccountPreSubmitCrashClassificationTests(unittest.TestCase):
+    def test_explicit_pre_submit_crash_is_safe_to_recover(self) -> None:
+        self.assertTrue(
+            _known_pre_submit_capture_crash(
+                {
+                    "page_crashed": True,
+                    "final_capture_armed": False,
+                    "create_may_have_been_sent": False,
+                    "browser_phase": "CAPTURE_FORM_READY",
+                }
+            )
         )
-        self.assertIn(
-            "Independent inventory checks",
-            source,
-        )
-        self.assertIn(
-            "AD_ACCOUNT_RECONCILE_EXHAUSTED",
-            source,
+
+    def test_final_armed_crash_is_not_classified_pre_submit(self) -> None:
+        self.assertFalse(
+            _known_pre_submit_capture_crash(
+                {
+                    "page_crashed": True,
+                    "final_capture_armed": True,
+                    "create_may_have_been_sent": False,
+                    "browser_phase": "CAPTURE_FINAL_ARMED",
+                }
+            )
         )
 
 
