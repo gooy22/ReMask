@@ -4259,3 +4259,23 @@ class BrowserAdAccountCreateSurfacePersistenceRegressionTests(unittest.TestCase)
         recovery_pos = source.index("if not entry_clicked and create_surface_active:")
         reload_pos = source.index("post_add_stale_reload")
         self.assertLess(recovery_pos, reload_pos)
+
+
+class BrowserAdAccountExactCreateLeafRegressionTests(unittest.TestCase):
+    def test_classifier_tags_leaf_and_parent_for_create_entry(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser._ad_account_ui_state
+        )
+        self.assertIn("data-remask-rk-create-leaf", source)
+        self.assertIn("source_x", source)
+        self.assertIn("source_tag", source)
+
+    def test_state_create_click_prefers_leaf_before_parent(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser._click_state_detected_ad_account_create_entry
+        )
+        leaf_pos = source.index('data-remask-rk-create-leaf')
+        parent_pos = source.index('data-remask-rk-create-state')
+        self.assertLess(leaf_pos, parent_pos)
+        self.assertIn('"playwright_physical"', source)
+        self.assertIn('"leaf_dom"', source)
