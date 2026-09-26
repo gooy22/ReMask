@@ -9599,6 +9599,25 @@ class FacebookBusinessBrowser:
                             attempts.append(attempt)
                             return True, attempts
 
+                        if _clean(
+                            direct_transition.get("state")
+                        ).upper() == "INTRO_DIALOG":
+                            intro_advanced = (
+                                await self._advance_ad_account_intro_dialog(
+                                    timeout_seconds=4.0,
+                                )
+                            )
+                            attempt["intro_dialog_advanced"] = bool(
+                                intro_advanced
+                            )
+                            if intro_advanced:
+                                attempt["create_entry_found"] = True
+                                attempts.append(attempt)
+                                return True, attempts
+                            direct_transition = (
+                                await self._ad_account_ui_state()
+                            )
+
                         # Continue recovery from the state produced by the
                         # exact Create-card click, not from the stale pre-click
                         # snapshot.
@@ -9813,8 +9832,15 @@ timeout_seconds=4.0,
                     recovery_state.get("signature")
                 )[:700]
                 if (
-                    attempt["create_surface_seen"]
-                    and recovery_name in {"CREATE_ENTRY", "DIALOG"}
+                    (
+                        attempt["create_surface_seen"]
+                        or recovery_name == "INTRO_DIALOG"
+                    )
+                    and recovery_name in {
+                        "CREATE_ENTRY",
+                        "INTRO_DIALOG",
+                        "DIALOG",
+                    }
                 ):
                     attempt["preserve_create_surface"] = True
                     attempts.append(attempt)
@@ -10608,7 +10634,11 @@ timeout_seconds=4.0,
                 ).upper()
                 if recovery_state == "BLOCKED":
                     break
-                if recovery_state not in {"CREATE_ENTRY", "DIALOG"}:
+                if recovery_state not in {
+                    "CREATE_ENTRY",
+                    "INTRO_DIALOG",
+                    "DIALOG",
+                }:
                     create_surface_active = False
                     break
 
