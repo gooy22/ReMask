@@ -310,6 +310,15 @@ class ProvisioningStateStore:
                 or ""
             ).strip().upper()
 
+            # A newer explicit CREATE_NOT_SUBMITTED checkpoint is authoritative
+            # evidence that this later Job did not send CREATE. Because rows are
+            # ordered newest-first, it supersedes any older ambiguous
+            # CREATE_RESULT_UNKNOWN/CLICK_INTENT for the same Business. Without
+            # this tombstone, a fixed pre-submit Job can still be blocked forever
+            # by stale uncertainty from an older attempt.
+            if not confirmed and phase == "CREATE_NOT_SUBMITTED":
+                return {}
+
             if not confirmed and phase not in uncertain:
                 continue
 
