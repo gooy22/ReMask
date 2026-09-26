@@ -736,6 +736,15 @@ class BrowserAdAccountWizardGeometryRegressionTests(unittest.TestCase):
         self.assertIn("_ad_account_wizard_rect", final)
         self.assertIn("in_wizard_anchor", final)
 
+    def test_wizard_anchor_prefers_fields_plus_action_footer(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser._capture_ad_account_wizard_rect
+        )
+        self.assertIn("fields_plus_action", source)
+        self.assertIn("action_text", source)
+        self.assertIn("priority", source)
+        self.assertIn("suivant", source)
+
 
 class BrowserAdAccountSubmitScopeRegressionTests(unittest.TestCase):
     def test_submit_actions_require_wizard_surface(self):
