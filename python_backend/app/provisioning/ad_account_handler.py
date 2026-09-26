@@ -1329,10 +1329,12 @@ async def ad_account_handler(
                 retryable=exc.retryable,
             ) from exc
         except Exception as exc:
-            # Any unexpected exception in the capture-only browser pass is
-            # still pre-submit: the definitive CREATE request is routed through
-            # an aborting interceptor. Restart the browser session and retry
-            # before surfacing an infrastructure failure.
+            # Unknown exceptions do not carry enough evidence to prove where
+            # the browser was relative to the final CTA. Expected pre-submit
+            # UI/transport failures have explicit BrowserBusinessError codes
+            # above and self-heal there. Never auto-repeat an unknown exception
+            # through an irreversible flow merely because capture normally
+            # aborts the mutation.
             failure = {
                 "attempt": capture_attempt,
                 "code": "AD_ACCOUNT_CAPTURE_BROWSER_EXCEPTION",
@@ -1348,8 +1350,8 @@ async def ad_account_handler(
                 scope_key,
                 ProvisioningStep.AD_ACCOUNT,
                 {
-                    "phase": "CREATE_NOT_SUBMITTED",
-                    "resume_from": "CREATE",
+                    "phase": "CREATE_RESULT_UNKNOWN",
+                    "resume_from": "RECONCILE_CREATE",
                     "business_id": business_id,
                     "account_name": rk_name,
                     "currency": currency,
@@ -1357,19 +1359,17 @@ async def ad_account_handler(
                     "capture_attempt": capture_attempt,
                     "capture_attempt_limit": capture_attempt_limit,
                     "capture_failures": capture_failures[-3:],
-                    "last_error_code": "AD_ACCOUNT_CAPTURE_BROWSER_EXCEPTION",
+                    "last_error_code": failure["code"],
                     "last_error": failure["message"],
                     "transport": "business_suite_live_capture",
                 },
             )
-            if capture_attempt < capture_attempt_limit:
-                await asyncio.sleep(0.75 * capture_attempt)
-                continue
             raise ProvisioningError(
                 "AD_ACCOUNT_CAPTURE_BROWSER_EXCEPTION",
                 (
-                    "Live Add-RK capture failed before submit after "
-                    f"{capture_attempt_limit} browser attempts. "
+                    "Unexpected live Add-RK capture exception has unknown "
+                    "final-click state. ReMask will not auto-repeat CREATE; "
+                    "inventory reconciliation is required. "
                     + failure["message"]
                 ),
                 retryable=True,
