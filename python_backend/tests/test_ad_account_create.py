@@ -38,6 +38,15 @@ class AdAccountDuplicateSafetyTests(unittest.TestCase):
         self.assertIn('"CREATE_CLICK_INTENT"', source)
         self.assertIn('"CREATE_RESULT_UNKNOWN"', source)
 
+    def test_proven_empty_browser_inventory_unlocks_stale_cross_job_guard(self) -> None:
+        source = inspect.getsource(ad_account_handler)
+        empty_check = 'browser_inventory.get("confirmed_empty")'
+        guard_message = "previous Job may already have submitted CREATE"
+        self.assertIn(empty_check, source)
+        self.assertIn(guard_message, source)
+        self.assertLess(source.index(empty_check), source.index(guard_message))
+
+
 
 
 class AdAccountUiStateRegressionTests(unittest.TestCase):
