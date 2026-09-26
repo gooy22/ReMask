@@ -25,6 +25,29 @@ from app.provisioning.ad_account_handler import (
 from app.provisioning.state import ProvisioningStateStore
 
 
+class AdAccountToolbarIsolationTests(unittest.TestCase):
+    def test_add_candidates_reject_unrelated_top_toolbar(self) -> None:
+        source = inspect.getsource(
+            FacebookBusinessBrowser._ad_account_add_button_candidates
+        )
+        self.assertIn("hasLocalAccountContext", source)
+        self.assertIn("if (r.y < 180 && !localAccountContext)", source)
+        self.assertIn("local_account_context", source)
+
+    def test_create_action_readiness_rejects_global_toolbar_add(self) -> None:
+        source = inspect.getsource(
+            FacebookBusinessBrowser._wait_for_ad_account_create_action
+        )
+        self.assertIn("localAccountContext", source)
+        self.assertIn("return r.y >= 180 || localAccountContext(el)", source)
+
+    def test_exact_migrated_ad_accounts_route_is_preferred(self) -> None:
+        first = FacebookBusinessBrowser.SETTINGS_AD_ACCOUNTS_URLS[0]
+        self.assertIn("nav_ref=bm_settings_redirect_migration", first)
+        self.assertIn("bm_redirect_migration=true", first)
+        self.assertIn("business_id={business_id}", first)
+
+
 class AdAccountCreateTransportTests(unittest.TestCase):
     def test_handler_requires_live_capture_then_private_replay(self) -> None:
         source = inspect.getsource(ad_account_handler)
