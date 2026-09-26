@@ -41,6 +41,12 @@ def browser_step_timeout(step: ProvisioningStep) -> float:
     """
     waves = browser_queue_waves()
 
+    if step is ProvisioningStep.FAN_PAGES:
+        explicit = _env_float("REMASK_FAN_PAGES_STEP_TIMEOUT")
+        if explicit is not None:
+            return max(90.0, min(explicit, 7200.0))
+        return min(7200.0, max(420.0, waves * 210.0 + 180.0))
+
     if step is ProvisioningStep.BUSINESS:
         explicit = _env_float("REMASK_BUSINESS_STEP_TIMEOUT")
         if explicit is not None:
@@ -71,11 +77,20 @@ def browser_provisioning_hard_timeout(
                 step = ProvisioningStep(str(raw).strip().upper())
             except ValueError:
                 continue
-        if step in {ProvisioningStep.BUSINESS, ProvisioningStep.AD_ACCOUNT}:
+        if step in {
+            ProvisioningStep.FAN_PAGES,
+            ProvisioningStep.BUSINESS,
+            ProvisioningStep.AD_ACCOUNT,
+        }:
             normalized.add(step)
 
     if not normalized:
         return 0.0
+
+    if normalized == {ProvisioningStep.FAN_PAGES}:
+        explicit = _env_float("REMASK_ADD_FP_HARD_TIMEOUT_SECONDS")
+        if explicit is not None:
+            return max(120.0, min(explicit, 7200.0))
 
     if normalized == {ProvisioningStep.BUSINESS}:
         explicit = _env_float("REMASK_ADD_BM_HARD_TIMEOUT_SECONDS")
