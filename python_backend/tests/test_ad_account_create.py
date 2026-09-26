@@ -43,6 +43,16 @@ class AdAccountCreateEntryTargetTests(unittest.TestCase):
             source,
         )
 
+    def test_add_candidate_probe_defines_local_context_helper(self) -> None:
+        source = inspect.getsource(
+            FacebookBusinessBrowser._ad_account_add_button_candidates
+        )
+        self.assertIn("const hasLocalAccountContext = el =>", source)
+        self.assertIn(
+            "const localAccountContext = hasLocalAccountContext(el);",
+            source,
+        )
+
     def test_create_entry_state_clicks_exact_tagged_target(self) -> None:
         source = inspect.getsource(
             FacebookBusinessBrowser._wait_for_ad_account_create_entry
