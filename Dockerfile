@@ -130,8 +130,9 @@ RUN set -eux; \
     grep -q 'async def checkpoint' /opt/remask-python/app/provisioning/state.py; \
     grep -q 'resume_from' /opt/remask-python/app/provisioning/business_handler.py; \
     grep -q 'FacebookBusinessBrowser(' /opt/remask-python/app/provisioning/ad_account_handler.py; \
-    grep -q 'create_ad_account_with_docids(' /opt/remask-python/app/provisioning/ad_account_handler.py; \
-    grep -q 'facebook_private_graphql' /opt/remask-python/app/provisioning/ad_account_handler.py; \
+    grep -q 'create_ad_account_for_business(' /opt/remask-python/app/provisioning/ad_account_handler.py; \
+    grep -q 'facebook_graph_api' /opt/remask-python/app/provisioning/ad_account_handler.py; \
+    ! grep -q 'create_ad_account_with_docids(' /opt/remask-python/app/provisioning/ad_account_handler.py; \
     grep -q 'classify_meta_request_error' /opt/remask-python/app/provisioning/meta_errors.py; \
     grep -q "@app.get('/ready'" /opt/remask-python/main.py; \
     grep -q "profile_preflight" /opt/remask-python/main.py; \
