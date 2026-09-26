@@ -893,7 +893,7 @@ class AdAccountExactlyOnceSystemRegressionTests(unittest.TestCase):
             'exc.code == "AD_ACCOUNT_CREATE_REQUEST_NOT_OBSERVED"'
         )
         reconcile_pos = source.index(
-            "_inventory_repeatedly_confirms_empty(",
+            "_prove_empty_after_uncertainty(",
             unmatched_pos,
         )
         safe_retry_pos = source.index(
@@ -902,11 +902,7 @@ class AdAccountExactlyOnceSystemRegressionTests(unittest.TestCase):
         )
         self.assertLess(reconcile_pos, safe_retry_pos)
         self.assertIn(
-            "capture_escape_inventory_reconciliation",
-            source,
-        )
-        self.assertIn(
-            "capture_escape_business_settings_inventory",
+            "capture_escape_uncertain_inventory_v2",
             source,
         )
 
@@ -936,19 +932,19 @@ class AdAccountUnknownCaptureExceptionRecoveryTests(unittest.TestCase):
         )
         tail = source[marker:]
         self.assertIn(
-            "capture_exception_inventory_reconciliation",
+            "_prove_empty_after_uncertainty(",
             tail,
         )
         self.assertIn(
-            "capture_exception_business_settings_inventory",
+            "capture_exception_uncertain_inventory_v2",
             tail,
         )
         self.assertIn(
-            "graph_empty",
+            "AD_ACCOUNT_CAPTURE_UNCERTAIN_RECONCILED_EMPTY",
             tail,
         )
         self.assertIn(
-            "secondary_empty",
+            "CREATE_AD_ACCOUNT_SAFE_RETRY_REQUIRED",
             tail,
         )
         self.assertIn(
