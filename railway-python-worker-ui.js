@@ -1498,6 +1498,10 @@ async function pythonWorkerPoll() {
     pythonWorkerUiState.busy = false;
 
     if (status === 'SUCCESS') {
+      const isFanPageJob = items.some(function(item) {
+        return (Array.isArray(item && item.provisioning_steps) ? item.provisioning_steps : [])
+          .some(function(step) { return step && String(step.step || '').toUpperCase() === 'FAN_PAGES'; });
+      });
       const isAdAccountJob = items.some(function(item) {
         return (Array.isArray(item && item.provisioning_steps) ? item.provisioning_steps : [])
           .some(function(step) {
@@ -1507,7 +1511,13 @@ async function pythonWorkerPoll() {
       const unconfirmed = await pythonWorkerRefreshSuccessfulProfiles(items);
       pythonWorkerSetText(
         'pythonPwStatus',
-        isAdAccountJob
+        isFanPageJob
+          ? (
+              unconfirmed.length
+                ? 'FP созданы. Page ID сохранены в Job. Workspace sync не подтвердил: ' + unconfirmed.join(', ') + '.'
+                : 'Fan Pages созданы и Workspace sync завершён.'
+            )
+          : isAdAccountJob
           ? (
               unconfirmed.length
                 ? (
@@ -1530,6 +1540,10 @@ async function pythonWorkerPoll() {
       pythonWorkerUiState.jobId = '';
       localStorage.removeItem('remask_python_worker_job_v1');
     } else {
+      const isFanPageJob = items.some(function(item) {
+        return (Array.isArray(item && item.provisioning_steps) ? item.provisioning_steps : [])
+          .some(function(step) { return step && String(step.step || '').toUpperCase() === 'FAN_PAGES'; });
+      });
       const isAdAccountJob = items.some(function(item) {
         if (item && String(item.step || '').toUpperCase() === 'AD_ACCOUNT') {
           return true;
@@ -1539,8 +1553,10 @@ async function pythonWorkerPoll() {
             return step && String(step.step || '').toUpperCase() === 'AD_ACCOUNT';
           });
       });
-      const entityLabel = isAdAccountJob ? 'RK' : 'BM';
-      const entityFailureLabel = isAdAccountJob
+      const entityLabel = isFanPageJob ? 'FP' : (isAdAccountJob ? 'RK' : 'BM');
+      const entityFailureLabel = isFanPageJob
+        ? 'Создание Fan Page завершилось ошибкой: '
+        : isAdAccountJob
         ? 'Создание рекламного кабинета завершилось ошибкой: '
         : 'Создание BM завершилось ошибкой: ';
       const errors = items
@@ -2187,64 +2203,271 @@ async function pythonWorkerOpenOwnAdAccountModal() {
 window.pythonWorkerStartAdAccounts = pythonWorkerStartAdAccounts;
 
 
+
+async function pythonWorkerStartFanPages(options) {
+  const profiles = options && Array.isArray(options.profiles)
+    ? options.profiles.map(function(v){ return String(v || '').trim(); }).filter(Boolean)
+    : pythonWorkerSelectedProfiles();
+  const configs = options && options.configs && typeof options.configs === 'object'
+    ? options.configs : {};
+  if (!profiles.length || pythonWorkerUiState.busy) return;
+
+  const invalid = profiles.filter(function(profileId) {
+    const cfg = configs[String(profileId)] || {};
+    const count = Number(cfg.count || 0);
+    return !String(cfg.base_name || '').trim()
+      || !String(cfg.category || '').trim()
+      || !Number.isInteger(count)
+      || count < 1 || count > 10;
+  });
+  if (invalid.length) {
+    throw new Error('Add FP: нужны название, category и count 1–10. Проблема: ' + invalid.join(', '));
+  }
+
+  pythonWorkerUiState.busy = true;
+  pythonWorkerSelectionRefresh();
+  pythonWorkerSetText('pythonPwStatus', 'Создаю Fan Page Job для ' + profiles.length + ' FB-профилей...');
+
+  try {
+    const nonce = Date.now() + '-' + Math.random().toString(16).slice(2);
+    const payloadProfiles = profiles.map(function(profileId, index) {
+      const cfg = configs[String(profileId)] || {};
+      return {
+        profile_id: String(profileId),
+        tasks: [{
+          action: 'provisioning',
+          idempotency_key: 'add-fp-' + nonce + '-' + index,
+          payload: {
+            steps: ['PROXY_CHECK', 'FAN_PAGES'],
+            scope_key: 'add-fp-' + nonce + '-' + index,
+            parameters: {
+              FAN_PAGES: {
+                base_name: String(cfg.base_name || '').trim(),
+                count: Number(cfg.count),
+                category: String(cfg.category || '').trim(),
+                bio: String(cfg.bio || '').trim()
+              }
+            }
+          }
+        }]
+      };
+    });
+
+    const data = await pythonWorkerBridge({
+      action: 'create',
+      idempotency_key: 'workspace-add-fp-' + nonce,
+      profiles: payloadProfiles
+    });
+    const jobId = String((data && data.job && data.job.job_id) || '').trim();
+    if (!jobId) throw new Error('Worker did not return job_id.');
+
+    pythonWorkerUiState.jobId = jobId;
+    localStorage.setItem('remask_python_worker_job_v1', jobId);
+    pythonWorkerSetText('pythonPwJob', 'Job: ' + jobId);
+    pythonWorkerSetText('pythonPwStatus', 'Создание Fan Page запущено...');
+    pythonWorkerPoll().catch(function(error) {
+      pythonWorkerSetText('pythonPwStatus', 'Ошибка polling: ' + ((error && error.message) || error));
+    });
+  } catch (error) {
+    pythonWorkerUiState.busy = false;
+    pythonWorkerSelectionRefresh();
+    pythonWorkerSetText('pythonPwStatus', 'Add FP: ' + ((error && error.message) || error));
+    throw error;
+  }
+}
+
+async function pythonWorkerOpenOwnFanPageModal() {
+  if (pythonWorkerUiState.workerOnline !== true) {
+    pythonWorkerSetText('pythonPwStatus', 'Add FP недоступен: worker ещё не READY.');
+    await pythonWorkerHealthCheck();
+    if (pythonWorkerUiState.workerOnline !== true) return;
+  }
+
+  const profiles = pythonWorkerSelectedProfiles();
+  if (!profiles.length) {
+    pythonWorkerSetText('pythonPwStatus', 'Сначала выбери хотя бы один FB-профиль.');
+    return;
+  }
+
+  pythonWorkerEnsureBmModalStyle();
+  pythonWorkerCloseOwnBmModal();
+
+  const modal = document.createElement('div');
+  modal.id = 'pythonWorkerBmModal';
+  const card = document.createElement('div');
+  card.className = 'pwbm-card';
+
+  const head = document.createElement('div');
+  head.className = 'pwbm-head';
+  const title = document.createElement('div');
+  title.className = 'pwbm-title';
+  title.textContent = 'Создать Fan Page · ' + profiles.length + ' проф.';
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'pwbm-close';
+  close.textContent = '×';
+  close.addEventListener('click', pythonWorkerCloseOwnBmModal);
+  head.appendChild(title); head.appendChild(close);
+
+  const body = document.createElement('div');
+  body.className = 'pwbm-body';
+  const note = document.createElement('div');
+  note.className = 'pwbm-note';
+  note.textContent = 'Для двух будущих BM поставь count=2. ReMask создаст две отдельные FP и сохранит их Page ID.';
+  body.appendChild(note);
+
+  const rows = {};
+  profiles.forEach(function(profileId) {
+    const row = document.createElement('div');
+    row.className = 'pwbm-row';
+
+    const profile = document.createElement('div');
+    profile.className = 'pwbm-profile';
+    profile.textContent = profileId;
+
+    const nameField = document.createElement('div');
+    nameField.className = 'pwbm-field';
+    const baseName = document.createElement('input');
+    baseName.type = 'text';
+    baseName.value = 'ReMask Page';
+    baseName.placeholder = 'Базовое название Page';
+    const count = document.createElement('input');
+    count.type = 'number';
+    count.className = 'pwbm-manual';
+    count.min = '1'; count.max = '10'; count.value = '2';
+    const nameHint = document.createElement('small');
+    nameHint.textContent = 'count=2 → “ReMask Page 1” и “ReMask Page 2”.';
+    nameField.appendChild(baseName); nameField.appendChild(count); nameField.appendChild(nameHint);
+
+    const metaField = document.createElement('div');
+    metaField.className = 'pwbm-field';
+    const category = document.createElement('input');
+    category.type = 'text';
+    category.value = 'Digital creator';
+    category.placeholder = 'Категория';
+    const bio = document.createElement('input');
+    bio.type = 'text';
+    bio.className = 'pwbm-manual';
+    bio.placeholder = 'Bio (необязательно)';
+    const metaHint = document.createElement('small');
+    metaHint.textContent = 'Категория выбирается из autocomplete Facebook.';
+    metaField.appendChild(category); metaField.appendChild(bio); metaField.appendChild(metaHint);
+
+    row.appendChild(profile); row.appendChild(nameField); row.appendChild(metaField);
+    body.appendChild(row);
+    rows[profileId] = {baseName:baseName,count:count,category:category,bio:bio};
+  });
+
+  const footer = document.createElement('div');
+  footer.className = 'pwbm-footer';
+  const status = document.createElement('div');
+  status.className = 'pwbm-status';
+  const actions = document.createElement('div');
+  actions.className = 'pwbm-actions';
+  const cancel = document.createElement('button');
+  cancel.type='button'; cancel.className='btn btn-secondary'; cancel.textContent='Отмена';
+  cancel.addEventListener('click', pythonWorkerCloseOwnBmModal);
+  const create = document.createElement('button');
+  create.type='button'; create.className='btn btn-primary'; create.textContent='Создать FP';
+  actions.appendChild(cancel); actions.appendChild(create);
+  footer.appendChild(status); footer.appendChild(actions);
+
+  card.appendChild(head); card.appendChild(body); card.appendChild(footer);
+  modal.appendChild(card); document.body.appendChild(modal);
+
+  const refresh = function() {
+    const bad = profiles.filter(function(profileId) {
+      const cfg = rows[profileId];
+      const n = Number(cfg.count.value || 0);
+      return !String(cfg.baseName.value || '').trim()
+        || !String(cfg.category.value || '').trim()
+        || !Number.isInteger(n) || n < 1 || n > 10;
+    });
+    create.disabled = pythonWorkerUiState.busy || bad.length > 0;
+    status.textContent = bad.length ? 'Не готовы: ' + bad.join(', ') : 'Готово к Add FP.';
+  };
+
+  profiles.forEach(function(profileId) {
+    const cfg=rows[profileId];
+    cfg.baseName.addEventListener('input',refresh);
+    cfg.count.addEventListener('input',refresh);
+    cfg.category.addEventListener('input',refresh);
+  });
+
+  create.addEventListener('click', function() {
+    if (create.disabled) return;
+    const configs = {};
+    profiles.forEach(function(profileId) {
+      const cfg=rows[profileId];
+      configs[profileId] = {
+        base_name:String(cfg.baseName.value || '').trim(),
+        count:Number(cfg.count.value || 0),
+        category:String(cfg.category.value || '').trim(),
+        bio:String(cfg.bio.value || '').trim()
+      };
+    });
+    create.disabled=true; cancel.disabled=true; status.textContent='Отправляю Add FP Job…';
+    pythonWorkerStartFanPages({profiles:profiles,configs:configs})
+      .then(pythonWorkerCloseOwnBmModal)
+      .catch(function(error){
+        cancel.disabled=false; refresh();
+        status.textContent='Ошибка: ' + String((error && error.message) || error);
+      });
+  });
+
+  refresh();
+}
+
+window.pythonWorkerStartFanPages = pythonWorkerStartFanPages;
+
 function pythonWorkerEnhanceProfileThreeDots() {
-  const candidates = Array.from(
-    document.querySelectorAll(
-      '.js-btn-add-bm, #btn_add_bm, .js-python-add-bm, button, a, [role="button"], [role="menuitem"], [data-action]'
-    )
-  ).filter(function(el) {
+  const candidates = Array.from(document.querySelectorAll(
+    '.js-btn-add-bm, #btn_add_bm, .js-python-add-bm, button, a, [role="button"], [role="menuitem"], [data-action]'
+  )).filter(function(el) {
     if (!el || el.id === 'pythonProvisionStart') return false;
-    if (el.hasAttribute('data-python-worker-rk-menu')) return false;
-
-    const label = String(
-      el.textContent ||
-      el.value ||
-      el.getAttribute('aria-label') ||
-      ''
-    ).replace(/\s+/g, ' ').trim();
-
+    if (el.hasAttribute('data-python-worker-rk-menu') || el.hasAttribute('data-python-worker-fp-menu')) return false;
+    const label = String(el.textContent || el.value || el.getAttribute('aria-label') || '')
+      .replace(/\s+/g,' ').trim();
     return /^(Добавить\s*(?:BM|Business Manager)|Add\s*(?:BM|Business Manager))$/i.test(label);
   });
 
   for (const addBm of candidates) {
-    const parent = addBm.parentNode;
+    const parent=addBm.parentNode;
     if (!parent || parent.nodeType !== 1) continue;
-    if (parent.querySelector && parent.querySelector('[data-python-worker-rk-menu="1"]')) {
-      continue;
+
+    if (!parent.querySelector('[data-python-worker-fp-menu="1"]')) {
+      const addFp=addBm.cloneNode(true);
+      addFp.removeAttribute('id'); addFp.removeAttribute('onclick'); addFp.removeAttribute('data-action');
+      addFp.setAttribute('data-python-worker-fp-menu','1');
+      addFp.setAttribute('aria-label','Add FP');
+      if (addFp.tagName === 'A') addFp.setAttribute('href','#');
+      if (addFp.tagName === 'BUTTON') addFp.type='button';
+      addFp.textContent='Add FP';
+      addFp.addEventListener('click',function(event){
+        event.preventDefault(); event.stopPropagation(); event.stopImmediatePropagation();
+        pythonWorkerOpenOwnFanPageModal().catch(function(error){
+          pythonWorkerSetText('pythonPwStatus','Add FP: ' + String((error && error.message) || error));
+        });
+      },true);
+      if (addBm.nextSibling) parent.insertBefore(addFp,addBm.nextSibling); else parent.appendChild(addFp);
     }
 
-    const addRk = addBm.cloneNode(true);
-    addRk.removeAttribute('id');
-    addRk.removeAttribute('onclick');
-    addRk.removeAttribute('data-action');
-    addRk.setAttribute('data-python-worker-rk-menu', '1');
-    addRk.setAttribute('aria-label', 'Add RK');
-
-    if (addRk.tagName === 'A') {
-      addRk.setAttribute('href', '#');
-    } else if (addRk.tagName === 'BUTTON') {
-      addRk.type = 'button';
-    }
-
-    addRk.textContent = 'Add RK';
-
-    addRk.addEventListener('click', function(event) {
-      event.preventDefault();
-      event.stopPropagation();
-      event.stopImmediatePropagation();
-
-      pythonWorkerOpenOwnAdAccountModal().catch(function(error) {
-        pythonWorkerSetText(
-          'pythonPwStatus',
-          'Add RK: ' + String((error && error.message) || error)
-        );
-      });
-    }, true);
-
-    if (addBm.nextSibling) {
-      parent.insertBefore(addRk, addBm.nextSibling);
-    } else {
-      parent.appendChild(addRk);
+    if (!parent.querySelector('[data-python-worker-rk-menu="1"]')) {
+      const addRk=addBm.cloneNode(true);
+      addRk.removeAttribute('id'); addRk.removeAttribute('onclick'); addRk.removeAttribute('data-action');
+      addRk.setAttribute('data-python-worker-rk-menu','1');
+      addRk.setAttribute('aria-label','Add RK');
+      if (addRk.tagName === 'A') addRk.setAttribute('href','#');
+      if (addRk.tagName === 'BUTTON') addRk.type='button';
+      addRk.textContent='Add RK';
+      addRk.addEventListener('click',function(event){
+        event.preventDefault(); event.stopPropagation(); event.stopImmediatePropagation();
+        pythonWorkerOpenOwnAdAccountModal().catch(function(error){
+          pythonWorkerSetText('pythonPwStatus','Add RK: ' + String((error && error.message) || error));
+        });
+      },true);
+      const fp=parent.querySelector('[data-python-worker-fp-menu="1"]');
+      if (fp && fp.nextSibling) parent.insertBefore(addRk,fp.nextSibling); else parent.appendChild(addRk);
     }
   }
 }
