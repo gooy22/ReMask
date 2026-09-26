@@ -856,6 +856,7 @@ class FacebookBusinessBrowser:
         self._ad_account_phase_started_at = time.monotonic()
         self._ad_account_create_sent = False
         self._ad_account_ui_trace: list[dict[str, Any]] = []
+        self._ad_account_wizard_rect: dict[str, float] = {}
 
     async def __aenter__(self) -> "FacebookBusinessBrowser":
         await self.open()
@@ -4217,6 +4218,142 @@ class FacebookBusinessBrowser:
         value = _clean(result).lower()
         return value if value in {"create", "add"} else ""
 
+    async def _capture_ad_account_wizard_rect(self) -> dict[str, float]:
+        """Remember the visual bounds of the active Add-RK wizard.
+
+        Meta can replace all field labels after Continue while keeping the same
+        drawer/modal geometry. Text-only wizard detection then loses the flow.
+        A geometry anchor lets later Next/Create actions stay inside the exact
+        UI surface that contained the verified name/currency/timezone fields.
+        """
+        if self.page is None:
+            return {}
+
+        try:
+            rect = await self.page.evaluate(
+                """() => {
+                    const visible = el => {
+                        if (!el) return false;
+                        const r = el.getBoundingClientRect();
+                        const s = getComputedStyle(el);
+                        return r.width > 0 && r.height > 0
+                            && s.display !== 'none'
+                            && s.visibility !== 'hidden';
+                    };
+                    const clean = text => (text || '')
+                        .normalize('NFKC')
+                        .replace(/[\u200b\u200c\u200d\ufeff]/g, '')
+                        .replace(/\u00a0/g, ' ')
+                        .replace(/\s+/g, ' ')
+                        .trim()
+                        .toLowerCase();
+                    const name = [
+                        'ad account name','advertising account name',
+                        'nom du compte publicitaire','nom du compte',
+                        'name des werbekontos','название рекламного аккаунта',
+                        'назва рекламного акаунта','বিজ্ঞাপন অ্যাকাউন্টের নাম',
+                        'tên tài khoản quảng cáo','विज्ञापन खाते का नाम',
+                        'विज्ञापन खाता नाम'
+                    ];
+                    const currency = [
+                        'currency','devise','währung','валюта','মুদ্রা',
+                        'tiền tệ','मुद्रा'
+                    ];
+                    const timezone = [
+                        'time zone','timezone','fuseau horaire','zeitzone',
+                        'часовой пояс','часовий пояс','সময় অঞ্চল',
+                        'múi giờ','समय क्षेत्र'
+                    ];
+                    const ai = [
+                        'meta ai','assistant business meta ai',
+                        'meta ai business assistant','assistant meta ai'
+                    ];
+
+                    const roots = [];
+                    const addRoot = root => {
+                        if (!root || !visible(root)) return;
+                        const r = root.getBoundingClientRect();
+                        if (
+                            r.x < 250 || r.y < 20 || r.width < 220 || r.height < 120
+                            || r.width > 1050 || r.height > 790
+                        ) return;
+                        const t = clean(
+                            (root.getAttribute('aria-label') || '') + ' ' +
+                            (root.getAttribute('title') || '') + ' ' +
+                            (root.innerText || root.textContent || '')
+                        );
+                        if (!t || ai.some(word => t.includes(word))) return;
+                        const hasName = name.some(word => t.includes(word));
+                        const hasCurrency = currency.some(word => t.includes(word));
+                        const hasTimezone = timezone.some(word => t.includes(word));
+                        if (
+                            (hasName && (hasCurrency || hasTimezone))
+                            || (hasCurrency && hasTimezone)
+                        ) {
+                            roots.push({
+                                x:r.x,y:r.y,width:r.width,height:r.height,
+                                area:r.width*r.height
+                            });
+                        }
+                    };
+
+                    for (const root of document.querySelectorAll(
+                        '[role="dialog"],[aria-modal="true"]'
+                    )) addRoot(root);
+
+                    const markerNodes = [...document.querySelectorAll(
+                        'label,span,div,p,h1,h2,h3,input,select,[role="combobox"]'
+                    )].filter(el => {
+                        if (!visible(el)) return false;
+                        const r = el.getBoundingClientRect();
+                        if (r.x < 280 || r.y < 30 || r.y > 795) return false;
+                        const t = clean(
+                            (el.getAttribute('aria-label') || '') + ' ' +
+                            (el.getAttribute('placeholder') || '') + ' ' +
+                            (el.innerText || el.textContent || '')
+                        );
+                        return name.some(word => t.includes(word))
+                            || currency.some(word => t.includes(word))
+                            || timezone.some(word => t.includes(word));
+                    });
+
+                    for (const node of markerNodes.slice(0, 30)) {
+                        let cur = node;
+                        for (let depth = 0; cur && depth < 9; depth++, cur = cur.parentElement) {
+                            addRoot(cur);
+                        }
+                    }
+
+                    roots.sort((a,b) => a.area - b.area);
+                    const best = roots[0];
+                    if (!best) return {};
+                    return {
+                        x:Math.round(best.x),
+                        y:Math.round(best.y),
+                        width:Math.round(best.width),
+                        height:Math.round(best.height)
+                    };
+                }"""
+            )
+        except Exception:
+            return {}
+
+        if not isinstance(rect, dict):
+            return {}
+        try:
+            width = float(rect.get("width") or 0)
+            height = float(rect.get("height") or 0)
+            if width < 220 or height < 120:
+                return {}
+            return {
+                "x": float(rect.get("x") or 0),
+                "y": float(rect.get("y") or 0),
+                "width": width,
+                "height": height,
+            }
+        except (TypeError, ValueError):
+            return {}
+
     async def _click_ad_account_final_interactive(
         self,
         *,
@@ -4343,6 +4480,24 @@ class FacebookBusinessBrowser:
                 y = float(box.get("y") or 0)
                 if x < 280 or y < 40 or y > 795:
                     continue
+                anchor = self._ad_account_wizard_rect
+                in_anchor = False
+                if anchor:
+                    ax = float(anchor.get("x") or 0) - 36
+                    ay = float(anchor.get("y") or 0) - 36
+                    ar = (
+                        float(anchor.get("x") or 0)
+                        + float(anchor.get("width") or 0)
+                        + 36
+                    )
+                    ab = (
+                        float(anchor.get("y") or 0)
+                        + float(anchor.get("height") or 0)
+                        + 36
+                    )
+                    cx = x + float(box.get("width") or 0) / 2
+                    cy = y + float(box.get("height") or 0) / 2
+                    in_anchor = ax <= cx <= ar and ay <= cy <= ab
                 aria_label = _clean(
                     await item.get_attribute("aria-label")
                 )
@@ -4508,11 +4663,21 @@ class FacebookBusinessBrowser:
                 in_ai_dialog = bool(dialog_meta.get("in_ai_dialog"))
                 if in_ai_dialog:
                     continue
-                if wizard_dialog_present and not in_wizard_dialog:
+                if (
+                    wizard_dialog_present
+                    and not in_wizard_dialog
+                    and not in_anchor
+                ):
                     continue
-                if not wizard_dialog_present and not in_wizard_surface:
+                if (
+                    not wizard_dialog_present
+                    and not in_wizard_surface
+                    and not in_anchor
+                ):
                     continue
                 score = 0
+                if in_anchor:
+                    score -= 350
                 if in_wizard_dialog:
                     score -= 500
                 elif in_dialog:
@@ -4538,6 +4703,7 @@ class FacebookBusinessBrowser:
                             "in_dialog": in_dialog,
                             "in_wizard_dialog": in_wizard_dialog,
                             "in_wizard_surface": in_wizard_surface,
+                            "in_wizard_anchor": in_anchor,
                             "wizard_dialog_present": wizard_dialog_present,
                             "index": index,
                         },
@@ -4576,7 +4742,9 @@ class FacebookBusinessBrowser:
 
         try:
             result = await self.page.evaluate(
-                """(mode) => {
+                """(payload) => {
+                    const mode = payload.mode;
+                    const anchor = payload.anchor || null;
                     const visible = el => {
                         if (!el) return false;
                         const r = el.getBoundingClientRect();
@@ -4689,7 +4857,23 @@ class FacebookBusinessBrowser:
                     ];
 
                     const belongsToWizardSurface = el => {
-                        if (wizardRoot) return wizardRoot.contains(el);
+                        if (wizardRoot && wizardRoot.contains(el)) return true;
+                        if (anchor) {
+                            const r = el.getBoundingClientRect();
+                            const cx = r.x + r.width / 2;
+                            const cy = r.y + r.height / 2;
+                            const pad = 36;
+                            if (
+                                cx >= Number(anchor.x || 0) - pad
+                                && cx <= Number(anchor.x || 0)
+                                    + Number(anchor.width || 0) + pad
+                                && cy >= Number(anchor.y || 0) - pad
+                                && cy <= Number(anchor.y || 0)
+                                    + Number(anchor.height || 0) + pad
+                            ) {
+                                return true;
+                            }
+                        }
                         let cur = el;
                         for (let depth = 0; cur && depth < 9; depth++, cur = cur.parentElement) {
                             if (!visible(cur)) continue;
@@ -4836,7 +5020,10 @@ class FacebookBusinessBrowser:
                         role:best.role
                     };
                 }""",
-                mode,
+                {
+                    "mode": mode,
+                    "anchor": self._ad_account_wizard_rect,
+                },
             )
             if isinstance(result, dict):
                 return {
@@ -8632,6 +8819,9 @@ timeout_seconds=4.0,
             currency=currency,
             timezone_id=timezone_id,
         )
+        self._ad_account_wizard_rect = (
+            await self._capture_ad_account_wizard_rect()
+        )
         initial_form_state = await self._ad_account_ui_state()
         last_form_setup_signature = _clean(
             initial_form_state.get("signature")
@@ -8976,6 +9166,8 @@ timeout_seconds=4.0,
                     "stage": "ad_account_create_submit_missing",
                     "clicked_any": clicked_any,
                     "final_click_attempted": final_click_attempted,
+                    "submit_attempts": submit_attempts[-12:],
+                    "wizard_rect": self._ad_account_wizard_rect,
                     "requested_currency": _clean(currency).upper(),
                     "requested_timezone_id": int(timezone_id),
                     "requested_timezone_name": self._timezone_name_for_id(
@@ -8985,7 +9177,6 @@ timeout_seconds=4.0,
                     "label_control_probe": await self._ad_account_label_control_probe(),
                     "form_candidates": await self._ad_account_form_candidates(),
                     "submit_controls": await self._ad_account_submit_controls(),
-                    "submit_attempts": submit_attempts[-12:],
                     "own_business_selected": own_business_selected,
                     "last_form_setup_signature": last_form_setup_signature[:1000],
                     "graphql_candidates": graphql_candidates[-12:],
@@ -9000,9 +9191,20 @@ timeout_seconds=4.0,
                     import logging
                     logging.getLogger("remask_worker").warning(
                         "[ad-account-submit-missing] profile=%s business=%s "
-                        "form_setup=%s form_candidates=%s label_control_probe=%s submit_controls=%s",
+                        "submit_attempts=%s wizard_rect=%s form_setup=%s "
+                        "form_candidates=%s label_control_probe=%s submit_controls=%s",
                         self.profile_id,
                         business,
+                        json.dumps(
+                            submit_attempts[-12:],
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ),
+                        json.dumps(
+                            self._ad_account_wizard_rect,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ),
                         json.dumps(
                             form_setup,
                             ensure_ascii=False,
