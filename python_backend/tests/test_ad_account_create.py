@@ -1366,8 +1366,12 @@ class AdAccountButtonSemanticsRegressionTests(unittest.TestCase):
         )]
         self.assertIn("_raise_rk_already_exists(", preflight)
         self.assertNotIn('"reused": True', preflight)
+        self.assertNotIn(
+            "_browser_inventory_confirms_nonempty(browser_inventory_before)",
+            preflight,
+        )
         self.assertIn(
-            "_browser_inventory_confirms_nonempty(",
+            "verify_ad_account_inventory_empty(",
             preflight,
         )
 
