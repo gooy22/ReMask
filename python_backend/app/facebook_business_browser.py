@@ -12145,6 +12145,12 @@ timeout_seconds=4.0,
                         await self.page.wait_for_timeout(250)
                     if captured.done():
                         break
+                    if blocked_unclassified_create:
+                        # The safety gate already intercepted a strong unknown
+                        # mutation. Do not click the irreversible CTA again in
+                        # this browser pass; reconciliation decides whether a
+                        # clean recapture is safe.
+                        break
 
                 if not final_clicked:
                     break
