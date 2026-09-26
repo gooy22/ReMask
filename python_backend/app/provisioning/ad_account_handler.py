@@ -7,8 +7,11 @@ from typing import Any
 
 from fb_worker import AuthenticationError, ProxyError, RemoteRequestError
 
-from ..facebook_ad_account_create import _normalize_ad_account_id
-from ..facebook_graph_api import GraphApiError, GraphMutationUncertain
+from ..facebook_ad_account_create import (
+    AdAccountMutationError,
+    _normalize_ad_account_id,
+    create_ad_account_with_docids,
+)
 from ..facebook_business_browser import (
     BrowserBusinessError,
     FacebookBusinessBrowser,
@@ -832,8 +835,6 @@ async def ad_account_handler(
         idempotency_key,
     )
 
-    graph_submit_started = False
-
     async def reconcile_after_uncertain(
         *,
         reason: str,
@@ -851,7 +852,7 @@ async def ad_account_handler(
                 "currency": currency,
                 "timezone_id": timezone_id,
                 "last_error": reason[:4000],
-                "transport": "facebook_graph_api",
+                "transport": "facebook_private_graphql_live_capture",
             },
         )
 
@@ -915,96 +916,194 @@ async def ad_account_handler(
             retryable=True,
         )
 
+    # Phase 1: reproduce Meta's own current wizard and capture the exact
+    # private CREATE request. The interceptor aborts it BEFORE Meta receives it.
     try:
         await browser_checkpoint(
             {
-                "phase": "CREATE_SUBMIT_INTENT",
-                "activity": "AD_ACCOUNT_GRAPH_API_SUBMIT_INTENT",
+                "phase": "CREATE_CAPTURE_PREPARING",
+                "activity": "AD_ACCOUNT_LIVE_CAPTURE_OPENING",
                 "activity_at": int(time.time()),
-                "transport": "facebook_graph_api",
+                "transport": "business_suite_live_capture",
             }
         )
-        graph_submit_started = True
-
-        graph = await session.graph_api()
-        rk_id = await asyncio.wait_for(
-            graph.create_ad_account_for_business(
+        async with FacebookBusinessBrowser(
+            session.context,
+            timeout_seconds=90,
+        ) as browser:
+            captured_request = await browser.capture_ad_account_create_request(
                 business_id=business_id,
-                name=rk_name,
+                account_name=rk_name,
                 currency=currency,
                 timezone_id=timezone_id,
-                end_advertiser="NONE",
-                media_agency="NONE",
-                partner="NONE",
+            )
+    except BrowserBusinessError as exc:
+        await provisioning_state.checkpoint(
+            item_id,
+            profile_id,
+            scope_key,
+            ProvisioningStep.AD_ACCOUNT,
+            {
+                "phase": "CREATE_NOT_SUBMITTED",
+                "resume_from": "CREATE",
+                "business_id": business_id,
+                "account_name": rk_name,
+                "currency": currency,
+                "timezone_id": timezone_id,
+                "last_error_code": exc.code,
+                "last_error": str(exc)[:4000],
+                "browser_diagnostic": (
+                    exc.diagnostic
+                    if isinstance(exc.diagnostic, dict)
+                    else {}
+                ),
+                "transport": "business_suite_live_capture",
+            },
+        )
+        raise ProvisioningError(
+            exc.code,
+            str(exc),
+            retryable=exc.retryable,
+        ) from exc
+
+    capture_doc_id = _clean(captured_request.get("doc_id"))
+    capture_friendly = _clean(captured_request.get("friendly_name"))
+    capture_variables = captured_request.get("variables")
+    if (
+        not capture_doc_id.isdigit()
+        or not isinstance(capture_variables, dict)
+        or not capture_variables
+    ):
+        raise ProvisioningError(
+            "CREATE_AD_ACCOUNT_LIVE_CAPTURE_INVALID",
+            (
+                "Meta's live Add-RK request was intercepted but did not expose "
+                "a usable doc_id + variables pair. No CREATE was sent."
             ),
-            timeout=60.0,
+            retryable=True,
         )
 
-    except GraphMutationUncertain as exc:
-        return await reconcile_after_uncertain(reason=str(exc))
+    await provisioning_state.checkpoint(
+        item_id,
+        profile_id,
+        scope_key,
+        ProvisioningStep.AD_ACCOUNT,
+        {
+            "phase": "CREATE_CAPTURED",
+            "resume_from": "CREATE",
+            "business_id": business_id,
+            "account_name": rk_name,
+            "currency": currency,
+            "timezone_id": timezone_id,
+            "capture_doc_id": capture_doc_id,
+            "capture_friendly_name": capture_friendly,
+            "capture_variable_keys": sorted(capture_variables.keys()),
+            "transport": "business_suite_live_capture",
+        },
+    )
+
+    # Phase 2: replay exactly the request captured above through the same
+    # browser-native Facebook session. No discovery, cached doc-id, or public
+    # Graph API is allowed in this CREATE path.
+    submit_started = False
+
+    async def before_private_submit() -> None:
+        nonlocal submit_started
+        await browser_checkpoint(
+            {
+                "phase": "CREATE_SUBMIT_INTENT",
+                "activity": "AD_ACCOUNT_PRIVATE_CAPTURE_REPLAY_SUBMIT_INTENT",
+                "activity_at": int(time.time()),
+                "capture_doc_id": capture_doc_id,
+                "capture_friendly_name": capture_friendly,
+                "transport": "facebook_private_graphql_live_capture",
+            }
+        )
+        submit_started = True
+
+    try:
+        web_session = await session.facebook_web()
+        result = await asyncio.wait_for(
+            create_ad_account_with_docids(
+                web_session,
+                business_id=business_id,
+                account_name=rk_name,
+                currency=currency,
+                timezone_id=timezone_id,
+                profile_id=profile_id,
+                captured_request=captured_request,
+                before_submit=before_private_submit,
+            ),
+            timeout=90.0,
+        )
 
     except asyncio.TimeoutError as exc:
-        if graph_submit_started:
+        if submit_started:
             return await reconcile_after_uncertain(
-                reason="Official Graph API create-ad-account timed out after submit."
+                reason=(
+                    "Live-captured private CREATE timed out after submit; "
+                    "inventory reconciliation is required before retry."
+                )
             )
+        await provisioning_state.checkpoint(
+            item_id,
+            profile_id,
+            scope_key,
+            ProvisioningStep.AD_ACCOUNT,
+            {
+                "phase": "CREATE_NOT_SUBMITTED",
+                "resume_from": "CREATE",
+                "business_id": business_id,
+                "last_error_code": "CREATE_AD_ACCOUNT_PRE_SUBMIT_TIMEOUT",
+                "last_error": (
+                    "Live-captured private CREATE timed out before submit."
+                ),
+                "transport": "facebook_private_graphql_live_capture",
+            },
+        )
         raise ProvisioningError(
-            "AD_ACCOUNT_CREATE_PRE_SUBMIT_TIMEOUT",
-            "Official Graph API create-ad-account timed out before submit.",
+            "CREATE_AD_ACCOUNT_PRE_SUBMIT_TIMEOUT",
+            "Live-captured private CREATE timed out before submit.",
             retryable=True,
         ) from exc
 
-    except GraphApiError as exc:
-        code = exc.code
-        subcode = exc.subcode
-        payload = exc.payload if isinstance(exc.payload, dict) else {}
+    except AdAccountMutationError as exc:
+        if exc.code == "CREATE_AD_ACCOUNT_RESULT_UNKNOWN":
+            return await reconcile_after_uncertain(reason=str(exc))
 
-        text = " ".join(
-            [
+        pre_submit_codes = {
+            "CREATE_AD_ACCOUNT_LIVE_CAPTURE_REQUIRED",
+            "CREATE_AD_ACCOUNT_LIVE_CAPTURE_INVALID",
+            "CREATE_AD_ACCOUNT_LIVE_CAPTURE_STALE",
+            "CREATE_AD_ACCOUNT_PRE_SUBMIT_TRANSPORT",
+            "CREATE_AD_ACCOUNT_BROWSER_TRANSPORT_UNAVAILABLE",
+            "SESSION_EXPIRED",
+        }
+        if exc.code in pre_submit_codes:
+            await provisioning_state.checkpoint(
+                item_id,
+                profile_id,
+                scope_key,
+                ProvisioningStep.AD_ACCOUNT,
+                {
+                    "phase": "CREATE_NOT_SUBMITTED",
+                    "resume_from": "CREATE",
+                    "business_id": business_id,
+                    "last_error_code": exc.code,
+                    "last_error": str(exc)[:4000],
+                    "mutation_payload": (
+                        exc.payload
+                        if isinstance(exc.payload, dict)
+                        else {}
+                    ),
+                    "transport": "facebook_private_graphql_live_capture",
+                },
+            )
+            raise ProvisioningError(
+                exc.code,
                 str(exc),
-                str(payload.get("error") or ""),
-            ]
-        ).casefold()
-
-        retryable = bool(
-            code in {1, 2, 4, 17, 32, 613}
-            or exc.http_status in {408, 425, 429, 500, 502, 503, 504}
-        )
-
-        if code in {10, 200} or any(
-            marker in text
-            for marker in (
-                "permission",
-                "not authorized",
-                "not authorised",
-                "non autorisée",
-                "non autorise",
-            )
-        ):
-            stable_code = "AD_ACCOUNT_PERMISSION_DENIED"
-            retryable = False
-        elif any(
-            marker in text
-            for marker in (
-                "maximum ad account",
-                "ad account limit",
-                "too many ad accounts",
-                "account count",
-            )
-        ):
-            stable_code = "AD_ACCOUNT_LIMIT_REACHED"
-            retryable = False
-        elif retryable:
-            stable_code = "AD_ACCOUNT_REMOTE_RETRYABLE"
-        else:
-            stable_code = "AD_ACCOUNT_META_ERROR"
-
-        diagnostic = (
-            f"Graph API code={code if code is not None else '-'} "
-            f"subcode={subcode if subcode is not None else '-'} "
-            f"http={exc.http_status if exc.http_status is not None else '-'} "
-            f"message={str(exc)} payload={str(payload)[:3500]}"
-        )
+                retryable=exc.retryable,
+            ) from exc
 
         await provisioning_state.checkpoint(
             item_id,
@@ -1013,26 +1112,31 @@ async def ad_account_handler(
             ProvisioningStep.AD_ACCOUNT,
             {
                 "phase": "CREATE_REJECTED",
-                "resume_from": "STOP" if not retryable else "CREATE",
+                "resume_from": "CREATE" if exc.retryable else "STOP",
                 "business_id": business_id,
-                "last_error_code": stable_code,
-                "last_error": diagnostic,
-                "graph_error_code": code,
-                "graph_error_subcode": subcode,
-                "graph_error_payload": payload,
-                "transport": "facebook_graph_api",
+                "last_error_code": exc.code,
+                "last_error": str(exc)[:4000],
+                "mutation_payload": (
+                    exc.payload if isinstance(exc.payload, dict) else {}
+                ),
+                "capture_doc_id": capture_doc_id,
+                "capture_friendly_name": capture_friendly,
+                "transport": "facebook_private_graphql_live_capture",
             },
         )
         raise ProvisioningError(
-            stable_code,
-            diagnostic,
-            retryable=retryable,
+            exc.code,
+            str(exc),
+            retryable=exc.retryable,
         ) from exc
 
-    rk_id = _normalize_ad_account_id(rk_id)
+    rk_id = _normalize_ad_account_id(result.ad_account_id)
     if not rk_id:
         return await reconcile_after_uncertain(
-            reason="Official Graph API returned an invalid Ad Account ID."
+            reason=(
+                "Live-captured private CREATE returned no provable "
+                "Ad Account ID."
+            )
         )
 
     await provisioning_state.checkpoint(
@@ -1046,7 +1150,10 @@ async def ad_account_handler(
             "business_id": business_id,
             "ad_account_id": rk_id,
             "create_response_ad_account_id": rk_id,
-            "transport": "facebook_graph_api",
+            "create_response_friendly_name": result.candidate.friendly_name,
+            "create_response_doc_id": result.candidate.doc_id,
+            "create_response_path": result.response_path,
+            "transport": "facebook_private_graphql_live_capture",
         },
     )
     await provisioning_state.remember_entity(
@@ -1062,5 +1169,9 @@ async def ad_account_handler(
         "name": rk_name,
         "currency": currency,
         "timezone_id": timezone_id,
-        "transport": "facebook_graph_api",
+        "transport": "facebook_private_graphql_live_capture",
+        "create_response_friendly_name": result.candidate.friendly_name,
+        "create_response_doc_id": result.candidate.doc_id,
+        "create_response_path": result.response_path,
     }
+
