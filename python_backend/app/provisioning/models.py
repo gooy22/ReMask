@@ -7,6 +7,7 @@ from typing import Any
 
 class ProvisioningStep(str, Enum):
     PROXY_CHECK = "PROXY_CHECK"
+    FAN_PAGES = "FAN_PAGES"
     BUSINESS = "BUSINESS"
     AD_ACCOUNT = "AD_ACCOUNT"
     FUNDING = "FUNDING"
