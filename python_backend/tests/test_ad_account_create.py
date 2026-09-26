@@ -1309,7 +1309,7 @@ class AdAccountButtonSemanticsRegressionTests(unittest.TestCase):
             '"transport": "provisioning_state_verified"',
             source,
         )
-        self.assertIn("AD_ACCOUNT_ALREADY_EXISTS", source)
+        self.assertIn("_raise_rk_already_exists(", source)
 
     def test_add_rk_preflight_existing_rk_is_error_not_success(self) -> None:
         source = inspect.getsource(ad_account_handler)
@@ -1355,7 +1355,7 @@ class AdAccountCrossJobGraphTrustRegressionTests(unittest.TestCase):
             tail,
         )
         self.assertIn(
-            "cross_job_graph_candidate_business_settings_verified",
+            "_raise_rk_already_exists(",
             tail,
         )
         self.assertIn(
@@ -1382,7 +1382,7 @@ class AdAccountGraphInventoryTrustRegressionTests(unittest.TestCase):
         window = source[preflight_pos:preparing_pos]
         self.assertNotIn('"transport": "graph_inventory_preflight"', window)
         self.assertIn(
-            '"transport": "graph_candidate_business_settings_verified"',
+            "_raise_rk_already_exists(",
             window,
         )
         self.assertIn("_verify_expected_ad_account_in_business(", window)
