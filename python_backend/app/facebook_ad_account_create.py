@@ -33,13 +33,6 @@ BUSINESS_GRAPHQL_URL = "https://business.facebook.com/api/graphql/"
 # real Ad Account ID through a known response path.
 LEGACY_CREATE_AD_ACCOUNT_DOC_ID = "684920184730193"
 
-# Corroborated current BizKit Settings CREATE document observed in multiple
-# fresh external implementations on 2026-09-26. This is NOT treated as
-# permanently trusted: Meta must either execute it and return one RK id, or
-# reject it as stale schema. On success it is promoted into the confirmed
-# candidate registry.
-CORROBORATED_CREATE_AD_ACCOUNT_DOC_ID = "9236789956426634"
-
 
 class AdAccountMutationError(RuntimeError):
     def __init__(
@@ -504,26 +497,6 @@ async def create_ad_account_with_docids(
         # request shapes.
         ordered.append(dynamic_candidate)
 
-    # The current CREATE mutation is not guaranteed to be present in the
-    # initial Business Settings HTML/JS, so pure persisted-query discovery can
-    # legitimately return nothing. Keep one freshly corroborated BizKit
-    # candidate as a self-validating fallback. A stale-schema response is safe:
-    # Meta did not execute CREATE and the candidate is discarded. A successful
-    # response promotes it into the confirmed registry.
-    ordered.append(
-        DocIdCandidate(
-            operation=CREATE_AD_ACCOUNT_OPERATION,
-            doc_id=CORROBORATED_CREATE_AD_ACCOUNT_DOC_ID,
-            friendly_name="BizKitSettingsCreateAdAccountMutation",
-            endpoint_url=BUSINESS_GRAPHQL_URL,
-            variables_mode="bizkit_settings_create_ad_account_flat_v3",
-            source="corroborated_20260926",
-            priority=15_000,
-            observed_at=str(int(time.time())),
-            enabled=True,
-        )
-    )
-
     # Do not submit unconfirmed registry/static candidates. Only the live
     # Business Settings capture, explicit job override, current discovery or a
     # previously successful candidate may reach Meta.
@@ -643,7 +616,6 @@ async def create_ad_account_with_docids(
             persisted = candidate
             if (
                 candidate.source.startswith("dynamic_")
-                or candidate.source.startswith("corroborated_")
                 or candidate.source == "live_ui_capture"
                 or candidate.source == "job_manual"
             ):
@@ -659,11 +631,7 @@ async def create_ad_account_with_docids(
                         else (
                             "dynamic_success"
                             if candidate.source.startswith("dynamic_")
-                            else (
-                                "corroborated_success"
-                                if candidate.source.startswith("corroborated_")
-                                else "manual_success"
-                            )
+                            else "manual_success"
                         )
                     ),
                     priority=9_700,
