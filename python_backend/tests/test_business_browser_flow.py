@@ -22,6 +22,29 @@ from app.provisioning.state import ProvisioningStateStore
 from app.provisioning.service import ProvisioningService
 
 
+
+class HindiAdAccountLocaleRegressionTests(unittest.TestCase):
+    def test_hindi_meta_account_transliteration_is_supported(self) -> None:
+        source = inspect.getsource(FacebookBusinessBrowser)
+        for text in (
+            "विज्ञापन अकाउंट",
+            "विज्ञापन अकाउंट्स",
+            "नया विज्ञापन अकाउंट बनाएँ",
+            "विज्ञापन अकाउंट बनाएँ",
+        ):
+            self.assertIn(text, source)
+
+    def test_hindi_create_scanners_include_transliterated_account_word(self) -> None:
+        source = inspect.getsource(
+            FacebookBusinessBrowser._ad_account_visible_create_candidates
+        )
+        self.assertIn("विज्ञापन अकाउंट", source)
+        source = inspect.getsource(
+            FacebookBusinessBrowser._click_ad_account_create_entry_by_visible_text
+        )
+        self.assertIn("विज्ञापन अकाउंट", source)
+
+
 class _FakeRequest:
     def __init__(self, post_data: str):
         self.method = "POST"

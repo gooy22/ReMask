@@ -1015,6 +1015,8 @@ class FacebookBusinessBrowser:
         "Tài khoản quảng cáo",
         "विज्ञापन खाते",
         "विज्ञापन खाता",
+        "विज्ञापन अकाउंट",
+        "विज्ञापन अकाउंट्स",
     )
     AD_ACCOUNT_CREATE_ENTRY_NAMES = (
         "Create a new ad account",
@@ -1038,6 +1040,10 @@ class FacebookBusinessBrowser:
         "नया विज्ञापन खाता बनाएं",
         "विज्ञापन खाता बनाएँ",
         "विज्ञापन खाता बनाएं",
+        "नया विज्ञापन अकाउंट बनाएँ",
+        "नया विज्ञापन अकाउंट बनाएं",
+        "विज्ञापन अकाउंट बनाएँ",
+        "विज्ञापन अकाउंट बनाएं",
     )
     AD_ACCOUNT_SUBMIT_NAMES = (
         "Create ad account",
@@ -1069,6 +1075,8 @@ class FacebookBusinessBrowser:
         "Tiếp tục",
         "विज्ञापन खाता बनाएँ",
         "विज्ञापन खाता बनाएं",
+        "विज्ञापन अकाउंट बनाएँ",
+        "विज्ञापन अकाउंट बनाएं",
         "बनाएँ",
         "बनाएं",
         "अगला",
@@ -4625,6 +4633,8 @@ class FacebookBusinessBrowser:
                 "tài khoản quảng cáo",
                 "विज्ञापन खाता",
                 "विज्ञापन खाते",
+                "विज्ञापन अकाउंट",
+                "विज्ञापन अकाउंट्स",
             )
             if any(marker in body for marker in markers):
                 return True
@@ -4959,7 +4969,8 @@ class FacebookBusinessBrowser:
                         'ad account','advertising account','реклам',
                         'werbekonto','compte publicitaire',
                         'বিজ্ঞাপন অ্যাকাউন্ট','tài khoản quảng cáo',
-                        'विज्ञापन खाता','विज्ञापन खाते'
+                        'विज्ञापन खाता','विज्ञापन खाते',
+                        'विज्ञापन अकाउंट','विज्ञापन अकाउंट्स'
                     ];
                     const createWords = [
                         'create','new ad account',
@@ -4967,7 +4978,8 @@ class FacebookBusinessBrowser:
                         'créer','nouveau compte publicitaire',
                         'তৈরি করুন','নতুন বিজ্ঞাপন অ্যাকাউন্ট',
                         'tạo','tài khoản quảng cáo mới',
-                        'बनाएँ','बनाएं','नया विज्ञापन खाता'
+                        'बनाएँ','बनाएं','नया विज्ञापन खाता',
+                        'नया विज्ञापन अकाउंट'
                     ];
                     const addWords = [
                         'add','ajouter','добавить','додати',
@@ -4978,7 +4990,8 @@ class FacebookBusinessBrowser:
                         'compte publicitaire','comptes publicitaires',
                         'реклам','werbekonto','werbekonten',
                         'বিজ্ঞাপন অ্যাকাউন্ট','tài khoản quảng cáo',
-                        'विज्ञापन खाता','विज्ञापन खाते'
+                        'विज्ञापन खाता','विज्ञापन खाते',
+                        'विज्ञापन अकाउंट','विज्ञापन अकाउंट्स'
                     ];
                     const hasLocalAccountContext = el => {
                         let cur = el;
@@ -5168,7 +5181,8 @@ class FacebookBusinessBrowser:
                         'name des werbekontos','название рекламного аккаунта',
                         'назва рекламного акаунта','বিজ্ঞাপন অ্যাকাউন্টের নাম',
                         'tên tài khoản quảng cáo','विज्ञापन खाते का नाम',
-                        'विज्ञापन खाता नाम'
+                        'विज्ञापन खाता नाम','विज्ञापन अकाउंट का नाम',
+                        'विज्ञापन अकाउंट नाम'
                     ];
                     const currency = [
                         'currency','devise','währung','валюта','মুদ্রা',
@@ -8210,7 +8224,8 @@ class FacebookBusinessBrowser:
                         'назва рекламного акаунта','назва облікового запису',
                         'name des werbekontos','বিজ্ঞাপন অ্যাকাউন্টের নাম',
                         'tên tài khoản quảng cáo','विज्ञापन खाते का नाम',
-                        'विज्ञापन खाता नाम'
+                        'विज्ञापन खाता नाम','विज्ञापन अकाउंट का नाम',
+                        'विज्ञापन अकाउंट नाम'
                     ];
                     const formWords = [
                         'currency','devise','währung','валюта','валюта',
@@ -10792,7 +10807,8 @@ timeout_seconds=4.0,
                                 'ad account','advertising account','реклам',
                                 'werbekonto','compte publicitaire',
                                 'বিজ্ঞাপন অ্যাকাউন্ট','tài khoản quảng cáo',
-                                'विज्ञापन खाता','विज्ञापन खाते'
+                                'विज्ञापन खाता','विज्ञापन खाते',
+                        'विज्ञापन अकाउंट','विज्ञापन अकाउंट्स'
                             ];
                             const actionWords = [
                                 'add','create','ajouter','créer',
