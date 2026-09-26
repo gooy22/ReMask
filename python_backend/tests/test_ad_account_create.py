@@ -26,11 +26,30 @@ from app.provisioning.state import ProvisioningStateStore
 
 
 class AdAccountCreateTransportTests(unittest.TestCase):
-    def test_handler_uses_graph_api_business_adaccount_edge(self) -> None:
+    def test_handler_requires_live_capture_then_private_replay(self) -> None:
         source = inspect.getsource(ad_account_handler)
-        self.assertIn("create_ad_account_for_business(", source)
-        self.assertIn("facebook_graph_api", source)
-        self.assertNotIn("create_ad_account_with_docids(", source)
+        self.assertIn("capture_ad_account_create_request(", source)
+        self.assertIn("create_ad_account_with_docids(", source)
+        self.assertIn("facebook_private_graphql_live_capture", source)
+        self.assertNotIn("create_ad_account_for_business(", source)
+
+    def test_browser_capture_aborts_real_create_before_meta(self) -> None:
+        source = inspect.getsource(
+            FacebookBusinessBrowser.capture_ad_account_create_request
+        )
+        self.assertIn("_open_ad_account_create_form(", source)
+        self.assertIn("_prepare_ad_account_form_fields(", source)
+        self.assertIn("_request_matches_ad_account_create(", source)
+        self.assertIn("await route.abort()", source)
+        self.assertIn("_click_ad_account_final_interactive()", source)
+
+    def test_private_create_has_no_docid_fallback(self) -> None:
+        source = inspect.getsource(create_ad_account_with_docids)
+        self.assertIn("CREATE_AD_ACCOUNT_LIVE_CAPTURE_REQUIRED", source)
+        self.assertIn('source="live_ui_capture"', source)
+        self.assertNotIn("discover_current_ad_account_create_candidate(", source)
+        self.assertNotIn("list_candidates(", source)
+        self.assertNotIn("create_ad_account_for_business(", source)
 
 
 class AdAccountDuplicateSafetyTests(unittest.TestCase):
@@ -358,7 +377,7 @@ class AdAccountCreateRequestMatcherTests(unittest.TestCase):
                         "fb_api_req_friendly_name": (
                             "BizKitSettingsCreateAdAccountMutation"
                         ),
-                        "doc_id": "9236789956426634",
+                        "doc_id": "30132031866444376",
                         "variables": json.dumps(variables),
                     }
                 )
