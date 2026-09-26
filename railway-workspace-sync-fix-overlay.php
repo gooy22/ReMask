@@ -370,6 +370,11 @@ $syncProfileReplacement = <<<'PHP'
             MetaEndpoint::ok($snapshot);
         }
 
+        // REMASK_BM_BOUND_RK_SYNC_V1
+        // me/adaccounts means "accessible to the token", not "belongs to one
+        // of this profile's Business Managers". Workspace must only surface
+        // RK that Meta also returns from a concrete BM edge.
+        $verifiedBusinessAdAccounts = [];
         $syncWarnings = [];
         if (!empty($preflight['ad_accounts']['_funding_enrichment_warning'])) {
             $syncWarnings[] = 'RK funding/payment metadata unavailable; RK list kept';
@@ -382,6 +387,15 @@ $syncProfileReplacement = <<<'PHP'
                 if ($businessId === '') continue;
                 try {
                     $businessAccounts = MetaEndpoint::cachedAsset($profile, 'business_ad_accounts', $businessId, true);
+                    foreach ((array)($businessAccounts['data'] ?? []) as $businessAccount) {
+                        if (!is_array($businessAccount)) continue;
+                        $rkId = trim((string)($businessAccount['id'] ?? ''));
+                        if ($rkId === '') continue;
+                        $row = $businessAccount;
+                        $row['profile'] = $profile;
+                        $row['business_id'] = $businessId;
+                        $verifiedBusinessAdAccounts[$rkId] = $row;
+                    }
                     foreach ((array)($businessAccounts['_edge_warnings'] ?? []) as $edgeWarning) {
                         if (!is_array($edgeWarning)) continue;
                         $edgeName = trim((string)($edgeWarning['edge'] ?? 'business_ad_accounts'));
@@ -409,7 +423,38 @@ $syncProfileReplacement = <<<'PHP'
             'details'=>['sync_source'=>'direct_ad_accounts_with_optional_business_enrichment','warnings'=>$syncWarnings],
         ]);
         $snapshot = hierarchy_profile_snapshot($profile);
-        $snapshot['sync_source'] = 'direct_ad_accounts_with_optional_business_enrichment';
+
+        $directIds = [];
+        foreach ((array)($preflight['ad_accounts']['data'] ?? []) as $directAccount) {
+            if (!is_array($directAccount)) continue;
+            $directId = trim((string)($directAccount['id'] ?? ''));
+            if ($directId !== '') $directIds[$directId] = true;
+        }
+        $filteredDirect = array_values(array_diff(
+            array_keys($directIds),
+            array_keys($verifiedBusinessAdAccounts)
+        ));
+        if ($filteredDirect !== []) {
+            $syncWarnings[] = (
+                'Filtered ' . count($filteredDirect) .
+                ' token-accessible RK because Meta did not return them from any Business Manager.'
+            );
+        }
+
+        // Replace the broad me/adaccounts view with exact BM-bound inventory.
+        // This is the data Workspace renders and therefore prevents phantom RK.
+        $snapshot['ad_accounts'] = array_values($verifiedBusinessAdAccounts);
+        $snapshot['ad_accounts_count'] = count($verifiedBusinessAdAccounts);
+        if (is_array($snapshot['profiles'] ?? null)) {
+            foreach ($snapshot['profiles'] as $i => $profileRow) {
+                if (!is_array($profileRow)) continue;
+                $rowName = trim((string)($profileRow['name'] ?? $profileRow['profile'] ?? ''));
+                if ($rowName !== '' && $rowName !== $profile) continue;
+                $snapshot['profiles'][$i]['rk_count'] = count($verifiedBusinessAdAccounts);
+                $snapshot['profiles'][$i]['ad_accounts_count'] = count($verifiedBusinessAdAccounts);
+            }
+        }
+        $snapshot['sync_source'] = 'business_manager_bound_ad_accounts';
         if ($syncWarnings !== []) $snapshot['sync_warnings'] = array_values(array_unique($syncWarnings));
         MetaEndpoint::ok($snapshot);
     }

@@ -253,6 +253,8 @@ RUN set -eux; \
     ! grep -q 'curl_init' /var/www/html/ajax/checkAccount.php; \
     ! grep -q 'graph.facebook.com' /var/www/html/ajax/checkAccount.php; \
     grep -q 'direct_ad_accounts_with_optional_business_enrichment' /var/www/html/ajax/metaHierarchy.php; \
+    grep -q 'REMASK_BM_BOUND_RK_SYNC_V1' /var/www/html/ajax/metaHierarchy.php; \
+    grep -q 'business_manager_bound_ad_accounts' /var/www/html/ajax/metaHierarchy.php; \
     grep -Fq 'cachedPreflight($profile, true)' /var/www/html/ajax/metaHierarchy.php; \
     grep -Fq "cachedAsset(\$profile, 'pages', '', true)" /var/www/html/ajax/metaHierarchy.php; \
     grep -Fq "cachedAsset(\$profile, 'businesses', '', true)" /var/www/html/ajax/metaHierarchy.php; \
