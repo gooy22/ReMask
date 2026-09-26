@@ -2167,6 +2167,40 @@ class BrowserAdAccountDialogClassificationRegressionTests(unittest.TestCase):
             FacebookBusinessBrowser._ad_account_create_form_confirmed(state)
         )
 
+    def test_real_rk_dialog_with_embedded_meta_ai_button_still_confirms(self):
+        state = {
+            "state":"FORM",
+            "name_input":False,
+            "editable_form_control":False,
+            "controls":[
+                "Assistant business Meta AI [tag=DIV role=button x=1202 y=719]"
+            ],
+            "dialogs":[
+                "Créer un compte publicitaire Devise Fuseau horaire "
+                "Assistant business Meta AI"
+            ],
+        }
+
+        self.assertTrue(
+            FacebookBusinessBrowser._ad_account_create_form_confirmed(state)
+        )
+
+    def test_meta_ai_filter_uses_dialog_identity_not_full_popup_text(self):
+        popup_source = inspect.getsource(
+            FacebookBusinessBrowser._click_ad_account_create_entry_in_popup
+        )
+        dom_source = inspect.getsource(
+            FacebookBusinessBrowser._click_ad_account_action_dom
+        )
+        rect_source = inspect.getsource(
+            FacebookBusinessBrowser._capture_ad_account_wizard_rect
+        )
+
+        self.assertIn("rootIdentity", popup_source)
+        self.assertIn('h1,h2,h3,[role="heading"]', popup_source)
+        self.assertIn("const identity =", dom_source)
+        self.assertIn("ai.some(word => identity.includes(word))", rect_source)
+
 
 class BrowserAdAccountExactlyOnceSubmitTests(unittest.TestCase):
     def test_unmatched_final_click_becomes_unknown_instead_of_second_click(self):
