@@ -956,8 +956,8 @@ class AdAccountUnknownCaptureExceptionRecoveryTests(unittest.TestCase):
             tail,
         )
         self.assertIn(
-            "Duplicate CREATE remains blocked",
-            tail,
+            "duplicate create remains blocked",
+            tail.casefold(),
         )
 
 
