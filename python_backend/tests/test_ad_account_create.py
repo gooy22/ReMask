@@ -959,3 +959,44 @@ class AdAccountUnknownCaptureExceptionRecoveryTests(unittest.TestCase):
             "Duplicate CREATE remains blocked",
             tail,
         )
+
+
+class AdAccountNestedCapturedPayloadTests(unittest.TestCase):
+    def test_nested_ad_account_data_receives_required_attribution_defaults(self) -> None:
+        rewritten = _replace_capture_values(
+            {
+                "businessID": 111222333444555,
+                "adAccountData": {
+                    "name": "capture-canary",
+                    "currency": "EUR",
+                    "timezoneId": 57,
+                },
+            },
+            canary_name="capture-canary",
+            business_id="1056638030476027",
+            account_name="ReMask RK",
+            currency="USD",
+            timezone_id=137,
+        )
+        payload = rewritten["adAccountData"]
+        self.assertEqual(payload["name"], "ReMask RK")
+        self.assertEqual(payload["currency"], "USD")
+        self.assertEqual(payload["timezoneId"], 137)
+        self.assertEqual(payload["end_advertiser"], "NONE")
+        self.assertEqual(payload["media_agency"], "NONE")
+        self.assertEqual(payload["partner"], "NONE")
+
+    def test_ambiguous_nested_payloads_are_not_blindly_patched(self) -> None:
+        rewritten = _replace_capture_values(
+            {
+                "left": {"currency": "EUR", "timezone_id": 57},
+                "right": {"currency": "EUR", "timezone_id": 57},
+            },
+            canary_name="",
+            business_id="1056638030476027",
+            account_name="ReMask RK",
+            currency="USD",
+            timezone_id=137,
+        )
+        self.assertNotIn("end_advertiser", rewritten["left"])
+        self.assertNotIn("end_advertiser", rewritten["right"])
