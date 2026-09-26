@@ -1644,25 +1644,8 @@ class BrowserAdAccountStateCreateRecoveryTests(unittest.IsolatedAsyncioTestCase)
                 },
             )
         )
-        browser._click_ad_account_action_dom = AsyncMock(
-            return_value="create"
-        )
-        browser._wait_for_ad_account_ui_transition = AsyncMock(
-            return_value={
-                "state":"FORM",
-                "signature":"wizard",
-                "url":"",
-                "name_input":True,
-                "form_evidence":True,
-                "editable_form_control":True,
-                "errors":[],
-                "dialogs":[],
-                "controls":[
-                    "Nom du compte publicitaire",
-                    "Devise",
-                    "Fuseau horaire",
-                ],
-            }
+        browser._wait_for_ad_account_create_entry = AsyncMock(
+            return_value=True
         )
         browser._ad_account_popup_candidates = AsyncMock(
             return_value=["Assistant business Meta AI"]
@@ -1674,12 +1657,19 @@ class BrowserAdAccountStateCreateRecoveryTests(unittest.IsolatedAsyncioTestCase)
         found, attempts = await browser._probe_ad_account_add_buttons()
 
         self.assertTrue(found)
-        self.assertEqual(attempts[0]["state_dom_create"], "create")
+        self.assertTrue(attempts[0]["state_create_verified"])
         self.assertTrue(attempts[0]["create_entry_found"])
-        browser._click_ad_account_action_dom.assert_awaited_once_with(
-            allow_generic_add=False
+        browser._wait_for_ad_account_create_entry.assert_awaited_once_with(
+            timeout_seconds=2.5
         )
         browser._click_ad_account_create_entry_in_popup.assert_not_awaited()
+
+    def test_create_entry_state_classifier_excludes_meta_ai_dialog(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser._ad_account_ui_state
+        )
+        self.assertIn("const metaAIRoot = el =>", source)
+        self.assertIn("!metaAIRoot(el)", source)
 
     def test_create_dom_matcher_supports_plain_cards_and_excludes_meta_ai(self):
         source = inspect.getsource(
