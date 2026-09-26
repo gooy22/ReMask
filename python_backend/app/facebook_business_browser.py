@@ -4605,7 +4605,7 @@ class FacebookBusinessBrowser:
                         ) continue;
 
                         const r = clickable.getBoundingClientRect();
-                        if (r.x < 280 || r.y < 30 || r.y > 795) continue;
+                        if (r.x < 300 || r.y < 30 || r.y > 795) continue;
 
                         const key = [
                             text,
