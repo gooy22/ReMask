@@ -1335,113 +1335,47 @@ async def ad_account_handler(
             )
 
             # A final CTA was involved but the definitive mutation was not
-            # observed. Even though the capture gate aborts strong unknown
-            # candidates, treat this as potentially escaped CREATE until two
-            # independent inventory paths prove the Business is still empty.
+            # observed. Treat it as uncertain, but use the same strong
+            # multi-surface proof as the cross-Job guard. This prevents Graph
+            # API availability from turning a safe empty Business into a
+            # permanent RESULT_UNKNOWN lock.
             if (
                 exc.code == "AD_ACCOUNT_CREATE_REQUEST_NOT_OBSERVED"
                 and bool(exc.retryable)
             ):
-                uncertain_inventory: list[dict[str, Any]] = []
-                uncertain_found = ""
-                for inventory_attempt in range(3):
-                    uncertain_found, inventory_diag = await _reconcile_existing(
+                proof_found_id, proven_empty, inventory_proof = (
+                    await _prove_empty_after_uncertainty(
                         session,
                         business_id=business_id,
                         account_name=rk_name,
                     )
-                    uncertain_inventory.extend(inventory_diag)
-                    if uncertain_found:
-                        break
-                    if inventory_attempt < 2:
-                        await asyncio.sleep(2.0)
-
-                if uncertain_found:
+                )
+                if proof_found_id:
                     await provisioning_state.remember_entity(
                         profile_id,
                         scope_key,
                         ProvisioningStep.AD_ACCOUNT,
-                        {"ad_account_id": uncertain_found},
+                        {"ad_account_id": proof_found_id},
                     )
                     return {
-                        "ad_account_id": uncertain_found,
+                        "ad_account_id": proof_found_id,
                         "business_id": business_id,
                         "name": rk_name,
                         "currency": currency,
                         "timezone_id": timezone_id,
                         "reused": True,
                         "recovered_after_uncertainty": True,
-                        "transport": "capture_escape_inventory_reconciliation",
-                        "reconciliation": uncertain_inventory,
+                        "transport": (
+                            "capture_escape_uncertain_inventory_v2"
+                        ),
+                        "inventory_proof": inventory_proof,
                     }
 
-                graph_empty = _inventory_repeatedly_confirms_empty(
-                    uncertain_inventory,
-                    required_checks=3,
-                )
-                browser_found, browser_inventory = (
-                    await _reconcile_existing_browser_inventory(
-                        session,
-                        business_id=business_id,
-                        account_name=rk_name,
-                    )
-                )
-                if browser_found:
-                    await provisioning_state.remember_entity(
-                        profile_id,
-                        scope_key,
-                        ProvisioningStep.AD_ACCOUNT,
-                        {"ad_account_id": browser_found},
-                    )
-                    return {
-                        "ad_account_id": browser_found,
-                        "business_id": business_id,
-                        "name": rk_name,
-                        "currency": currency,
-                        "timezone_id": timezone_id,
-                        "reused": True,
-                        "recovered_after_uncertainty": True,
-                        "transport": "capture_escape_business_settings_inventory",
-                        "reconciliation": uncertain_inventory,
-                        "browser_inventory": browser_inventory,
-                    }
-
-                secondary_empty = bool(
-                    browser_inventory.get("confirmed_empty")
-                )
-                ui_inventory: dict[str, Any] = {}
-                if not secondary_empty:
-                    try:
-                        async with FacebookBusinessBrowser(
-                            session.context,
-                            timeout_seconds=45,
-                        ) as inventory_browser:
-                            ui_inventory = (
-                                await inventory_browser.verify_ad_account_inventory_empty(
-                                    business_id=business_id,
-                                )
-                            )
-                    except Exception as inventory_exc:
-                        ui_inventory = {
-                            "confirmed_empty": False,
-                            "error": (
-                                f"{inventory_exc.__class__.__name__}: "
-                                f"{_clean(inventory_exc)}"
-                            )[:500],
-                        }
-                    secondary_empty = bool(
-                        ui_inventory.get("confirmed_empty")
-                    )
-
-                if (
-                    graph_empty
-                    and secondary_empty
-                    and capture_attempt < capture_attempt_limit
-                ):
-                    safe_retry = True
+                if proven_empty:
                     failure["uncertain_reconciled_empty"] = True
-                    failure["browser_inventory"] = browser_inventory
-                    failure["ui_inventory"] = ui_inventory
+                    failure["inventory_proof"] = inventory_proof
+                    if capture_attempt < capture_attempt_limit:
+                        safe_retry = True
                 else:
                     await provisioning_state.checkpoint(
                         item_id,
@@ -1461,12 +1395,10 @@ async def ad_account_handler(
                             ),
                             "last_error": (
                                 "Final capture action was not observed as a "
-                                "definitive mutation and inventory is not "
-                                "independently conclusive."
+                                "definitive mutation and strong inventory "
+                                "proof is still inconclusive."
                             ),
-                            "reconciliation": uncertain_inventory,
-                            "browser_inventory": browser_inventory,
-                            "ui_inventory": ui_inventory,
+                            "inventory_proof": inventory_proof,
                             "browser_diagnostic": browser_diag,
                         },
                     )
@@ -1474,9 +1406,9 @@ async def ad_account_handler(
                         "AD_ACCOUNT_CREATE_RESULT_UNKNOWN",
                         (
                             "Meta final capture action was not matched to a "
-                            "definitive CREATE. Independent inventory checks "
-                            "do not safely prove the Business is empty, so "
-                            "ReMask will not risk a duplicate CREATE."
+                            "definitive CREATE. Strong read-only inventory "
+                            "proof is inconclusive, so duplicate CREATE "
+                            "remains blocked."
                         ),
                         retryable=True,
                     ) from exc
@@ -1636,99 +1568,38 @@ async def ad_account_handler(
                     retryable=True,
                 ) from exc
 
-            unknown_inventory: list[dict[str, Any]] = []
-            unknown_found = ""
-            for inventory_attempt in range(3):
-                unknown_found, inventory_diag = await _reconcile_existing(
+            proof_found_id, proven_empty, inventory_proof = (
+                await _prove_empty_after_uncertainty(
                     session,
                     business_id=business_id,
                     account_name=rk_name,
                 )
-                unknown_inventory.extend(inventory_diag)
-                if unknown_found:
-                    break
-                if inventory_attempt < 2:
-                    await asyncio.sleep(2.0)
+            )
 
-            if unknown_found:
+            if proof_found_id:
                 await provisioning_state.remember_entity(
                     profile_id,
                     scope_key,
                     ProvisioningStep.AD_ACCOUNT,
-                    {"ad_account_id": unknown_found},
+                    {"ad_account_id": proof_found_id},
                 )
                 return {
-                    "ad_account_id": unknown_found,
+                    "ad_account_id": proof_found_id,
                     "business_id": business_id,
                     "name": rk_name,
                     "currency": currency,
                     "timezone_id": timezone_id,
                     "reused": True,
                     "recovered_after_uncertainty": True,
-                    "transport": "capture_exception_inventory_reconciliation",
-                    "reconciliation": unknown_inventory,
+                    "transport": (
+                        "capture_exception_uncertain_inventory_v2"
+                    ),
+                    "inventory_proof": inventory_proof,
                 }
 
-            graph_empty = _inventory_repeatedly_confirms_empty(
-                unknown_inventory,
-                required_checks=3,
-            )
-            browser_found, browser_inventory = (
-                await _reconcile_existing_browser_inventory(
-                    session,
-                    business_id=business_id,
-                    account_name=rk_name,
-                )
-            )
-            if browser_found:
-                await provisioning_state.remember_entity(
-                    profile_id,
-                    scope_key,
-                    ProvisioningStep.AD_ACCOUNT,
-                    {"ad_account_id": browser_found},
-                )
-                return {
-                    "ad_account_id": browser_found,
-                    "business_id": business_id,
-                    "name": rk_name,
-                    "currency": currency,
-                    "timezone_id": timezone_id,
-                    "reused": True,
-                    "recovered_after_uncertainty": True,
-                    "transport": "capture_exception_business_settings_inventory",
-                    "reconciliation": unknown_inventory,
-                    "browser_inventory": browser_inventory,
-                }
-
-            secondary_empty = bool(browser_inventory.get("confirmed_empty"))
-            ui_inventory: dict[str, Any] = {}
-            if not secondary_empty:
-                try:
-                    async with FacebookBusinessBrowser(
-                        session.context,
-                        timeout_seconds=45,
-                    ) as inventory_browser:
-                        ui_inventory = (
-                            await inventory_browser.verify_ad_account_inventory_empty(
-                                business_id=business_id,
-                            )
-                        )
-                except Exception as inventory_exc:
-                    ui_inventory = {
-                        "confirmed_empty": False,
-                        "error": (
-                            f"{inventory_exc.__class__.__name__}: "
-                            f"{_clean(inventory_exc)}"
-                        )[:500],
-                    }
-                secondary_empty = bool(ui_inventory.get("confirmed_empty"))
-
-            if (
-                graph_empty
-                and secondary_empty
-                and capture_attempt < capture_attempt_limit
-            ):
+            if proven_empty:
                 failure["uncertain_reconciled_empty"] = True
+                failure["inventory_proof"] = inventory_proof
                 await provisioning_state.checkpoint(
                     item_id,
                     profile_id,
@@ -1744,16 +1615,33 @@ async def ad_account_handler(
                         "capture_attempt": capture_attempt,
                         "capture_attempt_limit": capture_attempt_limit,
                         "capture_failures": capture_failures[-3:],
-                        "last_error_code": failure["code"],
+                        "last_error_code": (
+                            "AD_ACCOUNT_CAPTURE_UNCERTAIN_RECONCILED_EMPTY"
+                        ),
                         "last_error": failure["message"],
-                        "reconciliation": unknown_inventory,
-                        "browser_inventory": browser_inventory,
-                        "ui_inventory": ui_inventory,
+                        "browser_phase": browser_phase,
+                        "final_capture_armed": final_capture_armed,
+                        "create_may_have_been_sent": (
+                            create_may_have_been_sent
+                        ),
+                        "page_crashed": page_crashed,
+                        "inventory_proof": inventory_proof,
                         "transport": "business_suite_live_capture",
                     },
                 )
-                await asyncio.sleep(0.75 * capture_attempt)
-                continue
+                if capture_attempt < capture_attempt_limit:
+                    await asyncio.sleep(0.75 * capture_attempt)
+                    continue
+
+                raise ProvisioningError(
+                    "CREATE_AD_ACCOUNT_SAFE_RETRY_REQUIRED",
+                    (
+                        "Live Add-RK capture ended ambiguously, but strong "
+                        "inventory proof confirmed that no RK exists. The "
+                        "checkpoint is safe for a fresh retry."
+                    ),
+                    retryable=True,
+                ) from exc
 
             await provisioning_state.checkpoint(
                 item_id,
@@ -1778,9 +1666,7 @@ async def ad_account_handler(
                         create_may_have_been_sent
                     ),
                     "page_crashed": page_crashed,
-                    "reconciliation": unknown_inventory,
-                    "browser_inventory": browser_inventory,
-                    "ui_inventory": ui_inventory,
+                    "inventory_proof": inventory_proof,
                     "transport": "business_suite_live_capture",
                 },
             )
@@ -1790,13 +1676,14 @@ async def ad_account_handler(
                     "Unexpected live Add-RK capture exception occurred "
                     f"at phase={browser_phase} final_armed="
                     f"{final_capture_armed} sent="
-                    f"{create_may_have_been_sent}. Independent inventory "
-                    "checks are not conclusive, so duplicate CREATE remains "
+                    f"{create_may_have_been_sent}. Strong read-only inventory "
+                    "proof is still inconclusive, so duplicate CREATE remains "
                     "blocked. "
                     + failure["message"]
                 ),
                 retryable=True,
             ) from exc
+
 
     if not captured_request:
         raise ProvisioningError(
