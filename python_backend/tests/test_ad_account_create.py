@@ -790,7 +790,14 @@ class AdAccountSelfHealingPipelineRegressionTests(unittest.TestCase):
             source,
         )
         self.assertIn("safe_same_capture_retry", source)
-        self.assertIn("return await reconcile_after_uncertain", source)
+        self.assertIn(
+            "reconciled = await reconcile_after_uncertain(",
+            source,
+        )
+        self.assertIn(
+            'reconciled.get("_remask_reconciled_empty")',
+            source,
+        )
 
     def test_safe_capture_codes_exclude_uncertain_and_rejected_results(self) -> None:
         self.assertIn(
@@ -1106,11 +1113,18 @@ class AdAccountRendererCrashRecoveryTests(unittest.TestCase):
             'failure["page_crashed"] = page_crashed'
         )
         reconcile_pos = source.index(
-            "unknown_inventory: list[dict[str, Any]] = []",
+            "_prove_empty_after_uncertainty(",
             crash_pos,
         )
         branch = source[crash_pos:reconcile_pos]
         self.assertIn("not final_capture_armed", branch)
         self.assertIn("not create_may_have_been_sent", branch)
+        self.assertIn("AD_ACCOUNT_CAPTURE_PAGE_CRASH_PRE_FINAL", branch)
         self.assertIn("continue", branch)
+
+        uncertain_tail = source[reconcile_pos:]
+        self.assertIn(
+            "capture_exception_uncertain_inventory_v2",
+            uncertain_tail,
+        )
 
