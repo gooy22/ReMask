@@ -1000,3 +1000,47 @@ class AdAccountNestedCapturedPayloadTests(unittest.TestCase):
         )
         self.assertNotIn("end_advertiser", rewritten["left"])
         self.assertNotIn("end_advertiser", rewritten["right"])
+
+
+class AdAccountInventoryPreflightRegressionTests(unittest.TestCase):
+    def test_preflight_retries_browser_inventory_before_unavailable(self) -> None:
+        source = inspect.getsource(ad_account_handler)
+        preflight_pos = source.index(
+            "# Read-only preflight enforces the 1 BM = 1 RK invariant."
+        )
+        blocked_pos = source.index(
+            '"AD_ACCOUNT_INVENTORY_UNAVAILABLE"',
+            preflight_pos,
+        )
+        window = source[preflight_pos:blocked_pos + 1200]
+        self.assertIn(
+            "for browser_inventory_attempt in range(2):",
+            window,
+        )
+        self.assertIn(
+            "_reconcile_existing_browser_inventory",
+            window,
+        )
+        self.assertIn(
+            "browser_inventory_attempts",
+            window,
+        )
+        self.assertIn(
+            'browser_inventory_before.get("confirmed_empty")',
+            window,
+        )
+
+    def test_post_submit_uncertainty_still_requires_strong_evidence(self) -> None:
+        source = inspect.getsource(ad_account_handler)
+        self.assertIn(
+            "if graph_empty_confirmed and secondary_empty_confirmed:",
+            source,
+        )
+        self.assertIn(
+            "Independent inventory checks",
+            source,
+        )
+        self.assertIn(
+            "AD_ACCOUNT_RECONCILE_EXHAUSTED",
+            source,
+        )
