@@ -796,6 +796,10 @@ class AdAccountSelfHealingPipelineRegressionTests(unittest.TestCase):
             AD_ACCOUNT_SAFE_CAPTURE_RETRY_CODES,
         )
         self.assertNotIn(
+            "AD_ACCOUNT_CREATE_REQUEST_NOT_OBSERVED",
+            AD_ACCOUNT_SAFE_CAPTURE_RETRY_CODES,
+        )
+        self.assertNotIn(
             "META_AD_ACCOUNT_CREATE_REJECTED",
             AD_ACCOUNT_SAFE_CAPTURE_RETRY_CODES,
         )
@@ -878,3 +882,47 @@ class AdAccountCapturedVariableSafetyTests(unittest.TestCase):
         )
         self.assertFalse(invalid["ok"])
         self.assertIn("timezone", invalid["missing"])
+
+
+class AdAccountExactlyOnceSystemRegressionTests(unittest.TestCase):
+    def test_unmatched_capture_reconciles_before_any_retry(self) -> None:
+        source = inspect.getsource(ad_account_handler)
+        unmatched_pos = source.index(
+            'exc.code == "AD_ACCOUNT_CREATE_REQUEST_NOT_OBSERVED"'
+        )
+        reconcile_pos = source.index(
+            "_inventory_repeatedly_confirms_empty(",
+            unmatched_pos,
+        )
+        safe_retry_pos = source.index(
+            "safe_retry = True",
+            unmatched_pos,
+        )
+        self.assertLess(reconcile_pos, safe_retry_pos)
+        self.assertIn(
+            "capture_escape_inventory_reconciliation",
+            source,
+        )
+        self.assertIn(
+            "capture_escape_business_settings_inventory",
+            source,
+        )
+
+    def test_cross_job_guard_requires_graph_and_secondary_empty_proof(self) -> None:
+        source = inspect.getsource(ad_account_handler)
+        self.assertIn("graph_empty_confirmed =", source)
+        self.assertIn("secondary_empty_confirmed =", source)
+        self.assertIn(
+            "if graph_empty_confirmed and secondary_empty_confirmed:",
+            source,
+        )
+        self.assertIn(
+            "Independent inventory checks",
+            source,
+        )
+
+    def test_uncertain_current_job_polls_inventory_before_failure(self) -> None:
+        source = inspect.getsource(ad_account_handler)
+        self.assertIn("for reconcile_attempt in range(3):", source)
+        self.assertIn("await asyncio.sleep(2.0)", source)
+        self.assertIn("AD_ACCOUNT_RECONCILE_EXHAUSTED", source)
