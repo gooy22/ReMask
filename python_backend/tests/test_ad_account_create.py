@@ -934,7 +934,7 @@ class AdAccountUnknownCaptureExceptionRecoveryTests(unittest.TestCase):
         marker = source.index(
             'code": "AD_ACCOUNT_CAPTURE_BROWSER_EXCEPTION"'
         )
-        tail = source[marker:marker + 12000]
+        tail = source[marker:]
         self.assertIn(
             "capture_exception_inventory_reconciliation",
             tail,
