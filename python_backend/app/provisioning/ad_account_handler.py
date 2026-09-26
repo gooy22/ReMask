@@ -1170,83 +1170,65 @@ async def ad_account_handler(
     )
 
     # Phase 2: replay exactly the request captured above through the same
-    # browser-native Facebook session. No discovery, cached doc-id, or public
-    # Graph API is allowed in this CREATE path.
-    submit_started = False
+    # browser-native Facebook session. Safe failures that are explicitly
+    # proven PRE-SUBMIT are retried inside this Job; ambiguous failures are
+    # never replayed and go straight to inventory reconciliation.
+    result = None
+    replay_failures: list[dict[str, Any]] = []
+    replay_attempt_limit = 2
 
-    async def before_private_submit() -> None:
-        nonlocal submit_started
-        await browser_checkpoint(
-            {
-                "phase": "CREATE_SUBMIT_INTENT",
-                "activity": "AD_ACCOUNT_PRIVATE_CAPTURE_REPLAY_SUBMIT_INTENT",
-                "activity_at": int(time.time()),
-                "capture_doc_id": capture_doc_id,
-                "capture_friendly_name": capture_friendly,
-                "transport": "facebook_private_graphql_live_capture",
-            }
-        )
-        submit_started = True
+    for replay_attempt in range(1, replay_attempt_limit + 1):
+        submit_started = False
 
-    try:
-        web_session = await session.facebook_web()
-        result = await asyncio.wait_for(
-            create_ad_account_with_docids(
-                web_session,
-                business_id=business_id,
-                account_name=rk_name,
-                currency=currency,
-                timezone_id=timezone_id,
-                profile_id=profile_id,
-                captured_request=captured_request,
-                before_submit=before_private_submit,
-            ),
-            timeout=90.0,
-        )
-
-    except asyncio.TimeoutError as exc:
-        if submit_started:
-            return await reconcile_after_uncertain(
-                reason=(
-                    "Live-captured private CREATE timed out after submit; "
-                    "inventory reconciliation is required before retry."
-                )
+        async def before_private_submit() -> None:
+            nonlocal submit_started
+            await browser_checkpoint(
+                {
+                    "phase": "CREATE_SUBMIT_INTENT",
+                    "activity": "AD_ACCOUNT_PRIVATE_CAPTURE_REPLAY_SUBMIT_INTENT",
+                    "activity_at": int(time.time()),
+                    "capture_doc_id": capture_doc_id,
+                    "capture_friendly_name": capture_friendly,
+                    "replay_attempt": replay_attempt,
+                    "replay_attempt_limit": replay_attempt_limit,
+                    "transport": "facebook_private_graphql_live_capture",
+                }
             )
-        await provisioning_state.checkpoint(
-            item_id,
-            profile_id,
-            scope_key,
-            ProvisioningStep.AD_ACCOUNT,
-            {
-                "phase": "CREATE_NOT_SUBMITTED",
-                "resume_from": "CREATE",
-                "business_id": business_id,
-                "last_error_code": "CREATE_AD_ACCOUNT_PRE_SUBMIT_TIMEOUT",
-                "last_error": (
-                    "Live-captured private CREATE timed out before submit."
+            submit_started = True
+
+        try:
+            web_session = await session.facebook_web()
+            result = await asyncio.wait_for(
+                create_ad_account_with_docids(
+                    web_session,
+                    business_id=business_id,
+                    account_name=rk_name,
+                    currency=currency,
+                    timezone_id=timezone_id,
+                    profile_id=profile_id,
+                    captured_request=captured_request,
+                    before_submit=before_private_submit,
                 ),
-                "transport": "facebook_private_graphql_live_capture",
-            },
-        )
-        raise ProvisioningError(
-            "CREATE_AD_ACCOUNT_PRE_SUBMIT_TIMEOUT",
-            "Live-captured private CREATE timed out before submit.",
-            retryable=True,
-        ) from exc
+                timeout=90.0,
+            )
+            break
 
-    except AdAccountMutationError as exc:
-        if exc.code == "CREATE_AD_ACCOUNT_RESULT_UNKNOWN":
-            return await reconcile_after_uncertain(reason=str(exc))
+        except asyncio.TimeoutError as exc:
+            if submit_started:
+                return await reconcile_after_uncertain(
+                    reason=(
+                        "Live-captured private CREATE timed out after submit "
+                        f"intent on replay attempt {replay_attempt}; inventory "
+                        "reconciliation is required before retry."
+                    )
+                )
 
-        pre_submit_codes = {
-            "CREATE_AD_ACCOUNT_LIVE_CAPTURE_REQUIRED",
-            "CREATE_AD_ACCOUNT_LIVE_CAPTURE_INVALID",
-            "CREATE_AD_ACCOUNT_LIVE_CAPTURE_STALE",
-            "CREATE_AD_ACCOUNT_PRE_SUBMIT_TRANSPORT",
-            "CREATE_AD_ACCOUNT_BROWSER_TRANSPORT_UNAVAILABLE",
-            "SESSION_EXPIRED",
-        }
-        if exc.code in pre_submit_codes:
+            failure = {
+                "attempt": replay_attempt,
+                "code": "CREATE_AD_ACCOUNT_PRE_SUBMIT_TIMEOUT",
+                "message": "Live-captured private CREATE timed out before submit.",
+            }
+            replay_failures.append(failure)
             await provisioning_state.checkpoint(
                 item_id,
                 profile_id,
@@ -1256,13 +1238,102 @@ async def ad_account_handler(
                     "phase": "CREATE_NOT_SUBMITTED",
                     "resume_from": "CREATE",
                     "business_id": business_id,
+                    "replay_attempt": replay_attempt,
+                    "replay_attempt_limit": replay_attempt_limit,
+                    "replay_failures": replay_failures[-2:],
+                    "last_error_code": failure["code"],
+                    "last_error": failure["message"],
+                    "transport": "facebook_private_graphql_live_capture",
+                },
+            )
+            if replay_attempt < replay_attempt_limit:
+                await asyncio.sleep(0.75)
+                continue
+            raise ProvisioningError(
+                failure["code"],
+                failure["message"],
+                retryable=True,
+            ) from exc
+
+        except AdAccountMutationError as exc:
+            if exc.code == "CREATE_AD_ACCOUNT_RESULT_UNKNOWN":
+                return await reconcile_after_uncertain(reason=str(exc))
+
+            pre_submit_codes = {
+                "CREATE_AD_ACCOUNT_LIVE_CAPTURE_REQUIRED",
+                "CREATE_AD_ACCOUNT_LIVE_CAPTURE_INVALID",
+                "CREATE_AD_ACCOUNT_LIVE_CAPTURE_STALE",
+                "CREATE_AD_ACCOUNT_PRE_SUBMIT_TRANSPORT",
+                "CREATE_AD_ACCOUNT_BROWSER_TRANSPORT_UNAVAILABLE",
+                "SESSION_EXPIRED",
+            }
+            if exc.code in pre_submit_codes:
+                failure = {
+                    "attempt": replay_attempt,
+                    "code": exc.code,
+                    "retryable": bool(exc.retryable),
+                    "message": str(exc)[:1600],
+                }
+                replay_failures.append(failure)
+                await provisioning_state.checkpoint(
+                    item_id,
+                    profile_id,
+                    scope_key,
+                    ProvisioningStep.AD_ACCOUNT,
+                    {
+                        "phase": "CREATE_NOT_SUBMITTED",
+                        "resume_from": "CREATE",
+                        "business_id": business_id,
+                        "replay_attempt": replay_attempt,
+                        "replay_attempt_limit": replay_attempt_limit,
+                        "replay_failures": replay_failures[-2:],
+                        "last_error_code": exc.code,
+                        "last_error": str(exc)[:4000],
+                        "mutation_payload": (
+                            exc.payload
+                            if isinstance(exc.payload, dict)
+                            else {}
+                        ),
+                        "transport": "facebook_private_graphql_live_capture",
+                    },
+                )
+
+                # Only a transport failure explicitly classified as PRE-SUBMIT
+                # can safely replay the same captured mutation. A stale capture
+                # needs a fresh UI capture; auth/browser availability failures
+                # need operator/session recovery and must not loop blindly.
+                safe_same_capture_retry = (
+                    exc.code == "CREATE_AD_ACCOUNT_PRE_SUBMIT_TRANSPORT"
+                    and bool(exc.retryable)
+                    and replay_attempt < replay_attempt_limit
+                )
+                if safe_same_capture_retry:
+                    await asyncio.sleep(0.75)
+                    continue
+
+                raise ProvisioningError(
+                    exc.code,
+                    str(exc),
+                    retryable=exc.retryable,
+                ) from exc
+
+            await provisioning_state.checkpoint(
+                item_id,
+                profile_id,
+                scope_key,
+                ProvisioningStep.AD_ACCOUNT,
+                {
+                    "phase": "CREATE_REJECTED",
+                    "resume_from": "CREATE" if exc.retryable else "STOP",
+                    "business_id": business_id,
                     "last_error_code": exc.code,
                     "last_error": str(exc)[:4000],
                     "mutation_payload": (
-                        exc.payload
-                        if isinstance(exc.payload, dict)
-                        else {}
+                        exc.payload if isinstance(exc.payload, dict) else {}
                     ),
+                    "capture_doc_id": capture_doc_id,
+                    "capture_friendly_name": capture_friendly,
+                    "replay_attempt": replay_attempt,
                     "transport": "facebook_private_graphql_live_capture",
                 },
             )
@@ -1272,30 +1343,12 @@ async def ad_account_handler(
                 retryable=exc.retryable,
             ) from exc
 
-        await provisioning_state.checkpoint(
-            item_id,
-            profile_id,
-            scope_key,
-            ProvisioningStep.AD_ACCOUNT,
-            {
-                "phase": "CREATE_REJECTED",
-                "resume_from": "CREATE" if exc.retryable else "STOP",
-                "business_id": business_id,
-                "last_error_code": exc.code,
-                "last_error": str(exc)[:4000],
-                "mutation_payload": (
-                    exc.payload if isinstance(exc.payload, dict) else {}
-                ),
-                "capture_doc_id": capture_doc_id,
-                "capture_friendly_name": capture_friendly,
-                "transport": "facebook_private_graphql_live_capture",
-            },
-        )
+    if result is None:
         raise ProvisioningError(
-            exc.code,
-            str(exc),
-            retryable=exc.retryable,
-        ) from exc
+            "CREATE_AD_ACCOUNT_REPLAY_EXHAUSTED",
+            "Private Add-RK replay exhausted before a result was produced.",
+            retryable=True,
+        )
 
     rk_id = _normalize_ad_account_id(result.ad_account_id)
     if not rk_id:
