@@ -1669,7 +1669,8 @@ class BrowserAdAccountStateCreateRecoveryTests(unittest.IsolatedAsyncioTestCase)
             FacebookBusinessBrowser._ad_account_ui_state
         )
         self.assertIn("const metaAIRoot = el =>", source)
-        self.assertIn("!metaAIRoot(el)", source)
+        self.assertIn("metaAIRoot(el)", source)
+        self.assertIn("data-remask-rk-create-state", source)
 
     def test_create_dom_matcher_supports_plain_cards_and_excludes_meta_ai(self):
         source = inspect.getsource(
