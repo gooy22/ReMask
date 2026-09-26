@@ -113,14 +113,18 @@ def _extract_ad_account_id(payload: dict[str, Any]) -> tuple[str, str]:
         if row not in matches:
             matches.append(row)
 
+    def add_first_id_field(node: dict[str, Any], path: str) -> None:
+        for field in ("id", "account_id", "ad_account_id"):
+            candidate = node.get(field)
+            if _normalize_ad_account_id(candidate):
+                add(candidate, f"{path}.{field}")
+                return
+
     for node_name in known_nodes:
         node = data.get(node_name)
         if not isinstance(node, dict):
             continue
-        add(
-            node.get("id") or node.get("account_id") or node.get("ad_account_id"),
-            f"data.{node_name}.id",
-        )
+        add_first_id_field(node, f"data.{node_name}")
         for child_name in (
             "ad_account",
             "account",
@@ -130,11 +134,9 @@ def _extract_ad_account_id(payload: dict[str, Any]) -> tuple[str, str]:
             child = node.get(child_name)
             if not isinstance(child, dict):
                 continue
-            add(
-                child.get("id")
-                or child.get("account_id")
-                or child.get("ad_account_id"),
-                f"data.{node_name}.{child_name}.id",
+            add_first_id_field(
+                child,
+                f"data.{node_name}.{child_name}",
             )
 
     def walk(value: Any, path: str = "data") -> None:
