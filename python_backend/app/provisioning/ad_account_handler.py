@@ -65,6 +65,87 @@ def _clean(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _capture_success_id_from_checkpoint(
+    result: Any,
+    *,
+    business_id: str,
+    account_name: str,
+) -> str:
+    """Recover a CREATE that Meta already confirmed in the captured UI.
+
+    Some Meta variants submit Add-RK through a transport shape that the private
+    GraphQL capture matcher does not recognize. The saved capture diagnostic can
+    still contain Meta's explicit success dialog plus the newly displayed
+    account ID. That is strong same-session proof and must suppress any retry.
+    """
+    if not isinstance(result, dict):
+        return ""
+
+    diagnostics: list[dict[str, Any]] = []
+    direct = result.get("browser_diagnostic")
+    if isinstance(direct, dict):
+        diagnostics.append(direct)
+
+    for failure in result.get("capture_failures") or []:
+        if not isinstance(failure, dict):
+            continue
+        diagnostic = failure.get("diagnostic")
+        if isinstance(diagnostic, dict):
+            diagnostics.append(diagnostic)
+
+    expected = _clean(account_name).casefold()
+    business = _normalize_ad_account_id(business_id)
+    for diagnostic in diagnostics:
+        ui_state = (
+            diagnostic.get("ui_state")
+            if isinstance(diagnostic.get("ui_state"), dict)
+            else {}
+        )
+        dialogs = [
+            _clean(value)
+            for value in (ui_state.get("dialogs") or [])
+            if _clean(value)
+        ]
+        dialog_text = " ".join(dialogs)
+        folded = dialog_text.casefold()
+        success = any(
+            marker in folded
+            for marker in (
+                "ad account created successfully",
+                "advertising account created successfully",
+                "has been created and added to the",
+                "compte publicitaire a été créé",
+                "рекламный аккаунт создан",
+                "рекламний акаунт створено",
+                "विज्ञापन अकाउंट बनाया गया",
+                "विज्ञापन खाता बनाया गया",
+                "tài khoản quảng cáo đã được tạo",
+                "বিজ্ঞাপন অ্যাকাউন্ট তৈরি করা হয়েছে",
+            )
+        )
+        if not success or (expected and expected not in folded):
+            continue
+
+        controls = " ".join(
+            _clean(value)
+            for value in (ui_state.get("controls") or [])
+            if _clean(value)
+        )
+        ids = []
+        for raw in re.findall(r"(?<!\d)(\d{8,30})(?!\d)", controls):
+            normalized = _normalize_ad_account_id(raw)
+            if (
+                normalized
+                and normalized != business
+                and normalized not in ids
+            ):
+                ids.append(normalized)
+        if len(ids) == 1:
+            return ids[0]
+
+    return ""
+
+
 def _checkpoint_result(step_state: Any) -> dict[str, Any]:
     if not isinstance(step_state, dict):
         return {}
@@ -925,6 +1006,47 @@ async def ad_account_handler(
             ),
             retryable=False,
         )
+
+    capture_ui_success_id = _capture_success_id_from_checkpoint(
+        checkpoint,
+        business_id=business_id,
+        account_name=rk_name,
+    )
+    if capture_ui_success_id:
+        checkpoint = await provisioning_state.checkpoint(
+            item_id,
+            profile_id,
+            scope_key,
+            ProvisioningStep.AD_ACCOUNT,
+            {
+                "phase": "CREATE_CONFIRMED",
+                "resume_from": "DONE",
+                "business_id": business_id,
+                "account_name": rk_name,
+                "currency": currency,
+                "timezone_id": timezone_id,
+                "ad_account_id": capture_ui_success_id,
+                "create_response_ad_account_id": capture_ui_success_id,
+                "activity": "AD_ACCOUNT_CREATE_CONFIRMED_CAPTURE_UI",
+                "activity_at": int(time.time()),
+                "transport": "business_settings_ui_capture_reconciliation",
+            },
+        )
+        await provisioning_state.remember_entity(
+            profile_id,
+            scope_key,
+            ProvisioningStep.AD_ACCOUNT,
+            {"ad_account_id": capture_ui_success_id},
+        )
+        return {
+            "ad_account_id": capture_ui_success_id,
+            "business_id": business_id,
+            "name": rk_name,
+            "currency": currency,
+            "timezone_id": timezone_id,
+            "recovered_after_capture_ui_success": True,
+            "transport": "business_settings_ui_capture_reconciliation",
+        }
 
     checkpoint_id = _normalize_ad_account_id(
         checkpoint.get("ad_account_id")
@@ -2221,6 +2343,48 @@ async def ad_account_handler(
             "Live Add-RK capture exhausted without a request. No CREATE was sent.",
             retryable=True,
         )
+
+    captured_created_id = _normalize_ad_account_id(
+        captured_request.get("ad_account_id")
+        if isinstance(captured_request, dict)
+        and captured_request.get("created_during_capture")
+        else ""
+    )
+    if captured_created_id:
+        await provisioning_state.checkpoint(
+            item_id,
+            profile_id,
+            scope_key,
+            ProvisioningStep.AD_ACCOUNT,
+            {
+                "phase": "CREATE_CONFIRMED",
+                "resume_from": "DONE",
+                "business_id": business_id,
+                "account_name": rk_name,
+                "currency": currency,
+                "timezone_id": timezone_id,
+                "ad_account_id": captured_created_id,
+                "create_response_ad_account_id": captured_created_id,
+                "activity": "AD_ACCOUNT_CREATE_CONFIRMED_CAPTURE_UI",
+                "activity_at": int(time.time()),
+                "transport": "business_settings_ui_capture_reconciliation",
+            },
+        )
+        await provisioning_state.remember_entity(
+            profile_id,
+            scope_key,
+            ProvisioningStep.AD_ACCOUNT,
+            {"ad_account_id": captured_created_id},
+        )
+        return {
+            "ad_account_id": captured_created_id,
+            "business_id": business_id,
+            "name": rk_name,
+            "currency": currency,
+            "timezone_id": timezone_id,
+            "created_during_capture": True,
+            "transport": "business_settings_ui_capture_reconciliation",
+        }
 
     capture_doc_id = _clean(captured_request.get("doc_id"))
     capture_friendly = _clean(captured_request.get("friendly_name"))
