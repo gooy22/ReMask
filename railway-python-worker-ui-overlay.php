@@ -116,8 +116,20 @@ try {
         if ($id === '' || !ctype_digit($id)) continue;
         $workerConfirmed++;
 
+        $workerBusinessId = trim((string)($workerPage['business_id'] ?? ''));
+        $workerAdAccountId = trim((string)($workerPage['ad_account_id'] ?? ''));
+
         if (isset($pagesById[$id])) {
             $pagesById[$id]['source'] = 'meta+python_worker_confirmed';
+            if (
+                trim((string)($pagesById[$id]['business_id'] ?? '')) === '' &&
+                $workerBusinessId !== ''
+            ) {
+                $pagesById[$id]['business_id'] = $workerBusinessId;
+            }
+            if ($workerAdAccountId !== '') {
+                $pagesById[$id]['ad_account_id'] = $workerAdAccountId;
+            }
             continue;
         }
 
@@ -125,7 +137,8 @@ try {
             'id' => $id,
             'name' => trim((string)($workerPage['name'] ?? $id)),
             'category' => trim((string)($workerPage['category'] ?? '')),
-            'business_id' => '',
+            'business_id' => $workerBusinessId,
+            'ad_account_id' => $workerAdAccountId,
             'source' => 'python_worker_confirmed',
         ];
     }
@@ -308,7 +321,7 @@ HTML;
 
     $php = preg_replace(
         '#scripts/workspace\.js(?:\?[^"\']*)?#',
-        'scripts/workspace.js?v=20260927-python-worker-ui-v169',
+        'scripts/workspace.js?v=20260927-python-worker-ui-v170',
         $php,
         1,
         $scriptCount
@@ -330,7 +343,7 @@ if ($workerPos === false) {
 
 $php = preg_replace(
     '#scripts/workspace\.js(?:\?[^"\']*)?#',
-    'scripts/workspace.js?v=20260927-python-worker-ui-v169',
+    'scripts/workspace.js?v=20260927-python-worker-ui-v170',
     $php,
     1
 ) ?? $php;
