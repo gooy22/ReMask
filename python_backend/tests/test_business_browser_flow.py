@@ -1214,6 +1214,16 @@ class BrowserAdAccountHindiFinalConfirmationRegressionTests(unittest.TestCase):
         self.assertIn("विज्ञापन अकाउंट", anchor_source)
 
 
+    def test_dialog_scoped_fallback_does_not_depend_on_global_dom_index(self) -> None:
+        source = inspect.getsource(
+            FacebookBusinessBrowser._click_ad_account_final_interactive
+        )
+        self.assertIn("data-remask-rk-final-dialog", source)
+        self.assertIn("dialog_scoped_recovered", source)
+        self.assertIn("'[role=\"dialog\"],[aria-modal=\"true\"]'", source)
+        self.assertIn("विज्ञापन अकाउंट बनाएँ", source)
+
+
 class BrowserAdAccountAnchoredFinalCreateRegressionTests(unittest.TestCase):
     def test_final_create_can_recover_plain_text_inside_wizard_anchor(self):
         source = inspect.getsource(
