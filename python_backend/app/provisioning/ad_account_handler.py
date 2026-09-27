@@ -170,6 +170,49 @@ def _known_pre_submit_capture_crash(result: Any) -> bool:
     )
 
 
+def _known_pre_submit_no_final_click(result: Any) -> bool:
+    """Recognize saved capture telemetry proving the final CTA was never clicked."""
+    if not isinstance(result, dict):
+        return False
+
+    diagnostic = result.get("browser_diagnostic")
+    if not isinstance(diagnostic, dict):
+        return False
+
+    if bool(diagnostic.get("blocked_unclassified_create")):
+        return False
+    if diagnostic.get("graphql_candidates"):
+        return False
+
+    attempts = diagnostic.get("submit_attempts")
+    if not isinstance(attempts, list) or not attempts:
+        return False
+
+    saw_final_stage = False
+    for row in attempts:
+        if not isinstance(row, dict):
+            continue
+        action = _clean(row.get("action")).lower()
+        if action not in {"final", "none"}:
+            continue
+        saw_final_stage = True
+        meta = row.get("meta") if isinstance(row.get("meta"), dict) else {}
+        fallback = (
+            meta.get("fallback")
+            if isinstance(meta.get("fallback"), dict)
+            else {}
+        )
+        if bool(
+            meta.get("attempted")
+            or meta.get("clicked")
+            or fallback.get("attempted")
+            or fallback.get("clicked")
+        ):
+            return False
+
+    return saw_final_stage
+
+
 
 def _known_final_click_unmatched_empty_inventory(result: Any) -> bool:
     """Recognize a false-uncertain final click with strong no-create evidence.
@@ -1004,6 +1047,7 @@ async def ad_account_handler(
             and not _known_pre_submit_navigation_failure(prior)
             and not _known_pre_submit_usage_step_failure(prior)
             and not _known_pre_submit_capture_crash(prior)
+            and not _known_pre_submit_no_final_click(prior)
         ):
             found_id, diagnostics = await _reconcile_existing(
                 session,
@@ -1103,6 +1147,7 @@ async def ad_account_handler(
             _known_pre_submit_navigation_failure(checkpoint)
             or _known_pre_submit_usage_step_failure(checkpoint)
             or _known_pre_submit_capture_crash(checkpoint)
+            or _known_pre_submit_no_final_click(checkpoint)
         )
     ):
         checkpoint = await provisioning_state.checkpoint(
@@ -1115,7 +1160,9 @@ async def ad_account_handler(
                 "resume_from": "CREATE",
                 "business_id": business_id,
                 "last_error_code": (
-                    "PRE_SUBMIT_CAPTURE_CRASH_RECOVERED"
+                    "PRE_SUBMIT_FINAL_NOT_CLICKED_RECOVERED"
+                    if _known_pre_submit_no_final_click(checkpoint)
+                    else "PRE_SUBMIT_CAPTURE_CRASH_RECOVERED"
                     if _known_pre_submit_capture_crash(checkpoint)
                     else "PRE_SUBMIT_USAGE_STEP_FALSE_UNCERTAIN_RECOVERED"
                     if _known_pre_submit_usage_step_failure(checkpoint)
