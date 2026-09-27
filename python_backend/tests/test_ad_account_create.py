@@ -33,6 +33,7 @@ from app.provisioning.ad_account_handler import (
     _verify_expected_ad_account_in_business,
     _known_final_click_unmatched_empty_inventory,
     _known_pre_submit_capture_crash,
+    _capture_success_id_from_checkpoint,
     _prove_empty_after_uncertainty,
     _known_pre_submit_navigation_failure,
     _known_pre_submit_usage_step_failure,
@@ -40,6 +41,63 @@ from app.provisioning.ad_account_handler import (
 )
 from app.provisioning.state import ProvisioningStateStore
 
+
+
+class AdAccountCaptureUiSuccessRecoveryTests(unittest.TestCase):
+    def test_extracts_exact_created_rk_id_from_saved_success_dialog(self) -> None:
+        checkpoint = {
+            "business_id": "1578458920690597",
+            "capture_failures": [
+                {
+                    "attempt": 1,
+                    "diagnostic": {
+                        "ui_state": {
+                            "dialogs": [
+                                "Ad account created successfully. "
+                                "The ReMask RK 1 ad account has been created "
+                                "and added to the Polr Dwol business portfolio."
+                            ],
+                            "controls": [
+                                "ReMask RK 1 [tag=DIV role=heading x=693 y=173]",
+                                "2490929708095829 [tag=A role=link x=714 y=194]",
+                            ],
+                        }
+                    },
+                }
+            ],
+        }
+        self.assertEqual(
+            _capture_success_id_from_checkpoint(
+                checkpoint,
+                business_id="1578458920690597",
+                account_name="ReMask RK 1",
+            ),
+            "2490929708095829",
+        )
+
+    def test_does_not_recover_without_meta_success_dialog(self) -> None:
+        checkpoint = {
+            "capture_failures": [
+                {
+                    "diagnostic": {
+                        "ui_state": {
+                            "dialogs": ["Confirm ad account"],
+                            "controls": [
+                                "2490929708095829 [tag=A role=link]"
+                            ],
+                        }
+                    }
+                }
+            ]
+        }
+        self.assertEqual(
+            _capture_success_id_from_checkpoint(
+                checkpoint,
+                business_id="1578458920690597",
+                account_name="ReMask RK 1",
+            ),
+            "",
+        )
 
 
 class AdAccountInventoryParserSafetyTests(unittest.TestCase):
