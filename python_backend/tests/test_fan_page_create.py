@@ -287,6 +287,121 @@ class FanPageProvisioningRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(state.checkpoint.await_count, 4)
         self.assertEqual(browser.create_fan_page.await_count, 2)
 
+    async def test_targeted_retry_reuses_only_page_scoped_to_same_rk(self) -> None:
+        state = SimpleNamespace(
+            checkpoint=AsyncMock(return_value={}),
+            step=AsyncMock(return_value=None),
+            latest_profile_fan_pages=AsyncMock(
+                return_value=[
+                    {
+                        "id": "4444444444",
+                        "name": "RK Page",
+                        "category": "Digital creator",
+                        "business_id": "1619103589770310",
+                        "ad_account_id": "29459808963612032",
+                        "attached": True,
+                        "already_attached": False,
+                    }
+                ]
+            ),
+        )
+        browser = AsyncMock()
+        browser.__aenter__.return_value = browser
+        browser.__aexit__.return_value = False
+
+        with patch(
+            "app.provisioning.fan_pages_handler.FacebookBusinessBrowser",
+            return_value=browser,
+        ):
+            result = await fan_pages_handler(
+                SimpleNamespace(context=SimpleNamespace(profile_id="6")),
+                {
+                    "mode": "create",
+                    "base_name": "RK Page",
+                    "count": 1,
+                    "category": "Digital creator",
+                    "business_id": "1619103589770310",
+                    "ad_account_id": "29459808963612032",
+                },
+                {},
+                item_id="item-rk-page-retry",
+                profile_id="6",
+                scope_key="rk-page-create-retry",
+                provisioning_state=state,
+                step_state={"result": {}},
+            )
+
+        self.assertEqual(result["page_ids"], ["4444444444"])
+        self.assertEqual(result["attached_count"], 1)
+        self.assertTrue(result["pages"][0]["reused"])
+        browser.create_fan_page.assert_not_awaited()
+        browser.add_existing_page.assert_not_awaited()
+
+    async def test_targeted_create_does_not_reuse_same_name_from_other_rk(self) -> None:
+        state = SimpleNamespace(
+            checkpoint=AsyncMock(return_value={}),
+            step=AsyncMock(return_value=None),
+            latest_profile_fan_pages=AsyncMock(
+                return_value=[
+                    {
+                        "id": "1111111111",
+                        "name": "RK Page",
+                        "category": "Digital creator",
+                        "business_id": "9999999999999999",
+                        "ad_account_id": "8888888888888888",
+                        "attached": True,
+                    }
+                ]
+            ),
+        )
+        browser = AsyncMock()
+        browser.__aenter__.return_value = browser
+        browser.__aexit__.return_value = False
+        browser.create_fan_page.return_value = {
+            "page_id": "7777777777",
+            "name": "RK Page",
+            "category": "Digital creator",
+            "reused": False,
+        }
+        browser.add_existing_page.return_value = SimpleNamespace(
+            already_attached=False
+        )
+
+        with patch(
+            "app.provisioning.fan_pages_handler._fresh_page_inventory",
+            new=AsyncMock(
+                return_value=[
+                    {"id": "1111111111", "name": "RK Page"}
+                ]
+            ),
+        ), patch(
+            "app.provisioning.fan_pages_handler.FacebookBusinessBrowser",
+            return_value=browser,
+        ):
+            result = await fan_pages_handler(
+                SimpleNamespace(context=SimpleNamespace(profile_id="6")),
+                {
+                    "mode": "create",
+                    "base_name": "RK Page",
+                    "count": 1,
+                    "category": "Digital creator",
+                    "business_id": "1619103589770310",
+                    "ad_account_id": "29459808963612032",
+                },
+                {},
+                item_id="item-rk-page-other-scope",
+                profile_id="6",
+                scope_key="rk-page-create-other-scope",
+                provisioning_state=state,
+                step_state={"result": {}},
+            )
+
+        self.assertEqual(result["page_ids"], ["7777777777"])
+        self.assertEqual(result["attached_count"], 1)
+        self.assertFalse(result["pages"][0]["reused"])
+        self.assertEqual(browser.create_fan_page.await_count, 1)
+        self.assertEqual(browser.add_existing_page.await_count, 1)
+
     async def test_create_page_can_attach_to_selected_rk_business(self) -> None:
         state = SimpleNamespace(
             checkpoint=AsyncMock(return_value={}),
