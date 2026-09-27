@@ -1329,6 +1329,9 @@ async def ad_account_handler(
             "candidate_confirmations": browser_candidate_confirmations,
         }
 
+    structural_ui_empty = False
+    cross_source_empty = False
+
     if not bool(browser_inventory_before.get("confirmed_empty")):
         try:
             async with FacebookBusinessBrowser(
