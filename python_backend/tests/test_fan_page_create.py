@@ -187,6 +187,50 @@ class FanPageProvisioningRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inventory.await_count, 3)
         self.assertEqual(len(diagnostics), 3)
 
+    async def test_handler_reuses_worker_confirmed_page_before_browser_create(self) -> None:
+        state = SimpleNamespace(
+            checkpoint=AsyncMock(return_value={}),
+            step=AsyncMock(return_value=None),
+            latest_profile_fan_pages=AsyncMock(
+                return_value=[
+                    {
+                        "id": "9999999999",
+                        "name": "Brand Page",
+                        "category": "Digital creator",
+                        "source": "python_worker_confirmed",
+                    }
+                ]
+            ),
+        )
+        browser = AsyncMock()
+        browser.__aenter__.return_value = browser
+        browser.__aexit__.return_value = False
+
+        with patch(
+            "app.provisioning.fan_pages_handler.FacebookBusinessBrowser",
+            return_value=browser,
+        ):
+            result = await fan_pages_handler(
+                SimpleNamespace(context=SimpleNamespace(profile_id="4")),
+                {
+                    "base_name": "Brand Page",
+                    "count": 1,
+                    "category": "Digital creator",
+                },
+                {},
+                item_id="item-reuse",
+                profile_id="4",
+                scope_key="fan-pages-reuse",
+                provisioning_state=state,
+                step_state={"result": {}},
+            )
+
+        self.assertEqual(result["page_ids"], ["9999999999"])
+        self.assertEqual(result["created_count"], 1)
+        self.assertTrue(result["pages"][0]["reused"])
+        state.latest_profile_fan_pages.assert_awaited()
+        browser.create_fan_page.assert_not_awaited()
+
     async def test_handler_creates_two_pages_and_checkpoints_each(self) -> None:
         state = SimpleNamespace(
             checkpoint=AsyncMock(return_value={}),
