@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
+from pathlib import Path
 from collections import defaultdict
 from typing import Any, Awaitable, Callable
 
@@ -99,6 +101,7 @@ class WorkerPool:
 
     async def start(self) -> None:
         await self.provisioning_state.init()
+        await self._restore_workspace_bindings()
         recovered=await self.store.recover()
         for item_id in recovered:
             await self.queue.put(item_id)
@@ -107,6 +110,42 @@ class WorkerPool:
             for i in range(self.concurrency)
         ]
         log.info('worker pool started concurrency=%d recovered=%d',self.concurrency,len(recovered))
+
+    async def _restore_workspace_bindings(self) -> None:
+        """Rebuild Workspace BM->RK bindings from durable SUCCESS history."""
+        bindings=await self.provisioning_state.confirmed_ad_account_bindings()
+        if not bindings:
+            return
+
+        root=(
+            os.getenv('REMASK_DATA_DIR')
+            or os.getenv('RAILWAY_VOLUME_MOUNT_PATH')
+            or '/var/lib/remask'
+        )
+        path=Path(root) / 'workspace-provisioning-bindings.json'
+        path.parent.mkdir(parents=True,exist_ok=True)
+
+        current: dict[str,Any]={}
+        try:
+            if path.exists():
+                decoded=json.loads(path.read_text(encoding='utf-8'))
+                if isinstance(decoded,dict):
+                    current=decoded
+        except (OSError,json.JSONDecodeError,ValueError):
+            current={}
+
+        current.update(bindings)
+        temp=path.with_suffix(path.suffix + '.worker.tmp')
+        temp.write_text(
+            json.dumps(current,separators=(',',':'),ensure_ascii=False),
+            encoding='utf-8',
+        )
+        os.replace(temp,path)
+        log.info(
+            'workspace BM/RK bindings restored profiles=%d path=%s',
+            len(bindings),
+            path,
+        )
 
     async def stop(self) -> None:
         for task in self._workers:

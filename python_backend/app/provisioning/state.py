@@ -599,6 +599,63 @@ class ProvisioningStateStore:
 
         return pages
 
+    async def confirmed_ad_account_bindings(
+        self,
+    ) -> dict[str, dict[str, Any]]:
+        """
+        Return the newest successful AD_ACCOUNT relation for every profile.
+
+        This is used at worker startup to rebuild Workspace's persistent
+        BM -> RK binding file from durable provisioning history.
+        """
+        return await asyncio.to_thread(
+            self._confirmed_ad_account_bindings_sync,
+        )
+
+    def _confirmed_ad_account_bindings_sync(
+        self,
+    ) -> dict[str, dict[str, Any]]:
+        with self._connect() as con:
+            rows = con.execute(
+                """
+                SELECT profile_id,scope_key,result_json,updated_at
+                FROM provisioning_steps
+                WHERE step=?
+                  AND status='SUCCESS'
+                  AND result_json IS NOT NULL
+                ORDER BY updated_at DESC
+                LIMIT 5000
+                """,
+                (ProvisioningStep.AD_ACCOUNT.value,),
+            ).fetchall()
+
+        bindings: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            profile = str(row["profile_id"] or "").strip()
+            if not profile or profile in bindings:
+                continue
+            try:
+                result = json.loads(str(row["result_json"] or "{}"))
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if not isinstance(result, dict):
+                continue
+
+            business_id = str(result.get("business_id") or "").strip()
+            ad_account_id = str(result.get("ad_account_id") or "").strip()
+            if not (business_id.isdigit() and ad_account_id.isdigit()):
+                continue
+
+            bindings[profile] = {
+                "business_id": business_id,
+                "ad_account_id": ad_account_id,
+                "updated_at": int(row["updated_at"] or 0),
+                "source": "python_worker_success_history",
+                "scope_key": str(row["scope_key"] or ""),
+            }
+
+        return bindings
+
     async def set_running(
         self,
         item_id: str,
