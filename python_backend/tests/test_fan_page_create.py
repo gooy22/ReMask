@@ -89,8 +89,8 @@ class FanPageProvisioningRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
             entities = await store.latest_profile_entities("4")
             pages = await store.latest_profile_fan_pages("4")
+            bindings = await store.confirmed_ad_account_bindings()
 
-        bindings = await store.confirmed_ad_account_bindings()
 
         self.assertEqual(entities["business_id"], "7777777777")
         self.assertEqual(entities["ad_account_id"], "8888888888")
