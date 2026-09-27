@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import re
+import signal
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -73,6 +74,102 @@ _BROWSER_LIMIT = max(1, int(os.getenv("REMASK_BM_BROWSER_CONCURRENCY") or "1"))
 _BROWSER_SEMAPHORE = asyncio.Semaphore(_BROWSER_LIMIT)
 _PROFILE_LOCKS: dict[str, asyncio.Lock] = {}
 _PROFILE_LOCKS_GUARD = asyncio.Lock()
+
+
+def _cgroup_memory_snapshot_mb() -> dict[str, float]:
+    result: dict[str, float] = {}
+    for key, path in (
+        ("current_mb", "/sys/fs/cgroup/memory.current"),
+        ("limit_mb", "/sys/fs/cgroup/memory.max"),
+    ):
+        try:
+            raw = Path(path).read_text(encoding="utf-8").strip()
+            if raw and raw != "max":
+                result[key] = round(int(raw) / (1024 * 1024), 1)
+        except Exception:
+            continue
+    return result
+
+
+async def _reap_stale_chromium_processes() -> dict[str, Any]:
+    """Best-effort cleanup of orphan Chromium children between browser leases.
+
+    The global browser semaphore guarantees that no live
+    FacebookBusinessBrowser owns Chromium when this runs before open() or after
+    close(). Railway's 1 GB container can otherwise retain crashed renderer /
+    zygote processes long enough to push the next wizard into OOM.
+    """
+    current_pid = os.getpid()
+    candidates: list[int] = []
+    proc = Path("/proc")
+    try:
+        for entry in proc.iterdir():
+            if not entry.name.isdigit():
+                continue
+            pid = int(entry.name)
+            if pid <= 1 or pid == current_pid:
+                continue
+            try:
+                cmdline = (entry / "cmdline").read_bytes().replace(b"\x00", b" ").decode(
+                    "utf-8", errors="ignore"
+                )
+            except Exception:
+                continue
+            folded = cmdline.casefold()
+            if "chromium" not in folded:
+                continue
+            # Only ReMask's headless Chromium processes run inside this
+            # container. Keep the match narrow enough to avoid unrelated
+            # helper processes.
+            if not any(
+                marker in folded
+                for marker in (
+                    "--headless",
+                    "--type=renderer",
+                    "--type=zygote",
+                    "--type=gpu-process",
+                    "--type=utility",
+                    "/usr/bin/chromium",
+                    "/usr/lib/chromium",
+                )
+            ):
+                continue
+            candidates.append(pid)
+    except Exception:
+        return {"found": 0, "terminated": 0}
+
+    terminated = 0
+    for pid in candidates:
+        try:
+            os.kill(pid, signal.SIGTERM)
+            terminated += 1
+        except ProcessLookupError:
+            continue
+        except Exception:
+            continue
+
+    if terminated:
+        await asyncio.sleep(0.35)
+
+    for pid in candidates:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            continue
+        except Exception:
+            continue
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except Exception:
+            pass
+
+    return {
+        "found": len(candidates),
+        "terminated": terminated,
+        "memory": _cgroup_memory_snapshot_mb(),
+    }
 
 
 async def _get_profile_lock(profile_id: str) -> asyncio.Lock:
@@ -1200,6 +1297,18 @@ class FacebookBusinessBrowser:
         self._semaphore_acquired = True
         self._browser_slot_acquired_at = time.monotonic()
 
+        stale_cleanup = await _reap_stale_chromium_processes()
+        if stale_cleanup.get("found"):
+            try:
+                import logging
+                logging.getLogger("remask_worker").warning(
+                    "[%s] reaped stale Chromium before browser open: %s",
+                    self.profile_id,
+                    stale_cleanup,
+                )
+            except Exception:
+                pass
+
         # Once a Chromium slot is acquired, it must never be held forever.
         # Queue wait is intentionally unbounded for large bulk waves, but the
         # active lease is bounded because all Meta/browser operations already
@@ -1277,8 +1386,13 @@ class FacebookBusinessBrowser:
                     "--disable-translate",
                     "--disable-default-apps",
                     "--disable-component-update",
+                    "--disable-background-networking",
+                    "--disable-breakpad",
+                    "--disable-crash-reporter",
+                    "--disable-features=BackForwardCache,MediaRouter,OptimizationHints,Translate,IsolateOrigins,site-per-process",
                     "--no-first-run",
-                    "--renderer-process-limit=2",
+                    "--renderer-process-limit=1",
+                    "--process-per-site",
                     "--blink-settings=imagesEnabled=false",
                 ],
             }
@@ -1291,7 +1405,7 @@ class FacebookBusinessBrowser:
                 user_agent=_clean(getattr(self.context, "user_agent", "")),
                 locale="en-US",
                 viewport={"width": 1280, "height": 800},
-                service_workers="allow",
+                service_workers="block",
                 reduced_motion="reduce",
             )
 
@@ -1455,6 +1569,12 @@ class FacebookBusinessBrowser:
 
         if playwright is not None:
             await bounded_cleanup(playwright.stop(), timeout=2.0)
+
+        # Chromium can leave renderer/zygote children behind after a page
+        # crash even when Playwright close() returns. Reap them while the
+        # global browser semaphore is still held so the next lease starts with
+        # a clean memory budget.
+        await _reap_stale_chromium_processes()
 
         if self._profile_lock_acquired and self._profile_lock is not None:
             self._profile_lock.release()
