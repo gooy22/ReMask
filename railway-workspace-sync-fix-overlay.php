@@ -665,54 +665,89 @@ $syncProfileReplacement = <<<'PHP'
             $verifiedBusinessAdAccounts[$directId] = $row;
         }
 
-        // Worker state is authoritative only for entities that completed
-        // the provisioning state machine. Persist that exact BM->RK pair so
-        // normal Workspace inventory does not fall back to an unrelated
-        // token-accessible ad account after reload.
+        // Worker state is authoritative for every confirmed BM->RK relation,
+        // not just the newest pair for the FB profile. This is required for
+        // mass Add RK from the Businesses tab where one profile can own many BM.
         try {
             $workerState = hierarchy_worker_state($profile);
-            $workerBusinessId = trim((string)($workerState['business_id'] ?? ''));
-            $workerAdAccountId = trim((string)($workerState['ad_account_id'] ?? ''));
-            if (
-                preg_match('/^\d{5,30}$/', $workerBusinessId)
-                && preg_match('/^\d{5,30}$/', $workerAdAccountId)
-                && isset($knownBusinesses[$workerBusinessId])
-            ) {
-                hierarchy_binding_put($profile, $workerBusinessId, $workerAdAccountId);
+            $workerBindings = $workerState['ad_account_bindings'] ?? null;
+            if (!is_array($workerBindings)) {
+                $workerBindings = [];
+            }
 
-                if (!isset($verifiedBusinessAdAccounts[$workerAdAccountId])) {
-                    $workerDirect = null;
-                    foreach ((array)($preflight['ad_accounts']['data'] ?? []) as $directAccount) {
-                        if (!is_array($directAccount)) continue;
-                        if (trim((string)($directAccount['id'] ?? '')) === $workerAdAccountId) {
-                            $workerDirect = $directAccount;
-                            break;
-                        }
-                    }
+            // Backward-compatible fallback for workers that only expose the
+            // newest relation at top level.
+            if ($workerBindings === []) {
+                $legacyBusinessId = trim((string)($workerState['business_id'] ?? ''));
+                $legacyAdAccountId = trim((string)($workerState['ad_account_id'] ?? ''));
+                if (
+                    preg_match('/^\d{5,30}$/', $legacyBusinessId)
+                    && preg_match('/^\d{5,30}$/', $legacyAdAccountId)
+                ) {
+                    $workerBindings[] = [
+                        'business_id' => $legacyBusinessId,
+                        'ad_account_id' => $legacyAdAccountId,
+                        'account_name' => '',
+                    ];
+                }
+            }
 
-                    if (is_array($workerDirect)) {
-                        $workerDirect['profile'] = $profile;
-                        $workerDirect['business_id'] = $workerBusinessId;
-                        $workerDirect['business_name'] = (string)($knownBusinesses[$workerBusinessId]['name'] ?? $workerBusinessId);
-                        $workerDirect['_business_edge'] = 'python_worker_confirmed_binding';
-                        $verifiedBusinessAdAccounts[$workerAdAccountId] = $workerDirect;
-                    } else {
-                        $verifiedBusinessAdAccounts[$workerAdAccountId] = [
-                            'profile' => $profile,
-                            'id' => $workerAdAccountId,
-                            'account_id' => $workerAdAccountId,
-                            'name' => 'RK ' . $workerAdAccountId,
-                            'business_id' => $workerBusinessId,
-                            'business_name' => (string)($knownBusinesses[$workerBusinessId]['name'] ?? $workerBusinessId),
-                            'account_status' => null,
-                            'disable_reason' => null,
-                            'currency' => '',
-                            'timezone_name' => '',
-                            'funding' => null,
-                            '_provisioned_only' => true,
-                            '_business_edge' => 'python_worker_confirmed_binding',
-                        ];
+            foreach ($workerBindings as $workerBinding) {
+                if (!is_array($workerBinding)) continue;
+                $workerBusinessId = trim((string)($workerBinding['business_id'] ?? ''));
+                $workerAdAccountId = trim((string)($workerBinding['ad_account_id'] ?? ''));
+                $workerAccountName = trim((string)($workerBinding['account_name'] ?? ''));
+                if (
+                    !preg_match('/^\d{5,30}$/', $workerBusinessId)
+                    || !preg_match('/^\d{5,30}$/', $workerAdAccountId)
+                    || !isset($knownBusinesses[$workerBusinessId])
+                ) continue;
+
+                hierarchy_binding_put(
+                    $profile,
+                    $workerBusinessId,
+                    $workerAdAccountId,
+                    $workerAccountName
+                );
+
+                if (isset($verifiedBusinessAdAccounts[$workerAdAccountId])) {
+                    continue;
+                }
+
+                $workerDirect = null;
+                foreach ((array)($preflight['ad_accounts']['data'] ?? []) as $directAccount) {
+                    if (!is_array($directAccount)) continue;
+                    if (trim((string)($directAccount['id'] ?? '')) === $workerAdAccountId) {
+                        $workerDirect = $directAccount;
+                        break;
                     }
+                }
+
+                if (is_array($workerDirect)) {
+                    $workerDirect['profile'] = $profile;
+                    $workerDirect['business_id'] = $workerBusinessId;
+                    $workerDirect['business_name'] = (string)($knownBusinesses[$workerBusinessId]['name'] ?? $workerBusinessId);
+                    $workerDirect['_provisioned_only'] = true;
+                    $workerDirect['_raw_account_status'] = $workerDirect['account_status'] ?? null;
+                    $workerDirect['_raw_disable_reason'] = $workerDirect['disable_reason'] ?? null;
+                    $workerDirect['_business_edge'] = 'python_worker_confirmed_binding';
+                    $verifiedBusinessAdAccounts[$workerAdAccountId] = $workerDirect;
+                } else {
+                    $verifiedBusinessAdAccounts[$workerAdAccountId] = [
+                        'profile' => $profile,
+                        'id' => $workerAdAccountId,
+                        'account_id' => $workerAdAccountId,
+                        'name' => $workerAccountName !== '' ? $workerAccountName : ('RK ' . $workerAdAccountId),
+                        'business_id' => $workerBusinessId,
+                        'business_name' => (string)($knownBusinesses[$workerBusinessId]['name'] ?? $workerBusinessId),
+                        'account_status' => null,
+                        'disable_reason' => null,
+                        'currency' => '',
+                        'timezone_name' => '',
+                        'funding' => null,
+                        '_provisioned_only' => true,
+                        '_business_edge' => 'python_worker_confirmed_binding',
+                    ];
                 }
             }
         } catch (Throwable $workerStateError) {
@@ -827,9 +862,7 @@ $bindingSnapshotNeedle = <<<'PHP_BINDING'
     $bmRows = [];
 PHP_BINDING;
 $bindingSnapshotReplacement = <<<'PHP_BINDING'
-    $binding = hierarchy_binding_get($profile);
-    $boundBusinessId = trim((string)($binding['business_id'] ?? ''));
-    $boundAdAccountId = trim((string)($binding['ad_account_id'] ?? ''));
+    $bindings = hierarchy_binding_get($profile);
 
     $knownBusinessNames = [];
     foreach ($businessRows as $businessRow) {
@@ -857,16 +890,22 @@ $rkRowsSnapshotNeedle = <<<'PHP_BINDING'
     foreach ($allAccounts as $rk) {
 PHP_BINDING;
 $rkRowsSnapshotReplacement = <<<'PHP_BINDING'
-    if (
-        preg_match('/^\d{5,30}$/', $boundBusinessId)
-        && preg_match('/^\d{5,30}$/', $boundAdAccountId)
-        && isset($knownBusinessNames[$boundBusinessId])
-        && !isset($businessAccountMap[$boundAdAccountId])
-    ) {
+    foreach ($bindings as $binding) {
+        if (!is_array($binding)) continue;
+        $boundBusinessId = trim((string)($binding['business_id'] ?? ''));
+        $boundAdAccountId = trim((string)($binding['ad_account_id'] ?? ''));
+        if (
+            !preg_match('/^\d{5,30}$/', $boundBusinessId)
+            || !preg_match('/^\d{5,30}$/', $boundAdAccountId)
+            || !isset($knownBusinessNames[$boundBusinessId])
+            || isset($businessAccountMap[$boundAdAccountId])
+        ) continue;
+
         $businessAccountMap[$boundAdAccountId] = [
             'id' => $boundBusinessId,
             'name' => $knownBusinessNames[$boundBusinessId],
             'source' => 'python_worker_binding',
+            'account_name' => trim((string)($binding['account_name'] ?? '')),
         ];
     }
 
@@ -891,6 +930,14 @@ $tokenOnlyReplacement = <<<'PHP_BINDING'
         $bm = $businessAccountMap[$id] ?? null;
         if (!is_array($bm)) continue; // never render token-only/unmapped RK
         $rk['profile'] = $profile;
+        if ((string)($bm['source'] ?? '') === 'python_worker_binding') {
+            // Worker proved CREATE and the exact BM relation, but Meta's
+            // owned/client edge has not propagated yet. Do not display a
+            // transient token-level account_status=2 as a real disabled RK.
+            $rk['_provisioned_only'] = true;
+            $rk['_raw_account_status'] = $rk['account_status'] ?? null;
+            $rk['_raw_disable_reason'] = $rk['disable_reason'] ?? null;
+        }
 PHP_BINDING;
 $php = str_replace($tokenOnlyNeedle, $tokenOnlyReplacement, $php, $tokenOnlyFilterCount);
 if ($tokenOnlyFilterCount !== 1) {
@@ -905,26 +952,31 @@ $provisionalReplacement = <<<'PHP_BINDING'
         $rkRows[] = $rk;
     }
 
-    $hasBoundRow = false;
+    $existingRkIds = [];
     foreach ($rkRows as $rkRow) {
         if (!is_array($rkRow)) continue;
-        if ((string)($rkRow['id'] ?? '') === $boundAdAccountId) {
-            $hasBoundRow = true;
-            break;
-        }
+        $existingId = trim((string)($rkRow['id'] ?? ''));
+        if ($existingId !== '') $existingRkIds[$existingId] = true;
     }
-    if (
-        !$hasBoundRow
-        && preg_match('/^\d{5,30}$/', $boundBusinessId)
-        && preg_match('/^\d{5,30}$/', $boundAdAccountId)
-        && isset($knownBusinessNames[$boundBusinessId])
-    ) {
+
+    foreach ($bindings as $binding) {
+        if (!is_array($binding)) continue;
+        $boundBusinessId = trim((string)($binding['business_id'] ?? ''));
+        $boundAdAccountId = trim((string)($binding['ad_account_id'] ?? ''));
+        if (
+            isset($existingRkIds[$boundAdAccountId])
+            || !preg_match('/^\d{5,30}$/', $boundBusinessId)
+            || !preg_match('/^\d{5,30}$/', $boundAdAccountId)
+            || !isset($knownBusinessNames[$boundBusinessId])
+        ) continue;
+
+        $boundAccountName = trim((string)($binding['account_name'] ?? ''));
         $rkRows[] = [
             'profile' => $profile,
             'group' => (string)($profileMeta['group'] ?? ''),
             'id' => $boundAdAccountId,
             'account_id' => $boundAdAccountId,
-            'name' => 'RK ' . $boundAdAccountId,
+            'name' => $boundAccountName !== '' ? $boundAccountName : ('RK ' . $boundAdAccountId),
             'business_id' => $boundBusinessId,
             'business_name' => $knownBusinessNames[$boundBusinessId],
             'account_status' => null,
@@ -935,6 +987,7 @@ $provisionalReplacement = <<<'PHP_BINDING'
             '_provisioned_only' => true,
             '_source' => 'python_worker_binding',
         ];
+        $existingRkIds[$boundAdAccountId] = true;
     }
 
     $rkByBusiness = [];
