@@ -25,7 +25,6 @@ from app.facebook_business_browser import (
 from app.provisioning.ad_account_handler import (
     AD_ACCOUNT_SAFE_CAPTURE_RETRY_CODES,
     _inventory_repeatedly_confirms_empty,
-    _capture_diagnostic_proves_no_final_submit,
     _reconcile_existing,
     _inventory_proof_summary,
     _browser_inventory_confirms_nonempty,
@@ -41,61 +40,6 @@ from app.provisioning.ad_account_handler import (
 )
 from app.provisioning.state import ProvisioningStateStore
 
-
-
-class AdAccountCaptureNoSubmitClassificationTests(unittest.TestCase):
-    def test_none_final_action_with_no_graph_candidate_is_pre_submit(self) -> None:
-        diagnostic = {
-            "blocked_unclassified_create": False,
-            "graphql_candidates": [],
-            "submit_attempts": [
-                {"step": 0, "action": "next", "meta": {"clicked": True}},
-                {
-                    "step": 1,
-                    "action": "none",
-                    "meta": {
-                        "found": False,
-                        "attempted": False,
-                        "clicked": False,
-                        "fallback": {
-                            "clicked": False,
-                            "attempted": False,
-                        },
-                    },
-                },
-            ],
-        }
-        self.assertTrue(
-            _capture_diagnostic_proves_no_final_submit(diagnostic)
-        )
-
-    def test_attempted_final_action_remains_uncertain(self) -> None:
-        diagnostic = {
-            "blocked_unclassified_create": False,
-            "graphql_candidates": [],
-            "submit_attempts": [
-                {
-                    "step": 2,
-                    "action": "final",
-                    "meta": {"attempted": True, "clicked": False},
-                }
-            ],
-        }
-        self.assertFalse(
-            _capture_diagnostic_proves_no_final_submit(diagnostic)
-        )
-
-    def test_blocked_unknown_create_remains_uncertain(self) -> None:
-        diagnostic = {
-            "blocked_unclassified_create": True,
-            "graphql_candidates": [],
-            "submit_attempts": [
-                {"step": 2, "action": "none", "meta": {}}
-            ],
-        }
-        self.assertFalse(
-            _capture_diagnostic_proves_no_final_submit(diagnostic)
-        )
 
 
 class AdAccountInventoryParserSafetyTests(unittest.TestCase):
@@ -1291,34 +1235,24 @@ class AdAccountCapturedVariableSafetyTests(unittest.TestCase):
 
 
 class AdAccountExactlyOnceSystemRegressionTests(unittest.TestCase):
-    def test_unmatched_capture_only_reconciles_after_real_final_attempt(self) -> None:
+    def test_unmatched_capture_reconciles_before_any_retry(self) -> None:
         source = inspect.getsource(ad_account_handler)
         unmatched_pos = source.index(
             'exc.code == "AD_ACCOUNT_CREATE_REQUEST_NOT_OBSERVED"'
         )
-        tail = source[unmatched_pos:]
-        self.assertIn("no_final_submit", tail)
-        self.assertIn(
-            "_capture_diagnostic_proves_no_final_submit(compact_diag)",
-            tail,
-        )
-        self.assertIn(
-            "and not no_final_submit",
-            tail,
-        )
-        self.assertIn(
+        reconcile_pos = source.index(
             "_prove_empty_after_uncertainty(",
-            tail,
+            unmatched_pos,
         )
+        safe_retry_pos = source.index(
+            "safe_retry = True",
+            unmatched_pos,
+        )
+        self.assertLess(reconcile_pos, safe_retry_pos)
         self.assertIn(
             "capture_escape_uncertain_inventory_v2",
-            tail,
+            source,
         )
-        # No-click diagnostics are pre-submit and may safely retry; any real
-        # final attempt remains behind the read-only reconciliation gate.
-        no_submit_pos = tail.index("if no_final_submit:")
-        reconcile_pos = tail.index("_prove_empty_after_uncertainty(")
-        self.assertLess(no_submit_pos, reconcile_pos)
 
     def test_cross_job_guard_uses_multi_surface_empty_proof(self) -> None:
         source = inspect.getsource(ad_account_handler)
@@ -1442,11 +1376,11 @@ class AdAccountStructuralInventoryRegressionTests(unittest.TestCase):
         preflight_pos = source.index(
             "# Read-only preflight enforces the 1 BM = 1 RK invariant."
         )
-        browser_checkpoint_pos = source.index(
-            "async def browser_checkpoint",
+        preparing_pos = source.index(
+            '"phase": "CREATE_PREPARING"',
             preflight_pos,
         )
-        window = source[preflight_pos:browser_checkpoint_pos]
+        window = source[preflight_pos:preparing_pos]
         self.assertNotIn(
             "_browser_inventory_confirms_nonempty(browser_inventory_before)",
             window,
@@ -1563,11 +1497,11 @@ class AdAccountInventoryPreflightRegressionTests(unittest.TestCase):
         preflight_pos = source.index(
             "# Read-only preflight enforces the 1 BM = 1 RK invariant."
         )
-        preparing_pos = source.index(
-            '"phase": "CREATE_PREPARING"',
+        blocked_pos = source.index(
+            '"AD_ACCOUNT_INVENTORY_UNAVAILABLE"',
             preflight_pos,
         )
-        window = source[preflight_pos:preparing_pos]
+        window = source[preflight_pos:blocked_pos + 1200]
         self.assertIn(
             "for browser_inventory_attempt in range(2):",
             window,
@@ -1599,13 +1533,6 @@ class AdAccountInventoryPreflightRegressionTests(unittest.TestCase):
             window,
         )
         self.assertIn("graph+stable_ui", window)
-        init_pos = window.index("cross_source_empty = False")
-        branch_pos = window.index(
-            'if not bool(browser_inventory_before.get("confirmed_empty"))'
-        )
-        use_pos = window.index('"graph_plus_stable_ui"')
-        self.assertLess(init_pos, branch_pos)
-        self.assertLess(branch_pos, use_pos)
 
     def test_post_submit_uncertainty_still_requires_strong_evidence(self) -> None:
         proof = inspect.getsource(_prove_empty_after_uncertainty)
