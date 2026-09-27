@@ -776,6 +776,93 @@ class ProvisioningStateStore:
 
         return bindings
 
+    async def confirmed_ad_account_binding_groups(
+        self,
+    ) -> dict[str, dict[str, Any]]:
+        """Return every durable BM -> RK relation grouped by profile.
+
+        The Workspace volume format is multi-Business:
+        profile -> ad_accounts -> business_id -> binding.
+        Never collapse a profile to only its newest RK during worker startup.
+        """
+        return await asyncio.to_thread(
+            self._confirmed_ad_account_binding_groups_sync,
+        )
+
+    def _confirmed_ad_account_binding_groups_sync(
+        self,
+    ) -> dict[str, dict[str, Any]]:
+        with self._connect() as con:
+            rows = con.execute(
+                """
+                SELECT profile_id,scope_key,status,result_json,updated_at
+                FROM provisioning_steps
+                WHERE step=?
+                  AND result_json IS NOT NULL
+                ORDER BY updated_at DESC
+                LIMIT 10000
+                """,
+                (ProvisioningStep.AD_ACCOUNT.value,),
+            ).fetchall()
+
+        groups: dict[str, dict[str, Any]] = {}
+        seen: set[tuple[str, str]] = set()
+
+        for row in rows:
+            profile = str(row["profile_id"] or "").strip()
+            if not profile:
+                continue
+            try:
+                result = json.loads(str(row["result_json"] or "{}"))
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if not isinstance(result, dict):
+                continue
+
+            business_id = str(result.get("business_id") or "").strip()
+            if not business_id.isdigit():
+                continue
+            identity = (profile, business_id)
+            if identity in seen:
+                continue
+
+            status = str(row["status"] or "").strip().upper()
+            ad_account_id = str(result.get("ad_account_id") or "").strip()
+            if ad_account_id.lower().startswith("act_"):
+                ad_account_id = ad_account_id[4:]
+
+            source = ""
+            if status == "SUCCESS" and ad_account_id.isdigit():
+                source = "python_worker_success_history"
+            else:
+                ad_account_id = _capture_ui_confirmed_ad_account_id(result)
+                if ad_account_id.isdigit():
+                    source = "python_worker_capture_ui_history"
+
+            if not source:
+                continue
+
+            seen.add(identity)
+            profile_group = groups.setdefault(
+                profile,
+                {"ad_accounts": {}},
+            )
+            accounts = profile_group.setdefault("ad_accounts", {})
+            accounts[business_id] = {
+                "business_id": business_id,
+                "ad_account_id": ad_account_id,
+                "account_name": str(
+                    result.get("account_name")
+                    or result.get("name")
+                    or ""
+                ).strip(),
+                "scope_key": str(row["scope_key"] or ""),
+                "updated_at": int(row["updated_at"] or 0),
+                "source": source,
+            }
+
+        return groups
+
     async def confirmed_ad_account_bindings(
         self,
     ) -> dict[str, dict[str, Any]]:
