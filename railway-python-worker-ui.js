@@ -1,4 +1,4 @@
-/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 REMASK_PYTHON_WORKER_UI_V140 REMASK_PYTHON_WORKER_UI_V141 REMASK_PYTHON_WORKER_UI_V142 REMASK_PYTHON_WORKER_UI_V143 REMASK_PYTHON_WORKER_UI_V144 REMASK_PYTHON_WORKER_UI_V145 REMASK_PYTHON_WORKER_UI_V146 REMASK_PYTHON_WORKER_UI_V147 REMASK_PYTHON_WORKER_UI_V148 REMASK_PYTHON_WORKER_UI_V149 REMASK_PYTHON_WORKER_UI_V150 REMASK_PYTHON_WORKER_UI_V151 REMASK_PYTHON_WORKER_UI_V152 REMASK_PYTHON_WORKER_UI_V153 REMASK_PYTHON_WORKER_UI_V154 REMASK_PYTHON_WORKER_UI_V155 REMASK_PYTHON_WORKER_UI_V156 REMASK_PYTHON_WORKER_UI_V157 REMASK_PYTHON_WORKER_UI_V158 REMASK_PYTHON_WORKER_UI_V159 REMASK_PYTHON_WORKER_UI_V160 REMASK_PYTHON_WORKER_UI_V161 REMASK_PYTHON_WORKER_UI_V164 REMASK_PYTHON_WORKER_UI_V166 REMASK_PYTHON_WORKER_UI_V169 REMASK_PYTHON_WORKER_UI_V170 REMASK_PYTHON_WORKER_UI_V171 REMASK_PYTHON_WORKER_UI_V172 */
+/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 REMASK_PYTHON_WORKER_UI_V140 REMASK_PYTHON_WORKER_UI_V141 REMASK_PYTHON_WORKER_UI_V142 REMASK_PYTHON_WORKER_UI_V143 REMASK_PYTHON_WORKER_UI_V144 REMASK_PYTHON_WORKER_UI_V145 REMASK_PYTHON_WORKER_UI_V146 REMASK_PYTHON_WORKER_UI_V147 REMASK_PYTHON_WORKER_UI_V148 REMASK_PYTHON_WORKER_UI_V149 REMASK_PYTHON_WORKER_UI_V150 REMASK_PYTHON_WORKER_UI_V151 REMASK_PYTHON_WORKER_UI_V152 REMASK_PYTHON_WORKER_UI_V153 REMASK_PYTHON_WORKER_UI_V154 REMASK_PYTHON_WORKER_UI_V155 REMASK_PYTHON_WORKER_UI_V156 REMASK_PYTHON_WORKER_UI_V157 REMASK_PYTHON_WORKER_UI_V158 REMASK_PYTHON_WORKER_UI_V159 REMASK_PYTHON_WORKER_UI_V160 REMASK_PYTHON_WORKER_UI_V161 REMASK_PYTHON_WORKER_UI_V164 REMASK_PYTHON_WORKER_UI_V166 REMASK_PYTHON_WORKER_UI_V169 REMASK_PYTHON_WORKER_UI_V170 REMASK_PYTHON_WORKER_UI_V171 REMASK_PYTHON_WORKER_UI_V172 REMASK_PYTHON_WORKER_UI_V173 */
 const restoredPythonWorkerJobId = localStorage.getItem('remask_python_worker_job_v1') || '';
 
 const restoredPythonWorkerBatchIds = (() => {
@@ -49,7 +49,8 @@ const pythonWorkerUiState = {
   pollTimer: null,
   batchPollTimer: null,
   polling: false,
-  batchPolling: false
+  batchPolling: false,
+  fpResolving: false
 };
 
 window.pythonWorkerUiState = pythonWorkerUiState;
@@ -176,59 +177,41 @@ function pythonWorkerEnsureRkFanPageActions() {
     targets.length
   );
 
-  let createBtn = document.getElementById('pythonRkCreateFp');
-  let attachBtn = document.getElementById('pythonRkAttachFp');
+  // FP fast path: one visible action only. The old Create/Attach split forced
+  // operators to fill or choose a Page per RK and made bulk work slower.
+  for (const legacyId of ['pythonRkCreateFp', 'pythonRkAttachFp']) {
+    const legacy = document.getElementById(legacyId);
+    if (legacy) legacy.remove();
+  }
 
-  if (!createBtn) {
-    createBtn = document.createElement('button');
-    createBtn.id = 'pythonRkCreateFp';
-    createBtn.type = 'button';
-    createBtn.className = 'btn btn-secondary';
-    createBtn.textContent = 'Создать FP';
-    createBtn.addEventListener('click', function(event) {
+  let autoBtn = document.getElementById('pythonRkAutoFp');
+  if (!autoBtn) {
+    autoBtn = document.createElement('button');
+    autoBtn.id = 'pythonRkAutoFp';
+    autoBtn.type = 'button';
+    autoBtn.className = 'btn btn-secondary';
+    autoBtn.addEventListener('click', function(event) {
       event.preventDefault();
       event.stopPropagation();
-      pythonWorkerOpenRkFanPageModal('create').catch(function(error) {
+      pythonWorkerStartAutoRkFanPages().catch(function(error) {
         pythonWorkerSetText(
           'pythonPwStatus',
-          'Create FP: ' + String((error && error.message) || error)
+          'FP авто: ' + String((error && error.message) || error)
         );
       });
     });
-    actionsButton.parentElement.insertBefore(createBtn, actionsButton);
+    actionsButton.parentElement.insertBefore(autoBtn, actionsButton);
   }
 
-  if (!attachBtn) {
-    attachBtn = document.createElement('button');
-    attachBtn.id = 'pythonRkAttachFp';
-    attachBtn.type = 'button';
-    attachBtn.className = 'btn btn-secondary';
-    attachBtn.textContent = 'Прикрепить FP';
-    attachBtn.addEventListener('click', function(event) {
-      event.preventDefault();
-      event.stopPropagation();
-      pythonWorkerOpenRkFanPageModal('attach_existing').catch(function(error) {
-        pythonWorkerSetText(
-          'pythonPwStatus',
-          'Attach FP: ' + String((error && error.message) || error)
-        );
-      });
-    });
-    actionsButton.parentElement.insertBefore(attachBtn, actionsButton);
-  }
-
-  for (const btn of [createBtn, attachBtn]) {
-    btn.style.display = active ? '' : 'none';
-    btn.disabled =
-      !active ||
-      pythonWorkerUiState.busy ||
-      pythonWorkerUiState.workerOnline !== true;
-  }
-
-  if (active) {
-    createBtn.textContent = 'Создать FP (' + targets.length + ')';
-    attachBtn.textContent = 'Прикрепить FP (' + targets.length + ')';
-  }
+  autoBtn.style.display = active ? '' : 'none';
+  autoBtn.disabled =
+    !active ||
+    pythonWorkerUiState.busy ||
+    pythonWorkerUiState.fpResolving ||
+    pythonWorkerUiState.workerOnline !== true;
+  autoBtn.textContent = active
+    ? 'FP авто (' + targets.length + ')'
+    : 'FP авто';
 }
 
 function pythonWorkerEl(id) {
@@ -2393,12 +2376,16 @@ async function pythonWorkerStartRkFanPageTargets(targets, mode, configs) {
   const settings = configs && typeof configs === 'object' ? configs : {};
 
   if (!list.length || pythonWorkerUiState.busy) return;
-  if (['create', 'attach_existing'].indexOf(cleanMode) === -1) {
-    throw new Error('FP mode must be create or attach_existing.');
+  if (['create', 'attach_existing', 'auto'].indexOf(cleanMode) === -1) {
+    throw new Error('FP mode must be create, attach_existing or auto.');
   }
 
   const invalid = list.filter(function(target, index) {
     const cfg = settings[String(index)] || {};
+    const targetMode = cleanMode === 'auto'
+      ? String(cfg.mode || '').trim().toLowerCase()
+      : cleanMode;
+
     if (
       !target ||
       !String(target.profile_id || '').trim() ||
@@ -2406,16 +2393,20 @@ async function pythonWorkerStartRkFanPageTargets(targets, mode, configs) {
       !/^\d+$/.test(String(target.ad_account_id || '').trim())
     ) return true;
 
-    if (cleanMode === 'create') {
+    if (targetMode === 'create') {
       return !String(cfg.base_name || '').trim() ||
         !String(cfg.category || '').trim();
     }
-
-    return !/^\d+$/.test(String(cfg.existing_page_id || '').trim());
+    if (targetMode === 'attach_existing') {
+      return !/^\d+$/.test(String(cfg.existing_page_id || '').trim());
+    }
+    return true;
   });
   if (invalid.length) {
     throw new Error(
-      cleanMode === 'create'
+      cleanMode === 'auto'
+        ? 'FP авто: не удалось автоматически подготовить FP для части выбранных RK.'
+        : cleanMode === 'create'
         ? 'Create FP: нужны имя и category для каждого выбранного RK.'
         : 'Attach FP: нужен Page ID для каждого выбранного RK.'
     );
@@ -2432,8 +2423,13 @@ async function pythonWorkerStartRkFanPageTargets(targets, mode, configs) {
 
   pythonWorkerSetText(
     'pythonPwStatus',
-    (cleanMode === 'create' ? 'Создаю и прикрепляю FP к ' : 'Прикрепляю FP к ') +
-      list.length + ' выбранным RK...'
+    (
+      cleanMode === 'auto'
+        ? 'Автоматически подготавливаю FP для '
+        : cleanMode === 'create'
+        ? 'Создаю и прикрепляю FP к '
+        : 'Прикрепляю FP к '
+    ) + list.length + ' выбранным RK...'
   );
 
   const created = new Array(list.length);
@@ -2455,14 +2451,17 @@ async function pythonWorkerStartRkFanPageTargets(targets, mode, configs) {
     };
 
     try {
+      const targetMode = cleanMode === 'auto'
+        ? String(cfg.mode || '').trim().toLowerCase()
+        : cleanMode;
       const fanPages = {
-        mode: cleanMode,
+        mode: targetMode,
         business_id: businessId,
         ad_account_id: adAccountId
       };
 
       let operationSubject = '';
-      if (cleanMode === 'create') {
+      if (targetMode === 'create') {
         fanPages.base_name = String(cfg.base_name || '').trim();
         fanPages.count = 1;
         fanPages.category = String(cfg.category || '').trim();
@@ -2481,11 +2480,11 @@ async function pythonWorkerStartRkFanPageTargets(targets, mode, configs) {
         profileId + '|' +
         businessId + '|' +
         adAccountId + '|' +
-        cleanMode + '|' +
+        targetMode + '|' +
         operationSubject
       );
       const operationKey =
-        cleanMode + '-' + businessId + '-' + adAccountId + '-' + operationToken;
+        targetMode + '-' + businessId + '-' + adAccountId + '-' + operationToken;
 
       const data = await pythonWorkerBridge({
         action: 'create',
@@ -2578,6 +2577,117 @@ async function pythonWorkerStartRkFanPageTargets(targets, mode, configs) {
     );
   });
 }
+
+
+async function pythonWorkerStartAutoRkFanPages() {
+  if (pythonWorkerUiState.workerOnline !== true) {
+    pythonWorkerSetText('pythonPwStatus', 'FP авто недоступно: worker ещё не READY.');
+    await pythonWorkerHealthCheck();
+    if (pythonWorkerUiState.workerOnline !== true) return;
+  }
+
+  const targets = pythonWorkerSelectedAdAccountTargets();
+  if (!targets.length || pythonWorkerUiState.busy || pythonWorkerUiState.fpResolving) {
+    return;
+  }
+
+  pythonWorkerUiState.fpResolving = true;
+  pythonWorkerSelectionRefresh();
+  pythonWorkerSetText(
+    'pythonPwStatus',
+    'FP авто: подбираю свободные Pages для ' + targets.length + ' RK...'
+  );
+
+  try {
+    const profiles = Array.from(new Set(
+      targets.map(function(target) {
+        return String(target.profile_id || '').trim();
+      }).filter(Boolean)
+    ));
+    const pageCache = new Map();
+
+    await pythonWorkerMapLimit(profiles, 4, async function(profileId) {
+      try {
+        const pages = await pythonWorkerLoadPages(profileId);
+        pageCache.set(profileId, Array.isArray(pages) ? pages : []);
+      } catch (error) {
+        // Fast path must not force manual work when the cache endpoint is
+        // temporarily unavailable. No trustworthy candidate means create one.
+        pageCache.set(profileId, []);
+        console.warn('[ReMask Worker UI] FP auto page cache fallback:', profileId, error);
+      }
+    });
+
+    const usedPageIds = new Set();
+    const configs = {};
+    let attachCount = 0;
+    let createCount = 0;
+
+    targets.forEach(function(target, index) {
+      const profileId = String(target.profile_id || '').trim();
+      const businessId = String(target.business_id || '').trim();
+      const adAccountId = String(target.ad_account_id || '').trim();
+      const pages = (pageCache.get(profileId) || []).filter(function(page) {
+        const pageId = String((page && page.id) || '').trim();
+        if (!/^\d+$/.test(pageId) || usedPageIds.has(pageId)) return false;
+        const ownerBusinessId = String((page && page.business_id) || '').trim();
+        const ownerAdAccountId = String((page && page.ad_account_id) || '').trim();
+        if (ownerBusinessId && ownerBusinessId !== businessId) return false;
+        if (ownerAdAccountId && ownerAdAccountId !== adAccountId) return false;
+        return true;
+      });
+
+      const inTargetBusiness = pages.find(function(page) {
+        return String((page && page.business_id) || '').trim() === businessId;
+      });
+      const freePage = pages.find(function(page) {
+        return !String((page && page.business_id) || '').trim();
+      });
+      const selectedPage = inTargetBusiness || freePage || null;
+
+      if (selectedPage) {
+        const pageId = String(selectedPage.id || '').trim();
+        usedPageIds.add(pageId);
+        configs[String(index)] = {
+          mode: 'attach_existing',
+          existing_page_id: pageId,
+          page_name: String(selectedPage.name || ('Page ' + pageId)).trim()
+        };
+        attachCount += 1;
+        return;
+      }
+
+      const suffix = adAccountId.slice(-6) || String(index + 1);
+      configs[String(index)] = {
+        mode: 'create',
+        base_name: 'ReMask ' + suffix,
+        category: 'Digital creator',
+        bio: ''
+      };
+      createCount += 1;
+    });
+
+    pythonWorkerSetText(
+      'pythonPwStatus',
+      'FP авто: ' + attachCount + ' готовых FP будут прикреплены, ' +
+      createCount + ' FP будут созданы автоматически.'
+    );
+
+    pythonWorkerUiState.fpResolving = false;
+    await pythonWorkerStartRkFanPageTargets(targets, 'auto', configs);
+  } catch (error) {
+    pythonWorkerUiState.fpResolving = false;
+    pythonWorkerSelectionRefresh();
+    throw error;
+  } finally {
+    if (!pythonWorkerUiState.busy) {
+      pythonWorkerUiState.fpResolving = false;
+      pythonWorkerSelectionRefresh();
+    }
+  }
+}
+
+window.pythonWorkerStartAutoRkFanPages = pythonWorkerStartAutoRkFanPages;
 
 function pythonWorkerFillRkAttachPages(cfg, target, pages) {
   const list = (Array.isArray(pages) ? pages : []).filter(function(item) {
