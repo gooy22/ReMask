@@ -1348,7 +1348,40 @@ async def ad_account_handler(
                 )[:500],
             }
 
-        if not bool(ui_inventory_before.get("confirmed_empty")):
+        structural_ui_empty = bool(
+            ui_inventory_before.get("structural_empty")
+        )
+        cross_source_empty = bool(
+            graph_inventory_empty and structural_ui_empty
+        )
+
+        if (
+            not bool(ui_inventory_before.get("confirmed_empty"))
+            and not cross_source_empty
+        ):
+            diagnostic = {
+                "inventory_before": inventory_before,
+                "graph_inventory_empty": graph_inventory_empty,
+                "graph_candidate_verification": (
+                    graph_candidate_verification
+                ),
+                "browser_inventory_before": browser_inventory_before,
+                "browser_inventory_attempts": browser_inventory_attempts,
+                "ui_inventory_before": ui_inventory_before,
+            }
+            log.warning(
+                "[%s] AD_ACCOUNT inventory preflight inconclusive "
+                "item=%s business=%s diagnostic=%s",
+                profile_id,
+                item_id,
+                business_id,
+                json.dumps(
+                    diagnostic,
+                    ensure_ascii=False,
+                    default=str,
+                    separators=(",", ":"),
+                )[:12000],
+            )
             await provisioning_state.checkpoint(
                 item_id,
                 profile_id,
@@ -1366,14 +1399,7 @@ async def ad_account_handler(
                         "RK inventory is inconclusive before CREATE; "
                         "duplicate-safe preflight blocked submission."
                     ),
-                    "inventory_before": inventory_before,
-                    "graph_inventory_empty": graph_inventory_empty,
-                    "graph_candidate_verification": (
-                        graph_candidate_verification
-                    ),
-                    "browser_inventory_before": browser_inventory_before,
-                    "browser_inventory_attempts": browser_inventory_attempts,
-                    "ui_inventory_before": ui_inventory_before,
+                    **diagnostic,
                 },
             )
             raise ProvisioningError(
@@ -1383,6 +1409,15 @@ async def ad_account_handler(
                     "that no RK exists. CREATE was not submitted."
                 ),
                 retryable=True,
+            )
+
+        if cross_source_empty:
+            log.info(
+                "[%s] AD_ACCOUNT preflight accepted cross-source empty "
+                "item=%s business=%s source=graph+stable_ui",
+                profile_id,
+                item_id,
+                business_id,
             )
 
     await provisioning_state.checkpoint(
@@ -1398,6 +1433,18 @@ async def ad_account_handler(
             "currency": currency,
             "timezone_id": timezone_id,
             "inventory_before": inventory_before,
+            "graph_inventory_empty": graph_inventory_empty,
+            "browser_inventory_before": browser_inventory_before,
+            "ui_inventory_before": ui_inventory_before,
+            "inventory_proof_path": (
+                "graph_plus_stable_ui"
+                if cross_source_empty
+                else (
+                    _clean(ui_inventory_before.get("source"))
+                    or _clean(browser_inventory_before.get("source"))
+                    or "business_settings"
+                )
+            ),
             "activity": "BUSINESS_SETTINGS_CREATE_OPENING",
         },
     )
