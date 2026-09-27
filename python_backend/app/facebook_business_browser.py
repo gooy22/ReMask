@@ -11848,10 +11848,11 @@ timeout_seconds=4.0,
             diag["ui_state"] = current_ui
             diag["ui_trace"] = self._ad_account_ui_trace[-12:]
             raise BrowserBusinessError(
-                "META_AD_ACCOUNT_CREATE_UNAVAILABLE",
+                "AD_ACCOUNT_ADVERTISING_RESTRICTED",
                 (
                     (current_ui.get("errors") or [
-                        "Meta blocked Ad Account creation on this surface."
+                        "Meta reports that this Business portfolio cannot "
+                        "be used for advertising."
                     ])[0]
                 ),
                 retryable=False,
