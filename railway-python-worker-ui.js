@@ -1,4 +1,4 @@
-/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 REMASK_PYTHON_WORKER_UI_V140 REMASK_PYTHON_WORKER_UI_V141 REMASK_PYTHON_WORKER_UI_V142 REMASK_PYTHON_WORKER_UI_V143 REMASK_PYTHON_WORKER_UI_V144 REMASK_PYTHON_WORKER_UI_V145 REMASK_PYTHON_WORKER_UI_V146 REMASK_PYTHON_WORKER_UI_V147 REMASK_PYTHON_WORKER_UI_V148 REMASK_PYTHON_WORKER_UI_V149 REMASK_PYTHON_WORKER_UI_V150 REMASK_PYTHON_WORKER_UI_V151 REMASK_PYTHON_WORKER_UI_V152 REMASK_PYTHON_WORKER_UI_V153 REMASK_PYTHON_WORKER_UI_V154 REMASK_PYTHON_WORKER_UI_V155 REMASK_PYTHON_WORKER_UI_V156 REMASK_PYTHON_WORKER_UI_V157 REMASK_PYTHON_WORKER_UI_V158 REMASK_PYTHON_WORKER_UI_V159 REMASK_PYTHON_WORKER_UI_V160 REMASK_PYTHON_WORKER_UI_V161 REMASK_PYTHON_WORKER_UI_V164 REMASK_PYTHON_WORKER_UI_V166 REMASK_PYTHON_WORKER_UI_V169 REMASK_PYTHON_WORKER_UI_V170 REMASK_PYTHON_WORKER_UI_V171 REMASK_PYTHON_WORKER_UI_V172 REMASK_PYTHON_WORKER_UI_V173 REMASK_PYTHON_WORKER_UI_V174 REMASK_PYTHON_WORKER_UI_V175 */
+/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 REMASK_PYTHON_WORKER_UI_V140 REMASK_PYTHON_WORKER_UI_V141 REMASK_PYTHON_WORKER_UI_V142 REMASK_PYTHON_WORKER_UI_V143 REMASK_PYTHON_WORKER_UI_V144 REMASK_PYTHON_WORKER_UI_V145 REMASK_PYTHON_WORKER_UI_V146 REMASK_PYTHON_WORKER_UI_V147 REMASK_PYTHON_WORKER_UI_V148 REMASK_PYTHON_WORKER_UI_V149 REMASK_PYTHON_WORKER_UI_V150 REMASK_PYTHON_WORKER_UI_V151 REMASK_PYTHON_WORKER_UI_V152 REMASK_PYTHON_WORKER_UI_V153 REMASK_PYTHON_WORKER_UI_V154 REMASK_PYTHON_WORKER_UI_V155 REMASK_PYTHON_WORKER_UI_V156 REMASK_PYTHON_WORKER_UI_V157 REMASK_PYTHON_WORKER_UI_V158 REMASK_PYTHON_WORKER_UI_V159 REMASK_PYTHON_WORKER_UI_V160 REMASK_PYTHON_WORKER_UI_V161 REMASK_PYTHON_WORKER_UI_V164 REMASK_PYTHON_WORKER_UI_V166 REMASK_PYTHON_WORKER_UI_V169 REMASK_PYTHON_WORKER_UI_V170 REMASK_PYTHON_WORKER_UI_V171 REMASK_PYTHON_WORKER_UI_V172 REMASK_PYTHON_WORKER_UI_V173 REMASK_PYTHON_WORKER_UI_V174 REMASK_PYTHON_WORKER_UI_V175 REMASK_PYTHON_WORKER_UI_V176 */
 const restoredPythonWorkerJobId = localStorage.getItem('remask_python_worker_job_v1') || '';
 
 const restoredPythonWorkerBatchIds = (() => {
@@ -2602,6 +2602,16 @@ async function pythonWorkerStartRkFanPageTargets(targets, mode, configs) {
 }
 
 
+
+function pythonWorkerFpAuthBlockedMessage(error) {
+  const message = String((error && error.message) || error || '');
+  if (!/(CHECKPOINT_REQUIRED|checkpoint|TWO_FACTOR_REQUIRED|two-factor|SESSION_EXPIRED|redirected.*login)/i.test(message)) {
+    return '';
+  }
+  return message;
+}
+
+
 async function pythonWorkerStartAutoRkFanPages() {
   if (pythonWorkerUiState.workerOnline !== true) {
     pythonWorkerSetText('pythonPwStatus', 'FP авто недоступно: worker ещё не READY.');
@@ -2627,9 +2637,46 @@ async function pythonWorkerStartAutoRkFanPages() {
         return String(target.profile_id || '').trim();
       }).filter(Boolean)
     ));
-    const pageCache = new Map();
 
-    await pythonWorkerMapLimit(profiles, 4, async function(profileId) {
+    const authBlocked = new Map();
+    await pythonWorkerMapLimit(profiles, 3, async function(profileId) {
+      try {
+        await pythonWorkerProfilePreflight(profileId);
+      } catch (error) {
+        const blocked = pythonWorkerFpAuthBlockedMessage(error);
+        if (blocked) {
+          authBlocked.set(profileId, blocked);
+        } else {
+          console.warn('[ReMask Worker UI] FP preflight soft-failed:', profileId, error);
+        }
+      }
+    });
+
+    const activeTargets = targets.filter(function(target) {
+      return !authBlocked.has(String(target.profile_id || '').trim());
+    });
+    const blockedProfiles = Array.from(authBlocked.keys());
+
+    if (!activeTargets.length) {
+      pythonWorkerUiState.fpResolving = false;
+      pythonWorkerSelectionRefresh();
+      pythonWorkerSetText(
+        'pythonPwStatus',
+        'FP авто: Facebook checkpoint у профиля(ей) ' +
+          blockedProfiles.join(', ') +
+          '. Jobs не запускались, FP не изменялись.'
+      );
+      return;
+    }
+
+    const pageCache = new Map();
+    const activeProfiles = Array.from(new Set(
+      activeTargets.map(function(target) {
+        return String(target.profile_id || '').trim();
+      }).filter(Boolean)
+    ));
+
+    await pythonWorkerMapLimit(activeProfiles, 4, async function(profileId) {
       try {
         const pages = await pythonWorkerLoadPages(profileId);
         pageCache.set(profileId, Array.isArray(pages) ? pages : []);
@@ -2646,7 +2693,7 @@ async function pythonWorkerStartAutoRkFanPages() {
     let attachCount = 0;
     let createCount = 0;
 
-    targets.forEach(function(target, index) {
+    activeTargets.forEach(function(target, index) {
       const profileId = String(target.profile_id || '').trim();
       const businessId = String(target.business_id || '').trim();
       const adAccountId = String(target.ad_account_id || '').trim();
@@ -2693,11 +2740,14 @@ async function pythonWorkerStartAutoRkFanPages() {
     pythonWorkerSetText(
       'pythonPwStatus',
       'FP авто: ' + attachCount + ' готовых FP будут прикреплены, ' +
-      createCount + ' FP будут созданы автоматически.'
+      createCount + ' FP будут созданы автоматически.' +
+      (blockedProfiles.length
+        ? ' Пропущены checkpoint-профили: ' + blockedProfiles.join(', ') + '.'
+        : '')
     );
 
     pythonWorkerUiState.fpResolving = false;
-    await pythonWorkerStartRkFanPageTargets(targets, 'auto', configs);
+    await pythonWorkerStartRkFanPageTargets(activeTargets, 'auto', configs);
   } catch (error) {
     pythonWorkerUiState.fpResolving = false;
     pythonWorkerSelectionRefresh();
