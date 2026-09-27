@@ -1533,6 +1533,13 @@ class AdAccountInventoryPreflightRegressionTests(unittest.TestCase):
             window,
         )
         self.assertIn("graph+stable_ui", window)
+        init_pos = window.index("cross_source_empty = False")
+        branch_pos = window.index(
+            'if not bool(browser_inventory_before.get("confirmed_empty"))'
+        )
+        use_pos = window.index('"graph_plus_stable_ui"')
+        self.assertLess(init_pos, branch_pos)
+        self.assertLess(branch_pos, use_pos)
 
     def test_post_submit_uncertainty_still_requires_strong_evidence(self) -> None:
         proof = inspect.getsource(_prove_empty_after_uncertainty)
