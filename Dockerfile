@@ -156,6 +156,8 @@ RUN set -eux; \
     grep -q 'latest_profile_entities' /opt/remask-python/app/provisioning/state.py; \
     grep -q 'latest_profile_fan_pages' /opt/remask-python/app/provisioning/state.py; \
     grep -q 'confirmed_ad_account_bindings' /opt/remask-python/app/provisioning/state.py; \
+    grep -q 'python_worker_capture_ui_history' /opt/remask-python/app/provisioning/state.py; \
+    grep -q '_capture_ui_confirmed_ad_account_id' /opt/remask-python/app/provisioning/state.py; \
     grep -q '_restore_workspace_bindings' /opt/remask-python/app/runner.py; \
     grep -q "'fan_pages':fan_pages" /opt/remask-python/main.py; \
     grep -q 'REMASK_WORKER_CONFIRMED_FP_MERGE_V1' /var/www/html/ajax/pythonWorkerPages.php; \

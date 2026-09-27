@@ -89,6 +89,46 @@ class FanPageProvisioningRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
             entities = await store.latest_profile_entities("4")
             pages = await store.latest_profile_fan_pages("4")
+
+            await store.set_running(
+                "legacy-rk-item",
+                "5",
+                "add-rk-bm-1578458920690597",
+                ProvisioningStep.AD_ACCOUNT,
+            )
+            await store.checkpoint(
+                "legacy-rk-item",
+                "5",
+                "add-rk-bm-1578458920690597",
+                ProvisioningStep.AD_ACCOUNT,
+                {
+                    "phase": "CREATE_RESULT_UNKNOWN",
+                    "business_id": "1578458920690597",
+                    "account_name": "ReMask RK 1",
+                    "browser_diagnostic": {
+                        "ui_state": {
+                            "dialogs": [
+                                "Ad account created successfully. "
+                                "The ReMask RK 1 ad account has been created "
+                                "and added to the Polr Dwol business portfolio."
+                            ],
+                            "controls": [
+                                "ReMask RK 1",
+                                "2490929708095829",
+                            ],
+                        }
+                    },
+                },
+            )
+            await store.fail(
+                "legacy-rk-item",
+                "5",
+                "add-rk-bm-1578458920690597",
+                ProvisioningStep.AD_ACCOUNT,
+                "AD_ACCOUNT_CREATE_RESULT_UNKNOWN",
+                "legacy capture missed",
+            )
+
             bindings = await store.confirmed_ad_account_bindings()
 
 
@@ -101,6 +141,18 @@ class FanPageProvisioningRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             bindings["4"]["business_id"],
             "7777777777",
+        )
+        self.assertEqual(
+            bindings["5"]["business_id"],
+            "1578458920690597",
+        )
+        self.assertEqual(
+            bindings["5"]["ad_account_id"],
+            "2490929708095829",
+        )
+        self.assertEqual(
+            bindings["5"]["source"],
+            "python_worker_capture_ui_history",
         )
         self.assertEqual(len(pages), 1)
         self.assertEqual(pages[0]["id"], "9999999999")

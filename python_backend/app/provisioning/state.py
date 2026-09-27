@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import sqlite3
 import time
 from pathlib import Path
@@ -12,6 +13,79 @@ from .models import ENTITY_RESULT_KEYS, ProvisioningSnapshot, ProvisioningStep
 
 def _now() -> int:
     return int(time.time())
+
+
+def _capture_ui_confirmed_ad_account_id(result: Any) -> str:
+    """Extract an RK ID only from explicit saved Meta success UI evidence."""
+    if not isinstance(result, dict):
+        return ""
+
+    business_id = str(result.get("business_id") or "").strip()
+    account_name = str(
+        result.get("account_name")
+        or result.get("name")
+        or ""
+    ).strip()
+    if not business_id.isdigit() or not account_name:
+        return ""
+
+    diagnostics: list[dict[str, Any]] = []
+    direct = result.get("browser_diagnostic")
+    if isinstance(direct, dict):
+        diagnostics.append(direct)
+
+    for failure in result.get("capture_failures") or []:
+        if not isinstance(failure, dict):
+            continue
+        diagnostic = failure.get("diagnostic")
+        if isinstance(diagnostic, dict):
+            diagnostics.append(diagnostic)
+
+    expected = account_name.casefold()
+    success_markers = (
+        "ad account created successfully",
+        "advertising account created successfully",
+        "has been created and added to the",
+        "compte publicitaire a été créé",
+        "рекламный аккаунт создан",
+        "рекламний акаунт створено",
+        "विज्ञापन अकाउंट बनाया गया",
+        "विज्ञापन खाता बनाया गया",
+        "tài khoản quảng cáo đã được tạo",
+        "বিজ্ঞাপন অ্যাকাউন্ট তৈরি করা হয়েছে",
+    )
+
+    for diagnostic in diagnostics:
+        ui_state = diagnostic.get("ui_state")
+        if not isinstance(ui_state, dict):
+            continue
+
+        dialogs = " ".join(
+            str(value or "").strip()
+            for value in (ui_state.get("dialogs") or [])
+            if str(value or "").strip()
+        )
+        folded = dialogs.casefold()
+        if expected not in folded:
+            continue
+        if not any(marker in folded for marker in success_markers):
+            continue
+
+        controls = " ".join(
+            str(value or "").strip()
+            for value in (ui_state.get("controls") or [])
+            if str(value or "").strip()
+        )
+        ids: list[str] = []
+        for raw in re.findall(r"(?<!\d)(\d{8,30})(?!\d)", controls):
+            if raw == business_id or raw in ids:
+                continue
+            ids.append(raw)
+
+        if len(ids) == 1:
+            return ids[0]
+
+    return ""
 
 
 class ProvisioningStateStore:
@@ -620,10 +694,9 @@ class ProvisioningStateStore:
         with self._connect() as con:
             rows = con.execute(
                 """
-                SELECT profile_id,scope_key,result_json,updated_at
+                SELECT profile_id,scope_key,status,result_json,updated_at
                 FROM provisioning_steps
                 WHERE step=?
-                  AND status='SUCCESS'
                   AND result_json IS NOT NULL
                 ORDER BY updated_at DESC
                 LIMIT 5000
@@ -644,17 +717,32 @@ class ProvisioningStateStore:
                 continue
 
             business_id = str(result.get("business_id") or "").strip()
+            status = str(row["status"] or "").strip().upper()
             ad_account_id = str(result.get("ad_account_id") or "").strip()
             if ad_account_id.lower().startswith("act_"):
                 ad_account_id = ad_account_id[4:]
-            if not (business_id.isdigit() and ad_account_id.isdigit()):
+
+            source = ""
+            if status == "SUCCESS" and business_id.isdigit() and ad_account_id.isdigit():
+                source = "python_worker_success_history"
+            else:
+                # Historical Add-RK Jobs could be marked FAILED/RESULT_UNKNOWN
+                # even after Meta rendered its explicit success dialog because
+                # the private GraphQL mutation was not captured. Recover only
+                # from that strong same-session evidence; never from a generic
+                # candidate ID or ambiguous failed checkpoint.
+                ad_account_id = _capture_ui_confirmed_ad_account_id(result)
+                if business_id.isdigit() and ad_account_id.isdigit():
+                    source = "python_worker_capture_ui_history"
+
+            if not source:
                 continue
 
             bindings[profile] = {
                 "business_id": business_id,
                 "ad_account_id": ad_account_id,
                 "updated_at": int(row["updated_at"] or 0),
-                "source": "python_worker_success_history",
+                "source": source,
                 "scope_key": str(row["scope_key"] or ""),
             }
 
