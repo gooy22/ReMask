@@ -1,4 +1,4 @@
-/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 REMASK_PYTHON_WORKER_UI_V140 REMASK_PYTHON_WORKER_UI_V141 REMASK_PYTHON_WORKER_UI_V142 REMASK_PYTHON_WORKER_UI_V143 REMASK_PYTHON_WORKER_UI_V144 REMASK_PYTHON_WORKER_UI_V145 REMASK_PYTHON_WORKER_UI_V146 REMASK_PYTHON_WORKER_UI_V147 REMASK_PYTHON_WORKER_UI_V148 REMASK_PYTHON_WORKER_UI_V149 REMASK_PYTHON_WORKER_UI_V150 REMASK_PYTHON_WORKER_UI_V151 REMASK_PYTHON_WORKER_UI_V152 REMASK_PYTHON_WORKER_UI_V153 REMASK_PYTHON_WORKER_UI_V154 REMASK_PYTHON_WORKER_UI_V155 REMASK_PYTHON_WORKER_UI_V156 REMASK_PYTHON_WORKER_UI_V157 REMASK_PYTHON_WORKER_UI_V158 REMASK_PYTHON_WORKER_UI_V159 REMASK_PYTHON_WORKER_UI_V160 REMASK_PYTHON_WORKER_UI_V161 REMASK_PYTHON_WORKER_UI_V164 REMASK_PYTHON_WORKER_UI_V166 REMASK_PYTHON_WORKER_UI_V169 */
+/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 REMASK_PYTHON_WORKER_UI_V140 REMASK_PYTHON_WORKER_UI_V141 REMASK_PYTHON_WORKER_UI_V142 REMASK_PYTHON_WORKER_UI_V143 REMASK_PYTHON_WORKER_UI_V144 REMASK_PYTHON_WORKER_UI_V145 REMASK_PYTHON_WORKER_UI_V146 REMASK_PYTHON_WORKER_UI_V147 REMASK_PYTHON_WORKER_UI_V148 REMASK_PYTHON_WORKER_UI_V149 REMASK_PYTHON_WORKER_UI_V150 REMASK_PYTHON_WORKER_UI_V151 REMASK_PYTHON_WORKER_UI_V152 REMASK_PYTHON_WORKER_UI_V153 REMASK_PYTHON_WORKER_UI_V154 REMASK_PYTHON_WORKER_UI_V155 REMASK_PYTHON_WORKER_UI_V156 REMASK_PYTHON_WORKER_UI_V157 REMASK_PYTHON_WORKER_UI_V158 REMASK_PYTHON_WORKER_UI_V159 REMASK_PYTHON_WORKER_UI_V160 REMASK_PYTHON_WORKER_UI_V161 REMASK_PYTHON_WORKER_UI_V164 REMASK_PYTHON_WORKER_UI_V166 REMASK_PYTHON_WORKER_UI_V169 REMASK_PYTHON_WORKER_UI_V170 */
 const restoredPythonWorkerJobId = localStorage.getItem('remask_python_worker_job_v1') || '';
 
 const restoredPythonWorkerBatchIds = (() => {
@@ -16,11 +16,33 @@ const restoredPythonWorkerBatchIds = (() => {
 const restoredPythonWorkerBatchKind =
   localStorage.getItem('remask_python_worker_batch_kind_v1') || 'add_rk';
 
+const restoredPythonWorkerBatchTargets = (() => {
+  try {
+    const raw = localStorage.getItem('remask_python_worker_batch_targets_v1') || '[]';
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? parsed.filter(function(value) {
+          return value && typeof value === 'object';
+        }).map(function(value) {
+          return {
+            profile_id: String(value.profile_id || '').trim(),
+            business_id: String(value.business_id || '').trim(),
+            ad_account_id: String(value.ad_account_id || '').trim(),
+            ad_account_name: String(value.ad_account_name || '').trim(),
+            business_name: String(value.business_name || '').trim()
+          };
+        })
+      : [];
+  } catch (_) {
+    return [];
+  }
+})();
+
 const pythonWorkerUiState = {
   jobId: restoredPythonWorkerJobId,
   job: null,
   batchJobIds: restoredPythonWorkerBatchIds,
-  batchTargets: [],
+  batchTargets: restoredPythonWorkerBatchTargets,
   batchKind: restoredPythonWorkerBatchKind,
   busy: restoredPythonWorkerJobId !== '' || restoredPythonWorkerBatchIds.length > 0,
   workerOnline: null,
@@ -218,7 +240,49 @@ function pythonWorkerSetText(id, value) {
   if (el) el.textContent = String(value == null ? '' : value);
 }
 
-async function pythonWorkerMapLimit(items, limit, worker) {
+async function pythonWorkerStableKey(value) {
+  const input = String(value == null ? '' : value).trim().toLowerCase();
+  let hash = 2166136261;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+function pythonWorkerPersistBatchState() {
+  localStorage.setItem(
+    'remask_python_worker_batch_v1',
+    JSON.stringify(
+      Array.isArray(pythonWorkerUiState.batchJobIds)
+        ? pythonWorkerUiState.batchJobIds
+        : []
+    )
+  );
+  localStorage.setItem(
+    'remask_python_worker_batch_targets_v1',
+    JSON.stringify(
+      Array.isArray(pythonWorkerUiState.batchTargets)
+        ? pythonWorkerUiState.batchTargets
+        : []
+    )
+  );
+  localStorage.setItem(
+    'remask_python_worker_batch_kind_v1',
+    String(pythonWorkerUiState.batchKind || 'add_rk')
+  );
+}
+
+function pythonWorkerClearBatchState() {
+  pythonWorkerUiState.batchJobIds = [];
+  pythonWorkerUiState.batchTargets = [];
+  pythonWorkerUiState.batchKind = 'add_rk';
+  localStorage.removeItem('remask_python_worker_batch_v1');
+  localStorage.removeItem('remask_python_worker_batch_targets_v1');
+  localStorage.removeItem('remask_python_worker_batch_kind_v1');
+}
+
+function pythonWorkerMapLimit(items, limit, worker) {
   const source = Array.isArray(items) ? items.slice() : [];
   const concurrency = Math.max(1, Math.min(Number(limit) || 1, source.length || 1));
   let index = 0;
@@ -297,10 +361,10 @@ function pythonWorkerSelectionRefresh() {
       profiles.length
         ? (
             pythonWorkerUiState.workerOnline === true
-              ? 'Worker UI v161 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
-              : 'Worker UI v161 · Выбрано FB-профилей: ' + profiles.length + '. Жду READY от worker.'
+              ? 'Worker UI v170 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
+              : 'Worker UI v170 · Выбрано FB-профилей: ' + profiles.length + '. Жду READY от worker.'
           )
-        : 'Worker UI v161 · Выберите FB-профили в Workspace.'
+        : 'Worker UI v170 · Выберите FB-профили в Workspace.'
     );
   }
 }
@@ -2266,15 +2330,9 @@ async function pythonWorkerStartRkFanPageTargets(targets, mode, configs) {
   pythonWorkerUiState.busy = true;
   pythonWorkerUiState.batchKind = 'rk_fp';
   pythonWorkerUiState.batchJobIds = [];
-  pythonWorkerUiState.batchTargets = list.map(function(target) {
-    return {
-      profile_id: String(target.profile_id || '').trim(),
-      business_id: String(target.business_id || '').trim(),
-      ad_account_id: String(target.ad_account_id || '').trim(),
-      ad_account_name: String(target.ad_account_name || target.ad_account_id || '').trim()
-    };
-  });
+  pythonWorkerUiState.batchTargets = [];
   localStorage.removeItem('remask_python_worker_batch_v1');
+  localStorage.removeItem('remask_python_worker_batch_targets_v1');
   localStorage.setItem('remask_python_worker_batch_kind_v1', 'rk_fp');
   pythonWorkerSelectionRefresh();
 
@@ -2284,49 +2342,68 @@ async function pythonWorkerStartRkFanPageTargets(targets, mode, configs) {
       list.length + ' выбранным RK...'
   );
 
-  try {
-    const nonce = Date.now() + '-' + Math.random().toString(16).slice(2);
-    const created = [];
+  const created = new Array(list.length);
+  const launchErrors = new Array(list.length);
 
-    await pythonWorkerMapLimit(list, 3, async function(target, index) {
-      const cfg = settings[String(index)] || {};
-      const profileId = String(target.profile_id || '').trim();
-      const businessId = String(target.business_id || '').trim();
-      const adAccountId = String(target.ad_account_id || '').trim();
+  await pythonWorkerMapLimit(list, 3, async function(target, index) {
+    const cfg = settings[String(index)] || {};
+    const profileId = String(target.profile_id || '').trim();
+    const businessId = String(target.business_id || '').trim();
+    const adAccountId = String(target.ad_account_id || '').trim();
 
+    const normalizedTarget = {
+      profile_id: profileId,
+      business_id: businessId,
+      ad_account_id: adAccountId,
+      ad_account_name: String(
+        target.ad_account_name || target.ad_account_id || ''
+      ).trim()
+    };
+
+    try {
       const fanPages = {
         mode: cleanMode,
         business_id: businessId,
         ad_account_id: adAccountId
       };
 
+      let operationSubject = '';
       if (cleanMode === 'create') {
         fanPages.base_name = String(cfg.base_name || '').trim();
         fanPages.count = 1;
         fanPages.category = String(cfg.category || '').trim();
         fanPages.bio = String(cfg.bio || '').trim();
+        operationSubject = fanPages.base_name;
       } else {
         fanPages.existing_page_id = String(cfg.existing_page_id || '').trim();
         fanPages.page_name = String(
           cfg.page_name || ('Page ' + fanPages.existing_page_id)
         ).trim();
         fanPages.category = String(cfg.category || '').trim();
+        operationSubject = fanPages.existing_page_id;
       }
+
+      const operationToken = pythonWorkerStableKey(
+        profileId + '|' +
+        businessId + '|' +
+        adAccountId + '|' +
+        cleanMode + '|' +
+        operationSubject
+      );
+      const operationKey =
+        cleanMode + '-' + businessId + '-' + adAccountId + '-' + operationToken;
 
       const data = await pythonWorkerBridge({
         action: 'create',
-        idempotency_key:
-          'workspace-rk-fp-' + cleanMode + '-' + businessId + '-' + adAccountId + '-' + nonce,
+        idempotency_key: 'workspace-rk-fp-' + operationKey,
         profiles: [{
           profile_id: profileId,
           tasks: [{
             action: 'provisioning',
-            idempotency_key:
-              'rk-fp-' + cleanMode + '-' + businessId + '-' + adAccountId + '-' + nonce,
+            idempotency_key: 'rk-fp-' + operationKey,
             payload: {
               steps: ['PROXY_CHECK', 'FAN_PAGES'],
-              scope_key:
-                'rk-fp-' + businessId + '-' + adAccountId + '-' + nonce,
+              scope_key: 'rk-fp-' + operationKey,
               parameters: {
                 FAN_PAGES: fanPages
               }
@@ -2339,46 +2416,73 @@ async function pythonWorkerStartRkFanPageTargets(targets, mode, configs) {
       if (!jobId) {
         throw new Error('Worker did not return job_id for RK ' + adAccountId);
       }
-      created[index] = jobId;
-    });
 
-    pythonWorkerUiState.batchJobIds = created.filter(Boolean);
-    if (!pythonWorkerUiState.batchJobIds.length) {
-      throw new Error('Worker did not create FP Jobs.');
+      created[index] = {
+        job_id: jobId,
+        target: normalizedTarget
+      };
+
+      const launched = created.filter(Boolean);
+      pythonWorkerUiState.batchJobIds = launched.map(function(row) {
+        return row.job_id;
+      });
+      pythonWorkerUiState.batchTargets = launched.map(function(row) {
+        return row.target;
+      });
+      pythonWorkerPersistBatchState();
+    } catch (error) {
+      launchErrors[index] = String((error && error.message) || error);
     }
+  });
 
-    pythonWorkerUiState.jobId = '';
-    localStorage.removeItem('remask_python_worker_job_v1');
-    localStorage.setItem(
-      'remask_python_worker_batch_v1',
-      JSON.stringify(pythonWorkerUiState.batchJobIds)
-    );
+  const launched = created.filter(Boolean);
+  const failedLaunches = launchErrors.filter(Boolean);
 
-    pythonWorkerSetText(
-      'pythonPwJob',
-      'RK → FP batch: ' + pythonWorkerUiState.batchJobIds.length + ' Jobs'
+  if (!launched.length) {
+    pythonWorkerUiState.busy = false;
+    pythonWorkerClearBatchState();
+    pythonWorkerSelectionRefresh();
+    throw new Error(
+      'Worker did not create FP Jobs. ' +
+      (failedLaunches[0] || 'Unknown create error.')
     );
+  }
+
+  pythonWorkerUiState.batchJobIds = launched.map(function(row) {
+    return row.job_id;
+  });
+  pythonWorkerUiState.batchTargets = launched.map(function(row) {
+    return row.target;
+  });
+  pythonWorkerUiState.batchKind = 'rk_fp';
+  pythonWorkerPersistBatchState();
+
+  pythonWorkerUiState.jobId = '';
+  localStorage.removeItem('remask_python_worker_job_v1');
+
+  pythonWorkerSetText(
+    'pythonPwJob',
+    'RK → FP batch: ' +
+      pythonWorkerUiState.batchJobIds.length +
+      '/' + list.length + ' Jobs'
+  );
+  pythonWorkerSetText(
+    'pythonPwStatus',
+    failedLaunches.length
+      ? (
+          'FP Jobs запущены для ' + launched.length + ' из ' + list.length +
+          ' RK; ' + failedLaunches.length +
+          ' Job не удалось поставить в очередь. Запущенные Jobs не потеряны.'
+        )
+      : 'FP Jobs запущены для ' + launched.length + ' RK.'
+  );
+
+  pythonWorkerPollAdAccountBatch().catch(function(error) {
     pythonWorkerSetText(
       'pythonPwStatus',
-      'FP Jobs запущены для ' + pythonWorkerUiState.batchJobIds.length + ' RK.'
+      'Ошибка FP batch polling: ' + ((error && error.message) || error)
     );
-
-    pythonWorkerPollAdAccountBatch().catch(function(error) {
-      pythonWorkerSetText(
-        'pythonPwStatus',
-        'Ошибка FP batch polling: ' + ((error && error.message) || error)
-      );
-    });
-  } catch (error) {
-    pythonWorkerUiState.busy = false;
-    pythonWorkerUiState.batchKind = 'add_rk';
-    pythonWorkerUiState.batchJobIds = [];
-    pythonWorkerUiState.batchTargets = [];
-    localStorage.removeItem('remask_python_worker_batch_v1');
-    localStorage.removeItem('remask_python_worker_batch_kind_v1');
-    pythonWorkerSelectionRefresh();
-    throw error;
-  }
+  });
 }
 
 function pythonWorkerFillRkAttachPages(cfg, target, pages) {
@@ -2738,10 +2842,10 @@ async function pythonWorkerPollAdAccountBatch() {
   ) return;
 
   pythonWorkerUiState.batchPolling = true;
+  const isRkFpBatch = pythonWorkerUiState.batchKind === 'rk_fp';
   try {
     const ids = pythonWorkerUiState.batchJobIds.slice();
     const jobs = new Array(ids.length);
-    const isRkFpBatch = pythonWorkerUiState.batchKind === 'rk_fp';
 
     await pythonWorkerMapLimit(ids, 4, async function(jobId, index) {
       const data = await pythonWorkerBridge({
@@ -2829,7 +2933,7 @@ async function pythonWorkerPollAdAccountBatch() {
       isRkFpBatch
         ? (
             allSuccess
-              ? 'FP созданы/прикреплены ко всем выбранным RK.'
+              ? 'Все запущенные FP Jobs SUCCESS: ' + ids.length + ' RK.'
               : 'RK → FP batch завершён: есть FAILED/PARTIAL Jobs. Повторный attach/Create автоматически не отправляется.'
           )
         : (
@@ -2840,13 +2944,30 @@ async function pythonWorkerPollAdAccountBatch() {
     );
 
     if (allSuccess) {
-      pythonWorkerUiState.batchJobIds = [];
-      pythonWorkerUiState.batchTargets = [];
-      pythonWorkerUiState.batchKind = 'add_rk';
-      localStorage.removeItem('remask_python_worker_batch_v1');
-      localStorage.removeItem('remask_python_worker_batch_kind_v1');
+      pythonWorkerClearBatchState();
+    } else {
+      pythonWorkerPersistBatchState();
     }
     pythonWorkerSelectionRefresh();
+  } catch (error) {
+    pythonWorkerSetText(
+      'pythonPwStatus',
+      (isRkFpBatch ? 'RK → FP' : 'Add RK') +
+        ' polling временно недоступен: ' +
+        String((error && error.message) || error) +
+        '. Повторяю автоматически.'
+    );
+    if (
+      Array.isArray(pythonWorkerUiState.batchJobIds) &&
+      pythonWorkerUiState.batchJobIds.length
+    ) {
+      if (pythonWorkerUiState.batchPollTimer) {
+        clearTimeout(pythonWorkerUiState.batchPollTimer);
+      }
+      pythonWorkerUiState.batchPollTimer = setTimeout(function() {
+        pythonWorkerPollAdAccountBatch().catch(function(){});
+      }, 2000);
+    }
   } finally {
     pythonWorkerUiState.batchPolling = false;
   }
