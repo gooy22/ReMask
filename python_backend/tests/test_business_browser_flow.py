@@ -2681,17 +2681,21 @@ class BrowserAdAccountStateMachineTests(unittest.IsolatedAsyncioTestCase):
             "aucun compte publicitaire ajouté",
         )
 
-    async def test_verify_ad_account_inventory_exposes_stable_structural_empty(self):
+    async def test_verify_ad_account_inventory_confirms_stable_structural_empty(self):
         class _Page:
             url = (
                 "https://business.facebook.com/latest/settings/"
                 "ad_accounts?business_id=1056638030476027"
             )
 
+            def __init__(self):
+                self.evaluate_calls = 0
+
             async def wait_for_timeout(self, ms):
                 return None
 
             async def evaluate(self, script, business):
+                self.evaluate_calls += 1
                 return {
                     "exact_business": True,
                     "ad_route": True,
@@ -2699,7 +2703,10 @@ class BrowserAdAccountStateMachineTests(unittest.IsolatedAsyncioTestCase):
                     "filter_surface": True,
                     "search_surface": True,
                     "loading": False,
+                    "global_loading": True,
+                    "inventory_loading": False,
                     "dialog_open": False,
+                    "candidate_rows": [],
                     "row_ids": [],
                 }
 
@@ -2723,19 +2730,73 @@ class BrowserAdAccountStateMachineTests(unittest.IsolatedAsyncioTestCase):
             business_id="1056638030476027"
         )
 
-        self.assertFalse(result["confirmed_empty"])
+        self.assertTrue(result["confirmed_empty"])
         self.assertTrue(result["structural_empty"])
         self.assertEqual(
             result["source"],
-            "business_settings_ui_structural",
+            "business_settings_ui_structural_consensus",
         )
+        self.assertEqual(browser.page.evaluate_calls, 3)
         self.assertEqual(len(result["attempts"]), 1)
         self.assertTrue(
-            result["attempts"][0]["structural_first"]["add_surface"]
+            result["attempts"][0]["structural_first"]["global_loading"]
+        )
+        self.assertFalse(
+            result["attempts"][0]["structural_first"]["inventory_loading"]
         )
         self.assertTrue(
-            result["attempts"][0]["structural_second"]["filter_surface"]
+            result["attempts"][0]["structural_third"]["filter_surface"]
         )
+
+    async def test_verify_ad_account_inventory_rejects_structural_row_candidate(self):
+        class _Page:
+            url = (
+                "https://business.facebook.com/latest/settings/"
+                "ad_accounts?business_id=1056638030476027"
+            )
+
+            async def wait_for_timeout(self, ms):
+                return None
+
+            async def evaluate(self, script, business):
+                return {
+                    "exact_business": True,
+                    "ad_route": True,
+                    "add_surface": True,
+                    "filter_surface": True,
+                    "search_surface": True,
+                    "loading": False,
+                    "global_loading": False,
+                    "inventory_loading": False,
+                    "dialog_open": False,
+                    "candidate_rows": [
+                        {"role": "listitem", "text": "Existing RK"}
+                    ],
+                    "row_ids": [],
+                }
+
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-structural-nonempty-rk")
+        )
+        browser.page = _Page()
+        browser._goto = AsyncMock(return_value=None)
+        browser._body_text = AsyncMock(return_value="No localized empty phrase")
+        browser._ad_account_ui_state = AsyncMock(
+            return_value={
+                "state": "ADD_SURFACE",
+                "url": _Page.url,
+                "signature": "ADD_SURFACE",
+                "controls": ["Search", "Filters", "Add"],
+                "dialogs": [],
+            }
+        )
+
+        result = await browser.verify_ad_account_inventory_empty(
+            business_id="1056638030476027"
+        )
+
+        self.assertFalse(result["confirmed_empty"])
+        self.assertFalse(result.get("structural_empty", False))
 
 
     async def test_final_create_does_not_accept_plain_div(self):
