@@ -1193,6 +1193,27 @@ class BrowserAdAccountConfirmTermsRegressionTests(unittest.TestCase):
         self.assertLess(terms_pos, final_pos)
 
 
+class BrowserAdAccountHindiFinalConfirmationRegressionTests(unittest.TestCase):
+    def test_final_interactive_accepts_hindi_account_confirmation_cta(self) -> None:
+        source = inspect.getsource(
+            FacebookBusinessBrowser._click_ad_account_final_interactive
+        )
+        self.assertIn("विज्ञापन अकाउंट", source)
+        self.assertIn("finalCreateAction", source)
+        self.assertIn("create.some", source)
+        self.assertIn("account.some", source)
+
+    def test_anchor_fallback_includes_hindi_account_transliteration(self) -> None:
+        source = inspect.getsource(
+            FacebookBusinessBrowser._click_ad_account_final_interactive
+        )
+        anchor_pos = source.index(
+            "if not candidates and self._ad_account_wizard_rect"
+        )
+        anchor_source = source[anchor_pos:]
+        self.assertIn("विज्ञापन अकाउंट", anchor_source)
+
+
 class BrowserAdAccountAnchoredFinalCreateRegressionTests(unittest.TestCase):
     def test_final_create_can_recover_plain_text_inside_wizard_anchor(self):
         source = inspect.getsource(
