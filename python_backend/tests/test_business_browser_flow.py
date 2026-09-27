@@ -4674,6 +4674,10 @@ class BrowserAdAccountLocalizedInventoryProofTests(unittest.TestCase):
             "AD_ACCOUNT_ADVERTISING_RESTRICTED",
             create_source,
         )
+        self.assertNotIn(
+            "META_AD_ACCOUNT_CREATE_UNAVAILABLE",
+            create_source,
+        )
         self.assertIn("retryable=False", create_source)
         self.assertIn('"phase": "CREATE_NOT_SUBMITTED"', create_source)
 
