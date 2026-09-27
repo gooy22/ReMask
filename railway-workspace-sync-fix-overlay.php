@@ -760,7 +760,10 @@ if ($livePreflightCount < 2 || $livePagesCount < 1 || $liveBusinessesCount < 1) 
 // Explicit readiness dimensions in the profile snapshot. Cache-only: opening
 // Workspace itself does not create extra Graph traffic.
 
-$bindingSnapshotNeedle = "    \\$businessAccountMap = [];\n    \\$bmRows = [];";
+$bindingSnapshotNeedle = <<<'PHP_BINDING'
+    $businessAccountMap = [];
+    $bmRows = [];
+PHP_BINDING;
 $bindingSnapshotReplacement = <<<'PHP_BINDING'
     $binding = hierarchy_binding_get($profile);
     $boundBusinessId = trim((string)($binding['business_id'] ?? ''));
@@ -787,7 +790,10 @@ if ($bindingSnapshotCount !== 1) {
     throw new RuntimeException('snapshot binding prelude patch failed: ' . $bindingSnapshotCount);
 }
 
-$rkRowsSnapshotNeedle = "    \\$rkRows = [];\n    foreach (\\$allAccounts as \\$rk) {";
+$rkRowsSnapshotNeedle = <<<'PHP_BINDING'
+    $rkRows = [];
+    foreach ($allAccounts as $rk) {
+PHP_BINDING;
 $rkRowsSnapshotReplacement = <<<'PHP_BINDING'
     if (
         preg_match('/^\d{5,30}$/', $boundBusinessId)
