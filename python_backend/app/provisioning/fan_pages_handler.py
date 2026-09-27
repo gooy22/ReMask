@@ -12,6 +12,21 @@ def _clean(value: Any) -> str:
     return str(value or "").strip()
 
 
+_AUTH_RECOVERY_CODES = {
+    "CHECKPOINT_REQUIRED",
+    "SESSION_EXPIRED",
+    "TWO_FACTOR_REQUIRED",
+}
+
+
+def _browser_retryable(exc: BrowserBusinessError) -> bool:
+    # These are not safe for blind automatic loops, but they ARE resumable
+    # after the operator restores the Facebook session/checkpoint. Marking
+    # them retryable lets Retry Failed / the one-click FP flow resume the
+    # same idempotent Job instead of forcing a brand new operation.
+    return bool(exc.retryable) or exc.code in _AUTH_RECOVERY_CODES
+
+
 def _checkpoint_result(step_state: Any) -> dict[str, Any]:
     if not isinstance(step_state, dict):
         return {}
@@ -324,7 +339,7 @@ async def _attach_page_to_business(
         raise ProvisioningError(
             exc.code,
             str(exc),
-            retryable=bool(exc.retryable),
+            retryable=_browser_retryable(exc),
         ) from exc
 
     return {
@@ -640,8 +655,12 @@ async def fan_pages_handler(
         try:
             current_pages = await _fresh_page_inventory(session)
         except BrowserBusinessError as exc:
-            if exc.code in {"SESSION_EXPIRED", "CHECKPOINT_REQUIRED", "TWO_FACTOR_REQUIRED"}:
-                raise ProvisioningError(exc.code, str(exc), retryable=False) from exc
+            if exc.code in _AUTH_RECOVERY_CODES:
+                raise ProvisioningError(
+                    exc.code,
+                    str(exc),
+                    retryable=True,
+                ) from exc
             current_pages = []
 
         # For RK-targeted creation, a same-named Page elsewhere on the FB
@@ -740,7 +759,7 @@ async def fan_pages_handler(
                     raise ProvisioningError(
                         exc.code,
                         str(exc),
-                        retryable=bool(exc.retryable),
+                        retryable=_browser_retryable(exc),
                     ) from exc
 
                 if exc.code != "FAN_PAGE_CREATE_RESULT_UNKNOWN":

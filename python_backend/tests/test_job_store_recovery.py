@@ -264,6 +264,65 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(job["status"], "SUCCESS")
 
 
+    async def test_retry_failed_recovers_legacy_checkpoint_even_if_old_row_was_nonretryable(self):
+        now = int(time.time())
+        job_id = "job-checkpoint-legacy"
+        item_id = "item-checkpoint-legacy"
+        task_id = "task-checkpoint-legacy"
+        with self.store._connect() as con:
+            con.execute(
+                "INSERT INTO jobs(id,status,idempotency_key,created_at,updated_at) VALUES(?,?,?,?,?)",
+                (job_id, "FAILED", "idem-checkpoint-legacy", now, now),
+            )
+            con.execute(
+                """INSERT INTO job_items(
+                    id,job_id,profile_id,status,error_code,error_message,retryable,
+                    created_at,updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?)""",
+                (
+                    item_id,
+                    job_id,
+                    "6",
+                    "FAILED",
+                    "CHECKPOINT_REQUIRED",
+                    "Facebook requires a checkpoint",
+                    0,
+                    now,
+                    now,
+                ),
+            )
+            con.execute(
+                """INSERT INTO job_tasks(
+                    id,item_id,position,action,payload_json,idempotency_key,status,
+                    error_code,error_message,retryable,created_at,updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    task_id,
+                    item_id,
+                    0,
+                    "provisioning",
+                    "{}",
+                    "task-checkpoint-legacy",
+                    "FAILED",
+                    "CHECKPOINT_REQUIRED",
+                    "Facebook requires a checkpoint",
+                    0,
+                    now,
+                    now,
+                ),
+            )
+
+        requeued = await self.store.retry_failed(job_id)
+        item = await self.store.item(item_id)
+        tasks = await self.store.tasks(item_id)
+
+        self.assertEqual(requeued, 1)
+        self.assertEqual(item["status"], "QUEUED")
+        self.assertEqual(tasks[0]["status"], "QUEUED")
+        self.assertIsNone(tasks[0]["error_code"])
+
+
+
 class ProfileResolverRecoveryTests(unittest.IsolatedAsyncioTestCase):
     @staticmethod
     def _payload() -> dict:

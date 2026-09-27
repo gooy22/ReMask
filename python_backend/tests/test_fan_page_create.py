@@ -6,8 +6,9 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from app.facebook_business_browser import FacebookBusinessBrowser
+from app.facebook_business_browser import BrowserBusinessError, FacebookBusinessBrowser
 from app.provisioning.fan_pages_handler import (
+    _browser_retryable,
     _reconcile_uncertain_page,
     _target_names,
     fan_pages_handler,
@@ -39,6 +40,17 @@ class FanPageProvisioningStructureTests(unittest.TestCase):
         self.assertIn("_attach_page_to_business", handler_source)
         self.assertIn("attach_existing", handler_source)
 
+
+    def test_profile_auth_challenges_are_resumable_not_blind_auto_retries(self) -> None:
+        for code in ("CHECKPOINT_REQUIRED", "SESSION_EXPIRED", "TWO_FACTOR_REQUIRED"):
+            exc = BrowserBusinessError(code, "profile auth required", retryable=False)
+            self.assertTrue(_browser_retryable(exc))
+        blocked = BrowserBusinessError(
+            "FACEBOOK_TEMPORARILY_BLOCKED",
+            "blocked",
+            retryable=False,
+        )
+        self.assertFalse(_browser_retryable(blocked))
 
     def test_create_page_rejection_markers_cover_supported_geos(self) -> None:
         source = inspect.getsource(FacebookBusinessBrowser.create_fan_page)
