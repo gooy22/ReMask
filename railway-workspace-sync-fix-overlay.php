@@ -389,14 +389,62 @@ function hierarchy_binding_get(string $profile): array
 {
     $all = hierarchy_binding_all();
     $row = $all[$profile] ?? null;
-    return is_array($row) ? $row : [];
+    if (!is_array($row)) return [];
+
+    // V1 stored one BM->RK pair directly at profile level. Normalize it into
+    // the V2 list shape so existing volume data remains usable.
+    if (isset($row['business_id']) || isset($row['ad_account_id'])) {
+        $businessId = trim((string)($row['business_id'] ?? ''));
+        $adAccountId = trim((string)($row['ad_account_id'] ?? ''));
+        if (
+            preg_match('/^\d{5,30}$/', $businessId)
+            && preg_match('/^\d{5,30}$/', $adAccountId)
+        ) {
+            return [[
+                'business_id' => $businessId,
+                'ad_account_id' => $adAccountId,
+                'account_name' => trim((string)($row['account_name'] ?? '')),
+                'updated_at' => (int)($row['updated_at'] ?? 0),
+                'source' => (string)($row['source'] ?? 'legacy_binding_v1'),
+            ]];
+        }
+        return [];
+    }
+
+    $items = $row['ad_accounts'] ?? $row;
+    if (!is_array($items)) return [];
+
+    $out = [];
+    foreach ($items as $businessKey => $item) {
+        if (!is_array($item)) continue;
+        $businessId = trim((string)($item['business_id'] ?? $businessKey));
+        $adAccountId = trim((string)($item['ad_account_id'] ?? ''));
+        if (
+            !preg_match('/^\d{5,30}$/', $businessId)
+            || !preg_match('/^\d{5,30}$/', $adAccountId)
+        ) continue;
+        $out[] = [
+            'business_id' => $businessId,
+            'ad_account_id' => $adAccountId,
+            'account_name' => trim((string)($item['account_name'] ?? '')),
+            'updated_at' => (int)($item['updated_at'] ?? 0),
+            'source' => (string)($item['source'] ?? 'python_worker_confirmed_entities'),
+        ];
+    }
+    return $out;
 }
 
-function hierarchy_binding_put(string $profile, string $businessId, string $adAccountId): void
+function hierarchy_binding_put(
+    string $profile,
+    string $businessId,
+    string $adAccountId,
+    string $accountName = ''
+): void
 {
     $profile = trim($profile);
     $businessId = trim($businessId);
     $adAccountId = trim($adAccountId);
+    $accountName = trim($accountName);
     if (
         $profile === ''
         || !preg_match('/^\d{5,30}$/', $businessId)
@@ -418,12 +466,26 @@ function hierarchy_binding_put(string $profile, string $businessId, string $adAc
             $decoded = json_decode($raw, true);
             if (is_array($decoded)) $all = $decoded;
         }
-        $all[$profile] = [
+
+        $profileRow = $all[$profile] ?? [];
+        if (!is_array($profileRow)) $profileRow = [];
+        $existing = hierarchy_binding_get($profile);
+        $normalized = [];
+        foreach ($existing as $item) {
+            if (!is_array($item)) continue;
+            $bid = trim((string)($item['business_id'] ?? ''));
+            if (!preg_match('/^\d{5,30}$/', $bid)) continue;
+            $normalized[$bid] = $item;
+        }
+        $normalized[$businessId] = [
             'business_id' => $businessId,
             'ad_account_id' => $adAccountId,
+            'account_name' => $accountName,
             'updated_at' => time(),
-            'source' => 'python_worker_confirmed_entities',
+            'source' => 'python_worker_confirmed_entities_v2',
         ];
+        $all[$profile] = ['ad_accounts' => $normalized];
+
         $encoded = json_encode($all, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         if (!is_string($encoded)) return;
         ftruncate($fp, 0);
