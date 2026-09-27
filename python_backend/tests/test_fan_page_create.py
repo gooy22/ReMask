@@ -35,6 +35,9 @@ class FanPageProvisioningStructureTests(unittest.TestCase):
         self.assertIn("before_ids", source)
         self.assertIn("discover_managed_pages", source)
         self.assertIn("FAN_PAGE_CREATE_RESULT_UNKNOWN", source)
+        handler_source = inspect.getsource(fan_pages_handler)
+        self.assertIn("_attach_page_to_business", handler_source)
+        self.assertIn("attach_existing", handler_source)
 
 
     def test_create_page_rejection_markers_cover_supported_geos(self) -> None:
@@ -283,3 +286,97 @@ class FanPageProvisioningRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["created_count"], 2)
         self.assertGreaterEqual(state.checkpoint.await_count, 4)
         self.assertEqual(browser.create_fan_page.await_count, 2)
+
+    async def test_create_page_can_attach_to_selected_rk_business(self) -> None:
+        state = SimpleNamespace(
+            checkpoint=AsyncMock(return_value={}),
+            step=AsyncMock(return_value=None),
+            latest_profile_fan_pages=AsyncMock(return_value=[]),
+        )
+        browser = AsyncMock()
+        browser.__aenter__.return_value = browser
+        browser.__aexit__.return_value = False
+        browser.discover_managed_pages.return_value = []
+        browser.create_fan_page.return_value = {
+            "page_id": "4444444444",
+            "name": "RK Page",
+            "category": "Digital creator",
+            "reused": False,
+        }
+        browser.add_existing_page.return_value = SimpleNamespace(
+            already_attached=False
+        )
+
+        with patch(
+            "app.provisioning.fan_pages_handler.FacebookBusinessBrowser",
+            return_value=browser,
+        ):
+            result = await fan_pages_handler(
+                SimpleNamespace(context=SimpleNamespace(profile_id="6")),
+                {
+                    "mode": "create",
+                    "base_name": "RK Page",
+                    "count": 1,
+                    "category": "Digital creator",
+                    "business_id": "1619103589770310",
+                    "ad_account_id": "29459808963612032",
+                },
+                {},
+                item_id="item-rk-page",
+                profile_id="6",
+                scope_key="rk-page-create",
+                provisioning_state=state,
+                step_state={"result": {}},
+            )
+
+        self.assertEqual(result["attached_count"], 1)
+        self.assertEqual(result["business_id"], "1619103589770310")
+        self.assertEqual(result["ad_account_id"], "29459808963612032")
+        self.assertTrue(result["pages"][0]["attached"])
+        self.assertEqual(
+            result["pages"][0]["business_id"],
+            "1619103589770310",
+        )
+        self.assertEqual(browser.create_fan_page.await_count, 1)
+        self.assertEqual(browser.add_existing_page.await_count, 1)
+
+    async def test_existing_page_can_attach_without_create(self) -> None:
+        state = SimpleNamespace(
+            checkpoint=AsyncMock(return_value={}),
+            step=AsyncMock(return_value=None),
+            latest_profile_fan_pages=AsyncMock(return_value=[]),
+        )
+        browser = AsyncMock()
+        browser.__aenter__.return_value = browser
+        browser.__aexit__.return_value = False
+        browser.add_existing_page.return_value = SimpleNamespace(
+            already_attached=False
+        )
+
+        with patch(
+            "app.provisioning.fan_pages_handler.FacebookBusinessBrowser",
+            return_value=browser,
+        ):
+            result = await fan_pages_handler(
+                SimpleNamespace(context=SimpleNamespace(profile_id="6")),
+                {
+                    "mode": "attach_existing",
+                    "existing_page_id": "5555555555",
+                    "page_name": "Existing FP",
+                    "business_id": "1619103589770310",
+                    "ad_account_id": "29459808963612032",
+                },
+                {},
+                item_id="item-rk-page-attach",
+                profile_id="6",
+                scope_key="rk-page-attach",
+                provisioning_state=state,
+                step_state={"result": {}},
+            )
+
+        self.assertEqual(result["created_count"], 0)
+        self.assertEqual(result["attached_count"], 1)
+        self.assertEqual(result["page_ids"], ["5555555555"])
+        self.assertTrue(result["pages"][0]["attached"])
+        self.assertEqual(browser.create_fan_page.await_count, 0)
+        self.assertEqual(browser.add_existing_page.await_count, 1)
