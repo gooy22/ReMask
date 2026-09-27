@@ -1,4 +1,4 @@
-/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 REMASK_PYTHON_WORKER_UI_V140 REMASK_PYTHON_WORKER_UI_V141 REMASK_PYTHON_WORKER_UI_V142 REMASK_PYTHON_WORKER_UI_V143 REMASK_PYTHON_WORKER_UI_V144 REMASK_PYTHON_WORKER_UI_V145 REMASK_PYTHON_WORKER_UI_V146 REMASK_PYTHON_WORKER_UI_V147 REMASK_PYTHON_WORKER_UI_V148 REMASK_PYTHON_WORKER_UI_V149 REMASK_PYTHON_WORKER_UI_V150 REMASK_PYTHON_WORKER_UI_V151 REMASK_PYTHON_WORKER_UI_V152 REMASK_PYTHON_WORKER_UI_V153 REMASK_PYTHON_WORKER_UI_V154 REMASK_PYTHON_WORKER_UI_V155 REMASK_PYTHON_WORKER_UI_V156 REMASK_PYTHON_WORKER_UI_V157 REMASK_PYTHON_WORKER_UI_V158 REMASK_PYTHON_WORKER_UI_V159 REMASK_PYTHON_WORKER_UI_V160 REMASK_PYTHON_WORKER_UI_V161 REMASK_PYTHON_WORKER_UI_V164 REMASK_PYTHON_WORKER_UI_V166 REMASK_PYTHON_WORKER_UI_V169 REMASK_PYTHON_WORKER_UI_V170 */
+/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 REMASK_PYTHON_WORKER_UI_V140 REMASK_PYTHON_WORKER_UI_V141 REMASK_PYTHON_WORKER_UI_V142 REMASK_PYTHON_WORKER_UI_V143 REMASK_PYTHON_WORKER_UI_V144 REMASK_PYTHON_WORKER_UI_V145 REMASK_PYTHON_WORKER_UI_V146 REMASK_PYTHON_WORKER_UI_V147 REMASK_PYTHON_WORKER_UI_V148 REMASK_PYTHON_WORKER_UI_V149 REMASK_PYTHON_WORKER_UI_V150 REMASK_PYTHON_WORKER_UI_V151 REMASK_PYTHON_WORKER_UI_V152 REMASK_PYTHON_WORKER_UI_V153 REMASK_PYTHON_WORKER_UI_V154 REMASK_PYTHON_WORKER_UI_V155 REMASK_PYTHON_WORKER_UI_V156 REMASK_PYTHON_WORKER_UI_V157 REMASK_PYTHON_WORKER_UI_V158 REMASK_PYTHON_WORKER_UI_V159 REMASK_PYTHON_WORKER_UI_V160 REMASK_PYTHON_WORKER_UI_V161 REMASK_PYTHON_WORKER_UI_V164 REMASK_PYTHON_WORKER_UI_V166 REMASK_PYTHON_WORKER_UI_V169 REMASK_PYTHON_WORKER_UI_V170 REMASK_PYTHON_WORKER_UI_V171 */
 const restoredPythonWorkerJobId = localStorage.getItem('remask_python_worker_job_v1') || '';
 
 const restoredPythonWorkerBatchIds = (() => {
@@ -347,24 +347,41 @@ function pythonWorkerSelectionRefresh() {
           task.retryable === true;
       });
     });
+    const hasTerminalBatchFailure =
+      Array.isArray(pythonWorkerUiState.batchJobIds) &&
+      pythonWorkerUiState.batchJobIds.length > 0 &&
+      pythonWorkerUiState.busy === false;
+
     retry.disabled =
       pythonWorkerUiState.busy ||
-      !pythonWorkerUiState.jobId ||
-      !hasRetryableFailed;
+      (
+        !hasTerminalBatchFailure &&
+        (!pythonWorkerUiState.jobId || !hasRetryableFailed)
+      );
+    retry.textContent = hasTerminalBatchFailure
+      ? 'Retry Failed batch'
+      : 'Retry Failed';
   }
 
   pythonWorkerEnsureRkFanPageActions();
 
-  if (!pythonWorkerUiState.jobId && !pythonWorkerUiState.busy) {
+  if (
+    !pythonWorkerUiState.jobId &&
+    !pythonWorkerUiState.busy &&
+    !(
+      Array.isArray(pythonWorkerUiState.batchJobIds) &&
+      pythonWorkerUiState.batchJobIds.length
+    )
+  ) {
     pythonWorkerSetText(
       'pythonPwStatus',
       profiles.length
         ? (
             pythonWorkerUiState.workerOnline === true
-              ? 'Worker UI v170 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
-              : 'Worker UI v170 · Выбрано FB-профилей: ' + profiles.length + '. Жду READY от worker.'
+              ? 'Worker UI v171 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
+              : 'Worker UI v171 · Выбрано FB-профилей: ' + profiles.length + '. Жду READY от worker.'
           )
-        : 'Worker UI v170 · Выберите FB-профили в Workspace.'
+        : 'Worker UI v171 · Выберите FB-профили в Workspace.'
     );
   }
 }
@@ -1864,6 +1881,83 @@ async function pythonWorkerPoll() {
 window.pythonWorkerStartBusiness = pythonWorkerStartBusiness;
 
 async function pythonWorkerRetryFailed() {
+  const batchIds = Array.isArray(pythonWorkerUiState.batchJobIds)
+    ? pythonWorkerUiState.batchJobIds.slice()
+    : [];
+
+  if (batchIds.length) {
+    if (pythonWorkerUiState.busy) return;
+
+    pythonWorkerUiState.busy = true;
+    pythonWorkerSelectionRefresh();
+    pythonWorkerSetText(
+      'pythonPwStatus',
+      'Retry Failed: проверяю ' + batchIds.length + ' batch Jobs...'
+    );
+
+    try {
+      let requeued = 0;
+      const retryErrors = [];
+
+      await pythonWorkerMapLimit(batchIds, 4, async function(jobId) {
+        try {
+          const data = await pythonWorkerBridge({
+            action: 'retry_failed',
+            job_id: jobId
+          });
+          requeued += Number(
+            (data && data.result && data.result.requeued) || 0
+          );
+        } catch (error) {
+          retryErrors.push(
+            jobId + ': ' + String((error && error.message) || error)
+          );
+        }
+      });
+
+      if (requeued <= 0) {
+        pythonWorkerUiState.busy = false;
+        pythonWorkerSelectionRefresh();
+        pythonWorkerSetText(
+          'pythonPwStatus',
+          retryErrors.length
+            ? 'Retry Failed batch: ничего не поставлено в очередь. ' +
+              retryErrors.join(' · ')
+            : 'Retry Failed batch: нет retryable FAILED элементов.'
+        );
+        return;
+      }
+
+      pythonWorkerUiState.busy = true;
+      pythonWorkerPersistBatchState();
+      pythonWorkerSetText(
+        'pythonPwStatus',
+        'Retry Failed batch: возвращено в очередь ' + requeued +
+          (retryErrors.length
+            ? ' · ошибки отдельных Jobs: ' + retryErrors.join(' · ')
+            : '.')
+      );
+
+      pythonWorkerPollAdAccountBatch().catch(function(error) {
+        pythonWorkerSetText(
+          'pythonPwStatus',
+          'Retry Failed batch polling: ' +
+            String((error && error.message) || error)
+        );
+      });
+      return;
+    } catch (error) {
+      pythonWorkerUiState.busy = false;
+      pythonWorkerSelectionRefresh();
+      pythonWorkerSetText(
+        'pythonPwStatus',
+        'Retry Failed batch error: ' +
+          String((error && error.message) || error)
+      );
+      return;
+    }
+  }
+
   if (!pythonWorkerUiState.jobId || pythonWorkerUiState.busy) return;
 
   pythonWorkerUiState.busy = true;
@@ -3815,7 +3909,12 @@ function pythonWorkerInitUi() {
   }).observe(document.documentElement, {childList: true, subtree: true});
 
   if (pythonWorkerUiState.batchJobIds.length) {
-    pythonWorkerSetText('pythonPwStatus', 'Восстанавливаю Add RK batch...');
+    pythonWorkerSetText(
+      'pythonPwStatus',
+      pythonWorkerUiState.batchKind === 'rk_fp'
+        ? 'Восстанавливаю RK → FP batch...'
+        : 'Восстанавливаю Add RK batch...'
+    );
     pythonWorkerPollAdAccountBatch().catch(function(){});
   } else if (pythonWorkerUiState.jobId) {
     pythonWorkerSetText('pythonPwStatus', 'Восстанавливаю последний Job...');
