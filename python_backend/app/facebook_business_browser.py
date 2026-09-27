@@ -9022,18 +9022,6 @@ class FacebookBusinessBrowser:
                         'không thể tạo','giới hạn','bị hạn chế',
                         'अनुमति नहीं','पात्र नहीं','नहीं बना सकते',
                         'सीमा','प्रतिबंधित',
-                        'you cannot use this business portfolio to advertise',
-                        "you can't use this business portfolio to advertise",
-                        'this business portfolio cannot be used to advertise',
-                        'आप विज्ञापन देने के लिए इस बिज़नेस पोर्टफ़ोलियो का उपयोग नहीं कर सकते',
-                        'आप विज्ञापन देने के लिए इस बिजनेस पोर्टफोलियो का उपयोग नहीं कर सकते',
-                        'ce portefeuille business ne peut pas être utilisé pour faire de la publicité',
-                        'vous ne pouvez pas utiliser ce portefeuille business pour faire de la publicité',
-                        'этот бизнес-портфель нельзя использовать для рекламы',
-                        'цей бізнес-портфель не можна використовувати для реклами',
-                        'không thể dùng danh mục kinh doanh này để quảng cáo',
-                        'không thể sử dụng danh mục kinh doanh này để quảng cáo',
-                        'এই বিজনেস পোর্টফোলিও বিজ্ঞাপন দেওয়ার জন্য ব্যবহার করা যাবে না'
                     ];
 
                     const metaAIRoot = el => {
@@ -11848,11 +11836,10 @@ timeout_seconds=4.0,
             diag["ui_state"] = current_ui
             diag["ui_trace"] = self._ad_account_ui_trace[-12:]
             raise BrowserBusinessError(
-                "AD_ACCOUNT_ADVERTISING_RESTRICTED",
+                "META_AD_ACCOUNT_CREATE_UNAVAILABLE",
                 (
                     (current_ui.get("errors") or [
-                        "Meta reports that this Business portfolio cannot "
-                        "be used for advertising."
+                        "Meta blocked Ad Account creation on this surface."
                     ])[0]
                 ),
                 retryable=False,
@@ -13758,6 +13745,31 @@ timeout_seconds=4.0,
                         await self.page.wait_for_timeout(250)
                     if captured.done():
                         break
+
+                    # Meta can occasionally submit the actual CREATE through a
+                    # transport shape that is not matched by the private
+                    # GraphQL interceptor. Never click CREATE again if the same
+                    # browser session already proves success in Meta's UI.
+                    ui_created = await self._reconcile_created_ad_account_from_ui(
+                        business_id=business,
+                        account_name=name,
+                    )
+                    if bool(ui_created.get("confirmed")):
+                        created_id = _clean(ui_created.get("ad_account_id"))
+                        if created_id:
+                            self._ad_account_create_sent = True
+                            self._mark_ad_account_phase("CREATE_CONFIRMED")
+                            return {
+                                "created_during_capture": True,
+                                "ad_account_id": created_id,
+                                "business_id": business,
+                                "canary_name": name,
+                                "currency": currency_code,
+                                "timezone_id": timezone,
+                                "source": "business_settings_ui_capture_reconciliation",
+                                "ui_reconcile": ui_created,
+                            }
+
                     if blocked_unclassified_create:
                         # The safety gate already intercepted a strong unknown
                         # mutation. Do not click the irreversible CTA again in
@@ -13791,11 +13803,11 @@ timeout_seconds=4.0,
                     raise BrowserBusinessError(
                         "AD_ACCOUNT_CREATE_REQUEST_NOT_OBSERVED",
                         (
-                            "Meta Add-RK wizard was driven to the final action, "
-                            "but ReMask did not observe a definitive private "
-                            "CREATE request. The final capture gate blocked any "
-                            "strong unknown CREATE candidate; no captured CREATE "
-                            "was intentionally allowed to reach Meta."
+                            "Meta Add-RK wizard reached the final action, but "
+                            "ReMask did not capture a definitive private CREATE "
+                            "request and the same browser session did not prove "
+                            "a created RK. Inventory reconciliation is required "
+                            "before any additional CREATE attempt."
                         ),
                         retryable=True,
                         diagnostic=diag,
