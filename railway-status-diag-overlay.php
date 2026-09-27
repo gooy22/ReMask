@@ -31,3 +31,16 @@ foreach ($files as $file => $needles) {
         }
     }
 }
+
+$meta = @file_get_contents('/var/www/html/ajax/metaHierarchy.php');
+if (is_string($meta)) {
+    $start = strpos($meta, 'function hierarchy_profile_snapshot');
+    if ($start !== false) {
+        $next = strpos($meta, "
+function ", $start + 20);
+        if ($next === false) $next = min(strlen($meta), $start + 18000);
+        $snippet = substr($meta, $start, min(18000, $next - $start));
+        $snippet = str_replace(["\r","\n"], ['\\r','\\n'], $snippet);
+        fwrite(STDERR, "[snapshot-diag] " . $snippet . "\n");
+    }
+}
