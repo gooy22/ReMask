@@ -2660,6 +2660,62 @@ class BrowserAdAccountStateMachineTests(unittest.IsolatedAsyncioTestCase):
             "aucun compte publicitaire ajouté",
         )
 
+    async def test_verify_ad_account_inventory_exposes_stable_structural_empty(self):
+        class _Page:
+            url = (
+                "https://business.facebook.com/latest/settings/"
+                "ad_accounts?business_id=1056638030476027"
+            )
+
+            async def wait_for_timeout(self, ms):
+                return None
+
+            async def evaluate(self, script, business):
+                return {
+                    "exact_business": True,
+                    "ad_route": True,
+                    "add_surface": True,
+                    "filter_surface": True,
+                    "search_surface": True,
+                    "loading": False,
+                    "dialog_open": False,
+                    "row_ids": [],
+                }
+
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-structural-empty-rk")
+        )
+        browser.page = _Page()
+        browser._goto = AsyncMock(return_value=None)
+        browser._body_text = AsyncMock(return_value="No localized empty phrase")
+        browser._ad_account_ui_state = AsyncMock(
+            return_value={
+                "state": "ADD_SURFACE",
+                "url": _Page.url,
+                "signature": "ADD_SURFACE",
+                "controls": ["Search", "Filters", "Add"],
+                "dialogs": [],
+            }
+        )
+
+        result = await browser.verify_ad_account_inventory_empty(
+            business_id="1056638030476027"
+        )
+
+        self.assertFalse(result["confirmed_empty"])
+        self.assertTrue(result["structural_empty"])
+        self.assertEqual(
+            result["source"],
+            "business_settings_ui_structural",
+        )
+        self.assertEqual(len(result["attempts"]), 1)
+        self.assertTrue(
+            result["attempts"][0]["structural_first"]["add_surface"]
+        )
+        self.assertTrue(
+            result["attempts"][0]["structural_second"]["filter_surface"]
+        )
+
 
     async def test_final_create_does_not_accept_plain_div(self):
         class _Page:
@@ -4471,6 +4527,17 @@ class BrowserAdAccountFullFlowHardeningTests(unittest.TestCase):
             "समय क्षेत्र",
         ):
             self.assertIn(marker, source)
+
+
+class BrowserAdAccountFinalDialogAnchorRegressionTests(unittest.TestCase):
+    def test_final_dialog_can_anchor_on_localized_interactive_create_cta(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser._click_ad_account_form_action_by_visible_text
+        )
+        self.assertIn("dialogAccountWords", source)
+        self.assertIn("root.querySelectorAll", source)
+        self.assertIn("createWords.some", source)
+        self.assertIn("dialogAccountWords.some", source)
 
 
 class BrowserAdAccountLocalizedInventoryProofTests(unittest.TestCase):
