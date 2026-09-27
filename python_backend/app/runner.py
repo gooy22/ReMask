@@ -112,8 +112,10 @@ class WorkerPool:
         log.info('worker pool started concurrency=%d recovered=%d',self.concurrency,len(recovered))
 
     async def _restore_workspace_bindings(self) -> None:
-        """Rebuild Workspace BM->RK bindings from durable SUCCESS history."""
-        bindings=await self.provisioning_state.confirmed_ad_account_bindings()
+        """Rebuild multi-Business Workspace BM->RK bindings from durable history."""
+        bindings=(
+            await self.provisioning_state.confirmed_ad_account_binding_groups()
+        )
         if not bindings:
             return
 
@@ -134,16 +136,71 @@ class WorkerPool:
         except (OSError,json.JSONDecodeError,ValueError):
             current={}
 
-        current.update(bindings)
+        for profile, group in bindings.items():
+            if not isinstance(group,dict):
+                continue
+            incoming=group.get('ad_accounts')
+            if not isinstance(incoming,dict):
+                continue
+
+            existing=current.get(profile)
+            merged: dict[str,Any]={}
+
+            if isinstance(existing,dict):
+                existing_accounts=existing.get('ad_accounts')
+                if isinstance(existing_accounts,dict):
+                    merged.update(
+                        {
+                            str(key):value
+                            for key,value in existing_accounts.items()
+                            if isinstance(value,dict)
+                        }
+                    )
+                else:
+                    # V1 file shape: one pair directly under the profile.
+                    business_id=str(existing.get('business_id') or '').strip()
+                    ad_account_id=str(existing.get('ad_account_id') or '').strip()
+                    if business_id.isdigit() and ad_account_id.isdigit():
+                        merged[business_id]={
+                            'business_id':business_id,
+                            'ad_account_id':ad_account_id,
+                            'account_name':str(
+                                existing.get('account_name') or ''
+                            ).strip(),
+                            'updated_at':int(existing.get('updated_at') or 0),
+                            'source':str(
+                                existing.get('source') or 'legacy_binding_v1'
+                            ),
+                        }
+
+            merged.update(
+                {
+                    str(key):value
+                    for key,value in incoming.items()
+                    if isinstance(value,dict)
+                }
+            )
+            current[profile]={'ad_accounts':merged}
+
         temp=path.with_suffix(path.suffix + '.worker.tmp')
         temp.write_text(
             json.dumps(current,separators=(',',':'),ensure_ascii=False),
             encoding='utf-8',
         )
         os.replace(temp,path)
+        total=sum(
+            len(
+                group.get('ad_accounts')
+                if isinstance(group,dict)
+                and isinstance(group.get('ad_accounts'),dict)
+                else {}
+            )
+            for group in bindings.values()
+        )
         log.info(
-            'workspace BM/RK bindings restored profiles=%d path=%s',
+            'workspace BM/RK bindings restored profiles=%d relations=%d path=%s',
             len(bindings),
+            total,
             path,
         )
 
