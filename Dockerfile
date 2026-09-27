@@ -158,6 +158,10 @@ RUN set -eux; \
     grep -q 'pythonWorkerOpenOwnFanPageModal' /var/www/html/scripts/workspace.js; \
     grep -q 'data-python-worker-rk-menu' /var/www/html/scripts/workspace.js; \
     grep -q 'pythonWorkerOpenOwnAdAccountModal' /var/www/html/scripts/workspace.js; \
+    grep -q 'function pythonWorkerSelectedBusinessTargets()' /var/www/html/scripts/workspace.js; \
+    grep -q 'function pythonWorkerStartBusinessAdAccountTargets(' /var/www/html/scripts/workspace.js; \
+    grep -q 'function pythonWorkerInstallBusinessAddRkInterceptor()' /var/www/html/scripts/workspace.js; \
+    grep -q 'workspace-add-rk-selected-bm-' /var/www/html/scripts/workspace.js; \
     grep -q 'latest_ad_account_resume_for_business' /opt/remask-python/app/provisioning/state.py; \
     grep -q 'latest_profile_entities' /opt/remask-python/app/provisioning/state.py; \
     grep -q 'latest_profile_fan_pages' /opt/remask-python/app/provisioning/state.py; \
