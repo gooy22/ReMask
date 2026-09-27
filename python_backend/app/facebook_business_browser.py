@@ -5673,6 +5673,16 @@ class FacebookBusinessBrowser:
                             'meta ai','assistant business meta ai',
                             'meta ai business assistant','assistant meta ai'
                         ];
+                        const account = [
+                            'ad account','advertising account',
+                            'compte publicitaire','werbekonto','реклам',
+                            'বিজ্ঞাপন অ্যাকাউন্ট','tài khoản quảng cáo',
+                            'विज्ञापन खाता','विज्ञापन अकाउंट'
+                        ];
+                        const create = [
+                            'create','créer','создать','створити','erstellen',
+                            'তৈরি করুন','tạo','बनाएँ','बनाएं'
+                        ];
                         return [...document.querySelectorAll(
                             '[role="dialog"],[aria-modal="true"]'
                         )].filter(visible).some(root => {
@@ -5691,8 +5701,32 @@ class FacebookBusinessBrowser:
                                 (root.getAttribute('title') || '') + ' ' +
                                 headings
                             );
-                            return !ai.some(word => identity.includes(word))
-                                && wizard.some(word => t.includes(word));
+                            if (ai.some(word => identity.includes(word))) {
+                                return false;
+                            }
+                            if (wizard.some(word => t.includes(word))) {
+                                return true;
+                            }
+                            return [...root.querySelectorAll(
+                                'button,a,[role="button"],'
+                                + '[tabindex]:not([tabindex="-1"])'
+                            )].some(el => {
+                                if (!visible(el)) return false;
+                                if (
+                                    el.hasAttribute('disabled')
+                                    || el.getAttribute('aria-disabled') === 'true'
+                                ) return false;
+                                const actionText = clean(
+                                    (el.getAttribute('aria-label') || '') + ' ' +
+                                    (el.getAttribute('title') || '') + ' ' +
+                                    (el.innerText || el.textContent || '')
+                                );
+                                return account.some(word =>
+                                    actionText.includes(word)
+                                ) && create.some(word =>
+                                    actionText.includes(word)
+                                );
+                            });
                         });
                     }"""
                 )
@@ -5804,6 +5838,10 @@ class FacebookBusinessBrowser:
                             'বিজ্ঞাপন অ্যাকাউন্ট','tài khoản quảng cáo',
                             'विज्ञापन खाता','विज्ञापन अकाउंट'
                         ];
+                        const create = [
+                            'create','créer','создать','створити','erstellen',
+                            'তৈরি করুন','tạo','बनाएँ','बनाएं'
+                        ];
                         const name = [
                             'ad account name','advertising account name',
                             'nom du compte publicitaire','name des werbekontos',
@@ -5859,10 +5897,20 @@ class FacebookBusinessBrowser:
                             const hasTimezone = timezone.some(word => t.includes(word));
                             const hasOwnership = ownership.some(word => t.includes(word));
                             const hasAccount = account.some(word => t.includes(word));
+                            const actionText = clean(
+                                (el.getAttribute('aria-label') || '') + ' ' +
+                                (el.getAttribute('title') || '') + ' ' +
+                                (el.innerText || el.textContent || '')
+                            );
+                            const finalCreateAction = (
+                                account.some(word => actionText.includes(word))
+                                && create.some(word => actionText.includes(word))
+                            );
                             inWizardDialog = !inAI && (
                                 (hasName && (hasCurrency || hasTimezone))
                                 || (hasCurrency && hasTimezone)
                                 || (hasOwnership && hasAccount)
+                                || finalCreateAction
                             );
                         }
 
@@ -6020,7 +6068,8 @@ class FacebookBusinessBrowser:
                             'ad account','advertising account',
                             'compte publicitaire','werbekonto','реклам',
                             'বিজ্ঞাপন অ্যাকাউন্ট',
-                            'tài khoản quảng cáo','विज्ञापन खाता'
+                            'tài khoản quảng cáo','विज्ञापन खाता',
+                            'विज्ञापन अकाउंट'
                         ];
                         const ai = [
                             'meta ai','assistant business meta ai',
