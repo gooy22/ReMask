@@ -5821,6 +5821,14 @@ class FacebookBusinessBrowser:
                 ).upper()
                 dialog_meta = await item.evaluate(
                     """(el) => {
+                        const visible = node => {
+                            if (!node) return false;
+                            const r = node.getBoundingClientRect();
+                            const s = getComputedStyle(node);
+                            return r.width > 0 && r.height > 0
+                                && s.display !== 'none'
+                                && s.visibility !== 'hidden';
+                        };
                         const clean = text => (text || '')
                             .normalize('NFKC')
                             .replace(/[\u200b\u200c\u200d\ufeff]/g, '')
