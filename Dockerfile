@@ -109,7 +109,6 @@ RUN set -eux; \
     php /tmp/railway-language-targeting-v116-overlay.php; \
     php -l /tmp/railway-python-worker-ui-overlay.php; \
     php /tmp/railway-python-worker-ui-overlay.php; \
-    php /tmp/railway-status-diag-overlay.php; \
     grep -q 'REMASK_STATUS_TRUTH_V1' /var/www/html/scripts/workspace.js; \
     grep -q 'Business Verification · не блокировка' /var/www/html/scripts/workspace.js; \
     grep -q 'REMASK_PERSISTENT_BM_RK_BINDING_V1' /var/www/html/ajax/metaHierarchy.php; \
