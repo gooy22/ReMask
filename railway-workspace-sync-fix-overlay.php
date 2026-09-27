@@ -340,7 +340,10 @@ if ($php === false) {
 }
 
 
-$hierarchyHelperSignature = "function hierarchy_profile_snapshot(string \\$profile, ?array \\$workspaceMeta = null): array\n{";
+$hierarchyHelperSignature = <<<'PHP_SIG'
+function hierarchy_profile_snapshot(string $profile, ?array $workspaceMeta = null): array
+{
+PHP_SIG;
 $hierarchyHelpers = <<<'PHP_HELPERS'
 // REMASK_PERSISTENT_BM_RK_BINDING_V1
 function hierarchy_worker_state(string $profile): array
