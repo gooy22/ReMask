@@ -154,6 +154,10 @@ RUN set -eux; \
     grep -q 'pythonWorkerOpenOwnAdAccountModal' /var/www/html/scripts/workspace.js; \
     grep -q 'latest_ad_account_resume_for_business' /opt/remask-python/app/provisioning/state.py; \
     grep -q 'latest_profile_entities' /opt/remask-python/app/provisioning/state.py; \
+    grep -q 'latest_profile_fan_pages' /opt/remask-python/app/provisioning/state.py; \
+    grep -q "'fan_pages':fan_pages" /opt/remask-python/main.py; \
+    grep -q 'REMASK_WORKER_CONFIRMED_FP_MERGE_V1' /var/www/html/ajax/pythonWorkerPages.php; \
+    grep -q "count.value = '1'" /var/www/html/scripts/workspace.js; \
     grep -q 'profile_provisioning_state' /opt/remask-python/main.py; \
     grep -q "action === 'profile_state'" /var/www/html/ajax/pythonWorkerJobs.php; \
     grep -q 'CREATE_AD_ACCOUNT_RESULT_UNKNOWN' /opt/remask-python/app/facebook_ad_account_create.py; \

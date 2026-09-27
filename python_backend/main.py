@@ -746,9 +746,12 @@ async def profile_provisioning_state(profile_id: str):
     clean_profile=str(profile_id or '').strip()
     if not clean_profile:
         raise HTTPException(status_code=400,detail='profile_id is required')
+    entities=await pool.provisioning_state.latest_profile_entities(clean_profile)
+    fan_pages=await pool.provisioning_state.latest_profile_fan_pages(clean_profile)
     return {
         'ok':True,
-        **await pool.provisioning_state.latest_profile_entities(clean_profile),
+        **entities,
+        'fan_pages':fan_pages,
     }
 
 @app.post('/api/v1/jobs',response_model=JobAccepted,dependencies=[Depends(require_key)])

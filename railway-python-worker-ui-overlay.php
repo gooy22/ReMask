@@ -32,6 +32,31 @@ function rmx_pwp_out(array $payload, int $status = 200): void {
     exit;
 }
 
+// REMASK_WORKER_CONFIRMED_FP_MERGE_V1
+function rmx_pwp_worker_state(string $profile): array {
+    $base = rtrim(trim((string)(getenv('REMASK_PYTHON_WORKER_URL') ?: 'http://127.0.0.1:8081')), '/');
+    $url = $base . '/api/v1/profiles/' . rawurlencode($profile) . '/provisioning-state';
+
+    $headers = ['Accept: application/json'];
+    $key = trim((string)(getenv('REMASK_WORKER_API_KEY') ?: ''));
+    if ($key !== '') $headers[] = 'X-Remask-Worker-Key: ' . $key;
+
+    $ctx = stream_context_create([
+        'http' => [
+            'method' => 'GET',
+            'header' => implode("\r\n", $headers) . "\r\n",
+            'timeout' => 5,
+            'ignore_errors' => true,
+            'follow_location' => 0,
+        ],
+    ]);
+
+    $raw = @file_get_contents($url, false, $ctx);
+    if (!is_string($raw) || trim($raw) === '') return [];
+    $json = json_decode($raw, true);
+    return is_array($json) ? $json : [];
+}
+
 try {
     $raw = (string)file_get_contents('php://input');
     $input = $_POST;
@@ -53,7 +78,7 @@ try {
         $rows = is_array($result['data'] ?? null) ? $result['data'] : [];
     }
 
-    $pages = [];
+    $pagesById = [];
 
     foreach ($rows as $row) {
         if (!is_array($row)) continue;
@@ -70,19 +95,49 @@ try {
             $businessId = trim((string)($row['business_id'] ?? ''));
         }
 
-        $pages[] = [
+        $pagesById[$id] = [
             'id' => $id,
             'name' => trim((string)($row['name'] ?? $id)),
             'category' => trim((string)($row['category'] ?? '')),
             'business_id' => $businessId,
+            'source' => 'meta',
         ];
     }
+
+    $workerState = rmx_pwp_worker_state($profile);
+    $workerPages = is_array($workerState['fan_pages'] ?? null)
+        ? $workerState['fan_pages']
+        : [];
+    $workerConfirmed = 0;
+
+    foreach ($workerPages as $workerPage) {
+        if (!is_array($workerPage)) continue;
+        $id = trim((string)($workerPage['id'] ?? $workerPage['page_id'] ?? ''));
+        if ($id === '' || !ctype_digit($id)) continue;
+        $workerConfirmed++;
+
+        if (isset($pagesById[$id])) {
+            $pagesById[$id]['source'] = 'meta+python_worker_confirmed';
+            continue;
+        }
+
+        $pagesById[$id] = [
+            'id' => $id,
+            'name' => trim((string)($workerPage['name'] ?? $id)),
+            'category' => trim((string)($workerPage['category'] ?? '')),
+            'business_id' => '',
+            'source' => 'python_worker_confirmed',
+        ];
+    }
+
+    $pages = array_values($pagesById);
 
     rmx_pwp_out([
         'ok' => true,
         'profile' => $profile,
         'pages' => $pages,
         'count' => count($pages),
+        'worker_confirmed_count' => $workerConfirmed,
     ]);
 } catch (Throwable $e) {
     error_log('[python-worker-pages] ' . get_class($e) . ': ' . $e->getMessage());
@@ -253,7 +308,7 @@ HTML;
 
     $php = preg_replace(
         '#scripts/workspace\.js(?:\?[^"\']*)?#',
-        'scripts/workspace.js?v=20260927-python-worker-ui-v166',
+        'scripts/workspace.js?v=20260927-python-worker-ui-v167',
         $php,
         1,
         $scriptCount
@@ -275,7 +330,7 @@ if ($workerPos === false) {
 
 $php = preg_replace(
     '#scripts/workspace\.js(?:\?[^"\']*)?#',
-    'scripts/workspace.js?v=20260927-python-worker-ui-v166',
+    'scripts/workspace.js?v=20260927-python-worker-ui-v167',
     $php,
     1
 ) ?? $php;

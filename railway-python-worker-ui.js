@@ -2763,7 +2763,7 @@ async function pythonWorkerOpenOwnFanPageModal() {
   body.className = 'pwbm-body';
   const note = document.createElement('div');
   note.className = 'pwbm-note';
-  note.textContent = 'Для двух будущих BM поставь count=2. ReMask создаст две отдельные FP и сохранит их Page ID.';
+  note.textContent = 'По умолчанию создаётся 1 FP на профиль. При необходимости count можно увеличить до 10; каждый подтверждённый Page ID сохраняется в worker state.';
   body.appendChild(note);
 
   const rows = {};
@@ -2784,9 +2784,9 @@ async function pythonWorkerOpenOwnFanPageModal() {
     const count = document.createElement('input');
     count.type = 'number';
     count.className = 'pwbm-manual';
-    count.min = '1'; count.max = '10'; count.value = '2';
+    count.min = '1'; count.max = '10'; count.value = '1';
     const nameHint = document.createElement('small');
-    nameHint.textContent = 'count=2 → “ReMask Page 1” и “ReMask Page 2”.';
+    nameHint.textContent = 'count=1 → точное базовое имя; count>1 → имена с порядковым номером.';
     nameField.appendChild(baseName); nameField.appendChild(count); nameField.appendChild(nameHint);
 
     const metaField = document.createElement('div');

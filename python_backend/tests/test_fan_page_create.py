@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import tempfile
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -13,6 +14,7 @@ from app.provisioning.fan_pages_handler import (
 )
 from app.provisioning.models import ProvisioningStep
 from app.provisioning.registry import PROVISIONING_HANDLERS
+from app.provisioning.state import ProvisioningStateStore
 
 
 class FanPageProvisioningStructureTests(unittest.TestCase):
@@ -36,6 +38,64 @@ class FanPageProvisioningStructureTests(unittest.TestCase):
 
 
 class FanPageProvisioningRuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_state_recovers_cross_scope_rk_and_confirmed_fan_pages(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = ProvisioningStateStore(tmp + "/state.sqlite3")
+            await store.init()
+
+            await store.set_running(
+                "rk-item",
+                "4",
+                "add-rk-bm-7777777777",
+                ProvisioningStep.AD_ACCOUNT,
+            )
+            await store.complete(
+                "rk-item",
+                "4",
+                "add-rk-bm-7777777777",
+                ProvisioningStep.AD_ACCOUNT,
+                {
+                    "phase": "DONE",
+                    "business_id": "7777777777",
+                    "ad_account_id": "8888888888",
+                },
+            )
+
+            await store.set_running(
+                "fp-item",
+                "4",
+                "add-fp-test",
+                ProvisioningStep.FAN_PAGES,
+            )
+            await store.complete(
+                "fp-item",
+                "4",
+                "add-fp-test",
+                ProvisioningStep.FAN_PAGES,
+                {
+                    "phase": "DONE",
+                    "category": "Digital creator",
+                    "page_ids": ["9999999999"],
+                    "pages": [
+                        {
+                            "id": "9999999999",
+                            "name": "Brand Page",
+                            "category": "Digital creator",
+                            "reused": False,
+                        }
+                    ],
+                },
+            )
+
+            entities = await store.latest_profile_entities("4")
+            pages = await store.latest_profile_fan_pages("4")
+
+        self.assertEqual(entities["business_id"], "7777777777")
+        self.assertEqual(entities["ad_account_id"], "8888888888")
+        self.assertEqual(len(pages), 1)
+        self.assertEqual(pages[0]["id"], "9999999999")
+        self.assertEqual(pages[0]["source"], "python_worker_confirmed")
+
     async def test_uncertain_create_can_prove_brand_new_account_still_empty(self) -> None:
         with patch(
             "app.provisioning.fan_pages_handler._fresh_page_inventory",
