@@ -72,7 +72,7 @@ class AdAccountCaptureUiSuccessRecoveryTests(unittest.TestCase):
                 business_id="1578458920690597",
                 account_name="ReMask RK 1",
             ),
-            "2490929708095829",
+            "act_2490929708095829",
         )
 
     def test_does_not_recover_without_meta_success_dialog(self) -> None:
