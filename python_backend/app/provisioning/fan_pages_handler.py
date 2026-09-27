@@ -324,6 +324,58 @@ async def fan_pages_handler(
         if page_name.casefold() in completed_names:
             continue
 
+        # Cross-Job exactly-once guard. A Page confirmed by a prior successful
+        # FAN_PAGES step is authoritative even while Facebook's rendered
+        # "Your Pages" inventory is still propagating. Current live inventory
+        # remains the second source, but it must not be the only duplicate
+        # protection for mass provisioning.
+        persisted_pages: list[dict[str, Any]] = []
+        try:
+            persisted_pages = await provisioning_state.latest_profile_fan_pages(
+                profile_id
+            )
+        except Exception:
+            persisted_pages = []
+
+        persisted_exact = [
+            row
+            for row in persisted_pages
+            if isinstance(row, dict)
+            and _clean(row.get("id") or row.get("page_id")).isdigit()
+            and _clean(row.get("name")).casefold() == page_name.casefold()
+        ]
+        if len(persisted_exact) == 1:
+            persisted_id = _clean(
+                persisted_exact[0].get("id")
+                or persisted_exact[0].get("page_id")
+            )
+            created_pages.append(
+                {
+                    "id": persisted_id,
+                    "name": page_name,
+                    "category": _clean(
+                        persisted_exact[0].get("category") or category
+                    ),
+                    "reused": True,
+                }
+            )
+            completed_names.add(page_name.casefold())
+            await provisioning_state.checkpoint(
+                item_id,
+                profile_id,
+                scope_key,
+                ProvisioningStep.FAN_PAGES,
+                {
+                    "phase": "PAGE_CREATED",
+                    "resume_from": "CREATE_NEXT",
+                    "target_names": names,
+                    "created_pages": created_pages,
+                    "activity": "FAN_PAGE_REUSED_FROM_WORKER_STATE",
+                    "activity_at": int(time.time()),
+                },
+            )
+            continue
+
         try:
             current_pages = await _fresh_page_inventory(session)
         except BrowserBusinessError as exc:
