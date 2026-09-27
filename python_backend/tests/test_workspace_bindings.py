@@ -49,18 +49,33 @@ class WorkspaceProvisioningBindingsTests(unittest.IsolatedAsyncioTestCase):
         rows = await self.store.confirmed_ad_account_bindings_for_profile(
             profile
         )
+        groups = await self.store.confirmed_ad_account_binding_groups()
 
+        expected = {
+            ("1578458920690597", "2490929708095829"),
+            ("1619103589770310", "29459808963612032"),
+        }
         self.assertEqual(
             {
                 (row["business_id"], row["ad_account_id"])
                 for row in rows
             },
-            {
-                ("1578458920690597", "2490929708095829"),
-                ("1619103589770310", "29459808963612032"),
-            },
+            expected,
         )
         self.assertEqual(len(rows), 2)
+
+        profile_accounts = groups[profile]["ad_accounts"]
+        self.assertEqual(set(profile_accounts), {
+            "1578458920690597",
+            "1619103589770310",
+        })
+        self.assertEqual(
+            {
+                (row["business_id"], row["ad_account_id"])
+                for row in profile_accounts.values()
+            },
+            expected,
+        )
 
     async def test_confirmed_fan_page_survives_without_graph_inventory(self) -> None:
         profile = "6"
