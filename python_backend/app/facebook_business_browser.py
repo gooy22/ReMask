@@ -3759,9 +3759,21 @@ class FacebookBusinessBrowser:
             "couldn't create page",
             "could not create page",
             "unable to create page",
+            "page creation failed",
             "не удалось создать страницу",
             "не вдалося створити сторінку",
-            "page creation failed",
+            "seite konnte nicht erstellt werden",
+            "seite kann nicht erstellt werden",
+            "impossible de créer la page",
+            "nous n’avons pas pu créer votre page",
+            "nous n'avons pas pu créer votre page",
+            "không thể tạo trang",
+            "không tạo được trang",
+            "पेज नहीं बनाया जा सका",
+            "पेज नहीं बना सके",
+            "पेज नहीं बनाया जा सकता",
+            "পেজ তৈরি করা যায়নি",
+            "পেজ তৈরি করতে পারিনি",
         )
         if any(marker in body for marker in reject_markers):
             diag = await self._diagnostic("fan_page_create_rejected")
