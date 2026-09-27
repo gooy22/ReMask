@@ -55,7 +55,6 @@ def _compact_browser_diagnostic(value: Any) -> dict[str, Any]:
             "right_pane_snapshot",
             "submit_attempts",
             "graphql_candidates",
-            "blocked_unclassified_create",
         )
         if key in diagnostic
     }
@@ -64,43 +63,6 @@ def _compact_browser_diagnostic(value: Any) -> dict[str, Any]:
 
 def _clean(value: Any) -> str:
     return str(value or "").strip()
-
-
-def _capture_diagnostic_proves_no_final_submit(value: Any) -> bool:
-    """Return True only when capture diagnostics prove no final CTA was attempted."""
-    diagnostic = value if isinstance(value, dict) else {}
-    if bool(diagnostic.get("blocked_unclassified_create")):
-        return False
-    if diagnostic.get("graphql_candidates"):
-        return False
-
-    attempts = diagnostic.get("submit_attempts")
-    if not isinstance(attempts, list) or not attempts:
-        return False
-
-    saw_final_stage = False
-    for row in attempts:
-        if not isinstance(row, dict):
-            continue
-        action = _clean(row.get("action")).lower()
-        if action not in {"final", "none"}:
-            continue
-        saw_final_stage = True
-        meta = row.get("meta") if isinstance(row.get("meta"), dict) else {}
-        fallback = (
-            meta.get("fallback")
-            if isinstance(meta.get("fallback"), dict)
-            else {}
-        )
-        if bool(
-            meta.get("attempted")
-            or meta.get("clicked")
-            or fallback.get("attempted")
-            or fallback.get("clicked")
-        ):
-            return False
-
-    return saw_final_stage
 
 
 def _checkpoint_result(step_state: Any) -> dict[str, Any]:
@@ -1852,58 +1814,14 @@ async def ad_account_handler(
                 and capture_attempt < capture_attempt_limit
             )
 
-            # If diagnostics prove the final CTA was never attempted and the
-            # capture gate saw no CREATE-like request, this is a pre-submit UI
-            # miss, not RESULT_UNKNOWN. It is safe to retry because no CREATE
-            # was sent to Meta.
-            no_final_submit = (
-                exc.code == "AD_ACCOUNT_CREATE_REQUEST_NOT_OBSERVED"
-                and _capture_diagnostic_proves_no_final_submit(compact_diag)
-            )
-            if no_final_submit:
-                failure["confirmed_pre_submit_no_click"] = True
-                if capture_attempt < capture_attempt_limit:
-                    safe_retry = True
-                else:
-                    await provisioning_state.checkpoint(
-                        item_id,
-                        profile_id,
-                        scope_key,
-                        ProvisioningStep.AD_ACCOUNT,
-                        {
-                            "phase": "CREATE_NOT_SUBMITTED",
-                            "resume_from": "CREATE",
-                            "business_id": business_id,
-                            "account_name": rk_name,
-                            "currency": currency,
-                            "timezone_id": timezone_id,
-                            "capture_attempt": capture_attempt,
-                            "last_error_code": "AD_ACCOUNT_CREATE_UI_CHANGED",
-                            "last_error": (
-                                "Final Create control was not activated by the "
-                                "capture driver. Diagnostics prove no CREATE "
-                                "request was submitted."
-                            ),
-                            "browser_diagnostic": browser_diag,
-                        },
-                    )
-                    raise ProvisioningError(
-                        "AD_ACCOUNT_CREATE_UI_CHANGED",
-                        (
-                            "Meta final Create control was visible but the "
-                            "capture driver did not activate it. No CREATE was "
-                            "submitted, so a fresh retry is safe."
-                        ),
-                        retryable=True,
-                    ) from exc
-
-            # When a final action really was attempted but the definitive
-            # mutation was not observed, reconcile read-only inventory before
-            # allowing any additional CREATE.
+            # A final CTA was involved but the definitive mutation was not
+            # observed. Treat it as uncertain, but use the same strong
+            # multi-surface proof as the cross-Job guard. This prevents Graph
+            # API availability from turning a safe empty Business into a
+            # permanent RESULT_UNKNOWN lock.
             if (
                 exc.code == "AD_ACCOUNT_CREATE_REQUEST_NOT_OBSERVED"
                 and bool(exc.retryable)
-                and not no_final_submit
             ):
                 proof_found_id, proven_empty, inventory_proof = (
                     await _prove_empty_after_uncertainty(
