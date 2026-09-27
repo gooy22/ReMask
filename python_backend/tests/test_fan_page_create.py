@@ -37,6 +37,18 @@ class FanPageProvisioningStructureTests(unittest.TestCase):
         self.assertIn("FAN_PAGE_CREATE_RESULT_UNKNOWN", source)
 
 
+    def test_create_page_rejection_markers_cover_supported_geos(self) -> None:
+        source = inspect.getsource(FacebookBusinessBrowser.create_fan_page)
+        for marker in (
+            "seite konnte nicht erstellt werden",
+            "impossible de créer la page",
+            "không thể tạo trang",
+            "पेज नहीं बनाया जा सका",
+            "পেজ তৈরি করা যায়নি",
+        ):
+            self.assertIn(marker, source)
+
+
 class FanPageProvisioningRuntimeTests(unittest.IsolatedAsyncioTestCase):
     async def test_state_recovers_cross_scope_rk_and_confirmed_fan_pages(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
