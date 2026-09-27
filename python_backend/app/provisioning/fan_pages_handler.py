@@ -507,6 +507,10 @@ async def fan_pages_handler(
                     "name": active_name,
                     "category": category,
                     "reused": False,
+                    "attached": False,
+                    "business_id": business_id,
+                    "ad_account_id": ad_account_id,
+                    "already_attached": False,
                 }
             )
             completed_names.add(active_name.casefold())
@@ -579,6 +583,15 @@ async def fan_pages_handler(
             if isinstance(row, dict)
             and _clean(row.get("id") or row.get("page_id")).isdigit()
             and _clean(row.get("name")).casefold() == page_name.casefold()
+            and (
+                not business_id
+                or _clean(row.get("business_id")) == business_id
+            )
+            and (
+                not ad_account_id
+                or not _clean(row.get("ad_account_id"))
+                or _clean(row.get("ad_account_id")) == ad_account_id
+            )
         ]
         if len(persisted_exact) == 1:
             persisted_id = _clean(
@@ -593,6 +606,18 @@ async def fan_pages_handler(
                         persisted_exact[0].get("category") or category
                     ),
                     "reused": True,
+                    "attached": bool(persisted_exact[0].get("attached")),
+                    "business_id": (
+                        business_id
+                        or _clean(persisted_exact[0].get("business_id"))
+                    ),
+                    "ad_account_id": (
+                        ad_account_id
+                        or _clean(persisted_exact[0].get("ad_account_id"))
+                    ),
+                    "already_attached": bool(
+                        persisted_exact[0].get("already_attached")
+                    ),
                 }
             )
             completed_names.add(page_name.casefold())
@@ -619,10 +644,19 @@ async def fan_pages_handler(
                 raise ProvisioningError(exc.code, str(exc), retryable=False) from exc
             current_pages = []
 
-        existing = _find_created_page(
-            current_pages,
-            page_name=page_name,
-            before_ids=set(),
+        # For RK-targeted creation, a same-named Page elsewhere on the FB
+        # profile is not proof that this RK already owns its intended Page.
+        # Reuse by rendered inventory is safe only for the standalone FP flow;
+        # targeted retries are recovered through the scoped checkpoint/worker
+        # state above.
+        existing = (
+            None
+            if business_id
+            else _find_created_page(
+                current_pages,
+                page_name=page_name,
+                before_ids=set(),
+            )
         )
         if existing:
             created_pages.append(
@@ -807,6 +841,10 @@ async def fan_pages_handler(
                 "name": page_name,
                 "category": category,
                 "reused": bool(create_result.get("reused")),
+                "attached": False,
+                "business_id": business_id,
+                "ad_account_id": ad_account_id,
+                "already_attached": False,
             }
         )
         completed_names.add(page_name.casefold())
