@@ -408,7 +408,7 @@ $syncProfileReplacement = <<<'PHP'
             MetaEndpoint::ok($snapshot);
         }
 
-        // REMASK_BM_BOUND_RK_SYNC_V2
+        // REMASK_BM_BOUND_RK_SYNC_V1 REMASK_BM_BOUND_RK_SYNC_V2
         // me/adaccounts may update before owned_ad_accounts/client_ad_accounts
         // after a fresh CREATE. Keep an RK when Meta's direct object already
         // points at one of this profile's Business Managers; otherwise a real
