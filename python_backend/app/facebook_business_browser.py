@@ -6284,6 +6284,12 @@ class FacebookBusinessBrowser:
                         'meta ai','assistant business meta ai',
                         'meta ai business assistant','assistant meta ai'
                     ];
+                    const dialogAccountWords = [
+                        'ad account','advertising account','compte publicitaire',
+                        'werbekonto','реклам','বিজ্ঞাপন অ্যাকাউন্ট',
+                        'tài khoản quảng cáo','विज्ञापन खाता',
+                        'विज्ञापन अकाउंट'
+                    ];
                     const dialogRoots = [...document.querySelectorAll(
                         '[role="dialog"],[aria-modal="true"]'
                     )].filter(visible);
@@ -6293,8 +6299,40 @@ class FacebookBusinessBrowser:
                             (root.getAttribute('title') || '') + ' ' +
                             (root.innerText || root.textContent || '')
                         );
-                        return !aiMarkers.some(word => t.includes(word))
-                            && wizardMarkers.some(word => t.includes(word));
+                        if (aiMarkers.some(word => t.includes(word))) {
+                            return false;
+                        }
+                        if (wizardMarkers.some(word => t.includes(word))) {
+                            return true;
+                        }
+
+                        // Current Meta confirmation screens can drop the
+                        // earlier wizard labels entirely. Bind the dialog by
+                        // the final enabled Create-Ad-Account control instead
+                        // of requiring a locale-specific heading.
+                        return [...root.querySelectorAll(
+                            'button,a,[role="button"],'
+                            + '[tabindex]:not([tabindex="-1"])'
+                        )].some(el => {
+                            if (!visible(el)) return false;
+                            if (
+                                el.hasAttribute('disabled')
+                                || el.getAttribute('aria-disabled') === 'true'
+                            ) {
+                                return false;
+                            }
+                            const actionText = clean(
+                                (el.getAttribute('aria-label') || '') + ' ' +
+                                (el.getAttribute('title') || '') + ' ' +
+                                (el.innerText || el.textContent || '')
+                            );
+                            return createWords.some(
+                                word => actionText === word
+                                    || actionText.startsWith(word + ' ')
+                            ) && dialogAccountWords.some(
+                                word => actionText.includes(word)
+                            );
+                        });
                     }) || null;
 
                     const nodes = wizardRoot
@@ -8339,6 +8377,159 @@ class FacebookBusinessBrowser:
                         "business_id": business,
                         "source": "business_settings_ui",
                         "marker": matched_marker,
+                        "attempts": attempts,
+                    }
+
+                # Meta frequently changes/localizes the explicit empty-state
+                # sentence. Capture a second, language-light structural proof:
+                # exact Business ad-account route, rendered table controls,
+                # no RK row identity, no modal/loading state, stable twice.
+                # This signal alone never unlocks CREATE; the handler combines
+                # it with an independent empty Graph inventory.
+                async def structural_snapshot() -> dict[str, Any]:
+                    try:
+                        raw = await self.page.evaluate(
+                            """(business) => {
+                                const visible = el => {
+                                    if (!el) return false;
+                                    const r = el.getBoundingClientRect();
+                                    const s = getComputedStyle(el);
+                                    return r.width > 0 && r.height > 0
+                                        && s.display !== 'none'
+                                        && s.visibility !== 'hidden';
+                                };
+                                const clean = text => (text || '')
+                                    .normalize('NFKC')
+                                    .replace(/\\u00a0/g, ' ')
+                                    .replace(/\\s+/g, ' ')
+                                    .trim()
+                                    .toLowerCase();
+                                const url = String(location.href || '');
+                                const exactBusiness = url.includes(
+                                    'business_id=' + String(business)
+                                );
+                                const adRoute = (
+                                    url.toLowerCase().includes('/settings/ad_accounts')
+                                    || url.toLowerCase().includes('/settings/ad-accounts')
+                                );
+                                const nodes = [...document.querySelectorAll(
+                                    'button,a,input,[role="button"],[role="row"],'
+                                    + '[role="listitem"],[role="progressbar"],'
+                                    + '[aria-busy="true"],[role="dialog"],'
+                                    + '[aria-modal="true"]'
+                                )].filter(visible);
+                                const texts = nodes.map(el => clean(
+                                    (el.getAttribute('aria-label') || '') + ' ' +
+                                    (el.getAttribute('placeholder') || '') + ' ' +
+                                    (el.getAttribute('title') || '') + ' ' +
+                                    (el.innerText || el.textContent || '')
+                                ));
+                                const addWords = [
+                                    'add','ajouter','добавить','додати',
+                                    'hinzufügen','যোগ করুন','thêm','जोड़ें'
+                                ];
+                                const filterWords = [
+                                    'filter','filters','filtre','filtres',
+                                    'фильтр','фільтр','lọc','फ़िल्टर'
+                                ];
+                                const searchWords = [
+                                    'search','rechercher','поиск','пошук',
+                                    'suchen','tìm kiếm','सर्च'
+                                ];
+                                const addSurface = texts.some(t =>
+                                    addWords.some(w => t === w || t.startsWith(w + ' '))
+                                );
+                                const filterSurface = texts.some(t =>
+                                    filterWords.some(w => t === w || t.startsWith(w + ' '))
+                                );
+                                const searchSurface = nodes.some((el, idx) =>
+                                    el.tagName === 'INPUT'
+                                    && searchWords.some(w => texts[idx].includes(w))
+                                );
+                                const loading = nodes.some(el =>
+                                    el.getAttribute('role') === 'progressbar'
+                                    || el.getAttribute('aria-busy') === 'true'
+                                );
+                                const dialogOpen = nodes.some(el =>
+                                    el.getAttribute('role') === 'dialog'
+                                    || el.getAttribute('aria-modal') === 'true'
+                                );
+                                const ids = new Set();
+                                for (const el of nodes) {
+                                    const href = String(
+                                        el.getAttribute?.('href') || ''
+                                    );
+                                    const txt = String(
+                                        el.innerText || el.textContent || ''
+                                    );
+                                    for (const source of [href, txt]) {
+                                        for (const match of source.matchAll(
+                                            /(?:act_|account_id[=:"']?|ad_account_id[=:"']?)(\\d{5,30})/gi
+                                        )) {
+                                            ids.add(match[1]);
+                                        }
+                                    }
+                                }
+                                return {
+                                    exact_business: exactBusiness,
+                                    ad_route: adRoute,
+                                    add_surface: addSurface,
+                                    filter_surface: filterSurface,
+                                    search_surface: searchSurface,
+                                    loading,
+                                    dialog_open: dialogOpen,
+                                    row_ids: [...ids].slice(0, 20),
+                                };
+                            }""",
+                            business,
+                        )
+                        return dict(raw) if isinstance(raw, dict) else {}
+                    except Exception as exc:
+                        return {
+                            "error": (
+                                f"{exc.__class__.__name__}: {_clean(exc)}"
+                            )[:500]
+                        }
+
+                first_structural = await structural_snapshot()
+                stable_structural_empty = bool(
+                    first_structural.get("exact_business")
+                    and first_structural.get("ad_route")
+                    and first_structural.get("add_surface")
+                    and (
+                        first_structural.get("filter_surface")
+                        or first_structural.get("search_surface")
+                    )
+                    and not first_structural.get("loading")
+                    and not first_structural.get("dialog_open")
+                    and not first_structural.get("row_ids")
+                )
+                if stable_structural_empty:
+                    await self.page.wait_for_timeout(900)
+                    second_structural = await structural_snapshot()
+                    stable_structural_empty = bool(
+                        second_structural.get("exact_business")
+                        and second_structural.get("ad_route")
+                        and second_structural.get("add_surface")
+                        and (
+                            second_structural.get("filter_surface")
+                            or second_structural.get("search_surface")
+                        )
+                        and not second_structural.get("loading")
+                        and not second_structural.get("dialog_open")
+                        and not second_structural.get("row_ids")
+                    )
+                else:
+                    second_structural = {}
+
+                attempts[-1]["structural_first"] = first_structural
+                attempts[-1]["structural_second"] = second_structural
+                if stable_structural_empty:
+                    return {
+                        "confirmed_empty": False,
+                        "structural_empty": True,
+                        "business_id": business,
+                        "source": "business_settings_ui_structural",
                         "attempts": attempts,
                     }
             except Exception as exc:
