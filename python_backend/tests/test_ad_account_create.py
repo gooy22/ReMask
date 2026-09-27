@@ -25,6 +25,7 @@ from app.facebook_business_browser import (
 from app.provisioning.ad_account_handler import (
     AD_ACCOUNT_SAFE_CAPTURE_RETRY_CODES,
     _inventory_repeatedly_confirms_empty,
+    _capture_diagnostic_proves_no_final_submit,
     _reconcile_existing,
     _inventory_proof_summary,
     _browser_inventory_confirms_nonempty,
@@ -40,6 +41,61 @@ from app.provisioning.ad_account_handler import (
 )
 from app.provisioning.state import ProvisioningStateStore
 
+
+
+class AdAccountCaptureNoSubmitClassificationTests(unittest.TestCase):
+    def test_none_final_action_with_no_graph_candidate_is_pre_submit(self) -> None:
+        diagnostic = {
+            "blocked_unclassified_create": False,
+            "graphql_candidates": [],
+            "submit_attempts": [
+                {"step": 0, "action": "next", "meta": {"clicked": True}},
+                {
+                    "step": 1,
+                    "action": "none",
+                    "meta": {
+                        "found": False,
+                        "attempted": False,
+                        "clicked": False,
+                        "fallback": {
+                            "clicked": False,
+                            "attempted": False,
+                        },
+                    },
+                },
+            ],
+        }
+        self.assertTrue(
+            _capture_diagnostic_proves_no_final_submit(diagnostic)
+        )
+
+    def test_attempted_final_action_remains_uncertain(self) -> None:
+        diagnostic = {
+            "blocked_unclassified_create": False,
+            "graphql_candidates": [],
+            "submit_attempts": [
+                {
+                    "step": 2,
+                    "action": "final",
+                    "meta": {"attempted": True, "clicked": False},
+                }
+            ],
+        }
+        self.assertFalse(
+            _capture_diagnostic_proves_no_final_submit(diagnostic)
+        )
+
+    def test_blocked_unknown_create_remains_uncertain(self) -> None:
+        diagnostic = {
+            "blocked_unclassified_create": True,
+            "graphql_candidates": [],
+            "submit_attempts": [
+                {"step": 2, "action": "none", "meta": {}}
+            ],
+        }
+        self.assertFalse(
+            _capture_diagnostic_proves_no_final_submit(diagnostic)
+        )
 
 
 class AdAccountInventoryParserSafetyTests(unittest.TestCase):
