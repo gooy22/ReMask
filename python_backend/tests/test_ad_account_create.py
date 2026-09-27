@@ -1442,11 +1442,11 @@ class AdAccountStructuralInventoryRegressionTests(unittest.TestCase):
         preflight_pos = source.index(
             "# Read-only preflight enforces the 1 BM = 1 RK invariant."
         )
-        preparing_pos = source.index(
-            '"phase": "CREATE_PREPARING"',
+        browser_checkpoint_pos = source.index(
+            "async def browser_checkpoint",
             preflight_pos,
         )
-        window = source[preflight_pos:preparing_pos]
+        window = source[preflight_pos:browser_checkpoint_pos]
         self.assertNotIn(
             "_browser_inventory_confirms_nonempty(browser_inventory_before)",
             window,
