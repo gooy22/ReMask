@@ -4658,28 +4658,31 @@ class BrowserAdAccountLocalizedInventoryProofTests(unittest.TestCase):
             "অনুমতি নেই",
             "không được phép",
             "अनुमति नहीं",
-            "आप विज्ञापन देने के लिए इस बिज़नेस पोर्टफ़ोलियो का उपयोग नहीं कर सकते",
         ):
             self.assertIn(marker, source)
 
-    def test_advertising_restriction_heading_is_terminal_pre_submit(self):
-        state_source = inspect.getsource(
+    def test_generic_portfolio_advertising_banner_is_not_terminal_by_itself(self):
+        source = inspect.getsource(
             FacebookBusinessBrowser._ad_account_ui_state
         )
-        create_source = inspect.getsource(
-            FacebookBusinessBrowser.create_ad_account
-        )
-        self.assertIn('[role="heading"]', state_source)
-        self.assertIn(
-            "AD_ACCOUNT_ADVERTISING_RESTRICTED",
-            create_source,
-        )
         self.assertNotIn(
-            "META_AD_ACCOUNT_CREATE_UNAVAILABLE",
-            create_source,
+            "you can't use this business portfolio to advertise",
+            source,
         )
-        self.assertIn("retryable=False", create_source)
-        self.assertIn('"phase": "CREATE_NOT_SUBMITTED"', create_source)
+
+    def test_capture_reconciles_same_session_success_before_retry(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser.capture_ad_account_create_request
+        )
+        self.assertIn(
+            "_reconcile_created_ad_account_from_ui",
+            source,
+        )
+        self.assertIn("created_during_capture", source)
+        self.assertIn(
+            "business_settings_ui_capture_reconciliation",
+            source,
+        )
 
 
 class BrowserAdAccountIntroDialogRegressionTests(unittest.TestCase):
