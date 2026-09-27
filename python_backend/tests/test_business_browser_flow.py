@@ -4669,6 +4669,17 @@ class BrowserAdAccountLocalizedInventoryProofTests(unittest.TestCase):
             "you can't use this business portfolio to advertise",
             source,
         )
+        form_pos = source.index(
+            "if (nameInput || formEvidence) state = 'FORM';"
+        )
+        add_pos = source.index(
+            "else if (addSurface) state = 'ADD_SURFACE';"
+        )
+        blocked_pos = source.index(
+            "else if (errors.length) state = 'BLOCKED';"
+        )
+        self.assertLess(form_pos, blocked_pos)
+        self.assertLess(add_pos, blocked_pos)
 
     def test_capture_reconciles_same_session_success_before_retry(self):
         source = inspect.getsource(
