@@ -140,6 +140,10 @@ if ($count !== 1) {
 $oldAccountStatus = "function accountStatus(a){ const s=Number(a.account_status||0); return s===1?pill('ACTIVE','ok'):s===2?pill('DISABLED','bad'):s===3?pill('UNSETTLED','warn'):pill(String(a.account_status||'UNKNOWN'),'warn'); }";
 $newAccountStatus = <<<'JS'
 function accountStatus(a){
+  /* REMASK_STATUS_TRUTH_V1 */
+  if(a && a._provisioned_only){
+    return pill('CREATED','ok')+'<div class="sub">Worker confirmed · awaiting Meta inventory sync</div>';
+  }
   const s=Number(a.account_status||0);
   const reason=String(a.disable_reason==null?'':a.disable_reason).trim();
   if(s===1)return pill('ACTIVE','ok');
@@ -335,6 +339,110 @@ if ($php === false) {
     throw new RuntimeException('metaHierarchy.php not found');
 }
 
+
+$hierarchyHelperSignature = "function hierarchy_profile_snapshot(string \\$profile, ?array \\$workspaceMeta = null): array\n{";
+$hierarchyHelpers = <<<'PHP_HELPERS'
+// REMASK_PERSISTENT_BM_RK_BINDING_V1
+function hierarchy_worker_state(string $profile): array
+{
+    $profile = trim($profile);
+    if ($profile === '') return [];
+
+    $base = rtrim(trim((string)(getenv('REMASK_PYTHON_WORKER_URL') ?: 'http://127.0.0.1:8081')), '/');
+    $url = $base . '/api/v1/profiles/' . rawurlencode($profile) . '/provisioning-state';
+    $headers = ['Accept: application/json'];
+    $key = trim((string)(getenv('REMASK_WORKER_API_KEY') ?: ''));
+    if ($key !== '') $headers[] = 'X-Remask-Worker-Key: ' . $key;
+
+    $ctx = stream_context_create(['http' => [
+        'method' => 'GET',
+        'header' => implode("\r\n", $headers) . "\r\n",
+        'timeout' => 5,
+        'ignore_errors' => true,
+        'follow_location' => 0,
+    ]]);
+
+    $raw = @file_get_contents($url, false, $ctx);
+    if (!is_string($raw) || trim($raw) === '') return [];
+    $json = json_decode($raw, true);
+    return is_array($json) ? $json : [];
+}
+
+function hierarchy_binding_file(): string
+{
+    return '/var/lib/remask/workspace-provisioning-bindings.json';
+}
+
+function hierarchy_binding_all(): array
+{
+    $file = hierarchy_binding_file();
+    $raw = @file_get_contents($file);
+    if (!is_string($raw) || trim($raw) === '') return [];
+    $json = json_decode($raw, true);
+    return is_array($json) ? $json : [];
+}
+
+function hierarchy_binding_get(string $profile): array
+{
+    $all = hierarchy_binding_all();
+    $row = $all[$profile] ?? null;
+    return is_array($row) ? $row : [];
+}
+
+function hierarchy_binding_put(string $profile, string $businessId, string $adAccountId): void
+{
+    $profile = trim($profile);
+    $businessId = trim($businessId);
+    $adAccountId = trim($adAccountId);
+    if (
+        $profile === ''
+        || !preg_match('/^\d{5,30}$/', $businessId)
+        || !preg_match('/^\d{5,30}$/', $adAccountId)
+    ) return;
+
+    $file = hierarchy_binding_file();
+    $dir = dirname($file);
+    if (!is_dir($dir)) @mkdir($dir, 0700, true);
+
+    $fp = @fopen($file, 'c+');
+    if (!$fp) return;
+    try {
+        if (!@flock($fp, LOCK_EX)) return;
+        rewind($fp);
+        $raw = stream_get_contents($fp);
+        $all = [];
+        if (is_string($raw) && trim($raw) !== '') {
+            $decoded = json_decode($raw, true);
+            if (is_array($decoded)) $all = $decoded;
+        }
+        $all[$profile] = [
+            'business_id' => $businessId,
+            'ad_account_id' => $adAccountId,
+            'updated_at' => time(),
+            'source' => 'python_worker_confirmed_entities',
+        ];
+        $encoded = json_encode($all, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if (!is_string($encoded)) return;
+        ftruncate($fp, 0);
+        rewind($fp);
+        fwrite($fp, $encoded);
+        fflush($fp);
+    } finally {
+        @flock($fp, LOCK_UN);
+        @fclose($fp);
+    }
+}
+PHP_HELPERS;
+$php = str_replace(
+    $hierarchyHelperSignature,
+    $hierarchyHelpers . "\n\n" . $hierarchyHelperSignature,
+    $php,
+    $hierarchyHelperCount
+);
+if ($hierarchyHelperCount !== 1) {
+    throw new RuntimeException('worker binding helper injection failed: ' . $hierarchyHelperCount);
+}
+
 $fundingNeedle = "        \$rk['funding'] = MetaEndpoint::peekCachedAsset(\$profile, 'funding', \$id);";
 $fundingReplacement = <<<'PHP_FUNDING'
         // REMASK_DIRECT_FUNDING_SNAPSHOT_V2
@@ -492,6 +600,60 @@ $syncProfileReplacement = <<<'PHP'
             $verifiedBusinessAdAccounts[$directId] = $row;
         }
 
+        // Worker state is authoritative only for entities that completed
+        // the provisioning state machine. Persist that exact BM->RK pair so
+        // normal Workspace inventory does not fall back to an unrelated
+        // token-accessible ad account after reload.
+        try {
+            $workerState = hierarchy_worker_state($profile);
+            $workerBusinessId = trim((string)($workerState['business_id'] ?? ''));
+            $workerAdAccountId = trim((string)($workerState['ad_account_id'] ?? ''));
+            if (
+                preg_match('/^\d{5,30}$/', $workerBusinessId)
+                && preg_match('/^\d{5,30}$/', $workerAdAccountId)
+                && isset($knownBusinesses[$workerBusinessId])
+            ) {
+                hierarchy_binding_put($profile, $workerBusinessId, $workerAdAccountId);
+
+                if (!isset($verifiedBusinessAdAccounts[$workerAdAccountId])) {
+                    $workerDirect = null;
+                    foreach ((array)($preflight['ad_accounts']['data'] ?? []) as $directAccount) {
+                        if (!is_array($directAccount)) continue;
+                        if (trim((string)($directAccount['id'] ?? '')) === $workerAdAccountId) {
+                            $workerDirect = $directAccount;
+                            break;
+                        }
+                    }
+
+                    if (is_array($workerDirect)) {
+                        $workerDirect['profile'] = $profile;
+                        $workerDirect['business_id'] = $workerBusinessId;
+                        $workerDirect['business_name'] = (string)($knownBusinesses[$workerBusinessId]['name'] ?? $workerBusinessId);
+                        $workerDirect['_business_edge'] = 'python_worker_confirmed_binding';
+                        $verifiedBusinessAdAccounts[$workerAdAccountId] = $workerDirect;
+                    } else {
+                        $verifiedBusinessAdAccounts[$workerAdAccountId] = [
+                            'profile' => $profile,
+                            'id' => $workerAdAccountId,
+                            'account_id' => $workerAdAccountId,
+                            'name' => 'RK ' . $workerAdAccountId,
+                            'business_id' => $workerBusinessId,
+                            'business_name' => (string)($knownBusinesses[$workerBusinessId]['name'] ?? $workerBusinessId),
+                            'account_status' => null,
+                            'disable_reason' => null,
+                            'currency' => '',
+                            'timezone_name' => '',
+                            'funding' => null,
+                            '_provisioned_only' => true,
+                            '_business_edge' => 'python_worker_confirmed_binding',
+                        ];
+                    }
+                }
+            }
+        } catch (Throwable $workerStateError) {
+            $syncWarnings[] = 'Worker provisioning state unavailable; Meta inventory kept';
+        }
+
         hierarchy_activity([
             'action'=>'sync_profile',
             'entity_type'=>'profile',
@@ -594,6 +756,132 @@ if ($livePreflightCount < 2 || $livePagesCount < 1 || $liveBusinessesCount < 1) 
 
 // Explicit readiness dimensions in the profile snapshot. Cache-only: opening
 // Workspace itself does not create extra Graph traffic.
+
+$bindingSnapshotNeedle = "    \\$businessAccountMap = [];\n    \\$bmRows = [];";
+$bindingSnapshotReplacement = <<<'PHP_BINDING'
+    $binding = hierarchy_binding_get($profile);
+    $boundBusinessId = trim((string)($binding['business_id'] ?? ''));
+    $boundAdAccountId = trim((string)($binding['ad_account_id'] ?? ''));
+
+    $knownBusinessNames = [];
+    foreach ($businessRows as $businessRow) {
+        if (!is_array($businessRow)) continue;
+        $businessRowId = trim((string)($businessRow['id'] ?? ''));
+        if ($businessRowId === '') continue;
+        $knownBusinessNames[$businessRowId] = trim((string)($businessRow['name'] ?? $businessRowId));
+    }
+
+    $businessAccountMap = [];
+    $bmRows = [];
+PHP_BINDING;
+$php = str_replace(
+    $bindingSnapshotNeedle,
+    $bindingSnapshotReplacement,
+    $php,
+    $bindingSnapshotCount
+);
+if ($bindingSnapshotCount !== 1) {
+    throw new RuntimeException('snapshot binding prelude patch failed: ' . $bindingSnapshotCount);
+}
+
+$rkRowsSnapshotNeedle = "    \\$rkRows = [];\n    foreach (\\$allAccounts as \\$rk) {";
+$rkRowsSnapshotReplacement = <<<'PHP_BINDING'
+    if (
+        preg_match('/^\d{5,30}$/', $boundBusinessId)
+        && preg_match('/^\d{5,30}$/', $boundAdAccountId)
+        && isset($knownBusinessNames[$boundBusinessId])
+        && !isset($businessAccountMap[$boundAdAccountId])
+    ) {
+        $businessAccountMap[$boundAdAccountId] = [
+            'id' => $boundBusinessId,
+            'name' => $knownBusinessNames[$boundBusinessId],
+            'source' => 'python_worker_binding',
+        ];
+    }
+
+    $rkRows = [];
+    foreach ($allAccounts as $rk) {
+PHP_BINDING;
+$php = str_replace(
+    $rkRowsSnapshotNeedle,
+    $rkRowsSnapshotReplacement,
+    $php,
+    $rkRowsSnapshotCount
+);
+if ($rkRowsSnapshotCount !== 1) {
+    throw new RuntimeException('snapshot RK binding patch failed: ' . $rkRowsSnapshotCount);
+}
+
+$tokenOnlyNeedle = "        \\$bm = \\$businessAccountMap[\\$id] ?? null;\n        \\$rk['profile'] = \\$profile;";
+$tokenOnlyReplacement = "        \\$bm = \\$businessAccountMap[\\$id] ?? null;\n        if (!is_array(\\$bm)) continue; // never render token-only/unmapped RK\n        \\$rk['profile'] = \\$profile;";
+$php = str_replace($tokenOnlyNeedle, $tokenOnlyReplacement, $php, $tokenOnlyFilterCount);
+if ($tokenOnlyFilterCount !== 1) {
+    throw new RuntimeException('token-only RK snapshot filter failed: ' . $tokenOnlyFilterCount);
+}
+
+$provisionalNeedle = "        \\$rkRows[] = \\$rk;\n    }\n";
+$provisionalReplacement = <<<'PHP_BINDING'
+        $rkRows[] = $rk;
+    }
+
+    $hasBoundRow = false;
+    foreach ($rkRows as $rkRow) {
+        if (!is_array($rkRow)) continue;
+        if ((string)($rkRow['id'] ?? '') === $boundAdAccountId) {
+            $hasBoundRow = true;
+            break;
+        }
+    }
+    if (
+        !$hasBoundRow
+        && preg_match('/^\d{5,30}$/', $boundBusinessId)
+        && preg_match('/^\d{5,30}$/', $boundAdAccountId)
+        && isset($knownBusinessNames[$boundBusinessId])
+    ) {
+        $rkRows[] = [
+            'profile' => $profile,
+            'group' => (string)($profileMeta['group'] ?? ''),
+            'id' => $boundAdAccountId,
+            'account_id' => $boundAdAccountId,
+            'name' => 'RK ' . $boundAdAccountId,
+            'business_id' => $boundBusinessId,
+            'business_name' => $knownBusinessNames[$boundBusinessId],
+            'account_status' => null,
+            'disable_reason' => null,
+            'currency' => '',
+            'timezone_name' => '',
+            'funding' => null,
+            '_provisioned_only' => true,
+            '_source' => 'python_worker_binding',
+        ];
+    }
+
+    $rkByBusiness = [];
+    foreach ($rkRows as $rkRow) {
+        if (!is_array($rkRow)) continue;
+        $rkBusinessId = trim((string)($rkRow['business_id'] ?? ''));
+        if ($rkBusinessId === '') continue;
+        $rkByBusiness[$rkBusinessId][] = $rkRow;
+    }
+    foreach ($bmRows as $i => $bmRow) {
+        if (!is_array($bmRow)) continue;
+        $bmId = trim((string)($bmRow['id'] ?? ''));
+        if ($bmId === '') continue;
+        $rows = $rkByBusiness[$bmId] ?? [];
+        $bmRows[$i]['ad_account_count'] = count($rows);
+        $bmRows[$i]['accounts'] = $rows;
+    }
+PHP_BINDING;
+$php = str_replace(
+    $provisionalNeedle,
+    $provisionalReplacement,
+    $php,
+    $provisionalCount
+);
+if ($provisionalCount !== 1) {
+    throw new RuntimeException('provisional worker RK row patch failed: ' . $provisionalCount);
+}
+
 $pagesNeedle = "    \$businesses = MetaEndpoint::peekCachedAsset(\$profile, 'businesses', '');";
 $pagesReplacement = "    \$pages = MetaEndpoint::peekCachedAsset(\$profile, 'pages', '');\n" . $pagesNeedle;
 $php = str_replace($pagesNeedle, $pagesReplacement, $php, $pagesSnapshotCount);
