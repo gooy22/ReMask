@@ -8503,14 +8503,52 @@ class FacebookBusinessBrowser:
                                     el.tagName === 'INPUT'
                                     && searchWords.some(w => texts[idx].includes(w))
                                 );
-                                const loading = nodes.some(el =>
+                                const busyNodes = nodes.filter(el =>
                                     el.getAttribute('role') === 'progressbar'
                                     || el.getAttribute('aria-busy') === 'true'
                                 );
+                                const globalLoading = busyNodes.length > 0;
+                                const inventoryLoading = busyNodes.some(el => {
+                                    const r = el.getBoundingClientRect();
+                                    const ariaBusy =
+                                        el.getAttribute('aria-busy') === 'true';
+                                    // Ignore Meta's persistent thin/global
+                                    // progress indicators and tiny assistant
+                                    // spinners. Only a substantial busy
+                                    // container in the right Ad Accounts pane
+                                    // blocks structural empty proof.
+                                    return (
+                                        r.x >= 280
+                                        && r.y >= 70
+                                        && (
+                                            (ariaBusy && r.width >= 300 && r.height >= 120)
+                                            || (r.width >= 150 && r.height >= 24)
+                                        )
+                                    );
+                                });
                                 const dialogOpen = nodes.some(el =>
                                     el.getAttribute('role') === 'dialog'
                                     || el.getAttribute('aria-modal') === 'true'
                                 );
+                                const candidateRows = nodes.filter(el => {
+                                    const role = el.getAttribute('role') || '';
+                                    if (!['row','listitem','gridcell'].includes(role)) {
+                                        return false;
+                                    }
+                                    if (el.closest('[role="dialog"],[aria-modal="true"]')) {
+                                        return false;
+                                    }
+                                    const r = el.getBoundingClientRect();
+                                    if (r.x < 280 || r.y < 130) {
+                                        return false;
+                                    }
+                                    const t = clean(
+                                        (el.getAttribute('aria-label') || '') + ' ' +
+                                        (el.getAttribute('title') || '') + ' ' +
+                                        (el.innerText || el.textContent || '')
+                                    );
+                                    return Boolean(t);
+                                });
                                 const ids = new Set();
                                 for (const el of nodes) {
                                     const href = String(
@@ -8533,8 +8571,18 @@ class FacebookBusinessBrowser:
                                     add_surface: addSurface,
                                     filter_surface: filterSurface,
                                     search_surface: searchSurface,
-                                    loading,
+                                    loading: inventoryLoading,
+                                    global_loading: globalLoading,
+                                    inventory_loading: inventoryLoading,
                                     dialog_open: dialogOpen,
+                                    candidate_rows: candidateRows.slice(0, 12).map(el => ({
+                                        role: el.getAttribute('role') || '',
+                                        text: clean(
+                                            (el.getAttribute('aria-label') || '') + ' ' +
+                                            (el.getAttribute('title') || '') + ' ' +
+                                            (el.innerText || el.textContent || '')
+                                        ).slice(0, 220)
+                                    })),
                                     row_ids: [...ids].slice(0, 20),
                                 };
                             }""",
@@ -8548,45 +8596,52 @@ class FacebookBusinessBrowser:
                             )[:500]
                         }
 
-                first_structural = await structural_snapshot()
-                stable_structural_empty = bool(
-                    first_structural.get("exact_business")
-                    and first_structural.get("ad_route")
-                    and first_structural.get("add_surface")
-                    and (
-                        first_structural.get("filter_surface")
-                        or first_structural.get("search_surface")
-                    )
-                    and not first_structural.get("loading")
-                    and not first_structural.get("dialog_open")
-                    and not first_structural.get("row_ids")
-                )
-                if stable_structural_empty:
-                    await self.page.wait_for_timeout(900)
-                    second_structural = await structural_snapshot()
-                    stable_structural_empty = bool(
-                        second_structural.get("exact_business")
-                        and second_structural.get("ad_route")
-                        and second_structural.get("add_surface")
+                def structural_empty_snapshot(value: Any) -> bool:
+                    return bool(
+                        isinstance(value, dict)
+                        and value.get("exact_business")
+                        and value.get("ad_route")
+                        and value.get("add_surface")
                         and (
-                            second_structural.get("filter_surface")
-                            or second_structural.get("search_surface")
+                            value.get("filter_surface")
+                            or value.get("search_surface")
                         )
-                        and not second_structural.get("loading")
-                        and not second_structural.get("dialog_open")
-                        and not second_structural.get("row_ids")
+                        and not value.get("inventory_loading")
+                        and not value.get("dialog_open")
+                        and not value.get("candidate_rows")
+                        and not value.get("row_ids")
                     )
-                else:
-                    second_structural = {}
+
+                first_structural = await structural_snapshot()
+                stable_structural_empty = structural_empty_snapshot(
+                    first_structural
+                )
+                second_structural: dict[str, Any] = {}
+                third_structural: dict[str, Any] = {}
+                if stable_structural_empty:
+                    await self.page.wait_for_timeout(700)
+                    second_structural = await structural_snapshot()
+                    stable_structural_empty = structural_empty_snapshot(
+                        second_structural
+                    )
+                if stable_structural_empty:
+                    await self.page.wait_for_timeout(700)
+                    third_structural = await structural_snapshot()
+                    stable_structural_empty = structural_empty_snapshot(
+                        third_structural
+                    )
 
                 attempts[-1]["structural_first"] = first_structural
                 attempts[-1]["structural_second"] = second_structural
+                attempts[-1]["structural_third"] = third_structural
                 if stable_structural_empty:
                     return {
-                        "confirmed_empty": False,
+                        "confirmed_empty": True,
                         "structural_empty": True,
                         "business_id": business,
-                        "source": "business_settings_ui_structural",
+                        "source": (
+                            "business_settings_ui_structural_consensus"
+                        ),
                         "attempts": attempts,
                     }
             except Exception as exc:
