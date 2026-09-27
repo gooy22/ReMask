@@ -812,8 +812,15 @@ if ($rkRowsSnapshotCount !== 1) {
     throw new RuntimeException('snapshot RK binding patch failed: ' . $rkRowsSnapshotCount);
 }
 
-$tokenOnlyNeedle = "        \\$bm = \\$businessAccountMap[\\$id] ?? null;\n        \\$rk['profile'] = \\$profile;";
-$tokenOnlyReplacement = "        \\$bm = \\$businessAccountMap[\\$id] ?? null;\n        if (!is_array(\\$bm)) continue; // never render token-only/unmapped RK\n        \\$rk['profile'] = \\$profile;";
+$tokenOnlyNeedle = <<<'PHP_BINDING'
+        $bm = $businessAccountMap[$id] ?? null;
+        $rk['profile'] = $profile;
+PHP_BINDING;
+$tokenOnlyReplacement = <<<'PHP_BINDING'
+        $bm = $businessAccountMap[$id] ?? null;
+        if (!is_array($bm)) continue; // never render token-only/unmapped RK
+        $rk['profile'] = $profile;
+PHP_BINDING;
 $php = str_replace($tokenOnlyNeedle, $tokenOnlyReplacement, $php, $tokenOnlyFilterCount);
 if ($tokenOnlyFilterCount !== 1) {
     throw new RuntimeException('token-only RK snapshot filter failed: ' . $tokenOnlyFilterCount);
