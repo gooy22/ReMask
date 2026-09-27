@@ -1291,24 +1291,34 @@ class AdAccountCapturedVariableSafetyTests(unittest.TestCase):
 
 
 class AdAccountExactlyOnceSystemRegressionTests(unittest.TestCase):
-    def test_unmatched_capture_reconciles_before_any_retry(self) -> None:
+    def test_unmatched_capture_only_reconciles_after_real_final_attempt(self) -> None:
         source = inspect.getsource(ad_account_handler)
         unmatched_pos = source.index(
             'exc.code == "AD_ACCOUNT_CREATE_REQUEST_NOT_OBSERVED"'
         )
-        reconcile_pos = source.index(
+        tail = source[unmatched_pos:]
+        self.assertIn("no_final_submit", tail)
+        self.assertIn(
+            "_capture_diagnostic_proves_no_final_submit(compact_diag)",
+            tail,
+        )
+        self.assertIn(
+            "and not no_final_submit",
+            tail,
+        )
+        self.assertIn(
             "_prove_empty_after_uncertainty(",
-            unmatched_pos,
+            tail,
         )
-        safe_retry_pos = source.index(
-            "safe_retry = True",
-            unmatched_pos,
-        )
-        self.assertLess(reconcile_pos, safe_retry_pos)
         self.assertIn(
             "capture_escape_uncertain_inventory_v2",
-            source,
+            tail,
         )
+        # No-click diagnostics are pre-submit and may safely retry; any real
+        # final attempt remains behind the read-only reconciliation gate.
+        no_submit_pos = tail.index("if no_final_submit:")
+        reconcile_pos = tail.index("_prove_empty_after_uncertainty(")
+        self.assertLess(no_submit_pos, reconcile_pos)
 
     def test_cross_job_guard_uses_multi_surface_empty_proof(self) -> None:
         source = inspect.getsource(ad_account_handler)
@@ -1553,11 +1563,11 @@ class AdAccountInventoryPreflightRegressionTests(unittest.TestCase):
         preflight_pos = source.index(
             "# Read-only preflight enforces the 1 BM = 1 RK invariant."
         )
-        blocked_pos = source.index(
-            '"AD_ACCOUNT_INVENTORY_UNAVAILABLE"',
+        preparing_pos = source.index(
+            '"phase": "CREATE_PREPARING"',
             preflight_pos,
         )
-        window = source[preflight_pos:blocked_pos + 1200]
+        window = source[preflight_pos:preparing_pos]
         self.assertIn(
             "for browser_inventory_attempt in range(2):",
             window,
