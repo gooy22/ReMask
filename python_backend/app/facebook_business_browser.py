@@ -9021,7 +9021,19 @@ class FacebookBusinessBrowser:
                         'không được phép','không đủ điều kiện',
                         'không thể tạo','giới hạn','bị hạn chế',
                         'अनुमति नहीं','पात्र नहीं','नहीं बना सकते',
-                        'सीमा','प्रतिबंधित'
+                        'सीमा','प्रतिबंधित',
+                        'you cannot use this business portfolio to advertise',
+                        "you can't use this business portfolio to advertise",
+                        'this business portfolio cannot be used to advertise',
+                        'आप विज्ञापन देने के लिए इस बिज़नेस पोर्टफ़ोलियो का उपयोग नहीं कर सकते',
+                        'आप विज्ञापन देने के लिए इस बिजनेस पोर्टफोलियो का उपयोग नहीं कर सकते',
+                        'ce portefeuille business ne peut pas être utilisé pour faire de la publicité',
+                        'vous ne pouvez pas utiliser ce portefeuille business pour faire de la publicité',
+                        'этот бизнес-портфель нельзя использовать для рекламы',
+                        'цей бізнес-портфель не можна використовувати для реклами',
+                        'không thể dùng danh mục kinh doanh này để quảng cáo',
+                        'không thể sử dụng danh mục kinh doanh này để quảng cáo',
+                        'এই বিজনেস পোর্টফোলিও বিজ্ঞাপন দেওয়ার জন্য ব্যবহার করা যাবে না'
                     ];
 
                     const metaAIRoot = el => {
@@ -9390,7 +9402,8 @@ class FacebookBusinessBrowser:
                     // alert/toast/dialog, not merely present in hidden app text.
                     const errorSurfaces = [...document.querySelectorAll(
                         '[role="alert"],[role="alertdialog"],[aria-live="assertive"],'
-                        + '[aria-live="polite"],[role="dialog"]'
+                        + '[aria-live="polite"],[role="dialog"],[role="heading"],'
+                        + 'h1,h2,h3'
                     )].filter(visible);
                     const errors = [];
                     for (const el of errorSurfaces) {
@@ -12734,6 +12747,7 @@ timeout_seconds=4.0,
             clicked_any = False
             own_business_selected = False
             final_click_attempted = False
+            blocked_errors: list[str] = []
             submit_attempts: list[dict[str, Any]] = []
 
             for step in range(12):
@@ -12748,11 +12762,16 @@ timeout_seconds=4.0,
                 before_signature = _clean(before_state.get("signature"))
 
                 if _clean(before_state.get("state")).upper() == "BLOCKED":
+                    blocked_errors = [
+                        _clean(value)
+                        for value in (before_state.get("errors") or [])[:4]
+                        if _clean(value)
+                    ]
                     submit_attempts.append(
                         {
                             "step": step,
                             "action": "blocked",
-                            "errors": list(before_state.get("errors") or [])[:3],
+                            "errors": blocked_errors[:3],
                         }
                     )
                     break
@@ -13146,6 +13165,32 @@ timeout_seconds=4.0,
                     }
                 )
                 break
+
+            if blocked_errors:
+                await checkpoint(
+                    {
+                        "phase": "CREATE_NOT_SUBMITTED",
+                        "resume_from": "CREATE",
+                        "activity": "AD_ACCOUNT_ADVERTISING_RESTRICTED",
+                        "activity_at": int(time.time()),
+                        "ui_errors": blocked_errors[:4],
+                    }
+                )
+                raise BrowserBusinessError(
+                    "AD_ACCOUNT_ADVERTISING_RESTRICTED",
+                    (
+                        "Meta reports that this profile/business cannot use "
+                        "the Business portfolio for advertising. CREATE was "
+                        "not submitted."
+                    ),
+                    retryable=False,
+                    diagnostic={
+                        "stage": "ad_account_advertising_restricted",
+                        "errors": blocked_errors[:4],
+                        "submit_attempts": submit_attempts[-12:],
+                        "ui_state": await self._ad_account_ui_state(),
+                    },
+                )
 
             if gate_future.done() and gate_future.exception() is not None:
                 raise gate_future.exception()
