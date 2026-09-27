@@ -6144,6 +6144,184 @@ class FacebookBusinessBrowser:
             except Exception:
                 continue
 
+        if not candidates:
+            # Do not depend on the final CTA's page-global DOM index. Meta
+            # Business Suite can have >120 interactive nodes before the modal,
+            # while the confirmation dialog itself is small and deterministic.
+            # Recover the enabled CREATE control only from a visible non-AI
+            # dialog that contains an ad-account-specific final action.
+            try:
+                dialog_scoped = await self.page.evaluate(
+                    """() => {
+                        const visible = el => {
+                            if (!el) return false;
+                            const r = el.getBoundingClientRect();
+                            const s = getComputedStyle(el);
+                            return r.width > 0 && r.height > 0
+                                && s.display !== 'none'
+                                && s.visibility !== 'hidden'
+                                && s.pointerEvents !== 'none';
+                        };
+                        const clean = text => (text || '')
+                            .normalize('NFKC')
+                            .replace(/[\u200b\u200c\u200d\ufeff]/g, '')
+                            .replace(/\u00a0/g, ' ')
+                            .replace(/\s+/g, ' ')
+                            .trim()
+                            .toLowerCase();
+                        const createWords = [
+                            'create ad account','create advertising account',
+                            'create account','create',
+                            'créer un compte publicitaire',
+                            'créer le compte publicitaire','créer le compte',
+                            'создать рекламный аккаунт','создать аккаунт',
+                            'створити рекламний акаунт',
+                            'створити обліковий запис',
+                            'werbekonto erstellen','konto erstellen',
+                            'বিজ্ঞাপন অ্যাকাউন্ট তৈরি করুন',
+                            'tạo tài khoản quảng cáo',
+                            'विज्ञापन खाता बनाएँ','विज्ञापन खाता बनाएं',
+                            'विज्ञापन अकाउंट बनाएँ','विज्ञापन अकाउंट बनाएं'
+                        ];
+                        const accountWords = [
+                            'ad account','advertising account',
+                            'compte publicitaire','werbekonto','реклам',
+                            'বিজ্ঞাপন অ্যাকাউন্ট','tài khoản quảng cáo',
+                            'विज्ञापन खाता','विज्ञापन अकाउंट'
+                        ];
+                        const ai = [
+                            'meta ai','assistant business meta ai',
+                            'meta ai business assistant','assistant meta ai'
+                        ];
+
+                        const rows = [];
+                        const roots = [...document.querySelectorAll(
+                            '[role="dialog"],[aria-modal="true"]'
+                        )].filter(visible);
+                        for (const root of roots) {
+                            const rootText = clean(
+                                (root.getAttribute('aria-label') || '') + ' ' +
+                                (root.getAttribute('title') || '') + ' ' +
+                                (root.innerText || root.textContent || '')
+                            );
+                            if (!rootText) continue;
+                            if (ai.some(word => rootText.includes(word))) continue;
+                            if (!accountWords.some(word => rootText.includes(word))) {
+                                continue;
+                            }
+
+                            for (const el of root.querySelectorAll(
+                                'button,a,[role="button"],[role="menuitem"],'
+                                + '[tabindex]:not([tabindex="-1"])'
+                            )) {
+                                if (!visible(el)) continue;
+                                if (
+                                    el.hasAttribute('disabled')
+                                    || el.getAttribute('aria-disabled') === 'true'
+                                ) continue;
+                                const text = clean(
+                                    (el.getAttribute('aria-label') || '') + ' ' +
+                                    (el.getAttribute('title') || '') + ' ' +
+                                    (el.innerText || el.textContent || '')
+                                );
+                                if (!text) continue;
+                                const exactCreate = createWords.some(word =>
+                                    text === word || text.startsWith(word + ' ')
+                                );
+                                const accountAction = accountWords.some(word =>
+                                    text.includes(word)
+                                );
+                                if (!exactCreate || !accountAction) continue;
+
+                                const r = el.getBoundingClientRect();
+                                rows.push({
+                                    el,
+                                    text,
+                                    x:Math.round(r.x),
+                                    y:Math.round(r.y),
+                                    tag:el.tagName || '',
+                                    role:el.getAttribute('role') || '',
+                                    score:Math.round(r.y)
+                                        - (
+                                            el.getAttribute('role') === 'button'
+                                            ? 120 : 0
+                                        )
+                                        - (
+                                            el.tagName === 'BUTTON'
+                                            ? 80 : 0
+                                        )
+                                });
+                            }
+                        }
+
+                        rows.sort((a,b) => a.score - b.score);
+                        const best = rows[0];
+                        if (!best) return {found:false, candidates:0};
+                        best.el.setAttribute(
+                            'data-remask-rk-final-dialog',
+                            '1'
+                        );
+                        return {
+                            found:true,
+                            candidates:rows.length,
+                            text:best.text,
+                            x:best.x,
+                            y:best.y,
+                            tag:best.tag,
+                            role:best.role
+                        };
+                    }"""
+                )
+            except Exception as exc:
+                dialog_scoped = {
+                    "found": False,
+                    "error": f"{exc.__class__.__name__}: {exc}"[:500],
+                }
+
+            if (
+                isinstance(dialog_scoped, dict)
+                and bool(dialog_scoped.get("found"))
+            ):
+                locator = self.page.locator(
+                    '[data-remask-rk-final-dialog="1"]'
+                ).first
+                meta = {
+                    "found": True,
+                    "attempted": False,
+                    "clicked": False,
+                    "text": _clean(dialog_scoped.get("text"))[:180],
+                    "x": int(dialog_scoped.get("x") or 0),
+                    "y": int(dialog_scoped.get("y") or 0),
+                    "tag": _clean(dialog_scoped.get("tag"))[:40],
+                    "role": _clean(dialog_scoped.get("role"))[:80],
+                    "dialog_scoped_recovered": True,
+                    "dialog_candidate_count": int(
+                        dialog_scoped.get("candidates") or 0
+                    ),
+                }
+                try:
+                    if before_click is not None:
+                        await before_click()
+                    meta["attempted"] = True
+                    await locator.click(timeout=2500)
+                    meta["clicked"] = True
+                    return meta
+                except Exception as exc:
+                    meta["error"] = (
+                        f"{exc.__class__.__name__}: {exc}"
+                    )[:500]
+                    return meta
+                finally:
+                    try:
+                        await self.page.locator(
+                            '[data-remask-rk-final-dialog="1"]'
+                        ).evaluate_all(
+                            "(els) => els.forEach(el => "
+                            "el.removeAttribute('data-remask-rk-final-dialog'))"
+                        )
+                    except Exception:
+                        pass
+
         if not candidates and self._ad_account_wizard_rect:
             # Meta sometimes renders the final localized Create text in a plain
             # DIV/SPAN while the actual click handler lives on an ancestor.
