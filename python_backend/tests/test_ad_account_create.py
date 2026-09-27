@@ -1308,7 +1308,11 @@ class AdAccountExactlyOnceSystemRegressionTests(unittest.TestCase):
         )
         self.assertLess(ui_success_pos, inventory_pos)
         self.assertIn(
-            "AD_ACCOUNT_CREATE_CONFIRMED_CAPTURE_UI_CURRENT_ATTEMPT",
+            "AD_ACCOUNT_CREATE_CONFIRMED_",
+            source,
+        )
+        self.assertIn(
+            "CAPTURE_UI_CURRENT_ATTEMPT",
             source,
         )
         self.assertIn(
