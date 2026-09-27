@@ -826,7 +826,10 @@ if ($tokenOnlyFilterCount !== 1) {
     throw new RuntimeException('token-only RK snapshot filter failed: ' . $tokenOnlyFilterCount);
 }
 
-$provisionalNeedle = "        \\$rkRows[] = \\$rk;\n    }\n";
+$provisionalNeedle = <<<'PHP_BINDING'
+        $rkRows[] = $rk;
+    }
+PHP_BINDING;
 $provisionalReplacement = <<<'PHP_BINDING'
         $rkRows[] = $rk;
     }
