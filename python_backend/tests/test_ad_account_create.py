@@ -1526,6 +1526,13 @@ class AdAccountInventoryPreflightRegressionTests(unittest.TestCase):
             'browser_inventory_before.get("confirmed_empty")',
             window,
         )
+        self.assertIn("structural_ui_empty", window)
+        self.assertIn("cross_source_empty", window)
+        self.assertIn(
+            "graph_inventory_empty and structural_ui_empty",
+            window,
+        )
+        self.assertIn("graph+stable_ui", window)
 
     def test_post_submit_uncertainty_still_requires_strong_evidence(self) -> None:
         proof = inspect.getsource(_prove_empty_after_uncertainty)
