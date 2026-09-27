@@ -33,7 +33,7 @@ $listAdAccountsMethod = <<<'PHP_METHOD'
 // REMASK_DIRECT_RK_FUNDING_V2
 function listAdAccounts(int $limit = 0): array
     {
-        $baseFields = 'id,name,account_status,disable_reason,currency,balance,amount_spent,spend_cap,business_name,timezone_name';
+        $baseFields = 'id,account_id,name,account_status,disable_reason,currency,balance,amount_spent,spend_cap,business{id,name},business_name,timezone_name';
         $fundingFields = $baseFields . ',is_prepay_account,funding_source,funding_source_details,expired_funding_source_details';
 
         try {
@@ -71,7 +71,7 @@ function listBusinessAdAccounts(string $businessId, int $limit = 0, bool $includ
         $bounded = $limit > 0;
         $limit = $bounded ? max(1, $limit) : 0;
         $edges = $includeClient ? ['owned_ad_accounts', 'client_ad_accounts'] : ['owned_ad_accounts'];
-        $baseFields = 'id,name,account_status,currency,amount_spent,balance,business{id,name},business_name,timezone_name,spend_cap';
+        $baseFields = 'id,account_id,name,account_status,disable_reason,currency,amount_spent,balance,business{id,name},business_name,timezone_name,spend_cap';
         $fundingFields = $baseFields . ',funding_source,funding_source_details';
         $items = [];
         $seen = [];
@@ -135,6 +135,44 @@ $count = 0;
 $js = str_replace($oldAttention, $newAttention, $js, $count);
 if ($count !== 1) {
     throw new RuntimeException('profileAttention patch failed: ' . $count);
+}
+
+$oldAccountStatus = "function accountStatus(a){ const s=Number(a.account_status||0); return s===1?pill('ACTIVE','ok'):s===2?pill('DISABLED','bad'):s===3?pill('UNSETTLED','warn'):pill(String(a.account_status||'UNKNOWN'),'warn'); }";
+$newAccountStatus = <<<'JS'
+function accountStatus(a){
+  const s=Number(a.account_status||0);
+  const reason=String(a.disable_reason==null?'':a.disable_reason).trim();
+  if(s===1)return pill('ACTIVE','ok');
+  if(s===2){
+    const detail=reason&&reason!=='0'
+      ? '<div class="sub">Meta disable_reason: '+esc(reason)+'</div>'
+      : '<div class="sub">Meta account_status=2</div>';
+    return pill('META: DISABLED','bad')+detail;
+  }
+  if(s===3)return pill('UNSETTLED','warn');
+  return pill('META STATUS '+String(a.account_status||'UNKNOWN'),'warn');
+}
+JS;
+$js = str_replace($oldAccountStatus, $newAccountStatus, $js, $accountStatusPatchCount);
+if ($accountStatusPatchCount !== 1) {
+    throw new RuntimeException('accountStatus patch failed: ' . $accountStatusPatchCount);
+}
+
+$oldBusinessRender = "const pp=row.primary_page||{}; const status=businessAttention(row)?pill('НЕТ RK','warn'):pill(row.verification_status||'READY', row.verification_status==='verified'?'ok':'blue');";
+$newBusinessRender = <<<'JS'
+const pp=row.primary_page||{};
+    const verification=String(row.verification_status||'').trim().toLowerCase();
+    const status=verification==='verified'
+      ? pill('VERIFIED','ok')
+      : verification==='not_verified'
+        ? pill('NOT VERIFIED','blue')+'<div class="sub">Business Verification · не блокировка</div>'
+        : verification
+          ? pill(verification.toUpperCase(),'blue')
+          : pill('VERIFICATION UNKNOWN','warn');
+JS;
+$js = str_replace($oldBusinessRender, $newBusinessRender, $js, $businessRenderPatchCount);
+if ($businessRenderPatchCount !== 1) {
+    throw new RuntimeException('business verification render patch failed: ' . $businessRenderPatchCount);
 }
 
 $newSync = <<<'JS'
@@ -370,11 +408,13 @@ $syncProfileReplacement = <<<'PHP'
             MetaEndpoint::ok($snapshot);
         }
 
-        // REMASK_BM_BOUND_RK_SYNC_V1
-        // me/adaccounts means "accessible to the token", not "belongs to one
-        // of this profile's Business Managers". Workspace must only surface
-        // RK that Meta also returns from a concrete BM edge.
+        // REMASK_BM_BOUND_RK_SYNC_V2
+        // me/adaccounts may update before owned_ad_accounts/client_ad_accounts
+        // after a fresh CREATE. Keep an RK when Meta's direct object already
+        // points at one of this profile's Business Managers; otherwise a real
+        // newly-created RK disappears from Workspace during edge propagation.
         $verifiedBusinessAdAccounts = [];
+        $knownBusinesses = [];
         $syncWarnings = [];
         if (!empty($preflight['ad_accounts']['_funding_enrichment_warning'])) {
             $syncWarnings[] = 'RK funding/payment metadata unavailable; RK list kept';
@@ -385,6 +425,10 @@ $syncProfileReplacement = <<<'PHP'
                 if (!is_array($business)) continue;
                 $businessId = trim((string)($business['id'] ?? ''));
                 if ($businessId === '') continue;
+                $knownBusinesses[$businessId] = [
+                    'id' => $businessId,
+                    'name' => trim((string)($business['name'] ?? $businessId)),
+                ];
                 try {
                     $businessAccounts = MetaEndpoint::cachedAsset($profile, 'business_ad_accounts', $businessId, true);
                     foreach ((array)($businessAccounts['data'] ?? []) as $businessAccount) {
@@ -394,6 +438,9 @@ $syncProfileReplacement = <<<'PHP'
                         $row = $businessAccount;
                         $row['profile'] = $profile;
                         $row['business_id'] = $businessId;
+                        if (trim((string)($row['business_name'] ?? '')) === '') {
+                            $row['business_name'] = (string)($knownBusinesses[$businessId]['name'] ?? $businessId);
+                        }
                         $verifiedBusinessAdAccounts[$rkId] = $row;
                     }
                     foreach ((array)($businessAccounts['_edge_warnings'] ?? []) as $edgeWarning) {
@@ -412,6 +459,37 @@ $syncProfileReplacement = <<<'PHP'
             }
         } catch (Throwable $businessError) {
             $syncWarnings[] = 'Business Manager list unavailable for this token; direct RK data kept';
+        }
+
+        // Meta's direct ad-account object can carry the BM relation before the
+        // BM-owned/client edge catches up. Treat that relation as a valid
+        // read-only ownership proof when it points at a currently returned BM.
+        foreach ((array)($preflight['ad_accounts']['data'] ?? []) as $directAccount) {
+            if (!is_array($directAccount)) continue;
+            $directId = trim((string)($directAccount['id'] ?? ''));
+            if ($directId === '' || isset($verifiedBusinessAdAccounts[$directId])) continue;
+
+            $directBusiness = $directAccount['business'] ?? null;
+            $directBusinessId = '';
+            $directBusinessName = '';
+            if (is_array($directBusiness)) {
+                $directBusinessId = trim((string)($directBusiness['id'] ?? ''));
+                $directBusinessName = trim((string)($directBusiness['name'] ?? ''));
+            }
+            if ($directBusinessId === '') {
+                $directBusinessId = trim((string)($directAccount['business_id'] ?? ''));
+            }
+
+            if ($directBusinessId === '' || !isset($knownBusinesses[$directBusinessId])) continue;
+
+            $row = $directAccount;
+            $row['profile'] = $profile;
+            $row['business_id'] = $directBusinessId;
+            $row['business_name'] = $directBusinessName !== ''
+                ? $directBusinessName
+                : (string)($knownBusinesses[$directBusinessId]['name'] ?? $directBusinessId);
+            $row['_business_edge'] = 'direct_business_reference';
+            $verifiedBusinessAdAccounts[$directId] = $row;
         }
 
         hierarchy_activity([
@@ -434,17 +512,34 @@ $syncProfileReplacement = <<<'PHP'
             array_keys($directIds),
             array_keys($verifiedBusinessAdAccounts)
         ));
-        if ($filteredDirect !== []) {
-            $syncWarnings[] = (
-                'Filtered ' . count($filteredDirect) .
-                ' token-accessible RK because Meta did not return them from any Business Manager.'
-            );
-        }
+        // Token-level RK outside the currently returned BM inventory are not
+        // an error. Keep only the count for diagnostics instead of alarming
+        // the Workspace user with a sync warning.
+        $snapshot['token_only_ad_accounts_count'] = count($filteredDirect);
 
         // Replace the broad me/adaccounts view with exact BM-bound inventory.
         // This is the data Workspace renders and therefore prevents phantom RK.
         $snapshot['ad_accounts'] = array_values($verifiedBusinessAdAccounts);
         $snapshot['ad_accounts_count'] = count($verifiedBusinessAdAccounts);
+
+        $accountsByBusiness = [];
+        foreach ($verifiedBusinessAdAccounts as $verifiedRow) {
+            if (!is_array($verifiedRow)) continue;
+            $verifiedBusinessId = trim((string)($verifiedRow['business_id'] ?? ''));
+            if ($verifiedBusinessId === '') continue;
+            $accountsByBusiness[$verifiedBusinessId][] = $verifiedRow;
+        }
+        if (is_array($snapshot['businesses'] ?? null)) {
+            foreach ($snapshot['businesses'] as $i => $businessRow) {
+                if (!is_array($businessRow)) continue;
+                $businessRowId = trim((string)($businessRow['id'] ?? ''));
+                if ($businessRowId === '') continue;
+                $rowsForBusiness = $accountsByBusiness[$businessRowId] ?? [];
+                $snapshot['businesses'][$i]['ad_account_count'] = count($rowsForBusiness);
+                $snapshot['businesses'][$i]['accounts'] = $rowsForBusiness;
+            }
+        }
+
         if (is_array($snapshot['profiles'] ?? null)) {
             foreach ($snapshot['profiles'] as $i => $profileRow) {
                 if (!is_array($profileRow)) continue;
