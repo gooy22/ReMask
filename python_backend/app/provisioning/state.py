@@ -455,6 +455,8 @@ class ProvisioningStateStore:
                 continue
             candidate_business = str(result.get("business_id") or "").strip()
             candidate_account = str(result.get("ad_account_id") or "").strip()
+            if candidate_account.lower().startswith("act_"):
+                candidate_account = candidate_account[4:]
             if candidate_business.isdigit() and candidate_account.isdigit():
                 business_id = candidate_business
                 ad_account_id = candidate_account
@@ -643,6 +645,8 @@ class ProvisioningStateStore:
 
             business_id = str(result.get("business_id") or "").strip()
             ad_account_id = str(result.get("ad_account_id") or "").strip()
+            if ad_account_id.lower().startswith("act_"):
+                ad_account_id = ad_account_id[4:]
             if not (business_id.isdigit() and ad_account_id.isdigit()):
                 continue
 

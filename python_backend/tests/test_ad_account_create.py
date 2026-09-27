@@ -1293,6 +1293,29 @@ class AdAccountCapturedVariableSafetyTests(unittest.TestCase):
 
 
 class AdAccountExactlyOnceSystemRegressionTests(unittest.TestCase):
+    def test_current_success_dialog_short_circuits_inventory_uncertainty(self) -> None:
+        source = inspect.getsource(ad_account_handler)
+        unmatched_pos = source.index(
+            'exc.code == "AD_ACCOUNT_CREATE_REQUEST_NOT_OBSERVED"'
+        )
+        ui_success_pos = source.index(
+            "REMASK_AD_ACCOUNT_CURRENT_UI_SUCCESS_V1",
+            unmatched_pos,
+        )
+        inventory_pos = source.index(
+            "_prove_empty_after_uncertainty(",
+            unmatched_pos,
+        )
+        self.assertLess(ui_success_pos, inventory_pos)
+        self.assertIn(
+            "AD_ACCOUNT_CREATE_CONFIRMED_CAPTURE_UI_CURRENT_ATTEMPT",
+            source,
+        )
+        self.assertIn(
+            "business_settings_ui_capture_current_attempt",
+            source,
+        )
+
     def test_unmatched_capture_reconciles_before_any_retry(self) -> None:
         source = inspect.getsource(ad_account_handler)
         unmatched_pos = source.index(

@@ -1993,6 +1993,69 @@ async def ad_account_handler(
                 exc.code == "AD_ACCOUNT_CREATE_REQUEST_NOT_OBSERVED"
                 and bool(exc.retryable)
             ):
+                # REMASK_AD_ACCOUNT_CURRENT_UI_SUCCESS_V1
+                # Meta can complete CREATE and render the success dialog even
+                # when its private transport shape is not matched by the
+                # GraphQL capture gate. Treat that explicit same-session UI
+                # confirmation as success immediately; otherwise a genuinely
+                # created RK is incorrectly reported FAILED until another Job
+                # re-enters this handler.
+                capture_ui_success_id = _capture_success_id_from_checkpoint(
+                    {
+                        "browser_diagnostic": browser_diag,
+                        "capture_failures": capture_failures[-3:],
+                    },
+                    business_id=business_id,
+                    account_name=rk_name,
+                )
+                if capture_ui_success_id:
+                    await provisioning_state.checkpoint(
+                        item_id,
+                        profile_id,
+                        scope_key,
+                        ProvisioningStep.AD_ACCOUNT,
+                        {
+                            "phase": "CREATE_CONFIRMED",
+                            "resume_from": "DONE",
+                            "business_id": business_id,
+                            "account_name": rk_name,
+                            "currency": currency,
+                            "timezone_id": timezone_id,
+                            "ad_account_id": capture_ui_success_id,
+                            "create_response_ad_account_id": (
+                                capture_ui_success_id
+                            ),
+                            "capture_attempt": capture_attempt,
+                            "activity": (
+                                "AD_ACCOUNT_CREATE_CONFIRMED_"
+                                "CAPTURE_UI_CURRENT_ATTEMPT"
+                            ),
+                            "activity_at": int(time.time()),
+                            "browser_diagnostic": browser_diag,
+                            "transport": (
+                                "business_settings_ui_capture_"
+                                "current_attempt"
+                            ),
+                        },
+                    )
+                    await provisioning_state.remember_entity(
+                        profile_id,
+                        scope_key,
+                        ProvisioningStep.AD_ACCOUNT,
+                        {"ad_account_id": capture_ui_success_id},
+                    )
+                    return {
+                        "ad_account_id": capture_ui_success_id,
+                        "business_id": business_id,
+                        "name": rk_name,
+                        "currency": currency,
+                        "timezone_id": timezone_id,
+                        "recovered_after_capture_ui_success": True,
+                        "transport": (
+                            "business_settings_ui_capture_current_attempt"
+                        ),
+                    }
+
                 proof_found_id, proven_empty, inventory_proof = (
                     await _prove_empty_after_uncertainty(
                         session,
