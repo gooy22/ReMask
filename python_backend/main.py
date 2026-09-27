@@ -758,6 +758,16 @@ async def profile_provisioning_state(profile_id: str):
         'fan_pages':fan_pages,
     }
 
+@app.get('/api/v1/provisioning/bindings',dependencies=[Depends(require_key)])
+async def provisioning_bindings(profile_id: str = ""):
+    clean_profile=str(profile_id or '').strip()
+    return {
+        'ok':True,
+        'profiles':await pool.provisioning_state.confirmed_ad_account_bindings(
+            clean_profile
+        ),
+    }
+
 @app.post('/api/v1/jobs',response_model=JobAccepted,dependencies=[Depends(require_key)])
 async def create_job(request: CreateJobRequest) -> JobAccepted:
     job_id,created=await store.create_job(request)
