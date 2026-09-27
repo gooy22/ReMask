@@ -13,11 +13,15 @@ const restoredPythonWorkerBatchIds = (() => {
   }
 })();
 
+const restoredPythonWorkerBatchKind =
+  localStorage.getItem('remask_python_worker_batch_kind_v1') || 'add_rk';
+
 const pythonWorkerUiState = {
   jobId: restoredPythonWorkerJobId,
   job: null,
   batchJobIds: restoredPythonWorkerBatchIds,
   batchTargets: [],
+  batchKind: restoredPythonWorkerBatchKind,
   busy: restoredPythonWorkerJobId !== '' || restoredPythonWorkerBatchIds.length > 0,
   workerOnline: null,
   pollTimer: null,
@@ -82,6 +86,126 @@ function pythonWorkerSelectedBusinessTargets() {
     return out;
   } catch (_) {
     return [];
+  }
+}
+
+function pythonWorkerSelectedAdAccountTargets() {
+  try {
+    if (
+      typeof selectedRows !== 'function' ||
+      !state ||
+      String(state.activeTab || '') !== 'ad_accounts'
+    ) return [];
+
+    const rows = selectedRows('ad_accounts') || [];
+    const out = [];
+    const seen = new Set();
+
+    for (const row of rows) {
+      const profileId = String(
+        (row && (row.profile || row.profile_name || row.profile_id)) || ''
+      ).trim();
+      const businessId = String(
+        (row && (row.business_id || row.businessId || row.bm_id)) || ''
+      ).trim();
+      let adAccountId = String(
+        (row && (row.id || row.account_id || row.ad_account_id)) || ''
+      ).trim();
+      if (/^act_/i.test(adAccountId)) adAccountId = adAccountId.slice(4);
+
+      if (
+        !profileId ||
+        !/^\d+$/.test(businessId) ||
+        !/^\d+$/.test(adAccountId)
+      ) continue;
+
+      const key = profileId + ':' + businessId + ':' + adAccountId;
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      out.push({
+        profile_id: profileId,
+        business_id: businessId,
+        ad_account_id: adAccountId,
+        ad_account_name: String(
+          (row && (row.name || row.account_name || row.title)) ||
+          ('RK ' + adAccountId)
+        ).trim() || ('RK ' + adAccountId),
+        business_name: String(
+          (row && (row.business_name || row.bm_name)) || businessId
+        ).trim() || businessId
+      });
+    }
+
+    return out;
+  } catch (_) {
+    return [];
+  }
+}
+
+function pythonWorkerEnsureRkFanPageActions() {
+  const actionsButton = document.getElementById('workspaceActions');
+  if (!actionsButton || !actionsButton.parentElement) return;
+
+  const targets = pythonWorkerSelectedAdAccountTargets();
+  const active = Boolean(
+    state &&
+    String(state.activeTab || '') === 'ad_accounts' &&
+    targets.length
+  );
+
+  let createBtn = document.getElementById('pythonRkCreateFp');
+  let attachBtn = document.getElementById('pythonRkAttachFp');
+
+  if (!createBtn) {
+    createBtn = document.createElement('button');
+    createBtn.id = 'pythonRkCreateFp';
+    createBtn.type = 'button';
+    createBtn.className = 'btn btn-secondary';
+    createBtn.textContent = 'Создать FP';
+    createBtn.addEventListener('click', function(event) {
+      event.preventDefault();
+      event.stopPropagation();
+      pythonWorkerOpenRkFanPageModal('create').catch(function(error) {
+        pythonWorkerSetText(
+          'pythonPwStatus',
+          'Create FP: ' + String((error && error.message) || error)
+        );
+      });
+    });
+    actionsButton.parentElement.insertBefore(createBtn, actionsButton);
+  }
+
+  if (!attachBtn) {
+    attachBtn = document.createElement('button');
+    attachBtn.id = 'pythonRkAttachFp';
+    attachBtn.type = 'button';
+    attachBtn.className = 'btn btn-secondary';
+    attachBtn.textContent = 'Прикрепить FP';
+    attachBtn.addEventListener('click', function(event) {
+      event.preventDefault();
+      event.stopPropagation();
+      pythonWorkerOpenRkFanPageModal('attach_existing').catch(function(error) {
+        pythonWorkerSetText(
+          'pythonPwStatus',
+          'Attach FP: ' + String((error && error.message) || error)
+        );
+      });
+    });
+    actionsButton.parentElement.insertBefore(attachBtn, actionsButton);
+  }
+
+  for (const btn of [createBtn, attachBtn]) {
+    btn.style.display = active ? '' : 'none';
+    btn.disabled =
+      !active ||
+      pythonWorkerUiState.busy ||
+      pythonWorkerUiState.workerOnline !== true;
+  }
+
+  if (active) {
+    createBtn.textContent = 'Создать FP (' + targets.length + ')';
+    attachBtn.textContent = 'Прикрепить FP (' + targets.length + ')';
   }
 }
 
@@ -164,6 +288,8 @@ function pythonWorkerSelectionRefresh() {
       !pythonWorkerUiState.jobId ||
       !hasRetryableFailed;
   }
+
+  pythonWorkerEnsureRkFanPageActions();
 
   if (!pythonWorkerUiState.jobId && !pythonWorkerUiState.busy) {
     pythonWorkerSetText(
