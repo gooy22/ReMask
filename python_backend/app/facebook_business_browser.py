@@ -9404,11 +9404,17 @@ class FacebookBusinessBrowser:
                     }
 
                     let state = 'UNKNOWN';
-                    if (errors.length) state = 'BLOCKED';
-                    else if (nameInput || formEvidence) state = 'FORM';
+                    // A Business Suite warning banner is not proof that Add-RK
+                    // is unavailable. Meta can show the warning while the Add
+                    // surface is fully actionable and can even show it after a
+                    // successful account creation. Prefer concrete actionable
+                    // UI state over advisory/banner text; only classify BLOCKED
+                    // when there is no usable creation surface.
+                    if (nameInput || formEvidence) state = 'FORM';
                     else if (introDialog) state = 'INTRO_DIALOG';
                     else if (createEntry) state = 'CREATE_ENTRY';
                     else if (addSurface) state = 'ADD_SURFACE';
+                    else if (errors.length) state = 'BLOCKED';
                     else if (dialogs.length) state = 'DIALOG';
 
                     const signature = [
