@@ -109,6 +109,10 @@ RUN set -eux; \
     php /tmp/railway-language-targeting-v116-overlay.php; \
     php -l /tmp/railway-python-worker-ui-overlay.php; \
     php /tmp/railway-python-worker-ui-overlay.php; \
+    grep -q 'REMASK_STATUS_TRUTH_V1' /var/www/html/scripts/workspace.js; \
+    grep -q 'Business Verification · не блокировка' /var/www/html/scripts/workspace.js; \
+    grep -q 'REMASK_PERSISTENT_BM_RK_BINDING_V1' /var/www/html/ajax/metaHierarchy.php; \
+    grep -q 'never render token-only/unmapped RK' /var/www/html/ajax/metaHierarchy.php; \
     php -r '$allowedRaw=["/var/www/html/classes/MetaApiClient.php"=>true,"/var/www/html/classes/FbRequests.php"=>true,"/var/www/html/classes/ProxyHealthService.php"=>true]; $allowedLegacy=["/var/www/html/ajax/payUnsettled.php"=>true,"/var/www/html/ajax/policyAppeal.php"=>true,"/var/www/html/ajax/disapproveAppeal.php"=>true]; $violations=[]; foreach(["/var/www/html/ajax","/var/www/html/classes","/var/www/html/bin"] as $root){$it=new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root,FilesystemIterator::SKIP_DOTS)); foreach($it as $fi){if(!$fi->isFile()||$fi->getExtension()!=="php")continue;$path=$fi->getPathname();$s=file_get_contents($path);if((str_contains($s,"graph.facebook.com")||str_contains($s,"curl_init("))&&!isset($allowedRaw[$path]))$violations[]="raw-meta-transport:".$path;if($fi->getFilename()!=="FbRequests.php"&&preg_match("/new\\s+FbRequests\\s*\\(/",$s)&&!isset($allowedLegacy[$path]))$violations[]="legacy-fbrequests-ref:".$path;}} if($violations){fwrite(STDERR,"Meta transport invariant failed: ".implode(", ",$violations)."\\n");exit(91);} fwrite(STDERR,"[transport-invariant] canonical Graph transport enforced; legacy browser transport limited to payment/appeal endpoints\\n");'; \
     php -l /var/www/html/classes/RemaskProxy.php; \
     php -l /var/www/html/classes/MetaApiClient.php; \
