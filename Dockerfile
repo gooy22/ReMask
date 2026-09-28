@@ -263,9 +263,11 @@ RUN set -eux; \
     grep -q 'REMASK_CREATIVE_CAPABILITIES_V1' /var/www/html/classes/MetaAdsService.php; \
     grep -q 'delivery_estimate' /var/www/html/classes/MetaAdsService.php; \
     grep -q 'REMASK_SYNC_ERROR_CLASSIFIER_V1' /var/www/html/scripts/workspace.js; \
+    grep -q "kind='META_REQUEST'" /var/www/html/scripts/workspace.js; \
     grep -q 'Meta request timeout after' /var/www/html/scripts/workspace.js; \
     grep -Fq "\$('workspaceActions').disabled=n===0;" /var/www/html/scripts/workspace.js; \
     grep -q 'REMASK_SESSION_CLEAR_EXPLICIT_V2' /var/www/html/ajax/metaProfileManager.php; \
+    grep -q 'REMASK_SESSION_ONLY_UPDATE_V1' /var/www/html/ajax/metaProfileManager.php; \
     ! grep -q 'profile7-' /var/www/html/docker-start.sh 2>/dev/null || true; \
     grep -q 'profileSaveJson' /var/www/html/scripts/workspace.js; \
     if grep -Fq '\\`' /var/www/html/scripts/workspace.js; then echo 'workspace-invalid-backtick' >&2; exit 92; fi; \

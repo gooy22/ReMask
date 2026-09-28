@@ -166,7 +166,8 @@ async function syncSelection(){
     else if(/rate.?limit|too many|code[^0-9]*(4|17|32|613)\\b/.test(s))kind='RATE_LIMIT';
     else if(/\\b407\\b|proxy authentication|proxy auth/.test(s))kind='PROXY_AUTH';
     else if(/transport error|curl|could not resolve|connection timed out|connection refused|ssl connect/.test(s))kind='TRANSPORT';
-    else if(/oauth|access token|token.*(invalid|expired)|session.*expired|code[^0-9]*190\\b|\\(#190\\)/.test(s))kind='TOKEN_INVALID';
+    else if(/access token.*(invalid|expired)|token.*(invalid|expired)|code[^0-9]*(190)\\b|\\(#190\\)/.test(s))kind='TOKEN_INVALID';
+    else if(/oauth.*code[^0-9]*1\\b|code=1\\b|invalid request/.test(s))kind='META_REQUEST';
     else if(/ads_management|ads_read|business_management|permission|permissions|not authorized|code[^0-9]*(10|200)\\b/.test(s))kind='PERMISSION';
     else if(/http 5\\d\\d|temporar|transient/.test(s))kind='META_TEMPORARY';
     return {kind,message};

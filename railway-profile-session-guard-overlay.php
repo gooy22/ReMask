@@ -156,6 +156,88 @@ try {
         $remaining = $store->deleteAccountByName($name);
         rmx_pm_out(['ok'=>true,'success'=>true,'deleted'=>true,'count'=>count($remaining)]);
     }
+
+    // REMASK_SESSION_ONLY_UPDATE_V1
+    if (in_array($action, ['session_update','update_session','refresh_session'], true)) {
+        $name = rmx_pm_find_scalar($input, ['name','profile_name','profile','id','fb_id','account_id']);
+        if ($name === '') throw new InvalidArgumentException('Profile name is required.');
+
+        $existing = $store->getAccountByName($name);
+        if (!$existing instanceof FbAccount) {
+            throw new RuntimeException('PROFILE_NOT_FOUND');
+        }
+
+        $cookiesProvided = false;
+        $incomingCookies = rmx_pm_find_cookies($input, $cookiesProvided);
+        if (!$cookiesProvided || !is_array($incomingCookies) || $incomingCookies === []) {
+            throw new InvalidArgumentException('Fresh Facebook Cookies JSON is required.');
+        }
+
+        $hasCUser = false;
+        $hasXs = false;
+        foreach ((array)$incomingCookies as $cookie) {
+            if (!is_array($cookie)) continue;
+            $cookieName = trim((string)($cookie['name'] ?? ''));
+            $cookieValue = trim((string)($cookie['value'] ?? ''));
+            if ($cookieName === 'c_user' && $cookieValue !== '') $hasCUser = true;
+            if ($cookieName === 'xs' && $cookieValue !== '') $hasXs = true;
+        }
+        if (!$hasCUser || !$hasXs) {
+            throw new InvalidArgumentException('Fresh session must contain c_user and xs.');
+        }
+
+        $accountsPath = (string)ACCOUNTSFILENAME;
+        if (is_file($accountsPath) && filesize($accountsPath) > 2) {
+            @copy($accountsPath, $accountsPath . '.bak.session-update.' . gmdate('YmdHis'));
+        }
+
+        $cookieJson = json_encode(
+            array_values($incomingCookies),
+            JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR
+        );
+        $dtsgInput = rmx_pm_find_scalar($input, ['dtsg','fb_dtsg','fbDtsg']);
+        $updated = new FbAccount(
+            (string)$existing->name,
+            (string)$existing->token,
+            $cookieJson,
+            $dtsgInput !== '' ? $dtsgInput : null,
+            $existing->proxy
+        );
+        $store->addOrUpdateAccount($updated);
+
+        $tokenRefreshed = false;
+        $refreshError = '';
+        try {
+            require_once __DIR__ . '/../classes/FbRequests.php';
+            $requests = new FbRequests();
+            if (method_exists($requests, 'RefreshAdsManagerToken')) {
+                $freshToken = $requests->RefreshAdsManagerToken($updated);
+                $freshToken = is_string($freshToken) ? trim($freshToken) : '';
+                if ($freshToken !== '' && !hash_equals((string)$updated->token, $freshToken)) {
+                    $updated->token = $freshToken;
+                    $store->addOrUpdateAccount($updated);
+                    $tokenRefreshed = true;
+                }
+            }
+        } catch (Throwable $refreshException) {
+            $refreshError = 'ADS_MANAGER_TOKEN_REFRESH_FAILED';
+        }
+
+        $saved = $store->getAccountByName($name);
+        if (!$saved instanceof FbAccount) {
+            throw new RuntimeException('PROFILE_SESSION_SAVE_FAILED');
+        }
+
+        rmx_pm_out([
+            'ok'=>true,
+            'success'=>true,
+            'session_updated'=>true,
+            'token_refreshed'=>$tokenRefreshed,
+            'token_refresh_error'=>$refreshError,
+            'profile'=>rmx_pm_safe($saved),
+        ]);
+    }
+
     if (!in_array($action, ['create','save','upsert','add'], true)) {
         rmx_pm_out(['ok'=>false,'success'=>false,'error'=>'UNSUPPORTED_ACTION','message'=>'Unsupported profile action.'], 400);
     }
