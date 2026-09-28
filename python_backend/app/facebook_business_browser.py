@@ -1488,14 +1488,12 @@ class FacebookBusinessBrowser:
         "पेज बनाएं",
     )
     SETTINGS_AD_ACCOUNTS_URLS = (
-        # Current live profiles can redirect all /latest/settings/ad_accounts
-        # variants into a Page/Profile shell. The legacy Business Settings URL
-        # is the only route observed to preserve the requested business_id, so
-        # give that exact BM context the primary inventory budget.
-        "https://business.facebook.com/settings/ad-accounts/?business_id={business_id}",
+        # Exact migrated Business Settings route observed on current profiles.
         "https://business.facebook.com/latest/settings/ad_accounts/?nav_ref=bm_settings_redirect_migration&bm_redirect_migration=true&business_id={business_id}",
         "https://business.facebook.com/latest/settings/ad_accounts?business_id={business_id}",
         "https://business.facebook.com/latest/settings/ad_accounts/?business_id={business_id}",
+        # Legacy settings route remains only as a final fallback.
+        "https://business.facebook.com/settings/ad-accounts/?business_id={business_id}",
     )
     AD_ACCOUNT_SECTION_NAMES = (
         "Ad accounts",
@@ -9133,6 +9131,19 @@ class FacebookBusinessBrowser:
             targets = [
                 template.format(business_id=business)
                 for template in self.SETTINGS_AD_ACCOUNTS_URLS
+            ]
+            # Read-only sync has different routing evidence than CREATE: on
+            # current live profiles every /latest/settings/ad_accounts variant
+            # redirects into a Page/Profile shell, while the legacy Business
+            # Settings URL preserves the requested business_id. Prefer that
+            # route only for this snapshot; keep CREATE route order untouched.
+            legacy_exact = (
+                "https://business.facebook.com/settings/ad-accounts/"
+                f"?business_id={business}"
+            )
+            targets = [
+                legacy_exact,
+                *[target for target in targets if target != legacy_exact],
             ]
             current = _clean(getattr(self.page, "url", ""))
             if (
