@@ -30,32 +30,51 @@ $service = file_get_contents($servicePath);
 if ($service === false) throw new RuntimeException('MetaAdsService.php not found');
 
 $listAdAccountsMethod = <<<'PHP_METHOD'
-// REMASK_DIRECT_RK_FUNDING_V2
+// REMASK_DIRECT_RK_FUNDING_V3
 function listAdAccounts(int $limit = 0): array
     {
-        $baseFields = 'id,account_id,name,account_status,disable_reason,currency,balance,amount_spent,spend_cap,business{id,name},business_name,timezone_name';
-        $fundingFields = $baseFields . ',is_prepay_account,funding_source,funding_source_details,expired_funding_source_details';
+        $fieldSets = [
+            ['name'=>'funding_full','fields'=>'id,account_id,name,account_status,disable_reason,currency,balance,amount_spent,spend_cap,business{id,name},business_name,timezone_name,is_prepay_account,funding_source,funding_source_details,expired_funding_source_details'],
+            ['name'=>'baseline_full','fields'=>'id,account_id,name,account_status,disable_reason,currency,balance,amount_spent,spend_cap,business{id,name},business_name,timezone_name'],
+            ['name'=>'baseline_compat','fields'=>'id,account_id,name,account_status,currency,balance,amount_spent,spend_cap,business{id,name},timezone_name'],
+            ['name'=>'identity_minimal','fields'=>'id,account_id,name,account_status,currency'],
+            ['name'=>'id_only','fields'=>'id,account_id,name'],
+        ];
 
-        try {
-            $result = $this->listPagedEdge('me/adaccounts', ['fields' => $fundingFields], $limit);
-            foreach ((array)($result['data'] ?? []) as $i => $item) {
-                if (!is_array($item)) continue;
-                $result['data'][$i]['_funding_metadata_loaded'] = true;
+        $errors = [];
+        foreach ($fieldSets as $index => $set) {
+            try {
+                $result = $this->listPagedEdge('me/adaccounts', ['fields'=>$set['fields']], $limit);
+                foreach ((array)($result['data'] ?? []) as $i => $item) {
+                    if (!is_array($item)) continue;
+                    $result['data'][$i]['_funding_metadata_loaded'] = $index === 0;
+                }
+                if ($index > 0) {
+                    $result['_adaccounts_fallback'] = [
+                        'field_set'=>$set['name'],
+                        'failed_attempts'=>$errors,
+                    ];
+                }
+                return $result;
+            } catch (Throwable $error) {
+                $message = preg_replace(
+                    '/access_token=[^&\\s]+/i',
+                    'access_token=[redacted]',
+                    (string)$error->getMessage()
+                );
+                $errors[] = [
+                    'field_set'=>$set['name'],
+                    'error_class'=>get_class($error),
+                    'message'=>mb_substr((string)$message,0,500),
+                ];
             }
-            return $result;
-        } catch (Throwable $fundingError) {
-            // Payment metadata must never be able to break baseline RK discovery.
-            $result = $this->listPagedEdge('me/adaccounts', ['fields' => $baseFields], $limit);
-            foreach ((array)($result['data'] ?? []) as $i => $item) {
-                if (!is_array($item)) continue;
-                $result['data'][$i]['_funding_metadata_loaded'] = false;
-            }
-            $result['_funding_enrichment_warning'] = [
-                'kind' => 'funding_metadata_unavailable',
-                'error_class' => get_class($fundingError),
-            ];
-            return $result;
         }
+
+        $last = end($errors);
+        throw new RuntimeException(
+            'me/adaccounts failed after compatibility fallbacks: ' .
+            (string)($last['message'] ?? 'unknown Meta error')
+        );
     }
 PHP_METHOD;
 
@@ -209,6 +228,7 @@ async function syncSelection(){
     else if(/transport error|curl|could not resolve|connection timed out|connection refused|ssl connect/.test(s))kind='TRANSPORT';
     else if(/oauth|access token|token.*(invalid|expired)|session.*expired|code[^0-9]*190\\b|\\(#190\\)/.test(s))kind='TOKEN_INVALID';
     else if(/ads_management|ads_read|business_management|permission|permissions|not authorized|code[^0-9]*(10|200)\\b/.test(s))kind='PERMISSION';
+    else if(/meta_sync_preflight_failed/.test(s))kind='META_PREFLIGHT';
     else if(/http 5\\d\\d|temporar|transient/.test(s))kind='META_TEMPORARY';
     return {kind,message};
   };
@@ -549,7 +569,25 @@ $syncProfileReplacement = <<<'PHP'
         // Directly accessible ad accounts from the token are the baseline.
         // Business Manager enumeration is optional enrichment and must not make
         // an otherwise valid FB profile fail synchronization.
-        $preflight = MetaEndpoint::cachedPreflight($profile, true);
+        try {
+            $preflight = MetaEndpoint::cachedPreflight($profile, true);
+        } catch (Throwable $preflightError) {
+            $safeMessage = preg_replace(
+                '/access_token=[^&\\s]+/i',
+                'access_token=[redacted]',
+                (string)$preflightError->getMessage()
+            );
+            error_log(
+                '[remask-sync] profile=' . $profile .
+                ' stage=baseline_preflight class=' . get_class($preflightError) .
+                ' message=' . mb_substr((string)$safeMessage, 0, 1200)
+            );
+            throw new RuntimeException(
+                'META_SYNC_PREFLIGHT_FAILED: ' . (string)$safeMessage,
+                0,
+                $preflightError
+            );
+        }
 
         // A saved token and saved browser cookies must represent the same
         // Facebook user. Otherwise me/adaccounts can silently inject RK from a
@@ -591,6 +629,10 @@ $syncProfileReplacement = <<<'PHP'
         $syncWarnings = [];
         if (!empty($preflight['ad_accounts']['_funding_enrichment_warning'])) {
             $syncWarnings[] = 'RK funding/payment metadata unavailable; RK list kept';
+        }
+        if (!empty($preflight['ad_accounts']['_adaccounts_fallback'])) {
+            $fallbackName = trim((string)($preflight['ad_accounts']['_adaccounts_fallback']['field_set'] ?? 'compat'));
+            $syncWarnings[] = 'RK sync used compatible Meta field set: ' . $fallbackName;
         }
         try {
             $businesses = MetaEndpoint::cachedAsset($profile, 'businesses', '', true);
