@@ -4588,47 +4588,83 @@ class FacebookBusinessBrowser:
             await self.page.wait_for_timeout(900)
 
             # Opening the portfolio selector causes Meta's frontend to hydrate
-            # its Business list on accounts where HOME alone is lazy.
+            # its Business list. Keep the established lightweight sidebar
+            # probe: it samples only a bounded top-left grid and never scans
+            # the whole DOM.
             try:
-                candidates = self.page.locator(
-                    '[role="button"]:visible, button:visible, [tabindex="0"]:visible'
+                selector_probe = await self.page.evaluate(
+                    """() => {
+                        const visible = (el) => {
+                            if (!el || el === document.body || el === document.documentElement) return false;
+                            const r = el.getBoundingClientRect();
+                            const s = getComputedStyle(el);
+                            return r.width > 0 && r.height > 0
+                                && s.display !== 'none'
+                                && s.visibility !== 'hidden'
+                                && s.pointerEvents !== 'none';
+                        };
+                        const label = (el) => [
+                            (el.getAttribute && el.getAttribute('aria-label')) || '',
+                            (el.getAttribute && el.getAttribute('title')) || '',
+                            el.innerText || el.textContent || ''
+                        ].join(' ').replace(/\\s+/g, ' ').trim();
+
+                        const xs = [20, 52, 88, 124, 160, 196, 228];
+                        const ys = [58,72,86,100,114,128,142,156,170,184,198,212,226,240,254,268];
+                        const seen = new Set();
+                        const rows = [];
+
+                        for (const y of ys) {
+                            for (const x of xs) {
+                                const stack = document.elementsFromPoint(x, y) || [];
+                                for (const el of stack.slice(0, 10)) {
+                                    if (seen.has(el) || !visible(el)) continue;
+                                    seen.add(el);
+                                    const r = el.getBoundingClientRect();
+                                    const text = label(el);
+                                    const role = (el.getAttribute && el.getAttribute('role')) || '';
+                                    const tabindex = (el.getAttribute && el.getAttribute('tabindex')) || '';
+                                    const tag = el.tagName || '';
+                                    if (r.x > 300 || r.y < 48 || r.y > 285) continue;
+                                    if (r.width < 70 || r.width > 300) continue;
+                                    if (r.height < 22 || r.height > 100) continue;
+                                    if (!text) continue;
+                                    rows.push({el,r,text,role,tabindex,tag});
+                                }
+                            }
+                        }
+
+                        const homeRows = rows.filter(row =>
+                            /^(Home|Startseite|Start|Главная|Головна)$/i.test(row.text)
+                        );
+                        const homeY = homeRows.length
+                            ? Math.min(...homeRows.map(row => row.r.y))
+                            : 285;
+                        const candidates = rows.filter(row =>
+                            row.r.y < homeY - 2
+                            && !/^Meta Business Suite$/i.test(row.text)
+                            && !/^(Home|Startseite|Start|Главная|Головна)$/i.test(row.text)
+                            && !/^(Create|Создать|Створити|Erstellen)$/i.test(row.text)
+                        );
+                        candidates.sort((a,b) => {
+                            const ai = (a.role === 'button' || a.tag === 'BUTTON' || a.tabindex === '0') ? 1 : 0;
+                            const bi = (b.role === 'button' || b.tag === 'BUTTON' || b.tabindex === '0') ? 1 : 0;
+                            if (ai !== bi) return bi - ai;
+                            if (a.r.y !== b.r.y) return b.r.y - a.r.y;
+                            return (b.r.width*b.r.height) - (a.r.width*a.r.height);
+                        });
+
+                        const best = candidates[0];
+                        if (!best) return {clicked:false,candidates:[]};
+                        best.el.click();
+                        return {clicked:true};
+                    }"""
                 )
-                count = min(await candidates.count(), 80)
-                best = None
-                best_y = -1.0
-                for index in range(count):
-                    item = candidates.nth(index)
-                    try:
-                        box = await item.bounding_box()
-                        if not box:
-                            continue
-                        x = float(box.get("x") or 0)
-                        y = float(box.get("y") or 0)
-                        w = float(box.get("width") or 0)
-                        h = float(box.get("height") or 0)
-                        if x > 300 or y < 45 or y > 285 or w < 60 or h < 20:
-                            continue
-                        label = _clean(
-                            await item.get_attribute("aria-label")
-                            or await item.get_attribute("title")
-                            or await item.inner_text(timeout=500)
-                        )
-                        if not label:
-                            continue
-                        folded = label.casefold()
-                        if folded in {
-                            "home", "главная", "головна",
-                            "meta business suite",
-                        }:
-                            continue
-                        if y > best_y:
-                            best = item
-                            best_y = y
-                    except Exception:
-                        continue
-                if best is not None:
-                    await best.click()
-                    selector_opened = True
+                selector_opened = bool(
+                    isinstance(selector_probe, dict)
+                    and selector_probe.get("clicked")
+                )
+                if selector_opened:
                     await self.page.wait_for_timeout(1000)
             except Exception:
                 selector_opened = False
