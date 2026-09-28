@@ -9634,6 +9634,88 @@ class FacebookBusinessBrowser:
                             or "/settings/ad-accounts" in landed_url.casefold()
                         )
                     )
+                    exact_dom_state: dict[str, Any] = {}
+                    if landed_targets_business:
+                        # This is the only live route observed to preserve the
+                        # requested BM. Unlike the redirecting /latest shell,
+                        # allow its document to finish loading before probing
+                        # the settings navigation and Relay hydration.
+                        dom_remaining = max(
+                            0.0,
+                            deadline - time.monotonic(),
+                        )
+                        if dom_remaining > 0:
+                            try:
+                                await self.page.wait_for_load_state(
+                                    "domcontentloaded",
+                                    timeout=max(
+                                        250,
+                                        int(
+                                            min(
+                                                5.0,
+                                                dom_remaining,
+                                            ) * 1000
+                                        ),
+                                    ),
+                                )
+                            except Exception as dom_exc:
+                                exact_dom_state["domcontentloaded_error"] = (
+                                    f"{dom_exc.__class__.__name__}: "
+                                    f"{_clean(dom_exc)}"
+                                )[:500]
+                        try:
+                            safe_dom = await self.page.evaluate(
+                                """(business) => {
+                                    const html = document.documentElement
+                                        ? document.documentElement.innerHTML || ''
+                                        : '';
+                                    const hrefs = [...document.querySelectorAll('a[href]')]
+                                        .filter(a => {
+                                            const h = (a.href || '').toLowerCase();
+                                            return h.includes('/settings/')
+                                                || h.includes('business_id=')
+                                                || h.includes('ad_account')
+                                                || h.includes('ad-account');
+                                        })
+                                        .slice(0, 12)
+                                        .map(a => ({
+                                            href: (a.href || '').slice(0, 700),
+                                            text: (a.innerText || a.textContent || '')
+                                                .replace(/\s+/g, ' ')
+                                                .trim()
+                                                .slice(0, 160)
+                                        }));
+                                    return {
+                                        readyState: document.readyState || '',
+                                        bodyChildren: document.body
+                                            ? document.body.querySelectorAll('*').length
+                                            : 0,
+                                        bodyTextLength: document.body
+                                            ? (document.body.innerText || '').length
+                                            : 0,
+                                        scripts: document.scripts ? document.scripts.length : 0,
+                                        links: document.links ? document.links.length : 0,
+                                        interactive: document.querySelectorAll(
+                                            'a[href],button,[role="button"],[role="link"],[role="menuitem"]'
+                                        ).length,
+                                        targetBusinessInHtml: business
+                                            ? html.includes(String(business))
+                                            : false,
+                                        adAccountMarkerInHtml:
+                                            /ad[_-]?accounts|adaccount|advertising account/i.test(html),
+                                        hrefCandidates: hrefs
+                                    };
+                                }""",
+                                business,
+                            )
+                            if isinstance(safe_dom, dict):
+                                exact_dom_state.update(safe_dom)
+                        except Exception as dom_probe_exc:
+                            exact_dom_state["probe_error"] = (
+                                f"{dom_probe_exc.__class__.__name__}: "
+                                f"{_clean(dom_probe_exc)}"
+                            )[:500]
+
                     post_nav_remaining = max(0.0, deadline - time.monotonic())
                     if post_nav_remaining > 0:
                         await self.page.wait_for_timeout(
@@ -9714,7 +9796,12 @@ class FacebookBusinessBrowser:
                             await asyncio.wait_for(
                                 inventory_query_seen.wait(),
                                 timeout=min(
-                                    3.0 if final_page_targets_business else 1.0,
+                                    max(
+                                        0.1,
+                                        body_read_remaining - 0.6,
+                                    )
+                                    if final_page_targets_business
+                                    else 1.0,
                                     body_read_remaining,
                                 ),
                             )
@@ -9768,9 +9855,16 @@ class FacebookBusinessBrowser:
                             ),
                             "activated": activated,
                             "section": section_diagnostic,
+                            "dom": exact_dom_state,
                         }
                     )
                     if inventory_observed:
+                        break
+                    if final_page_targets_business:
+                        # The exact BM document had the full remaining budget.
+                        # If it emitted no authoritative RK inventory, moving
+                        # into a known Page/Profile redirect cannot make the
+                        # result safer or more authoritative.
                         break
                     if inventory_query_seen.is_set() or pending_inventory:
                         # Once Meta emitted a read-only RK inventory query for
