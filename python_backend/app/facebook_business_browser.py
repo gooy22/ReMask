@@ -875,16 +875,19 @@ def _extract_business_inventory_rows(payload: Any) -> list[dict[str, str]]:
                 or value.get("name")
             )
 
+            explicit_business_key = any(
+                key in value
+                for key in ("business_id", "businessId", "businessID")
+            )
             strong_context = bool(
-                business_context
-                and (
-                    "business" in folded_type
-                    or "businesses" in folded_path
-                    or "businessportfolio" in folded_path
-                    or "bizkit" in folded_path
-                    or any(
-                        key in value
-                        for key in ("business_id", "businessId", "businessID")
+                explicit_business_key
+                or (
+                    business_context
+                    and (
+                        "business" in folded_type
+                        or "businesses" in folded_path
+                        or "businessportfolio" in folded_path
+                        or "bizkit" in folded_path
                     )
                 )
             )
@@ -4538,11 +4541,19 @@ class FacebookBusinessBrowser:
                 raw = await response.text()
                 payload = _decode_graphql_text(raw)
                 rows = _extract_business_inventory_rows(payload)
+                request_business_ids = sorted({
+                    business_id
+                    for business_id, path in _walk_business_ids(
+                        meta.get("variables") or {}
+                    )
+                    if business_id and "business" in path.casefold()
+                })
                 query_diagnostics.append(
                     {
                         "friendly_name": friendly[:180],
                         "doc_id": _clean(meta.get("doc_id"))[:60],
                         "rows": len(rows),
+                        "request_business_ids": request_business_ids[:8],
                     }
                 )
                 if len(query_diagnostics) > 24:
@@ -4558,6 +4569,13 @@ class FacebookBusinessBrowser:
                         or (business_name and not network_rows[business_id])
                     ):
                         network_rows[business_id] = business_name
+
+                # Meta frequently moves the Business node deeper into a generic
+                # viewer payload while keeping the exact target business_id in
+                # read-only query variables. That explicit key is private
+                # Business Suite evidence too; use it as an ID-only fallback.
+                for business_id in request_business_ids:
+                    network_rows.setdefault(business_id, "")
             except Exception as exc:
                 query_diagnostics.append(
                     {
@@ -4581,8 +4599,40 @@ class FacebookBusinessBrowser:
             except Exception:
                 listener_installed = False
 
-        selector_opened = False
         dom_output: dict[str, str] = {}
+        async def collect_dom_businesses() -> int:
+            before = len(dom_output)
+            try:
+                href_rows = await self.page.locator("a[href]").evaluate_all(
+                    """els => els.slice(0, 3000).map(el => ({
+                        href: el.href || "",
+                        text: (el.innerText || el.textContent || "").trim()
+                    }))"""
+                )
+            except Exception:
+                href_rows = []
+
+            for row in href_rows:
+                if not isinstance(row, dict):
+                    continue
+                href = str(row.get("href") or "")
+                text = _clean(row.get("text"))
+                for business_id in _business_ids_from_text(href):
+                    if (
+                        business_id not in dom_output
+                        or (text and not dom_output[business_id])
+                    ):
+                        dom_output[business_id] = text
+
+            try:
+                content = await self.page.content()
+            except Exception:
+                content = ""
+            for business_id in _business_ids_from_text(content):
+                dom_output.setdefault(business_id, "")
+            return len(dom_output) - before
+
+        selector_opened = False
         try:
             await self._goto(self.HOME_URL)
             await self.page.wait_for_timeout(900)
@@ -4688,6 +4738,10 @@ class FacebookBusinessBrowser:
                         if network_rows:
                             break
                         await self.page.wait_for_timeout(300)
+                    # Capture the open selector DOM before navigating away.
+                    # Some Meta builds render BM links in the menu but do not
+                    # issue a dedicated portfolio GraphQL request.
+                    await collect_dom_businesses()
             except Exception as exc:
                 selector_opened = False
                 selector_probe = {
@@ -4700,7 +4754,7 @@ class FacebookBusinessBrowser:
             # accounts/pages land in an asset-scoped HOME that never requests
             # the portfolio collection.
             overview_attempt: dict[str, Any] = {}
-            if not network_rows:
+            if not network_rows and not dom_output:
                 try:
                     await self._goto(self.OVERVIEW_URL)
                     overview_attempt = {
@@ -4712,6 +4766,7 @@ class FacebookBusinessBrowser:
                         if network_rows:
                             break
                         await self.page.wait_for_timeout(300)
+                    await collect_dom_businesses()
                 except BrowserBusinessError:
                     raise
                 except Exception as exc:
@@ -4720,32 +4775,8 @@ class FacebookBusinessBrowser:
                         "error": f"{exc.__class__.__name__}: {_clean(exc)}"[:500],
                     }
 
-            # Fallback only: some builds expose Business IDs in href/HTML.
-            try:
-                href_rows = await self.page.locator("a[href]").evaluate_all(
-                    """els => els.slice(0, 3000).map(el => ({
-                        href: el.href || "",
-                        text: (el.innerText || el.textContent || "").trim()
-                    }))"""
-                )
-            except Exception:
-                href_rows = []
-
-            for row in href_rows:
-                if not isinstance(row, dict):
-                    continue
-                href = str(row.get("href") or "")
-                text = _clean(row.get("text"))
-                for business_id in _business_ids_from_text(href):
-                    if business_id not in dom_output or (text and not dom_output[business_id]):
-                        dom_output[business_id] = text
-
-            try:
-                content = await self.page.content()
-            except Exception:
-                content = ""
-            for business_id in _business_ids_from_text(content):
-                dom_output.setdefault(business_id, "")
+            # Final fallback for whichever surface is currently mounted.
+            await collect_dom_businesses()
 
             if response_tasks:
                 await asyncio.gather(
