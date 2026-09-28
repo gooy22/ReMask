@@ -293,7 +293,7 @@ RUN set -eux; \
     grep -q "'network_identity' => 'profile_bound'" /var/www/html/ajax/metaHierarchy.php; \
     grep -Fq "p.proxy_configured && ps!==''&&ps!=='LIVE'" /var/www/html/scripts/workspace.js; \
     grep -q 'REMASK_BM_OWNED_CLIENT_V2' /var/www/html/classes/MetaAdsService.php; \
-    grep -q 'REMASK_DIRECT_RK_FUNDING_V3' /var/www/html/classes/MetaAdsService.php;     grep -q 'identity_minimal' /var/www/html/classes/MetaAdsService.php;     grep -q 'META_SYNC_PREFLIGHT_FAILED' /var/www/html/ajax/metaHierarchy.php; \
+    php -r '$files=["/var/www/html/classes/MetaApiClient.php"=>["Invalid request","function request","class MetaApiException"],"/var/www/html/classes/MetaEndpoint.php"=>["function cachedPreflight","function preflight"]]; foreach($files as $file=>$needles){$s=file_get_contents($file); foreach($needles as $n){$p=strpos($s,$n); if($p===false)continue; $a=max(0,$p-2200); $len=min(strlen($s)-$a,7000); fwrite(STDERR,"\n[REMASK_RUNTIME_DIAG] ".$file." needle=".$n."\n".substr($s,$a,$len)."\n[/REMASK_RUNTIME_DIAG]\n");}}';     grep -q 'REMASK_DIRECT_RK_FUNDING_V3' /var/www/html/classes/MetaAdsService.php;     grep -q 'identity_minimal' /var/www/html/classes/MetaAdsService.php;     grep -q 'META_SYNC_PREFLIGHT_FAILED' /var/www/html/ajax/metaHierarchy.php; \
     grep -q 'is_adset_budget_sharing_enabled' /var/www/html/classes/MetaAdsService.php; \
     grep -q 'REMASK_META_ERROR_DETAILS_V1' /var/www/html/scripts/launch.js; \
     grep -q 'REMASK_DAILY_BUDGET_GUARD_V1' /var/www/html/scripts/launch.js; \
