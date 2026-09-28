@@ -4815,10 +4815,35 @@ class FacebookBusinessBrowser:
                 ):
                     return
 
+                request_scoped = _graphql_request_ad_account_inventory_scope(meta)
+                if request_scoped:
+                    diagnostics.append(
+                        {
+                            "phase": "request",
+                            "friendly_name": _clean(meta.get("friendly_name"))[:180],
+                            "doc_id": _clean(meta.get("doc_id"))[:80],
+                            "variable_keys": sorted(
+                                str(key)
+                                for key in (
+                                    (meta.get("variables") or {}).keys()
+                                    if isinstance(meta.get("variables"), dict)
+                                    else []
+                                )
+                            )[:32],
+                            "variable_numeric_ids": safe_variable_numeric_ids(meta),
+                            "page_url": _clean(
+                                getattr(self.page, "url", "")
+                            )[:700],
+                        }
+                    )
+                    if len(diagnostics) > 24:
+                        del diagnostics[:-24]
+                    inventory_query_seen.set()
+
                 task = asyncio.create_task(inspect_response(response))
                 response_tasks.add(task)
                 task.add_done_callback(response_tasks.discard)
-                if _graphql_request_ad_account_inventory_scope(meta):
+                if request_scoped:
                     inventory_response_tasks.add(task)
                     task.add_done_callback(inventory_response_tasks.discard)
             except Exception:
@@ -9294,6 +9319,29 @@ class FacebookBusinessBrowser:
         inventory_observed = False
         response_tasks: set[asyncio.Task[Any]] = set()
         inventory_response_tasks: set[asyncio.Task[Any]] = set()
+        inventory_query_seen = asyncio.Event()
+
+        def safe_variable_numeric_ids(meta: dict[str, Any]) -> list[dict[str, str]]:
+            found: list[dict[str, str]] = []
+
+            def walk(value: Any, path: str = "variables") -> None:
+                if len(found) >= 32:
+                    return
+                if isinstance(value, dict):
+                    for key, child in value.items():
+                        walk(child, f"{path}.{key}")
+                elif isinstance(value, list):
+                    for index, child in enumerate(value[:24]):
+                        walk(child, f"{path}[{index}]")
+                else:
+                    clean_value = _clean(value)
+                    if clean_value.isdigit() and 5 <= len(clean_value) <= 30:
+                        found.append(
+                            {"path": path[:240], "value": clean_value}
+                        )
+
+            walk(meta.get("variables") or {})
+            return found
 
         async def inspect_response(response: Any) -> None:
             nonlocal inventory_observed
@@ -9364,24 +9412,7 @@ class FacebookBusinessBrowser:
 
                 # Diagnostic only: expose numeric context values by JSON path,
                 # never the raw request body, cookies, fb_dtsg or access token.
-                variable_numeric_ids: list[dict[str, str]] = []
-                def collect_numeric_ids(value: Any, path: str = "variables") -> None:
-                    if len(variable_numeric_ids) >= 32:
-                        return
-                    if isinstance(value, dict):
-                        for key, child in value.items():
-                            collect_numeric_ids(child, f"{path}.{key}")
-                    elif isinstance(value, list):
-                        for index, child in enumerate(value[:24]):
-                            collect_numeric_ids(child, f"{path}[{index}]")
-                    else:
-                        clean_value = _clean(value)
-                        if clean_value.isdigit() and 5 <= len(clean_value) <= 30:
-                            variable_numeric_ids.append(
-                                {"path": path[:240], "value": clean_value}
-                            )
-
-                collect_numeric_ids(meta.get("variables") or {})
+                variable_numeric_ids = safe_variable_numeric_ids(meta)
                 row_summaries = [
                     {
                         "id": _normalize_ad_account_id(row.get("id")),
@@ -9567,6 +9598,22 @@ class FacebookBusinessBrowser:
                     # the next navigation starts. Drain targeted inventory
                     # response bodies before another goto instead of racing
                     # Network.getResponseBody against navigation.
+                    body_read_remaining = max(
+                        0.0,
+                        deadline - time.monotonic(),
+                    )
+                    if (
+                        not inventory_query_seen.is_set()
+                        and body_read_remaining > 0
+                    ):
+                        try:
+                            await asyncio.wait_for(
+                                inventory_query_seen.wait(),
+                                timeout=min(2.0, body_read_remaining),
+                            )
+                        except asyncio.TimeoutError:
+                            pass
+
                     if inventory_response_tasks:
                         body_read_remaining = max(
                             0.0,
@@ -9575,7 +9622,7 @@ class FacebookBusinessBrowser:
                         if body_read_remaining > 0:
                             _done, pending_inventory = await asyncio.wait(
                                 list(inventory_response_tasks),
-                                timeout=min(2.0, body_read_remaining),
+                                timeout=min(2.5, body_read_remaining),
                             )
                         else:
                             pending_inventory = set()
@@ -9598,10 +9645,11 @@ class FacebookBusinessBrowser:
                     )
                     if inventory_observed:
                         break
-                    if pending_inventory:
-                        # Preserve the current document so the in-flight RK
-                        # response can finish instead of invalidating its body
-                        # with another navigation.
+                    if inventory_query_seen.is_set() or pending_inventory:
+                        # Once Meta emitted a read-only RK inventory query for
+                        # this navigation, keep the current document alive.
+                        # A second goto can invalidate response.body() even
+                        # after the response event was delivered.
                         break
                 except BrowserBusinessError:
                     raise
