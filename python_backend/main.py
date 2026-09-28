@@ -975,6 +975,15 @@ async def profile_live_inventory(profile_id: str, business_ids: str | None = Non
                         warnings.append(
                             'Private Business Suite inventory returned no Business portfolios'
                         )
+                        log.warning(
+                            'live inventory profile=%s business_discovery diagnostic=%s',
+                            clean_profile,
+                            json.dumps(
+                                business_diag,
+                                ensure_ascii=False,
+                                separators=(',', ':'),
+                            )[:6000],
+                        )
                 except asyncio.TimeoutError:
                     warnings.append('Business discovery timed out')
                     business_map={}
