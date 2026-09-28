@@ -274,7 +274,61 @@ def read_json(target: str, timeout: float):
 
 try:
     state = read_json(state_url, 15)
+
+    workspace_binding = {}
+    binding_root = (
+        os.getenv("REMASK_DATA_DIR")
+        or os.getenv("RAILWAY_VOLUME_MOUNT_PATH")
+        or "/var/lib/remask"
+    )
+    binding_path = os.path.join(
+        binding_root,
+        "workspace-provisioning-bindings.json",
+    )
+    try:
+        with open(binding_path, "r", encoding="utf-8") as fh:
+            binding_data = json.load(fh)
+        profile_binding = (
+            binding_data.get("7")
+            if isinstance(binding_data, dict)
+            else {}
+        )
+        if isinstance(profile_binding, dict):
+            raw_accounts = profile_binding.get("ad_accounts")
+            if isinstance(raw_accounts, dict):
+                for business_key, relation in raw_accounts.items():
+                    if not isinstance(relation, dict):
+                        continue
+                    workspace_binding[str(business_key)] = {
+                        "business_id": str(
+                            relation.get("business_id") or business_key
+                        ),
+                        "ad_account_id": str(
+                            relation.get("ad_account_id") or ""
+                        ),
+                        "account_name": str(
+                            relation.get("account_name") or ""
+                        ),
+                        "source": str(relation.get("source") or ""),
+                    }
+            else:
+                business_id = str(profile_binding.get("business_id") or "")
+                if business_id:
+                    workspace_binding[business_id] = {
+                        "business_id": business_id,
+                        "ad_account_id": str(
+                            profile_binding.get("ad_account_id") or ""
+                        ),
+                        "account_name": str(
+                            profile_binding.get("account_name") or ""
+                        ),
+                        "source": str(profile_binding.get("source") or ""),
+                    }
+    except Exception:
+        workspace_binding = {}
+
     safe_state = {
+        "workspace_binding": workspace_binding,
         "business_id": str(state.get("business_id") or ""),
         "business_name": str(state.get("business_name") or ""),
         "ad_account_id": str(state.get("ad_account_id") or ""),

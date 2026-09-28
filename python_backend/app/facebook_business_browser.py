@@ -4799,53 +4799,9 @@ class FacebookBusinessBrowser:
 
         def on_response(response: Any) -> None:
             try:
-                url = _clean(getattr(response, "url", ""))
-                if "graphql" not in url.casefold():
-                    return
-                request = getattr(response, "request", None)
-                meta = (
-                    _request_graphql_meta(request)
-                    if request is not None
-                    else {}
-                )
-                friendly = _clean(meta.get("friendly_name")).casefold()
-                if any(
-                    marker in friendly
-                    for marker in ("mutation", "create", "update", "delete")
-                ):
-                    return
-
-                request_scoped = _graphql_request_ad_account_inventory_scope(meta)
-                if request_scoped:
-                    diagnostics.append(
-                        {
-                            "phase": "request",
-                            "friendly_name": _clean(meta.get("friendly_name"))[:180],
-                            "doc_id": _clean(meta.get("doc_id"))[:80],
-                            "variable_keys": sorted(
-                                str(key)
-                                for key in (
-                                    (meta.get("variables") or {}).keys()
-                                    if isinstance(meta.get("variables"), dict)
-                                    else []
-                                )
-                            )[:32],
-                            "variable_numeric_ids": safe_variable_numeric_ids(meta),
-                            "page_url": _clean(
-                                getattr(self.page, "url", "")
-                            )[:700],
-                        }
-                    )
-                    if len(diagnostics) > 24:
-                        del diagnostics[:-24]
-                    inventory_query_seen.set()
-
                 task = asyncio.create_task(inspect_response(response))
                 response_tasks.add(task)
                 task.add_done_callback(response_tasks.discard)
-                if request_scoped:
-                    inventory_response_tasks.add(task)
-                    task.add_done_callback(inventory_response_tasks.discard)
             except Exception:
                 return
 
@@ -9320,6 +9276,7 @@ class FacebookBusinessBrowser:
         response_tasks: set[asyncio.Task[Any]] = set()
         inventory_response_tasks: set[asyncio.Task[Any]] = set()
         inventory_query_seen = asyncio.Event()
+        inventory_response_seen = asyncio.Event()
 
         def safe_variable_numeric_ids(meta: dict[str, Any]) -> list[dict[str, str]]:
             found: list[dict[str, str]] = []
@@ -9530,9 +9487,30 @@ class FacebookBusinessBrowser:
 
         def on_response(response: Any) -> None:
             try:
+                url = _clean(getattr(response, "url", ""))
+                if "graphql" not in url.casefold():
+                    return
+                request = getattr(response, "request", None)
+                meta = (
+                    _request_graphql_meta(request)
+                    if request is not None
+                    else {}
+                )
+                friendly = _clean(meta.get("friendly_name")).casefold()
+                if any(
+                    marker in friendly
+                    for marker in ("mutation", "create", "update", "delete")
+                ):
+                    return
+
+                request_scoped = _graphql_request_ad_account_inventory_scope(meta)
                 task = asyncio.create_task(inspect_response(response))
                 response_tasks.add(task)
                 task.add_done_callback(response_tasks.discard)
+                if request_scoped:
+                    inventory_response_seen.set()
+                    inventory_response_tasks.add(task)
+                    task.add_done_callback(inventory_response_tasks.discard)
             except Exception:
                 return
 
@@ -9655,6 +9633,26 @@ class FacebookBusinessBrowser:
                         except asyncio.TimeoutError:
                             pass
 
+                    # Request metadata arrives before the response event. Once
+                    # the RK request is seen, keep this document alive until
+                    # the matching response event has had a chance to arrive.
+                    if (
+                        inventory_query_seen.is_set()
+                        and not inventory_response_seen.is_set()
+                    ):
+                        response_wait_remaining = max(
+                            0.0,
+                            deadline - time.monotonic(),
+                        )
+                        if response_wait_remaining > 0:
+                            try:
+                                await asyncio.wait_for(
+                                    inventory_response_seen.wait(),
+                                    timeout=min(4.0, response_wait_remaining),
+                                )
+                            except asyncio.TimeoutError:
+                                pass
+
                     if inventory_response_tasks:
                         body_read_remaining = max(
                             0.0,
@@ -9663,7 +9661,7 @@ class FacebookBusinessBrowser:
                         if body_read_remaining > 0:
                             _done, pending_inventory = await asyncio.wait(
                                 list(inventory_response_tasks),
-                                timeout=min(2.5, body_read_remaining),
+                                timeout=min(4.0, body_read_remaining),
                             )
                         else:
                             pending_inventory = set()
