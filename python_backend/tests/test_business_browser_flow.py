@@ -3383,7 +3383,11 @@ class BrowserAdAccountPageScopedInventoryRegressionTests(unittest.TestCase):
         )
         self.assertIn("page_scoped = bool(page_targets_business)", source)
         self.assertIn(
-            "inventory_scope = bool(request_scoped or page_scoped)",
+            "preliminary_scope = bool(request_scoped or page_scoped)",
+            source,
+        )
+        self.assertIn(
+            "inventory_scope = bool(",
             source,
         )
         self.assertIn(
