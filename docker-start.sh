@@ -96,6 +96,10 @@ if [ -f "$ROOT/bin/remask-profile7-history-diagnostic.php" ]; then
   php "$ROOT/bin/remask-profile7-history-diagnostic.php" 2>&1 || true
 fi
 
+if [ -f "$ROOT/bin/remask-profile7-saved-context-diagnostic.php" ]; then
+  php "$ROOT/bin/remask-profile7-saved-context-diagnostic.php" 2>&1 || true
+fi
+
 rm -rf "$ROOT/health"
 printf '%s\n' '{"ok":true,"service":"remask"}' > "$ROOT/health"
 
@@ -161,44 +165,8 @@ PY
     tail -n 160 "$DATA_DIR/python-worker.log" >&2 || true
   fi
 
-  if [ "$WORKER_HEALTH_OK" = "1" ]; then
-    /opt/remask-venv/bin/python - "$PYTHON_WORKER_PORT" "$REMASK_WORKER_API_KEY" <<'PY' || true
-import json
-import sys
-import urllib.request
-port=int(sys.argv[1]); key=sys.argv[2]
-req=urllib.request.Request(
-    f"http://127.0.0.1:{port}/api/v1/profiles/7/live-inventory",
-    headers={"X-Remask-Worker-Key":key,"Accept":"application/json"},
-)
-try:
-    with urllib.request.urlopen(req,timeout=35) as r:
-        data=json.loads(r.read().decode("utf-8"))
-    safe={
-        "ok":data.get("ok"),
-        "profile_id":data.get("profile_id"),
-        "live_ready":data.get("live_ready"),
-        "source":data.get("source"),
-        "businesses_count":data.get("businesses_count"),
-        "live_businesses_count":data.get("live_businesses_count"),
-        "warnings":data.get("warnings"),
-        "businesses":[
-            {
-                "id":b.get("id"),
-                "name":b.get("name"),
-                "ad_accounts_count":b.get("ad_accounts_count"),
-                "ad_accounts_ready":b.get("ad_accounts_ready"),
-                "source":b.get("source") or b.get("ad_accounts_source"),
-            }
-            for b in (data.get("businesses") or [])
-            if isinstance(b,dict)
-        ],
-    }
-    print("[profile7-live-inventory] "+json.dumps(safe,ensure_ascii=False),file=sys.stderr)
-except Exception as exc:
-    print("[profile7-live-inventory] "+json.dumps({"ok":False,"error":f"{type(exc).__name__}: {exc}"},ensure_ascii=False),file=sys.stderr)
-PY
-  fi
+  # Live inventory is verified after Apache starts, because ProfileResolver
+  # calls the local PHP context endpoint.
 
   # Keep monitoring after startup too. A Chromium-heavy BUSINESS job can leave
   # the worker process alive while its HTTP loop is no longer responsive.
@@ -275,6 +243,69 @@ a2enconf remask-servername 2>/dev/null || true
 
 sed -ri "s#DocumentRoot .*#DocumentRoot ${ROOT}#" /etc/apache2/sites-available/000-default.conf
 sed -ri "s/<VirtualHost \*:[0-9]+>/<VirtualHost *:80>/" /etc/apache2/sites-available/000-default.conf
+
+
+# Read-only post-start verification. Apache is required because the embedded
+# Python ProfileResolver resolves profile context through local PHP.
+if [ "$USE_EXTERNAL_PYTHON_WORKER" != "1" ]; then
+  (
+    sleep 8
+    /opt/remask-venv/bin/python - "$PYTHON_WORKER_PORT" "$REMASK_WORKER_API_KEY" <<'PY' || true
+import json
+import sys
+import time
+import urllib.error
+import urllib.request
+
+port=int(sys.argv[1]); key=sys.argv[2]
+url=f"http://127.0.0.1:{port}/api/v1/profiles/7/live-inventory"
+last_error=""
+for attempt in range(1,4):
+    try:
+        req=urllib.request.Request(
+            url,
+            headers={"X-Remask-Worker-Key":key,"Accept":"application/json"},
+        )
+        with urllib.request.urlopen(req,timeout=35) as r:
+            data=json.loads(r.read().decode("utf-8"))
+        safe={
+            "ok":data.get("ok"),
+            "profile_id":data.get("profile_id"),
+            "live_ready":data.get("live_ready"),
+            "source":data.get("source"),
+            "businesses_count":data.get("businesses_count"),
+            "live_businesses_count":data.get("live_businesses_count"),
+            "warnings":data.get("warnings"),
+            "businesses":[
+                {
+                    "id":b.get("id"),
+                    "name":b.get("name"),
+                    "ad_accounts_count":b.get("ad_accounts_count"),
+                    "ad_accounts_ready":b.get("ad_accounts_ready"),
+                    "source":b.get("source") or b.get("ad_accounts_source"),
+                }
+                for b in (data.get("businesses") or [])
+                if isinstance(b,dict)
+            ],
+        }
+        print("[profile7-live-inventory] "+json.dumps(safe,ensure_ascii=False),file=sys.stderr)
+        raise SystemExit(0)
+    except urllib.error.HTTPError as exc:
+        try:
+            body=exc.read().decode("utf-8","replace")
+            payload=json.loads(body)
+            detail=payload.get("detail") or payload.get("error") or body[:300]
+        except Exception:
+            detail=f"HTTP {exc.code}"
+        last_error=f"HTTPError({exc.code}): {detail}"
+    except Exception as exc:
+        last_error=f"{type(exc).__name__}: {exc}"
+    if attempt < 3:
+        time.sleep(3)
+print("[profile7-live-inventory] "+json.dumps({"ok":False,"error":last_error},ensure_ascii=False),file=sys.stderr)
+PY
+  ) >> "$DATA_DIR/python-worker.log" 2>&1 &
+fi
 
 
 

@@ -430,6 +430,8 @@ RUN set -eux; \
     cp /tmp/railway-profile7-history-diagnostic.php /var/www/html/bin/remask-profile7-history-diagnostic.php; \
     cp /tmp/railway-profile7-session-restore.php /var/www/html/bin/remask-profile7-session-restore.php; \
     php -l /var/www/html/bin/remask-profile7-session-restore.php; \
+    cp /tmp/railway-profile7-saved-context-diagnostic.php /var/www/html/bin/remask-profile7-saved-context-diagnostic.php; \
+    php -l /var/www/html/bin/remask-profile7-saved-context-diagnostic.php; \
     php -l /var/www/html/bin/remask-profile7-history-diagnostic.php; \
     if [ ! -f /var/www/html/health/index.php ]; then printf '%s\n' '<?php http_response_code(200); header("Content-Type: application/json"); echo json_encode(["ok"=>true,"service":"remask","rev"=>getenv("REMASK_DEPLOY_REV")]);' > /var/www/html/health/index.php; fi; \
     [ -f /var/www/html/index.php ]; \
