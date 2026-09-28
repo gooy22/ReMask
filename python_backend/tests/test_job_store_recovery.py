@@ -431,5 +431,60 @@ class ProfileResolverRecoveryTests(unittest.IsolatedAsyncioTestCase):
 
 
 
+
+class ProfileMutationCooldownTests(unittest.IsolatedAsyncioTestCase):
+    async def test_first_mutation_has_no_delay(self):
+        from app.provisioning import service as service_module
+
+        original = service_module._PROFILE_MUTATION_COOLDOWN_SECONDS
+        service_module._PROFILE_MUTATION_COOLDOWN_SECONDS = 8.0
+        service_module._PROFILE_MUTATION_LAST_FINISHED.clear()
+        try:
+            waited = await service_module._await_profile_mutation_cooldown("6")
+            self.assertEqual(waited, 0.0)
+        finally:
+            service_module._PROFILE_MUTATION_LAST_FINISHED.clear()
+            service_module._PROFILE_MUTATION_COOLDOWN_SECONDS = original
+
+    async def test_recent_mutation_waits_before_same_profile(self):
+        from app.provisioning import service as service_module
+
+        original = service_module._PROFILE_MUTATION_COOLDOWN_SECONDS
+        original_sleep = service_module.asyncio.sleep
+        waits = []
+
+        async def fake_sleep(seconds):
+            waits.append(seconds)
+
+        service_module._PROFILE_MUTATION_COOLDOWN_SECONDS = 8.0
+        service_module._PROFILE_MUTATION_LAST_FINISHED.clear()
+        service_module._PROFILE_MUTATION_LAST_FINISHED["6"] = service_module.time.monotonic()
+        service_module.asyncio.sleep = fake_sleep
+        try:
+            waited = await service_module._await_profile_mutation_cooldown("6")
+            self.assertGreater(waited, 7.0)
+            self.assertLessEqual(waited, 8.0)
+            self.assertEqual(len(waits), 1)
+            self.assertGreater(waits[0], 7.0)
+        finally:
+            service_module.asyncio.sleep = original_sleep
+            service_module._PROFILE_MUTATION_LAST_FINISHED.clear()
+            service_module._PROFILE_MUTATION_COOLDOWN_SECONDS = original
+
+    async def test_other_profile_is_not_delayed(self):
+        from app.provisioning import service as service_module
+
+        original = service_module._PROFILE_MUTATION_COOLDOWN_SECONDS
+        service_module._PROFILE_MUTATION_COOLDOWN_SECONDS = 8.0
+        service_module._PROFILE_MUTATION_LAST_FINISHED.clear()
+        service_module._PROFILE_MUTATION_LAST_FINISHED["6"] = service_module.time.monotonic()
+        try:
+            waited = await service_module._await_profile_mutation_cooldown("7")
+            self.assertEqual(waited, 0.0)
+        finally:
+            service_module._PROFILE_MUTATION_LAST_FINISHED.clear()
+            service_module._PROFILE_MUTATION_COOLDOWN_SECONDS = original
+
+
 if __name__ == "__main__":
     unittest.main()
