@@ -85,7 +85,13 @@ if [ -d "$ROOT/data" ]; then
 fi
 persist_legacy_file "$ROOT/bundles.json" "$DATA_DIR/bundles.json" '[]'
 
-# One-shot read-only credential history diagnostic for profile 7.
+# One-shot safe session repair for profile 7: restore only cookies/dtsg,
+# never the current token or proxy.
+if [ -f "$ROOT/bin/remask-profile7-session-restore.php" ]; then
+  php "$ROOT/bin/remask-profile7-session-restore.php" 2>&1 || true
+fi
+
+# Read-only credential history diagnostic.
 if [ -f "$ROOT/bin/remask-profile7-history-diagnostic.php" ]; then
   php "$ROOT/bin/remask-profile7-history-diagnostic.php" 2>&1 || true
 fi
@@ -153,6 +159,45 @@ PY
   if [ "$WORKER_HEALTH_OK" != "1" ]; then
     echo "Embedded Python worker did not become healthy during initial probe window; watchdog will recover it" >&2
     tail -n 160 "$DATA_DIR/python-worker.log" >&2 || true
+  fi
+
+  if [ "$WORKER_HEALTH_OK" = "1" ]; then
+    /opt/remask-venv/bin/python - "$PYTHON_WORKER_PORT" "$REMASK_WORKER_API_KEY" <<'PY' || true
+import json
+import sys
+import urllib.request
+port=int(sys.argv[1]); key=sys.argv[2]
+req=urllib.request.Request(
+    f"http://127.0.0.1:{port}/api/v1/profiles/7/live-inventory",
+    headers={"X-Remask-Worker-Key":key,"Accept":"application/json"},
+)
+try:
+    with urllib.request.urlopen(req,timeout=35) as r:
+        data=json.loads(r.read().decode("utf-8"))
+    safe={
+        "ok":data.get("ok"),
+        "profile_id":data.get("profile_id"),
+        "live_ready":data.get("live_ready"),
+        "source":data.get("source"),
+        "businesses_count":data.get("businesses_count"),
+        "live_businesses_count":data.get("live_businesses_count"),
+        "warnings":data.get("warnings"),
+        "businesses":[
+            {
+                "id":b.get("id"),
+                "name":b.get("name"),
+                "ad_accounts_count":b.get("ad_accounts_count"),
+                "ad_accounts_ready":b.get("ad_accounts_ready"),
+                "source":b.get("source") or b.get("ad_accounts_source"),
+            }
+            for b in (data.get("businesses") or [])
+            if isinstance(b,dict)
+        ],
+    }
+    print("[profile7-live-inventory] "+json.dumps(safe,ensure_ascii=False),file=sys.stderr)
+except Exception as exc:
+    print("[profile7-live-inventory] "+json.dumps({"ok":False,"error":f"{type(exc).__name__}: {exc}"},ensure_ascii=False),file=sys.stderr)
+PY
   fi
 
   # Keep monitoring after startup too. A Chromium-heavy BUSINESS job can leave

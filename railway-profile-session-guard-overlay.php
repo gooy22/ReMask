@@ -168,7 +168,10 @@ try {
     $token = $tokenInput !== '' ? $tokenInput : (string)($existing?->token ?? '');
     if (trim($token) === '') throw new InvalidArgumentException('Token обязателен для нового профиля.');
 
-    $clearSession = rmx_pm_find_bool($input, ['clear_session','clear_cookies'], false);
+    // REMASK_SESSION_CLEAR_EXPLICIT_V2
+    // A normal profile save must never clear a working Facebook session.
+    // Session deletion is intentionally disabled on save/create paths.
+    $clearSession = false;
     $cookiesProvided = false;
     $incomingCookies = rmx_pm_find_cookies($input, $cookiesProvided);
     if ($cookiesProvided && $incomingCookies === null) throw new InvalidArgumentException('Cookies имеют неверный JSON-формат.');

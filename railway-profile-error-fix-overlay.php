@@ -77,7 +77,7 @@ $editPattern = <<<'REGEX'
 REGEX;
 $workspace = preg_replace(
     $editPattern,
-    "await profileSaveJson({action:'save',name:p.name,token:$('editToken').value.trim(),cookies,proxy:$('editProxy').value.trim(),clear_proxy:$('editClearProxy').checked?'1':'0',clear_session:$('editClearSession').checked?'1':'0'});",
+    "await profileSaveJson({action:'save',name:p.name,token:$('editToken').value.trim(),cookies,proxy:$('editProxy').value.trim(),clear_proxy:$('editClearProxy').checked?'1':'0'});",
     $workspace,
     -1,
     $editPatchCount
