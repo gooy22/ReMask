@@ -250,16 +250,10 @@ async function syncSelection(){
     if(failures.length){
       $('workspaceStatus').textContent=`Синхронизация Meta частично/полностью не выполнена: ${failures.join(' · ')}`;
       const expired=results.filter(x=>x&&x.error_kind==='SESSION_EXPIRED');
-      if(
-        tab==='profiles' &&
-        rows.length===1 &&
-        expired.length===1 &&
-        typeof remaskSessionRefreshRun==='function'
-      ){
+      if(tab==='profiles' && expired.length){
         $('workspaceStatus').textContent=
-          'FB-сессия профиля '+String(expired[0].profile||'')+
-          ' истекла. Открываю обновление session; текущий token и proxy сохраняются.';
-        setTimeout(()=>{try{remaskSessionRefreshRun();}catch(_){}},150);
+          'FB-сессия истекла для: '+expired.map(x=>String(x.profile||'')).filter(Boolean).join(', ')+
+          '. Текущие token/proxy и сохранённые данные не изменены. Используй «Обновить FB-сессию» только для нужного профиля.';
       }
     }else if(warnings.length){
       $('workspaceStatus').textContent=`Meta синхронизирована. ${warnings.join(' · ')}`;
@@ -349,7 +343,7 @@ $syncProfileReplacement = <<<'PHP'
         $profile = trim((string)($input['profile'] ?? ''));
         if ($profile === '') throw new InvalidArgumentException('profile is required');
 
-        // REMASK_FBTOOL_SYNC_REFRESH_V1
+        // REMASK_SYNC_TRANSPORT_REPAIR_V2
         // Ads Manager tokens extracted by FBTOOL can become unusable for Graph
         // reads while a fresh browser session can still mint a replacement EAAB.
         // ReMask historically handled exactly this in FbRequests::GetNewToken().
@@ -454,13 +448,13 @@ $syncProfileReplacement = <<<'PHP'
             'profile_name'=>$profile,
             'summary'=>'Синхронизация FB-профиля завершена',
             'details'=>[
-                'sync_source'=>'ads_manager_token_refresh_then_graph',
+                'sync_source'=>'direct_ad_accounts_with_optional_business_enrichment',
                 'token_refreshed'=>$tokenRefreshed,
                 'warnings'=>$syncWarnings,
             ],
         ]);
         $snapshot = hierarchy_profile_snapshot($profile);
-        $snapshot['sync_source'] = 'ads_manager_token_refresh_then_graph';
+        $snapshot['sync_source'] = 'direct_ad_accounts_with_optional_business_enrichment';
         $snapshot['token_refreshed'] = $tokenRefreshed;
         if ($syncWarnings !== []) {
             $snapshot['sync_warnings'] = array_values(array_unique($syncWarnings));
