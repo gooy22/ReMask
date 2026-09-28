@@ -9132,19 +9132,6 @@ class FacebookBusinessBrowser:
                 template.format(business_id=business)
                 for template in self.SETTINGS_AD_ACCOUNTS_URLS
             ]
-            # Read-only sync has different routing evidence than CREATE: on
-            # current live profiles every /latest/settings/ad_accounts variant
-            # redirects into a Page/Profile shell, while the legacy Business
-            # Settings URL preserves the requested business_id. Prefer that
-            # route only for this snapshot; keep CREATE route order untouched.
-            legacy_exact = (
-                "https://business.facebook.com/settings/ad-accounts/"
-                f"?business_id={business}"
-            )
-            targets = [
-                legacy_exact,
-                *[target for target in targets if target != legacy_exact],
-            ]
             current = _clean(getattr(self.page, "url", ""))
             if (
                 "/settings/ad_accounts" in current
@@ -9587,6 +9574,18 @@ class FacebookBusinessBrowser:
             targets = [
                 template.format(business_id=business)
                 for template in self.SETTINGS_AD_ACCOUNTS_URLS
+            ]
+            # Sync-only routing: live evidence shows /latest variants redirect
+            # into a Page/Profile shell for this profile, while the legacy
+            # Business Settings route preserves the requested business_id.
+            # Prefer it here without changing the route order used by CREATE.
+            legacy_exact = (
+                "https://business.facebook.com/settings/ad-accounts/"
+                f"?business_id={business}"
+            )
+            targets = [
+                legacy_exact,
+                *[target for target in targets if target != legacy_exact],
             ]
             current = _clean(getattr(self.page, "url", ""))
             if (
