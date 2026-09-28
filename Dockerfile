@@ -266,6 +266,7 @@ RUN set -eux; \
     grep -q 'Meta request timeout after' /var/www/html/scripts/workspace.js; \
     grep -Fq "\$('workspaceActions').disabled=n===0;" /var/www/html/scripts/workspace.js; \
     grep -q 'REMASK_SESSION_CLEAR_EXPLICIT_V2' /var/www/html/ajax/metaProfileManager.php; \
+    ! grep -q 'profile7-' /var/www/html/docker-start.sh 2>/dev/null || true; \
     grep -q 'profileSaveJson' /var/www/html/scripts/workspace.js; \
     if grep -Fq '\\`' /var/www/html/scripts/workspace.js; then echo 'workspace-invalid-backtick' >&2; exit 92; fi; \
     grep -q 'error_id' /var/www/html/ajax/metaProfileManager.php; \
@@ -432,20 +433,16 @@ RUN set -eux; \
     grep -q "resource:'pages'" /var/www/html/scripts/workspace.js; \
     ! grep -q 'hierarchy-autosync.js' /var/www/html/workspace.php; \
     mkdir -p /var/www/html/health /var/lib/remask /var/lib/remask/jobs /var/lib/remask/bundles /var/lib/remask/meta-cache /var/lib/remask/job-media /var/lib/remask/media-library /var/lib/remask/creative-presets; \
-    cp /tmp/railway-profile7-history-diagnostic.php /var/www/html/bin/remask-profile7-history-diagnostic.php; \
-    cp /tmp/railway-profile7-session-restore.php /var/www/html/bin/remask-profile7-session-restore.php; \
     php -l /var/www/html/bin/remask-profile7-session-restore.php; \
-    cp /tmp/railway-profile7-backup-session-recovery.php /var/www/html/bin/remask-profile7-backup-session-recovery.php; \
     php -l /var/www/html/bin/remask-profile7-backup-session-recovery.php; \
-    cp /tmp/railway-profile7-token-recovery.php /var/www/html/bin/remask-profile7-token-recovery.php; \
     php -l /var/www/html/bin/remask-profile7-token-recovery.php; \
-    cp /tmp/railway-profile7-saved-context-diagnostic.php /var/www/html/bin/remask-profile7-saved-context-diagnostic.php; \
     php -l /var/www/html/bin/remask-profile7-saved-context-diagnostic.php; \
     php -l /var/www/html/bin/remask-profile7-history-diagnostic.php; \
     if [ ! -f /var/www/html/health/index.php ]; then printf '%s\n' '<?php http_response_code(200); header("Content-Type: application/json"); echo json_encode(["ok"=>true,"service":"remask","rev"=>getenv("REMASK_DEPLOY_REV")]);' > /var/www/html/health/index.php; fi; \
     [ -f /var/www/html/index.php ]; \
     [ -f /var/www/html/launch.php ]; \
     bash -n /tmp/docker-start.sh; \
+    ! grep -q 'profile7-' /tmp/docker-start.sh; \
     cp /tmp/docker-start.sh /var/www/html/docker-start.sh; \
     mkdir -p /var/www/html/bin; \
     [ -f /var/lib/remask/accounts.json ] || printf '[]\n' > /var/lib/remask/accounts.json; \

@@ -85,33 +85,6 @@ if [ -d "$ROOT/data" ]; then
 fi
 persist_legacy_file "$ROOT/bundles.json" "$DATA_DIR/bundles.json" '[]'
 
-# One-shot safe session repair for profile 7: restore only cookies/dtsg,
-# never the current token or proxy.
-if [ -f "$ROOT/bin/remask-profile7-session-restore.php" ]; then
-  php "$ROOT/bin/remask-profile7-session-restore.php" 2>&1 || true
-fi
-
-# Verify all historical profile-7 sessions and recover only a session that
-# can mint a fresh Ads Manager token which passes Graph validation.
-if [ -f "$ROOT/bin/remask-profile7-backup-session-recovery.php" ]; then
-  php "$ROOT/bin/remask-profile7-backup-session-recovery.php" 2>&1 || true
-fi
-
-# Search durable ReMask data for a verified historical Ads token belonging
-# to the same c_user. Persist only after a successful /me identity match.
-if [ -f "$ROOT/bin/remask-profile7-token-recovery.php" ]; then
-  php "$ROOT/bin/remask-profile7-token-recovery.php" 2>&1 || true
-fi
-
-# Read-only credential history diagnostic.
-if [ -f "$ROOT/bin/remask-profile7-history-diagnostic.php" ]; then
-  php "$ROOT/bin/remask-profile7-history-diagnostic.php" 2>&1 || true
-fi
-
-if [ -f "$ROOT/bin/remask-profile7-saved-context-diagnostic.php" ]; then
-  php "$ROOT/bin/remask-profile7-saved-context-diagnostic.php" 2>&1 || true
-fi
-
 rm -rf "$ROOT/health"
 printf '%s\n' '{"ok":true,"service":"remask"}' > "$ROOT/health"
 
@@ -255,71 +228,6 @@ a2enconf remask-servername 2>/dev/null || true
 
 sed -ri "s#DocumentRoot .*#DocumentRoot ${ROOT}#" /etc/apache2/sites-available/000-default.conf
 sed -ri "s/<VirtualHost \*:[0-9]+>/<VirtualHost *:80>/" /etc/apache2/sites-available/000-default.conf
-
-
-# Read-only post-start verification. Apache is required because the embedded
-# Python ProfileResolver resolves profile context through local PHP.
-if [ "$USE_EXTERNAL_PYTHON_WORKER" != "1" ]; then
-  (
-    sleep 8
-    /opt/remask-venv/bin/python - "$PYTHON_WORKER_PORT" "$REMASK_WORKER_API_KEY" <<'PY' || true
-import json
-import sys
-import time
-import urllib.error
-import urllib.request
-
-port=int(sys.argv[1]); key=sys.argv[2]
-url=f"http://127.0.0.1:{port}/api/v1/profiles/7/live-inventory"
-last_error=""
-for attempt in range(1,4):
-    try:
-        req=urllib.request.Request(
-            url,
-            headers={"X-Remask-Worker-Key":key,"Accept":"application/json"},
-        )
-        with urllib.request.urlopen(req,timeout=35) as r:
-            data=json.loads(r.read().decode("utf-8"))
-        safe={
-            "ok":data.get("ok"),
-            "profile_id":data.get("profile_id"),
-            "live_ready":data.get("live_ready"),
-            "source":data.get("source"),
-            "businesses_count":data.get("businesses_count"),
-            "live_businesses_count":data.get("live_businesses_count"),
-            "warnings":data.get("warnings"),
-            "businesses":[
-                {
-                    "id":b.get("id"),
-                    "name":b.get("name"),
-                    "ad_accounts_count":b.get("ad_accounts_count"),
-                    "ad_accounts_ready":b.get("ad_accounts_ready"),
-                    "source":b.get("source") or b.get("ad_accounts_source"),
-                }
-                for b in (data.get("businesses") or [])
-                if isinstance(b,dict)
-            ],
-        }
-        print("[profile7-live-inventory] "+json.dumps(safe,ensure_ascii=False),file=sys.stderr)
-        raise SystemExit(0)
-    except urllib.error.HTTPError as exc:
-        try:
-            body=exc.read().decode("utf-8","replace")
-            payload=json.loads(body)
-            detail=payload.get("detail") or payload.get("error") or body[:300]
-        except Exception:
-            detail=f"HTTP {exc.code}"
-        last_error=f"HTTPError({exc.code}): {detail}"
-    except Exception as exc:
-        last_error=f"{type(exc).__name__}: {exc}"
-    if attempt < 3:
-        time.sleep(3)
-print("[profile7-live-inventory] "+json.dumps({"ok":False,"error":last_error},ensure_ascii=False),file=sys.stderr)
-PY
-  ) &
-fi
-
-
 
 
 exec apache2-foreground
