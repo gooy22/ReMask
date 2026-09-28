@@ -864,7 +864,7 @@ async def register_facebook_docid(
     }
 
 @app.get('/api/v1/profiles/{profile_id}/live-inventory',dependencies=[Depends(require_key)])
-async def profile_live_inventory(profile_id: str):
+async def profile_live_inventory(profile_id: str, business_ids: str | None = None):
     clean_profile=str(profile_id or '').strip()
     if not clean_profile:
         raise HTTPException(status_code=400,detail='profile_id is required')
@@ -904,6 +904,15 @@ async def profile_live_inventory(profile_id: str):
     known_business_ids=set(binding_by_business)
     if latest_business_id.isdigit():
         known_business_ids.add(latest_business_id)
+
+    # REMASK_PRIVATE_SYNC_BUSINESS_HINTS_V1
+    # Workspace may already know BM IDs even when Business Suite HOME fails to
+    # render the portfolio selector. Treat them as navigation hints only; the
+    # browser still has to prove each BM/RK through the live settings surface.
+    for hinted_business_id in str(business_ids or '').split(','):
+        hinted_business_id=hinted_business_id.strip()
+        if hinted_business_id.isdigit():
+            known_business_ids.add(hinted_business_id)
 
     try:
         stage='profile_session'
