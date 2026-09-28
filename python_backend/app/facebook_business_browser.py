@@ -9324,10 +9324,23 @@ class FacebookBusinessBrowser:
                         if candidate
                     }
                 )
+                request_page_url = _clean(getattr(self.page, "url", ""))
+                page_targets_business = bool(
+                    business in _business_ids_from_text(request_page_url)
+                    and (
+                        "/settings/ad_accounts" in request_page_url.casefold()
+                        or "/settings/ad-accounts" in request_page_url.casefold()
+                    )
+                )
+                exact_request_context = bool(
+                    business in set(variable_business_ids)
+                    or page_targets_business
+                )
                 diagnostics.append(
                     {
                         "phase": "request_event",
                         "inventory_scoped": request_scoped,
+                        "exact_business_context": exact_request_context,
                         "friendly_name": friendly_raw[:180],
                         "doc_id": _clean(meta.get("doc_id"))[:80],
                         "variable_keys": sorted(
@@ -9340,14 +9353,12 @@ class FacebookBusinessBrowser:
                         )[:32],
                         "variable_business_ids": variable_business_ids[:8],
                         "variable_numeric_ids": safe_variable_numeric_ids(meta),
-                        "page_url": _clean(
-                            getattr(self.page, "url", "")
-                        )[:700],
+                        "page_url": request_page_url[:700],
                     }
                 )
                 if len(diagnostics) > 40:
                     del diagnostics[:-40]
-                if request_scoped:
+                if request_scoped and exact_request_context:
                     inventory_query_seen.set()
             except Exception:
                 return
@@ -9516,10 +9527,33 @@ class FacebookBusinessBrowser:
                     return
 
                 request_scoped = _graphql_request_ad_account_inventory_scope(meta)
+                response_target_business_ids = {
+                    candidate
+                    for candidate, _path in _walk_business_ids(
+                        meta.get("variables") or {}
+                    )
+                    if candidate
+                }
+                response_target_business_ids.update(
+                    _business_ids_from_text(_clean(meta.get("decoded_raw")))
+                )
+                response_page_url = _clean(getattr(self.page, "url", ""))
+                response_page_targets_business = bool(
+                    business in _business_ids_from_text(response_page_url)
+                    and (
+                        "/settings/ad_accounts" in response_page_url.casefold()
+                        or "/settings/ad-accounts" in response_page_url.casefold()
+                    )
+                )
+                exact_response_context = bool(
+                    business in response_target_business_ids
+                    or response_page_targets_business
+                )
+
                 task = asyncio.create_task(inspect_response(response))
                 response_tasks.add(task)
                 task.add_done_callback(response_tasks.discard)
-                if request_scoped:
+                if request_scoped and exact_response_context:
                     inventory_response_seen.set()
                     inventory_response_tasks.add(task)
                     task.add_done_callback(inventory_response_tasks.discard)
@@ -9633,8 +9667,23 @@ class FacebookBusinessBrowser:
                         0.0,
                         deadline - time.monotonic(),
                     )
+                    final_page_targets_business = bool(
+                        business in _business_ids_from_text(final_url)
+                        and (
+                            "/settings/ad_accounts" in final_url.casefold()
+                            or "/settings/ad-accounts" in final_url.casefold()
+                        )
+                    )
+                    # Do not waste the snapshot budget waiting on a generic
+                    # profile/Page shell. Only wait for RK GraphQL when this
+                    # navigation actually stayed in the requested Business
+                    # Settings context (or the section activator proved it).
+                    should_wait_for_target_inventory = bool(
+                        activated or final_page_targets_business
+                    )
                     if (
-                        not inventory_query_seen.is_set()
+                        should_wait_for_target_inventory
+                        and not inventory_query_seen.is_set()
                         and body_read_remaining > 0
                     ):
                         try:
