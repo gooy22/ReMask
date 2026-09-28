@@ -597,9 +597,13 @@ async def profile_preflight(profile_id: str):
                     'error_code':'BUSINESS_PREFLIGHT_TIMEOUT',
                 })
             except BrowserBusinessError as exc:
+                diagnostic=exc.diagnostic if isinstance(exc.diagnostic,dict) else {}
                 browser_state.update({
                     'error':str(exc),
                     'error_code':exc.code,
+                    'diagnostic':diagnostic,
+                    'current_url':str(diagnostic.get('url') or ''),
+                    'auth_evidence':str(diagnostic.get('auth_evidence') or ''),
                 })
                 if exc.code == 'BUSINESS_CREATE_UI_UNAVAILABLE':
                     # Authentication/navigation already succeeded; only the
@@ -675,7 +679,8 @@ async def profile_preflight(profile_id: str):
             total_ms=int((time.monotonic()-preflight_started)*1000)
             log.info(
                 'bm preflight profile=%s total_ms=%d proxy_ms=%d browser_ms=%d pages_ms=%d '
-                'browser_ready=%s create_ready=%s pages=%d page_source=%s browser_error=%s pages_error=%s',
+                'browser_ready=%s create_ready=%s pages=%d page_source=%s browser_error=%s '
+                'auth_evidence=%s current_url=%s pages_error=%s',
                 clean_profile,
                 total_ms,
                 proxy_ms,
@@ -686,6 +691,8 @@ async def profile_preflight(profile_id: str):
                 len(saved_pages),
                 pages_source,
                 str(browser_state.get('error_code') or ''),
+                str(browser_state.get('auth_evidence') or ''),
+                str(browser_state.get('current_url') or '')[:500],
                 str(browser_state.get('page_discovery_error_code') or ''),
             )
 

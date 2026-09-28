@@ -1698,21 +1698,43 @@ class FacebookBusinessBrowser:
         body = (await self._body_text()).lower()
 
         if "/login" in lower_url or "login.php" in lower_url:
-            await self._diagnostic("login")
+            diagnostic = await self._diagnostic("login")
+            diagnostic["auth_evidence"] = "login_url"
             raise BrowserBusinessError(
                 "SESSION_EXPIRED",
                 "Facebook redirected the profile to login.",
                 retryable=False,
-                diagnostic={"url": url},
+                diagnostic=diagnostic,
             )
 
-        if "/checkpoint" in lower_url or "checkpoint" in body[:4000]:
-            await self._diagnostic("checkpoint")
+        try:
+            parsed_url = urlsplit(url)
+            current_host = _clean(parsed_url.hostname).lower()
+            current_path = _clean(parsed_url.path).lower()
+        except Exception:
+            current_host = ""
+            current_path = ""
+
+        # A generic occurrence of the word "checkpoint" in Business Suite body
+        # text is NOT proof of an account checkpoint. Meta's SPA can expose
+        # internal/help text containing that word on otherwise authenticated
+        # pages. Only a real Facebook checkpoint route is authoritative here.
+        checkpoint_url = (
+            current_host.endswith("facebook.com")
+            and (
+                current_path == "/checkpoint"
+                or current_path.startswith("/checkpoint/")
+            )
+        )
+        if checkpoint_url:
+            diagnostic = await self._diagnostic("checkpoint")
+            diagnostic["auth_evidence"] = "checkpoint_url"
+            diagnostic["checkpoint_path"] = current_path
             raise BrowserBusinessError(
                 "CHECKPOINT_REQUIRED",
                 "Facebook requires a checkpoint for this profile.",
                 retryable=False,
-                diagnostic={"url": url},
+                diagnostic=diagnostic,
             )
 
         if (
@@ -1720,12 +1742,13 @@ class FacebookBusinessBrowser:
             or "enter security code" in body
             or "authentication code" in body
         ):
-            await self._diagnostic("two_factor")
+            diagnostic = await self._diagnostic("two_factor")
+            diagnostic["auth_evidence"] = "two_factor_body"
             raise BrowserBusinessError(
                 "TWO_FACTOR_REQUIRED",
                 "Facebook requires two-factor authentication.",
                 retryable=False,
-                diagnostic={"url": url},
+                diagnostic=diagnostic,
             )
 
         if (

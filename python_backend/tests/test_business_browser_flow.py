@@ -3206,6 +3206,48 @@ class BrowserCreateFormIdentityTests(unittest.IsolatedAsyncioTestCase):
 
 
 class BrowserAuthenticationStateTests(unittest.IsolatedAsyncioTestCase):
+    async def test_business_suite_body_word_checkpoint_is_not_auth_checkpoint(self):
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-checkpoint-word")
+        )
+        browser.page = SimpleNamespace(
+            url="https://business.facebook.com/latest/home"
+        )
+        browser._body_text = AsyncMock(
+            return_value=(
+                "Meta Business Suite checkpoint status internal label "
+                "Create a post Advertising settings"
+            )
+        )
+        browser._diagnostic = AsyncMock(return_value={})
+
+        await browser._assert_authenticated()
+
+        browser._diagnostic.assert_not_awaited()
+
+    async def test_real_checkpoint_url_is_auth_checkpoint(self):
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-real-checkpoint")
+        )
+        browser.page = SimpleNamespace(
+            url="https://www.facebook.com/checkpoint/828281030927956/"
+        )
+        browser._body_text = AsyncMock(return_value="Continue")
+        browser._diagnostic = AsyncMock(
+            return_value={
+                "url":"https://www.facebook.com/checkpoint/828281030927956/"
+            }
+        )
+
+        with self.assertRaises(BrowserBusinessError) as caught:
+            await browser._assert_authenticated()
+
+        self.assertEqual(caught.exception.code, "CHECKPOINT_REQUIRED")
+        self.assertEqual(
+            caught.exception.diagnostic.get("auth_evidence"),
+            "checkpoint_url",
+        )
+
     async def test_temporary_feature_block_is_not_retryable(self):
         browser = FacebookBusinessBrowser(
             SimpleNamespace(profile_id="profile-temp-block")
