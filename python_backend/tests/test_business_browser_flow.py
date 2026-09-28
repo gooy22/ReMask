@@ -12,6 +12,7 @@ from app.facebook_business_browser import (
     FacebookBusinessBrowser,
     _ad_account_required_attribution_post_data,
     _extract_created_ad_account_id,
+    _extract_business_inventory_rows,
     _extract_inventory_ad_account_ids,
     _extract_named_ad_account_ids,
     _has_ad_account_inventory_container,
@@ -3204,6 +3205,35 @@ class BrowserCreateFormIdentityTests(unittest.IsolatedAsyncioTestCase):
     def test_french_final_submit_action_is_supported(self):
         self.assertIn("Créer", FacebookBusinessBrowser.SUBMIT_NAMES)
         self.assertIn("Continuer", FacebookBusinessBrowser.SUBMIT_NAMES)
+
+
+class BrowserBusinessInventoryExtractionTests(unittest.TestCase):
+    def test_business_inventory_accepts_explicit_business_id_in_generic_viewer(self):
+        payload = {
+            "data": {
+                "viewer": {
+                    "portfolio_edge": {
+                        "node": {
+                            "business_id": "1619103589770310",
+                            "name": "My Business",
+                        }
+                    }
+                }
+            }
+        }
+        self.assertEqual(
+            _extract_business_inventory_rows(payload),
+            [{"id": "1619103589770310", "name": "My Business"}],
+        )
+
+    def test_business_inventory_still_ignores_generic_numeric_ids(self):
+        payload = {
+            "data": {
+                "viewer": {"id": "123456789012345", "name": "Profile"},
+                "page": {"id": "987654321098765", "name": "Fan Page"},
+            }
+        }
+        self.assertEqual(_extract_business_inventory_rows(payload), [])
 
 
 class BrowserInventoryExtractionTests(unittest.TestCase):
