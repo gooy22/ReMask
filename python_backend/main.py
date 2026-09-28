@@ -1109,6 +1109,21 @@ async def profile_live_inventory(profile_id: str, business_ids: str | None = Non
                         warnings.append(
                             f'BM {business_id}: live RK inventory not confirmed'
                         )
+                        log.warning(
+                            'live inventory profile=%s business=%s rk inconclusive attempts=%s diagnostics=%s',
+                            clean_profile,
+                            business_id,
+                            json.dumps(
+                                row.get('attempts') or [],
+                                ensure_ascii=False,
+                                separators=(',', ':'),
+                            )[:2500],
+                            json.dumps(
+                                row.get('diagnostics') or [],
+                                ensure_ascii=False,
+                                separators=(',', ':'),
+                            )[:9000],
+                        )
                 except asyncio.TimeoutError:
                     row['ad_accounts_source']='business_settings_timeout'
                     row['diagnostics']=[

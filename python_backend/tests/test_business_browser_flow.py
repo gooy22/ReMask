@@ -3376,6 +3376,69 @@ class BrowserInventoryExtractionTests(unittest.TestCase):
         self.assertFalse(_graphql_request_ad_account_inventory_scope(meta))
 
 
+class BrowserAdAccountPageScopedInventoryRegressionTests(unittest.TestCase):
+    def test_snapshot_uses_exact_ad_accounts_page_as_generic_inventory_scope(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser.snapshot_ad_accounts_for_business
+        )
+        self.assertIn("page_scoped = bool(page_targets_business)", source)
+        self.assertIn(
+            "inventory_scope = bool(request_scoped or page_scoped)",
+            source,
+        )
+        self.assertIn(
+            "request_scoped=inventory_scope",
+            source,
+        )
+
+    def test_page_scope_does_not_authorize_unrelated_generic_connection(self):
+        payload = {
+            "data": {
+                "viewer": {
+                    "notifications": {
+                        "edges": [],
+                        "count": 0,
+                    }
+                }
+            }
+        }
+        self.assertFalse(
+            _has_ad_account_inventory_container(
+                payload,
+                request_scoped=True,
+            )
+        )
+
+    def test_page_scope_authorizes_generic_asset_connection(self):
+        payload = {
+            "data": {
+                "business": {
+                    "assets": {
+                        "edges": [
+                            {
+                                "node": {
+                                    "object_id": "29459808963612032",
+                                    "name": "Page Scoped RK",
+                                }
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+        rows = _extract_inventory_ad_account_rows(
+            payload,
+            request_scoped=True,
+        )
+        self.assertEqual(rows[0]["id"], "act_29459808963612032")
+        self.assertTrue(
+            _has_ad_account_inventory_container(
+                payload,
+                request_scoped=True,
+            )
+        )
+
+
 class BrowserAuthenticationStateTests(unittest.IsolatedAsyncioTestCase):
     async def test_business_suite_body_word_checkpoint_is_not_auth_checkpoint(self):
         browser = FacebookBusinessBrowser(

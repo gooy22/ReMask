@@ -1208,22 +1208,12 @@ def _extract_inventory_ad_account_rows(
         folded = path.casefold()
         typename = _clean(value.get("__typename")).casefold()
         explicit_asset = _dict_is_explicit_ad_account_asset(value)
-        strong_id = any(
-            _normalize_ad_account_id(value.get(key))
-            for key in (
-                "account_id",
-                "ad_account_id",
-                "accountId",
-                "adAccountId",
-                "adaccount_id",
-            )
-        )
         return (
             any(marker in folded or marker in typename for marker in ad_markers)
             or explicit_asset
             or (
                 request_scoped
-                and (strong_id or _generic_asset_connection_path(path))
+                and _generic_asset_connection_path(path)
             )
         )
 
@@ -1413,13 +1403,7 @@ def _has_ad_account_inventory_container(
             if (
                 request_scoped
                 and has_connection_shape
-                and (
-                    _generic_asset_connection_path(path)
-                    or any(
-                        isinstance(value.get(field), list)
-                        for field in ("edges", "nodes", "items", "results")
-                    )
-                )
+                and _generic_asset_connection_path(path)
             ):
                 return True
 
@@ -9246,7 +9230,7 @@ class FacebookBusinessBrowser:
                 "source": "business_settings_graphql_inventory",
                 "empty_observations": empty_observations,
                 "attempts": attempts,
-                "diagnostics": diagnostics[-12:],
+                "diagnostics": diagnostics[-24:],
             }
         finally:
             try:
@@ -9335,14 +9319,37 @@ class FacebookBusinessBrowser:
                 raw = await response.text()
                 payload = _decode_graphql_text(raw)
                 request_scoped = _graphql_request_ad_account_inventory_scope(meta)
+                page_scoped = bool(page_targets_business)
+                inventory_scope = bool(request_scoped or page_scoped)
                 rows = _extract_inventory_ad_account_rows(
                     payload,
-                    request_scoped=request_scoped,
+                    request_scoped=inventory_scope,
                 )
                 observed = _has_ad_account_inventory_container(
                     payload,
-                    request_scoped=request_scoped,
+                    request_scoped=inventory_scope,
                 )
+
+                diagnostic = {
+                    "friendly_name": _clean(meta.get("friendly_name"))[:180],
+                    "doc_id": _clean(meta.get("doc_id"))[:80],
+                    "request_scoped": request_scoped,
+                    "page_scoped": page_scoped,
+                    "inventory_scope": inventory_scope,
+                    "rows": len(rows),
+                    "inventory_observed": observed,
+                    "payload_type": type(payload).__name__,
+                    "payload_keys": (
+                        sorted(str(key) for key in payload.keys())[:24]
+                        if isinstance(payload, dict)
+                        else []
+                    ),
+                    "page_url": page_url[:700],
+                }
+                diagnostics.append(diagnostic)
+                if len(diagnostics) > 24:
+                    del diagnostics[:-24]
+
                 if not observed and not rows:
                     return
 
@@ -9368,22 +9375,6 @@ class FacebookBusinessBrowser:
                     current.setdefault("business_id", business)
                     accounts[account_id] = current
 
-                diagnostics.append(
-                    {
-                        "friendly_name": _clean(meta.get("friendly_name"))[:180],
-                        "doc_id": _clean(meta.get("doc_id"))[:80],
-                        "request_scoped": request_scoped,
-                        "rows": len(rows),
-                        "inventory_observed": observed,
-                        "payload_type": type(payload).__name__,
-                        "payload_keys": (
-                            sorted(str(key) for key in payload.keys())[:24]
-                            if isinstance(payload, dict)
-                            else []
-                        ),
-                        "page_url": page_url[:700],
-                    }
-                )
             except Exception as exc:
                 diagnostics.append(
                     {
@@ -9514,7 +9505,7 @@ class FacebookBusinessBrowser:
                 "ready": inventory_observed,
                 "accounts_count": len(accounts),
                 "attempts": attempts[-6:],
-                "diagnostics": diagnostics[-12:],
+                "diagnostics": diagnostics[-24:],
                 "url": _clean(getattr(self.page, "url", ""))[:700],
             }
             return {
