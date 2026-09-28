@@ -1,4 +1,4 @@
-/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 REMASK_PYTHON_WORKER_UI_V140 REMASK_PYTHON_WORKER_UI_V141 REMASK_PYTHON_WORKER_UI_V142 REMASK_PYTHON_WORKER_UI_V143 REMASK_PYTHON_WORKER_UI_V144 REMASK_PYTHON_WORKER_UI_V145 REMASK_PYTHON_WORKER_UI_V146 REMASK_PYTHON_WORKER_UI_V147 REMASK_PYTHON_WORKER_UI_V148 REMASK_PYTHON_WORKER_UI_V149 REMASK_PYTHON_WORKER_UI_V150 REMASK_PYTHON_WORKER_UI_V151 REMASK_PYTHON_WORKER_UI_V152 REMASK_PYTHON_WORKER_UI_V153 REMASK_PYTHON_WORKER_UI_V154 REMASK_PYTHON_WORKER_UI_V155 REMASK_PYTHON_WORKER_UI_V156 REMASK_PYTHON_WORKER_UI_V157 REMASK_PYTHON_WORKER_UI_V158 REMASK_PYTHON_WORKER_UI_V159 REMASK_PYTHON_WORKER_UI_V160 REMASK_PYTHON_WORKER_UI_V161 REMASK_PYTHON_WORKER_UI_V164 REMASK_PYTHON_WORKER_UI_V166 REMASK_PYTHON_WORKER_UI_V169 REMASK_PYTHON_WORKER_UI_V170 REMASK_PYTHON_WORKER_UI_V171 REMASK_PYTHON_WORKER_UI_V172 REMASK_PYTHON_WORKER_UI_V173 REMASK_PYTHON_WORKER_UI_V174 REMASK_PYTHON_WORKER_UI_V175 REMASK_PYTHON_WORKER_UI_V176 */
+/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 REMASK_PYTHON_WORKER_UI_V140 REMASK_PYTHON_WORKER_UI_V141 REMASK_PYTHON_WORKER_UI_V142 REMASK_PYTHON_WORKER_UI_V143 REMASK_PYTHON_WORKER_UI_V144 REMASK_PYTHON_WORKER_UI_V145 REMASK_PYTHON_WORKER_UI_V146 REMASK_PYTHON_WORKER_UI_V147 REMASK_PYTHON_WORKER_UI_V148 REMASK_PYTHON_WORKER_UI_V149 REMASK_PYTHON_WORKER_UI_V150 REMASK_PYTHON_WORKER_UI_V151 REMASK_PYTHON_WORKER_UI_V152 REMASK_PYTHON_WORKER_UI_V153 REMASK_PYTHON_WORKER_UI_V154 REMASK_PYTHON_WORKER_UI_V155 REMASK_PYTHON_WORKER_UI_V156 REMASK_PYTHON_WORKER_UI_V157 REMASK_PYTHON_WORKER_UI_V158 REMASK_PYTHON_WORKER_UI_V159 REMASK_PYTHON_WORKER_UI_V160 REMASK_PYTHON_WORKER_UI_V161 REMASK_PYTHON_WORKER_UI_V164 REMASK_PYTHON_WORKER_UI_V166 REMASK_PYTHON_WORKER_UI_V169 REMASK_PYTHON_WORKER_UI_V170 REMASK_PYTHON_WORKER_UI_V171 REMASK_PYTHON_WORKER_UI_V172 REMASK_PYTHON_WORKER_UI_V173 REMASK_PYTHON_WORKER_UI_V174 REMASK_PYTHON_WORKER_UI_V175 REMASK_PYTHON_WORKER_UI_V176 REMASK_PYTHON_WORKER_UI_V177 */
 const restoredPythonWorkerJobId = localStorage.getItem('remask_python_worker_job_v1') || '';
 
 const restoredPythonWorkerBatchIds = (() => {
@@ -361,10 +361,10 @@ function pythonWorkerSelectionRefresh() {
       profiles.length
         ? (
             pythonWorkerUiState.workerOnline === true
-              ? 'Worker UI v172 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
-              : 'Worker UI v172 · Выбрано FB-профилей: ' + profiles.length + '. Жду READY от worker.'
+              ? 'Worker UI v177 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
+              : 'Worker UI v177 · Выбрано FB-профилей: ' + profiles.length + '. Жду READY от worker.'
           )
-        : 'Worker UI v172 · Выберите FB-профили в Workspace.'
+        : 'Worker UI v177 · Выберите FB-профили в Workspace.'
     );
   }
 }
@@ -542,6 +542,14 @@ async function pythonWorkerHealthCheck() {
   }
 }
 
+function pythonWorkerIsProfileAuthBlockedCode(code) {
+  return [
+    'CHECKPOINT_REQUIRED',
+    'SESSION_EXPIRED',
+    'TWO_FACTOR_REQUIRED'
+  ].indexOf(String(code || '').trim().toUpperCase()) !== -1;
+}
+
 async function pythonWorkerProfilePreflight(profileId) {
   const data = await pythonWorkerBridge({
     action: 'preflight',
@@ -560,10 +568,49 @@ async function pythonWorkerProfilePreflight(profileId) {
     ? preflight.bm_routes
     : {};
 
+  const authErrorCode = String(
+    preflight.auth_error_code ||
+    browser.error_code ||
+    browser.page_discovery_error_code ||
+    ''
+  ).trim().toUpperCase();
+  const authBlocked =
+    preflight.auth_blocked === true ||
+    pythonWorkerIsProfileAuthBlockedCode(authErrorCode);
+
+  preflight.auth_blocked = authBlocked;
+  preflight.auth_error_code = authErrorCode;
+  preflight.facebook_session_ready =
+    preflight.facebook_session_ready === true ||
+    (
+      browser.session_ready === true &&
+      authBlocked !== true
+    );
+
+  if (authBlocked) {
+    const detail = String(
+      browser.error ||
+      browser.page_discovery_error ||
+      'Facebook profile authentication is blocked.'
+    ).trim();
+    throw new Error(
+      (authErrorCode || 'FACEBOOK_AUTH_BLOCKED') +
+      ': ' + detail
+    );
+  }
+
+  if (preflight.facebook_session_ready !== true) {
+    throw new Error(
+      'FACEBOOK_SESSION_NOT_READY: ' +
+      String(browser.error || 'Facebook browser session is not ready.')
+    );
+  }
+
   preflight.create_route_ready =
     routes.browser_ui === true &&
     browser.ready === true &&
-    browser.create_surface_ready === true;
+    browser.create_surface_ready === true &&
+    preflight.facebook_session_ready === true;
 
   return preflight;
 }
@@ -2605,7 +2652,11 @@ async function pythonWorkerStartRkFanPageTargets(targets, mode, configs) {
 
 function pythonWorkerFpAuthBlockedMessage(error) {
   const message = String((error && error.message) || error || '');
-  if (!/(CHECKPOINT_REQUIRED|checkpoint|TWO_FACTOR_REQUIRED|two-factor|SESSION_EXPIRED|redirected.*login)/i.test(message)) {
+  const codeMatch = message.match(/\b(CHECKPOINT_REQUIRED|TWO_FACTOR_REQUIRED|SESSION_EXPIRED)\b/i);
+  if (
+    !(codeMatch && pythonWorkerIsProfileAuthBlockedCode(codeMatch[1])) &&
+    !/(checkpoint|two-factor|redirected.*login)/i.test(message)
+  ) {
     return '';
   }
   return message;
@@ -2659,12 +2710,17 @@ async function pythonWorkerStartAutoRkFanPages() {
 
     if (!activeTargets.length) {
       pythonWorkerUiState.fpResolving = false;
+      if (pythonWorkerUiState.batchKind === 'rk_fp') {
+        pythonWorkerClearBatchState();
+      }
+      pythonWorkerUiState.busy = false;
       pythonWorkerSelectionRefresh();
+      pythonWorkerSetText('pythonPwJob', '');
       pythonWorkerSetText(
         'pythonPwStatus',
-        'FP авто: Facebook checkpoint у профиля(ей) ' +
+        'FP авто приостановлено: Facebook checkpoint у профиля(ей) ' +
           blockedProfiles.join(', ') +
-          '. Jobs не запускались, FP не изменялись.'
+          '. Backend Job сохранён; новых Jobs и FP не создавалось.'
       );
       return;
     }
@@ -3168,6 +3224,16 @@ async function pythonWorkerPollAdAccountBatch() {
     const anyFailed = statuses.some(function(status) {
       return status === 'FAILED' || status === 'PARTIAL';
     });
+    const failedItems = mergedItems.filter(function(item) {
+      return item && String(item.status || '').toUpperCase() === 'FAILED';
+    });
+    const authBlockedFailedItems = failedItems.filter(function(item) {
+      return pythonWorkerIsProfileAuthBlockedCode(item && item.error_code);
+    });
+    const onlyAuthBlockedFailures =
+      isRkFpBatch &&
+      failedItems.length > 0 &&
+      authBlockedFailedItems.length === failedItems.length;
 
     pythonWorkerRenderJob({
       id: 'batch:' + ids.join(','),
@@ -3211,6 +3277,12 @@ async function pythonWorkerPollAdAccountBatch() {
         ? (
             allSuccess
               ? 'Все запущенные FP Jobs SUCCESS: ' + ids.length + ' RK.'
+              : onlyAuthBlockedFailures
+              ? (
+                  'FP batch приостановлен: Facebook checkpoint у ' +
+                  authBlockedFailedItems.length +
+                  ' Job. Backend Jobs сохранены; повторный Create/attach не отправляется.'
+                )
               : 'RK → FP batch завершён: есть FAILED/PARTIAL Jobs. Повторный attach/Create автоматически не отправляется.'
           )
         : (
@@ -3220,8 +3292,11 @@ async function pythonWorkerPollAdAccountBatch() {
           )
     );
 
-    if (allSuccess) {
+    if (allSuccess || onlyAuthBlockedFailures) {
       pythonWorkerClearBatchState();
+      if (onlyAuthBlockedFailures) {
+        pythonWorkerSetText('pythonPwJob', '');
+      }
     } else {
       pythonWorkerPersistBatchState();
     }

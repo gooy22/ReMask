@@ -602,9 +602,25 @@ async def profile_preflight(profile_id: str):
                 )
             )
 
+            auth_codes={
+                'CHECKPOINT_REQUIRED',
+                'SESSION_EXPIRED',
+                'TWO_FACTOR_REQUIRED',
+            }
+            auth_error_code=str(
+                browser_state.get('error_code')
+                or browser_state.get('page_discovery_error_code')
+                or ''
+            ).strip().upper()
+            auth_blocked=auth_error_code in auth_codes
+            facebook_session_ready=bool(
+                browser_state.get('session_ready')
+                and not auth_blocked
+            )
             browser_ui_ready=bool(
                 browser_state['ready']
                 and browser_state['create_surface_ready']
+                and facebook_session_ready
             )
 
     except HTTPException:
@@ -624,6 +640,9 @@ async def profile_preflight(profile_id: str):
         'proxy_exit_ip':str(proxy_result.get('exit_ip') or ''),
         'proxy_latency_ms':int(proxy_result.get('latency_ms') or 0),
         'facebook_session':'browser',
+        'facebook_session_ready':facebook_session_ready,
+        'auth_blocked':auth_blocked,
+        'auth_error_code':auth_error_code,
         'browser_business':browser_state,
         'actor_present':False,
         'fb_dtsg_present':False,

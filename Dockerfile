@@ -109,8 +109,8 @@ RUN set -eux; \
     php /tmp/railway-language-targeting-v116-overlay.php; \
     php -l /tmp/railway-python-worker-ui-overlay.php; \
     php /tmp/railway-python-worker-ui-overlay.php; \
-    grep -q 'REMASK_PYTHON_WORKER_UI_V176' /var/www/html/scripts/workspace.js; \
-    grep -q 'python-worker-ui-v176' /var/www/html/workspace.php; \
+    grep -q 'REMASK_PYTHON_WORKER_UI_V177' /var/www/html/scripts/workspace.js; \
+    grep -q 'python-worker-ui-v177' /var/www/html/workspace.php;     grep -q 'pythonWorkerIsProfileAuthBlockedCode' /var/www/html/scripts/workspace.js;     grep -q 'preflight.auth_blocked = authBlocked' /var/www/html/scripts/workspace.js; \
     /opt/remask-venv/bin/python -c "from pathlib import Path; from playwright.sync_api import sync_playwright; src=Path('/var/www/html/scripts/workspace.js').read_text(encoding='utf-8'); p=sync_playwright().start(); b=p.chromium.launch(executable_path='/usr/bin/chromium', headless=True, args=['--no-sandbox']); page=b.new_page(); err=page.evaluate('(src)=>{try{new Function(src);return \\\"\\\"}catch(e){return e.name+\\\": \\\"+e.message}}', src); b.close(); p.stop(); assert not err, err"; \
     grep -q 'REMASK_STATUS_TRUTH_V1' /var/www/html/scripts/workspace.js; \
     grep -q 'Business Verification · не блокировка' /var/www/html/scripts/workspace.js; \
