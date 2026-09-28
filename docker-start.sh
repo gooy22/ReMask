@@ -230,110 +230,106 @@ sed -ri "s#DocumentRoot .*#DocumentRoot ${ROOT}#" /etc/apache2/sites-available/0
 sed -ri "s/<VirtualHost \*:[0-9]+>/<VirtualHost *:80>/" /etc/apache2/sites-available/000-default.conf
 
 
-# Temporary read-only RK sync diagnostic. Protected by an unguessable token.
-# It exposes no cookies, worker keys, access tokens, or fb_dtsg values.
-cat > "$ROOT/__rk_sync_diag.php" <<'PHP'
-<?php
-declare(strict_types=1);
-header('Content-Type: application/json; charset=utf-8');
+# One-shot read-only production probe used while repairing Workspace sync.
+# It waits for Apache because ProfileResolver calls the local PHP context bridge,
+# then asks the embedded worker for the exact known BM inventory. No mutation is
+# submitted and no cookie/token/fb_dtsg value is logged.
+(
+  for _ in $(seq 1 60); do
+    if /opt/remask-venv/bin/python - <<'PY'
+import urllib.request
+try:
+    with urllib.request.urlopen("http://127.0.0.1/health", timeout=0.5) as r:
+        raise SystemExit(0 if r.status == 200 else 1)
+except Exception:
+    raise SystemExit(1)
+PY
+    then
+      break
+    fi
+    sleep 0.5
+  done
 
-if (!hash_equals('RE2Yfc2VOvyFBvR7tFbHcwpko83zanpm', (string)($_GET['token'] ?? ''))) {
-    http_response_code(404);
-    echo json_encode(['ok' => false, 'error' => 'not_found']);
-    exit;
-}
+  /opt/remask-venv/bin/python - <<'PY'
+import json
+import os
+import urllib.parse
+import urllib.request
 
-$port = getenv('REMASK_LOCAL_WORKER_PORT') ?: '8081';
-$key = getenv('REMASK_WORKER_API_KEY') ?: '';
-$url = 'http://127.0.0.1:' . $port
-    . '/api/v1/profiles/7/live-inventory?business_ids=61594753560938';
+port = os.getenv("REMASK_LOCAL_WORKER_PORT", "8081")
+key = os.getenv("REMASK_WORKER_API_KEY", "")
+url = (
+    f"http://127.0.0.1:{port}/api/v1/profiles/7/live-inventory?"
+    + urllib.parse.urlencode({"business_ids": "61594753560938"})
+)
+req = urllib.request.Request(url)
+if key:
+    req.add_header("X-Remask-Worker-Key", key)
 
-$headers = "Accept: application/json\r\n";
-if ($key !== '') {
-    $headers .= "X-Remask-Worker-Key: " . $key . "\r\n";
-}
+try:
+    with urllib.request.urlopen(req, timeout=75) as r:
+        raw = r.read().decode("utf-8", "replace")
+        data = json.loads(raw)
+except Exception as exc:
+    print(
+        "[rk-sync-smoke] failed="
+        + json.dumps(
+            {"type": exc.__class__.__name__, "error": str(exc)[:700]},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ),
+        flush=True,
+    )
+    raise SystemExit(0)
 
-$context = stream_context_create([
-    'http' => [
-        'method' => 'GET',
-        'header' => $headers,
-        'timeout' => 70,
-        'ignore_errors' => true,
-    ],
-]);
-
-$raw = @file_get_contents($url, false, $context);
-$statusLine = '';
-if (isset($http_response_header) && is_array($http_response_header) && $http_response_header) {
-    $statusLine = (string)$http_response_header[0];
-}
-
-if (!is_string($raw) || $raw === '') {
-    http_response_code(502);
-    echo json_encode([
-        'ok' => false,
-        'worker_http' => $statusLine,
-        'error' => 'empty_worker_response',
-    ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-    exit;
-}
-
-$data = json_decode($raw, true);
-if (!is_array($data)) {
-    http_response_code(502);
-    echo json_encode([
-        'ok' => false,
-        'worker_http' => $statusLine,
-        'error' => 'invalid_worker_json',
-    ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-    exit;
-}
-
-$businesses = [];
-foreach (($data['businesses'] ?? []) as $row) {
-    if (!is_array($row)) {
-        continue;
-    }
-    $accounts = [];
-    foreach (($row['ad_accounts'] ?? []) as $account) {
-        if (!is_array($account)) {
-            continue;
+safe_businesses = []
+for row in data.get("businesses") or []:
+    if not isinstance(row, dict):
+        continue
+    safe_accounts = []
+    for account in row.get("ad_accounts") or []:
+        if not isinstance(account, dict):
+            continue
+        safe_accounts.append(
+            {
+                "id": str(account.get("id") or account.get("account_id") or ""),
+                "account_id": str(account.get("account_id") or account.get("id") or ""),
+                "name": str(account.get("name") or ""),
+                "business_id": str(account.get("business_id") or ""),
+                "source": str(account.get("_source") or account.get("source") or ""),
+            }
+        )
+    safe_businesses.append(
+        {
+            "id": str(row.get("id") or ""),
+            "name": str(row.get("name") or ""),
+            "ad_accounts_ready": bool(row.get("ad_accounts_ready")),
+            "ad_accounts_count": int(row.get("ad_accounts_count") or 0),
+            "ad_accounts_source": str(row.get("ad_accounts_source") or ""),
+            "ad_accounts": safe_accounts,
+            "attempts": row.get("attempts") or [],
+            "diagnostics": row.get("diagnostics") or [],
+            "section_diagnostic": row.get("section_diagnostic") or {},
+            "browser_error_code": str(row.get("browser_error_code") or ""),
+            "browser_error": str(row.get("browser_error") or ""),
         }
-        $accounts[] = [
-            'id' => (string)($account['id'] ?? $account['account_id'] ?? ''),
-            'account_id' => (string)($account['account_id'] ?? $account['id'] ?? ''),
-            'name' => (string)($account['name'] ?? ''),
-            'business_id' => (string)($account['business_id'] ?? ''),
-            'source' => (string)($account['_source'] ?? $account['source'] ?? ''),
-        ];
-    }
-    $businesses[] = [
-        'id' => (string)($row['id'] ?? ''),
-        'name' => (string)($row['name'] ?? ''),
-        'ad_accounts_ready' => (bool)($row['ad_accounts_ready'] ?? false),
-        'ad_accounts_count' => (int)($row['ad_accounts_count'] ?? 0),
-        'ad_accounts_source' => (string)($row['ad_accounts_source'] ?? ''),
-        'ad_accounts' => $accounts,
-        'attempts' => is_array($row['attempts'] ?? null) ? $row['attempts'] : [],
-        'diagnostics' => is_array($row['diagnostics'] ?? null) ? $row['diagnostics'] : [],
-        'section_diagnostic' => is_array($row['section_diagnostic'] ?? null)
-            ? $row['section_diagnostic']
-            : [],
-        'browser_error_code' => (string)($row['browser_error_code'] ?? ''),
-        'browser_error' => (string)($row['browser_error'] ?? ''),
-    ];
-}
+    )
 
-echo json_encode([
-    'ok' => (bool)($data['ok'] ?? false),
-    'worker_http' => $statusLine,
-    'profile_id' => (string)($data['profile_id'] ?? ''),
-    'live_ready' => (bool)($data['live_ready'] ?? false),
-    'businesses_count' => (int)($data['businesses_count'] ?? count($businesses)),
-    'live_businesses_count' => (int)($data['live_businesses_count'] ?? 0),
-    'warnings' => is_array($data['warnings'] ?? null) ? $data['warnings'] : [],
-    'businesses' => $businesses,
-], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-PHP
+safe = {
+    "ok": bool(data.get("ok")),
+    "profile_id": str(data.get("profile_id") or ""),
+    "live_ready": bool(data.get("live_ready")),
+    "businesses_count": int(data.get("businesses_count") or 0),
+    "live_businesses_count": int(data.get("live_businesses_count") or 0),
+    "warnings": data.get("warnings") or [],
+    "businesses": safe_businesses,
+}
+print(
+    "[rk-sync-smoke] result="
+    + json.dumps(safe, ensure_ascii=False, separators=(",", ":")),
+    flush=True,
+)
+PY
+) &
 
 exec apache2-foreground
