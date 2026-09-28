@@ -724,6 +724,7 @@ $syncProfileReplacement = <<<'PHP'
 
         // Durable worker state is only a propagation fallback. It never calls
         // Graph and it never fabricates an unconfirmed new relation.
+        $workerConfirmedCount = 0;
         try {
             $workerState = hierarchy_worker_state($profile);
             $workerBindings = $workerState['ad_account_bindings'] ?? [];
@@ -794,6 +795,7 @@ $syncProfileReplacement = <<<'PHP'
                     }
                 }
 
+                $workerConfirmedCount++;
                 hierarchy_binding_put(
                     $profile,
                     $businessId,
@@ -836,11 +838,17 @@ $syncProfileReplacement = <<<'PHP'
         $snapshot['businesses_count'] = count($businessRows);
         $snapshot['ad_accounts'] = array_values($adAccountRows);
         $snapshot['ad_accounts_count'] = count($adAccountRows);
-        $snapshot['sync_source'] = 'private_business_suite_browser';
+        $bindingReady = (!$liveReady && $workerConfirmedCount > 0 && count($businessRows) > 0);
+        $syncComplete = ($liveReady || $bindingReady);
+
+        $snapshot['sync_source'] = $liveReady
+            ? 'private_business_suite_browser'
+            : ($bindingReady ? 'private_browser_plus_confirmed_worker_binding' : 'private_business_suite_browser');
         $snapshot['live_inventory_available'] = $liveReady;
+        $snapshot['confirmed_worker_bindings'] = $workerConfirmedCount;
         $snapshot['graph_preflight_available'] = false;
-        $snapshot['sync_complete'] = $liveReady;
-        if (!$liveReady) {
+        $snapshot['sync_complete'] = $syncComplete;
+        if (!$syncComplete) {
             $snapshot['sync_error_kind'] = 'PRIVATE_INCONCLUSIVE';
             $snapshot['sync_error'] = 'Private Business Suite inventory did not confirm live BM/RK state.';
         }
@@ -873,6 +881,8 @@ $syncProfileReplacement = <<<'PHP'
             'details' => [
                 'sync_source' => 'private_business_suite_browser',
                 'live_ready' => $liveReady,
+                'worker_confirmed_bindings' => $workerConfirmedCount,
+                'sync_complete' => $syncComplete,
                 'businesses' => count($businessRows),
                 'ad_accounts' => count($adAccountRows),
                 'warnings' => $syncWarnings,
