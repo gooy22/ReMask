@@ -285,7 +285,7 @@ RUN set -eux; \
     ! grep -q 'graph.facebook.com' /var/www/html/ajax/checkAccount.php; \
     grep -q 'direct_ad_accounts_with_optional_business_enrichment' /var/www/html/ajax/metaHierarchy.php; \
     grep -q 'REMASK_BM_BOUND_RK_SYNC_V1' /var/www/html/ajax/metaHierarchy.php; \
-    grep -q 'business_manager_bound_ad_accounts' /var/www/html/ajax/metaHierarchy.php; \
+    grep -q 'me_adaccounts_live_business_reference' /var/www/html/ajax/metaHierarchy.php; \
     grep -Fq 'cachedPreflight($profile, true)' /var/www/html/ajax/metaHierarchy.php; \
     grep -Fq "cachedAsset(\$profile, 'pages', '', true)" /var/www/html/ajax/metaHierarchy.php; \
     grep -Fq "cachedAsset(\$profile, 'businesses', '', true)" /var/www/html/ajax/metaHierarchy.php; \
@@ -295,7 +295,7 @@ RUN set -eux; \
     grep -q "'network_identity' => 'profile_bound'" /var/www/html/ajax/metaHierarchy.php; \
     grep -Fq "p.proxy_configured && ps!==''&&ps!=='LIVE'" /var/www/html/scripts/workspace.js; \
     grep -q 'REMASK_BM_OWNED_CLIENT_V2' /var/www/html/classes/MetaAdsService.php; \
-    grep -q 'REMASK_DIRECT_RK_FUNDING_V3' /var/www/html/classes/MetaAdsService.php;     grep -q 'REMASK_META_PREFLIGHT_RK_BASELINE_V2' /var/www/html/classes/MetaAdsService.php;     grep -q 'META_PREFLIGHT_AD_ACCOUNTS_FAILED' /var/www/html/classes/MetaAdsService.php;     grep -q 'identity_minimal' /var/www/html/classes/MetaAdsService.php;     grep -q 'REMASK_SYNC_OPTIONAL_GRAPH_PREFLIGHT_V1' /var/www/html/ajax/metaHierarchy.php;     grep -q 'worker_browser_confirmed_inventory' /var/www/html/ajax/metaHierarchy.php;     grep -q 'me_adaccounts_live_business_reference' /var/www/html/ajax/metaHierarchy.php;     grep -q 'REMASK_SYNC_TOKEN_ONLY_LIVE_V1' /var/www/html/ajax/metaHierarchy.php;     grep -q "live-inventory" /opt/remask-python/main.py;     grep -q 'snapshot_ad_accounts_for_business' /opt/remask-python/app/facebook_business_browser.py;     ! grep -q 'oauth|access token|token.*(invalid|expired)' /var/www/html/scripts/workspace.js; \
+    grep -q 'REMASK_DIRECT_RK_FUNDING_V3' /var/www/html/classes/MetaAdsService.php;     grep -q 'REMASK_META_PREFLIGHT_RK_BASELINE_V2' /var/www/html/classes/MetaAdsService.php;     grep -q 'META_PREFLIGHT_AD_ACCOUNTS_FAILED' /var/www/html/classes/MetaAdsService.php;     grep -q 'identity_minimal' /var/www/html/classes/MetaAdsService.php;     grep -q 'REMASK_SYNC_OPTIONAL_GRAPH_PREFLIGHT_V1' /var/www/html/ajax/metaHierarchy.php;     grep -q 'worker_confirmed_inventory' /var/www/html/ajax/metaHierarchy.php;     grep -q 'me_adaccounts_live_business_reference' /var/www/html/ajax/metaHierarchy.php;     grep -q 'REMASK_SYNC_TOKEN_ONLY_LIVE_V1' /var/www/html/ajax/metaHierarchy.php;     grep -q "live-inventory" /opt/remask-python/main.py;     grep -q 'snapshot_ad_accounts_for_business' /opt/remask-python/app/facebook_business_browser.py;     ! grep -q 'oauth|access token|token.*(invalid|expired)' /var/www/html/scripts/workspace.js; \
     grep -q 'is_adset_budget_sharing_enabled' /var/www/html/classes/MetaAdsService.php; \
     grep -q 'REMASK_META_ERROR_DETAILS_V1' /var/www/html/scripts/launch.js; \
     grep -q 'REMASK_DAILY_BUDGET_GUARD_V1' /var/www/html/scripts/launch.js; \
