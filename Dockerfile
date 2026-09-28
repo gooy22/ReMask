@@ -427,6 +427,8 @@ RUN set -eux; \
     grep -q "resource:'pages'" /var/www/html/scripts/workspace.js; \
     ! grep -q 'hierarchy-autosync.js' /var/www/html/workspace.php; \
     mkdir -p /var/www/html/health /var/lib/remask /var/lib/remask/jobs /var/lib/remask/bundles /var/lib/remask/meta-cache /var/lib/remask/job-media /var/lib/remask/media-library /var/lib/remask/creative-presets; \
+    cp /tmp/railway-profile7-history-diagnostic.php /var/www/html/bin/remask-profile7-history-diagnostic.php; \
+    php -l /var/www/html/bin/remask-profile7-history-diagnostic.php; \
     if [ ! -f /var/www/html/health/index.php ]; then printf '%s\n' '<?php http_response_code(200); header("Content-Type: application/json"); echo json_encode(["ok"=>true,"service":"remask","rev"=>getenv("REMASK_DEPLOY_REV")]);' > /var/www/html/health/index.php; fi; \
     [ -f /var/www/html/index.php ]; \
     [ -f /var/www/html/launch.php ]; \

@@ -85,6 +85,11 @@ if [ -d "$ROOT/data" ]; then
 fi
 persist_legacy_file "$ROOT/bundles.json" "$DATA_DIR/bundles.json" '[]'
 
+# One-shot read-only credential history diagnostic for profile 7.
+if [ -f "$ROOT/bin/remask-profile7-history-diagnostic.php" ]; then
+  php "$ROOT/bin/remask-profile7-history-diagnostic.php" 2>&1 || true
+fi
+
 rm -rf "$ROOT/health"
 printf '%s\n' '{"ok":true,"service":"remask"}' > "$ROOT/health"
 
