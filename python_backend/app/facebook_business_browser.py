@@ -831,6 +831,82 @@ def _business_ids_from_text(text: str) -> set[str]:
 
 
 
+# REMASK_PRIVATE_BUSINESS_INVENTORY_V1
+def _extract_business_inventory_rows(payload: Any) -> list[dict[str, str]]:
+    """Extract Business portfolio rows from Meta Business Suite Relay payloads.
+
+    Only structurally business-scoped nodes are accepted. Generic numeric IDs
+    are ignored so Page/RK/user IDs cannot become phantom Businesses.
+    """
+    found: dict[str, dict[str, str]] = {}
+    business_markers = (
+        "business",
+        "businessportfolio",
+        "business_portfolio",
+        "businessmanager",
+        "business_manager",
+        "bizkit",
+    )
+
+    def compact(value: str) -> str:
+        return value.casefold().replace("_", "").replace("-", "").replace(" ", "")
+
+    def walk(value: Any, path: str = "root") -> None:
+        if isinstance(value, dict):
+            typename = _clean(value.get("__typename"))
+            folded_path = compact(path)
+            folded_type = compact(typename)
+            business_context = any(
+                compact(marker) in folded_path or compact(marker) in folded_type
+                for marker in business_markers
+            )
+
+            business_id = _digits(
+                value.get("business_id")
+                or value.get("businessId")
+                or value.get("businessID")
+            )
+            if not business_id and business_context:
+                business_id = _digits(value.get("id"))
+
+            name = _clean(
+                value.get("business_name")
+                or value.get("businessName")
+                or value.get("name")
+            )
+
+            strong_context = bool(
+                business_context
+                and (
+                    "business" in folded_type
+                    or "businesses" in folded_path
+                    or "businessportfolio" in folded_path
+                    or "bizkit" in folded_path
+                    or any(
+                        key in value
+                        for key in ("business_id", "businessId", "businessID")
+                    )
+                )
+            )
+            if business_id and strong_context:
+                row = found.get(business_id) or {
+                    "id": business_id,
+                    "name": "",
+                }
+                if name and not row.get("name"):
+                    row["name"] = name[:240]
+                found[business_id] = row
+
+            for key, child in value.items():
+                walk(child, f"{path}.{key}")
+        elif isinstance(value, list):
+            for index, child in enumerate(value):
+                walk(child, f"{path}[{index}]")
+
+    walk(payload)
+    return [found[key] for key in sorted(found)]
+
+
 def _extract_named_ad_account_ids(
     payload: Any,
     account_name: str,
@@ -1369,6 +1445,7 @@ class FacebookBusinessBrowser:
         self._profile_lock: asyncio.Lock | None = None
         self._profile_lock_acquired = False
         self._last_selector_diagnostic: dict[str, Any] = {}
+        self._last_business_inventory_diagnostic: dict[str, Any] = {}
         self._last_ad_account_section_diagnostic: dict[str, Any] = {}
         self._browser_events: list[dict[str, Any]] = []
         self._ad_account_runtime_phase = "IDLE"
@@ -4430,168 +4507,185 @@ class FacebookBusinessBrowser:
         }
 
     async def snapshot_businesses(self) -> dict[str, str]:
-        await self._goto(self.HOME_URL)
+        """Read Business portfolios from Meta's own Business Suite traffic.
 
-        # The home document often contains only the currently selected
-        # portfolio. Open the real top-left portfolio selector first so the
-        # rendered DOM also contains the other portfolios available to this
-        # Facebook profile. This makes CREATE reconciliation useful even when
-        # Meta does not switch the current portfolio after creation.
-        selector_opened = False
-        try:
-            selector_probe = await self.page.evaluate(
-                """() => {
-                    const visible = (el) => {
-                        if (!el || el === document.body || el === document.documentElement) {
-                            return false;
-                        }
-                        const r = el.getBoundingClientRect();
-                        const s = getComputedStyle(el);
-                        return r.width > 0 && r.height > 0
-                            && s.display !== 'none'
-                            && s.visibility !== 'hidden'
-                            && s.pointerEvents !== 'none';
-                    };
-                    const label = (el) => [
-                        (el.getAttribute && el.getAttribute('aria-label')) || '',
-                        (el.getAttribute && el.getAttribute('title')) || '',
-                        el.innerText || el.textContent || ''
-                    ].join(' ').replace(/\\s+/g, ' ').trim();
+        Primary source: read-only Relay/GraphQL responses emitted by the
+        authenticated Business Suite frontend. DOM/link parsing remains only a
+        fallback/diagnostic source.
+        """
+        if self.page is None:
+            await self.open()
 
-                    const xs = [20, 52, 88, 124, 160, 196, 228];
-                    const ys = [
-                        58, 72, 86, 100, 114, 128, 142, 156,
-                        170, 184, 198, 212, 226, 240, 254, 268
-                    ];
-                    const seen = new Set();
-                    const rows = [];
+        network_rows: dict[str, str] = {}
+        query_diagnostics: list[dict[str, Any]] = []
+        response_tasks: set[asyncio.Task[Any]] = set()
 
-                    for (const y of ys) {
-                        for (const x of xs) {
-                            const stack = document.elementsFromPoint(x, y) || [];
-                            for (const el of stack.slice(0, 10)) {
-                                if (seen.has(el) || !visible(el)) continue;
-                                seen.add(el);
-                                const r = el.getBoundingClientRect();
-                                const text = label(el);
-                                const role = (el.getAttribute && el.getAttribute('role')) || '';
-                                const tabindex = (el.getAttribute && el.getAttribute('tabindex')) || '';
-                                const tag = el.tagName || '';
-
-                                if (r.x > 300 || r.y < 48 || r.y > 285) continue;
-                                if (r.width < 70 || r.width > 300) continue;
-                                if (r.height < 22 || r.height > 100) continue;
-                                if (!text) continue;
-
-                                rows.push({el, r, text, role, tabindex, tag});
-                            }
-                        }
-                    }
-
-                    const homeRows = rows.filter(row =>
-                        /^(Home|Startseite|Start|Главная|Головна)$/i.test(row.text)
-                    );
-                    const homeY = homeRows.length
-                        ? Math.min(...homeRows.map(row => row.r.y))
-                        : 285;
-
-                    const candidates = rows.filter(row =>
-                        row.r.y < homeY - 2
-                        && !/^Meta Business Suite$/i.test(row.text)
-                        && !/^(Home|Startseite|Start|Главная|Головна)$/i.test(row.text)
-                        && !/^(Create|Создать|Створити|Erstellen)$/i.test(row.text)
-                    );
-
-                    candidates.sort((a,b) => {
-                        const ai = (
-                            a.role === 'button' ||
-                            a.tag === 'BUTTON' ||
-                            a.tabindex === '0'
-                        ) ? 1 : 0;
-                        const bi = (
-                            b.role === 'button' ||
-                            b.tag === 'BUTTON' ||
-                            b.tabindex === '0'
-                        ) ? 1 : 0;
-                        if (ai !== bi) return bi - ai;
-                        // Portfolio selector normally sits directly above Home.
-                        if (a.r.y !== b.r.y) return b.r.y - a.r.y;
-                        return (b.r.width * b.r.height) - (a.r.width * a.r.height);
-                    });
-
-                    const best = candidates[0];
-                    if (!best) {
-                        return {
-                            clicked:false,
-                            candidates:candidates.slice(0,12).map(row => ({
-                                text:row.text,
-                                x:Math.round(row.r.x),
-                                y:Math.round(row.r.y),
-                                w:Math.round(row.r.width),
-                                h:Math.round(row.r.height)
-                            }))
-                        };
-                    }
-
-                    best.el.click();
-                    return {
-                        clicked:true,
-                        clickedCandidate:{
-                            text:best.text,
-                            x:Math.round(best.r.x),
-                            y:Math.round(best.r.y),
-                            w:Math.round(best.r.width),
-                            h:Math.round(best.r.height)
-                        }
-                    };
-                }"""
-            )
-            selector_opened = bool(
-                isinstance(selector_probe, dict)
-                and selector_probe.get("clicked")
-            )
-            if selector_opened:
-                await self.page.wait_for_timeout(550)
-        except Exception:
-            selector_opened = False
-
-        href_rows: list[dict[str, str]] = []
-        try:
-            href_rows = await self.page.locator("a[href]").evaluate_all(
-                """els => els.slice(0, 3000).map(el => ({
-                    href: el.href || "",
-                    text: (el.innerText || el.textContent || "").trim()
-                }))"""
-            )
-        except Exception:
-            href_rows = []
-
-        output: dict[str, str] = {}
-        for row in href_rows:
-            if not isinstance(row, dict):
-                continue
-            href = str(row.get("href") or "")
-            text = _clean(row.get("text"))
-            for business_id in _business_ids_from_text(href):
-                if business_id not in output or (text and not output[business_id]):
-                    output[business_id] = text
-
-        try:
-            content = await self.page.content()
-        except Exception:
-            content = ""
-
-        for business_id in _business_ids_from_text(content):
-            output.setdefault(business_id, "")
-
-        if selector_opened:
+        async def inspect_response(response: Any) -> None:
             try:
-                await self.page.keyboard.press("Escape")
-                await self.page.wait_for_timeout(120)
+                url = _clean(getattr(response, "url", ""))
+                if "graphql" not in url.casefold():
+                    return
+                request = getattr(response, "request", None)
+                meta = _request_graphql_meta(request) if request is not None else {}
+                friendly = _clean(meta.get("friendly_name"))
+                folded_friendly = friendly.casefold()
+                if any(
+                    marker in folded_friendly
+                    for marker in ("mutation", "create", "update", "delete")
+                ):
+                    return
+
+                raw = await response.text()
+                payload = _decode_graphql_text(raw)
+                rows = _extract_business_inventory_rows(payload)
+                query_diagnostics.append(
+                    {
+                        "friendly_name": friendly[:180],
+                        "doc_id": _clean(meta.get("doc_id"))[:60],
+                        "rows": len(rows),
+                    }
+                )
+                if len(query_diagnostics) > 24:
+                    del query_diagnostics[:-24]
+
+                for row in rows:
+                    business_id = _digits(row.get("id"))
+                    if not business_id:
+                        continue
+                    business_name = _clean(row.get("name"))
+                    if (
+                        business_id not in network_rows
+                        or (business_name and not network_rows[business_id])
+                    ):
+                        network_rows[business_id] = business_name
+            except Exception as exc:
+                query_diagnostics.append(
+                    {
+                        "error": f"{exc.__class__.__name__}: {_clean(exc)}"[:500],
+                    }
+                )
+
+        def on_response(response: Any) -> None:
+            try:
+                task = asyncio.create_task(inspect_response(response))
+                response_tasks.add(task)
+                task.add_done_callback(response_tasks.discard)
+            except Exception:
+                return
+
+        self.page.on("response", on_response)
+        selector_opened = False
+        dom_output: dict[str, str] = {}
+        try:
+            await self._goto(self.HOME_URL)
+            await self.page.wait_for_timeout(900)
+
+            # Opening the portfolio selector causes Meta's frontend to hydrate
+            # its Business list on accounts where HOME alone is lazy.
+            try:
+                candidates = self.page.locator(
+                    '[role="button"]:visible, button:visible, [tabindex="0"]:visible'
+                )
+                count = min(await candidates.count(), 80)
+                best = None
+                best_y = -1.0
+                for index in range(count):
+                    item = candidates.nth(index)
+                    try:
+                        box = await item.bounding_box()
+                        if not box:
+                            continue
+                        x = float(box.get("x") or 0)
+                        y = float(box.get("y") or 0)
+                        w = float(box.get("width") or 0)
+                        h = float(box.get("height") or 0)
+                        if x > 300 or y < 45 or y > 285 or w < 60 or h < 20:
+                            continue
+                        label = _clean(
+                            await item.get_attribute("aria-label")
+                            or await item.get_attribute("title")
+                            or await item.inner_text(timeout=500)
+                        )
+                        if not label:
+                            continue
+                        folded = label.casefold()
+                        if folded in {
+                            "home", "главная", "головна",
+                            "meta business suite",
+                        }:
+                            continue
+                        if y > best_y:
+                            best = item
+                            best_y = y
+                    except Exception:
+                        continue
+                if best is not None:
+                    await best.click()
+                    selector_opened = True
+                    await self.page.wait_for_timeout(1000)
+            except Exception:
+                selector_opened = False
+
+            # Fallback only: some builds expose Business IDs in href/HTML.
+            try:
+                href_rows = await self.page.locator("a[href]").evaluate_all(
+                    """els => els.slice(0, 3000).map(el => ({
+                        href: el.href || "",
+                        text: (el.innerText || el.textContent || "").trim()
+                    }))"""
+                )
+            except Exception:
+                href_rows = []
+
+            for row in href_rows:
+                if not isinstance(row, dict):
+                    continue
+                href = str(row.get("href") or "")
+                text = _clean(row.get("text"))
+                for business_id in _business_ids_from_text(href):
+                    if business_id not in dom_output or (text and not dom_output[business_id]):
+                        dom_output[business_id] = text
+
+            try:
+                content = await self.page.content()
+            except Exception:
+                content = ""
+            for business_id in _business_ids_from_text(content):
+                dom_output.setdefault(business_id, "")
+
+            if response_tasks:
+                await asyncio.gather(
+                    *list(response_tasks),
+                    return_exceptions=True,
+                )
+
+            output = dict(network_rows)
+            for business_id, business_name in dom_output.items():
+                if business_id not in output or (business_name and not output[business_id]):
+                    output[business_id] = business_name
+
+            self._last_business_inventory_diagnostic = {
+                "source": (
+                    "business_suite_private_graphql"
+                    if network_rows
+                    else ("business_suite_dom_fallback" if dom_output else "none")
+                ),
+                "network_businesses": len(network_rows),
+                "dom_businesses": len(dom_output),
+                "queries": query_diagnostics[-12:],
+                "url": _clean(self.page.url)[:700],
+            }
+            return output
+        finally:
+            try:
+                self.page.remove_listener("response", on_response)
             except Exception:
                 pass
-
-        return output
+            if selector_opened:
+                try:
+                    await self.page.keyboard.press("Escape")
+                except Exception:
+                    pass
 
     @staticmethod
     def _request_matches_ad_account_create(
