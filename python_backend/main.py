@@ -1033,13 +1033,54 @@ async def profile_live_inventory(profile_id: str, business_ids: str | None = Non
                 last_error=None
                 for attempt in range(2):
                     try:
-                        return await asyncio.wait_for(
+                        ads_probe=await asyncio.wait_for(
+                            browser.probe_ads_manager_inventory_context(
+                                business_id=str(business_id),
+                                timeout_seconds=10.0,
+                            ),
+                            timeout=13.0,
+                        )
+                        if ads_probe.get('confirmed'):
+                            confirmed_accounts=[
+                                account
+                                for account in (
+                                    ads_probe.get('confirmed_accounts') or []
+                                )
+                                if isinstance(account,dict)
+                            ]
+                            if confirmed_accounts:
+                                return {
+                                    'business_id':str(business_id),
+                                    'ready':True,
+                                    'confirmed_empty':False,
+                                    'accounts':confirmed_accounts,
+                                    'accounts_count':len(confirmed_accounts),
+                                    'source':'ads_manager_business_scope_inventory',
+                                    'attempts':[{
+                                        'requested_url':str(
+                                            ads_probe.get('requested_url') or ''
+                                        ),
+                                        'landed_url':str(
+                                            ads_probe.get('final_url') or ''
+                                        ),
+                                        'result':'business_scope_confirmed',
+                                    }],
+                                    'diagnostics':(
+                                        ads_probe.get('diagnostics') or []
+                                    ),
+                                    'section_diagnostic':{},
+                                    'ads_manager_diagnostic':ads_probe,
+                                }
+
+                        settings_inventory=await asyncio.wait_for(
                             browser.snapshot_ad_accounts_for_business(
                                 business_id=str(business_id),
                                 timeout_seconds=12.0,
                             ),
                             timeout=18.0,
                         )
+                        settings_inventory['ads_manager_diagnostic']=ads_probe
+                        return settings_inventory
                     except BrowserBusinessError as exc:
                         last_error=exc
                         if (
@@ -1106,25 +1147,12 @@ async def profile_live_inventory(profile_id: str, business_ids: str | None = Non
                     row['section_diagnostic']=(
                         inventory.get('section_diagnostic') or {}
                     )
+                    row['ads_manager_diagnostic']=(
+                        inventory.get('ads_manager_diagnostic') or {}
+                    )
                     if row['ad_accounts_ready']:
                         live_business_ids.add(str(business_id))
                     else:
-                        try:
-                            row['ads_manager_diagnostic']=await asyncio.wait_for(
-                                browser.probe_ads_manager_inventory_context(
-                                    business_id=str(business_id),
-                                    timeout_seconds=10.0,
-                                ),
-                                timeout=13.0,
-                            )
-                        except Exception as ads_probe_exc:
-                            row['ads_manager_diagnostic']={
-                                'source':'ads_manager_read_only_probe',
-                                'error':(
-                                    f'{ads_probe_exc.__class__.__name__}: '
-                                    f'{ads_probe_exc}'
-                                )[:700],
-                            }
                         warnings.append(
                             f'BM {business_id}: live RK inventory not confirmed'
                         )

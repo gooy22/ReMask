@@ -786,6 +786,90 @@ def _graphql_request_ad_account_inventory_scope(meta: dict[str, Any]) -> bool:
     return walk(variables if isinstance(variables, dict) else {})
 
 
+def _confirmed_ads_manager_scope_account_id(
+    *,
+    business_id: str,
+    final_act_ids: list[str],
+    diagnostics: list[dict[str, Any]],
+) -> str:
+    """Return one RK ID only when Meta binds it to the requested BM scope.
+
+    The confirmation is deliberately independent of generic response-row
+    extraction. A valid pair must be present in the *same* read-only selector
+    query as either:
+      - firstLevelScopeId=BM + zeroLevelScopeId=RK + an explicit BM add/scope
+        marker, or
+      - globalScopeID=BM + localScopeID=RK.
+
+    This prevents unrelated numeric nodes from generic Relay payloads becoming
+    phantom RK rows.
+    """
+    business = _digits(business_id)
+    acts = sorted(
+        {
+            _digits(value)
+            for value in (final_act_ids or [])
+            if _digits(value)
+        }
+    )
+    if not business or len(acts) != 1:
+        return ""
+    account_id = acts[0]
+
+    def values_for(
+        rows: list[dict[str, str]],
+        suffix: str,
+    ) -> set[str]:
+        result: set[str] = set()
+        folded_suffix = suffix.casefold()
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            path = _clean(row.get("path")).casefold()
+            value = _digits(row.get("value"))
+            if value and path.endswith(folded_suffix):
+                result.add(value)
+        return result
+
+    for diagnostic in diagnostics or []:
+        if not isinstance(diagnostic, dict):
+            continue
+        numeric = diagnostic.get("variable_numeric_ids")
+        if not isinstance(numeric, list):
+            continue
+
+        first_level = values_for(numeric, ".firstlevelscopeid")
+        zero_level = values_for(numeric, ".zerolevelscopeid")
+        add_business = values_for(numeric, ".businessidforaddaa")
+        global_scope = values_for(numeric, ".globalscopeid")
+        local_scope = values_for(numeric, ".localscopeid")
+
+        scoped_business_values = {
+            _digits(row.get("value"))
+            for row in numeric
+            if isinstance(row, dict)
+            and ".scopeids[" in _clean(row.get("path")).casefold()
+            and _digits(row.get("value"))
+        }
+
+        selector_pair = bool(
+            business in first_level
+            and account_id in zero_level
+            and (
+                business in add_business
+                or business in scoped_business_values
+            )
+        )
+        local_pair = bool(
+            business in global_scope
+            and account_id in local_scope
+        )
+        if selector_pair or local_pair:
+            return account_id
+
+    return ""
+
+
 def _generic_asset_connection_path(path: str) -> bool:
     compact = re.sub(r"[^a-z0-9]+", "", path.casefold())
     has_asset_marker = any(
@@ -10411,6 +10495,25 @@ class FacebookBusinessBrowser:
                 )
             )
         )
+        confirmed_account_id = _confirmed_ads_manager_scope_account_id(
+            business_id=business,
+            final_act_ids=final_act_ids,
+            diagnostics=diagnostics,
+        )
+        confirmed_accounts: list[dict[str, Any]] = []
+        if confirmed_account_id:
+            existing = account_rows.get(confirmed_account_id) or {}
+            confirmed_accounts.append(
+                {
+                    **existing,
+                    "id": confirmed_account_id,
+                    "account_id": confirmed_account_id,
+                    "name": _clean(existing.get("name")),
+                    "business_id": business,
+                    "_source": "ads_manager_business_scope_confirmed",
+                }
+            )
+
         return {
             "source": "ads_manager_read_only_probe",
             "business_id": business,
@@ -10419,6 +10522,11 @@ class FacebookBusinessBrowser:
             "final_business_ids": final_business_ids[:8],
             "final_act_ids": final_act_ids[:8],
             "exact_business_evidence": exact_business_evidence,
+            "confirmed": bool(confirmed_account_id),
+            "confirmed_account_id": confirmed_account_id,
+            "confirmed_accounts": confirmed_accounts,
+            # Keep generic parser rows diagnostic-only. They are not accepted
+            # unless their ID independently matches the scope-confirmed RK.
             "accounts": [
                 account_rows[key]
                 for key in sorted(account_rows)
