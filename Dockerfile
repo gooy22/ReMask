@@ -205,7 +205,9 @@ RUN set -eux; \
     grep -q 'pythonWorkerJobs.php' /var/www/html/scripts/workspace.js; \
     grep -q 'Retry Failed' /var/www/html/workspace.php; \
     php -l /var/www/html/ajax/metaHierarchy.php; \
-    grep -q 'REMASK_FBTOOL_SYNC_REFRESH_V1' /var/www/html/ajax/metaHierarchy.php; \
+    grep -q 'REMASK_PRIVATE_BROWSER_SYNC_V1' /var/www/html/ajax/metaHierarchy.php; \
+    grep -q 'hierarchy_worker_live_inventory' /var/www/html/ajax/metaHierarchy.php; \
+    grep -q 'private_business_suite_browser' /var/www/html/ajax/metaHierarchy.php; \
     grep -q 'REMASK_FBTOOL_ADS_TOKEN_REFRESH_V1' /var/www/html/classes/FbRequests.php; \
 
     php -l /var/www/html/bin/remask-worker.php; \
@@ -262,7 +264,9 @@ RUN set -eux; \
     ! grep -q 'mbInstagramPositions' /var/www/html/creatives.php; \
     grep -q 'REMASK_CREATIVE_CAPABILITIES_V1' /var/www/html/classes/MetaAdsService.php; \
     grep -q 'delivery_estimate' /var/www/html/classes/MetaAdsService.php; \
-    grep -q 'REMASK_SYNC_ERROR_CLASSIFIER_V1' /var/www/html/scripts/workspace.js;     grep -q 'REMASK_SYNC_TRANSPORT_REPAIR_V2' /var/www/html/ajax/metaHierarchy.php;     grep -q "error_kind==='SESSION_EXPIRED'" /var/www/html/scripts/workspace.js; \
+    grep -q 'REMASK_SYNC_ERROR_CLASSIFIER_V1' /var/www/html/scripts/workspace.js; \
+    grep -q 'REMASK_PRIVATE_BROWSER_SYNC_V1' /var/www/html/ajax/metaHierarchy.php; \
+    grep -q 'PRIVATE_SYNC_FAILED' /var/www/html/ajax/metaHierarchy.php; \
     grep -q "kind='META_REQUEST'" /var/www/html/scripts/workspace.js; \
     grep -q 'Meta request timeout after' /var/www/html/scripts/workspace.js; \
     grep -Fq "\$('workspaceActions').disabled=n===0;" /var/www/html/scripts/workspace.js; \
@@ -287,10 +291,9 @@ RUN set -eux; \
     grep -q "network_identity'=>'profile_bound'" /var/www/html/ajax/checkAccount.php; \
     ! grep -q 'curl_init' /var/www/html/ajax/checkAccount.php; \
     ! grep -q 'graph.facebook.com' /var/www/html/ajax/checkAccount.php; \
-    grep -q 'direct_ad_accounts_with_optional_business_enrichment' /var/www/html/ajax/metaHierarchy.php; \
-    grep -Fq 'cachedPreflight($profile, true)' /var/www/html/ajax/metaHierarchy.php; \
-    grep -Fq "cachedAsset(\$profile, 'pages', '', true)" /var/www/html/ajax/metaHierarchy.php; \
-    grep -Fq "cachedAsset(\$profile, 'businesses', '', true)" /var/www/html/ajax/metaHierarchy.php; \
+    grep -q 'private_business_suite_browser' /var/www/html/ajax/metaHierarchy.php; \
+    grep -q 'hierarchy_worker_live_inventory($profile)' /var/www/html/ajax/metaHierarchy.php; \
+    grep -q 'graph_preflight_available' /var/www/html/ajax/metaHierarchy.php; \
     grep -q "'token_status'" /var/www/html/ajax/metaHierarchy.php; \
     grep -q "'proxy_status'" /var/www/html/ajax/metaHierarchy.php; \
     grep -q "'pages_count'" /var/www/html/ajax/metaHierarchy.php; \
