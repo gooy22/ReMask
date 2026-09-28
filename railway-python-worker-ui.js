@@ -1,13 +1,56 @@
-/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 REMASK_PYTHON_WORKER_UI_V140 REMASK_PYTHON_WORKER_UI_V141 REMASK_PYTHON_WORKER_UI_V142 REMASK_PYTHON_WORKER_UI_V143 REMASK_PYTHON_WORKER_UI_V144 REMASK_PYTHON_WORKER_UI_V145 REMASK_PYTHON_WORKER_UI_V146 REMASK_PYTHON_WORKER_UI_V147 REMASK_PYTHON_WORKER_UI_V148 REMASK_PYTHON_WORKER_UI_V149 REMASK_PYTHON_WORKER_UI_V150 REMASK_PYTHON_WORKER_UI_V151 REMASK_PYTHON_WORKER_UI_V152 REMASK_PYTHON_WORKER_UI_V153 REMASK_PYTHON_WORKER_UI_V154 REMASK_PYTHON_WORKER_UI_V155 REMASK_PYTHON_WORKER_UI_V156 REMASK_PYTHON_WORKER_UI_V157 REMASK_PYTHON_WORKER_UI_V158 REMASK_PYTHON_WORKER_UI_V159 REMASK_PYTHON_WORKER_UI_V160 REMASK_PYTHON_WORKER_UI_V161 */
+/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 REMASK_PYTHON_WORKER_UI_V140 REMASK_PYTHON_WORKER_UI_V141 REMASK_PYTHON_WORKER_UI_V142 REMASK_PYTHON_WORKER_UI_V143 REMASK_PYTHON_WORKER_UI_V144 REMASK_PYTHON_WORKER_UI_V145 REMASK_PYTHON_WORKER_UI_V146 REMASK_PYTHON_WORKER_UI_V147 REMASK_PYTHON_WORKER_UI_V148 REMASK_PYTHON_WORKER_UI_V149 REMASK_PYTHON_WORKER_UI_V150 REMASK_PYTHON_WORKER_UI_V151 REMASK_PYTHON_WORKER_UI_V152 REMASK_PYTHON_WORKER_UI_V153 REMASK_PYTHON_WORKER_UI_V154 REMASK_PYTHON_WORKER_UI_V155 REMASK_PYTHON_WORKER_UI_V156 REMASK_PYTHON_WORKER_UI_V157 REMASK_PYTHON_WORKER_UI_V158 REMASK_PYTHON_WORKER_UI_V159 REMASK_PYTHON_WORKER_UI_V160 REMASK_PYTHON_WORKER_UI_V161 REMASK_PYTHON_WORKER_UI_V164 REMASK_PYTHON_WORKER_UI_V166 REMASK_PYTHON_WORKER_UI_V169 REMASK_PYTHON_WORKER_UI_V170 REMASK_PYTHON_WORKER_UI_V171 REMASK_PYTHON_WORKER_UI_V172 REMASK_PYTHON_WORKER_UI_V173 REMASK_PYTHON_WORKER_UI_V174 REMASK_PYTHON_WORKER_UI_V175 REMASK_PYTHON_WORKER_UI_V176 REMASK_PYTHON_WORKER_UI_V177 REMASK_PYTHON_WORKER_UI_V178 REMASK_PYTHON_WORKER_UI_V179 */
 const restoredPythonWorkerJobId = localStorage.getItem('remask_python_worker_job_v1') || '';
+
+const restoredPythonWorkerBatchIds = (() => {
+  try {
+    const raw = localStorage.getItem('remask_python_worker_batch_v1') || '[]';
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? parsed.map(function(value) { return String(value || '').trim(); }).filter(Boolean)
+      : [];
+  } catch (_) {
+    return [];
+  }
+})();
+
+const restoredPythonWorkerBatchKind =
+  localStorage.getItem('remask_python_worker_batch_kind_v1') || 'add_rk';
+
+const restoredPythonWorkerBatchTargets = (() => {
+  try {
+    const raw = localStorage.getItem('remask_python_worker_batch_targets_v1') || '[]';
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? parsed.filter(function(value) {
+          return value && typeof value === 'object';
+        }).map(function(value) {
+          return {
+            profile_id: String(value.profile_id || '').trim(),
+            business_id: String(value.business_id || '').trim(),
+            ad_account_id: String(value.ad_account_id || '').trim(),
+            ad_account_name: String(value.ad_account_name || '').trim(),
+            business_name: String(value.business_name || '').trim()
+          };
+        })
+      : [];
+  } catch (_) {
+    return [];
+  }
+})();
 
 const pythonWorkerUiState = {
   jobId: restoredPythonWorkerJobId,
   job: null,
-  busy: restoredPythonWorkerJobId !== '',
+  batchJobIds: restoredPythonWorkerBatchIds,
+  batchTargets: restoredPythonWorkerBatchTargets,
+  batchKind: restoredPythonWorkerBatchKind,
+  busy: restoredPythonWorkerJobId !== '' || restoredPythonWorkerBatchIds.length > 0,
   workerOnline: null,
   pollTimer: null,
-  polling: false
+  batchPollTimer: null,
+  polling: false,
+  batchPolling: false,
+  fpResolving: false
 };
 
 window.pythonWorkerUiState = pythonWorkerUiState;
@@ -29,6 +72,148 @@ function pythonWorkerSelectedProfiles() {
   }
 }
 
+function pythonWorkerSelectedBusinessTargets() {
+  try {
+    if (
+      typeof selectedRows !== 'function' ||
+      !state ||
+      String(state.activeTab || '') !== 'businesses'
+    ) return [];
+
+    const rows = selectedRows('businesses') || [];
+    const out = [];
+    const seen = new Set();
+
+    for (const row of rows) {
+      const profileId = String(
+        (row && (row.profile || row.profile_name || row.profile_id)) || ''
+      ).trim();
+      const businessId = String(
+        (row && (row.id || row.business_id || row.businessId || row.bm_id)) || ''
+      ).trim();
+      if (!profileId || !/^\d+$/.test(businessId)) continue;
+
+      const key = profileId + ':' + businessId;
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      out.push({
+        profile_id: profileId,
+        business_id: businessId,
+        business_name: String(
+          (row && (row.name || row.business_name || row.title)) || businessId
+        ).trim() || businessId
+      });
+    }
+
+    return out;
+  } catch (_) {
+    return [];
+  }
+}
+
+function pythonWorkerSelectedAdAccountTargets() {
+  try {
+    if (
+      typeof selectedRows !== 'function' ||
+      !state ||
+      String(state.activeTab || '') !== 'ad_accounts'
+    ) return [];
+
+    const rows = selectedRows('ad_accounts') || [];
+    const out = [];
+    const seen = new Set();
+
+    for (const row of rows) {
+      const profileId = String(
+        (row && (row.profile || row.profile_name || row.profile_id)) || ''
+      ).trim();
+      const businessId = String(
+        (row && (row.business_id || row.businessId || row.bm_id)) || ''
+      ).trim();
+      let adAccountId = String(
+        (row && (row.id || row.account_id || row.ad_account_id)) || ''
+      ).trim();
+      if (/^act_/i.test(adAccountId)) adAccountId = adAccountId.slice(4);
+
+      if (
+        !profileId ||
+        !/^\d+$/.test(businessId) ||
+        !/^\d+$/.test(adAccountId)
+      ) continue;
+
+      const key = profileId + ':' + businessId + ':' + adAccountId;
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      out.push({
+        profile_id: profileId,
+        business_id: businessId,
+        ad_account_id: adAccountId,
+        ad_account_name: String(
+          (row && (row.name || row.account_name || row.title)) ||
+          ('RK ' + adAccountId)
+        ).trim() || ('RK ' + adAccountId),
+        business_name: String(
+          (row && (row.business_name || row.bm_name)) || businessId
+        ).trim() || businessId
+      });
+    }
+
+    return out;
+  } catch (_) {
+    return [];
+  }
+}
+
+function pythonWorkerEnsureRkFanPageActions() {
+  const actionsButton = document.getElementById('workspaceActions');
+  if (!actionsButton || !actionsButton.parentElement) return;
+
+  const targets = pythonWorkerSelectedAdAccountTargets();
+  const active = Boolean(
+    state &&
+    String(state.activeTab || '') === 'ad_accounts' &&
+    targets.length
+  );
+
+  // FP fast path: one visible action only. The old Create/Attach split forced
+  // operators to fill or choose a Page per RK and made bulk work slower.
+  for (const legacyId of ['pythonRkCreateFp', 'pythonRkAttachFp']) {
+    const legacy = document.getElementById(legacyId);
+    if (legacy) legacy.remove();
+  }
+
+  let autoBtn = document.getElementById('pythonRkAutoFp');
+  if (!autoBtn) {
+    autoBtn = document.createElement('button');
+    autoBtn.id = 'pythonRkAutoFp';
+    autoBtn.type = 'button';
+    autoBtn.className = 'btn btn-secondary';
+    autoBtn.addEventListener('click', function(event) {
+      event.preventDefault();
+      event.stopPropagation();
+      pythonWorkerStartAutoRkFanPages().catch(function(error) {
+        pythonWorkerSetText(
+          'pythonPwStatus',
+          'FP авто: ' + String((error && error.message) || error)
+        );
+      });
+    });
+    actionsButton.parentElement.insertBefore(autoBtn, actionsButton);
+  }
+
+  autoBtn.style.display = active ? '' : 'none';
+  autoBtn.disabled =
+    !active ||
+    pythonWorkerUiState.busy ||
+    pythonWorkerUiState.fpResolving ||
+    pythonWorkerUiState.workerOnline !== true;
+  autoBtn.textContent = active
+    ? 'FP авто (' + targets.length + ')'
+    : 'FP авто';
+}
+
 function pythonWorkerEl(id) {
   return document.getElementById(id);
 }
@@ -36,6 +221,48 @@ function pythonWorkerEl(id) {
 function pythonWorkerSetText(id, value) {
   const el = pythonWorkerEl(id);
   if (el) el.textContent = String(value == null ? '' : value);
+}
+
+function pythonWorkerStableKey(value) {
+  const input = String(value == null ? '' : value).trim().toLowerCase();
+  let hash = 2166136261;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+function pythonWorkerPersistBatchState() {
+  localStorage.setItem(
+    'remask_python_worker_batch_v1',
+    JSON.stringify(
+      Array.isArray(pythonWorkerUiState.batchJobIds)
+        ? pythonWorkerUiState.batchJobIds
+        : []
+    )
+  );
+  localStorage.setItem(
+    'remask_python_worker_batch_targets_v1',
+    JSON.stringify(
+      Array.isArray(pythonWorkerUiState.batchTargets)
+        ? pythonWorkerUiState.batchTargets
+        : []
+    )
+  );
+  localStorage.setItem(
+    'remask_python_worker_batch_kind_v1',
+    String(pythonWorkerUiState.batchKind || 'add_rk')
+  );
+}
+
+function pythonWorkerClearBatchState() {
+  pythonWorkerUiState.batchJobIds = [];
+  pythonWorkerUiState.batchTargets = [];
+  pythonWorkerUiState.batchKind = 'add_rk';
+  localStorage.removeItem('remask_python_worker_batch_v1');
+  localStorage.removeItem('remask_python_worker_batch_targets_v1');
+  localStorage.removeItem('remask_python_worker_batch_kind_v1');
 }
 
 async function pythonWorkerMapLimit(items, limit, worker) {
@@ -103,22 +330,41 @@ function pythonWorkerSelectionRefresh() {
           task.retryable === true;
       });
     });
+    const hasTerminalBatchFailure =
+      Array.isArray(pythonWorkerUiState.batchJobIds) &&
+      pythonWorkerUiState.batchJobIds.length > 0 &&
+      pythonWorkerUiState.busy === false;
+
     retry.disabled =
       pythonWorkerUiState.busy ||
-      !pythonWorkerUiState.jobId ||
-      !hasRetryableFailed;
+      (
+        !hasTerminalBatchFailure &&
+        (!pythonWorkerUiState.jobId || !hasRetryableFailed)
+      );
+    retry.textContent = hasTerminalBatchFailure
+      ? 'Retry Failed batch'
+      : 'Retry Failed';
   }
 
-  if (!pythonWorkerUiState.jobId && !pythonWorkerUiState.busy) {
+  pythonWorkerEnsureRkFanPageActions();
+
+  if (
+    !pythonWorkerUiState.jobId &&
+    !pythonWorkerUiState.busy &&
+    !(
+      Array.isArray(pythonWorkerUiState.batchJobIds) &&
+      pythonWorkerUiState.batchJobIds.length
+    )
+  ) {
     pythonWorkerSetText(
       'pythonPwStatus',
       profiles.length
         ? (
             pythonWorkerUiState.workerOnline === true
-              ? 'Worker UI v161 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
-              : 'Worker UI v161 · Выбрано FB-профилей: ' + profiles.length + '. Жду READY от worker.'
+              ? 'Worker UI v177 · Выбрано FB-профилей: ' + profiles.length + '. Готово к Add BM.'
+              : 'Worker UI v177 · Выбрано FB-профилей: ' + profiles.length + '. Жду READY от worker.'
           )
-        : 'Worker UI v161 · Выберите FB-профили в Workspace.'
+        : 'Worker UI v177 · Выберите FB-профили в Workspace.'
     );
   }
 }
@@ -296,6 +542,14 @@ async function pythonWorkerHealthCheck() {
   }
 }
 
+function pythonWorkerIsProfileAuthBlockedCode(code) {
+  return [
+    'CHECKPOINT_REQUIRED',
+    'SESSION_EXPIRED',
+    'TWO_FACTOR_REQUIRED'
+  ].indexOf(String(code || '').trim().toUpperCase()) !== -1;
+}
+
 async function pythonWorkerProfilePreflight(profileId) {
   const data = await pythonWorkerBridge({
     action: 'preflight',
@@ -314,10 +568,49 @@ async function pythonWorkerProfilePreflight(profileId) {
     ? preflight.bm_routes
     : {};
 
+  const authErrorCode = String(
+    preflight.auth_error_code ||
+    browser.error_code ||
+    browser.page_discovery_error_code ||
+    ''
+  ).trim().toUpperCase();
+  const authBlocked =
+    preflight.auth_blocked === true ||
+    pythonWorkerIsProfileAuthBlockedCode(authErrorCode);
+
+  preflight.auth_blocked = authBlocked;
+  preflight.auth_error_code = authErrorCode;
+  preflight.facebook_session_ready =
+    preflight.facebook_session_ready === true ||
+    (
+      browser.session_ready === true &&
+      authBlocked !== true
+    );
+
+  if (authBlocked) {
+    const detail = String(
+      browser.error ||
+      browser.page_discovery_error ||
+      'Facebook profile authentication is blocked.'
+    ).trim();
+    throw new Error(
+      (authErrorCode || 'FACEBOOK_AUTH_BLOCKED') +
+      ': ' + detail
+    );
+  }
+
+  if (preflight.facebook_session_ready !== true) {
+    throw new Error(
+      'FACEBOOK_SESSION_NOT_READY: ' +
+      String(browser.error || 'Facebook browser session is not ready.')
+    );
+  }
+
   preflight.create_route_ready =
     routes.browser_ui === true &&
     browser.ready === true &&
-    browser.create_surface_ready === true;
+    browser.create_surface_ready === true &&
+    preflight.facebook_session_ready === true;
 
   return preflight;
 }
@@ -1618,13 +1911,119 @@ async function pythonWorkerPoll() {
 window.pythonWorkerStartBusiness = pythonWorkerStartBusiness;
 
 async function pythonWorkerRetryFailed() {
+  const batchIds = Array.isArray(pythonWorkerUiState.batchJobIds)
+    ? pythonWorkerUiState.batchJobIds.slice()
+    : [];
+
+  if (batchIds.length) {
+    if (pythonWorkerUiState.busy) return;
+
+    pythonWorkerUiState.busy = true;
+    pythonWorkerSelectionRefresh();
+    pythonWorkerSetText(
+      'pythonPwStatus',
+      'Retry Failed: проверяю ' + batchIds.length + ' batch Jobs...'
+    );
+
+    try {
+      let requeued = 0;
+      const retryErrors = [];
+
+      await pythonWorkerMapLimit(batchIds, 4, async function(jobId) {
+        try {
+          const data = await pythonWorkerBridge({
+            action: 'retry_failed',
+            job_id: jobId
+          });
+          requeued += Number(
+            (data && data.result && data.result.requeued) || 0
+          );
+        } catch (error) {
+          retryErrors.push(
+            jobId + ': ' + String((error && error.message) || error)
+          );
+        }
+      });
+
+      if (requeued <= 0) {
+        pythonWorkerUiState.busy = false;
+        pythonWorkerSelectionRefresh();
+        pythonWorkerSetText(
+          'pythonPwStatus',
+          retryErrors.length
+            ? 'Retry Failed batch: ничего не поставлено в очередь. ' +
+              retryErrors.join(' · ')
+            : 'Retry Failed batch: нет retryable FAILED элементов.'
+        );
+        return;
+      }
+
+      pythonWorkerUiState.busy = true;
+      pythonWorkerPersistBatchState();
+      pythonWorkerSetText(
+        'pythonPwStatus',
+        'Retry Failed batch: возвращено в очередь ' + requeued +
+          (retryErrors.length
+            ? ' · ошибки отдельных Jobs: ' + retryErrors.join(' · ')
+            : '.')
+      );
+
+      pythonWorkerPollAdAccountBatch().catch(function(error) {
+        pythonWorkerSetText(
+          'pythonPwStatus',
+          'Retry Failed batch polling: ' +
+            String((error && error.message) || error)
+        );
+      });
+      return;
+    } catch (error) {
+      pythonWorkerUiState.busy = false;
+      pythonWorkerSelectionRefresh();
+      pythonWorkerSetText(
+        'pythonPwStatus',
+        'Retry Failed batch error: ' +
+          String((error && error.message) || error)
+      );
+      return;
+    }
+  }
+
   if (!pythonWorkerUiState.jobId || pythonWorkerUiState.busy) return;
 
   pythonWorkerUiState.busy = true;
   pythonWorkerSelectionRefresh();
-  pythonWorkerSetText('pythonPwStatus', 'Повторно ставлю FAILED JobItem в очередь...');
+  pythonWorkerSetText('pythonPwStatus', 'Проверяю FAILED Job перед Retry...');
 
   try {
+    const currentItems = pythonWorkerUiState.job && Array.isArray(pythonWorkerUiState.job.items)
+      ? pythonWorkerUiState.job.items
+      : [];
+    const checkpointProfiles = Array.from(new Set(
+      currentItems
+        .filter(function(item) {
+          return item &&
+            String(item.status || '').toUpperCase() === 'FAILED' &&
+            pythonWorkerIsProfileAuthBlockedCode(item.error_code);
+        })
+        .map(function(item) { return String(item.profile_id || '').trim(); })
+        .filter(Boolean)
+    ));
+
+    if (checkpointProfiles.length) {
+      const gate = await pythonWorkerFilterFanPageReadyProfiles(checkpointProfiles);
+      if (gate.blocked.length) {
+        pythonWorkerUiState.busy = false;
+        pythonWorkerSelectionRefresh();
+        pythonWorkerSetText(
+          'pythonPwStatus',
+          'Retry приостановлен: Facebook checkpoint у профиля(ей) ' +
+            gate.blocked.join(', ') + '. Job остаётся FAILED/resumable.'
+        );
+        return;
+      }
+    }
+
+    pythonWorkerSetText('pythonPwStatus', 'Повторно ставлю FAILED JobItem в очередь...');
     const data = await pythonWorkerBridge({
       action: 'retry_failed',
       job_id: pythonWorkerUiState.jobId
@@ -1880,8 +2279,9 @@ async function pythonWorkerStartAdAccounts(options) {
             idempotency_key: 'add-rk-' + nonce + '-' + index,
             payload: {
               steps: ['PROXY_CHECK', 'AD_ACCOUNT'],
-              // One stable RK slot per BM. Once ad_account_id is confirmed,
-              // ProvisioningService reuses it instead of creating a duplicate.
+              // Stable scope keeps duplicate-protection history only.
+              // AD_ACCOUNT is never auto-completed from cached entity state;
+              // every Add RK request reaches the create handler.
               scope_key: 'add-rk-bm-' + businessId,
               parameters: {
                 AD_ACCOUNT: {
@@ -1928,6 +2328,1233 @@ async function pythonWorkerStartAdAccounts(options) {
   }
 }
 
+
+async function pythonWorkerStartBusinessAdAccountTargets(targets, configs) {
+  const list = Array.isArray(targets) ? targets.slice() : [];
+  const settings = configs && typeof configs === 'object' ? configs : {};
+
+  if (!list.length || pythonWorkerUiState.busy) return;
+
+  const invalid = list.filter(function(target, index) {
+    const cfg = settings[String(index)] || {};
+    return (
+      !target ||
+      !String(target.profile_id || '').trim() ||
+      !/^\d+$/.test(String(target.business_id || '').trim()) ||
+      !String(cfg.name || '').trim() ||
+      !String(cfg.currency || '').trim() ||
+      !/^\d+$/.test(String(cfg.timezone_id == null ? '' : cfg.timezone_id).trim())
+    );
+  });
+  if (invalid.length) {
+    throw new Error('Add RK: у выбранных BM не заполнены обязательные поля.');
+  }
+
+  pythonWorkerUiState.busy = true;
+  pythonWorkerUiState.batchKind = 'add_rk';
+  pythonWorkerUiState.batchJobIds = [];
+  localStorage.setItem('remask_python_worker_batch_kind_v1', 'add_rk');
+  pythonWorkerUiState.batchTargets = list.map(function(target) {
+    return {
+      profile_id: String(target.profile_id || '').trim(),
+      business_id: String(target.business_id || '').trim(),
+      business_name: String(target.business_name || target.business_id || '').trim()
+    };
+  });
+  localStorage.removeItem('remask_python_worker_batch_v1');
+  pythonWorkerSelectionRefresh();
+  pythonWorkerSetText(
+    'pythonPwStatus',
+    'Создаю независимые Add RK Jobs для ' + list.length + ' выбранных BM...'
+  );
+
+  try {
+    const nonce = Date.now() + '-' + Math.random().toString(16).slice(2);
+    const created = [];
+
+    // One selected BM = one JobItem context. This deliberately avoids putting
+    // two AD_ACCOUNT tasks for the same FB profile into one JobItem because
+    // provisioning_steps is keyed by item_id + step.
+    await pythonWorkerMapLimit(list, 4, async function(target, index) {
+      const cfg = settings[String(index)] || {};
+      const profileId = String(target.profile_id || '').trim();
+      const businessId = String(target.business_id || '').trim();
+      const data = await pythonWorkerBridge({
+        action: 'create',
+        idempotency_key:
+          'workspace-add-rk-selected-bm-' + businessId + '-' + nonce,
+        profiles: [{
+          profile_id: profileId,
+          tasks: [{
+            action: 'provisioning',
+            idempotency_key: 'add-rk-selected-bm-' + businessId + '-' + nonce,
+            payload: {
+              steps: ['PROXY_CHECK', 'AD_ACCOUNT'],
+              scope_key: 'add-rk-bm-' + businessId,
+              parameters: {
+                AD_ACCOUNT: {
+                  business_id: businessId,
+                  name: String(cfg.name || '').trim(),
+                  currency: String(cfg.currency || '').trim().toUpperCase(),
+                  timezone_id: Number(cfg.timezone_id)
+                }
+              }
+            }
+          }]
+        }]
+      });
+
+      const jobId = String((data && data.job && data.job.job_id) || '').trim();
+      if (!jobId) throw new Error('Worker did not return job_id for BM ' + businessId);
+      created[index] = jobId;
+    });
+
+    pythonWorkerUiState.batchJobIds = created.filter(Boolean);
+    if (!pythonWorkerUiState.batchJobIds.length) {
+      throw new Error('Worker did not create Add RK Jobs.');
+    }
+
+    pythonWorkerUiState.jobId = '';
+    localStorage.removeItem('remask_python_worker_job_v1');
+    localStorage.setItem(
+      'remask_python_worker_batch_v1',
+      JSON.stringify(pythonWorkerUiState.batchJobIds)
+    );
+
+    pythonWorkerSetText(
+      'pythonPwJob',
+      'Add RK batch: ' + pythonWorkerUiState.batchJobIds.length + ' Jobs'
+    );
+    pythonWorkerSetText(
+      'pythonPwStatus',
+      'Создание RK запущено для ' + pythonWorkerUiState.batchJobIds.length + ' BM.'
+    );
+
+    pythonWorkerPollAdAccountBatch().catch(function(error) {
+      pythonWorkerSetText(
+        'pythonPwStatus',
+        'Ошибка batch polling: ' + ((error && error.message) || error)
+      );
+    });
+  } catch (error) {
+    pythonWorkerUiState.busy = false;
+    pythonWorkerUiState.batchJobIds = [];
+    pythonWorkerUiState.batchTargets = [];
+    localStorage.removeItem('remask_python_worker_batch_v1');
+    pythonWorkerSelectionRefresh();
+    throw error;
+  }
+}
+
+async function pythonWorkerStartRkFanPageTargets(targets, mode, configs) {
+  const list = Array.isArray(targets) ? targets.slice() : [];
+  const cleanMode = String(mode || '').trim().toLowerCase();
+  const settings = configs && typeof configs === 'object' ? configs : {};
+
+  if (!list.length || pythonWorkerUiState.busy) return;
+  if (['create', 'attach_existing', 'auto'].indexOf(cleanMode) === -1) {
+    throw new Error('FP mode must be create, attach_existing or auto.');
+  }
+
+  const invalid = list.filter(function(target, index) {
+    const cfg = settings[String(index)] || {};
+    const targetMode = cleanMode === 'auto'
+      ? String(cfg.mode || '').trim().toLowerCase()
+      : cleanMode;
+
+    if (
+      !target ||
+      !String(target.profile_id || '').trim() ||
+      !/^\d+$/.test(String(target.business_id || '').trim()) ||
+      !/^\d+$/.test(String(target.ad_account_id || '').trim())
+    ) return true;
+
+    if (targetMode === 'create') {
+      return !String(cfg.base_name || '').trim() ||
+        !String(cfg.category || '').trim();
+    }
+    if (targetMode === 'attach_existing') {
+      return !/^\d+$/.test(String(cfg.existing_page_id || '').trim());
+    }
+    return true;
+  });
+  if (invalid.length) {
+    throw new Error(
+      cleanMode === 'auto'
+        ? 'FP авто: не удалось автоматически подготовить FP для части выбранных RK.'
+        : cleanMode === 'create'
+        ? 'Create FP: нужны имя и category для каждого выбранного RK.'
+        : 'Attach FP: нужен Page ID для каждого выбранного RK.'
+    );
+  }
+
+  pythonWorkerUiState.busy = true;
+  pythonWorkerUiState.batchKind = 'rk_fp';
+  pythonWorkerUiState.batchJobIds = [];
+  pythonWorkerUiState.batchTargets = [];
+  localStorage.removeItem('remask_python_worker_batch_v1');
+  localStorage.removeItem('remask_python_worker_batch_targets_v1');
+  localStorage.setItem('remask_python_worker_batch_kind_v1', 'rk_fp');
+  pythonWorkerSelectionRefresh();
+
+  pythonWorkerSetText(
+    'pythonPwStatus',
+    (
+      cleanMode === 'auto'
+        ? 'Автоматически подготавливаю FP для '
+        : cleanMode === 'create'
+        ? 'Создаю и прикрепляю FP к '
+        : 'Прикрепляю FP к '
+    ) + list.length + ' выбранным RK...'
+  );
+
+  const created = new Array(list.length);
+  const launchErrors = new Array(list.length);
+
+  await pythonWorkerMapLimit(list, 3, async function(target, index) {
+    const cfg = settings[String(index)] || {};
+    const profileId = String(target.profile_id || '').trim();
+    const businessId = String(target.business_id || '').trim();
+    const adAccountId = String(target.ad_account_id || '').trim();
+
+    const normalizedTarget = {
+      profile_id: profileId,
+      business_id: businessId,
+      ad_account_id: adAccountId,
+      ad_account_name: String(
+        target.ad_account_name || target.ad_account_id || ''
+      ).trim()
+    };
+
+    try {
+      const targetMode = cleanMode === 'auto'
+        ? String(cfg.mode || '').trim().toLowerCase()
+        : cleanMode;
+      const fanPages = {
+        mode: targetMode,
+        business_id: businessId,
+        ad_account_id: adAccountId
+      };
+
+      let operationSubject = '';
+      if (targetMode === 'create') {
+        fanPages.base_name = String(cfg.base_name || '').trim();
+        fanPages.count = 1;
+        fanPages.category = String(cfg.category || '').trim();
+        fanPages.bio = String(cfg.bio || '').trim();
+        operationSubject = fanPages.base_name;
+      } else {
+        fanPages.existing_page_id = String(cfg.existing_page_id || '').trim();
+        fanPages.page_name = String(
+          cfg.page_name || ('Page ' + fanPages.existing_page_id)
+        ).trim();
+        fanPages.category = String(cfg.category || '').trim();
+        operationSubject = fanPages.existing_page_id;
+      }
+
+      const operationToken = pythonWorkerStableKey(
+        profileId + '|' +
+        businessId + '|' +
+        adAccountId + '|' +
+        targetMode + '|' +
+        operationSubject
+      );
+      const operationKey =
+        targetMode + '-' + businessId + '-' + adAccountId + '-' + operationToken;
+
+      const data = await pythonWorkerBridge({
+        action: 'create',
+        idempotency_key: 'workspace-rk-fp-' + operationKey,
+        profiles: [{
+          profile_id: profileId,
+          tasks: [{
+            action: 'provisioning',
+            idempotency_key: 'rk-fp-' + operationKey,
+            payload: {
+              steps: ['PROXY_CHECK', 'FAN_PAGES'],
+              scope_key: 'rk-fp-' + operationKey,
+              parameters: {
+                FAN_PAGES: fanPages
+              }
+            }
+          }]
+        }]
+      });
+
+      const jobId = String((data && data.job && data.job.job_id) || '').trim();
+      if (!jobId) {
+        throw new Error('Worker did not return job_id for RK ' + adAccountId);
+      }
+
+      const returnedStatus = String(
+        (data && data.job && data.job.status) || ''
+      ).trim().toUpperCase();
+
+      // Stable idempotency means a second FP-auto click can resolve to the
+      // existing FAILED/PARTIAL Job. Resume it in-place instead of making the
+      // user hunt for the separate Retry Failed control.
+      if (returnedStatus === 'FAILED' || returnedStatus === 'PARTIAL') {
+        const retryData = await pythonWorkerBridge({
+          action: 'retry_failed',
+          job_id: jobId
+        });
+        const requeued = Number(
+          (retryData && retryData.result && retryData.result.requeued) || 0
+        );
+        if (requeued > 0) {
+          pythonWorkerSetText(
+            'pythonPwStatus',
+            'FP авто: продолжаю предыдущий Job для RK ' + adAccountId + '...'
+          );
+        }
+      }
+
+      created[index] = {
+        job_id: jobId,
+        target: normalizedTarget
+      };
+
+      const launched = created.filter(Boolean);
+      pythonWorkerUiState.batchJobIds = launched.map(function(row) {
+        return row.job_id;
+      });
+      pythonWorkerUiState.batchTargets = launched.map(function(row) {
+        return row.target;
+      });
+      pythonWorkerPersistBatchState();
+    } catch (error) {
+      launchErrors[index] = String((error && error.message) || error);
+    }
+  });
+
+  const launched = created.filter(Boolean);
+  const failedLaunches = launchErrors.filter(Boolean);
+
+  if (!launched.length) {
+    pythonWorkerUiState.busy = false;
+    pythonWorkerClearBatchState();
+    pythonWorkerSelectionRefresh();
+    throw new Error(
+      'Worker did not create FP Jobs. ' +
+      (failedLaunches[0] || 'Unknown create error.')
+    );
+  }
+
+  pythonWorkerUiState.batchJobIds = launched.map(function(row) {
+    return row.job_id;
+  });
+  pythonWorkerUiState.batchTargets = launched.map(function(row) {
+    return row.target;
+  });
+  pythonWorkerUiState.batchKind = 'rk_fp';
+  pythonWorkerPersistBatchState();
+
+  pythonWorkerUiState.jobId = '';
+  localStorage.removeItem('remask_python_worker_job_v1');
+
+  pythonWorkerSetText(
+    'pythonPwJob',
+    'RK → FP batch: ' +
+      pythonWorkerUiState.batchJobIds.length +
+      '/' + list.length + ' Jobs'
+  );
+  pythonWorkerSetText(
+    'pythonPwStatus',
+    failedLaunches.length
+      ? (
+          'FP Jobs запущены для ' + launched.length + ' из ' + list.length +
+          ' RK; ' + failedLaunches.length +
+          ' Job не удалось поставить в очередь. Запущенные Jobs не потеряны.'
+        )
+      : 'FP Jobs запущены для ' + launched.length + ' RK.'
+  );
+
+  pythonWorkerPollAdAccountBatch().catch(function(error) {
+    pythonWorkerSetText(
+      'pythonPwStatus',
+      'Ошибка FP batch polling: ' + ((error && error.message) || error)
+    );
+  });
+}
+
+
+
+async function pythonWorkerFilterFanPageReadyProfiles(profileIds) {
+  const source = Array.from(new Set(
+    (Array.isArray(profileIds) ? profileIds : [])
+      .map(function(value) { return String(value || '').trim(); })
+      .filter(Boolean)
+  ));
+  const ready = [];
+  const blocked = [];
+  const errors = [];
+
+  await pythonWorkerMapLimit(source, 3, async function(profileId) {
+    try {
+      await pythonWorkerProfilePreflight(profileId);
+      ready.push(profileId);
+    } catch (error) {
+      const authMessage = pythonWorkerFpAuthBlockedMessage(error);
+      if (authMessage) {
+        blocked.push(profileId);
+      } else {
+        errors.push(
+          profileId + ': ' + String((error && error.message) || error)
+        );
+      }
+    }
+  });
+
+  return {ready: ready, blocked: blocked, errors: errors};
+}
+
+function pythonWorkerFpAuthBlockedMessage(error) {
+  const message = String((error && error.message) || error || '');
+  const codeMatch = message.match(/\b(CHECKPOINT_REQUIRED|TWO_FACTOR_REQUIRED|SESSION_EXPIRED)\b/i);
+  if (
+    !(codeMatch && pythonWorkerIsProfileAuthBlockedCode(codeMatch[1])) &&
+    !/(checkpoint|two-factor|redirected.*login)/i.test(message)
+  ) {
+    return '';
+  }
+  return message;
+}
+
+
+async function pythonWorkerStartAutoRkFanPages() {
+  if (pythonWorkerUiState.workerOnline !== true) {
+    pythonWorkerSetText('pythonPwStatus', 'FP авто недоступно: worker ещё не READY.');
+    await pythonWorkerHealthCheck();
+    if (pythonWorkerUiState.workerOnline !== true) return;
+  }
+
+  const targets = pythonWorkerSelectedAdAccountTargets();
+  if (!targets.length || pythonWorkerUiState.busy || pythonWorkerUiState.fpResolving) {
+    return;
+  }
+
+  pythonWorkerUiState.fpResolving = true;
+  pythonWorkerSelectionRefresh();
+  pythonWorkerSetText(
+    'pythonPwStatus',
+    'FP авто: подбираю свободные Pages для ' + targets.length + ' RK...'
+  );
+
+  try {
+    const profiles = Array.from(new Set(
+      targets.map(function(target) {
+        return String(target.profile_id || '').trim();
+      }).filter(Boolean)
+    ));
+
+    const authBlocked = new Map();
+    await pythonWorkerMapLimit(profiles, 3, async function(profileId) {
+      try {
+        await pythonWorkerProfilePreflight(profileId);
+      } catch (error) {
+        const blocked = pythonWorkerFpAuthBlockedMessage(error);
+        if (blocked) {
+          authBlocked.set(profileId, blocked);
+        } else {
+          console.warn('[ReMask Worker UI] FP preflight soft-failed:', profileId, error);
+        }
+      }
+    });
+
+    const activeTargets = targets.filter(function(target) {
+      return !authBlocked.has(String(target.profile_id || '').trim());
+    });
+    const blockedProfiles = Array.from(authBlocked.keys());
+
+    if (!activeTargets.length) {
+      pythonWorkerUiState.fpResolving = false;
+      if (pythonWorkerUiState.batchKind === 'rk_fp') {
+        pythonWorkerClearBatchState();
+      }
+      pythonWorkerUiState.busy = false;
+      pythonWorkerSelectionRefresh();
+      pythonWorkerSetText('pythonPwJob', '');
+      pythonWorkerSetText(
+        'pythonPwStatus',
+        'FP авто приостановлено: Facebook checkpoint у профиля(ей) ' +
+          blockedProfiles.join(', ') +
+          '. Backend Job сохранён; новых Jobs и FP не создавалось.'
+      );
+      return;
+    }
+
+    const pageCache = new Map();
+    const activeProfiles = Array.from(new Set(
+      activeTargets.map(function(target) {
+        return String(target.profile_id || '').trim();
+      }).filter(Boolean)
+    ));
+
+    await pythonWorkerMapLimit(activeProfiles, 4, async function(profileId) {
+      try {
+        const pages = await pythonWorkerLoadPages(profileId);
+        pageCache.set(profileId, Array.isArray(pages) ? pages : []);
+      } catch (error) {
+        // Fast path must not force manual work when the cache endpoint is
+        // temporarily unavailable. No trustworthy candidate means create one.
+        pageCache.set(profileId, []);
+        console.warn('[ReMask Worker UI] FP auto page cache fallback:', profileId, error);
+      }
+    });
+
+    const usedPageIds = new Set();
+    const configs = {};
+    let attachCount = 0;
+    let createCount = 0;
+
+    activeTargets.forEach(function(target, index) {
+      const profileId = String(target.profile_id || '').trim();
+      const businessId = String(target.business_id || '').trim();
+      const adAccountId = String(target.ad_account_id || '').trim();
+      const pages = (pageCache.get(profileId) || []).filter(function(page) {
+        const pageId = String((page && page.id) || '').trim();
+        if (!/^\d+$/.test(pageId) || usedPageIds.has(pageId)) return false;
+        const ownerBusinessId = String((page && page.business_id) || '').trim();
+        const ownerAdAccountId = String((page && page.ad_account_id) || '').trim();
+        if (ownerBusinessId && ownerBusinessId !== businessId) return false;
+        if (ownerAdAccountId && ownerAdAccountId !== adAccountId) return false;
+        return true;
+      });
+
+      const inTargetBusiness = pages.find(function(page) {
+        return String((page && page.business_id) || '').trim() === businessId;
+      });
+      const freePage = pages.find(function(page) {
+        return !String((page && page.business_id) || '').trim();
+      });
+      const selectedPage = inTargetBusiness || freePage || null;
+
+      if (selectedPage) {
+        const pageId = String(selectedPage.id || '').trim();
+        usedPageIds.add(pageId);
+        configs[String(index)] = {
+          mode: 'attach_existing',
+          existing_page_id: pageId,
+          page_name: String(selectedPage.name || ('Page ' + pageId)).trim()
+        };
+        attachCount += 1;
+        return;
+      }
+
+      const suffix = adAccountId.slice(-6) || String(index + 1);
+      configs[String(index)] = {
+        mode: 'create',
+        base_name: 'ReMask ' + suffix,
+        category: 'Digital creator',
+        bio: ''
+      };
+      createCount += 1;
+    });
+
+    pythonWorkerSetText(
+      'pythonPwStatus',
+      'FP авто: ' + attachCount + ' готовых FP будут прикреплены, ' +
+      createCount + ' FP будут созданы автоматически.' +
+      (blockedProfiles.length
+        ? ' Пропущены checkpoint-профили: ' + blockedProfiles.join(', ') + '.'
+        : '')
+    );
+
+    pythonWorkerUiState.fpResolving = false;
+    await pythonWorkerStartRkFanPageTargets(activeTargets, 'auto', configs);
+  } catch (error) {
+    pythonWorkerUiState.fpResolving = false;
+    pythonWorkerSelectionRefresh();
+    throw error;
+  } finally {
+    if (!pythonWorkerUiState.busy) {
+      pythonWorkerUiState.fpResolving = false;
+      pythonWorkerSelectionRefresh();
+    }
+  }
+}
+
+window.pythonWorkerStartAutoRkFanPages = pythonWorkerStartAutoRkFanPages;
+
+function pythonWorkerFillRkAttachPages(cfg, target, pages) {
+  const list = (Array.isArray(pages) ? pages : []).filter(function(item) {
+    return item && /^\d+$/.test(String(item.id || '').trim());
+  });
+
+  cfg.page.textContent = '';
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = list.length ? 'Выбери Fan Page' : 'Pages не найдены';
+  cfg.page.appendChild(placeholder);
+
+  let preferred = null;
+  for (const item of list) {
+    const pageId = String(item.id || '').trim();
+    const ownerBusinessId = String(item.business_id || '').trim();
+    const option = document.createElement('option');
+    option.value = pageId;
+    option.dataset.pageName = String(item.name || pageId);
+    option.textContent =
+      String(item.name || pageId) + ' — ' + pageId +
+      (
+        ownerBusinessId
+          ? (
+              ownerBusinessId === String(target.business_id)
+                ? ' · уже в этом BM'
+                : ' · в BM ' + ownerBusinessId
+            )
+          : ''
+      );
+
+    if (
+      ownerBusinessId &&
+      ownerBusinessId !== String(target.business_id)
+    ) {
+      option.disabled = true;
+    } else if (!preferred || ownerBusinessId === String(target.business_id)) {
+      preferred = item;
+    }
+    cfg.page.appendChild(option);
+  }
+
+  if (preferred) {
+    cfg.page.value = String(preferred.id || '');
+    cfg.manual.value = '';
+  }
+  cfg.loaded = true;
+  cfg.hint.textContent =
+    'Pages: ' + list.length +
+    ' · BM ' + target.business_id +
+    ' · можно ввести Page ID вручную.';
+}
+
+async function pythonWorkerOpenRkFanPageModal(mode) {
+  if (pythonWorkerUiState.workerOnline !== true) {
+    pythonWorkerSetText('pythonPwStatus', 'FP недоступны: worker ещё не READY.');
+    await pythonWorkerHealthCheck();
+    if (pythonWorkerUiState.workerOnline !== true) return;
+  }
+
+  const cleanMode = String(mode || '').trim().toLowerCase();
+  const targets = pythonWorkerSelectedAdAccountTargets();
+  if (!targets.length) {
+    pythonWorkerSetText(
+      'pythonPwStatus',
+      'Во вкладке RK выбери хотя бы один рекламный кабинет с известным BM.'
+    );
+    return;
+  }
+
+  pythonWorkerEnsureBmModalStyle();
+  pythonWorkerCloseOwnBmModal();
+
+  const modal = document.createElement('div');
+  modal.id = 'pythonWorkerBmModal';
+  const card = document.createElement('div');
+  card.className = 'pwbm-card';
+
+  const head = document.createElement('div');
+  head.className = 'pwbm-head';
+  const title = document.createElement('div');
+  title.className = 'pwbm-title';
+  title.textContent =
+    (cleanMode === 'create' ? 'Создать FP для RK' : 'Прикрепить FP к RK') +
+    ' · ' + targets.length;
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'pwbm-close';
+  close.textContent = '×';
+  close.addEventListener('click', pythonWorkerCloseOwnBmModal);
+  head.appendChild(title);
+  head.appendChild(close);
+
+  const body = document.createElement('div');
+  body.className = 'pwbm-body';
+  const note = document.createElement('div');
+  note.className = 'pwbm-note';
+  note.textContent = cleanMode === 'create'
+    ? (
+        'На каждый выбранный RK создаётся одна Fan Page в его FB-профиле, ' +
+        'после чего Page автоматически прикрепляется к BM этого RK.'
+      )
+    : (
+        'Выбери существующую Fan Page для каждого RK. ReMask прикрепит её ' +
+        'к BM кабинета через Meta Business Settings и проверит результат.'
+      );
+  body.appendChild(note);
+
+  const rows = {};
+
+  targets.forEach(function(target, index) {
+    const row = document.createElement('div');
+    row.className = 'pwbm-row';
+
+    const identity = document.createElement('div');
+    identity.className = 'pwbm-profile';
+    identity.textContent = String(target.ad_account_name || ('RK ' + target.ad_account_id));
+    const meta = document.createElement('span');
+    meta.className = 'pwbm-session ok';
+    meta.textContent =
+      'FB ' + target.profile_id +
+      ' · BM ' + target.business_id +
+      ' · RK ' + target.ad_account_id;
+    identity.appendChild(meta);
+
+    if (cleanMode === 'create') {
+      const nameField = document.createElement('div');
+      nameField.className = 'pwbm-field';
+      const name = document.createElement('input');
+      name.type = 'text';
+      name.value = (
+        String(target.ad_account_name || 'ReMask')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .slice(0, 90) + ' Page'
+      ).slice(0, 120);
+      name.placeholder = 'Название Fan Page';
+      const nameHint = document.createElement('small');
+      nameHint.textContent = 'Будет создана 1 FP и сразу добавлена в BM этого RK.';
+      nameField.appendChild(name);
+      nameField.appendChild(nameHint);
+
+      const metaField = document.createElement('div');
+      metaField.className = 'pwbm-field';
+      const category = document.createElement('input');
+      category.type = 'text';
+      category.value = 'Digital creator';
+      category.placeholder = 'Категория';
+      const bio = document.createElement('input');
+      bio.type = 'text';
+      bio.className = 'pwbm-manual';
+      bio.placeholder = 'Bio (необязательно)';
+      metaField.appendChild(category);
+      metaField.appendChild(bio);
+
+      row.appendChild(identity);
+      row.appendChild(nameField);
+      row.appendChild(metaField);
+      rows[String(index)] = {
+        name: name,
+        category: category,
+        bio: bio,
+        loaded: true
+      };
+    } else {
+      const pageField = document.createElement('div');
+      pageField.className = 'pwbm-field';
+      const page = document.createElement('select');
+      const manual = document.createElement('input');
+      manual.type = 'text';
+      manual.inputMode = 'numeric';
+      manual.className = 'pwbm-manual';
+      manual.placeholder = 'Или Page ID вручную';
+      const hint = document.createElement('small');
+      hint.textContent = 'Загружаю Pages профиля...';
+      pageField.appendChild(page);
+      pageField.appendChild(manual);
+      pageField.appendChild(hint);
+
+      const relation = document.createElement('div');
+      relation.className = 'pwbm-field';
+      const relationText = document.createElement('small');
+      relationText.textContent =
+        'Page будет добавлена в BM ' + target.business_id +
+        ', который владеет RK ' + target.ad_account_id + '.';
+      relation.appendChild(relationText);
+
+      row.appendChild(identity);
+      row.appendChild(pageField);
+      row.appendChild(relation);
+      rows[String(index)] = {
+        page: page,
+        manual: manual,
+        hint: hint,
+        loaded: false
+      };
+
+      page.addEventListener('change', function() {
+        if (String(page.value || '').trim()) manual.value = '';
+      });
+      manual.addEventListener('input', function() {
+        if (String(manual.value || '').trim()) page.value = '';
+      });
+    }
+
+    body.appendChild(row);
+  });
+
+  const footer = document.createElement('div');
+  footer.className = 'pwbm-footer';
+  const status = document.createElement('div');
+  status.className = 'pwbm-status';
+  status.textContent = cleanMode === 'create'
+    ? 'Готово к созданию.'
+    : 'Загружаю Pages...';
+  const actions = document.createElement('div');
+  actions.className = 'pwbm-actions';
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.className = 'btn btn-secondary';
+  cancel.textContent = 'Отмена';
+  cancel.addEventListener('click', pythonWorkerCloseOwnBmModal);
+  const submit = document.createElement('button');
+  submit.type = 'button';
+  submit.className = 'btn btn-primary';
+  submit.textContent = cleanMode === 'create' ? 'Создать и прикрепить' : 'Прикрепить';
+  actions.appendChild(cancel);
+  actions.appendChild(submit);
+  footer.appendChild(status);
+  footer.appendChild(actions);
+
+  card.appendChild(head);
+  card.appendChild(body);
+  card.appendChild(footer);
+  modal.appendChild(card);
+  document.body.appendChild(modal);
+
+  const refresh = function() {
+    const bad = targets.filter(function(_, index) {
+      const cfg = rows[String(index)];
+      if (!cfg || !cfg.loaded) return true;
+      if (cleanMode === 'create') {
+        return !String(cfg.name.value || '').trim() ||
+          !String(cfg.category.value || '').trim();
+      }
+      return !/^\d+$/.test(
+        String(cfg.page.value || cfg.manual.value || '').trim()
+      );
+    });
+
+    submit.disabled = pythonWorkerUiState.busy || bad.length > 0;
+    status.textContent = bad.length
+      ? (
+          cleanMode === 'create'
+            ? 'Заполни имя и category у всех RK.'
+            : 'Выбери или введи Page ID для всех RK.'
+        )
+      : 'Готово: ' + targets.length + ' RK.';
+  };
+
+  if (cleanMode === 'create') {
+    Object.keys(rows).forEach(function(key) {
+      rows[key].name.addEventListener('input', refresh);
+      rows[key].category.addEventListener('input', refresh);
+    });
+  } else {
+    const pageCache = new Map();
+    pythonWorkerMapLimit(targets, 4, async function(target, index) {
+      const profileId = String(target.profile_id || '');
+      let pages = pageCache.get(profileId);
+      if (!pages) {
+        try {
+          pages = await pythonWorkerLoadPages(profileId);
+        } catch (error) {
+          pages = [];
+          rows[String(index)].hint.className = 'error';
+          rows[String(index)].hint.textContent =
+            'Pages cache недоступен: ' +
+            String((error && error.message) || error) +
+            '. Можно ввести Page ID вручную.';
+        }
+        pageCache.set(profileId, pages);
+      }
+
+      pythonWorkerFillRkAttachPages(
+        rows[String(index)],
+        target,
+        pages
+      );
+      rows[String(index)].page.addEventListener('change', refresh);
+      rows[String(index)].manual.addEventListener('input', refresh);
+      refresh();
+    }).catch(function(error) {
+      status.textContent =
+        'Ошибка загрузки Pages: ' + String((error && error.message) || error);
+    });
+  }
+
+  submit.addEventListener('click', function() {
+    if (submit.disabled) return;
+
+    const configs = {};
+    targets.forEach(function(target, index) {
+      const cfg = rows[String(index)];
+      if (cleanMode === 'create') {
+        configs[String(index)] = {
+          base_name: String(cfg.name.value || '').trim(),
+          category: String(cfg.category.value || '').trim(),
+          bio: String(cfg.bio.value || '').trim()
+        };
+      } else {
+        const pageId = String(
+          cfg.page.value || cfg.manual.value || ''
+        ).trim();
+        let pageName = 'Page ' + pageId;
+        if (cfg.page.value) {
+          const selected = cfg.page.options[cfg.page.selectedIndex];
+          if (selected && selected.dataset.pageName) {
+            pageName = String(selected.dataset.pageName);
+          }
+        }
+        configs[String(index)] = {
+          existing_page_id: pageId,
+          page_name: pageName
+        };
+      }
+    });
+
+    submit.disabled = true;
+    cancel.disabled = true;
+    status.textContent = 'Отправляю FP Jobs...';
+
+    pythonWorkerStartRkFanPageTargets(
+      targets,
+      cleanMode,
+      configs
+    ).then(function() {
+      pythonWorkerCloseOwnBmModal();
+    }).catch(function(error) {
+      cancel.disabled = false;
+      refresh();
+      status.textContent =
+        'Ошибка: ' + String((error && error.message) || error);
+    });
+  });
+
+  refresh();
+}
+
+
+async function pythonWorkerPollAdAccountBatch() {
+  if (
+    !Array.isArray(pythonWorkerUiState.batchJobIds) ||
+    !pythonWorkerUiState.batchJobIds.length ||
+    pythonWorkerUiState.batchPolling
+  ) return;
+
+  pythonWorkerUiState.batchPolling = true;
+  const isRkFpBatch = pythonWorkerUiState.batchKind === 'rk_fp';
+  try {
+    const ids = pythonWorkerUiState.batchJobIds.slice();
+    const jobs = new Array(ids.length);
+
+    await pythonWorkerMapLimit(ids, 4, async function(jobId, index) {
+      const data = await pythonWorkerBridge({
+        action: 'status',
+        job_id: jobId
+      });
+      const job = data && data.job;
+      if (!job || typeof job !== 'object') {
+        throw new Error('Worker bridge returned no job for ' + jobId);
+      }
+      jobs[index] = job;
+    });
+
+    const mergedItems = [];
+    const statuses = [];
+    jobs.forEach(function(job, jobIndex) {
+      if (!job) return;
+      statuses.push(String(job.status || '').toUpperCase());
+      const target = pythonWorkerUiState.batchTargets[jobIndex] || null;
+      (Array.isArray(job.items) ? job.items : []).forEach(function(item) {
+        const copy = Object.assign({}, item);
+        if (target) {
+          copy.profile_id =
+            String(target.profile_id || '') +
+            ' · BM ' +
+            String(target.business_id || '') +
+            (
+              isRkFpBatch && target.ad_account_id
+                ? ' · RK ' + String(target.ad_account_id)
+                : ''
+            );
+        }
+        mergedItems.push(copy);
+      });
+    });
+
+    const terminal = statuses.length === ids.length && statuses.every(function(status) {
+      return ['SUCCESS', 'FAILED', 'PARTIAL'].indexOf(status) !== -1;
+    });
+    const allSuccess = statuses.length === ids.length && statuses.every(function(status) {
+      return status === 'SUCCESS';
+    });
+    const anyFailed = statuses.some(function(status) {
+      return status === 'FAILED' || status === 'PARTIAL';
+    });
+    const failedItems = mergedItems.filter(function(item) {
+      return item && String(item.status || '').toUpperCase() === 'FAILED';
+    });
+    const authBlockedFailedItems = failedItems.filter(function(item) {
+      return pythonWorkerIsProfileAuthBlockedCode(item && item.error_code);
+    });
+    const onlyAuthBlockedFailures =
+      isRkFpBatch &&
+      failedItems.length > 0 &&
+      authBlockedFailedItems.length === failedItems.length;
+
+    pythonWorkerRenderJob({
+      id: 'batch:' + ids.join(','),
+      status: terminal ? (allSuccess ? 'SUCCESS' : (anyFailed ? 'PARTIAL' : 'SUCCESS')) : 'RUNNING',
+      items: mergedItems
+    });
+    pythonWorkerSetText(
+      'pythonPwJob',
+      (isRkFpBatch ? 'RK → FP batch: ' : 'Add RK batch: ') +
+        ids.length + ' Jobs'
+    );
+
+    if (!terminal) {
+      if (pythonWorkerUiState.batchPollTimer) {
+        clearTimeout(pythonWorkerUiState.batchPollTimer);
+      }
+      pythonWorkerUiState.batchPollTimer = setTimeout(function() {
+        pythonWorkerPollAdAccountBatch().catch(function(){});
+      }, 1000);
+      return;
+    }
+
+    pythonWorkerUiState.busy = false;
+    if (pythonWorkerUiState.batchPollTimer) {
+      clearTimeout(pythonWorkerUiState.batchPollTimer);
+      pythonWorkerUiState.batchPollTimer = null;
+    }
+
+    const realProfiles = Array.from(new Set(
+      pythonWorkerUiState.batchTargets
+        .map(function(target) { return String(target.profile_id || '').trim(); })
+        .filter(Boolean)
+    ));
+    await pythonWorkerMapLimit(realProfiles, 3, async function(profileId) {
+      await pythonWorkerRefreshProfile(profileId);
+    });
+
+    pythonWorkerSetText(
+      'pythonPwStatus',
+      isRkFpBatch
+        ? (
+            allSuccess
+              ? 'Все запущенные FP Jobs SUCCESS: ' + ids.length + ' RK.'
+              : onlyAuthBlockedFailures
+              ? (
+                  'FP batch приостановлен: Facebook checkpoint у ' +
+                  authBlockedFailedItems.length +
+                  ' Job. Backend Jobs сохранены; повторный Create/attach не отправляется.'
+                )
+              : 'RK → FP batch завершён: есть FAILED/PARTIAL Jobs. Повторный attach/Create автоматически не отправляется.'
+          )
+        : (
+            allSuccess
+              ? 'RK созданы для всех выбранных BM.'
+              : 'Add RK batch завершён: есть FAILED/PARTIAL Jobs. Повторный CREATE автоматически не отправляется.'
+          )
+    );
+
+    if (allSuccess || onlyAuthBlockedFailures) {
+      pythonWorkerClearBatchState();
+      if (onlyAuthBlockedFailures) {
+        pythonWorkerSetText('pythonPwJob', '');
+      }
+    } else {
+      pythonWorkerPersistBatchState();
+    }
+    pythonWorkerSelectionRefresh();
+  } catch (error) {
+    pythonWorkerSetText(
+      'pythonPwStatus',
+      (isRkFpBatch ? 'RK → FP' : 'Add RK') +
+        ' polling временно недоступен: ' +
+        String((error && error.message) || error) +
+        '. Повторяю автоматически.'
+    );
+    if (
+      Array.isArray(pythonWorkerUiState.batchJobIds) &&
+      pythonWorkerUiState.batchJobIds.length
+    ) {
+      if (pythonWorkerUiState.batchPollTimer) {
+        clearTimeout(pythonWorkerUiState.batchPollTimer);
+      }
+      pythonWorkerUiState.batchPollTimer = setTimeout(function() {
+        pythonWorkerPollAdAccountBatch().catch(function(){});
+      }, 2000);
+    }
+  } finally {
+    pythonWorkerUiState.batchPolling = false;
+  }
+}
+
+async function pythonWorkerOpenSelectedBusinessAdAccountModal() {
+  if (pythonWorkerUiState.workerOnline !== true) {
+    pythonWorkerSetText('pythonPwStatus', 'Add RK недоступен: worker ещё не READY.');
+    await pythonWorkerHealthCheck();
+    if (pythonWorkerUiState.workerOnline !== true) return;
+  }
+
+  const targets = pythonWorkerSelectedBusinessTargets();
+  if (!targets.length) {
+    pythonWorkerSetText(
+      'pythonPwStatus',
+      'Во вкладке Бизнес-менеджеры выбери хотя бы один BM.'
+    );
+    return;
+  }
+
+  pythonWorkerEnsureBmModalStyle();
+  pythonWorkerCloseOwnBmModal();
+
+  const modal = document.createElement('div');
+  modal.id = 'pythonWorkerBmModal';
+  const card = document.createElement('div');
+  card.className = 'pwbm-card';
+
+  const head = document.createElement('div');
+  head.className = 'pwbm-head';
+  const title = document.createElement('div');
+  title.className = 'pwbm-title';
+  title.textContent = 'Добавить рекламные кабинеты · ' + targets.length + ' BM';
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'pwbm-close';
+  close.textContent = '×';
+  close.addEventListener('click', pythonWorkerCloseOwnBmModal);
+  head.appendChild(title);
+  head.appendChild(close);
+
+  const body = document.createElement('div');
+  body.className = 'pwbm-body';
+  const note = document.createElement('div');
+  note.className = 'pwbm-note';
+  note.textContent =
+    'Каждый выбранный BM идёт напрямую в Python/browser Add RK. Старый Graph create с end_advertiser здесь не используется.';
+  body.appendChild(note);
+
+  const rows = {};
+  targets.forEach(function(target, index) {
+    const row = document.createElement('div');
+    row.className = 'pwbm-row';
+
+    const label = document.createElement('div');
+    label.className = 'pwbm-profile';
+    label.textContent = String(target.business_name || target.business_id);
+    const meta = document.createElement('span');
+    meta.className = 'pwbm-session ok';
+    meta.textContent =
+      String(target.profile_id) + ' · ' + String(target.business_id);
+    label.appendChild(meta);
+
+    const field = document.createElement('div');
+    field.className = 'pwbm-field';
+    const name = document.createElement('input');
+    name.type = 'text';
+    name.value =
+      String(target.business_name || 'ReMask').replace(/\s+/g, ' ').trim().slice(0, 220) +
+      ' RK';
+    name.placeholder = 'Название рекламного кабинета';
+    field.appendChild(name);
+
+    row.appendChild(label);
+    row.appendChild(field);
+    body.appendChild(row);
+    rows[String(index)] = {name: name};
+  });
+
+  const shared = document.createElement('div');
+  shared.className = 'pwbm-row';
+  const currencyField = document.createElement('div');
+  currencyField.className = 'pwbm-field';
+  const currency = document.createElement('input');
+  currency.type = 'text';
+  currency.value = 'USD';
+  currency.placeholder = 'Currency';
+  currencyField.appendChild(currency);
+
+  const timezoneField = document.createElement('div');
+  timezoneField.className = 'pwbm-field';
+  const timezone = document.createElement('input');
+  timezone.type = 'number';
+  timezone.value = '1';
+  timezone.min = '0';
+  timezone.placeholder = 'Meta timezone_id';
+  timezoneField.appendChild(timezone);
+  shared.appendChild(currencyField);
+  shared.appendChild(timezoneField);
+  body.appendChild(shared);
+
+  const footer = document.createElement('div');
+  footer.className = 'pwbm-footer';
+  const status = document.createElement('div');
+  status.className = 'pwbm-status';
+  status.textContent = 'Готово к Add RK.';
+  const actions = document.createElement('div');
+  actions.className = 'pwbm-actions';
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.className = 'btn btn-secondary';
+  cancel.textContent = 'Отмена';
+  cancel.addEventListener('click', pythonWorkerCloseOwnBmModal);
+  const create = document.createElement('button');
+  create.type = 'button';
+  create.className = 'btn btn-primary';
+  create.textContent = 'Создать RK';
+  actions.appendChild(cancel);
+  actions.appendChild(create);
+  footer.appendChild(status);
+  footer.appendChild(actions);
+
+  card.appendChild(head);
+  card.appendChild(body);
+  card.appendChild(footer);
+  modal.appendChild(card);
+  document.body.appendChild(modal);
+
+  const refresh = function() {
+    const namesReady = targets.every(function(_, index) {
+      return String(rows[String(index)].name.value || '').trim();
+    });
+    const currencyReady = /^[A-Za-z]{3}$/.test(String(currency.value || '').trim());
+    const timezoneReady = /^\d+$/.test(String(timezone.value || '').trim());
+    create.disabled =
+      pythonWorkerUiState.busy || !namesReady || !currencyReady || !timezoneReady;
+    status.textContent = create.disabled
+      ? 'Заполни имя, currency и timezone_id.'
+      : 'Готово: ' + targets.length + ' BM.';
+  };
+
+  Object.keys(rows).forEach(function(index) {
+    rows[index].name.addEventListener('input', refresh);
+  });
+  currency.addEventListener('input', refresh);
+  timezone.addEventListener('input', refresh);
+
+  create.addEventListener('click', function() {
+    if (create.disabled) return;
+    const configs = {};
+    targets.forEach(function(_, index) {
+      configs[String(index)] = {
+        name: String(rows[String(index)].name.value || '').trim(),
+        currency: String(currency.value || '').trim().toUpperCase(),
+        timezone_id: Number(timezone.value)
+      };
+    });
+
+    create.disabled = true;
+    cancel.disabled = true;
+    status.textContent = 'Отправляю Add RK Jobs…';
+
+    pythonWorkerStartBusinessAdAccountTargets(targets, configs)
+      .then(function() {
+        pythonWorkerCloseOwnBmModal();
+      })
+      .catch(function(error) {
+        cancel.disabled = false;
+        refresh();
+        status.textContent = 'Ошибка: ' + String((error && error.message) || error);
+      });
+  });
+
+  refresh();
+}
+
 async function pythonWorkerOpenOwnAdAccountModal() {
   if (pythonWorkerUiState.workerOnline !== true) {
     pythonWorkerSetText('pythonPwStatus', 'Add RK недоступен: worker ещё не READY.');
@@ -1968,7 +3595,7 @@ async function pythonWorkerOpenOwnAdAccountModal() {
   const note = document.createElement('div');
   note.className = 'pwbm-note';
   note.textContent =
-    'Модель: 1 BM = 1 RK. Выбери BM; повторный Add RK для того же BM переиспользует уже подтверждённый ad_account_id.';
+    'Модель: 1 BM = 1 RK. Add RK всегда запускает create-handler; если в выбранном BM уже есть реальный RK, Job вернёт AD_ACCOUNT_ALREADY_EXISTS.';
   body.appendChild(note);
 
   const rows = {};
@@ -2224,13 +3851,33 @@ async function pythonWorkerStartFanPages(options) {
     throw new Error('Add FP: нужны название, category и count 1–10. Проблема: ' + invalid.join(', '));
   }
 
+  pythonWorkerSetText('pythonPwStatus', 'Add FP: проверяю Facebook-сессии...');
+  const gate = await pythonWorkerFilterFanPageReadyProfiles(profiles);
+  if (!gate.ready.length) {
+    pythonWorkerUiState.busy = false;
+    pythonWorkerSelectionRefresh();
+    pythonWorkerSetText('pythonPwJob', '');
+    throw new Error(
+      gate.blocked.length
+        ? 'CHECKPOINT_REQUIRED: профили ' + gate.blocked.join(', ') +
+          '. Fan Page Job не создан.'
+        : 'FP preflight не прошёл: ' + (gate.errors[0] || 'нет READY профилей.')
+    );
+  }
+
   pythonWorkerUiState.busy = true;
   pythonWorkerSelectionRefresh();
-  pythonWorkerSetText('pythonPwStatus', 'Создаю Fan Page Job для ' + profiles.length + ' FB-профилей...');
+  pythonWorkerSetText(
+    'pythonPwStatus',
+    'Создаю Fan Page Job для ' + gate.ready.length + ' FB-профилей...' +
+      (gate.blocked.length
+        ? ' Пропущены checkpoint-профили: ' + gate.blocked.join(', ') + '.'
+        : '')
+  );
 
   try {
     const nonce = Date.now() + '-' + Math.random().toString(16).slice(2);
-    const payloadProfiles = profiles.map(function(profileId, index) {
+    const payloadProfiles = gate.ready.map(function(profileId, index) {
       const cfg = configs[String(profileId)] || {};
       return {
         profile_id: String(profileId),
@@ -2313,7 +3960,7 @@ async function pythonWorkerOpenOwnFanPageModal() {
   body.className = 'pwbm-body';
   const note = document.createElement('div');
   note.className = 'pwbm-note';
-  note.textContent = 'Для двух будущих BM поставь count=2. ReMask создаст две отдельные FP и сохранит их Page ID.';
+  note.textContent = 'По умолчанию создаётся 1 FP на профиль. При необходимости count можно увеличить до 10; каждый подтверждённый Page ID сохраняется в worker state.';
   body.appendChild(note);
 
   const rows = {};
@@ -2334,9 +3981,9 @@ async function pythonWorkerOpenOwnFanPageModal() {
     const count = document.createElement('input');
     count.type = 'number';
     count.className = 'pwbm-manual';
-    count.min = '1'; count.max = '10'; count.value = '2';
+    count.min = '1'; count.max = '10'; count.value = '1';
     const nameHint = document.createElement('small');
-    nameHint.textContent = 'count=2 → “ReMask Page 1” и “ReMask Page 2”.';
+    nameHint.textContent = 'count=1 → точное базовое имя; count>1 → имена с порядковым номером.';
     nameField.appendChild(baseName); nameField.appendChild(count); nameField.appendChild(nameHint);
 
     const metaField = document.createElement('div');
@@ -2435,6 +4082,29 @@ function pythonWorkerEnhanceProfileThreeDots() {
     const parent=addBm.parentNode;
     if (!parent || parent.nodeType !== 1) continue;
 
+    // REMASK_BM_MENU_PYTHON_ONLY_V1
+    // The legacy Add BM item used to open the packed-runtime modal
+    // (Vertical / Timezone ID) and only later tried to bridge its submit
+    // button into the Python worker. That left two competing creation paths.
+    // Intercept the menu item itself so Business creation has one route only.
+    if (!addBm.hasAttribute('data-python-worker-bm-menu')) {
+      addBm.setAttribute('data-python-worker-bm-menu','1');
+      addBm.removeAttribute('onclick');
+      if (addBm.tagName === 'A') addBm.setAttribute('href','#');
+      if (addBm.tagName === 'BUTTON') addBm.type='button';
+      addBm.addEventListener('click',function(event){
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        pythonWorkerOpenOwnBmModal().catch(function(error){
+          pythonWorkerSetText(
+            'pythonPwStatus',
+            'Add BM: ' + String((error && error.message) || error)
+          );
+        });
+      },true);
+    }
+
     if (!parent.querySelector('[data-python-worker-fp-menu="1"]')) {
       const addFp=addBm.cloneNode(true);
       addFp.removeAttribute('id'); addFp.removeAttribute('onclick'); addFp.removeAttribute('data-action');
@@ -2470,6 +4140,45 @@ function pythonWorkerEnhanceProfileThreeDots() {
       if (fp && fp.nextSibling) parent.insertBefore(addRk,fp.nextSibling); else parent.appendChild(addRk);
     }
   }
+}
+
+function pythonWorkerInstallBusinessAddRkInterceptor() {
+  document.addEventListener('click', function(event) {
+    try {
+      if (!state || String(state.activeTab || '') !== 'businesses') return;
+      const target = event.target && typeof event.target.closest === 'function'
+        ? event.target.closest(
+            'button,a,[role="button"],[role="menuitem"],[data-action]'
+          )
+        : null;
+      if (!target) return;
+
+      const label = String(
+        target.textContent ||
+        target.value ||
+        target.getAttribute('aria-label') ||
+        ''
+      ).replace(/\s+/g, ' ').trim();
+
+      if (!/^(?:Добавить\s+рекламн(?:ый\s+кабинет|ые\s+кабинеты)|Add\s+(?:RK|ad\s+accounts?))$/i.test(label)) {
+        return;
+      }
+
+      const selected = pythonWorkerSelectedBusinessTargets();
+      if (!selected.length) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+
+      pythonWorkerOpenSelectedBusinessAdAccountModal().catch(function(error) {
+        pythonWorkerSetText(
+          'pythonPwStatus',
+          'Add RK: ' + String((error && error.message) || error)
+        );
+      });
+    } catch (_) {}
+  }, true);
 }
 
 function pythonWorkerInitUi() {
@@ -2524,6 +4233,7 @@ function pythonWorkerInitUi() {
   pythonWorkerSelectionRefresh();
   pythonWorkerEnhanceBmDialog();
   pythonWorkerEnhanceProfileThreeDots();
+  pythonWorkerInstallBusinessAddRkInterceptor();
   pythonWorkerHealthCheck().catch(function(){});
   setInterval(function() {
     pythonWorkerHealthCheck().catch(function(){});
@@ -2534,7 +4244,15 @@ function pythonWorkerInitUi() {
     pythonWorkerEnhanceProfileThreeDots();
   }).observe(document.documentElement, {childList: true, subtree: true});
 
-  if (pythonWorkerUiState.jobId) {
+  if (pythonWorkerUiState.batchJobIds.length) {
+    pythonWorkerSetText(
+      'pythonPwStatus',
+      pythonWorkerUiState.batchKind === 'rk_fp'
+        ? 'Восстанавливаю RK → FP batch...'
+        : 'Восстанавливаю Add RK batch...'
+    );
+    pythonWorkerPollAdAccountBatch().catch(function(){});
+  } else if (pythonWorkerUiState.jobId) {
     pythonWorkerSetText('pythonPwStatus', 'Восстанавливаю последний Job...');
     pythonWorkerPoll().catch(function(){});
   }

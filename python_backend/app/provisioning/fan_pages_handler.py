@@ -12,6 +12,59 @@ def _clean(value: Any) -> str:
     return str(value or "").strip()
 
 
+_AUTH_RECOVERY_CODES = {
+    "CHECKPOINT_REQUIRED",
+    "SESSION_EXPIRED",
+    "TWO_FACTOR_REQUIRED",
+}
+
+
+def _browser_retryable(exc: BrowserBusinessError) -> bool:
+    # These are not safe for blind automatic loops, but they ARE resumable
+    # after the operator restores the Facebook session/checkpoint. Marking
+    # them retryable lets Retry Failed / the one-click FP flow resume the
+    # same idempotent Job instead of forcing a brand new operation.
+    return bool(exc.retryable) or exc.code in _AUTH_RECOVERY_CODES
+
+
+async def _checkpoint_auth_block(
+    *,
+    provisioning_state: Any,
+    item_id: str,
+    profile_id: str,
+    scope_key: str,
+    business_id: str,
+    ad_account_id: str,
+    exc: BrowserBusinessError,
+    target_names: list[str],
+    created_pages: list[dict[str, Any]],
+    safe_before_submit: bool,
+) -> None:
+    await provisioning_state.checkpoint(
+        item_id,
+        profile_id,
+        scope_key,
+        ProvisioningStep.FAN_PAGES,
+        {
+            "phase": "PROFILE_AUTH_BLOCKED",
+            "resume_from": "CREATE_NEXT" if safe_before_submit else "RECONCILE_CREATE",
+            "target_names": target_names,
+            "created_pages": created_pages,
+            "business_id": _clean(business_id),
+            "ad_account_id": _clean(ad_account_id),
+            "auth_error_code": exc.code,
+            "last_error_code": exc.code,
+            "last_error": str(exc)[:4000],
+            "browser_diagnostic": (
+                exc.diagnostic if isinstance(exc.diagnostic, dict) else {}
+            ),
+            "safe_before_submit": bool(safe_before_submit),
+            "activity": "FAN_PAGE_PROFILE_AUTH_BLOCKED",
+            "activity_at": int(time.time()),
+        },
+    )
+
+
 def _checkpoint_result(step_state: Any) -> dict[str, Any]:
     if not isinstance(step_state, dict):
         return {}
@@ -177,6 +230,192 @@ async def _reconcile_uncertain_page(
     return None, conclusive_absent >= max(1, checks), diagnostics
 
 
+async def _attach_page_to_business(
+    session: Any,
+    *,
+    provisioning_state: Any,
+    item_id: str,
+    profile_id: str,
+    scope_key: str,
+    business_id: str,
+    ad_account_id: str,
+    page_id: str,
+    page_name: str,
+    target_names: list[str],
+    created_pages: list[dict[str, Any]],
+) -> dict[str, Any]:
+    business = _clean(business_id)
+    page = _clean(page_id)
+    ad_account = _clean(ad_account_id)
+    if ad_account.lower().startswith("act_"):
+        ad_account = ad_account[4:]
+
+    if not business.isdigit() or not page.isdigit():
+        raise ProvisioningError(
+            "INVALID_INPUT",
+            "FAN_PAGES attach requires numeric business_id and page_id.",
+            retryable=False,
+        )
+
+    step_state = await provisioning_state.step(
+        item_id,
+        ProvisioningStep.FAN_PAGES,
+    )
+    checkpoint = _checkpoint_result(step_state)
+    phase = _clean(
+        checkpoint.get("phase")
+        or checkpoint.get("resume_from")
+    ).upper()
+    checkpoint_business = _clean(
+        checkpoint.get("active_attach_business_id")
+        or checkpoint.get("business_id")
+    )
+    checkpoint_page = _clean(
+        checkpoint.get("active_attach_page_id")
+        or checkpoint.get("page_id")
+    )
+
+    # Never blindly resubmit an ownership/add request after a prior final click.
+    # First verify whether Meta already attached the Page.
+    if (
+        phase in {
+            "PAGE_ADD_CLICK_INTENT",
+            "PAGE_ADD_SUBMITTED",
+            "PAGE_ADD_RESULT_UNKNOWN",
+        }
+        and checkpoint_business == business
+        and checkpoint_page == page
+    ):
+        async with FacebookBusinessBrowser(
+            session.context,
+            timeout_seconds=60,
+        ) as browser:
+            attached = await browser.verify_page_attached(
+                business_id=business,
+                page_id=page,
+            )
+        if not attached:
+            raise ProvisioningError(
+                "PAGE_ATTACH_RESULT_UNKNOWN",
+                (
+                    f"Previous Page attach for {page} -> Business {business} "
+                    "may have reached Meta. The Page is not yet visible in "
+                    "Business Settings, so ReMask will not submit a duplicate "
+                    "attach request."
+                ),
+                retryable=True,
+            )
+
+        return {
+            "page_id": page,
+            "business_id": business,
+            "ad_account_id": ad_account,
+            "attached": True,
+            "already_attached": True,
+            "transport": "facebook_business_settings_page_attach_reconciled",
+        }
+
+    async def before_attach(patch: dict[str, Any]) -> None:
+        merged = {
+            "target_names": target_names,
+            "created_pages": created_pages,
+            "business_id": business,
+            "ad_account_id": ad_account,
+            "active_attach_business_id": business,
+            "active_attach_page_id": page,
+            "active_attach_page_name": page_name,
+            "activity_at": int(time.time()),
+        }
+        if isinstance(patch, dict):
+            merged.update(patch)
+        await provisioning_state.checkpoint(
+            item_id,
+            profile_id,
+            scope_key,
+            ProvisioningStep.FAN_PAGES,
+            merged,
+        )
+
+    try:
+        async with FacebookBusinessBrowser(
+            session.context,
+            timeout_seconds=75,
+        ) as browser:
+            result = await browser.add_existing_page(
+                business_id=business,
+                page_id=page,
+                before_submit=before_attach,
+            )
+    except BrowserBusinessError as exc:
+        if exc.code in _AUTH_RECOVERY_CODES:
+            current_state = await provisioning_state.step(
+                item_id,
+                ProvisioningStep.FAN_PAGES,
+            )
+            current_phase = _clean(
+                _checkpoint_result(current_state).get("phase")
+            ).upper()
+            await _checkpoint_auth_block(
+                provisioning_state=provisioning_state,
+                item_id=item_id,
+                profile_id=profile_id,
+                scope_key=scope_key,
+                business_id=business,
+                ad_account_id=ad_account,
+                exc=exc,
+                target_names=target_names,
+                created_pages=created_pages,
+                safe_before_submit=current_phase not in {
+                    "PAGE_ADD_CLICK_INTENT",
+                    "PAGE_ADD_SUBMITTED",
+                    "PAGE_ADD_RESULT_UNKNOWN",
+                },
+            )
+        if exc.code == "PAGE_ATTACH_RESULT_UNKNOWN":
+            await provisioning_state.checkpoint(
+                item_id,
+                profile_id,
+                scope_key,
+                ProvisioningStep.FAN_PAGES,
+                {
+                    "phase": "PAGE_ADD_RESULT_UNKNOWN",
+                    "resume_from": "VERIFY_ATTACH",
+                    "target_names": target_names,
+                    "created_pages": created_pages,
+                    "business_id": business,
+                    "ad_account_id": ad_account,
+                    "active_attach_business_id": business,
+                    "active_attach_page_id": page,
+                    "active_attach_page_name": page_name,
+                    "last_error_code": exc.code,
+                    "last_error": str(exc)[:4000],
+                    "browser_diagnostic": (
+                        exc.diagnostic
+                        if isinstance(exc.diagnostic, dict)
+                        else {}
+                    ),
+                    "activity": "FAN_PAGE_ATTACH_UNCERTAIN",
+                    "activity_at": int(time.time()),
+                },
+            )
+        raise ProvisioningError(
+            exc.code,
+            str(exc),
+            retryable=_browser_retryable(exc),
+        ) from exc
+
+    return {
+        "page_id": page,
+        "business_id": business,
+        "ad_account_id": ad_account,
+        "attached": True,
+        "already_attached": bool(
+            getattr(result, "already_attached", False)
+        ),
+        "transport": "facebook_business_settings_page_attach",
+    }
+
+
 async def fan_pages_handler(
     session: Any,
     params: dict[str, Any],
@@ -207,7 +446,60 @@ async def fan_pages_handler(
             retryable=False,
         )
 
-    names = _target_names(params)
+    business_id = _clean(params.get("business_id"))
+    ad_account_id = _clean(params.get("ad_account_id"))
+    if ad_account_id.lower().startswith("act_"):
+        ad_account_id = ad_account_id[4:]
+
+    existing_page_id = _clean(
+        params.get("existing_page_id")
+        or params.get("page_id")
+    )
+    mode = _clean(params.get("mode")).lower()
+    if not mode:
+        mode = "attach_existing" if existing_page_id else "create"
+    if mode not in {"create", "attach_existing"}:
+        raise ProvisioningError(
+            "INVALID_INPUT",
+            "FAN_PAGES.mode must be create or attach_existing.",
+            retryable=False,
+        )
+
+    if business_id and not business_id.isdigit():
+        raise ProvisioningError(
+            "INVALID_INPUT",
+            "FAN_PAGES.business_id must be numeric.",
+            retryable=False,
+        )
+    if ad_account_id and not ad_account_id.isdigit():
+        raise ProvisioningError(
+            "INVALID_INPUT",
+            "FAN_PAGES.ad_account_id must be numeric.",
+            retryable=False,
+        )
+
+    if mode == "attach_existing":
+        if not business_id:
+            raise ProvisioningError(
+                "INVALID_INPUT",
+                "attach_existing requires business_id.",
+                retryable=False,
+            )
+        if not existing_page_id.isdigit():
+            raise ProvisioningError(
+                "INVALID_INPUT",
+                "attach_existing requires numeric existing_page_id.",
+                retryable=False,
+            )
+        existing_name = _clean(
+            params.get("page_name")
+            or params.get("name")
+            or f"Page {existing_page_id}"
+        )
+        names = [existing_name[:120]]
+    else:
+        names = _target_names(params)
+
     category = _clean(params.get("category") or "Digital creator")
     bio = _clean(params.get("bio"))
 
@@ -235,12 +527,33 @@ async def fan_pages_handler(
             "name": _clean(row.get("name")),
             "category": _clean(row.get("category") or category),
             "reused": bool(row.get("reused")),
+            "attached": bool(row.get("attached")),
+            "business_id": _clean(row.get("business_id")),
+            "ad_account_id": _clean(row.get("ad_account_id")),
+            "already_attached": bool(row.get("already_attached")),
         }
         for row in (checkpoint.get("created_pages") or [])
         if isinstance(row, dict)
         and _clean(row.get("id")).isdigit()
         and _clean(row.get("name"))
     ]
+    if mode == "attach_existing" and not any(
+        _clean(row.get("id")) == existing_page_id
+        for row in created_pages
+    ):
+        created_pages.append(
+            {
+                "id": existing_page_id,
+                "name": names[0],
+                "category": category,
+                "reused": True,
+                "attached": False,
+                "business_id": "",
+                "ad_account_id": ad_account_id,
+                "already_attached": False,
+            }
+        )
+
     completed_names = {row["name"].casefold() for row in created_pages}
 
     prior_phase = _clean(
@@ -271,6 +584,10 @@ async def fan_pages_handler(
                     "name": active_name,
                     "category": category,
                     "reused": False,
+                    "attached": False,
+                    "business_id": business_id,
+                    "ad_account_id": ad_account_id,
+                    "already_attached": False,
                 }
             )
             completed_names.add(active_name.casefold())
@@ -324,17 +641,115 @@ async def fan_pages_handler(
         if page_name.casefold() in completed_names:
             continue
 
+        # Cross-Job exactly-once guard. A Page confirmed by a prior successful
+        # FAN_PAGES step is authoritative even while Facebook's rendered
+        # "Your Pages" inventory is still propagating. Current live inventory
+        # remains the second source, but it must not be the only duplicate
+        # protection for mass provisioning.
+        persisted_pages: list[dict[str, Any]] = []
+        try:
+            persisted_pages = await provisioning_state.latest_profile_fan_pages(
+                profile_id
+            )
+        except Exception:
+            persisted_pages = []
+
+        persisted_exact = [
+            row
+            for row in persisted_pages
+            if isinstance(row, dict)
+            and _clean(row.get("id") or row.get("page_id")).isdigit()
+            and _clean(row.get("name")).casefold() == page_name.casefold()
+            and (
+                not business_id
+                or _clean(row.get("business_id")) == business_id
+            )
+            and (
+                not ad_account_id
+                or not _clean(row.get("ad_account_id"))
+                or _clean(row.get("ad_account_id")) == ad_account_id
+            )
+        ]
+        if len(persisted_exact) == 1:
+            persisted_id = _clean(
+                persisted_exact[0].get("id")
+                or persisted_exact[0].get("page_id")
+            )
+            created_pages.append(
+                {
+                    "id": persisted_id,
+                    "name": page_name,
+                    "category": _clean(
+                        persisted_exact[0].get("category") or category
+                    ),
+                    "reused": True,
+                    "attached": bool(persisted_exact[0].get("attached")),
+                    "business_id": (
+                        business_id
+                        or _clean(persisted_exact[0].get("business_id"))
+                    ),
+                    "ad_account_id": (
+                        ad_account_id
+                        or _clean(persisted_exact[0].get("ad_account_id"))
+                    ),
+                    "already_attached": bool(
+                        persisted_exact[0].get("already_attached")
+                    ),
+                }
+            )
+            completed_names.add(page_name.casefold())
+            await provisioning_state.checkpoint(
+                item_id,
+                profile_id,
+                scope_key,
+                ProvisioningStep.FAN_PAGES,
+                {
+                    "phase": "PAGE_CREATED",
+                    "resume_from": "CREATE_NEXT",
+                    "target_names": names,
+                    "created_pages": created_pages,
+                    "activity": "FAN_PAGE_REUSED_FROM_WORKER_STATE",
+                    "activity_at": int(time.time()),
+                },
+            )
+            continue
+
         try:
             current_pages = await _fresh_page_inventory(session)
         except BrowserBusinessError as exc:
-            if exc.code in {"SESSION_EXPIRED", "CHECKPOINT_REQUIRED", "TWO_FACTOR_REQUIRED"}:
-                raise ProvisioningError(exc.code, str(exc), retryable=False) from exc
+            if exc.code in _AUTH_RECOVERY_CODES:
+                await _checkpoint_auth_block(
+                    provisioning_state=provisioning_state,
+                    item_id=item_id,
+                    profile_id=profile_id,
+                    scope_key=scope_key,
+                    business_id=business_id,
+                    ad_account_id=ad_account_id,
+                    exc=exc,
+                    target_names=names,
+                    created_pages=created_pages,
+                    safe_before_submit=True,
+                )
+                raise ProvisioningError(
+                    exc.code,
+                    str(exc),
+                    retryable=True,
+                ) from exc
             current_pages = []
 
-        existing = _find_created_page(
-            current_pages,
-            page_name=page_name,
-            before_ids=set(),
+        # For RK-targeted creation, a same-named Page elsewhere on the FB
+        # profile is not proof that this RK already owns its intended Page.
+        # Reuse by rendered inventory is safe only for the standalone FP flow;
+        # targeted retries are recovered through the scoped checkpoint/worker
+        # state above.
+        existing = (
+            None
+            if business_id
+            else _find_created_page(
+                current_pages,
+                page_name=page_name,
+                before_ids=set(),
+            )
         )
         if existing:
             created_pages.append(
@@ -415,10 +830,33 @@ async def fan_pages_handler(
                     "FACEBOOK_TEMPORARILY_BLOCKED",
                     "FAN_PAGE_CREATE_REJECTED",
                 }:
+                    if exc.code in _AUTH_RECOVERY_CODES:
+                        current_state = await provisioning_state.step(
+                            item_id,
+                            ProvisioningStep.FAN_PAGES,
+                        )
+                        current_phase = _clean(
+                            _checkpoint_result(current_state).get("phase")
+                        ).upper()
+                        await _checkpoint_auth_block(
+                            provisioning_state=provisioning_state,
+                            item_id=item_id,
+                            profile_id=profile_id,
+                            scope_key=scope_key,
+                            business_id=business_id,
+                            ad_account_id=ad_account_id,
+                            exc=exc,
+                            target_names=names,
+                            created_pages=created_pages,
+                            safe_before_submit=current_phase not in {
+                                "PAGE_CREATE_CLICK_INTENT",
+                                "PAGE_CREATE_RESULT_UNKNOWN",
+                            },
+                        )
                     raise ProvisioningError(
                         exc.code,
                         str(exc),
-                        retryable=bool(exc.retryable),
+                        retryable=_browser_retryable(exc),
                     ) from exc
 
                 if exc.code != "FAN_PAGE_CREATE_RESULT_UNKNOWN":
@@ -519,6 +957,10 @@ async def fan_pages_handler(
                 "name": page_name,
                 "category": category,
                 "reused": bool(create_result.get("reused")),
+                "attached": False,
+                "business_id": business_id,
+                "ad_account_id": ad_account_id,
+                "already_attached": False,
             }
         )
         completed_names.add(page_name.casefold())
@@ -543,6 +985,63 @@ async def fan_pages_handler(
     by_name = {row["name"].casefold(): row for row in created_pages}
     ordered = [by_name[name.casefold()] for name in names if name.casefold() in by_name]
 
+    if business_id:
+        for row in ordered:
+            row_page_id = _clean(row.get("id"))
+            relation_complete = (
+                bool(row.get("attached"))
+                and _clean(row.get("business_id")) == business_id
+                and (
+                    not ad_account_id
+                    or _clean(row.get("ad_account_id")) == ad_account_id
+                )
+            )
+            if relation_complete:
+                continue
+
+            attach_result = await _attach_page_to_business(
+                session,
+                provisioning_state=provisioning_state,
+                item_id=item_id,
+                profile_id=profile_id,
+                scope_key=scope_key,
+                business_id=business_id,
+                ad_account_id=ad_account_id,
+                page_id=row_page_id,
+                page_name=_clean(row.get("name")),
+                target_names=names,
+                created_pages=created_pages,
+            )
+            row["attached"] = True
+            row["business_id"] = business_id
+            row["ad_account_id"] = ad_account_id
+            row["already_attached"] = bool(
+                attach_result.get("already_attached")
+            )
+            row["attach_transport"] = _clean(
+                attach_result.get("transport")
+            )
+
+            await provisioning_state.checkpoint(
+                item_id,
+                profile_id,
+                scope_key,
+                ProvisioningStep.FAN_PAGES,
+                {
+                    "phase": "PAGE_ATTACHED",
+                    "resume_from": "ATTACH_NEXT",
+                    "target_names": names,
+                    "created_pages": created_pages,
+                    "business_id": business_id,
+                    "ad_account_id": ad_account_id,
+                    "active_attach_business_id": "",
+                    "active_attach_page_id": "",
+                    "active_attach_page_name": "",
+                    "activity": "FAN_PAGE_ATTACHED_TO_RK_BUSINESS",
+                    "activity_at": int(time.time()),
+                },
+            )
+
     if len(ordered) != len(names):
         raise ProvisioningError(
             "FAN_PAGES_INCOMPLETE",
@@ -552,11 +1051,26 @@ async def fan_pages_handler(
 
     return {
         "phase": "DONE",
+        "mode": mode,
         "requested_count": len(names),
-        "created_count": len(ordered),
+        "created_count": (
+            0 if mode == "attach_existing"
+            else len(ordered)
+        ),
+        "attached_count": sum(
+            1 for row in ordered if bool(row.get("attached"))
+        ),
         "page_ids": [row["id"] for row in ordered],
         "pages": ordered,
         "target_names": names,
         "category": category,
-        "transport": "facebook_pages_profile_ui",
+        "business_id": business_id,
+        "ad_account_id": ad_account_id,
+        "transport": (
+            "facebook_pages_attach_existing_to_rk"
+            if mode == "attach_existing"
+            else "facebook_pages_create_and_attach_to_rk"
+            if business_id
+            else "facebook_pages_profile_ui"
+        ),
     }

@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import re
+import signal
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -73,6 +74,102 @@ _BROWSER_LIMIT = max(1, int(os.getenv("REMASK_BM_BROWSER_CONCURRENCY") or "1"))
 _BROWSER_SEMAPHORE = asyncio.Semaphore(_BROWSER_LIMIT)
 _PROFILE_LOCKS: dict[str, asyncio.Lock] = {}
 _PROFILE_LOCKS_GUARD = asyncio.Lock()
+
+
+def _cgroup_memory_snapshot_mb() -> dict[str, float]:
+    result: dict[str, float] = {}
+    for key, path in (
+        ("current_mb", "/sys/fs/cgroup/memory.current"),
+        ("limit_mb", "/sys/fs/cgroup/memory.max"),
+    ):
+        try:
+            raw = Path(path).read_text(encoding="utf-8").strip()
+            if raw and raw != "max":
+                result[key] = round(int(raw) / (1024 * 1024), 1)
+        except Exception:
+            continue
+    return result
+
+
+async def _reap_stale_chromium_processes() -> dict[str, Any]:
+    """Best-effort cleanup of orphan Chromium children between browser leases.
+
+    The global browser semaphore guarantees that no live
+    FacebookBusinessBrowser owns Chromium when this runs before open() or after
+    close(). Railway's 1 GB container can otherwise retain crashed renderer /
+    zygote processes long enough to push the next wizard into OOM.
+    """
+    current_pid = os.getpid()
+    candidates: list[int] = []
+    proc = Path("/proc")
+    try:
+        for entry in proc.iterdir():
+            if not entry.name.isdigit():
+                continue
+            pid = int(entry.name)
+            if pid <= 1 or pid == current_pid:
+                continue
+            try:
+                cmdline = (entry / "cmdline").read_bytes().replace(b"\x00", b" ").decode(
+                    "utf-8", errors="ignore"
+                )
+            except Exception:
+                continue
+            folded = cmdline.casefold()
+            if "chromium" not in folded:
+                continue
+            # Only ReMask's headless Chromium processes run inside this
+            # container. Keep the match narrow enough to avoid unrelated
+            # helper processes.
+            if not any(
+                marker in folded
+                for marker in (
+                    "--headless",
+                    "--type=renderer",
+                    "--type=zygote",
+                    "--type=gpu-process",
+                    "--type=utility",
+                    "/usr/bin/chromium",
+                    "/usr/lib/chromium",
+                )
+            ):
+                continue
+            candidates.append(pid)
+    except Exception:
+        return {"found": 0, "terminated": 0}
+
+    terminated = 0
+    for pid in candidates:
+        try:
+            os.kill(pid, signal.SIGTERM)
+            terminated += 1
+        except ProcessLookupError:
+            continue
+        except Exception:
+            continue
+
+    if terminated:
+        await asyncio.sleep(0.35)
+
+    for pid in candidates:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            continue
+        except Exception:
+            continue
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except Exception:
+            pass
+
+    return {
+        "found": len(candidates),
+        "terminated": terminated,
+        "memory": _cgroup_memory_snapshot_mb(),
+    }
 
 
 async def _get_profile_lock(profile_id: str) -> asyncio.Lock:
@@ -734,18 +831,113 @@ def _business_ids_from_text(text: str) -> set[str]:
 
 
 
+# REMASK_PRIVATE_BUSINESS_INVENTORY_V1
+def _extract_business_inventory_rows(payload: Any) -> list[dict[str, str]]:
+    """Extract Business portfolio rows from Meta Business Suite Relay payloads.
+
+    Only structurally business-scoped nodes are accepted. Generic numeric IDs
+    are ignored so Page/RK/user IDs cannot become phantom Businesses.
+    """
+    found: dict[str, dict[str, str]] = {}
+    business_markers = (
+        "business",
+        "businessportfolio",
+        "business_portfolio",
+        "businessmanager",
+        "business_manager",
+        "bizkit",
+    )
+
+    def compact(value: str) -> str:
+        return value.casefold().replace("_", "").replace("-", "").replace(" ", "")
+
+    def walk(value: Any, path: str = "root") -> None:
+        if isinstance(value, dict):
+            typename = _clean(value.get("__typename"))
+            folded_path = compact(path)
+            folded_type = compact(typename)
+            business_context = any(
+                compact(marker) in folded_path or compact(marker) in folded_type
+                for marker in business_markers
+            )
+
+            business_id = _digits(
+                value.get("business_id")
+                or value.get("businessId")
+                or value.get("businessID")
+            )
+            if not business_id and business_context:
+                business_id = _digits(value.get("id"))
+
+            name = _clean(
+                value.get("business_name")
+                or value.get("businessName")
+                or value.get("name")
+            )
+
+            explicit_business_key = any(
+                key in value
+                for key in ("business_id", "businessId", "businessID")
+            )
+            strong_context = bool(
+                explicit_business_key
+                or (
+                    business_context
+                    and (
+                        "business" in folded_type
+                        or "businesses" in folded_path
+                        or "businessportfolio" in folded_path
+                        or "bizkit" in folded_path
+                    )
+                )
+            )
+            if business_id and strong_context:
+                row = found.get(business_id) or {
+                    "id": business_id,
+                    "name": "",
+                }
+                if name and not row.get("name"):
+                    row["name"] = name[:240]
+                found[business_id] = row
+
+            for key, child in value.items():
+                walk(child, f"{path}.{key}")
+        elif isinstance(value, list):
+            for index, child in enumerate(value):
+                walk(child, f"{path}[{index}]")
+
+    walk(payload)
+    return [found[key] for key in sorted(found)]
+
+
 def _extract_named_ad_account_ids(
     payload: Any,
     account_name: str,
 ) -> list[str]:
-    """Extract numeric RK ids only from nodes matching the exact account name."""
+    """Extract RK ids only from exact-name nodes inside RK inventory context."""
     expected = _clean(account_name).casefold()
     if not expected:
         return []
 
     found: set[str] = set()
+    ad_markers = (
+        "ad_account",
+        "adaccount",
+        "ad_accounts",
+        "adaccounts",
+        "advertising_account",
+        "advertisingaccount",
+    )
 
-    def walk(value: Any) -> None:
+    def is_ad_context(path: str, value: dict[str, Any]) -> bool:
+        folded = path.casefold()
+        typename = _clean(value.get("__typename")).casefold()
+        return any(
+            marker in folded or marker in typename
+            for marker in ad_markers
+        )
+
+    def walk(value: Any, path: str = "root") -> None:
         if isinstance(value, dict):
             node_name = _clean(
                 value.get("name")
@@ -754,7 +946,7 @@ def _extract_named_ad_account_ids(
                 or value.get("adAccountName")
             ).casefold()
 
-            if node_name == expected:
+            if node_name == expected and is_ad_context(path, value):
                 for key in (
                     "id",
                     "account_id",
@@ -787,24 +979,22 @@ def _extract_named_ad_account_ids(
                             if normalized:
                                 found.add(normalized)
 
-            for child in value.values():
-                walk(child)
+            for key, child in value.items():
+                walk(child, f"{path}.{key}")
 
         elif isinstance(value, list):
-            for child in value:
-                walk(child)
+            for index, child in enumerate(value):
+                walk(child, f"{path}[{index}]")
 
     walk(payload)
     return sorted(found)
 
-
 def _extract_inventory_ad_account_ids(payload: Any) -> list[str]:
-    """Extract RK ids from structurally identified ad-account inventory nodes.
+    """Extract RK ids only from structurally identified RK inventory nodes.
 
-    Generic numeric id values are ignored unless their parent/path clearly
-    belongs to an ad-account collection/node. This keeps Business/Page IDs out
-    of reconciliation while allowing Relay inventory shapes where the account
-    name is absent or localized differently.
+    A bare ad_account_id somewhere in a Relay payload is not evidence that
+    the current Business owns that RK. IDs are accepted only when their node
+    or traversal path is already inside an ad-account collection/context.
     """
     found: set[str] = set()
 
@@ -834,19 +1024,14 @@ def _extract_inventory_ad_account_ids(payload: Any) -> list[str]:
         if isinstance(value, dict):
             ad_context = path_is_ad_account(path, value)
 
-            for key in (
-                "ad_account_id",
-                "adAccountId",
-                "adaccount_id",
-            ):
-                if key in value:
-                    add(value.get(key))
-
             if ad_context:
                 for key in (
                     "id",
                     "account_id",
                     "accountId",
+                    "ad_account_id",
+                    "adAccountId",
+                    "adaccount_id",
                 ):
                     if key in value:
                         add(value.get(key))
@@ -875,6 +1060,107 @@ def _extract_inventory_ad_account_ids(payload: Any) -> list[str]:
 
     walk(payload)
     return sorted(found)
+
+def _extract_inventory_ad_account_rows(payload: Any) -> list[dict[str, Any]]:
+    """Extract RK rows only from structurally identified ad-account context.
+
+    Business Settings Relay responses may contain many unrelated numeric IDs.
+    Accept an ID only when its traversal path or typename is already inside an
+    ad-account inventory node. This is read-only inventory evidence.
+    """
+    found: dict[str, dict[str, Any]] = {}
+    ad_markers = (
+        "ad_account",
+        "adaccount",
+        "ad_accounts",
+        "adaccounts",
+        "advertising_account",
+        "advertisingaccount",
+    )
+
+    def is_ad_context(path: str, value: dict[str, Any]) -> bool:
+        folded = path.casefold()
+        typename = _clean(value.get("__typename")).casefold()
+        return any(
+            marker in folded or marker in typename
+            for marker in ad_markers
+        )
+
+    def merge_row(value: dict[str, Any], path: str) -> None:
+        if not is_ad_context(path, value):
+            return
+
+        account_id = ""
+        for key in (
+            "account_id",
+            "ad_account_id",
+            "accountId",
+            "adAccountId",
+            "adaccount_id",
+            "id",
+        ):
+            account_id = _normalize_ad_account_id(value.get(key))
+            if account_id:
+                break
+        if not account_id:
+            return
+
+        business = value.get("business")
+        business_id = ""
+        business_name = ""
+        if isinstance(business, dict):
+            business_id = _digits(business.get("id"))
+            business_name = _clean(business.get("name"))
+        if not business_id:
+            business_id = _digits(
+                value.get("business_id")
+                or value.get("businessId")
+                or value.get("businessID")
+            )
+
+        row = {
+            "id": account_id,
+            "account_id": account_id,
+            "name": _clean(
+                value.get("name")
+                or value.get("account_name")
+                or value.get("ad_account_name")
+                or value.get("adAccountName")
+            ),
+            "account_status": value.get("account_status"),
+            "disable_reason": value.get("disable_reason"),
+            "currency": _clean(value.get("currency")),
+            "timezone_name": _clean(
+                value.get("timezone_name")
+                or value.get("timezoneName")
+            ),
+            "business_id": business_id,
+            "business_name": business_name,
+        }
+
+        previous = found.get(account_id) or {}
+        merged = dict(previous)
+        for key, item in row.items():
+            if item not in ("", None, [], {}):
+                merged[key] = item
+            elif key not in merged:
+                merged[key] = item
+        found[account_id] = merged
+
+    def walk(value: Any, path: str = "root") -> None:
+        if isinstance(value, dict):
+            merge_row(value, path)
+            for key, child in value.items():
+                child_path = f"{path}.{key}"
+                if isinstance(child, dict):
+                    merge_row(child, child_path)
+                walk(child, child_path)
+        elif isinstance(value, list):
+            for index, child in enumerate(value):
+                walk(child, f"{path}[{index}]")
+
+    walk(payload)
+    return [found[key] for key in sorted(found)]
 
 
 def _has_ad_account_inventory_container(payload: Any) -> bool:
@@ -1007,6 +1293,8 @@ class FacebookBusinessBrowser:
         "Tài khoản quảng cáo",
         "विज्ञापन खाते",
         "विज्ञापन खाता",
+        "विज्ञापन अकाउंट",
+        "विज्ञापन अकाउंट्स",
     )
     AD_ACCOUNT_CREATE_ENTRY_NAMES = (
         "Create a new ad account",
@@ -1030,6 +1318,10 @@ class FacebookBusinessBrowser:
         "नया विज्ञापन खाता बनाएं",
         "विज्ञापन खाता बनाएँ",
         "विज्ञापन खाता बनाएं",
+        "नया विज्ञापन अकाउंट बनाएँ",
+        "नया विज्ञापन अकाउंट बनाएं",
+        "विज्ञापन अकाउंट बनाएँ",
+        "विज्ञापन अकाउंट बनाएं",
     )
     AD_ACCOUNT_SUBMIT_NAMES = (
         "Create ad account",
@@ -1061,6 +1353,8 @@ class FacebookBusinessBrowser:
         "Tiếp tục",
         "विज्ञापन खाता बनाएँ",
         "विज्ञापन खाता बनाएं",
+        "विज्ञापन अकाउंट बनाएँ",
+        "विज्ञापन अकाउंट बनाएं",
         "बनाएँ",
         "बनाएं",
         "अगला",
@@ -1154,6 +1448,7 @@ class FacebookBusinessBrowser:
         self._profile_lock: asyncio.Lock | None = None
         self._profile_lock_acquired = False
         self._last_selector_diagnostic: dict[str, Any] = {}
+        self._last_business_inventory_diagnostic: dict[str, Any] = {}
         self._last_ad_account_section_diagnostic: dict[str, Any] = {}
         self._browser_events: list[dict[str, Any]] = []
         self._ad_account_runtime_phase = "IDLE"
@@ -1183,6 +1478,18 @@ class FacebookBusinessBrowser:
         await _BROWSER_SEMAPHORE.acquire()
         self._semaphore_acquired = True
         self._browser_slot_acquired_at = time.monotonic()
+
+        stale_cleanup = await _reap_stale_chromium_processes()
+        if stale_cleanup.get("found"):
+            try:
+                import logging
+                logging.getLogger("remask_worker").warning(
+                    "[%s] reaped stale Chromium before browser open: %s",
+                    self.profile_id,
+                    stale_cleanup,
+                )
+            except Exception:
+                pass
 
         # Once a Chromium slot is acquired, it must never be held forever.
         # Queue wait is intentionally unbounded for large bulk waves, but the
@@ -1261,8 +1568,13 @@ class FacebookBusinessBrowser:
                     "--disable-translate",
                     "--disable-default-apps",
                     "--disable-component-update",
+                    "--disable-background-networking",
+                    "--disable-breakpad",
+                    "--disable-crash-reporter",
+                    "--disable-features=BackForwardCache,MediaRouter,OptimizationHints,Translate,IsolateOrigins,site-per-process",
                     "--no-first-run",
-                    "--renderer-process-limit=2",
+                    "--renderer-process-limit=1",
+                    "--process-per-site",
                     "--blink-settings=imagesEnabled=false",
                 ],
             }
@@ -1275,7 +1587,7 @@ class FacebookBusinessBrowser:
                 user_agent=_clean(getattr(self.context, "user_agent", "")),
                 locale="en-US",
                 viewport={"width": 1280, "height": 800},
-                service_workers="allow",
+                service_workers="block",
                 reduced_motion="reduce",
             )
 
@@ -1440,6 +1752,12 @@ class FacebookBusinessBrowser:
         if playwright is not None:
             await bounded_cleanup(playwright.stop(), timeout=2.0)
 
+        # Chromium can leave renderer/zygote children behind after a page
+        # crash even when Playwright close() returns. Reap them while the
+        # global browser semaphore is still held so the next lease starts with
+        # a clean memory budget.
+        await _reap_stale_chromium_processes()
+
         if self._profile_lock_acquired and self._profile_lock is not None:
             self._profile_lock.release()
             self._profile_lock_acquired = False
@@ -1562,21 +1880,43 @@ class FacebookBusinessBrowser:
         body = (await self._body_text()).lower()
 
         if "/login" in lower_url or "login.php" in lower_url:
-            await self._diagnostic("login")
+            diagnostic = await self._diagnostic("login")
+            diagnostic["auth_evidence"] = "login_url"
             raise BrowserBusinessError(
                 "SESSION_EXPIRED",
                 "Facebook redirected the profile to login.",
                 retryable=False,
-                diagnostic={"url": url},
+                diagnostic=diagnostic,
             )
 
-        if "/checkpoint" in lower_url or "checkpoint" in body[:4000]:
-            await self._diagnostic("checkpoint")
+        try:
+            parsed_url = urlsplit(url)
+            current_host = _clean(parsed_url.hostname).lower()
+            current_path = _clean(parsed_url.path).lower()
+        except Exception:
+            current_host = ""
+            current_path = ""
+
+        # A generic occurrence of the word "checkpoint" in Business Suite body
+        # text is NOT proof of an account checkpoint. Meta's SPA can expose
+        # internal/help text containing that word on otherwise authenticated
+        # pages. Only a real Facebook checkpoint route is authoritative here.
+        checkpoint_url = (
+            current_host.endswith("facebook.com")
+            and (
+                current_path == "/checkpoint"
+                or current_path.startswith("/checkpoint/")
+            )
+        )
+        if checkpoint_url:
+            diagnostic = await self._diagnostic("checkpoint")
+            diagnostic["auth_evidence"] = "checkpoint_url"
+            diagnostic["checkpoint_path"] = current_path
             raise BrowserBusinessError(
                 "CHECKPOINT_REQUIRED",
                 "Facebook requires a checkpoint for this profile.",
                 retryable=False,
-                diagnostic={"url": url},
+                diagnostic=diagnostic,
             )
 
         if (
@@ -1584,12 +1924,13 @@ class FacebookBusinessBrowser:
             or "enter security code" in body
             or "authentication code" in body
         ):
-            await self._diagnostic("two_factor")
+            diagnostic = await self._diagnostic("two_factor")
+            diagnostic["auth_evidence"] = "two_factor_body"
             raise BrowserBusinessError(
                 "TWO_FACTOR_REQUIRED",
                 "Facebook requires two-factor authentication.",
                 retryable=False,
-                diagnostic={"url": url},
+                diagnostic=diagnostic,
             )
 
         if (
@@ -3623,9 +3964,21 @@ class FacebookBusinessBrowser:
             "couldn't create page",
             "could not create page",
             "unable to create page",
+            "page creation failed",
             "не удалось создать страницу",
             "не вдалося створити сторінку",
-            "page creation failed",
+            "seite konnte nicht erstellt werden",
+            "seite kann nicht erstellt werden",
+            "impossible de créer la page",
+            "nous n’avons pas pu créer votre page",
+            "nous n'avons pas pu créer votre page",
+            "không thể tạo trang",
+            "không tạo được trang",
+            "पेज नहीं बनाया जा सका",
+            "पेज नहीं बना सके",
+            "पेज नहीं बनाया जा सकता",
+            "পেজ তৈরি করা যায়নি",
+            "পেজ তৈরি করতে পারিনি",
         )
         if any(marker in body for marker in reject_markers):
             diag = await self._diagnostic("fan_page_create_rejected")
@@ -4157,168 +4510,348 @@ class FacebookBusinessBrowser:
         }
 
     async def snapshot_businesses(self) -> dict[str, str]:
-        await self._goto(self.HOME_URL)
+        """Read Business portfolios from Meta's own Business Suite traffic.
 
-        # The home document often contains only the currently selected
-        # portfolio. Open the real top-left portfolio selector first so the
-        # rendered DOM also contains the other portfolios available to this
-        # Facebook profile. This makes CREATE reconciliation useful even when
-        # Meta does not switch the current portfolio after creation.
+        Primary source: read-only Relay/GraphQL responses emitted by the
+        authenticated Business Suite frontend. DOM/link parsing remains only a
+        fallback/diagnostic source.
+        """
+        if self.page is None:
+            await self.open()
+
+        network_rows: dict[str, str] = {}
+        query_diagnostics: list[dict[str, Any]] = []
+        response_tasks: set[asyncio.Task[Any]] = set()
+
+        async def inspect_response(response: Any) -> None:
+            try:
+                url = _clean(getattr(response, "url", ""))
+                if "graphql" not in url.casefold():
+                    return
+                request = getattr(response, "request", None)
+                meta = _request_graphql_meta(request) if request is not None else {}
+                friendly = _clean(meta.get("friendly_name"))
+                folded_friendly = friendly.casefold()
+                if any(
+                    marker in folded_friendly
+                    for marker in ("mutation", "create", "update", "delete")
+                ):
+                    return
+
+                raw = await response.text()
+                payload = _decode_graphql_text(raw)
+                rows = _extract_business_inventory_rows(payload)
+                request_business_ids = sorted({
+                    business_id
+                    for business_id, path in _walk_business_ids(
+                        meta.get("variables") or {}
+                    )
+                    if business_id and "business" in path.casefold()
+                })
+                query_diagnostics.append(
+                    {
+                        "friendly_name": friendly[:180],
+                        "doc_id": _clean(meta.get("doc_id"))[:60],
+                        "rows": len(rows),
+                        "request_business_ids": request_business_ids[:8],
+                    }
+                )
+                if len(query_diagnostics) > 24:
+                    del query_diagnostics[:-24]
+
+                for row in rows:
+                    business_id = _digits(row.get("id"))
+                    if not business_id:
+                        continue
+                    business_name = _clean(row.get("name"))
+                    if (
+                        business_id not in network_rows
+                        or (business_name and not network_rows[business_id])
+                    ):
+                        network_rows[business_id] = business_name
+
+                # Meta frequently moves the Business node deeper into a generic
+                # viewer payload while keeping the exact target business_id in
+                # read-only query variables. That explicit key is private
+                # Business Suite evidence too; use it as an ID-only fallback.
+                for business_id in request_business_ids:
+                    network_rows.setdefault(business_id, "")
+            except Exception as exc:
+                query_diagnostics.append(
+                    {
+                        "error": f"{exc.__class__.__name__}: {_clean(exc)}"[:500],
+                    }
+                )
+
+        def on_response(response: Any) -> None:
+            try:
+                task = asyncio.create_task(inspect_response(response))
+                response_tasks.add(task)
+                task.add_done_callback(response_tasks.discard)
+            except Exception:
+                return
+
+        listener_installed = False
+        if hasattr(self.page, "on"):
+            try:
+                self.page.on("response", on_response)
+                listener_installed = True
+            except Exception:
+                listener_installed = False
+
+        dom_output: dict[str, str] = {}
+        async def collect_dom_businesses() -> int:
+            before = len(dom_output)
+            try:
+                href_rows = await self.page.locator("a[href]").evaluate_all(
+                    """els => els.slice(0, 3000).map(el => ({
+                        href: el.href || "",
+                        text: (el.innerText || el.textContent || "").trim()
+                    }))"""
+                )
+            except Exception:
+                href_rows = []
+
+            for row in href_rows:
+                if not isinstance(row, dict):
+                    continue
+                href = str(row.get("href") or "")
+                text = _clean(row.get("text"))
+                for business_id in _business_ids_from_text(href):
+                    if (
+                        business_id not in dom_output
+                        or (text and not dom_output[business_id])
+                    ):
+                        dom_output[business_id] = text
+
+            try:
+                content = await self.page.content()
+            except Exception:
+                content = ""
+            for business_id in _business_ids_from_text(content):
+                dom_output.setdefault(business_id, "")
+            return len(dom_output) - before
+
         selector_opened = False
+        stage_started = time.monotonic()
+        self._last_business_inventory_diagnostic = {
+            "source": "in_progress",
+            "stage": "home_navigation",
+            "network_businesses": 0,
+            "dom_businesses": 0,
+            "queries": [],
+            "url": _clean(getattr(self.page, "url", ""))[:700],
+        }
         try:
-            selector_probe = await self.page.evaluate(
-                """() => {
-                    const visible = (el) => {
-                        if (!el || el === document.body || el === document.documentElement) {
-                            return false;
-                        }
-                        const r = el.getBoundingClientRect();
-                        const s = getComputedStyle(el);
-                        return r.width > 0 && r.height > 0
-                            && s.display !== 'none'
-                            && s.visibility !== 'hidden'
-                            && s.pointerEvents !== 'none';
-                    };
-                    const label = (el) => [
-                        (el.getAttribute && el.getAttribute('aria-label')) || '',
-                        (el.getAttribute && el.getAttribute('title')) || '',
-                        el.innerText || el.textContent || ''
-                    ].join(' ').replace(/\\s+/g, ' ').trim();
+            await self._goto(self.HOME_URL)
+            self._last_business_inventory_diagnostic.update({
+                "stage": "home_loaded",
+                "home_ms": int((time.monotonic() - stage_started) * 1000),
+                "url": _clean(getattr(self.page, "url", ""))[:700],
+            })
+            await self.page.wait_for_timeout(900)
 
-                    const xs = [20, 52, 88, 124, 160, 196, 228];
-                    const ys = [
-                        58, 72, 86, 100, 114, 128, 142, 156,
-                        170, 184, 198, 212, 226, 240, 254, 268
-                    ];
-                    const seen = new Set();
-                    const rows = [];
+            # Opening the portfolio selector causes Meta's frontend to hydrate
+            # its Business list. Keep the established lightweight sidebar
+            # probe: it samples only a bounded top-left grid and never scans
+            # the whole DOM.
+            selector_probe: dict[str, Any] = {}
+            self._last_business_inventory_diagnostic.update({
+                "stage": "selector_probe",
+                "network_businesses": len(network_rows),
+                "dom_businesses": len(dom_output),
+            })
+            try:
+                selector_probe = await self.page.evaluate(
+                    """() => {
+                        const visible = (el) => {
+                            if (!el || el === document.body || el === document.documentElement) return false;
+                            const r = el.getBoundingClientRect();
+                            const s = getComputedStyle(el);
+                            return r.width > 0 && r.height > 0
+                                && s.display !== 'none'
+                                && s.visibility !== 'hidden'
+                                && s.pointerEvents !== 'none';
+                        };
+                        const label = (el) => [
+                            (el.getAttribute && el.getAttribute('aria-label')) || '',
+                            (el.getAttribute && el.getAttribute('title')) || '',
+                            el.innerText || el.textContent || ''
+                        ].join(' ').replace(/\\s+/g, ' ').trim();
 
-                    for (const y of ys) {
-                        for (const x of xs) {
-                            const stack = document.elementsFromPoint(x, y) || [];
-                            for (const el of stack.slice(0, 10)) {
-                                if (seen.has(el) || !visible(el)) continue;
-                                seen.add(el);
-                                const r = el.getBoundingClientRect();
-                                const text = label(el);
-                                const role = (el.getAttribute && el.getAttribute('role')) || '';
-                                const tabindex = (el.getAttribute && el.getAttribute('tabindex')) || '';
-                                const tag = el.tagName || '';
+                        const xs = [20, 52, 88, 124, 160, 196, 228];
+                        const ys = [58,72,86,100,114,128,142,156,170,184,198,212,226,240,254,268];
+                        const seen = new Set();
+                        const rows = [];
 
-                                if (r.x > 300 || r.y < 48 || r.y > 285) continue;
-                                if (r.width < 70 || r.width > 300) continue;
-                                if (r.height < 22 || r.height > 100) continue;
-                                if (!text) continue;
-
-                                rows.push({el, r, text, role, tabindex, tag});
+                        for (const y of ys) {
+                            for (const x of xs) {
+                                const stack = document.elementsFromPoint(x, y) || [];
+                                for (const el of stack.slice(0, 10)) {
+                                    if (seen.has(el) || !visible(el)) continue;
+                                    seen.add(el);
+                                    const r = el.getBoundingClientRect();
+                                    const text = label(el);
+                                    const role = (el.getAttribute && el.getAttribute('role')) || '';
+                                    const tabindex = (el.getAttribute && el.getAttribute('tabindex')) || '';
+                                    const tag = el.tagName || '';
+                                    if (r.x > 300 || r.y < 48 || r.y > 285) continue;
+                                    if (r.width < 70 || r.width > 300) continue;
+                                    if (r.height < 22 || r.height > 100) continue;
+                                    if (!text) continue;
+                                    rows.push({el,r,text,role,tabindex,tag});
+                                }
                             }
                         }
-                    }
 
-                    const homeRows = rows.filter(row =>
-                        /^(Home|Startseite|Start|Главная|Головна)$/i.test(row.text)
-                    );
-                    const homeY = homeRows.length
-                        ? Math.min(...homeRows.map(row => row.r.y))
-                        : 285;
+                        const homeRows = rows.filter(row =>
+                            /^(Home|Startseite|Start|Главная|Головна)$/i.test(row.text)
+                        );
+                        const homeY = homeRows.length
+                            ? Math.min(...homeRows.map(row => row.r.y))
+                            : 285;
+                        const candidates = rows.filter(row =>
+                            row.r.y < homeY - 2
+                            && !/^Meta Business Suite$/i.test(row.text)
+                            && !/^(Home|Startseite|Start|Главная|Головна)$/i.test(row.text)
+                            && !/^(Create|Создать|Створити|Erstellen)$/i.test(row.text)
+                        );
+                        candidates.sort((a,b) => {
+                            const ai = (a.role === 'button' || a.tag === 'BUTTON' || a.tabindex === '0') ? 1 : 0;
+                            const bi = (b.role === 'button' || b.tag === 'BUTTON' || b.tabindex === '0') ? 1 : 0;
+                            if (ai !== bi) return bi - ai;
+                            if (a.r.y !== b.r.y) return b.r.y - a.r.y;
+                            return (b.r.width*b.r.height) - (a.r.width*a.r.height);
+                        });
 
-                    const candidates = rows.filter(row =>
-                        row.r.y < homeY - 2
-                        && !/^Meta Business Suite$/i.test(row.text)
-                        && !/^(Home|Startseite|Start|Главная|Головна)$/i.test(row.text)
-                        && !/^(Create|Создать|Створити|Erstellen)$/i.test(row.text)
-                    );
-
-                    candidates.sort((a,b) => {
-                        const ai = (
-                            a.role === 'button' ||
-                            a.tag === 'BUTTON' ||
-                            a.tabindex === '0'
-                        ) ? 1 : 0;
-                        const bi = (
-                            b.role === 'button' ||
-                            b.tag === 'BUTTON' ||
-                            b.tabindex === '0'
-                        ) ? 1 : 0;
-                        if (ai !== bi) return bi - ai;
-                        // Portfolio selector normally sits directly above Home.
-                        if (a.r.y !== b.r.y) return b.r.y - a.r.y;
-                        return (b.r.width * b.r.height) - (a.r.width * a.r.height);
-                    });
-
-                    const best = candidates[0];
-                    if (!best) {
+                        const summary = candidates.slice(0, 12).map(row => ({
+                            text: row.text.slice(0, 180),
+                            role: row.role,
+                            tag: row.tag,
+                            x: Math.round(row.r.x),
+                            y: Math.round(row.r.y),
+                            w: Math.round(row.r.width),
+                            h: Math.round(row.r.height)
+                        }));
+                        const best = candidates[0];
+                        if (!best) return {clicked:false,candidates:summary};
+                        best.el.click();
                         return {
-                            clicked:false,
-                            candidates:candidates.slice(0,12).map(row => ({
-                                text:row.text,
-                                x:Math.round(row.r.x),
-                                y:Math.round(row.r.y),
-                                w:Math.round(row.r.width),
-                                h:Math.round(row.r.height)
-                            }))
+                            clicked:true,
+                            best_text:best.text.slice(0,180),
+                            candidates:summary
                         };
+                    }"""
+                )
+                selector_opened = bool(
+                    isinstance(selector_probe, dict)
+                    and selector_probe.get("clicked")
+                )
+                if selector_opened:
+                    self._last_business_inventory_diagnostic.update({
+                        "stage": "selector_hydration",
+                        "selector_probe": selector_probe,
+                    })
+                    # Meta often hydrates the portfolio list after the menu
+                    # becomes visible. Keep the response listener alive long
+                    # enough for late Relay payloads instead of declaring an
+                    # empty inventory after one animation frame.
+                    hydrate_deadline = time.monotonic() + 4.5
+                    while time.monotonic() < hydrate_deadline:
+                        if network_rows:
+                            break
+                        await self.page.wait_for_timeout(300)
+                    # Capture the open selector DOM before navigating away.
+                    # Some Meta builds render BM links in the menu but do not
+                    # issue a dedicated portfolio GraphQL request.
+                    await collect_dom_businesses()
+            except Exception as exc:
+                selector_opened = False
+                selector_probe = {
+                    "clicked": False,
+                    "error": f"{exc.__class__.__name__}: {_clean(exc)}"[:500],
+                }
+
+            # If HOME did not hydrate any Business inventory, try Meta's
+            # Business overview surface while keeping the same listener. Some
+            # accounts/pages land in an asset-scoped HOME that never requests
+            # the portfolio collection.
+            overview_attempt: dict[str, Any] = {}
+            if not network_rows and not dom_output:
+                self._last_business_inventory_diagnostic.update({
+                    "stage": "overview_navigation",
+                    "selector_probe": selector_probe,
+                    "network_businesses": len(network_rows),
+                    "dom_businesses": len(dom_output),
+                    "queries": query_diagnostics[-24:],
+                    "url": _clean(getattr(self.page, "url", ""))[:700],
+                })
+                overview_started = time.monotonic()
+                try:
+                    await self._goto(self.OVERVIEW_URL)
+                    overview_attempt = {
+                        "loaded": True,
+                        "url": _clean(getattr(self.page, "url", ""))[:700],
+                        "navigation_ms": int((time.monotonic() - overview_started) * 1000),
+                    }
+                    self._last_business_inventory_diagnostic.update({
+                        "stage": "overview_loaded",
+                        "overview_attempt": overview_attempt,
+                    })
+                    overview_deadline = time.monotonic() + 3.5
+                    while time.monotonic() < overview_deadline:
+                        if network_rows:
+                            break
+                        await self.page.wait_for_timeout(300)
+                    await collect_dom_businesses()
+                except BrowserBusinessError:
+                    raise
+                except Exception as exc:
+                    overview_attempt = {
+                        "loaded": False,
+                        "error": f"{exc.__class__.__name__}: {_clean(exc)}"[:500],
                     }
 
-                    best.el.click();
-                    return {
-                        clicked:true,
-                        clickedCandidate:{
-                            text:best.text,
-                            x:Math.round(best.r.x),
-                            y:Math.round(best.r.y),
-                            w:Math.round(best.r.width),
-                            h:Math.round(best.r.height)
-                        }
-                    };
-                }"""
-            )
-            selector_opened = bool(
-                isinstance(selector_probe, dict)
-                and selector_probe.get("clicked")
-            )
+            # Final fallback for whichever surface is currently mounted.
+            await collect_dom_businesses()
+
+            if response_tasks:
+                await asyncio.gather(
+                    *list(response_tasks),
+                    return_exceptions=True,
+                )
+
+            output = dict(network_rows)
+            for business_id, business_name in dom_output.items():
+                if business_id not in output or (business_name and not output[business_id]):
+                    output[business_id] = business_name
+
+            self._last_business_inventory_diagnostic = {
+                "stage": "complete",
+                "source": (
+                    "business_suite_private_graphql"
+                    if network_rows
+                    else ("business_suite_dom_fallback" if dom_output else "none")
+                ),
+                "network_businesses": len(network_rows),
+                "dom_businesses": len(dom_output),
+                "queries": query_diagnostics[-24:],
+                "selector_probe": selector_probe,
+                "overview_attempt": overview_attempt,
+                "url": _clean(getattr(self.page, "url", ""))[:700],
+            }
+            return output
+        finally:
+            if listener_installed and hasattr(self.page, "remove_listener"):
+                try:
+                    self.page.remove_listener("response", on_response)
+                except Exception:
+                    pass
             if selector_opened:
-                await self.page.wait_for_timeout(550)
-        except Exception:
-            selector_opened = False
-
-        href_rows: list[dict[str, str]] = []
-        try:
-            href_rows = await self.page.locator("a[href]").evaluate_all(
-                """els => els.slice(0, 3000).map(el => ({
-                    href: el.href || "",
-                    text: (el.innerText || el.textContent || "").trim()
-                }))"""
-            )
-        except Exception:
-            href_rows = []
-
-        output: dict[str, str] = {}
-        for row in href_rows:
-            if not isinstance(row, dict):
-                continue
-            href = str(row.get("href") or "")
-            text = _clean(row.get("text"))
-            for business_id in _business_ids_from_text(href):
-                if business_id not in output or (text and not output[business_id]):
-                    output[business_id] = text
-
-        try:
-            content = await self.page.content()
-        except Exception:
-            content = ""
-
-        for business_id in _business_ids_from_text(content):
-            output.setdefault(business_id, "")
-
-        if selector_opened:
-            try:
-                await self.page.keyboard.press("Escape")
-                await self.page.wait_for_timeout(120)
-            except Exception:
-                pass
-
-        return output
+                try:
+                    await self.page.keyboard.press("Escape")
+                except Exception:
+                    pass
 
     @staticmethod
     def _request_matches_ad_account_create(
@@ -4617,6 +5150,8 @@ class FacebookBusinessBrowser:
                 "tài khoản quảng cáo",
                 "विज्ञापन खाता",
                 "विज्ञापन खाते",
+                "विज्ञापन अकाउंट",
+                "विज्ञापन अकाउंट्स",
             )
             if any(marker in body for marker in markers):
                 return True
@@ -4717,7 +5252,9 @@ class FacebookBusinessBrowser:
                         'বিজ্ঞাপন অ্যাকাউন্টসমূহ',
                         'tài khoản quảng cáo',
                         'विज्ञापन खाते',
-                        'विज्ञापन खाता'
+                        'विज्ञापन खाता',
+                        'विज्ञापन अकाउंट',
+                        'विज्ञापन अकाउंट्स'
                     ];
                     const interactive = [
                         ...document.querySelectorAll(
@@ -4951,7 +5488,8 @@ class FacebookBusinessBrowser:
                         'ad account','advertising account','реклам',
                         'werbekonto','compte publicitaire',
                         'বিজ্ঞাপন অ্যাকাউন্ট','tài khoản quảng cáo',
-                        'विज्ञापन खाता','विज्ञापन खाते'
+                        'विज्ञापन खाता','विज्ञापन खाते','विज्ञापन अकाउंट','विज्ञापन अकाउंट्स',
+                        'विज्ञापन अकाउंट','विज्ञापन अकाउंट्स'
                     ];
                     const createWords = [
                         'create','new ad account',
@@ -4959,7 +5497,8 @@ class FacebookBusinessBrowser:
                         'créer','nouveau compte publicitaire',
                         'তৈরি করুন','নতুন বিজ্ঞাপন অ্যাকাউন্ট',
                         'tạo','tài khoản quảng cáo mới',
-                        'बनाएँ','बनाएं','नया विज्ञापन खाता'
+                        'बनाएँ','बनाएं','नया विज्ञापन खाता',
+                        'नया विज्ञापन अकाउंट'
                     ];
                     const addWords = [
                         'add','ajouter','добавить','додати',
@@ -4970,7 +5509,8 @@ class FacebookBusinessBrowser:
                         'compte publicitaire','comptes publicitaires',
                         'реклам','werbekonto','werbekonten',
                         'বিজ্ঞাপন অ্যাকাউন্ট','tài khoản quảng cáo',
-                        'विज्ञापन खाता','विज्ञापन खाते'
+                        'विज्ञापन खाता','विज्ञापन खाते','विज्ञापन अकाउंट','विज्ञापन अकाउंट्स',
+                        'विज्ञापन अकाउंट','विज्ञापन अकाउंट्स'
                     ];
                     const hasLocalAccountContext = el => {
                         let cur = el;
@@ -5160,16 +5700,17 @@ class FacebookBusinessBrowser:
                         'name des werbekontos','название рекламного аккаунта',
                         'назва рекламного акаунта','বিজ্ঞাপন অ্যাকাউন্টের নাম',
                         'tên tài khoản quảng cáo','विज्ञापन खाते का नाम',
-                        'विज्ञापन खाता नाम'
+                        'विज्ञापन खाता नाम','विज्ञापन अकाउंट का नाम',
+                        'विज्ञापन अकाउंट नाम'
                     ];
                     const currency = [
                         'currency','devise','währung','валюта','মুদ্রা',
-                        'tiền tệ','मुद्रा'
+                        'কারেন্সি','tiền tệ','मुद्रा','करेंसी'
                     ];
                     const timezone = [
                         'time zone','timezone','fuseau horaire','zeitzone',
-                        'часовой пояс','часовий пояс','সময় অঞ্চল',
-                        'múi giờ','समय क्षेत्र'
+                        'часовой пояс','часовий пояс','সময় অঞ্চল','টাইম জোন',
+                        'múi giờ','समय क्षेत्र','टाइम ज़ोन','टाइम जोन'
                     ];
                     const nextWords = [
                         'next','continue','suivant','continuer','weiter',
@@ -5189,7 +5730,8 @@ class FacebookBusinessBrowser:
                         'তৈরি করুন','বিজ্ঞাপন অ্যাকাউন্ট তৈরি করুন',
                         'tạo','tạo tài khoản quảng cáo',
                         'बनाएँ','बनाएं','विज्ञापन खाता बनाएँ',
-                        'विज्ञापन खाता बनाएं'
+                        'विज्ञापन खाता बनाएं','विज्ञापन अकाउंट बनाएँ',
+                        'विज्ञापन अकाउंट बनाएं'
                     ];
                     const ai = [
                         'meta ai','assistant business meta ai',
@@ -5595,6 +6137,8 @@ class FacebookBusinessBrowser:
                 "Tạo",
                 "विज्ञापन खाता बनाएँ",
                 "विज्ञापन खाता बनाएं",
+                "विज्ञापन अकाउंट बनाएँ",
+                "विज्ञापन अकाउंट बनाएं",
                 "बनाएँ",
                 "बनाएं",
             )
@@ -5635,13 +6179,26 @@ class FacebookBusinessBrowser:
                             'мой бизнес','для моего бизнеса',
                             'мій бізнес','для мого бізнесу',
                             'আমার ব্যবসা','আমার ব্যবসার জন্য',
+                            'আমার বিজনেস','আমার বিজনেসের জন্য',
                             'doanh nghiệp của tôi',
                             'dành cho doanh nghiệp của tôi',
-                            'मेरा व्यवसाय','मेरे व्यवसाय के लिए'
+                            'मेरा व्यवसाय','मेरे व्यवसाय के लिए',
+                            'मेरा बिज़नेस','मेरे बिज़नेस के लिए',
+                            'मेरा बिजनेस','मेरे बिजनेस के लिए'
                         ];
                         const ai = [
                             'meta ai','assistant business meta ai',
                             'meta ai business assistant','assistant meta ai'
+                        ];
+                        const account = [
+                            'ad account','advertising account',
+                            'compte publicitaire','werbekonto','реклам',
+                            'বিজ্ঞাপন অ্যাকাউন্ট','tài khoản quảng cáo',
+                            'विज्ञापन खाता','विज्ञापन अकाउंट'
+                        ];
+                        const create = [
+                            'create','créer','создать','створити','erstellen',
+                            'তৈরি করুন','tạo','बनाएँ','बनाएं'
                         ];
                         return [...document.querySelectorAll(
                             '[role="dialog"],[aria-modal="true"]'
@@ -5661,8 +6218,32 @@ class FacebookBusinessBrowser:
                                 (root.getAttribute('title') || '') + ' ' +
                                 headings
                             );
-                            return !ai.some(word => identity.includes(word))
-                                && wizard.some(word => t.includes(word));
+                            if (ai.some(word => identity.includes(word))) {
+                                return false;
+                            }
+                            if (wizard.some(word => t.includes(word))) {
+                                return true;
+                            }
+                            return [...root.querySelectorAll(
+                                'button,a,[role="button"],'
+                                + '[tabindex]:not([tabindex="-1"])'
+                            )].some(el => {
+                                if (!visible(el)) return false;
+                                if (
+                                    el.hasAttribute('disabled')
+                                    || el.getAttribute('aria-disabled') === 'true'
+                                ) return false;
+                                const actionText = clean(
+                                    (el.getAttribute('aria-label') || '') + ' ' +
+                                    (el.getAttribute('title') || '') + ' ' +
+                                    (el.innerText || el.textContent || '')
+                                );
+                                return account.some(word =>
+                                    actionText.includes(word)
+                                ) && create.some(word =>
+                                    actionText.includes(word)
+                                );
+                            });
                         });
                     }"""
                 )
@@ -5757,6 +6338,14 @@ class FacebookBusinessBrowser:
                 ).upper()
                 dialog_meta = await item.evaluate(
                     """(el) => {
+                        const visible = node => {
+                            if (!node) return false;
+                            const r = node.getBoundingClientRect();
+                            const s = getComputedStyle(node);
+                            return r.width > 0 && r.height > 0
+                                && s.display !== 'none'
+                                && s.visibility !== 'hidden';
+                        };
                         const clean = text => (text || '')
                             .normalize('NFKC')
                             .replace(/[\u200b\u200c\u200d\ufeff]/g, '')
@@ -5772,7 +6361,11 @@ class FacebookBusinessBrowser:
                             'ad account','advertising account',
                             'compte publicitaire','werbekonto','реклам',
                             'বিজ্ঞাপন অ্যাকাউন্ট','tài khoản quảng cáo',
-                            'विज्ञापन खाता'
+                            'विज्ञापन खाता','विज्ञापन अकाउंट'
+                        ];
+                        const create = [
+                            'create','créer','создать','створити','erstellen',
+                            'তৈরি করুন','tạo','बनाएँ','बनाएं'
                         ];
                         const name = [
                             'ad account name','advertising account name',
@@ -5782,12 +6375,12 @@ class FacebookBusinessBrowser:
                         ];
                         const currency = [
                             'currency','devise','währung','валюта','মুদ্রা',
-                            'tiền tệ','मुद्रा'
+                            'কারেন্সি','tiền tệ','मुद्रा','करेंसी'
                         ];
                         const timezone = [
                             'time zone','timezone','fuseau horaire','zeitzone',
-                            'часовой пояс','часовий пояс','সময় অঞ্চল',
-                            'múi giờ','समय क्षेत्र'
+                            'часовой пояс','часовий пояс','সময় অঞ্চল','টাইম জোন',
+                            'múi giờ','समय क्षेत्र','टाइम ज़ोन','टाइम जोन'
                         ];
                         const ownership = [
                             'my business','my business portfolio','for my business',
@@ -5829,10 +6422,20 @@ class FacebookBusinessBrowser:
                             const hasTimezone = timezone.some(word => t.includes(word));
                             const hasOwnership = ownership.some(word => t.includes(word));
                             const hasAccount = account.some(word => t.includes(word));
+                            const actionText = clean(
+                                (el.getAttribute('aria-label') || '') + ' ' +
+                                (el.getAttribute('title') || '') + ' ' +
+                                (el.innerText || el.textContent || '')
+                            );
+                            const finalCreateAction = (
+                                account.some(word => actionText.includes(word))
+                                && create.some(word => actionText.includes(word))
+                            );
                             inWizardDialog = !inAI && (
                                 (hasName && (hasCurrency || hasTimezone))
                                 || (hasCurrency && hasTimezone)
                                 || (hasOwnership && hasAccount)
+                                || finalCreateAction
                             );
                         }
 
@@ -5938,6 +6541,184 @@ class FacebookBusinessBrowser:
             except Exception:
                 continue
 
+        if not candidates:
+            # Do not depend on the final CTA's page-global DOM index. Meta
+            # Business Suite can have >120 interactive nodes before the modal,
+            # while the confirmation dialog itself is small and deterministic.
+            # Recover the enabled CREATE control only from a visible non-AI
+            # dialog that contains an ad-account-specific final action.
+            try:
+                dialog_scoped = await self.page.evaluate(
+                    """() => {
+                        const visible = el => {
+                            if (!el) return false;
+                            const r = el.getBoundingClientRect();
+                            const s = getComputedStyle(el);
+                            return r.width > 0 && r.height > 0
+                                && s.display !== 'none'
+                                && s.visibility !== 'hidden'
+                                && s.pointerEvents !== 'none';
+                        };
+                        const clean = text => (text || '')
+                            .normalize('NFKC')
+                            .replace(/[\u200b\u200c\u200d\ufeff]/g, '')
+                            .replace(/\u00a0/g, ' ')
+                            .replace(/\s+/g, ' ')
+                            .trim()
+                            .toLowerCase();
+                        const createWords = [
+                            'create ad account','create advertising account',
+                            'create account','create',
+                            'créer un compte publicitaire',
+                            'créer le compte publicitaire','créer le compte',
+                            'создать рекламный аккаунт','создать аккаунт',
+                            'створити рекламний акаунт',
+                            'створити обліковий запис',
+                            'werbekonto erstellen','konto erstellen',
+                            'বিজ্ঞাপন অ্যাকাউন্ট তৈরি করুন',
+                            'tạo tài khoản quảng cáo',
+                            'विज्ञापन खाता बनाएँ','विज्ञापन खाता बनाएं',
+                            'विज्ञापन अकाउंट बनाएँ','विज्ञापन अकाउंट बनाएं'
+                        ];
+                        const accountWords = [
+                            'ad account','advertising account',
+                            'compte publicitaire','werbekonto','реклам',
+                            'বিজ্ঞাপন অ্যাকাউন্ট','tài khoản quảng cáo',
+                            'विज्ञापन खाता','विज्ञापन अकाउंट'
+                        ];
+                        const ai = [
+                            'meta ai','assistant business meta ai',
+                            'meta ai business assistant','assistant meta ai'
+                        ];
+
+                        const rows = [];
+                        const roots = [...document.querySelectorAll(
+                            '[role="dialog"],[aria-modal="true"]'
+                        )].filter(visible);
+                        for (const root of roots) {
+                            const rootText = clean(
+                                (root.getAttribute('aria-label') || '') + ' ' +
+                                (root.getAttribute('title') || '') + ' ' +
+                                (root.innerText || root.textContent || '')
+                            );
+                            if (!rootText) continue;
+                            if (ai.some(word => rootText.includes(word))) continue;
+                            if (!accountWords.some(word => rootText.includes(word))) {
+                                continue;
+                            }
+
+                            for (const el of root.querySelectorAll(
+                                'button,a,[role="button"],[role="menuitem"],'
+                                + '[tabindex]:not([tabindex="-1"])'
+                            )) {
+                                if (!visible(el)) continue;
+                                if (
+                                    el.hasAttribute('disabled')
+                                    || el.getAttribute('aria-disabled') === 'true'
+                                ) continue;
+                                const text = clean(
+                                    (el.getAttribute('aria-label') || '') + ' ' +
+                                    (el.getAttribute('title') || '') + ' ' +
+                                    (el.innerText || el.textContent || '')
+                                );
+                                if (!text) continue;
+                                const exactCreate = createWords.some(word =>
+                                    text === word || text.startsWith(word + ' ')
+                                );
+                                const accountAction = accountWords.some(word =>
+                                    text.includes(word)
+                                );
+                                if (!exactCreate || !accountAction) continue;
+
+                                const r = el.getBoundingClientRect();
+                                rows.push({
+                                    el,
+                                    text,
+                                    x:Math.round(r.x),
+                                    y:Math.round(r.y),
+                                    tag:el.tagName || '',
+                                    role:el.getAttribute('role') || '',
+                                    score:Math.round(r.y)
+                                        - (
+                                            el.getAttribute('role') === 'button'
+                                            ? 120 : 0
+                                        )
+                                        - (
+                                            el.tagName === 'BUTTON'
+                                            ? 80 : 0
+                                        )
+                                });
+                            }
+                        }
+
+                        rows.sort((a,b) => a.score - b.score);
+                        const best = rows[0];
+                        if (!best) return {found:false, candidates:0};
+                        best.el.setAttribute(
+                            'data-remask-rk-final-dialog',
+                            '1'
+                        );
+                        return {
+                            found:true,
+                            candidates:rows.length,
+                            text:best.text,
+                            x:best.x,
+                            y:best.y,
+                            tag:best.tag,
+                            role:best.role
+                        };
+                    }"""
+                )
+            except Exception as exc:
+                dialog_scoped = {
+                    "found": False,
+                    "error": f"{exc.__class__.__name__}: {exc}"[:500],
+                }
+
+            if (
+                isinstance(dialog_scoped, dict)
+                and bool(dialog_scoped.get("found"))
+            ):
+                locator = self.page.locator(
+                    '[data-remask-rk-final-dialog="1"]'
+                ).first
+                meta = {
+                    "found": True,
+                    "attempted": False,
+                    "clicked": False,
+                    "text": _clean(dialog_scoped.get("text"))[:180],
+                    "x": int(dialog_scoped.get("x") or 0),
+                    "y": int(dialog_scoped.get("y") or 0),
+                    "tag": _clean(dialog_scoped.get("tag"))[:40],
+                    "role": _clean(dialog_scoped.get("role"))[:80],
+                    "dialog_scoped_recovered": True,
+                    "dialog_candidate_count": int(
+                        dialog_scoped.get("candidates") or 0
+                    ),
+                }
+                try:
+                    if before_click is not None:
+                        await before_click()
+                    meta["attempted"] = True
+                    await locator.click(timeout=2500)
+                    meta["clicked"] = True
+                    return meta
+                except Exception as exc:
+                    meta["error"] = (
+                        f"{exc.__class__.__name__}: {exc}"
+                    )[:500]
+                    return meta
+                finally:
+                    try:
+                        await self.page.locator(
+                            '[data-remask-rk-final-dialog="1"]'
+                        ).evaluate_all(
+                            "(els) => els.forEach(el => "
+                            "el.removeAttribute('data-remask-rk-final-dialog'))"
+                        )
+                    except Exception:
+                        pass
+
         if not candidates and self._ad_account_wizard_rect:
             # Meta sometimes renders the final localized Create text in a plain
             # DIV/SPAN while the actual click handler lives on an ancestor.
@@ -5983,13 +6764,15 @@ class FacebookBusinessBrowser:
                             'তৈরি করুন','বিজ্ঞাপন অ্যাকাউন্ট তৈরি করুন',
                             'tạo','tạo tài khoản quảng cáo',
                             'बनाएँ','बनाएं','विज्ञापन खाता बनाएँ',
-                            'विज्ञापन खाता बनाएं'
+                            'विज्ञापन खाता बनाएं','विज्ञापन अकाउंट बनाएँ',
+                            'विज्ञापन अकाउंट बनाएं'
                         ];
                         const accountWords = [
                             'ad account','advertising account',
                             'compte publicitaire','werbekonto','реклам',
                             'বিজ্ঞাপন অ্যাকাউন্ট',
-                            'tài khoản quảng cáo','विज्ञापन खाता'
+                            'tài khoản quảng cáo','विज्ञापन खाता',
+                            'विज्ञापन अकाउंट'
                         ];
                         const ai = [
                             'meta ai','assistant business meta ai',
@@ -6196,7 +6979,8 @@ class FacebookBusinessBrowser:
                         'তৈরি করুন','বিজ্ঞাপন অ্যাকাউন্ট তৈরি করুন',
                         'tạo','tạo tài khoản quảng cáo',
                         'बनाएँ','बनाएं','विज्ञापन खाता बनाएँ',
-                        'विज्ञापन खाता बनाएं'
+                        'विज्ञापन खाता बनाएं','विज्ञापन अकाउंट बनाएँ',
+                        'विज्ञापन अकाउंट बनाएं'
                     ];
                     const ownWords = [
                         'my business','my business portfolio','for my business',
@@ -6209,8 +6993,11 @@ class FacebookBusinessBrowser:
                         'мой бизнес','для моего бизнеса',
                         'мій бізнес','для мого бізнесу',
                         'আমার ব্যবসা','আমার ব্যবসার জন্য',
+                        'আমার বিজনেস','আমার বিজনেসের জন্য',
                         'doanh nghiệp của tôi','dành cho doanh nghiệp của tôi',
-                        'मेरा व्यवसाय','मेरे व्यवसाय के लिए'
+                        'मेरा व्यवसाय','मेरे व्यवसाय के लिए',
+                        'मेरा बिज़नेस','मेरे बिज़नेस के लिए',
+                        'मेरा बिजनेस','मेरे बिजनेस के लिए'
                     ];
 
                     const wizardMarkers = [
@@ -6249,6 +7036,12 @@ class FacebookBusinessBrowser:
                         'meta ai','assistant business meta ai',
                         'meta ai business assistant','assistant meta ai'
                     ];
+                    const dialogAccountWords = [
+                        'ad account','advertising account','compte publicitaire',
+                        'werbekonto','реклам','বিজ্ঞাপন অ্যাকাউন্ট',
+                        'tài khoản quảng cáo','विज्ञापन खाता',
+                        'विज्ञापन अकाउंट'
+                    ];
                     const dialogRoots = [...document.querySelectorAll(
                         '[role="dialog"],[aria-modal="true"]'
                     )].filter(visible);
@@ -6258,8 +7051,40 @@ class FacebookBusinessBrowser:
                             (root.getAttribute('title') || '') + ' ' +
                             (root.innerText || root.textContent || '')
                         );
-                        return !aiMarkers.some(word => t.includes(word))
-                            && wizardMarkers.some(word => t.includes(word));
+                        if (aiMarkers.some(word => t.includes(word))) {
+                            return false;
+                        }
+                        if (wizardMarkers.some(word => t.includes(word))) {
+                            return true;
+                        }
+
+                        // Current Meta confirmation screens can drop the
+                        // earlier wizard labels entirely. Bind the dialog by
+                        // the final enabled Create-Ad-Account control instead
+                        // of requiring a locale-specific heading.
+                        return [...root.querySelectorAll(
+                            'button,a,[role="button"],'
+                            + '[tabindex]:not([tabindex="-1"])'
+                        )].some(el => {
+                            if (!visible(el)) return false;
+                            if (
+                                el.hasAttribute('disabled')
+                                || el.getAttribute('aria-disabled') === 'true'
+                            ) {
+                                return false;
+                            }
+                            const actionText = clean(
+                                (el.getAttribute('aria-label') || '') + ' ' +
+                                (el.getAttribute('title') || '') + ' ' +
+                                (el.innerText || el.textContent || '')
+                            );
+                            return createWords.some(
+                                word => actionText === word
+                                    || actionText.startsWith(word + ' ')
+                            ) && dialogAccountWords.some(
+                                word => actionText.includes(word)
+                            );
+                        });
                     }) || null;
 
                     const nodes = wizardRoot
@@ -6273,7 +7098,8 @@ class FacebookBusinessBrowser:
                     const accountWords = [
                         'ad account','advertising account','compte publicitaire',
                         'werbekonto','реклам','বিজ্ঞাপন অ্যাকাউন্ট',
-                        'tài khoản quảng cáo','विज्ञापन खाता'
+                        'tài khoản quảng cáo','विज्ञापन खाता',
+                        'विज्ञापन अकाउंट'
                     ];
                     const nameMarkers = [
                         'ad account name','advertising account name',
@@ -6282,12 +7108,12 @@ class FacebookBusinessBrowser:
                     ];
                     const currencyMarkers = [
                         'currency','devise','währung','валюта','মুদ্রা',
-                        'tiền tệ','मुद्रा'
+                        'কারেন্সি','tiền tệ','मुद्रा','करेंसी'
                     ];
                     const timezoneMarkers = [
                         'time zone','timezone','fuseau horaire','zeitzone',
-                        'часовой пояс','часовий пояс','সময় অঞ্চল',
-                        'múi giờ','समय क्षेत्र'
+                        'часовой пояс','часовий пояс','সময় অঞ্চল','টাইম জোন',
+                        'múi giờ','समय क्षेत्र','टाइम ज़ोन','टाइम जोन'
                     ];
 
                     const belongsToWizardSurface = el => {
@@ -6960,6 +7786,149 @@ class FacebookBusinessBrowser:
 
         return None
 
+
+    async def _ad_account_structural_form_field_control(
+        self,
+        field_name: str,
+    ) -> Any | None:
+        """Resolve currency/timezone only inside the verified Add-RK wizard.
+
+        This is the locale-independent fallback. If labels disappear, ReMask
+        accepts a positional guess only when the wizard contains exactly two
+        dropdown-like controls, in Meta's Details order: currency, timezone.
+        """
+        if self.page is None or not self._ad_account_wizard_rect:
+            return None
+
+        mode = _clean(field_name).lower()
+        if mode not in {"currency", "timezone"}:
+            return None
+
+        try:
+            result = await self.page.evaluate(
+                """(payload) => {
+                    const mode = payload.mode;
+                    const anchor = payload.anchor || null;
+                    if (!anchor) return {found:false};
+                    const visible = el => {
+                        if (!el) return false;
+                        const r = el.getBoundingClientRect();
+                        const s = getComputedStyle(el);
+                        return r.width > 0 && r.height > 0
+                            && s.display !== 'none'
+                            && s.visibility !== 'hidden'
+                            && s.pointerEvents !== 'none';
+                    };
+                    const clean = text => (text || '')
+                        .normalize('NFKC')
+                        .replace(/[\u200b\u200c\u200d\ufeff]/g, '')
+                        .replace(/\u00a0/g, ' ')
+                        .replace(/\s+/g, ' ')
+                        .trim()
+                        .toLowerCase();
+                    const inside = el => {
+                        const r = el.getBoundingClientRect();
+                        const cx = r.x + r.width / 2;
+                        const cy = r.y + r.height / 2;
+                        const pad = 24;
+                        return cx >= Number(anchor.x || 0) - pad
+                            && cx <= Number(anchor.x || 0)
+                                + Number(anchor.width || 0) + pad
+                            && cy >= Number(anchor.y || 0) - pad
+                            && cy <= Number(anchor.y || 0)
+                                + Number(anchor.height || 0) + pad;
+                    };
+                    const currencyWords = [
+                        'currency','devise','währung','валюта','মুদ্রা',
+                        'কারেন্সি','tiền tệ','मुद्रा','करेंसी'
+                    ];
+                    const timezoneWords = [
+                        'time zone','timezone','fuseau horaire','zeitzone',
+                        'часовой пояс','часовий пояс','সময় অঞ্চল','টাইম জোন',
+                        'múi giờ','समय क्षेत्र','टाइम ज़ोन','टाइम जोन'
+                    ];
+                    for (const el of document.querySelectorAll(
+                        '[data-remask-rk-structural-field]'
+                    )) {
+                        el.removeAttribute('data-remask-rk-structural-field');
+                    }
+                    const selector = [
+                        'select',
+                        '[role="combobox"]',
+                        'button[aria-haspopup]',
+                        '[role="button"][aria-haspopup]',
+                        'button[aria-expanded]',
+                        '[role="button"][aria-expanded]'
+                    ].join(',');
+                    const rows = [...document.querySelectorAll(selector)]
+                        .filter(el => visible(el) && inside(el))
+                        .map(el => {
+                            const r = el.getBoundingClientRect();
+                            const text = clean(
+                                (el.getAttribute('aria-label') || '') + ' '
+                                + (el.getAttribute('placeholder') || '') + ' '
+                                + (el.getAttribute('title') || '') + ' '
+                                + (el.getAttribute('name') || '') + ' '
+                                + (el.getAttribute('value') || '') + ' '
+                                + (el.innerText || el.textContent || '')
+                            );
+                            return {
+                                el, text, x:r.x, y:r.y,
+                                currency:currencyWords.some(w => text.includes(w)),
+                                timezone:timezoneWords.some(w => text.includes(w))
+                            };
+                        });
+                    let matches = rows.filter(row =>
+                        mode === 'currency' ? row.currency : row.timezone
+                    );
+                    if (matches.length !== 1) {
+                        const ordered = rows.slice().sort(
+                            (a,b) => a.y - b.y || a.x - b.x
+                        );
+                        if (ordered.length === 2) {
+                            matches = [
+                                mode === 'currency' ? ordered[0] : ordered[1]
+                            ];
+                        }
+                    }
+                    if (matches.length !== 1) {
+                        return {found:false,count:rows.length};
+                    }
+                    const best = matches[0];
+                    best.el.setAttribute(
+                        'data-remask-rk-structural-field',
+                        mode
+                    );
+                    return {
+                        found:true,
+                        text:best.text,
+                        x:Math.round(best.x),
+                        y:Math.round(best.y)
+                    };
+                }""",
+                {
+                    "mode": mode,
+                    "anchor": self._ad_account_wizard_rect,
+                },
+            )
+        except Exception:
+            return None
+
+        if not isinstance(result, dict) or not result.get("found"):
+            return None
+        try:
+            locator = self.page.locator(
+                f'[data-remask-rk-structural-field="{mode}"]'
+            )
+            if await locator.count():
+                item = locator.first
+                if await item.is_visible():
+                    return item
+        except Exception:
+            pass
+        return None
+
+
     async def _select_ad_account_form_field(
         self,
         *,
@@ -7038,6 +8007,15 @@ class FacebookBusinessBrowser:
             )
             if nearby_control is not None:
                 controls.append(nearby_control)
+
+        if not controls:
+            structural_control = (
+                await self._ad_account_structural_form_field_control(
+                    field_name
+                )
+            )
+            if structural_control is not None:
+                controls.append(structural_control)
 
         if not controls:
             return {
@@ -7229,8 +8207,10 @@ class FacebookBusinessBrowser:
             "Währung",
             "Валюта",
             "মুদ্রা",
+            "কারেন্সি",
             "Tiền tệ",
             "मुद्रा",
+            "करेंसी",
         )
         timezone_labels = (
             "Time zone",
@@ -7240,8 +8220,11 @@ class FacebookBusinessBrowser:
             "Часовой пояс",
             "Часовий пояс",
             "সময় অঞ্চল",
+            "টাইম জোন",
             "Múi giờ",
             "समय क्षेत्र",
+            "टाइम ज़ोन",
+            "टाइम जोन",
         )
 
         requested_currency = _clean(currency).upper()
@@ -7734,20 +8717,21 @@ class FacebookBusinessBrowser:
         *,
         business_id: str,
         account_name: str,
+        expected_ad_account_id: str = "",
         timeout_seconds: float = 10.0,
     ) -> dict[str, Any]:
         """Read-only RK lookup from Meta's own Business Settings responses.
 
         This is intentionally independent from CREATE mutation names.  It
         reloads the Ad Accounts inventory and observes the GraphQL responses
-        Meta uses to paint the table. It first accepts an exact-name match;
-        under ReMask's 1 BM = 1 RK invariant it also accepts one unique
-        structurally identified RK from a read-only query targeting the exact
-        Business. Two explicit empty inventory observations are accepted as
-        proof that a stale previous CREATE did not leave an RK behind.
+        Meta uses to paint the table. Existing RK reuse is allowed only for an
+        exact-name match inside a structurally identified RK inventory node,
+        or for an exact expected RK id that also matches that name. A random
+        unique numeric id elsewhere in Relay payloads is never treated as an RK.
         """
         business = _digits(business_id)
         expected = _clean(account_name)
+        expected_id = _normalize_ad_account_id(expected_ad_account_id)
         if self.page is None or not business or not expected:
             return {
                 "confirmed": False,
@@ -7845,6 +8829,7 @@ class FacebookBusinessBrowser:
                     "friendly_name": _clean(
                         meta.get("friendly_name")
                     )[:180],
+                    "expected_ad_account_id": expected_id,
                     "request": request_summary,
                 }
 
@@ -7859,6 +8844,28 @@ class FacebookBusinessBrowser:
 
                 if (
                     exact_business_context
+                    and expected_id
+                    and expected_id in set(exact_name_ids)
+                    and not found_future.done()
+                ):
+                    found_future.set_result(
+                        {
+                            "confirmed": True,
+                            "confirmed_empty": False,
+                            "business_id": business,
+                            "ad_account_id": expected_id,
+                            "account_name": expected,
+                            "source": (
+                                "business_settings_graphql_inventory_expected_id"
+                            ),
+                            "evidence": row,
+                        }
+                    )
+                    return
+
+                if (
+                    exact_business_context
+                    and not expected_id
                     and len(exact_name_ids) == 1
                     and not found_future.done()
                 ):
@@ -7871,27 +8878,6 @@ class FacebookBusinessBrowser:
                             "account_name": expected,
                             "source": (
                                 "business_settings_graphql_inventory_name"
-                            ),
-                            "evidence": row,
-                        }
-                    )
-                    return
-
-                if (
-                    exact_business_context
-                    and not mutation_like
-                    and len(inventory_ids) == 1
-                    and not found_future.done()
-                ):
-                    found_future.set_result(
-                        {
-                            "confirmed": True,
-                            "confirmed_empty": False,
-                            "business_id": business,
-                            "ad_account_id": inventory_ids[0],
-                            "account_name": expected,
-                            "source": (
-                                "business_settings_graphql_inventory_unique"
                             ),
                             "evidence": row,
                         }
@@ -8045,6 +9031,271 @@ class FacebookBusinessBrowser:
                     return_exceptions=True,
                 )
 
+    async def snapshot_ad_accounts_for_business(
+        self,
+        *,
+        business_id: str,
+        timeout_seconds: float = 8.0,
+    ) -> dict[str, Any]:
+        """Read the current RK inventory rendered by Meta Business Settings.
+
+        This observes only read-only GraphQL responses on the exact Business
+        Ad Accounts settings surface. It does not submit mutations.
+        """
+        business = _digits(business_id)
+        if not business:
+            raise BrowserBusinessError(
+                "INVALID_BUSINESS_ID",
+                "Ad Account inventory requires a numeric Business ID.",
+                retryable=False,
+            )
+        if self.page is None:
+            raise BrowserBusinessError(
+                "BROWSER_NOT_READY",
+                "Business browser is not open.",
+                retryable=True,
+            )
+
+        accounts: dict[str, dict[str, Any]] = {}
+        diagnostics: list[dict[str, Any]] = []
+        inventory_observed = False
+        response_tasks: set[asyncio.Task[Any]] = set()
+
+        async def inspect_response(response: Any) -> None:
+            nonlocal inventory_observed
+            try:
+                url = _clean(getattr(response, "url", ""))
+                if "graphql" not in url.casefold():
+                    return
+
+                request = getattr(response, "request", None)
+                meta = (
+                    _request_graphql_meta(request)
+                    if request is not None
+                    else {}
+                )
+                friendly = _clean(meta.get("friendly_name")).casefold()
+                if any(
+                    marker in friendly
+                    for marker in ("mutation", "create", "update", "delete")
+                ):
+                    return
+
+                target_business_ids = {
+                    candidate
+                    for candidate, _ in _walk_business_ids(
+                        meta.get("variables") or {}
+                    )
+                    if candidate
+                }
+                target_business_ids.update(
+                    _business_ids_from_text(_clean(meta.get("decoded_raw")))
+                )
+                page_url = _clean(getattr(self.page, "url", ""))
+                page_targets_business = (
+                    business in _business_ids_from_text(page_url)
+                    and (
+                        "/settings/ad_accounts" in page_url.casefold()
+                        or "/settings/ad-accounts" in page_url.casefold()
+                    )
+                )
+                if business not in target_business_ids and not page_targets_business:
+                    return
+
+                raw = await response.text()
+                payload = _decode_graphql_text(raw)
+                rows = _extract_inventory_ad_account_rows(payload)
+                observed = _has_ad_account_inventory_container(payload)
+                if not observed and not rows:
+                    return
+
+                inventory_observed = True
+                for row in rows:
+                    account_id = _normalize_ad_account_id(row.get("id"))
+                    if not account_id:
+                        continue
+                    normalized = dict(row)
+                    normalized["id"] = account_id
+                    normalized["account_id"] = account_id
+                    normalized["business_id"] = business
+                    current = accounts.get(account_id) or {}
+                    current.update(
+                        {
+                            key: value
+                            for key, value in normalized.items()
+                            if value not in ("", None, [], {})
+                        }
+                    )
+                    current.setdefault("id", account_id)
+                    current.setdefault("account_id", account_id)
+                    current.setdefault("business_id", business)
+                    accounts[account_id] = current
+
+                diagnostics.append(
+                    {
+                        "friendly_name": _clean(meta.get("friendly_name"))[:180],
+                        "rows": len(rows),
+                        "inventory_observed": observed,
+                        "page_url": page_url[:700],
+                    }
+                )
+            except Exception as exc:
+                diagnostics.append(
+                    {
+                        "error": (
+                            f"{exc.__class__.__name__}: {_clean(exc)}"
+                        )[:500]
+                    }
+                )
+
+        def on_response(response: Any) -> None:
+            try:
+                task = asyncio.create_task(inspect_response(response))
+                response_tasks.add(task)
+                task.add_done_callback(response_tasks.discard)
+            except Exception:
+                return
+
+        self.page.on("response", on_response)
+        attempts: list[dict[str, Any]] = []
+        deadline = time.monotonic() + max(3.0, float(timeout_seconds))
+        self._last_ad_account_section_diagnostic = {
+            "stage": "inventory_start",
+            "business_id": business,
+            "timeout_seconds": float(timeout_seconds),
+            "url": _clean(getattr(self.page, "url", ""))[:700],
+        }
+        try:
+            targets = [
+                template.format(business_id=business)
+                for template in self.SETTINGS_AD_ACCOUNTS_URLS
+            ]
+            current = _clean(getattr(self.page, "url", ""))
+            if (
+                business in _business_ids_from_text(current)
+                and (
+                    "/settings/ad_accounts" in current.casefold()
+                    or "/settings/ad-accounts" in current.casefold()
+                )
+            ):
+                targets.insert(0, current)
+
+            seen: set[str] = set()
+            for target in targets:
+                if target in seen or time.monotonic() >= deadline:
+                    continue
+                seen.add(target)
+                try:
+                    remaining_before_nav = max(0.0, deadline - time.monotonic())
+                    if remaining_before_nav <= 0:
+                        break
+                    self._last_ad_account_section_diagnostic = {
+                        "stage": "settings_navigation",
+                        "business_id": business,
+                        "target": target[:700],
+                        "remaining_seconds": round(remaining_before_nav, 3),
+                        "attempts": attempts[-6:],
+                        "url": _clean(getattr(self.page, "url", ""))[:700],
+                    }
+                    # RK inventory is read-only. Do not wait for Meta's
+                    # heavy Business Settings document to reach
+                    # DOMContentLoaded; the Relay inventory requests are
+                    # emitted after the navigation commits and hydrate the SPA
+                    # asynchronously. Waiting for DOMContentLoaded was consuming
+                    # the entire inventory budget before those responses could
+                    # be observed.
+                    await self.page.goto(
+                        target,
+                        wait_until="commit",
+                        timeout=max(1000, int(remaining_before_nav * 1000)),
+                    )
+                    post_nav_remaining = max(0.0, deadline - time.monotonic())
+                    if post_nav_remaining > 0:
+                        await self.page.wait_for_timeout(
+                            int(min(650.0, post_nav_remaining * 1000.0))
+                        )
+                    await self._assert_authenticated()
+                    attempts.append(
+                        {
+                            "url": _clean(self.page.url)[:700],
+                            "result": "loaded",
+                        }
+                    )
+                    if inventory_observed:
+                        break
+                except BrowserBusinessError:
+                    raise
+                except asyncio.TimeoutError:
+                    attempts.append(
+                        {
+                            "url": target[:700],
+                            "result": "navigation_timeout",
+                        }
+                    )
+                    self._last_ad_account_section_diagnostic = {
+                        "stage": "settings_navigation_timeout",
+                        "business_id": business,
+                        "target": target[:700],
+                        "attempts": attempts[-6:],
+                        "url": _clean(getattr(self.page, "url", ""))[:700],
+                    }
+                    break
+                except Exception as exc:
+                    attempts.append(
+                        {
+                            "url": target[:700],
+                            "result": "error",
+                            "error": (
+                                f"{exc.__class__.__name__}: {_clean(exc)}"
+                            )[:500],
+                        }
+                    )
+
+            remaining = max(0.0, deadline - time.monotonic())
+            if remaining > 0 and not inventory_observed:
+                await self.page.wait_for_timeout(
+                    int(min(1600.0, remaining * 1000.0))
+                )
+
+            if response_tasks:
+                await asyncio.gather(
+                    *list(response_tasks),
+                    return_exceptions=True,
+                )
+
+            self._last_ad_account_section_diagnostic = {
+                "stage": "inventory_complete",
+                "business_id": business,
+                "ready": inventory_observed,
+                "accounts_count": len(accounts),
+                "attempts": attempts[-6:],
+                "diagnostics": diagnostics[-12:],
+                "url": _clean(getattr(self.page, "url", ""))[:700],
+            }
+            return {
+                "business_id": business,
+                "ready": inventory_observed,
+                "confirmed_empty": bool(inventory_observed and not accounts),
+                "accounts": [
+                    accounts[key]
+                    for key in sorted(accounts)
+                ],
+                "accounts_count": len(accounts),
+                "source": "business_settings_graphql_inventory",
+                "attempts": attempts[-6:],
+                "diagnostics": diagnostics[-12:],
+            }
+        finally:
+            try:
+                self.page.remove_listener("response", on_response)
+            except Exception:
+                pass
+            if response_tasks:
+                await asyncio.gather(
+                    *list(response_tasks),
+                    return_exceptions=True,
+                )
+
     async def verify_ad_account_inventory_empty(
         self,
         *,
@@ -8071,6 +9322,8 @@ class FacebookBusinessBrowser:
             "không có tài khoản quảng cáo nào được thêm",
             "कोई विज्ञापन खाता नहीं जोड़ा गया",
             "कोई विज्ञापन खाते नहीं जोड़े गए",
+            "कोई विज्ञापन अकाउंट नहीं जोड़ा गया",
+            "कोई विज्ञापन अकाउंट्स नहीं जोड़े गए",
             "no ad accounts",
             "you haven't added any ad accounts",
             "you have not added any ad accounts",
@@ -8143,6 +9396,214 @@ class FacebookBusinessBrowser:
                         "marker": matched_marker,
                         "attempts": attempts,
                     }
+
+                # Meta frequently changes/localizes the explicit empty-state
+                # sentence. Capture a second, language-light structural proof:
+                # exact Business ad-account route, rendered table controls,
+                # no RK row identity, no modal/loading state, stable twice.
+                # This signal alone never unlocks CREATE; the handler combines
+                # it with an independent empty Graph inventory.
+                async def structural_snapshot() -> dict[str, Any]:
+                    try:
+                        raw = await self.page.evaluate(
+                            """(business) => {
+                                const visible = el => {
+                                    if (!el) return false;
+                                    const r = el.getBoundingClientRect();
+                                    const s = getComputedStyle(el);
+                                    return r.width > 0 && r.height > 0
+                                        && s.display !== 'none'
+                                        && s.visibility !== 'hidden';
+                                };
+                                const clean = text => (text || '')
+                                    .normalize('NFKC')
+                                    .replace(/\\u00a0/g, ' ')
+                                    .replace(/\\s+/g, ' ')
+                                    .trim()
+                                    .toLowerCase();
+                                const url = String(location.href || '');
+                                const exactBusiness = url.includes(
+                                    'business_id=' + String(business)
+                                );
+                                const adRoute = (
+                                    url.toLowerCase().includes('/settings/ad_accounts')
+                                    || url.toLowerCase().includes('/settings/ad-accounts')
+                                );
+                                const nodes = [...document.querySelectorAll(
+                                    'button,a,input,[role="button"],[role="row"],'
+                                    + '[role="listitem"],[role="progressbar"],'
+                                    + '[aria-busy="true"],[role="dialog"],'
+                                    + '[aria-modal="true"]'
+                                )].filter(visible);
+                                const texts = nodes.map(el => clean(
+                                    (el.getAttribute('aria-label') || '') + ' ' +
+                                    (el.getAttribute('placeholder') || '') + ' ' +
+                                    (el.getAttribute('title') || '') + ' ' +
+                                    (el.innerText || el.textContent || '')
+                                ));
+                                const addWords = [
+                                    'add','ajouter','добавить','додати',
+                                    'hinzufügen','যোগ করুন','thêm','जोड़ें'
+                                ];
+                                const filterWords = [
+                                    'filter','filters','filtre','filtres',
+                                    'фильтр','фільтр','lọc','फ़िल्टर'
+                                ];
+                                const searchWords = [
+                                    'search','rechercher','поиск','пошук',
+                                    'suchen','tìm kiếm','सर्च'
+                                ];
+                                const addSurface = texts.some(t =>
+                                    addWords.some(w => t === w || t.startsWith(w + ' '))
+                                );
+                                const filterSurface = texts.some(t =>
+                                    filterWords.some(w => t === w || t.startsWith(w + ' '))
+                                );
+                                const searchSurface = nodes.some((el, idx) =>
+                                    el.tagName === 'INPUT'
+                                    && searchWords.some(w => texts[idx].includes(w))
+                                );
+                                const busyNodes = nodes.filter(el =>
+                                    el.getAttribute('role') === 'progressbar'
+                                    || el.getAttribute('aria-busy') === 'true'
+                                );
+                                const globalLoading = busyNodes.length > 0;
+                                const inventoryLoading = busyNodes.some(el => {
+                                    const r = el.getBoundingClientRect();
+                                    const ariaBusy =
+                                        el.getAttribute('aria-busy') === 'true';
+                                    // Ignore Meta's persistent thin/global
+                                    // progress indicators and tiny assistant
+                                    // spinners. Only a substantial busy
+                                    // container in the right Ad Accounts pane
+                                    // blocks structural empty proof.
+                                    return (
+                                        r.x >= 280
+                                        && r.y >= 70
+                                        && (
+                                            (ariaBusy && r.width >= 300 && r.height >= 120)
+                                            || (r.width >= 150 && r.height >= 24)
+                                        )
+                                    );
+                                });
+                                const dialogOpen = nodes.some(el =>
+                                    el.getAttribute('role') === 'dialog'
+                                    || el.getAttribute('aria-modal') === 'true'
+                                );
+                                const candidateRows = nodes.filter(el => {
+                                    const role = el.getAttribute('role') || '';
+                                    if (!['row','listitem','gridcell'].includes(role)) {
+                                        return false;
+                                    }
+                                    if (el.closest('[role="dialog"],[aria-modal="true"]')) {
+                                        return false;
+                                    }
+                                    const r = el.getBoundingClientRect();
+                                    if (r.x < 280 || r.y < 130) {
+                                        return false;
+                                    }
+                                    const t = clean(
+                                        (el.getAttribute('aria-label') || '') + ' ' +
+                                        (el.getAttribute('title') || '') + ' ' +
+                                        (el.innerText || el.textContent || '')
+                                    );
+                                    return Boolean(t);
+                                });
+                                const ids = new Set();
+                                for (const el of nodes) {
+                                    const href = String(
+                                        el.getAttribute?.('href') || ''
+                                    );
+                                    const txt = String(
+                                        el.innerText || el.textContent || ''
+                                    );
+                                    for (const source of [href, txt]) {
+                                        for (const match of source.matchAll(
+                                            /(?:act_|account_id[=:"']?|ad_account_id[=:"']?)(\\d{5,30})/gi
+                                        )) {
+                                            ids.add(match[1]);
+                                        }
+                                    }
+                                }
+                                return {
+                                    exact_business: exactBusiness,
+                                    ad_route: adRoute,
+                                    add_surface: addSurface,
+                                    filter_surface: filterSurface,
+                                    search_surface: searchSurface,
+                                    loading: inventoryLoading,
+                                    global_loading: globalLoading,
+                                    inventory_loading: inventoryLoading,
+                                    dialog_open: dialogOpen,
+                                    candidate_rows: candidateRows.slice(0, 12).map(el => ({
+                                        role: el.getAttribute('role') || '',
+                                        text: clean(
+                                            (el.getAttribute('aria-label') || '') + ' ' +
+                                            (el.getAttribute('title') || '') + ' ' +
+                                            (el.innerText || el.textContent || '')
+                                        ).slice(0, 220)
+                                    })),
+                                    row_ids: [...ids].slice(0, 20),
+                                };
+                            }""",
+                            business,
+                        )
+                        return dict(raw) if isinstance(raw, dict) else {}
+                    except Exception as exc:
+                        return {
+                            "error": (
+                                f"{exc.__class__.__name__}: {_clean(exc)}"
+                            )[:500]
+                        }
+
+                def structural_empty_snapshot(value: Any) -> bool:
+                    return bool(
+                        isinstance(value, dict)
+                        and value.get("exact_business")
+                        and value.get("ad_route")
+                        and value.get("add_surface")
+                        and (
+                            value.get("filter_surface")
+                            or value.get("search_surface")
+                        )
+                        and not value.get("inventory_loading")
+                        and not value.get("dialog_open")
+                        and not value.get("candidate_rows")
+                        and not value.get("row_ids")
+                    )
+
+                first_structural = await structural_snapshot()
+                stable_structural_empty = structural_empty_snapshot(
+                    first_structural
+                )
+                second_structural: dict[str, Any] = {}
+                third_structural: dict[str, Any] = {}
+                if stable_structural_empty:
+                    await self.page.wait_for_timeout(700)
+                    second_structural = await structural_snapshot()
+                    stable_structural_empty = structural_empty_snapshot(
+                        second_structural
+                    )
+                if stable_structural_empty:
+                    await self.page.wait_for_timeout(700)
+                    third_structural = await structural_snapshot()
+                    stable_structural_empty = structural_empty_snapshot(
+                        third_structural
+                    )
+
+                attempts[-1]["structural_first"] = first_structural
+                attempts[-1]["structural_second"] = second_structural
+                attempts[-1]["structural_third"] = third_structural
+                if stable_structural_empty:
+                    return {
+                        "confirmed_empty": True,
+                        "structural_empty": True,
+                        "business_id": business,
+                        "source": (
+                            "business_settings_ui_structural_consensus"
+                        ),
+                        "attempts": attempts,
+                    }
             except Exception as exc:
                 attempts.append(
                     {
@@ -8190,7 +9651,7 @@ class FacebookBusinessBrowser:
                     const accountWords = [
                         'ad account','advertising account','compte publicitaire',
                         'реклам','werbekonto','বিজ্ঞাপন অ্যাকাউন্ট',
-                        'tài khoản quảng cáo','विज्ञापन खाता','विज्ञापन खाते'
+                        'tài khoản quảng cáo','विज्ञापन खाता','विज्ञापन खाते','विज्ञापन अकाउंट','विज्ञापन अकाउंट्स'
                     ];
                     const nameWords = [
                         'ad account name','advertising account name','account name',
@@ -8199,7 +9660,8 @@ class FacebookBusinessBrowser:
                         'назва рекламного акаунта','назва облікового запису',
                         'name des werbekontos','বিজ্ঞাপন অ্যাকাউন্টের নাম',
                         'tên tài khoản quảng cáo','विज्ञापन खाते का नाम',
-                        'विज्ञापन खाता नाम'
+                        'विज्ञापन खाता नाम','विज्ञापन अकाउंट का नाम',
+                        'विज्ञापन अकाउंट नाम'
                     ];
                     const formWords = [
                         'currency','devise','währung','валюта','валюта',
@@ -8221,7 +9683,7 @@ class FacebookBusinessBrowser:
                         'không được phép','không đủ điều kiện',
                         'không thể tạo','giới hạn','bị hạn chế',
                         'अनुमति नहीं','पात्र नहीं','नहीं बना सकते',
-                        'सीमा','प्रतिबंधित'
+                        'सीमा','प्रतिबंधित',
                     ];
 
                     const metaAIRoot = el => {
@@ -8428,7 +9890,11 @@ class FacebookBusinessBrowser:
                             'नया विज्ञापन खाता बनाएँ',
                             'नया विज्ञापन खाता बनाएं',
                             'विज्ञापन खाता बनाएँ',
-                            'विज्ञापन खाता बनाएं'
+                            'विज्ञापन खाता बनाएं',
+                            'नया विज्ञापन अकाउंट बनाएँ',
+                            'नया विज्ञापन अकाउंट बनाएं',
+                            'विज्ञापन अकाउंट बनाएँ',
+                            'विज्ञापन अकाउंट बनाएं'
                         ].some(value => low === value);
 
                         const area = cr.width * cr.height;
@@ -8586,7 +10052,8 @@ class FacebookBusinessBrowser:
                     // alert/toast/dialog, not merely present in hidden app text.
                     const errorSurfaces = [...document.querySelectorAll(
                         '[role="alert"],[role="alertdialog"],[aria-live="assertive"],'
-                        + '[aria-live="polite"],[role="dialog"]'
+                        + '[aria-live="polite"],[role="dialog"],[role="heading"],'
+                        + 'h1,h2,h3'
                     )].filter(visible);
                     const errors = [];
                     for (const el of errorSurfaces) {
@@ -8599,11 +10066,17 @@ class FacebookBusinessBrowser:
                     }
 
                     let state = 'UNKNOWN';
-                    if (errors.length) state = 'BLOCKED';
-                    else if (nameInput || formEvidence) state = 'FORM';
+                    // A Business Suite warning banner is not proof that Add-RK
+                    // is unavailable. Meta can show the warning while the Add
+                    // surface is fully actionable and can even show it after a
+                    // successful account creation. Prefer concrete actionable
+                    // UI state over advisory/banner text; only classify BLOCKED
+                    // when there is no usable creation surface.
+                    if (nameInput || formEvidence) state = 'FORM';
                     else if (introDialog) state = 'INTRO_DIALOG';
                     else if (createEntry) state = 'CREATE_ENTRY';
                     else if (addSurface) state = 'ADD_SURFACE';
+                    else if (errors.length) state = 'BLOCKED';
                     else if (dialogs.length) state = 'DIALOG';
 
                     const signature = [
@@ -8923,7 +10396,7 @@ class FacebookBusinessBrowser:
                     const accountWords = [
                         'ad account','advertising account','compte publicitaire',
                         'реклам','werbekonto','বিজ্ঞাপন অ্যাকাউন্ট',
-                        'tài khoản quảng cáo','विज्ञापन खाता','विज्ञापन खाते'
+                        'tài khoản quảng cáo','विज्ञापन खाता','विज्ञापन खाते','विज्ञापन अकाउंट','विज्ञापन अकाउंट्स'
                     ];
 
                     const nodes = [...document.querySelectorAll(
@@ -9516,7 +10989,7 @@ class FacebookBusinessBrowser:
                     const accountWords = [
                         'ad account','advertising account','compte publicitaire',
                         'реклам','werbekonto','বিজ্ঞাপন অ্যাকাউন্ট',
-                        'tài khoản quảng cáo','विज्ञापन खाता','विज्ञापन खाते'
+                        'tài khoản quảng cáo','विज्ञापन खाता','विज्ञापन खाते','विज्ञापन अकाउंट','विज्ञापन अकाउंट्स'
                     ];
                     const hasLocalAccountContext = el => {
                         let cur = el;
@@ -9690,7 +11163,7 @@ class FacebookBusinessBrowser:
                     const accountWords = [
                         'ad account','advertising account','compte publicitaire',
                         'реклам','werbekonto','বিজ্ঞাপন অ্যাকাউন্ট',
-                        'tài khoản quảng cáo','विज्ञापन खाता','विज्ञापन खाते'
+                        'tài khoản quảng cáo','विज्ञापन खाता','विज्ञापन खाते','विज्ञापन अकाउंट','विज्ञापन अकाउंट्स'
                     ];
                     for (const el of document.querySelectorAll(
                         '[data-remask-rk-create-fresh]'
@@ -10496,7 +11969,7 @@ timeout_seconds=4.0,
                     const accountWords = [
                         'ad account','advertising account','compte publicitaire',
                         'реклам','werbekonto','বিজ্ঞাপন অ্যাকাউন্ট',
-                        'tài khoản quảng cáo','विज्ञापन खाता','विज्ञापन खाते'
+                        'tài khoản quảng cáo','विज्ञापन खाता','विज्ञापन खाते','विज्ञापन अकाउंट','विज्ञापन अकाउंट्स'
                     ];
 
                     const popupRoots = [...document.querySelectorAll(
@@ -10700,7 +12173,8 @@ timeout_seconds=4.0,
                         'hinzufügen','erstellen','werbekonto',
                         'যোগ করুন','তৈরি করুন','বিজ্ঞাপন অ্যাকাউন্ট',
                         'thêm','tạo','tài khoản quảng cáo',
-                        'जोड़ें','बनाएँ','बनाएं','विज्ञापन खाता'
+                        'जोड़ें','बनाएँ','बनाएं','विज्ञापन खाता',
+                        'विज्ञापन अकाउंट'
                     ];
                     const out = [];
                     const seen = new Set();
@@ -10781,7 +12255,8 @@ timeout_seconds=4.0,
                                 'ad account','advertising account','реклам',
                                 'werbekonto','compte publicitaire',
                                 'বিজ্ঞাপন অ্যাকাউন্ট','tài khoản quảng cáo',
-                                'विज्ञापन खाता','विज्ञापन खाते'
+                                'विज्ञापन खाता','विज्ञापन खाते','विज्ञापन अकाउंट','विज्ञापन अकाउंट्स',
+                        'विज्ञापन अकाउंट','विज्ञापन अकाउंट्स'
                             ];
                             const actionWords = [
                                 'add','create','ajouter','créer',
@@ -11479,6 +12954,8 @@ timeout_seconds=4.0,
             "Tên tài khoản quảng cáo",
             "विज्ञापन खाते का नाम",
             "विज्ञापन खाता नाम",
+            "विज्ञापन अकाउंट का नाम",
+            "विज्ञापन अकाउंट नाम",
         )
         name_filled = False
         name_deadline = time.monotonic() + 6.0
@@ -11506,6 +12983,25 @@ timeout_seconds=4.0,
                 count = 0
 
             safe_candidates: list[Any] = []
+            strong_name_candidates: list[Any] = []
+            name_meta_markers = (
+                "ad account name",
+                "advertising account name",
+                "account name",
+                "nom du compte publicitaire",
+                "nom du compte",
+                "название рекламного аккаунта",
+                "название аккаунта",
+                "назва рекламного акаунта",
+                "назва облікового запису",
+                "name des werbekontos",
+                "বিজ্ঞাপন অ্যাকাউন্টের নাম",
+                "tên tài khoản quảng cáo",
+                "विज्ञापन खाते का नाम",
+                "विज्ञापन खाता नाम",
+                "विज्ञापन अकाउंट का नाम",
+                "विज्ञापन अकाउंट नाम",
+            )
             for index in range(count):
                 candidate = candidates.nth(index)
                 try:
@@ -11517,6 +13013,27 @@ timeout_seconds=4.0,
                         or float(box.get("y") or 0) > 795
                     ):
                         continue
+                    if self._ad_account_wizard_rect:
+                        anchor = self._ad_account_wizard_rect
+                        cx = float(box.get("x") or 0) + float(
+                            box.get("width") or 0
+                        ) / 2
+                        cy = float(box.get("y") or 0) + float(
+                            box.get("height") or 0
+                        ) / 2
+                        if not (
+                            float(anchor.get("x") or 0) - 30
+                            <= cx
+                            <= float(anchor.get("x") or 0)
+                            + float(anchor.get("width") or 0)
+                            + 30
+                            and float(anchor.get("y") or 0) - 30
+                            <= cy
+                            <= float(anchor.get("y") or 0)
+                            + float(anchor.get("height") or 0)
+                            + 30
+                        ):
+                            continue
 
                     kind = _clean(
                         await candidate.get_attribute("type")
@@ -11564,11 +13081,21 @@ timeout_seconds=4.0,
                         continue
 
                     safe_candidates.append(candidate)
+                    if any(
+                        marker in meta_text
+                        for marker in name_meta_markers
+                    ):
+                        strong_name_candidates.append(candidate)
                 except Exception:
                     continue
 
-            if len(safe_candidates) == 1:
-                candidate = safe_candidates[0]
+            preferred_candidates = (
+                strong_name_candidates
+                if strong_name_candidates
+                else safe_candidates
+            )
+            if len(preferred_candidates) == 1:
+                candidate = preferred_candidates[0]
                 try:
                     try:
                         await candidate.fill(account_name, timeout=2500)
@@ -11587,6 +13114,7 @@ timeout_seconds=4.0,
             diag = await self._diagnostic("ad_account_name_input_missing")
             diag["business_id"] = business
             diag["form_candidates"] = await self._ad_account_form_candidates()
+            diag["name_labels"] = list(name_labels)
             raise BrowserBusinessError(
                 "AD_ACCOUNT_CREATE_UI_CHANGED",
                 "Meta Ad Account form opened but the account-name field was not found.",
@@ -11852,18 +13380,20 @@ timeout_seconds=4.0,
             "Tạo",
             "विज्ञापन खाता बनाएँ",
             "विज्ञापन खाता बनाएं",
+            "विज्ञापन अकाउंट बनाएँ",
+            "विज्ञापन अकाउंट बनाएं",
             "बनाएँ",
             "बनाएं",
         )
 
         self._mark_ad_account_phase("SUBMIT_UI")
         last_form_setup_signature = ""
+        self._ad_account_wizard_rect = (
+            await self._capture_ad_account_wizard_rect()
+        )
         form_setup = await self._prepare_ad_account_form_fields(
             currency=currency,
             timezone_id=timezone_id,
-        )
-        self._ad_account_wizard_rect = (
-            await self._capture_ad_account_wizard_rect()
         )
         initial_form_state = await self._ad_account_ui_state()
         last_form_setup_signature = _clean(
@@ -11873,6 +13403,7 @@ timeout_seconds=4.0,
             clicked_any = False
             own_business_selected = False
             final_click_attempted = False
+            blocked_errors: list[str] = []
             submit_attempts: list[dict[str, Any]] = []
 
             for step in range(12):
@@ -11887,11 +13418,16 @@ timeout_seconds=4.0,
                 before_signature = _clean(before_state.get("signature"))
 
                 if _clean(before_state.get("state")).upper() == "BLOCKED":
+                    blocked_errors = [
+                        _clean(value)
+                        for value in (before_state.get("errors") or [])[:4]
+                        if _clean(value)
+                    ]
                     submit_attempts.append(
                         {
                             "step": step,
                             "action": "blocked",
-                            "errors": list(before_state.get("errors") or [])[:3],
+                            "errors": blocked_errors[:3],
                         }
                     )
                     break
@@ -11934,6 +13470,9 @@ timeout_seconds=4.0,
                             and ownership_signature
                             != last_form_setup_signature
                         ):
+                            self._ad_account_wizard_rect = (
+                                await self._capture_ad_account_wizard_rect()
+                            )
                             form_setup = (
                                 await self._prepare_ad_account_form_fields(
                                     currency=currency,
@@ -11995,6 +13534,9 @@ timeout_seconds=4.0,
                         and transition_signature
                         and transition_signature != last_form_setup_signature
                     ):
+                        self._ad_account_wizard_rect = (
+                            await self._capture_ad_account_wizard_rect()
+                        )
                         form_setup = await self._prepare_ad_account_form_fields(
                             currency=currency,
                             timezone_id=timezone_id,
@@ -12279,6 +13821,32 @@ timeout_seconds=4.0,
                     }
                 )
                 break
+
+            if blocked_errors:
+                await checkpoint(
+                    {
+                        "phase": "CREATE_NOT_SUBMITTED",
+                        "resume_from": "CREATE",
+                        "activity": "AD_ACCOUNT_ADVERTISING_RESTRICTED",
+                        "activity_at": int(time.time()),
+                        "ui_errors": blocked_errors[:4],
+                    }
+                )
+                raise BrowserBusinessError(
+                    "AD_ACCOUNT_ADVERTISING_RESTRICTED",
+                    (
+                        "Meta reports that this profile/business cannot use "
+                        "the Business portfolio for advertising. CREATE was "
+                        "not submitted."
+                    ),
+                    retryable=False,
+                    diagnostic={
+                        "stage": "ad_account_advertising_restricted",
+                        "errors": blocked_errors[:4],
+                        "submit_attempts": submit_attempts[-12:],
+                        "ui_state": await self._ad_account_ui_state(),
+                    },
+                )
 
             if gate_future.done() and gate_future.exception() is not None:
                 raise gate_future.exception()
@@ -12845,6 +14413,31 @@ timeout_seconds=4.0,
                         await self.page.wait_for_timeout(250)
                     if captured.done():
                         break
+
+                    # Meta can occasionally submit the actual CREATE through a
+                    # transport shape that is not matched by the private
+                    # GraphQL interceptor. Never click CREATE again if the same
+                    # browser session already proves success in Meta's UI.
+                    ui_created = await self._reconcile_created_ad_account_from_ui(
+                        business_id=business,
+                        account_name=name,
+                    )
+                    if bool(ui_created.get("confirmed")):
+                        created_id = _clean(ui_created.get("ad_account_id"))
+                        if created_id:
+                            self._ad_account_create_sent = True
+                            self._mark_ad_account_phase("CREATE_CONFIRMED")
+                            return {
+                                "created_during_capture": True,
+                                "ad_account_id": created_id,
+                                "business_id": business,
+                                "canary_name": name,
+                                "currency": currency_code,
+                                "timezone_id": timezone,
+                                "source": "business_settings_ui_capture_reconciliation",
+                                "ui_reconcile": ui_created,
+                            }
+
                     if blocked_unclassified_create:
                         # The safety gate already intercepted a strong unknown
                         # mutation. Do not click the irreversible CTA again in
@@ -12878,11 +14471,11 @@ timeout_seconds=4.0,
                     raise BrowserBusinessError(
                         "AD_ACCOUNT_CREATE_REQUEST_NOT_OBSERVED",
                         (
-                            "Meta Add-RK wizard was driven to the final action, "
-                            "but ReMask did not observe a definitive private "
-                            "CREATE request. The final capture gate blocked any "
-                            "strong unknown CREATE candidate; no captured CREATE "
-                            "was intentionally allowed to reach Meta."
+                            "Meta Add-RK wizard reached the final action, but "
+                            "ReMask did not capture a definitive private CREATE "
+                            "request and the same browser session did not prove "
+                            "a created RK. Inventory reconciliation is required "
+                            "before any additional CREATE attempt."
                         ),
                         retryable=True,
                         diagnostic=diag,

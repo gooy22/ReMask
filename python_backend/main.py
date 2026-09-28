@@ -410,6 +410,100 @@ async def lifespan(app: FastAPI):
     )
     await pool.stop()
 
+_FP_AUTH_GATE_CACHE: dict[str, dict[str, Any]] = {}
+_FP_AUTH_GATE_TTL_SECONDS = 20.0
+
+def _remember_fp_auth_gate(profile_id: str, preflight: dict[str, Any]) -> None:
+    _FP_AUTH_GATE_CACHE[str(profile_id)] = {
+        'at': time.monotonic(),
+        'auth_blocked': bool(preflight.get('auth_blocked')),
+        'auth_error_code': str(preflight.get('auth_error_code') or '').strip().upper(),
+        'facebook_session_ready': bool(preflight.get('facebook_session_ready')),
+    }
+
+def _cached_fp_auth_gate(profile_id: str) -> dict[str, Any] | None:
+    row = _FP_AUTH_GATE_CACHE.get(str(profile_id))
+    if not isinstance(row, dict):
+        return None
+    if time.monotonic() - float(row.get('at') or 0.0) > _FP_AUTH_GATE_TTL_SECONDS:
+        return None
+    return row
+
+def _request_fan_page_profile_ids(request: CreateJobRequest) -> list[str]:
+    out: list[str] = []
+    for profile in request.profiles:
+        has_fp = False
+        for task in profile.tasks:
+            if str(task.action or '').strip().lower() != 'provisioning':
+                continue
+            payload = task.payload if isinstance(task.payload, dict) else {}
+            steps = payload.get('steps') if isinstance(payload.get('steps'), list) else []
+            if any(str(step or '').strip().upper() == 'FAN_PAGES' for step in steps):
+                has_fp = True
+                break
+        if has_fp:
+            profile_id = str(profile.profile_id or '').strip()
+            if profile_id and profile_id not in out:
+                out.append(profile_id)
+    return out
+
+def _view_fan_page_retry_profile_ids(view: dict[str, Any]) -> list[str]:
+    out: list[str] = []
+    for item in view.get('items') or []:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get('status') or '').upper() != 'FAILED':
+            continue
+        has_fp = False
+        for task in item.get('tasks') or []:
+            if not isinstance(task, dict):
+                continue
+            payload = task.get('payload') if isinstance(task.get('payload'), dict) else {}
+            steps = payload.get('steps') if isinstance(payload.get('steps'), list) else []
+            if any(str(step or '').strip().upper() == 'FAN_PAGES' for step in steps):
+                has_fp = True
+                break
+        if has_fp:
+            profile_id = str(item.get('profile_id') or '').strip()
+            if profile_id and profile_id not in out:
+                out.append(profile_id)
+    return out
+
+async def _require_fp_auth_ready(profile_ids: list[str]) -> None:
+    async def check(profile_id: str) -> tuple[str, dict[str, Any]]:
+        cached = _cached_fp_auth_gate(profile_id)
+        if cached is not None:
+            return profile_id, cached
+        preflight = await profile_preflight(profile_id)
+        _remember_fp_auth_gate(profile_id, preflight)
+        return profile_id, preflight
+
+    if not profile_ids:
+        return
+
+    results = await asyncio.gather(
+        *(check(profile_id) for profile_id in profile_ids)
+    )
+    blocked: list[str] = []
+    not_ready: list[str] = []
+    for profile_id, state in results:
+        code = str(state.get('auth_error_code') or '').strip().upper()
+        if bool(state.get('auth_blocked')):
+            blocked.append(f'{profile_id}:{code or "FACEBOOK_AUTH_BLOCKED"}')
+        elif state.get('facebook_session_ready') is not True:
+            not_ready.append(profile_id)
+
+    if blocked:
+        raise HTTPException(
+            status_code=409,
+            detail='FP_AUTH_BLOCKED: ' + ', '.join(blocked),
+        )
+    if not_ready:
+        raise HTTPException(
+            status_code=409,
+            detail='FP_SESSION_NOT_READY: ' + ', '.join(not_ready),
+        )
+
 app=FastAPI(title='ReMask Python Worker',version='0.4.0',lifespan=lifespan)
 
 @app.get('/health',response_model=HealthResponse)
@@ -503,9 +597,13 @@ async def profile_preflight(profile_id: str):
                     'error_code':'BUSINESS_PREFLIGHT_TIMEOUT',
                 })
             except BrowserBusinessError as exc:
+                diagnostic=exc.diagnostic if isinstance(exc.diagnostic,dict) else {}
                 browser_state.update({
                     'error':str(exc),
                     'error_code':exc.code,
+                    'diagnostic':diagnostic,
+                    'current_url':str(diagnostic.get('url') or ''),
+                    'auth_evidence':str(diagnostic.get('auth_evidence') or ''),
                 })
                 if exc.code == 'BUSINESS_CREATE_UI_UNAVAILABLE':
                     # Authentication/navigation already succeeded; only the
@@ -581,7 +679,8 @@ async def profile_preflight(profile_id: str):
             total_ms=int((time.monotonic()-preflight_started)*1000)
             log.info(
                 'bm preflight profile=%s total_ms=%d proxy_ms=%d browser_ms=%d pages_ms=%d '
-                'browser_ready=%s create_ready=%s pages=%d page_source=%s browser_error=%s pages_error=%s',
+                'browser_ready=%s create_ready=%s pages=%d page_source=%s browser_error=%s '
+                'auth_evidence=%s current_url=%s pages_error=%s',
                 clean_profile,
                 total_ms,
                 proxy_ms,
@@ -592,6 +691,8 @@ async def profile_preflight(profile_id: str):
                 len(saved_pages),
                 pages_source,
                 str(browser_state.get('error_code') or ''),
+                str(browser_state.get('auth_evidence') or ''),
+                str(browser_state.get('current_url') or '')[:500],
                 str(browser_state.get('page_discovery_error_code') or ''),
             )
 
@@ -602,9 +703,25 @@ async def profile_preflight(profile_id: str):
                 )
             )
 
+            auth_codes={
+                'CHECKPOINT_REQUIRED',
+                'SESSION_EXPIRED',
+                'TWO_FACTOR_REQUIRED',
+            }
+            auth_error_code=str(
+                browser_state.get('error_code')
+                or browser_state.get('page_discovery_error_code')
+                or ''
+            ).strip().upper()
+            auth_blocked=auth_error_code in auth_codes
+            facebook_session_ready=bool(
+                browser_state.get('session_ready')
+                and not auth_blocked
+            )
             browser_ui_ready=bool(
                 browser_state['ready']
                 and browser_state['create_surface_ready']
+                and facebook_session_ready
             )
 
     except HTTPException:
@@ -616,7 +733,7 @@ async def profile_preflight(profile_id: str):
             detail=f'PROFILE_PREFLIGHT_FAILED: {exc}',
         ) from exc
 
-    return {
+    result = {
         'ok':True,
         'profile_id':clean_profile,
         'profile_context':'ok',
@@ -624,6 +741,9 @@ async def profile_preflight(profile_id: str):
         'proxy_exit_ip':str(proxy_result.get('exit_ip') or ''),
         'proxy_latency_ms':int(proxy_result.get('latency_ms') or 0),
         'facebook_session':'browser',
+        'facebook_session_ready':facebook_session_ready,
+        'auth_blocked':auth_blocked,
+        'auth_error_code':auth_error_code,
         'browser_business':browser_state,
         'actor_present':False,
         'fb_dtsg_present':False,
@@ -668,6 +788,8 @@ async def profile_preflight(profile_id: str):
         },
         'bm_route_ready':browser_ui_ready,
     }
+    _remember_fp_auth_gate(clean_profile, result)
+    return result
 
 @app.get('/api/v1/facebook/docids',dependencies=[Depends(require_key)])
 async def facebook_docids(operation: str | None = None):
@@ -741,18 +863,464 @@ async def register_facebook_docid(
         'registry':registry_view(clean_operation),
     }
 
+@app.get('/api/v1/profiles/{profile_id}/live-inventory',dependencies=[Depends(require_key)])
+async def profile_live_inventory(profile_id: str, business_ids: str | None = None):
+    clean_profile=str(profile_id or '').strip()
+    if not clean_profile:
+        raise HTTPException(status_code=400,detail='profile_id is required')
+
+    started=time.monotonic()
+    stage='resolver'
+    try:
+        context=await pool.resolver.resolve(clean_profile)
+    except ProfileContextError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f'PROFILE_CONTEXT_ERROR: {exc}',
+        ) from exc
+
+    warnings: list[str] = []
+
+    # Prefer already-confirmed durable BM identities. For a profile that ReMask
+    # itself provisioned, forcing a fresh Business Suite HOME discovery first
+    # is both redundant and fragile: Meta HOME can take >18s to settle while
+    # the exact Business Settings route is directly addressable.
+    confirmed_bindings=await pool.provisioning_state.confirmed_ad_account_bindings_for_profile(
+        clean_profile
+    )
+    latest_entities=await pool.provisioning_state.latest_profile_entities(
+        clean_profile
+    )
+
+    binding_by_business={
+        str(row.get('business_id') or '').strip():row
+        for row in confirmed_bindings
+        if isinstance(row,dict)
+        and str(row.get('business_id') or '').strip().isdigit()
+    }
+    latest_business_id=str(
+        (latest_entities or {}).get('business_id') or ''
+    ).strip()
+    known_business_ids=set(binding_by_business)
+    if latest_business_id.isdigit():
+        known_business_ids.add(latest_business_id)
+
+    # REMASK_PRIVATE_SYNC_BUSINESS_HINTS_V1
+    # Workspace may already know BM IDs even when Business Suite HOME fails to
+    # render the portfolio selector. Treat them as navigation hints only; the
+    # browser still has to prove each BM/RK through the live settings surface.
+    for hinted_business_id in str(business_ids or '').split(','):
+        hinted_business_id=hinted_business_id.strip()
+        if hinted_business_id.isdigit():
+            known_business_ids.add(hinted_business_id)
+
+    try:
+        stage='profile_session'
+        async with ProfileSession(context) as profile_session:
+            stage='browser_open'
+            browser_open_started=time.monotonic()
+            try:
+                browser=await asyncio.wait_for(
+                    profile_session.facebook_business_browser(),
+                    timeout=24.0,
+                )
+            except asyncio.TimeoutError as exc:
+                log.warning(
+                    'live inventory profile=%s browser_open timeout ms=%d',
+                    clean_profile,
+                    int((time.monotonic()-browser_open_started)*1000),
+                )
+                raise HTTPException(
+                    status_code=504,
+                    detail='LIVE_INVENTORY_BROWSER_OPEN_TIMEOUT',
+                ) from exc
+            log.info(
+                'live inventory profile=%s browser_open ms=%d',
+                clean_profile,
+                int((time.monotonic()-browser_open_started)*1000),
+            )
+
+            business_map: dict[str,str] = {}
+            discovery_source=''
+
+            stage='business_discovery'
+            if known_business_ids:
+                business_map={
+                    business_id:business_id
+                    for business_id in sorted(known_business_ids)
+                }
+                discovery_source='worker_confirmed_business_ids'
+                log.info(
+                    'live inventory profile=%s using confirmed businesses=%s',
+                    clean_profile,
+                    ','.join(sorted(known_business_ids)),
+                )
+            else:
+                discovery_started=time.monotonic()
+                try:
+                    try:
+                        business_discovery_timeout=float(
+                            os.getenv(
+                                'REMASK_LIVE_INVENTORY_BUSINESS_DISCOVERY_TIMEOUT_SECONDS',
+                                '28',
+                            )
+                        )
+                    except (TypeError,ValueError):
+                        business_discovery_timeout=28.0
+                    business_discovery_timeout=max(
+                        20.0,
+                        min(business_discovery_timeout,40.0),
+                    )
+                    business_map=await asyncio.wait_for(
+                        browser.snapshot_businesses(),
+                        timeout=business_discovery_timeout,
+                    )
+                    business_diag=getattr(
+                        browser,
+                        '_last_business_inventory_diagnostic',
+                        {},
+                    )
+                    discovery_source=str(
+                        (business_diag or {}).get('source')
+                        or 'business_suite_private_inventory'
+                    )
+                    if not business_map:
+                        warnings.append(
+                            'Private Business Suite inventory returned no Business portfolios'
+                        )
+                        log.warning(
+                            'live inventory profile=%s business_discovery diagnostic=%s',
+                            clean_profile,
+                            json.dumps(
+                                business_diag,
+                                ensure_ascii=False,
+                                separators=(',', ':'),
+                            )[:6000],
+                        )
+                except asyncio.TimeoutError:
+                    warnings.append('Business discovery timed out')
+                    business_map={}
+                    discovery_source='business_suite_discovery_timeout'
+                    business_diag=getattr(
+                        browser,
+                        '_last_business_inventory_diagnostic',
+                        {},
+                    )
+                    log.warning(
+                        'live inventory profile=%s business_discovery timeout=%.1fs diagnostic=%s',
+                        clean_profile,
+                        business_discovery_timeout,
+                        json.dumps(
+                            business_diag,
+                            ensure_ascii=False,
+                            separators=(',', ':'),
+                        )[:6000],
+                    )
+                finally:
+                    log.info(
+                        'live inventory profile=%s business_discovery source=%s ms=%d count=%d',
+                        clean_profile,
+                        discovery_source,
+                        int((time.monotonic()-discovery_started)*1000),
+                        len(business_map),
+                    )
+
+            businesses=[]
+            live_business_ids:set[str]=set()
+
+            async def load_business_inventory(business_id: str):
+                nonlocal browser
+                last_error=None
+                for attempt in range(2):
+                    try:
+                        return await asyncio.wait_for(
+                            browser.snapshot_ad_accounts_for_business(
+                                business_id=str(business_id),
+                                timeout_seconds=12.0,
+                            ),
+                            timeout=18.0,
+                        )
+                    except BrowserBusinessError as exc:
+                        last_error=exc
+                        if (
+                            attempt == 0
+                            and exc.code in {
+                                'CHECKPOINT_REQUIRED',
+                                'SESSION_EXPIRED',
+                                'TWO_FACTOR_REQUIRED',
+                            }
+                        ):
+                            log.warning(
+                                'live inventory profile=%s business=%s auth redirect=%s; reopening profile browser once',
+                                clean_profile,
+                                business_id,
+                                exc.code,
+                            )
+                            try:
+                                await browser.close()
+                            except Exception:
+                                pass
+                            try:
+                                profile_session._business_browser=None
+                            except Exception:
+                                pass
+                            browser=await asyncio.wait_for(
+                                profile_session.facebook_business_browser(),
+                                timeout=24.0,
+                            )
+                            continue
+                        raise
+                if last_error is not None:
+                    raise last_error
+                raise RuntimeError('business inventory retry exhausted')
+
+            stage='rk_inventory'
+            for business_id,business_name in sorted(
+                business_map.items(),
+                key=lambda item: str(item[0]),
+            )[:25]:
+                row={
+                    'id':str(business_id or '').strip(),
+                    'name':str(business_name or business_id or '').strip(),
+                    'ad_accounts':[],
+                    'ad_accounts_count':0,
+                    'ad_accounts_ready':False,
+                }
+                inventory_started=time.monotonic()
+                try:
+                    inventory=await load_business_inventory(
+                        str(business_id)
+                    )
+                    row['ad_accounts']=[
+                        account
+                        for account in (inventory.get('accounts') or [])
+                        if isinstance(account,dict)
+                    ]
+                    row['ad_accounts_count']=len(row['ad_accounts'])
+                    row['ad_accounts_ready']=bool(inventory.get('ready'))
+                    row['ad_accounts_source']=str(
+                        inventory.get('source') or ''
+                    )
+                    row['attempts']=inventory.get('attempts') or []
+                    row['diagnostics']=inventory.get('diagnostics') or []
+                    if row['ad_accounts_ready']:
+                        live_business_ids.add(str(business_id))
+                    else:
+                        warnings.append(
+                            f'BM {business_id}: live RK inventory not confirmed'
+                        )
+                except asyncio.TimeoutError:
+                    row['ad_accounts_source']='business_settings_timeout'
+                    row['diagnostics']=[
+                        getattr(
+                            browser,
+                            '_last_ad_account_section_diagnostic',
+                            {},
+                        )
+                    ]
+                    warnings.append(
+                        f'BM {business_id}: live RK inventory timed out'
+                    )
+                    log.warning(
+                        'live inventory profile=%s business=%s rk timeout diagnostic=%s',
+                        clean_profile,
+                        business_id,
+                        json.dumps(
+                            getattr(
+                                browser,
+                                '_last_ad_account_section_diagnostic',
+                                {},
+                            ),
+                            ensure_ascii=False,
+                            separators=(',', ':'),
+                        )[:6000],
+                    )
+                except BrowserBusinessError as exc:
+                    row['ad_accounts_source']=(
+                        'business_auth_blocked'
+                        if exc.code in {
+                            'CHECKPOINT_REQUIRED',
+                            'SESSION_EXPIRED',
+                            'TWO_FACTOR_REQUIRED',
+                        }
+                        else 'browser_error'
+                    )
+                    row['browser_error_code']=exc.code
+                    row['browser_error']=str(exc)
+                    if isinstance(getattr(exc, 'diagnostic', None), dict):
+                        row['browser_error_diagnostic']=exc.diagnostic
+                    row['auth_blocked']=exc.code in {
+                        'CHECKPOINT_REQUIRED',
+                        'SESSION_EXPIRED',
+                        'TWO_FACTOR_REQUIRED',
+                    }
+                    warnings.append(
+                        f'BM {business_id}: {exc.code}'
+                    )
+                finally:
+                    log.info(
+                        'live inventory profile=%s business=%s rk_ms=%d ready=%s accounts=%d source=%s error=%s',
+                        clean_profile,
+                        business_id,
+                        int((time.monotonic()-inventory_started)*1000),
+                        bool(row.get('ad_accounts_ready')),
+                        len(row.get('ad_accounts') or []),
+                        str(row.get('ad_accounts_source') or ''),
+                        str(row.get('browser_error_code') or ''),
+                    )
+                businesses.append(row)
+
+            # Preserve only already-confirmed bindings as a fallback annotation;
+            # they never turn a Business into "live_ready".
+            seen_businesses={
+                str(row.get('id') or '').strip()
+                for row in businesses
+                if isinstance(row,dict)
+            }
+            for business_id,binding in binding_by_business.items():
+                if business_id not in seen_businesses:
+                    businesses.append({
+                        'id':business_id,
+                        'name':business_id,
+                        'ad_accounts':[],
+                        'ad_accounts_count':0,
+                        'ad_accounts_ready':False,
+                        'source':'worker_confirmed_fallback',
+                    })
+
+            by_business={
+                str(row.get('id') or '').strip():row
+                for row in businesses
+                if isinstance(row,dict)
+                and str(row.get('id') or '').strip()
+            }
+            for business_id,binding in binding_by_business.items():
+                ad_account_id=str(
+                    binding.get('ad_account_id') or ''
+                ).strip().removeprefix('act_')
+                if not ad_account_id.isdigit():
+                    continue
+                business_row=by_business.get(business_id)
+                if business_row is None:
+                    continue
+                existing={
+                    str(row.get('id') or row.get('account_id') or '').strip().removeprefix('act_')
+                    for row in (business_row.get('ad_accounts') or [])
+                    if isinstance(row,dict)
+                }
+                if ad_account_id not in existing:
+                    business_row.setdefault('ad_accounts',[]).append({
+                        'id':ad_account_id,
+                        'account_id':ad_account_id,
+                        'name':str(binding.get('account_name') or '').strip(),
+                        'business_id':business_id,
+                        '_source':'worker_confirmed_fallback',
+                    })
+                    business_row['ad_accounts_count']=len(
+                        business_row['ad_accounts']
+                    )
+
+            businesses.sort(
+                key=lambda row:(
+                    str(row.get('name') or '').casefold(),
+                    str(row.get('id') or ''),
+                )
+            )
+            live_ready=bool(live_business_ids)
+            result={
+                'ok':True,
+                'profile_id':clean_profile,
+                'live_ready':live_ready,
+                'businesses':businesses,
+                'businesses_count':len(businesses),
+                'live_businesses_count':len(live_business_ids),
+                'known_businesses_count':len(known_business_ids),
+                'auth_blocked_businesses':[
+                    str(row.get('id') or '')
+                    for row in businesses
+                    if isinstance(row,dict) and row.get('auth_blocked')
+                ],
+                'discovery_source':discovery_source,
+                'business_inventory_diagnostic':getattr(
+                    browser,
+                    '_last_business_inventory_diagnostic',
+                    {},
+                ),
+                'source':'business_suite_private_inventory',
+                'warnings':warnings,
+            }
+            log.info(
+                'live inventory profile=%s complete ms=%d live_ready=%s live_businesses=%d businesses=%d warnings=%d',
+                clean_profile,
+                int((time.monotonic()-started)*1000),
+                live_ready,
+                len(live_business_ids),
+                len(businesses),
+                len(warnings),
+            )
+            return result
+
+    except asyncio.TimeoutError as exc:
+        log.warning(
+            'live inventory profile=%s outer timeout stage=%s ms=%d',
+            clean_profile,
+            stage,
+            int((time.monotonic()-started)*1000),
+        )
+        raise HTTPException(
+            status_code=504,
+            detail=f'LIVE_INVENTORY_TIMEOUT:{stage}',
+        ) from exc
+    except BrowserBusinessError as exc:
+        log.warning(
+            'live inventory profile=%s browser error=%s message=%s',
+            clean_profile,
+            exc.code,
+            exc,
+        )
+        raise HTTPException(
+            status_code=409 if exc.code in {
+                'CHECKPOINT_REQUIRED',
+                'SESSION_EXPIRED',
+                'TWO_FACTOR_REQUIRED',
+            } else 502,
+            detail=f'{exc.code}: {exc}',
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.exception(
+            'live inventory failed profile=%s: %s',
+            clean_profile,
+            exc,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=f'LIVE_INVENTORY_FAILED: {exc}',
+        ) from exc
+
 @app.get('/api/v1/profiles/{profile_id}/provisioning-state',dependencies=[Depends(require_key)])
 async def profile_provisioning_state(profile_id: str):
     clean_profile=str(profile_id or '').strip()
     if not clean_profile:
         raise HTTPException(status_code=400,detail='profile_id is required')
+    entities=await pool.provisioning_state.latest_profile_entities(clean_profile)
+    ad_account_bindings=await pool.provisioning_state.confirmed_ad_account_bindings_for_profile(
+        clean_profile
+    )
+    fan_pages=await pool.provisioning_state.latest_profile_fan_pages(clean_profile)
     return {
         'ok':True,
-        **await pool.provisioning_state.latest_profile_entities(clean_profile),
+        **entities,
+        'ad_account_bindings':ad_account_bindings,
+        'fan_pages':fan_pages,
     }
 
 @app.post('/api/v1/jobs',response_model=JobAccepted,dependencies=[Depends(require_key)])
 async def create_job(request: CreateJobRequest) -> JobAccepted:
+    fp_profiles=_request_fan_page_profile_ids(request)
+    if fp_profiles:
+        await _require_fp_auth_ready(fp_profiles)
     job_id,created=await store.create_job(request)
     view=await store.job_view(job_id)
     if view and mirror.enabled:
@@ -788,8 +1356,12 @@ async def get_job(job_id: str):
 
 @app.post('/api/v1/jobs/{job_id}/retry-failed',response_model=RetryResponse,dependencies=[Depends(require_key)])
 async def retry_failed(job_id: str) -> RetryResponse:
-    if not await store.job_view(job_id):
+    current_view=await store.job_view(job_id)
+    if not current_view:
         raise HTTPException(status_code=404,detail='job not found')
+    fp_profiles=_view_fan_page_retry_profile_ids(current_view)
+    if fp_profiles:
+        await _require_fp_auth_ready(fp_profiles)
     count=await store.retry_failed(job_id)
     view=await store.job_view(job_id)
     if view and mirror.enabled:

@@ -12,14 +12,110 @@ from app.facebook_business_browser import (
     FacebookBusinessBrowser,
     _ad_account_required_attribution_post_data,
     _extract_created_ad_account_id,
+    _extract_business_inventory_rows,
     _extract_inventory_ad_account_ids,
     _extract_named_ad_account_ids,
     _has_ad_account_inventory_container,
+    _extract_inventory_ad_account_rows,
 )
 from app.provisioning.business_handler import business_handler
 from app.provisioning.models import ProvisioningError, ProvisioningStep
 from app.provisioning.state import ProvisioningStateStore
 from app.provisioning.service import ProvisioningService
+
+
+
+class AdAccountEndToEndLocaleSystemRegressionTests(unittest.TestCase):
+    def test_hindi_account_variant_reaches_all_critical_rk_stages(self) -> None:
+        critical = (
+            FacebookBusinessBrowser._activate_ad_account_settings_section,
+            FacebookBusinessBrowser._capture_ad_account_wizard_rect,
+            FacebookBusinessBrowser._click_ad_account_final_interactive,
+            FacebookBusinessBrowser._click_ad_account_form_action_by_visible_text,
+            FacebookBusinessBrowser._ad_account_ui_state,
+            FacebookBusinessBrowser._ad_account_action_candidates,
+            FacebookBusinessBrowser._open_ad_account_create_form,
+            FacebookBusinessBrowser.create_ad_account,
+        )
+        for fn in critical:
+            source = inspect.getsource(fn)
+            self.assertIn(
+                "विज्ञापन अकाउंट",
+                source,
+                msg=f"Hindi account transliteration missing in {fn.__name__}",
+            )
+
+    def test_bulk_profile_locales_cover_fields_and_actions(self) -> None:
+        source = inspect.getsource(FacebookBusinessBrowser)
+        required = (
+            "বিজ্ঞাপন অ্যাকাউন্ট",
+            "বিজ্ঞাপন অ্যাকাউন্টের নাম",
+            "মুদ্রা",
+            "সময় অঞ্চল",
+            "Tài khoản quảng cáo",
+            "Tên tài khoản quảng cáo",
+            "Tiền tệ",
+            "Múi giờ",
+            "विज्ञापन अकाउंट",
+            "विज्ञापन अकाउंट नाम",
+            "करेंसी",
+            "टाइम ज़ोन",
+            "मेरा बिज़नेस",
+        )
+        for token in required:
+            self.assertIn(token, source)
+
+    def test_currency_timezone_structural_fallback_is_wizard_bounded(self) -> None:
+        source = inspect.getsource(
+            FacebookBusinessBrowser._ad_account_structural_form_field_control
+        )
+        self.assertIn("exactly two", source)
+        self.assertIn("data-remask-rk-structural-field", source)
+        select_source = inspect.getsource(
+            FacebookBusinessBrowser._select_ad_account_form_field
+        )
+        self.assertIn(
+            "_ad_account_structural_form_field_control",
+            select_source,
+        )
+
+    def test_wizard_anchor_is_captured_before_immutable_field_selection(self) -> None:
+        source = inspect.getsource(FacebookBusinessBrowser.create_ad_account)
+        first_capture = source.index("_capture_ad_account_wizard_rect()")
+        first_fields = source.index("_prepare_ad_account_form_fields(")
+        self.assertLess(first_capture, first_fields)
+
+
+class HindiAdAccountNameFieldRegressionTests(unittest.TestCase):
+    def test_hindi_meta_account_name_labels_are_fillable(self) -> None:
+        source = inspect.getsource(
+            FacebookBusinessBrowser._open_ad_account_create_form
+        )
+        self.assertIn("विज्ञापन अकाउंट का नाम", source)
+        self.assertIn("विज्ञापन अकाउंट नाम", source)
+        self.assertIn("strong_name_candidates", source)
+        self.assertIn("name_meta_markers", source)
+
+class HindiAdAccountLocaleRegressionTests(unittest.TestCase):
+    def test_hindi_meta_account_transliteration_is_supported(self) -> None:
+        source = inspect.getsource(FacebookBusinessBrowser)
+        for text in (
+            "विज्ञापन अकाउंट",
+            "विज्ञापन अकाउंट्स",
+            "नया विज्ञापन अकाउंट बनाएँ",
+            "विज्ञापन अकाउंट बनाएँ",
+        ):
+            self.assertIn(text, source)
+
+    def test_hindi_create_scanners_include_transliterated_account_word(self) -> None:
+        source = inspect.getsource(
+            FacebookBusinessBrowser._ad_account_visible_create_candidates
+        )
+        self.assertIn("विज्ञापन अकाउंट", source)
+        source = inspect.getsource(
+            FacebookBusinessBrowser._click_ad_account_create_entry_by_visible_text
+        )
+        self.assertIn("विज्ञापन अकाउंट", source)
 
 
 class _FakeRequest:
@@ -915,7 +1011,7 @@ class BrowserAdAccountGraphqlInventoryTests(unittest.IsolatedAsyncioTestCase):
         )
 
 
-    async def test_inventory_lookup_accepts_one_unique_rk_for_exact_business(self):
+    async def test_inventory_lookup_rejects_one_unnamed_unique_rk(self):
         class _Response:
             url = "https://business.facebook.com/api/graphql/"
 
@@ -967,14 +1063,14 @@ class BrowserAdAccountGraphqlInventoryTests(unittest.IsolatedAsyncioTestCase):
             timeout_seconds=2.0,
         )
 
-        self.assertTrue(result["confirmed"])
-        self.assertEqual(
-            result["ad_account_id"],
-            "act_123456789012345",
-        )
-        self.assertEqual(
-            result["source"],
-            "business_settings_graphql_inventory_unique",
+        self.assertFalse(result["confirmed"])
+        self.assertFalse(result["confirmed_empty"])
+        self.assertNotIn("ad_account_id", result)
+        self.assertTrue(
+            any(
+                "act_123456789012345" in row.get("inventory_ids", [])
+                for row in result.get("diagnostics", [])
+            )
         )
 
 
@@ -1097,6 +1193,37 @@ class BrowserAdAccountConfirmTermsRegressionTests(unittest.TestCase):
         terms_pos = source.index("_accept_ad_account_terms_if_present")
         final_pos = source.index("_click_ad_account_final_interactive", terms_pos)
         self.assertLess(terms_pos, final_pos)
+
+
+class BrowserAdAccountHindiFinalConfirmationRegressionTests(unittest.TestCase):
+    def test_final_interactive_accepts_hindi_account_confirmation_cta(self) -> None:
+        source = inspect.getsource(
+            FacebookBusinessBrowser._click_ad_account_final_interactive
+        )
+        self.assertIn("विज्ञापन अकाउंट", source)
+        self.assertIn("finalCreateAction", source)
+        self.assertIn("create.some", source)
+        self.assertIn("account.some", source)
+
+    def test_anchor_fallback_includes_hindi_account_transliteration(self) -> None:
+        source = inspect.getsource(
+            FacebookBusinessBrowser._click_ad_account_final_interactive
+        )
+        anchor_pos = source.index(
+            "if not candidates and self._ad_account_wizard_rect"
+        )
+        anchor_source = source[anchor_pos:]
+        self.assertIn("विज्ञापन अकाउंट", anchor_source)
+
+
+    def test_dialog_scoped_fallback_does_not_depend_on_global_dom_index(self) -> None:
+        source = inspect.getsource(
+            FacebookBusinessBrowser._click_ad_account_final_interactive
+        )
+        self.assertIn("data-remask-rk-final-dialog", source)
+        self.assertIn("dialog_scoped_recovered", source)
+        self.assertIn("'[role=\"dialog\"],[aria-modal=\"true\"]'", source)
+        self.assertIn("विज्ञापन अकाउंट बनाएँ", source)
 
 
 class BrowserAdAccountAnchoredFinalCreateRegressionTests(unittest.TestCase):
@@ -2566,6 +2693,123 @@ class BrowserAdAccountStateMachineTests(unittest.IsolatedAsyncioTestCase):
             "aucun compte publicitaire ajouté",
         )
 
+    async def test_verify_ad_account_inventory_confirms_stable_structural_empty(self):
+        class _Page:
+            url = (
+                "https://business.facebook.com/latest/settings/"
+                "ad_accounts?business_id=1056638030476027"
+            )
+
+            def __init__(self):
+                self.evaluate_calls = 0
+
+            async def wait_for_timeout(self, ms):
+                return None
+
+            async def evaluate(self, script, business):
+                self.evaluate_calls += 1
+                return {
+                    "exact_business": True,
+                    "ad_route": True,
+                    "add_surface": True,
+                    "filter_surface": True,
+                    "search_surface": True,
+                    "loading": False,
+                    "global_loading": True,
+                    "inventory_loading": False,
+                    "dialog_open": False,
+                    "candidate_rows": [],
+                    "row_ids": [],
+                }
+
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-structural-empty-rk")
+        )
+        browser.page = _Page()
+        browser._goto = AsyncMock(return_value=None)
+        browser._body_text = AsyncMock(return_value="No localized empty phrase")
+        browser._ad_account_ui_state = AsyncMock(
+            return_value={
+                "state": "ADD_SURFACE",
+                "url": _Page.url,
+                "signature": "ADD_SURFACE",
+                "controls": ["Search", "Filters", "Add"],
+                "dialogs": [],
+            }
+        )
+
+        result = await browser.verify_ad_account_inventory_empty(
+            business_id="1056638030476027"
+        )
+
+        self.assertTrue(result["confirmed_empty"])
+        self.assertTrue(result["structural_empty"])
+        self.assertEqual(
+            result["source"],
+            "business_settings_ui_structural_consensus",
+        )
+        self.assertEqual(browser.page.evaluate_calls, 3)
+        self.assertEqual(len(result["attempts"]), 1)
+        self.assertTrue(
+            result["attempts"][0]["structural_first"]["global_loading"]
+        )
+        self.assertFalse(
+            result["attempts"][0]["structural_first"]["inventory_loading"]
+        )
+        self.assertTrue(
+            result["attempts"][0]["structural_third"]["filter_surface"]
+        )
+
+    async def test_verify_ad_account_inventory_rejects_structural_row_candidate(self):
+        class _Page:
+            url = (
+                "https://business.facebook.com/latest/settings/"
+                "ad_accounts?business_id=1056638030476027"
+            )
+
+            async def wait_for_timeout(self, ms):
+                return None
+
+            async def evaluate(self, script, business):
+                return {
+                    "exact_business": True,
+                    "ad_route": True,
+                    "add_surface": True,
+                    "filter_surface": True,
+                    "search_surface": True,
+                    "loading": False,
+                    "global_loading": False,
+                    "inventory_loading": False,
+                    "dialog_open": False,
+                    "candidate_rows": [
+                        {"role": "listitem", "text": "Existing RK"}
+                    ],
+                    "row_ids": [],
+                }
+
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-structural-nonempty-rk")
+        )
+        browser.page = _Page()
+        browser._goto = AsyncMock(return_value=None)
+        browser._body_text = AsyncMock(return_value="No localized empty phrase")
+        browser._ad_account_ui_state = AsyncMock(
+            return_value={
+                "state": "ADD_SURFACE",
+                "url": _Page.url,
+                "signature": "ADD_SURFACE",
+                "controls": ["Search", "Filters", "Add"],
+                "dialogs": [],
+            }
+        )
+
+        result = await browser.verify_ad_account_inventory_empty(
+            business_id="1056638030476027"
+        )
+
+        self.assertFalse(result["confirmed_empty"])
+        self.assertFalse(result.get("structural_empty", False))
+
 
     async def test_final_create_does_not_accept_plain_div(self):
         class _Page:
@@ -2963,7 +3207,128 @@ class BrowserCreateFormIdentityTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Continuer", FacebookBusinessBrowser.SUBMIT_NAMES)
 
 
+class LiveInventoryBusinessDiscoveryBudgetRegressionTests(unittest.TestCase):
+    def test_live_inventory_uses_dedicated_business_discovery_budget(self):
+        main_path = Path(__file__).resolve().parents[1] / "main.py"
+        source = main_path.read_text(encoding="utf-8")
+        self.assertIn(
+            "REMASK_LIVE_INVENTORY_BUSINESS_DISCOVERY_TIMEOUT_SECONDS",
+            source,
+        )
+        call_pos = source.index("browser.snapshot_businesses()")
+        window = source[max(0, call_pos - 700): call_pos + 700]
+        self.assertNotIn("timeout=18.0", window)
+
+
+class BrowserBusinessInventoryExtractionTests(unittest.TestCase):
+    def test_business_inventory_accepts_explicit_business_id_in_generic_viewer(self):
+        payload = {
+            "data": {
+                "viewer": {
+                    "portfolio_edge": {
+                        "node": {
+                            "business_id": "1619103589770310",
+                            "name": "My Business",
+                        }
+                    }
+                }
+            }
+        }
+        self.assertEqual(
+            _extract_business_inventory_rows(payload),
+            [{"id": "1619103589770310", "name": "My Business"}],
+        )
+
+    def test_business_inventory_still_ignores_generic_numeric_ids(self):
+        payload = {
+            "data": {
+                "viewer": {"id": "123456789012345", "name": "Profile"},
+                "page": {"id": "987654321098765", "name": "Fan Page"},
+            }
+        }
+        self.assertEqual(_extract_business_inventory_rows(payload), [])
+
+
+class BrowserInventoryExtractionTests(unittest.TestCase):
+    def test_extracts_rows_only_from_ad_account_context(self):
+        payload = {
+            "data":{
+                "business":{
+                    "id":"1619103589770310",
+                    "owned_ad_accounts":{
+                        "nodes":[
+                            {
+                                "__typename":"AdAccount",
+                                "id":"act_29459808963612032",
+                                "account_id":"29459808963612032",
+                                "name":"ReMask RK",
+                                "account_status":1,
+                                "currency":"USD",
+                            }
+                        ]
+                    },
+                    "unrelated":{"id":"999999999999999"},
+                }
+            }
+        }
+        rows=_extract_inventory_ad_account_rows(payload)
+        self.assertEqual(len(rows),1)
+        self.assertEqual(rows[0]["id"],"act_29459808963612032")
+        self.assertEqual(rows[0]["name"],"ReMask RK")
+
+    def test_ignores_unrelated_numeric_ids(self):
+        payload={
+            "data":{
+                "viewer":{"id":"123456789012345","name":"Profile"},
+                "page":{"id":"987654321098765","name":"Fan Page"},
+            }
+        }
+        self.assertEqual(_extract_inventory_ad_account_rows(payload),[])
+
+
 class BrowserAuthenticationStateTests(unittest.IsolatedAsyncioTestCase):
+    async def test_business_suite_body_word_checkpoint_is_not_auth_checkpoint(self):
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-checkpoint-word")
+        )
+        browser.page = SimpleNamespace(
+            url="https://business.facebook.com/latest/home"
+        )
+        browser._body_text = AsyncMock(
+            return_value=(
+                "Meta Business Suite checkpoint status internal label "
+                "Create a post Advertising settings"
+            )
+        )
+        browser._diagnostic = AsyncMock(return_value={})
+
+        await browser._assert_authenticated()
+
+        browser._diagnostic.assert_not_awaited()
+
+    async def test_real_checkpoint_url_is_auth_checkpoint(self):
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-real-checkpoint")
+        )
+        browser.page = SimpleNamespace(
+            url="https://www.facebook.com/checkpoint/828281030927956/"
+        )
+        browser._body_text = AsyncMock(return_value="Continue")
+        browser._diagnostic = AsyncMock(
+            return_value={
+                "url":"https://www.facebook.com/checkpoint/828281030927956/"
+            }
+        )
+
+        with self.assertRaises(BrowserBusinessError) as caught:
+            await browser._assert_authenticated()
+
+        self.assertEqual(caught.exception.code, "CHECKPOINT_REQUIRED")
+        self.assertEqual(
+            caught.exception.diagnostic.get("auth_evidence"),
+            "checkpoint_url",
+        )
+
     async def test_temporary_feature_block_is_not_retryable(self):
         browser = FacebookBusinessBrowser(
             SimpleNamespace(profile_id="profile-temp-block")
@@ -4379,6 +4744,17 @@ class BrowserAdAccountFullFlowHardeningTests(unittest.TestCase):
             self.assertIn(marker, source)
 
 
+class BrowserAdAccountFinalDialogAnchorRegressionTests(unittest.TestCase):
+    def test_final_dialog_can_anchor_on_localized_interactive_create_cta(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser._click_ad_account_form_action_by_visible_text
+        )
+        self.assertIn("dialogAccountWords", source)
+        self.assertIn("root.querySelectorAll", source)
+        self.assertIn("createWords.some", source)
+        self.assertIn("dialogAccountWords.some", source)
+
+
 class BrowserAdAccountLocalizedInventoryProofTests(unittest.TestCase):
     def test_empty_inventory_markers_cover_target_locales(self):
         source = inspect.getsource(
@@ -4407,6 +4783,40 @@ class BrowserAdAccountLocalizedInventoryProofTests(unittest.TestCase):
             "अनुमति नहीं",
         ):
             self.assertIn(marker, source)
+
+    def test_generic_portfolio_advertising_banner_is_not_terminal_by_itself(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser._ad_account_ui_state
+        )
+        self.assertNotIn(
+            "you can't use this business portfolio to advertise",
+            source,
+        )
+        form_pos = source.index(
+            "if (nameInput || formEvidence) state = 'FORM';"
+        )
+        add_pos = source.index(
+            "else if (addSurface) state = 'ADD_SURFACE';"
+        )
+        blocked_pos = source.index(
+            "else if (errors.length) state = 'BLOCKED';"
+        )
+        self.assertLess(form_pos, blocked_pos)
+        self.assertLess(add_pos, blocked_pos)
+
+    def test_capture_reconciles_same_session_success_before_retry(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser.capture_ad_account_create_request
+        )
+        self.assertIn(
+            "_reconcile_created_ad_account_from_ui",
+            source,
+        )
+        self.assertIn("created_during_capture", source)
+        self.assertIn(
+            "business_settings_ui_capture_reconciliation",
+            source,
+        )
 
 
 class BrowserAdAccountIntroDialogRegressionTests(unittest.TestCase):

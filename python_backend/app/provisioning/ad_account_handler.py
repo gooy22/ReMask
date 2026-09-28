@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import logging
 import time
 from typing import Any
@@ -63,6 +64,87 @@ def _compact_browser_diagnostic(value: Any) -> dict[str, Any]:
 
 def _clean(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _capture_success_id_from_checkpoint(
+    result: Any,
+    *,
+    business_id: str,
+    account_name: str,
+) -> str:
+    """Recover a CREATE that Meta already confirmed in the captured UI.
+
+    Some Meta variants submit Add-RK through a transport shape that the private
+    GraphQL capture matcher does not recognize. The saved capture diagnostic can
+    still contain Meta's explicit success dialog plus the newly displayed
+    account ID. That is strong same-session proof and must suppress any retry.
+    """
+    if not isinstance(result, dict):
+        return ""
+
+    diagnostics: list[dict[str, Any]] = []
+    direct = result.get("browser_diagnostic")
+    if isinstance(direct, dict):
+        diagnostics.append(direct)
+
+    for failure in result.get("capture_failures") or []:
+        if not isinstance(failure, dict):
+            continue
+        diagnostic = failure.get("diagnostic")
+        if isinstance(diagnostic, dict):
+            diagnostics.append(diagnostic)
+
+    expected = _clean(account_name).casefold()
+    business = _normalize_ad_account_id(business_id)
+    for diagnostic in diagnostics:
+        ui_state = (
+            diagnostic.get("ui_state")
+            if isinstance(diagnostic.get("ui_state"), dict)
+            else {}
+        )
+        dialogs = [
+            _clean(value)
+            for value in (ui_state.get("dialogs") or [])
+            if _clean(value)
+        ]
+        dialog_text = " ".join(dialogs)
+        folded = dialog_text.casefold()
+        success = any(
+            marker in folded
+            for marker in (
+                "ad account created successfully",
+                "advertising account created successfully",
+                "has been created and added to the",
+                "compte publicitaire a été créé",
+                "рекламный аккаунт создан",
+                "рекламний акаунт створено",
+                "विज्ञापन अकाउंट बनाया गया",
+                "विज्ञापन खाता बनाया गया",
+                "tài khoản quảng cáo đã được tạo",
+                "বিজ্ঞাপন অ্যাকাউন্ট তৈরি করা হয়েছে",
+            )
+        )
+        if not success or (expected and expected not in folded):
+            continue
+
+        controls = " ".join(
+            _clean(value)
+            for value in (ui_state.get("controls") or [])
+            if _clean(value)
+        )
+        ids = []
+        for raw in re.findall(r"(?<!\d)(\d{8,30})(?!\d)", controls):
+            normalized = _normalize_ad_account_id(raw)
+            if (
+                normalized
+                and normalized != business
+                and normalized not in ids
+            ):
+                ids.append(normalized)
+        if len(ids) == 1:
+            return ids[0]
+
+    return ""
 
 
 def _checkpoint_result(step_state: Any) -> dict[str, Any]:
@@ -168,6 +250,49 @@ def _known_pre_submit_capture_crash(result: Any) -> bool:
             "CREATE_SUBMITTED",
         }
     )
+
+
+def _known_pre_submit_no_final_click(result: Any) -> bool:
+    """Recognize saved capture telemetry proving the final CTA was never clicked."""
+    if not isinstance(result, dict):
+        return False
+
+    diagnostic = result.get("browser_diagnostic")
+    if not isinstance(diagnostic, dict):
+        return False
+
+    if bool(diagnostic.get("blocked_unclassified_create")):
+        return False
+    if diagnostic.get("graphql_candidates"):
+        return False
+
+    attempts = diagnostic.get("submit_attempts")
+    if not isinstance(attempts, list) or not attempts:
+        return False
+
+    saw_final_stage = False
+    for row in attempts:
+        if not isinstance(row, dict):
+            continue
+        action = _clean(row.get("action")).lower()
+        if action not in {"final", "none"}:
+            continue
+        saw_final_stage = True
+        meta = row.get("meta") if isinstance(row.get("meta"), dict) else {}
+        fallback = (
+            meta.get("fallback")
+            if isinstance(meta.get("fallback"), dict)
+            else {}
+        )
+        if bool(
+            meta.get("attempted")
+            or meta.get("clicked")
+            or fallback.get("attempted")
+            or fallback.get("clicked")
+        ):
+            return False
+
+    return saw_final_stage
 
 
 
@@ -310,11 +435,10 @@ async def _reconcile_existing(
     if not normalized:
         return "", diagnostics
 
-    # User's invariant: one BM must have only one RK. If there is exactly one,
-    # reuse it regardless of name. A unique exact-name match is also safe.
-    if len(normalized) == 1:
-        return str(normalized[0]["id"]), diagnostics
-
+    # Graph inventory is advisory only. Never turn a lone numeric ID into an
+    # existing RK just because it is the only row returned by the token.
+    # At most expose an exact-name candidate; the caller must still verify that
+    # same ID through live Business Settings before it can suppress CREATE.
     name_matches = [
         row
         for row in normalized
@@ -323,15 +447,11 @@ async def _reconcile_existing(
     if len(name_matches) == 1:
         return str(name_matches[0]["id"]), diagnostics
 
-    raise ProvisioningError(
-        "AD_ACCOUNT_INVENTORY_AMBIGUOUS",
-        (
-            f"Business {business_id} already exposes {len(normalized)} ad "
-            "accounts. ReMask will not create another RK because the configured "
-            "model is 1 BM = 1 RK."
-        ),
-        retryable=False,
-    )
+    diagnostics[-1]["graph_candidates_untrusted"] = [
+        row["id"] for row in normalized[:20]
+    ]
+    diagnostics[-1]["reason"] = "no_exact_name_match"
+    return "", diagnostics
 
 
 async def _reconcile_existing_browser_inventory(
@@ -339,6 +459,7 @@ async def _reconcile_existing_browser_inventory(
     *,
     business_id: str,
     account_name: str,
+    expected_ad_account_id: str = "",
 ) -> tuple[str, dict[str, Any]]:
     """Read-only fallback using Meta Business Settings inventory surfaces.
 
@@ -357,6 +478,7 @@ async def _reconcile_existing_browser_inventory(
             raw_result = await browser.find_ad_account_in_inventory(
                 business_id=business_id,
                 account_name=account_name,
+                expected_ad_account_id=expected_ad_account_id,
                 timeout_seconds=10.0,
             )
             result = (
@@ -426,6 +548,109 @@ async def _reconcile_existing_browser_inventory(
         }
 
 
+def _browser_inventory_confirms_nonempty(value: Any) -> bool:
+    """Return True when exact Business Settings inventory structurally has RK.
+
+    This deliberately does not choose or trust any ad-account ID. It only
+    answers the question needed by Add RK: is the selected Business already
+    non-empty?
+    """
+    if not isinstance(value, dict):
+        return False
+
+    candidates: list[dict[str, Any]] = []
+    evidence = value.get("evidence")
+    if isinstance(evidence, dict):
+        candidates.append(evidence)
+    diagnostics = value.get("diagnostics")
+    if isinstance(diagnostics, list):
+        candidates.extend(
+            row for row in diagnostics if isinstance(row, dict)
+        )
+
+    for row in candidates:
+        if not bool(row.get("exact_business_context")):
+            continue
+        inventory_ids = row.get("inventory_ids")
+        if isinstance(inventory_ids, list) and any(
+            _normalize_ad_account_id(item) for item in inventory_ids
+        ):
+            return True
+        exact_name_ids = row.get("exact_name_ids")
+        if isinstance(exact_name_ids, list) and any(
+            _normalize_ad_account_id(item) for item in exact_name_ids
+        ):
+            return True
+    return False
+
+
+def _raise_rk_already_exists(
+    *,
+    business_id: str,
+    ad_account_id: str = "",
+) -> None:
+    rk = _normalize_ad_account_id(ad_account_id)
+    suffix = f" ({rk})" if rk else ""
+    raise ProvisioningError(
+        "AD_ACCOUNT_ALREADY_EXISTS",
+        (
+            f"Business {business_id} already has an RK{suffix}. "
+            "Add RK only creates a new advertising account and never reuses "
+            "an existing one."
+        ),
+        retryable=False,
+    )
+
+
+async def _verify_expected_ad_account_in_business(
+    session: Any,
+    *,
+    business_id: str,
+    account_name: str,
+    expected_ad_account_id: str,
+    checks: int = 3,
+    delay_seconds: float = 1.5,
+) -> tuple[bool, list[dict[str, Any]]]:
+    """Confirm one exact CREATE response ID in the requested Business.
+
+    A private GraphQL response is only a candidate until the independent
+    Business Settings inventory for the exact Business exposes the same RK ID.
+    This prevents unrelated account_id fields or stale cache values from being
+    promoted to SUCCESS.
+    """
+    expected = _normalize_ad_account_id(expected_ad_account_id)
+    if not expected:
+        return False, []
+
+    observations: list[dict[str, Any]] = []
+    attempts = max(1, int(checks))
+
+    for attempt in range(attempts):
+        found_id, evidence = await _reconcile_existing_browser_inventory(
+            session,
+            business_id=business_id,
+            account_name=account_name,
+            expected_ad_account_id=expected,
+        )
+        row = (
+            dict(evidence)
+            if isinstance(evidence, dict)
+            else {"source": "business_settings_inventory", "reason": "invalid_result"}
+        )
+        row["attempt"] = attempt + 1
+        row["expected_ad_account_id"] = expected
+        row["found_ad_account_id"] = _normalize_ad_account_id(found_id)
+        observations.append(row)
+
+        if _normalize_ad_account_id(found_id) == expected:
+            return True, observations
+
+        if attempt < attempts - 1:
+            await asyncio.sleep(max(0.25, float(delay_seconds)))
+
+    return False, observations
+
+
 async def _prove_empty_after_uncertainty(
     session: Any,
     *,
@@ -478,11 +703,32 @@ async def _prove_empty_after_uncertainty(
         )
         graph_evidence.extend(diagnostics)
         if found_id:
-            return found_id, False, {
-                "strategy": "uncertain_inventory_v2",
-                "found_via": "graph_inventory",
-                "graph": graph_evidence[-16:],
-            }
+            graph_verified, graph_verify_evidence = (
+                await _verify_expected_ad_account_in_business(
+                    session,
+                    business_id=business_id,
+                    account_name=account_name,
+                    expected_ad_account_id=found_id,
+                    checks=2,
+                    delay_seconds=delay_seconds,
+                )
+            )
+            if graph_verified:
+                return found_id, False, {
+                    "strategy": "uncertain_inventory_v2",
+                    "found_via": "graph_then_business_settings_verified",
+                    "graph": graph_evidence[-16:],
+                    "graph_candidate_verification": graph_verify_evidence,
+                }
+            graph_evidence.append(
+                {
+                    "stage": "inventory",
+                    "result": "candidate_rejected",
+                    "candidate_ad_account_id": found_id,
+                    "reason": "not_confirmed_in_business_settings",
+                    "browser_verification": graph_verify_evidence,
+                }
+            )
         if attempt < graph_attempts_needed - 1:
             await asyncio.sleep(max(0.25, float(delay_seconds)))
 
@@ -705,15 +951,42 @@ async def ad_account_handler(
 
     existing_state_id = _normalize_ad_account_id(state.get("ad_account_id"))
     if existing_state_id:
-        return {
-            "ad_account_id": existing_state_id,
-            "business_id": business_id,
-            "name": rk_name,
-            "currency": currency,
-            "timezone_id": timezone_id,
-            "reused": True,
-            "transport": "provisioning_state",
-        }
+        state_verified, state_evidence = (
+            await _verify_expected_ad_account_in_business(
+                session,
+                business_id=business_id,
+                account_name=rk_name,
+                expected_ad_account_id=existing_state_id,
+            )
+        )
+        if state_verified:
+            _raise_rk_already_exists(
+                business_id=business_id,
+                ad_account_id=existing_state_id,
+            )
+
+        await provisioning_state.forget_entity(
+            profile_id,
+            scope_key,
+            ProvisioningStep.AD_ACCOUNT,
+            expected_value=existing_state_id,
+        )
+        await provisioning_state.checkpoint(
+            item_id,
+            profile_id,
+            scope_key,
+            ProvisioningStep.AD_ACCOUNT,
+            {
+                "phase": "CREATE_RESULT_UNVERIFIED",
+                "resume_from": "RECONCILE_CREATE",
+                "business_id": business_id,
+                "account_name": rk_name,
+                "candidate_ad_account_id": existing_state_id,
+                "post_create_verification": state_evidence,
+                "activity": "AD_ACCOUNT_STALE_STATE_ID_REJECTED",
+                "activity_at": int(time.time()),
+            },
+        )
 
     step_state = kwargs.get("step_state")
     if not isinstance(step_state, dict):
@@ -735,26 +1008,105 @@ async def ad_account_handler(
             retryable=False,
         )
 
+    capture_ui_success_id = _capture_success_id_from_checkpoint(
+        checkpoint,
+        business_id=business_id,
+        account_name=rk_name,
+    )
+    if capture_ui_success_id:
+        checkpoint = await provisioning_state.checkpoint(
+            item_id,
+            profile_id,
+            scope_key,
+            ProvisioningStep.AD_ACCOUNT,
+            {
+                "phase": "CREATE_CONFIRMED",
+                "resume_from": "DONE",
+                "business_id": business_id,
+                "account_name": rk_name,
+                "currency": currency,
+                "timezone_id": timezone_id,
+                "ad_account_id": capture_ui_success_id,
+                "create_response_ad_account_id": capture_ui_success_id,
+                "activity": "AD_ACCOUNT_CREATE_CONFIRMED_CAPTURE_UI",
+                "activity_at": int(time.time()),
+                "transport": "business_settings_ui_capture_reconciliation",
+            },
+        )
+        await provisioning_state.remember_entity(
+            profile_id,
+            scope_key,
+            ProvisioningStep.AD_ACCOUNT,
+            {"ad_account_id": capture_ui_success_id},
+        )
+        return {
+            "ad_account_id": capture_ui_success_id,
+            "business_id": business_id,
+            "name": rk_name,
+            "currency": currency,
+            "timezone_id": timezone_id,
+            "recovered_after_capture_ui_success": True,
+            "transport": "business_settings_ui_capture_reconciliation",
+        }
+
     checkpoint_id = _normalize_ad_account_id(
         checkpoint.get("ad_account_id")
         or checkpoint.get("create_response_ad_account_id")
     )
     if checkpoint_id:
-        await provisioning_state.remember_entity(
+        checkpoint_verified, checkpoint_evidence = (
+            await _verify_expected_ad_account_in_business(
+                session,
+                business_id=business_id,
+                account_name=rk_name,
+                expected_ad_account_id=checkpoint_id,
+            )
+        )
+        if checkpoint_verified:
+            await provisioning_state.remember_entity(
+                profile_id,
+                scope_key,
+                ProvisioningStep.AD_ACCOUNT,
+                {"ad_account_id": checkpoint_id},
+            )
+            return {
+                "ad_account_id": checkpoint_id,
+                "business_id": business_id,
+                "name": rk_name,
+                "currency": currency,
+                "timezone_id": timezone_id,
+                "reused": True,
+                "transport": (
+                    _clean(checkpoint.get("transport"))
+                    or "checkpoint_verified"
+                ),
+                "post_create_verification": checkpoint_evidence,
+            }
+
+        await provisioning_state.forget_entity(
             profile_id,
             scope_key,
             ProvisioningStep.AD_ACCOUNT,
-            {"ad_account_id": checkpoint_id},
+            expected_value=checkpoint_id,
         )
-        return {
-            "ad_account_id": checkpoint_id,
-            "business_id": business_id,
-            "name": rk_name,
-            "currency": currency,
-            "timezone_id": timezone_id,
-            "reused": True,
-            "transport": _clean(checkpoint.get("transport")) or "checkpoint",
-        }
+        checkpoint = await provisioning_state.checkpoint(
+            item_id,
+            profile_id,
+            scope_key,
+            ProvisioningStep.AD_ACCOUNT,
+            {
+                "phase": "CREATE_RESULT_UNVERIFIED",
+                "resume_from": "RECONCILE_CREATE",
+                "business_id": business_id,
+                "account_name": rk_name,
+                "candidate_ad_account_id": checkpoint_id,
+                "ad_account_id": "",
+                "create_response_ad_account_id": "",
+                "post_create_verification": checkpoint_evidence,
+                "activity": "AD_ACCOUNT_CHECKPOINT_ID_REJECTED",
+                "activity_at": int(time.time()),
+            },
+        )
 
     # Protect against a new Job being launched after an ambiguous previous
     # CREATE. Cross-job state is keyed by profile + Business ID.
@@ -774,22 +1126,34 @@ async def ad_account_handler(
             or prior.get("create_response_ad_account_id")
         )
         if prior_id:
-            await provisioning_state.remember_entity(
-                profile_id,
-                scope_key,
-                ProvisioningStep.AD_ACCOUNT,
-                {"ad_account_id": prior_id},
+            prior_verified, prior_evidence = (
+                await _verify_expected_ad_account_in_business(
+                    session,
+                    business_id=business_id,
+                    account_name=rk_name,
+                    expected_ad_account_id=prior_id,
+                )
             )
-            return {
-                "ad_account_id": prior_id,
-                "business_id": business_id,
-                "name": rk_name,
-                "currency": currency,
-                "timezone_id": timezone_id,
-                "reused": True,
-                "cross_job_resume": True,
-                "transport": _clean(prior.get("transport")) or "checkpoint",
-            }
+            if prior_verified:
+                _raise_rk_already_exists(
+                    business_id=business_id,
+                    ad_account_id=prior_id,
+                )
+
+            prior_scope = _clean(cross_job.get("scope_key"))
+            if prior_scope:
+                await provisioning_state.forget_entity(
+                    profile_id,
+                    prior_scope,
+                    ProvisioningStep.AD_ACCOUNT,
+                    expected_value=prior_id,
+                )
+            prior["phase"] = "CREATE_RESULT_UNVERIFIED"
+            prior["resume_from"] = "RECONCILE_CREATE"
+            prior["candidate_ad_account_id"] = prior_id
+            prior["ad_account_id"] = ""
+            prior["create_response_ad_account_id"] = ""
+            prior["post_create_verification"] = prior_evidence
 
         prior_phase = _clean(
             prior.get("phase") or prior.get("resume_from")
@@ -800,11 +1164,13 @@ async def ad_account_handler(
                 "CREATE_SUBMIT_INTENT",
                 "CREATE_SUBMITTED",
                 "CREATE_RESULT_UNKNOWN",
+                "CREATE_RESULT_UNVERIFIED",
                 "RECONCILE_CREATE",
             }
             and not _known_pre_submit_navigation_failure(prior)
             and not _known_pre_submit_usage_step_failure(prior)
             and not _known_pre_submit_capture_crash(prior)
+            and not _known_pre_submit_no_final_click(prior)
         ):
             found_id, diagnostics = await _reconcile_existing(
                 session,
@@ -812,24 +1178,31 @@ async def ad_account_handler(
                 account_name=rk_name,
             )
             if found_id:
-                await provisioning_state.remember_entity(
-                    profile_id,
-                    scope_key,
-                    ProvisioningStep.AD_ACCOUNT,
-                    {"ad_account_id": found_id},
+                cross_graph_verified, cross_graph_evidence = (
+                    await _verify_expected_ad_account_in_business(
+                        session,
+                        business_id=business_id,
+                        account_name=rk_name,
+                        expected_ad_account_id=found_id,
+                        checks=2,
+                        delay_seconds=0.75,
+                    )
                 )
-                return {
-                    "ad_account_id": found_id,
-                    "business_id": business_id,
-                    "name": rk_name,
-                    "currency": currency,
-                    "timezone_id": timezone_id,
-                    "reused": True,
-                    "cross_job_resume": True,
-                    "recovered_after_uncertainty": True,
-                    "transport": "graph_inventory_reconciliation",
-                    "reconciliation": diagnostics,
-                }
+                if cross_graph_verified:
+                    _raise_rk_already_exists(
+                        business_id=business_id,
+                        ad_account_id=found_id,
+                    )
+
+                diagnostics.append(
+                    {
+                        "stage": "inventory",
+                        "result": "candidate_rejected",
+                        "candidate_ad_account_id": found_id,
+                        "reason": "not_confirmed_in_business_settings",
+                        "browser_verification": cross_graph_evidence,
+                    }
+                )
 
             proof_found_id, proven_empty, inventory_proof = (
                 await _prove_empty_after_uncertainty(
@@ -840,24 +1213,10 @@ async def ad_account_handler(
                 )
             )
             if proof_found_id:
-                await provisioning_state.remember_entity(
-                    profile_id,
-                    scope_key,
-                    ProvisioningStep.AD_ACCOUNT,
-                    {"ad_account_id": proof_found_id},
+                _raise_rk_already_exists(
+                    business_id=business_id,
+                    ad_account_id=proof_found_id,
                 )
-                return {
-                    "ad_account_id": proof_found_id,
-                    "business_id": business_id,
-                    "name": rk_name,
-                    "currency": currency,
-                    "timezone_id": timezone_id,
-                    "reused": True,
-                    "cross_job_resume": True,
-                    "recovered_after_uncertainty": True,
-                    "transport": "uncertain_inventory_v2_reconciliation",
-                    "inventory_proof": inventory_proof,
-                }
 
             if proven_empty:
                 checkpoint = await provisioning_state.checkpoint(
@@ -904,12 +1263,14 @@ async def ad_account_handler(
             "CREATE_SUBMIT_INTENT",
             "CREATE_SUBMITTED",
             "CREATE_RESULT_UNKNOWN",
+            "CREATE_RESULT_UNVERIFIED",
             "RECONCILE_CREATE",
         }
         and (
             _known_pre_submit_navigation_failure(checkpoint)
             or _known_pre_submit_usage_step_failure(checkpoint)
             or _known_pre_submit_capture_crash(checkpoint)
+            or _known_pre_submit_no_final_click(checkpoint)
         )
     ):
         checkpoint = await provisioning_state.checkpoint(
@@ -922,7 +1283,9 @@ async def ad_account_handler(
                 "resume_from": "CREATE",
                 "business_id": business_id,
                 "last_error_code": (
-                    "PRE_SUBMIT_CAPTURE_CRASH_RECOVERED"
+                    "PRE_SUBMIT_FINAL_NOT_CLICKED_RECOVERED"
+                    if _known_pre_submit_no_final_click(checkpoint)
+                    else "PRE_SUBMIT_CAPTURE_CRASH_RECOVERED"
                     if _known_pre_submit_capture_crash(checkpoint)
                     else "PRE_SUBMIT_USAGE_STEP_FALSE_UNCERTAIN_RECOVERED"
                     if _known_pre_submit_usage_step_failure(checkpoint)
@@ -1030,141 +1393,205 @@ async def ad_account_handler(
         business_id=business_id,
         account_name=rk_name,
     )
-    if found_id:
-        await provisioning_state.remember_entity(
-            profile_id,
-            scope_key,
-            ProvisioningStep.AD_ACCOUNT,
-            {"ad_account_id": found_id},
-        )
-        return {
-            "ad_account_id": found_id,
-            "business_id": business_id,
-            "name": rk_name,
-            "currency": currency,
-            "timezone_id": timezone_id,
-            "reused": True,
-            "transport": "graph_inventory_preflight",
-            "reconciliation": inventory_before,
-        }
 
-    graph_inventory_conclusive = any(
+    graph_candidate_id = _normalize_ad_account_id(found_id)
+    graph_candidate_verification: list[dict[str, Any]] = []
+    if graph_candidate_id:
+        graph_verified, graph_candidate_verification = (
+            await _verify_expected_ad_account_in_business(
+                session,
+                business_id=business_id,
+                account_name=rk_name,
+                expected_ad_account_id=graph_candidate_id,
+                checks=2,
+                delay_seconds=0.75,
+            )
+        )
+        if graph_verified:
+            _raise_rk_already_exists(
+                business_id=business_id,
+                ad_account_id=graph_candidate_id,
+            )
+
+        inventory_before.append(
+            {
+                "stage": "inventory",
+                "result": "candidate_rejected",
+                "candidate_ad_account_id": graph_candidate_id,
+                "reason": "not_confirmed_in_business_settings",
+                "browser_verification": graph_candidate_verification,
+            }
+        )
+
+    graph_inventory_empty = any(
         isinstance(row, dict)
         and row.get("stage") == "inventory"
         and row.get("result") == "ok"
+        and int(row.get("count") or 0) == 0
         for row in inventory_before
     )
     browser_inventory_before: dict[str, Any] = {}
     browser_inventory_attempts: list[dict[str, Any]] = []
     ui_inventory_before: dict[str, Any] = {}
 
-    if not graph_inventory_conclusive:
-        # The public/Graph inventory transport is frequently unavailable for
-        # browser-only Meta sessions. Prefer Meta Business Settings' own
-        # read-only GraphQL inventory and give it one fresh-session retry
-        # before falling back to localized UI evidence.
-        browser_found_id = ""
-        for browser_inventory_attempt in range(2):
-            (
-                browser_found_id,
-                browser_inventory_before,
-            ) = await _reconcile_existing_browser_inventory(
-                session,
-                business_id=business_id,
-                account_name=rk_name,
-            )
-            browser_inventory_attempts.append(
-                {
-                    "attempt": browser_inventory_attempt + 1,
-                    **(
-                        browser_inventory_before
-                        if isinstance(browser_inventory_before, dict)
-                        else {}
-                    ),
-                }
-            )
+    # Business Settings is authoritative for pre-submit reuse/absence. Graph
+    # responses can be stale, token-scoped, or contain accounts not visible in
+    # the selected BM. Never let Graph alone suppress CREATE.
+    browser_found_id = ""
+    browser_candidate_id = ""
+    browser_candidate_confirmations = 0
+    for browser_inventory_attempt in range(2):
+        (
+            browser_found_id,
+            browser_inventory_before,
+        ) = await _reconcile_existing_browser_inventory(
+            session,
+            business_id=business_id,
+            account_name=rk_name,
+        )
+        browser_inventory_attempts.append(
+            {
+                "attempt": browser_inventory_attempt + 1,
+                **(
+                    browser_inventory_before
+                    if isinstance(browser_inventory_before, dict)
+                    else {}
+                ),
+            }
+        )
 
-            if browser_found_id:
-                await provisioning_state.remember_entity(
-                    profile_id,
-                    scope_key,
-                    ProvisioningStep.AD_ACCOUNT,
-                    {"ad_account_id": browser_found_id},
+        if browser_found_id:
+            if not browser_candidate_id:
+                browser_candidate_id = browser_found_id
+                browser_candidate_confirmations = 1
+            elif browser_candidate_id == browser_found_id:
+                browser_candidate_confirmations += 1
+            else:
+                browser_candidate_id = ""
+                browser_candidate_confirmations = 0
+
+            if browser_candidate_confirmations >= 2:
+                _raise_rk_already_exists(
+                    business_id=business_id,
+                    ad_account_id=browser_found_id,
                 )
-                return {
-                    "ad_account_id": browser_found_id,
+
+        if (
+            bool(browser_inventory_before.get("confirmed_empty"))
+            and not browser_candidate_id
+        ):
+            break
+
+        if browser_inventory_attempt == 0:
+            await asyncio.sleep(0.75)
+
+    if browser_candidate_id and browser_candidate_confirmations < 2:
+        browser_inventory_before = {
+            **(
+                browser_inventory_before
+                if isinstance(browser_inventory_before, dict)
+                else {}
+            ),
+            "confirmed": False,
+            "confirmed_empty": False,
+            "source": "business_settings_single_candidate_rejected",
+            "candidate_ad_account_id": browser_candidate_id,
+            "candidate_confirmations": browser_candidate_confirmations,
+        }
+
+    structural_ui_empty = False
+    cross_source_empty = False
+
+    if not bool(browser_inventory_before.get("confirmed_empty")):
+        try:
+            async with FacebookBusinessBrowser(
+                session.context,
+                timeout_seconds=45,
+            ) as inventory_browser:
+                ui_inventory_before = (
+                    await inventory_browser.verify_ad_account_inventory_empty(
+                        business_id=business_id,
+                    )
+                )
+        except Exception as exc:
+            ui_inventory_before = {
+                "confirmed_empty": False,
+                "error": (
+                    f"{exc.__class__.__name__}: {_clean(exc)}"
+                )[:500],
+            }
+
+        structural_ui_empty = bool(
+            ui_inventory_before.get("structural_empty")
+        )
+        cross_source_empty = bool(
+            graph_inventory_empty and structural_ui_empty
+        )
+
+        if (
+            not bool(ui_inventory_before.get("confirmed_empty"))
+            and not cross_source_empty
+        ):
+            diagnostic = {
+                "inventory_before": inventory_before,
+                "graph_inventory_empty": graph_inventory_empty,
+                "graph_candidate_verification": (
+                    graph_candidate_verification
+                ),
+                "browser_inventory_before": browser_inventory_before,
+                "browser_inventory_attempts": browser_inventory_attempts,
+                "ui_inventory_before": ui_inventory_before,
+            }
+            log.warning(
+                "[%s] AD_ACCOUNT inventory preflight inconclusive "
+                "item=%s business=%s diagnostic=%s",
+                profile_id,
+                item_id,
+                business_id,
+                json.dumps(
+                    diagnostic,
+                    ensure_ascii=False,
+                    default=str,
+                    separators=(",", ":"),
+                )[:12000],
+            )
+            await provisioning_state.checkpoint(
+                item_id,
+                profile_id,
+                scope_key,
+                ProvisioningStep.AD_ACCOUNT,
+                {
+                    "phase": "CREATE_NOT_SUBMITTED",
+                    "resume_from": "CREATE",
                     "business_id": business_id,
-                    "name": rk_name,
+                    "account_name": rk_name,
                     "currency": currency,
                     "timezone_id": timezone_id,
-                    "reused": True,
-                    "transport": (
-                        "business_settings_graphql_inventory_preflight"
+                    "last_error_code": "AD_ACCOUNT_INVENTORY_UNAVAILABLE",
+                    "last_error": (
+                        "RK inventory is inconclusive before CREATE; "
+                        "duplicate-safe preflight blocked submission."
                     ),
-                    "reconciliation": inventory_before,
-                    "browser_inventory": browser_inventory_before,
-                    "browser_inventory_attempts": (
-                        browser_inventory_attempts
-                    ),
-                }
+                    **diagnostic,
+                },
+            )
+            raise ProvisioningError(
+                "AD_ACCOUNT_INVENTORY_UNAVAILABLE",
+                (
+                    f"Business {business_id} inventory could not prove "
+                    "that no RK exists. CREATE was not submitted."
+                ),
+                retryable=True,
+            )
 
-            if bool(browser_inventory_before.get("confirmed_empty")):
-                break
-
-            if browser_inventory_attempt == 0:
-                await asyncio.sleep(0.75)
-
-        if not bool(browser_inventory_before.get("confirmed_empty")):
-            try:
-                async with FacebookBusinessBrowser(
-                    session.context,
-                    timeout_seconds=45,
-                ) as inventory_browser:
-                    ui_inventory_before = (
-                        await inventory_browser.verify_ad_account_inventory_empty(
-                            business_id=business_id,
-                        )
-                    )
-            except Exception as exc:
-                ui_inventory_before = {
-                    "confirmed_empty": False,
-                    "error": (
-                        f"{exc.__class__.__name__}: {_clean(exc)}"
-                    )[:500],
-                }
-
-            if not bool(ui_inventory_before.get("confirmed_empty")):
-                await provisioning_state.checkpoint(
-                    item_id,
-                    profile_id,
-                    scope_key,
-                    ProvisioningStep.AD_ACCOUNT,
-                    {
-                        "phase": "CREATE_NOT_SUBMITTED",
-                        "resume_from": "CREATE",
-                        "business_id": business_id,
-                        "account_name": rk_name,
-                        "currency": currency,
-                        "timezone_id": timezone_id,
-                        "last_error_code": "AD_ACCOUNT_INVENTORY_UNAVAILABLE",
-                        "last_error": (
-                            "RK inventory is inconclusive before CREATE; "
-                            "duplicate-safe preflight blocked submission."
-                        ),
-                        "inventory_before": inventory_before,
-                        "browser_inventory_before": browser_inventory_before,
-                        "browser_inventory_attempts": browser_inventory_attempts,
-                        "ui_inventory_before": ui_inventory_before,
-                    },
-                )
-                raise ProvisioningError(
-                    "AD_ACCOUNT_INVENTORY_UNAVAILABLE",
-                    (
-                        f"Business {business_id} inventory could not prove "
-                        "that no RK exists. CREATE was not submitted."
-                    ),
-                    retryable=True,
-                )
+        if cross_source_empty:
+            log.info(
+                "[%s] AD_ACCOUNT preflight accepted cross-source empty "
+                "item=%s business=%s source=graph+stable_ui",
+                profile_id,
+                item_id,
+                business_id,
+            )
 
     await provisioning_state.checkpoint(
         item_id,
@@ -1179,6 +1606,18 @@ async def ad_account_handler(
             "currency": currency,
             "timezone_id": timezone_id,
             "inventory_before": inventory_before,
+            "graph_inventory_empty": graph_inventory_empty,
+            "browser_inventory_before": browser_inventory_before,
+            "ui_inventory_before": ui_inventory_before,
+            "inventory_proof_path": (
+                "graph_plus_stable_ui"
+                if cross_source_empty
+                else (
+                    _clean(ui_inventory_before.get("source"))
+                    or _clean(browser_inventory_before.get("source"))
+                    or "business_settings"
+                )
+            ),
             "activity": "BUSINESS_SETTINGS_CREATE_OPENING",
         },
     )
@@ -1341,7 +1780,9 @@ async def ad_account_handler(
     # force the operator to launch a brand-new Job manually.
     captured_request: dict[str, Any] = {}
     capture_failures: list[dict[str, Any]] = []
-    capture_attempt_limit = 3
+    capture_attempt_limit = 2
+    capture_attempt_timeout_seconds = 75.0
+    capture_stage_deadline = time.monotonic() + 150.0
 
     for capture_attempt in range(1, capture_attempt_limit + 1):
         await browser_checkpoint(
@@ -1357,17 +1798,150 @@ async def ad_account_handler(
         )
         browser: FacebookBusinessBrowser | None = None
         try:
-            async with FacebookBusinessBrowser(
-                session.context,
-                timeout_seconds=90,
-            ) as browser:
-                captured_request = await browser.capture_ad_account_create_request(
-                    business_id=business_id,
-                    account_name=rk_name,
-                    currency=currency,
-                    timezone_id=timezone_id,
-                )
+            remaining_capture_seconds = max(
+                5.0,
+                capture_stage_deadline - time.monotonic(),
+            )
+            attempt_timeout_seconds = min(
+                capture_attempt_timeout_seconds,
+                remaining_capture_seconds,
+            )
+
+            async def _run_capture_attempt() -> dict[str, Any]:
+                nonlocal browser
+                async with FacebookBusinessBrowser(
+                    session.context,
+                    timeout_seconds=90,
+                ) as active_browser:
+                    browser = active_browser
+                    return await active_browser.capture_ad_account_create_request(
+                        business_id=business_id,
+                        account_name=rk_name,
+                        currency=currency,
+                        timezone_id=timezone_id,
+                    )
+
+            captured_request = await asyncio.wait_for(
+                _run_capture_attempt(),
+                timeout=attempt_timeout_seconds,
+            )
             break
+        except asyncio.TimeoutError as exc:
+            browser_phase = (
+                browser.ad_account_runtime_phase
+                if browser is not None
+                else "BROWSER_NOT_ENTERED"
+            )
+            final_capture_armed = bool(
+                browser is not None
+                and browser.ad_account_final_capture_armed
+            )
+            create_may_have_been_sent = bool(
+                browser is not None
+                and browser.ad_account_create_may_have_been_sent
+            )
+
+            timeout_diag: dict[str, Any] = {}
+            if browser is not None:
+                try:
+                    timeout_diag = await asyncio.wait_for(
+                        browser.ad_account_runtime_timeout_diagnostic(),
+                        timeout=6.0,
+                    )
+                except Exception:
+                    timeout_diag = {}
+
+            failure = {
+                "attempt": capture_attempt,
+                "code": "AD_ACCOUNT_LIVE_CAPTURE_TIMEOUT",
+                "retryable": True,
+                "message": (
+                    "Live Add-RK capture exceeded "
+                    f"{attempt_timeout_seconds:.0f}s at phase={browser_phase}."
+                ),
+                "browser_phase": browser_phase,
+                "final_capture_armed": final_capture_armed,
+                "create_may_have_been_sent": create_may_have_been_sent,
+                "diagnostic": _compact_browser_diagnostic(timeout_diag),
+            }
+            capture_failures.append(failure)
+
+            # Before the final CTA the capture pass cannot have submitted
+            # CREATE. Fail/retry directly instead of spending more minutes in
+            # inventory reconciliation for a request that was never sent.
+            if not final_capture_armed and not create_may_have_been_sent:
+                await provisioning_state.checkpoint(
+                    item_id,
+                    profile_id,
+                    scope_key,
+                    ProvisioningStep.AD_ACCOUNT,
+                    {
+                        "phase": "CREATE_NOT_SUBMITTED",
+                        "resume_from": "CREATE",
+                        "business_id": business_id,
+                        "account_name": rk_name,
+                        "currency": currency,
+                        "timezone_id": timezone_id,
+                        "capture_attempt": capture_attempt,
+                        "capture_attempt_limit": capture_attempt_limit,
+                        "capture_failures": capture_failures[-2:],
+                        "last_error_code": "AD_ACCOUNT_LIVE_CAPTURE_TIMEOUT",
+                        "last_error": failure["message"],
+                        "browser_phase": browser_phase,
+                        "final_capture_armed": False,
+                        "create_may_have_been_sent": False,
+                        "browser_diagnostic": timeout_diag,
+                        "transport": "business_suite_live_capture",
+                    },
+                )
+
+                has_time_for_retry = (
+                    capture_attempt < capture_attempt_limit
+                    and time.monotonic() + 10.0 < capture_stage_deadline
+                )
+                if has_time_for_retry:
+                    await asyncio.sleep(0.5)
+                    continue
+
+                raise ProvisioningError(
+                    "AD_ACCOUNT_LIVE_CAPTURE_TIMEOUT",
+                    (
+                        failure["message"]
+                        + " No CREATE was sent. The Job stopped instead of "
+                        "remaining stuck in live capture."
+                    ),
+                    retryable=True,
+                ) from exc
+
+            # If the timeout happened after the final gate was armed, preserve
+            # exactly-once safety: never click again until inventory proves
+            # whether Meta created anything.
+            reconciled = await reconcile_after_uncertain(
+                reason=(
+                    failure["message"]
+                    + " Final CREATE gate had already been armed; inventory "
+                    "reconciliation is required before any retry."
+                )
+            )
+            if reconciled.get("_remask_reconciled_empty"):
+                has_time_for_retry = (
+                    capture_attempt < capture_attempt_limit
+                    and time.monotonic() + 10.0 < capture_stage_deadline
+                )
+                if has_time_for_retry:
+                    await asyncio.sleep(0.5)
+                    continue
+                raise ProvisioningError(
+                    "CREATE_AD_ACCOUNT_SAFE_RETRY_REQUIRED",
+                    (
+                        "Live capture timed out after the final gate, but "
+                        "strong inventory proof confirmed that no RK exists. "
+                        "The checkpoint is safe for a fresh retry."
+                    ),
+                    retryable=True,
+                ) from exc
+            return reconciled
+
         except BrowserBusinessError as exc:
             browser_diag = (
                 exc.diagnostic if isinstance(exc.diagnostic, dict) else {}
@@ -1419,6 +1993,69 @@ async def ad_account_handler(
                 exc.code == "AD_ACCOUNT_CREATE_REQUEST_NOT_OBSERVED"
                 and bool(exc.retryable)
             ):
+                # REMASK_AD_ACCOUNT_CURRENT_UI_SUCCESS_V1
+                # Meta can complete CREATE and render the success dialog even
+                # when its private transport shape is not matched by the
+                # GraphQL capture gate. Treat that explicit same-session UI
+                # confirmation as success immediately; otherwise a genuinely
+                # created RK is incorrectly reported FAILED until another Job
+                # re-enters this handler.
+                capture_ui_success_id = _capture_success_id_from_checkpoint(
+                    {
+                        "browser_diagnostic": browser_diag,
+                        "capture_failures": capture_failures[-3:],
+                    },
+                    business_id=business_id,
+                    account_name=rk_name,
+                )
+                if capture_ui_success_id:
+                    await provisioning_state.checkpoint(
+                        item_id,
+                        profile_id,
+                        scope_key,
+                        ProvisioningStep.AD_ACCOUNT,
+                        {
+                            "phase": "CREATE_CONFIRMED",
+                            "resume_from": "DONE",
+                            "business_id": business_id,
+                            "account_name": rk_name,
+                            "currency": currency,
+                            "timezone_id": timezone_id,
+                            "ad_account_id": capture_ui_success_id,
+                            "create_response_ad_account_id": (
+                                capture_ui_success_id
+                            ),
+                            "capture_attempt": capture_attempt,
+                            "activity": (
+                                "AD_ACCOUNT_CREATE_CONFIRMED_"
+                                "CAPTURE_UI_CURRENT_ATTEMPT"
+                            ),
+                            "activity_at": int(time.time()),
+                            "browser_diagnostic": browser_diag,
+                            "transport": (
+                                "business_settings_ui_capture_"
+                                "current_attempt"
+                            ),
+                        },
+                    )
+                    await provisioning_state.remember_entity(
+                        profile_id,
+                        scope_key,
+                        ProvisioningStep.AD_ACCOUNT,
+                        {"ad_account_id": capture_ui_success_id},
+                    )
+                    return {
+                        "ad_account_id": capture_ui_success_id,
+                        "business_id": business_id,
+                        "name": rk_name,
+                        "currency": currency,
+                        "timezone_id": timezone_id,
+                        "recovered_after_capture_ui_success": True,
+                        "transport": (
+                            "business_settings_ui_capture_current_attempt"
+                        ),
+                    }
+
                 proof_found_id, proven_empty, inventory_proof = (
                     await _prove_empty_after_uncertainty(
                         session,
@@ -1770,6 +2407,48 @@ async def ad_account_handler(
             "Live Add-RK capture exhausted without a request. No CREATE was sent.",
             retryable=True,
         )
+
+    captured_created_id = _normalize_ad_account_id(
+        captured_request.get("ad_account_id")
+        if isinstance(captured_request, dict)
+        and captured_request.get("created_during_capture")
+        else ""
+    )
+    if captured_created_id:
+        await provisioning_state.checkpoint(
+            item_id,
+            profile_id,
+            scope_key,
+            ProvisioningStep.AD_ACCOUNT,
+            {
+                "phase": "CREATE_CONFIRMED",
+                "resume_from": "DONE",
+                "business_id": business_id,
+                "account_name": rk_name,
+                "currency": currency,
+                "timezone_id": timezone_id,
+                "ad_account_id": captured_created_id,
+                "create_response_ad_account_id": captured_created_id,
+                "activity": "AD_ACCOUNT_CREATE_CONFIRMED_CAPTURE_UI",
+                "activity_at": int(time.time()),
+                "transport": "business_settings_ui_capture_reconciliation",
+            },
+        )
+        await provisioning_state.remember_entity(
+            profile_id,
+            scope_key,
+            ProvisioningStep.AD_ACCOUNT,
+            {"ad_account_id": captured_created_id},
+        )
+        return {
+            "ad_account_id": captured_created_id,
+            "business_id": business_id,
+            "name": rk_name,
+            "currency": currency,
+            "timezone_id": timezone_id,
+            "created_during_capture": True,
+            "transport": "business_settings_ui_capture_reconciliation",
+        }
 
     capture_doc_id = _clean(captured_request.get("doc_id"))
     capture_friendly = _clean(captured_request.get("friendly_name"))
@@ -2148,6 +2827,63 @@ async def ad_account_handler(
         scope_key,
         ProvisioningStep.AD_ACCOUNT,
         {
+            "phase": "CREATE_RESULT_UNVERIFIED",
+            "resume_from": "RECONCILE_CREATE",
+            "business_id": business_id,
+            "candidate_ad_account_id": rk_id,
+            "create_response_friendly_name": result.candidate.friendly_name,
+            "create_response_doc_id": result.candidate.doc_id,
+            "create_response_path": result.response_path,
+            "activity": "AD_ACCOUNT_RESPONSE_ID_AWAITING_INVENTORY",
+            "activity_at": int(time.time()),
+            "transport": "facebook_private_graphql_live_capture",
+        },
+    )
+
+    post_verified, post_evidence = (
+        await _verify_expected_ad_account_in_business(
+            session,
+            business_id=business_id,
+            account_name=rk_name,
+            expected_ad_account_id=rk_id,
+            checks=4,
+            delay_seconds=2.0,
+        )
+    )
+    if not post_verified:
+        await provisioning_state.checkpoint(
+            item_id,
+            profile_id,
+            scope_key,
+            ProvisioningStep.AD_ACCOUNT,
+            {
+                "phase": "CREATE_RESULT_UNVERIFIED",
+                "resume_from": "RECONCILE_CREATE",
+                "business_id": business_id,
+                "candidate_ad_account_id": rk_id,
+                "post_create_verification": post_evidence,
+                "activity": "AD_ACCOUNT_RESPONSE_ID_NOT_IN_BUSINESS",
+                "activity_at": int(time.time()),
+                "transport": "facebook_private_graphql_live_capture",
+            },
+        )
+        raise ProvisioningError(
+            "AD_ACCOUNT_CREATE_RESULT_UNVERIFIED",
+            (
+                f"Meta CREATE returned candidate {rk_id}, but repeated "
+                f"Business Settings inventory for Business {business_id} did "
+                "not confirm that exact RK. SUCCESS is blocked and duplicate "
+                "CREATE remains blocked until inventory reconciliation."
+            ),
+            retryable=True,
+        )
+
+    await provisioning_state.checkpoint(
+        item_id,
+        profile_id,
+        scope_key,
+        ProvisioningStep.AD_ACCOUNT,
+        {
             "phase": "CREATE_CONFIRMED",
             "resume_from": "DONE",
             "business_id": business_id,
@@ -2156,6 +2892,9 @@ async def ad_account_handler(
             "create_response_friendly_name": result.candidate.friendly_name,
             "create_response_doc_id": result.candidate.doc_id,
             "create_response_path": result.response_path,
+            "post_create_verification": post_evidence,
+            "activity": "AD_ACCOUNT_POST_CREATE_VERIFIED",
+            "activity_at": int(time.time()),
             "transport": "facebook_private_graphql_live_capture",
         },
     )
@@ -2172,9 +2911,11 @@ async def ad_account_handler(
         "name": rk_name,
         "currency": currency,
         "timezone_id": timezone_id,
-        "transport": "facebook_private_graphql_live_capture",
+        "transport": "facebook_private_graphql_live_capture_verified",
         "create_response_friendly_name": result.candidate.friendly_name,
         "create_response_doc_id": result.candidate.doc_id,
         "create_response_path": result.response_path,
+        "post_create_verified": True,
+        "post_create_verification": post_evidence,
     }
 

@@ -53,6 +53,39 @@ PHP_CODE;
     $client = str_replace($proxyAnchor, $replacement, $client, $count);
     if ($count !== 1) throw new RuntimeException('MetaApiClient cookie transport patch count: ' . $count);
 }
+
+if (!str_contains($client, 'REMASK_META_GRAPH_ERROR_DETAIL_V1')) {
+    $oldGraphThrow = "                throw MetaApiException::fromGraphResponse(\$decoded, \$httpStatus);";
+    $newGraphThrow = <<<'PHP_CODE'
+                // REMASK_META_GRAPH_ERROR_DETAIL_V1
+                $graphError = is_array($decoded['error'] ?? null) ? $decoded['error'] : [];
+                $graphMessage = trim((string)($graphError['message'] ?? 'Meta Graph request failed'));
+                $graphCode = isset($graphError['code']) ? (int)$graphError['code'] : 0;
+                $graphSubcode = isset($graphError['error_subcode']) ? (int)$graphError['error_subcode'] : 0;
+                $graphType = trim((string)($graphError['type'] ?? ''));
+                $graphTrace = trim((string)($graphError['fbtrace_id'] ?? ''));
+                $detail = 'Meta Graph ' . $method . ' /' . $path .
+                    ' HTTP ' . $httpStatus .
+                    ' code=' . $graphCode .
+                    ' subcode=' . $graphSubcode .
+                    ($graphType !== '' ? ' type=' . $graphType : '') .
+                    ': ' . $graphMessage .
+                    ($graphTrace !== '' ? ' trace=' . $graphTrace : '');
+                throw new MetaApiException(
+                    $detail,
+                    $httpStatus,
+                    responsePayload: $decoded
+                );
+PHP_CODE;
+    if (!str_contains($client, $oldGraphThrow)) {
+        throw new RuntimeException('MetaApiClient Graph error throw anchor not found');
+    }
+    $client = str_replace($oldGraphThrow, $newGraphThrow, $client, $graphErrorPatchCount);
+    if ($graphErrorPatchCount !== 1) {
+        throw new RuntimeException('MetaApiClient Graph error detail patch count: ' . $graphErrorPatchCount);
+    }
+}
+
 file_put_contents($clientPath, $client);
 
 $endpoint = file_get_contents($endpointPath);
@@ -128,4 +161,35 @@ PHP_CODE;
 
 file_put_contents($endpointPath, $endpoint);
 
-fwrite(STDERR, "[meta-session-context] canonical profile transport = token + bound proxy + optional saved session; no direct fallback\n");
+// REMASK_FBTOOL_ADS_TOKEN_REFRESH_V1
+// Preserve the historical ReMask Ads Manager token-refresh path as a bounded,
+// explicit helper. It never clears the current token when refresh is unavailable.
+$fbRequestsPath = $root . '/classes/FbRequests.php';
+$fbRequests = file_get_contents($fbRequestsPath);
+if ($fbRequests === false) throw new RuntimeException('FbRequests.php not found');
+if (!str_contains($fbRequests, 'REMASK_FBTOOL_ADS_TOKEN_REFRESH_V1')) {
+    $needle = 'private function GetNewToken(FbAccount $acc): ?string';
+    $pos = strpos($fbRequests, $needle);
+    if ($pos === false) {
+        throw new RuntimeException('FbRequests GetNewToken method not found');
+    }
+    $wrapper = <<<'PHP_CODE'
+
+    // REMASK_FBTOOL_ADS_TOKEN_REFRESH_V1
+    public function RefreshAdsManagerToken(FbAccount $acc): ?string
+    {
+        try {
+            $token = $this->GetNewToken($acc);
+            $token = is_string($token) ? trim($token) : '';
+            return $token !== '' ? $token : null;
+        } catch (Throwable $e) {
+            return null;
+        }
+    }
+
+PHP_CODE;
+    $fbRequests = substr($fbRequests, 0, $pos) . $wrapper . substr($fbRequests, $pos);
+    file_put_contents($fbRequestsPath, $fbRequests);
+}
+
+fwrite(STDERR, "[meta-session-context] canonical profile transport + legacy Ads Manager token refresh ready\n");

@@ -392,7 +392,16 @@ class JobStore:
         now=_now()
         with self._connect() as con:
             rows=con.execute(
-                "SELECT id FROM job_items WHERE job_id=? AND status='FAILED' AND retryable=1",
+                """SELECT id FROM job_items
+                   WHERE job_id=? AND status='FAILED'
+                     AND (
+                       retryable=1
+                       OR error_code IN (
+                         'CHECKPOINT_REQUIRED',
+                         'SESSION_EXPIRED',
+                         'TWO_FACTOR_REQUIRED'
+                       )
+                     )""",
                 (job_id,),
             ).fetchall()
             ids=[str(r['id']) for r in rows]
@@ -402,8 +411,17 @@ class JobStore:
                     (now,item_id),
                 )
                 con.execute(
-                    "UPDATE job_tasks SET status='QUEUED',error_code=NULL,error_message=NULL,retryable=0,updated_at=? "
-                    "WHERE item_id=? AND status='FAILED' AND retryable=1",
+                    """UPDATE job_tasks
+                       SET status='QUEUED',error_code=NULL,error_message=NULL,retryable=0,updated_at=?
+                       WHERE item_id=? AND status='FAILED'
+                         AND (
+                           retryable=1
+                           OR error_code IN (
+                             'CHECKPOINT_REQUIRED',
+                             'SESSION_EXPIRED',
+                             'TWO_FACTOR_REQUIRED'
+                           )
+                         )""",
                     (now,item_id),
                 )
             if ids:

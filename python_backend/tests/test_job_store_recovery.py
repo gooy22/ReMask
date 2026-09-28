@@ -1,14 +1,19 @@
 import asyncio
 import json
+import os
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
+
+import aiohttp
 from pathlib import Path
 
 from app.store import JobStore
 from app.provisioning.state import ProvisioningStateStore
 from app.runner import _await_with_hard_watchdog
 from app.provisioning.models import ProvisioningError
+from app.session import ProfileContextError, ProfileResolver
 
 
 class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
@@ -257,6 +262,228 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
         job = await self.store.job_view(job_id)
         self.assertEqual(item["status"], "SUCCESS")
         self.assertEqual(job["status"], "SUCCESS")
+
+
+    async def test_retry_failed_recovers_legacy_checkpoint_even_if_old_row_was_nonretryable(self):
+        now = int(time.time())
+        job_id = "job-checkpoint-legacy"
+        item_id = "item-checkpoint-legacy"
+        task_id = "task-checkpoint-legacy"
+        with self.store._connect() as con:
+            con.execute(
+                "INSERT INTO jobs(id,status,idempotency_key,created_at,updated_at) VALUES(?,?,?,?,?)",
+                (job_id, "FAILED", "idem-checkpoint-legacy", now, now),
+            )
+            con.execute(
+                """INSERT INTO job_items(
+                    id,job_id,profile_id,status,error_code,error_message,retryable,
+                    created_at,updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?)""",
+                (
+                    item_id,
+                    job_id,
+                    "6",
+                    "FAILED",
+                    "CHECKPOINT_REQUIRED",
+                    "Facebook requires a checkpoint",
+                    0,
+                    now,
+                    now,
+                ),
+            )
+            con.execute(
+                """INSERT INTO job_tasks(
+                    id,item_id,position,action,payload_json,idempotency_key,status,
+                    error_code,error_message,retryable,created_at,updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    task_id,
+                    item_id,
+                    0,
+                    "provisioning",
+                    "{}",
+                    "task-checkpoint-legacy",
+                    "FAILED",
+                    "CHECKPOINT_REQUIRED",
+                    "Facebook requires a checkpoint",
+                    0,
+                    now,
+                    now,
+                ),
+            )
+
+        requeued = await self.store.retry_failed(job_id)
+        item = await self.store.item(item_id)
+        tasks = await self.store.tasks(item_id)
+
+        self.assertEqual(requeued, 1)
+        self.assertEqual(item["status"], "QUEUED")
+        self.assertEqual(tasks[0]["status"], "QUEUED")
+        self.assertIsNone(tasks[0]["error_code"])
+
+
+
+class ProfileResolverRecoveryTests(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    def _payload() -> dict:
+        return {
+            "cookies": {"c_user": "123", "xs": "session"},
+            "user_agent": "Mozilla/5.0",
+            "proxy": "http://127.0.0.1:8888",
+            "display_name": "Profile Five",
+            "pages": [],
+        }
+
+    async def test_loopback_transport_recovers_before_job_failure(self):
+        calls = {"count": 0}
+        payload = self._payload()
+
+        class Response:
+            status = 200
+
+            async def json(self, content_type=None):
+                return payload
+
+        class RequestContext:
+            async def __aenter__(self):
+                calls["count"] += 1
+                if calls["count"] < 3:
+                    raise aiohttp.ClientConnectionError("resolver not listening")
+                return Response()
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        class Client:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            def get(self, *args, **kwargs):
+                return RequestContext()
+
+        with patch.dict(
+            os.environ,
+            {
+                "REMASK_PROFILE_RESOLVER_ATTEMPTS": "3",
+                "REMASK_PROFILE_RESOLVER_BACKOFF_SECONDS": "0",
+            },
+            clear=False,
+        ), patch("app.session.aiohttp.ClientSession", Client):
+            resolver = ProfileResolver(
+                "http://127.0.0.1/ajax/pythonProfileContext.php",
+                "internal-key",
+            )
+            context = await resolver.resolve("5")
+
+        self.assertEqual(calls["count"], 3)
+        self.assertEqual(context.profile_id, "5")
+        self.assertEqual(context.cookies["c_user"], "123")
+
+    async def test_exhausted_transport_error_stays_retryable(self):
+        calls = {"count": 0}
+
+        class RequestContext:
+            async def __aenter__(self):
+                calls["count"] += 1
+                raise aiohttp.ClientConnectionError("resolver unavailable")
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        class Client:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            def get(self, *args, **kwargs):
+                return RequestContext()
+
+        with patch.dict(
+            os.environ,
+            {
+                "REMASK_PROFILE_RESOLVER_ATTEMPTS": "2",
+                "REMASK_PROFILE_RESOLVER_BACKOFF_SECONDS": "0",
+            },
+            clear=False,
+        ), patch("app.session.aiohttp.ClientSession", Client):
+            resolver = ProfileResolver(
+                "http://127.0.0.1/ajax/pythonProfileContext.php",
+                "internal-key",
+            )
+            with self.assertRaises(ProfileContextError) as raised:
+                await resolver.resolve("5")
+
+        self.assertEqual(calls["count"], 2)
+        self.assertTrue(raised.exception.retryable)
+        self.assertEqual(raised.exception.category, "resolver_transport")
+        self.assertIn("ClientConnectionError", str(raised.exception))
+
+
+
+
+class ProfileMutationCooldownTests(unittest.IsolatedAsyncioTestCase):
+    async def test_first_mutation_has_no_delay(self):
+        from app.provisioning import service as service_module
+
+        original = service_module._PROFILE_MUTATION_COOLDOWN_SECONDS
+        service_module._PROFILE_MUTATION_COOLDOWN_SECONDS = 8.0
+        service_module._PROFILE_MUTATION_LAST_FINISHED.clear()
+        try:
+            waited = await service_module._await_profile_mutation_cooldown("6")
+            self.assertEqual(waited, 0.0)
+        finally:
+            service_module._PROFILE_MUTATION_LAST_FINISHED.clear()
+            service_module._PROFILE_MUTATION_COOLDOWN_SECONDS = original
+
+    async def test_recent_mutation_waits_before_same_profile(self):
+        from app.provisioning import service as service_module
+
+        original = service_module._PROFILE_MUTATION_COOLDOWN_SECONDS
+        original_sleep = service_module.asyncio.sleep
+        waits = []
+
+        async def fake_sleep(seconds):
+            waits.append(seconds)
+
+        service_module._PROFILE_MUTATION_COOLDOWN_SECONDS = 8.0
+        service_module._PROFILE_MUTATION_LAST_FINISHED.clear()
+        service_module._PROFILE_MUTATION_LAST_FINISHED["6"] = service_module.time.monotonic()
+        service_module.asyncio.sleep = fake_sleep
+        try:
+            waited = await service_module._await_profile_mutation_cooldown("6")
+            self.assertGreater(waited, 7.0)
+            self.assertLessEqual(waited, 8.0)
+            self.assertEqual(len(waits), 1)
+            self.assertGreater(waits[0], 7.0)
+        finally:
+            service_module.asyncio.sleep = original_sleep
+            service_module._PROFILE_MUTATION_LAST_FINISHED.clear()
+            service_module._PROFILE_MUTATION_COOLDOWN_SECONDS = original
+
+    async def test_other_profile_is_not_delayed(self):
+        from app.provisioning import service as service_module
+
+        original = service_module._PROFILE_MUTATION_COOLDOWN_SECONDS
+        service_module._PROFILE_MUTATION_COOLDOWN_SECONDS = 8.0
+        service_module._PROFILE_MUTATION_LAST_FINISHED.clear()
+        service_module._PROFILE_MUTATION_LAST_FINISHED["6"] = service_module.time.monotonic()
+        try:
+            waited = await service_module._await_profile_mutation_cooldown("7")
+            self.assertEqual(waited, 0.0)
+        finally:
+            service_module._PROFILE_MUTATION_LAST_FINISHED.clear()
+            service_module._PROFILE_MUTATION_COOLDOWN_SECONDS = original
 
 
 if __name__ == "__main__":

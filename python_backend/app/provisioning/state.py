@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import sqlite3
 import time
 from pathlib import Path
@@ -12,6 +13,79 @@ from .models import ENTITY_RESULT_KEYS, ProvisioningSnapshot, ProvisioningStep
 
 def _now() -> int:
     return int(time.time())
+
+
+def _capture_ui_confirmed_ad_account_id(result: Any) -> str:
+    """Extract an RK ID only from explicit saved Meta success UI evidence."""
+    if not isinstance(result, dict):
+        return ""
+
+    business_id = str(result.get("business_id") or "").strip()
+    account_name = str(
+        result.get("account_name")
+        or result.get("name")
+        or ""
+    ).strip()
+    if not business_id.isdigit() or not account_name:
+        return ""
+
+    diagnostics: list[dict[str, Any]] = []
+    direct = result.get("browser_diagnostic")
+    if isinstance(direct, dict):
+        diagnostics.append(direct)
+
+    for failure in result.get("capture_failures") or []:
+        if not isinstance(failure, dict):
+            continue
+        diagnostic = failure.get("diagnostic")
+        if isinstance(diagnostic, dict):
+            diagnostics.append(diagnostic)
+
+    expected = account_name.casefold()
+    success_markers = (
+        "ad account created successfully",
+        "advertising account created successfully",
+        "has been created and added to the",
+        "compte publicitaire a été créé",
+        "рекламный аккаунт создан",
+        "рекламний акаунт створено",
+        "विज्ञापन अकाउंट बनाया गया",
+        "विज्ञापन खाता बनाया गया",
+        "tài khoản quảng cáo đã được tạo",
+        "বিজ্ঞাপন অ্যাকাউন্ট তৈরি করা হয়েছে",
+    )
+
+    for diagnostic in diagnostics:
+        ui_state = diagnostic.get("ui_state")
+        if not isinstance(ui_state, dict):
+            continue
+
+        dialogs = " ".join(
+            str(value or "").strip()
+            for value in (ui_state.get("dialogs") or [])
+            if str(value or "").strip()
+        )
+        folded = dialogs.casefold()
+        if expected not in folded:
+            continue
+        if not any(marker in folded for marker in success_markers):
+            continue
+
+        controls = " ".join(
+            str(value or "").strip()
+            for value in (ui_state.get("controls") or [])
+            if str(value or "").strip()
+        )
+        ids: list[str] = []
+        for raw in re.findall(r"(?<!\d)(\d{8,30})(?!\d)", controls):
+            if raw == business_id or raw in ids:
+                continue
+            ids.append(raw)
+
+        if len(ids) == 1:
+            return ids[0]
+
+    return ""
 
 
 class ProvisioningStateStore:
@@ -276,6 +350,7 @@ class ProvisioningStateStore:
             "CREATE_SUBMIT_INTENT",
             "CREATE_SUBMITTED",
             "CREATE_RESULT_UNKNOWN",
+            "CREATE_RESULT_UNVERIFIED",
             "RECONCILE_CREATE",
         }
 
@@ -296,19 +371,19 @@ class ProvisioningStateStore:
             if str(result.get("business_id") or "").strip() != business:
                 continue
 
-            raw_id = str(
-                result.get("ad_account_id")
-                or result.get("create_response_ad_account_id")
-                or ""
-            ).strip()
+            raw_id = str(result.get("ad_account_id") or "").strip()
             numeric_id = raw_id[4:] if raw_id.lower().startswith("act_") else raw_id
-            confirmed = numeric_id.isdigit() and 5 <= len(numeric_id) <= 30
 
             phase = str(
                 result.get("phase")
                 or result.get("resume_from")
                 or ""
             ).strip().upper()
+            confirmed = (
+                numeric_id.isdigit()
+                and 5 <= len(numeric_id) <= 30
+                and phase != "CREATE_RESULT_UNVERIFIED"
+            )
 
             # A newer explicit CREATE_NOT_SUBMITTED checkpoint is authoritative
             # evidence that this later Job did not send CREATE. Because rows are
@@ -381,9 +456,10 @@ class ProvisioningStateStore:
         """
         Return the newest confirmed BM/RK pair for a profile.
 
-        Add BM and Add RK intentionally use different stable scopes. This
-        profile-level view lets the UI recover the BM created by ReMask without
-        depending on a separate Meta hierarchy cache refresh.
+        Add BM and Add RK intentionally use different stable scopes. Prefer
+        confirmed SUCCESS step results, because they preserve the exact
+        business_id -> ad_account_id relation even when the entity rows live
+        in different scopes.
         """
         return await asyncio.to_thread(
             self._latest_profile_entities_sync,
@@ -405,7 +481,7 @@ class ProvisioningStateStore:
             }
 
         with self._connect() as con:
-            rows = con.execute(
+            entity_rows = con.execute(
                 """
                 SELECT profile_id,scope_key,business_id,ad_account_id,
                        funding_source_id,updated_at
@@ -416,13 +492,72 @@ class ProvisioningStateStore:
                 """,
                 (profile,),
             ).fetchall()
+            step_rows = con.execute(
+                """
+                SELECT item_id,scope_key,step,status,result_json,updated_at
+                FROM provisioning_steps
+                WHERE profile_id=?
+                  AND status='SUCCESS'
+                  AND result_json IS NOT NULL
+                  AND step IN (?,?)
+                ORDER BY updated_at DESC
+                LIMIT 250
+                """,
+                (
+                    profile,
+                    ProvisioningStep.AD_ACCOUNT.value,
+                    ProvisioningStep.BUSINESS.value,
+                ),
+            ).fetchall()
 
         business_id = ""
         ad_account_id = ""
         funding_source_id = ""
         scope_key = ""
 
-        for row in rows:
+        # A successful AD_ACCOUNT result is the strongest relation proof:
+        # the handler only completes after the created/existing RK is
+        # reconciled and the result contains its target Business ID.
+        for row in step_rows:
+            if str(row["step"] or "") != ProvisioningStep.AD_ACCOUNT.value:
+                continue
+            try:
+                result = json.loads(str(row["result_json"] or "{}"))
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if not isinstance(result, dict):
+                continue
+            candidate_business = str(result.get("business_id") or "").strip()
+            candidate_account = str(result.get("ad_account_id") or "").strip()
+            if candidate_account.lower().startswith("act_"):
+                candidate_account = candidate_account[4:]
+            if candidate_business.isdigit() and candidate_account.isdigit():
+                business_id = candidate_business
+                ad_account_id = candidate_account
+                scope_key = str(row["scope_key"] or "")
+                break
+
+        # Fall back to a successful Business result only when there is no
+        # confirmed AD_ACCOUNT relation yet.
+        if not business_id:
+            for row in step_rows:
+                if str(row["step"] or "") != ProvisioningStep.BUSINESS.value:
+                    continue
+                try:
+                    result = json.loads(str(row["result_json"] or "{}"))
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                if not isinstance(result, dict):
+                    continue
+                candidate_business = str(result.get("business_id") or "").strip()
+                if candidate_business.isdigit():
+                    business_id = candidate_business
+                    scope_key = str(row["scope_key"] or "")
+                    break
+
+        # Legacy entity rows remain useful for funding and for old Jobs that
+        # predate relation-rich SUCCESS results.
+        for row in entity_rows:
             row_business = str(row["business_id"] or "").strip()
             row_ad_account = str(row["ad_account_id"] or "").strip()
             row_funding = str(row["funding_source_id"] or "").strip()
@@ -431,14 +566,10 @@ class ProvisioningStateStore:
                 business_id = row_business
                 scope_key = str(row["scope_key"] or "")
 
-            if (
-                business_id
-                and row_business == business_id
-                and not ad_account_id
-                and row_ad_account
-            ):
-                ad_account_id = row_ad_account
-                scope_key = str(row["scope_key"] or scope_key)
+            if not ad_account_id and row_ad_account:
+                if not row_business or not business_id or row_business == business_id:
+                    ad_account_id = row_ad_account
+                    scope_key = str(row["scope_key"] or scope_key)
 
             if (
                 ad_account_id
@@ -455,6 +586,355 @@ class ProvisioningStateStore:
             "ad_account_id": ad_account_id,
             "funding_source_id": funding_source_id,
         }
+
+    async def latest_profile_fan_pages(
+        self,
+        profile_id: str,
+        *,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """
+        Return Fan Pages confirmed by successful FAN_PAGES steps.
+
+        These results are independent from Graph /me/accounts propagation, so
+        a newly created Page can immediately be selected as Primary Page for a
+        subsequent Add BM operation.
+        """
+        return await asyncio.to_thread(
+            self._latest_profile_fan_pages_sync,
+            profile_id,
+            limit,
+        )
+
+    def _latest_profile_fan_pages_sync(
+        self,
+        profile_id: str,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        profile = str(profile_id or "").strip()
+        bounded_limit = max(1, min(int(limit or 100), 500))
+        if not profile:
+            return []
+
+        with self._connect() as con:
+            rows = con.execute(
+                """
+                SELECT item_id,scope_key,result_json,updated_at
+                FROM provisioning_steps
+                WHERE profile_id=?
+                  AND step=?
+                  AND status='SUCCESS'
+                  AND result_json IS NOT NULL
+                ORDER BY updated_at DESC
+                LIMIT 250
+                """,
+                (profile, ProvisioningStep.FAN_PAGES.value),
+            ).fetchall()
+
+        pages: list[dict[str, Any]] = []
+        seen: set[str] = set()
+
+        for row in rows:
+            try:
+                result = json.loads(str(row["result_json"] or "{}"))
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if not isinstance(result, dict):
+                continue
+
+            result_pages = result.get("pages")
+            if not isinstance(result_pages, list):
+                continue
+
+            for page in result_pages:
+                if not isinstance(page, dict):
+                    continue
+                page_id = str(page.get("id") or page.get("page_id") or "").strip()
+                if not page_id.isdigit() or page_id in seen:
+                    continue
+
+                seen.add(page_id)
+                pages.append(
+                    {
+                        "id": page_id,
+                        "page_id": page_id,
+                        "name": str(page.get("name") or page_id).strip(),
+                        "category": str(
+                            page.get("category")
+                            or result.get("category")
+                            or ""
+                        ).strip(),
+                        "reused": bool(page.get("reused")),
+                        "source": "python_worker_confirmed",
+                        "scope_key": str(row["scope_key"] or ""),
+                        "updated_at": int(row["updated_at"] or 0),
+                    }
+                )
+                if len(pages) >= bounded_limit:
+                    return pages
+
+        return pages
+
+    async def confirmed_ad_account_bindings_for_profile(
+        self,
+        profile_id: str,
+        *,
+        limit: int = 250,
+    ) -> list[dict[str, Any]]:
+        """Return every confirmed BM -> RK relation for one FB profile.
+
+        ReMask allows one RK per Business, and one FB profile may own several
+        Businesses. Workspace therefore must not collapse provisioning history
+        to one newest pair per profile.
+        """
+        return await asyncio.to_thread(
+            self._confirmed_ad_account_bindings_for_profile_sync,
+            profile_id,
+            limit,
+        )
+
+    def _confirmed_ad_account_bindings_for_profile_sync(
+        self,
+        profile_id: str,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        profile = str(profile_id or "").strip()
+        bounded_limit = max(1, min(int(limit or 250), 1000))
+        if not profile:
+            return []
+
+        with self._connect() as con:
+            rows = con.execute(
+                """
+                SELECT scope_key,status,result_json,updated_at
+                FROM provisioning_steps
+                WHERE profile_id=?
+                  AND step=?
+                  AND result_json IS NOT NULL
+                ORDER BY updated_at DESC
+                LIMIT ?
+                """,
+                (
+                    profile,
+                    ProvisioningStep.AD_ACCOUNT.value,
+                    bounded_limit,
+                ),
+            ).fetchall()
+
+        bindings: list[dict[str, Any]] = []
+        seen_businesses: set[str] = set()
+
+        for row in rows:
+            try:
+                result = json.loads(str(row["result_json"] or "{}"))
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if not isinstance(result, dict):
+                continue
+
+            business_id = str(result.get("business_id") or "").strip()
+            if (
+                not business_id.isdigit()
+                or business_id in seen_businesses
+            ):
+                continue
+
+            status = str(row["status"] or "").strip().upper()
+            ad_account_id = str(result.get("ad_account_id") or "").strip()
+            if ad_account_id.lower().startswith("act_"):
+                ad_account_id = ad_account_id[4:]
+
+            source = ""
+            if (
+                status == "SUCCESS"
+                and ad_account_id.isdigit()
+            ):
+                source = "python_worker_success_history"
+            else:
+                ad_account_id = _capture_ui_confirmed_ad_account_id(result)
+                if ad_account_id.isdigit():
+                    source = "python_worker_capture_ui_history"
+
+            if not source:
+                continue
+
+            seen_businesses.add(business_id)
+            bindings.append(
+                {
+                    "business_id": business_id,
+                    "ad_account_id": ad_account_id,
+                    "account_name": str(
+                        result.get("account_name")
+                        or result.get("name")
+                        or ""
+                    ).strip(),
+                    "scope_key": str(row["scope_key"] or ""),
+                    "updated_at": int(row["updated_at"] or 0),
+                    "source": source,
+                }
+            )
+
+        return bindings
+
+    async def confirmed_ad_account_binding_groups(
+        self,
+    ) -> dict[str, dict[str, Any]]:
+        """Return every durable BM -> RK relation grouped by profile.
+
+        The Workspace volume format is multi-Business:
+        profile -> ad_accounts -> business_id -> binding.
+        Never collapse a profile to only its newest RK during worker startup.
+        """
+        return await asyncio.to_thread(
+            self._confirmed_ad_account_binding_groups_sync,
+        )
+
+    def _confirmed_ad_account_binding_groups_sync(
+        self,
+    ) -> dict[str, dict[str, Any]]:
+        with self._connect() as con:
+            rows = con.execute(
+                """
+                SELECT profile_id,scope_key,status,result_json,updated_at
+                FROM provisioning_steps
+                WHERE step=?
+                  AND result_json IS NOT NULL
+                ORDER BY updated_at DESC
+                LIMIT 10000
+                """,
+                (ProvisioningStep.AD_ACCOUNT.value,),
+            ).fetchall()
+
+        groups: dict[str, dict[str, Any]] = {}
+        seen: set[tuple[str, str]] = set()
+
+        for row in rows:
+            profile = str(row["profile_id"] or "").strip()
+            if not profile:
+                continue
+            try:
+                result = json.loads(str(row["result_json"] or "{}"))
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if not isinstance(result, dict):
+                continue
+
+            business_id = str(result.get("business_id") or "").strip()
+            if not business_id.isdigit():
+                continue
+            identity = (profile, business_id)
+            if identity in seen:
+                continue
+
+            status = str(row["status"] or "").strip().upper()
+            ad_account_id = str(result.get("ad_account_id") or "").strip()
+            if ad_account_id.lower().startswith("act_"):
+                ad_account_id = ad_account_id[4:]
+
+            source = ""
+            if status == "SUCCESS" and ad_account_id.isdigit():
+                source = "python_worker_success_history"
+            else:
+                ad_account_id = _capture_ui_confirmed_ad_account_id(result)
+                if ad_account_id.isdigit():
+                    source = "python_worker_capture_ui_history"
+
+            if not source:
+                continue
+
+            seen.add(identity)
+            profile_group = groups.setdefault(
+                profile,
+                {"ad_accounts": {}},
+            )
+            accounts = profile_group.setdefault("ad_accounts", {})
+            accounts[business_id] = {
+                "business_id": business_id,
+                "ad_account_id": ad_account_id,
+                "account_name": str(
+                    result.get("account_name")
+                    or result.get("name")
+                    or ""
+                ).strip(),
+                "scope_key": str(row["scope_key"] or ""),
+                "updated_at": int(row["updated_at"] or 0),
+                "source": source,
+            }
+
+        return groups
+
+    async def confirmed_ad_account_bindings(
+        self,
+    ) -> dict[str, dict[str, Any]]:
+        """
+        Return the newest successful AD_ACCOUNT relation for every profile.
+
+        This is used at worker startup to rebuild Workspace's persistent
+        BM -> RK binding file from durable provisioning history.
+        """
+        return await asyncio.to_thread(
+            self._confirmed_ad_account_bindings_sync,
+        )
+
+    def _confirmed_ad_account_bindings_sync(
+        self,
+    ) -> dict[str, dict[str, Any]]:
+        with self._connect() as con:
+            rows = con.execute(
+                """
+                SELECT profile_id,scope_key,status,result_json,updated_at
+                FROM provisioning_steps
+                WHERE step=?
+                  AND result_json IS NOT NULL
+                ORDER BY updated_at DESC
+                LIMIT 5000
+                """,
+                (ProvisioningStep.AD_ACCOUNT.value,),
+            ).fetchall()
+
+        bindings: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            profile = str(row["profile_id"] or "").strip()
+            if not profile or profile in bindings:
+                continue
+            try:
+                result = json.loads(str(row["result_json"] or "{}"))
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if not isinstance(result, dict):
+                continue
+
+            business_id = str(result.get("business_id") or "").strip()
+            status = str(row["status"] or "").strip().upper()
+            ad_account_id = str(result.get("ad_account_id") or "").strip()
+            if ad_account_id.lower().startswith("act_"):
+                ad_account_id = ad_account_id[4:]
+
+            source = ""
+            if status == "SUCCESS" and business_id.isdigit() and ad_account_id.isdigit():
+                source = "python_worker_success_history"
+            else:
+                # Historical Add-RK Jobs could be marked FAILED/RESULT_UNKNOWN
+                # even after Meta rendered its explicit success dialog because
+                # the private GraphQL mutation was not captured. Recover only
+                # from that strong same-session evidence; never from a generic
+                # candidate ID or ambiguous failed checkpoint.
+                ad_account_id = _capture_ui_confirmed_ad_account_id(result)
+                if business_id.isdigit() and ad_account_id.isdigit():
+                    source = "python_worker_capture_ui_history"
+
+            if not source:
+                continue
+
+            bindings[profile] = {
+                "business_id": business_id,
+                "ad_account_id": ad_account_id,
+                "updated_at": int(row["updated_at"] or 0),
+                "source": source,
+                "scope_key": str(row["scope_key"] or ""),
+            }
+
+        return bindings
 
     async def set_running(
         self,
@@ -678,6 +1158,54 @@ class ProvisioningStateStore:
                 (entity_value, now, profile_id, scope_key),
             )
             con.commit()
+
+
+    async def forget_entity(
+        self,
+        profile_id: str,
+        scope_key: str,
+        step: ProvisioningStep,
+        *,
+        expected_value: str = "",
+    ) -> None:
+        """Clear a cached entity that failed independent live verification."""
+        entity_key = ENTITY_RESULT_KEYS.get(step)
+        column = {
+            "business_id": "business_id",
+            "ad_account_id": "ad_account_id",
+            "funding_source_id": "funding_source_id",
+        }.get(entity_key or "")
+        if not column:
+            return
+        await asyncio.to_thread(
+            self._forget_entity_sync,
+            profile_id,
+            scope_key,
+            column,
+            str(expected_value or "").strip(),
+        )
+
+    def _forget_entity_sync(
+        self,
+        profile_id: str,
+        scope_key: str,
+        column: str,
+        expected_value: str,
+    ) -> None:
+        now = _now()
+        with self._connect() as con:
+            if expected_value:
+                con.execute(
+                    f"UPDATE provisioning_entities SET {column}=NULL,updated_at=? "
+                    f"WHERE profile_id=? AND scope_key=? AND {column}=?",
+                    (now, profile_id, scope_key, expected_value),
+                )
+            else:
+                con.execute(
+                    f"UPDATE provisioning_entities SET {column}=NULL,updated_at=? "
+                    "WHERE profile_id=? AND scope_key=?",
+                    (now, profile_id, scope_key),
+                )
 
     async def complete(
         self,

@@ -148,15 +148,16 @@ def _extract_ad_account_id(payload: dict[str, Any]) -> tuple[str, str]:
                 key_folded = key_text.casefold()
                 child_path = f"{path}.{key_text}"
 
-                if key_folded in {"account_id", "ad_account_id"}:
+                parent_is_ad_account = (
+                    "ad_account" in parent_key
+                    or "adaccount" in parent_key
+                    or "advertising_account" in parent_key
+                )
+                if key_folded == "ad_account_id":
                     add(child, child_path)
                 elif (
-                    key_folded == "id"
-                    and (
-                        "ad_account" in parent_key
-                        or "adaccount" in parent_key
-                        or "advertising_account" in parent_key
-                    )
+                    key_folded in {"account_id", "id"}
+                    and parent_is_ad_account
                 ):
                     add(child, child_path)
 

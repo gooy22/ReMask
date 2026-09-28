@@ -118,7 +118,7 @@ if [ "$USE_EXTERNAL_PYTHON_WORKER" != "1" ]; then
   (
     cd /opt/remask-python
     exec /opt/remask-venv/bin/uvicorn main:app --host 127.0.0.1 --port "$PYTHON_WORKER_PORT" --workers 1
-  ) >> "$DATA_DIR/python-worker.log" 2>&1 &
+  ) > >(tee -a "$DATA_DIR/python-worker.log") 2> >(tee -a "$DATA_DIR/python-worker.log" >&2) &
   PYTHON_WORKER_PID="$!"
   echo "$PYTHON_WORKER_PID" > "$DATA_DIR/python-worker.pid"
 
@@ -149,6 +149,9 @@ PY
     echo "Embedded Python worker did not become healthy during initial probe window; watchdog will recover it" >&2
     tail -n 160 "$DATA_DIR/python-worker.log" >&2 || true
   fi
+
+  # Live inventory is verified after Apache starts, because ProfileResolver
+  # calls the local PHP context endpoint.
 
   # Keep monitoring after startup too. A Chromium-heavy BUSINESS job can leave
   # the worker process alive while its HTTP loop is no longer responsive.
@@ -203,7 +206,7 @@ PY
       (
         cd /opt/remask-python
         exec /opt/remask-venv/bin/uvicorn main:app --host 127.0.0.1 --port "$PYTHON_WORKER_PORT" --workers 1
-      ) >> "$DATA_DIR/python-worker.log" 2>&1 &
+      ) > >(tee -a "$DATA_DIR/python-worker.log") 2> >(tee -a "$DATA_DIR/python-worker.log" >&2) &
       echo "$!" > "$DATA_DIR/python-worker.pid"
       FAIL_COUNT=0
       sleep 5
@@ -225,8 +228,6 @@ a2enconf remask-servername 2>/dev/null || true
 
 sed -ri "s#DocumentRoot .*#DocumentRoot ${ROOT}#" /etc/apache2/sites-available/000-default.conf
 sed -ri "s/<VirtualHost \*:[0-9]+>/<VirtualHost *:80>/" /etc/apache2/sites-available/000-default.conf
-
-
 
 
 exec apache2-foreground
