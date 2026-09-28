@@ -429,7 +429,9 @@ function hierarchy_worker_live_inventory(string $profile, array $knownBusinessId
     $ctx = stream_context_create(['http' => [
         'method' => 'GET',
         'header' => implode("\r\n", $headers) . "\r\n",
-        'timeout' => 32,
+        // Keep this below the 70s browser UI deadline, but long enough for
+        // private BM discovery plus one BM's RK inventory.
+        'timeout' => 64,
         'ignore_errors' => true,
         'follow_location' => 0,
     ]]);
