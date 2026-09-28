@@ -250,6 +250,13 @@ async function syncSelection(){
     try{
       const d=await withTimeout(apiJson('ajax/metaHierarchy.php',post({action:'sync_profile',profile})));
       applySnapshot(d);
+      if(d && d.sync_complete===false){
+        return {
+          error:String(d.sync_error||'Private Business Suite inventory was inconclusive'),
+          error_kind:String(d.sync_error_kind||'PRIVATE_INCONCLUSIVE'),
+          profile
+        };
+      }
       return d;
     }catch(e){
       const x=classifySyncError(e);
@@ -261,6 +268,14 @@ async function syncSelection(){
     try{
       const d=await withTimeout(apiJson('ajax/metaHierarchy.php',post({action:'sync_profile',profile:row.profile})));
       applySnapshot(d);
+      if(d && d.sync_complete===false){
+        return {
+          error:String(d.sync_error||'Private Business Suite inventory was inconclusive'),
+          error_kind:String(d.sync_error_kind||'PRIVATE_INCONCLUSIVE'),
+          profile:row.profile,
+          business_id:row.id
+        };
+      }
       return d;
     }catch(e){
       const x=classifySyncError(e);
@@ -392,13 +407,21 @@ function hierarchy_worker_state(string $profile): array
     return is_array($json) ? $json : [];
 }
 
-function hierarchy_worker_live_inventory(string $profile): array
+function hierarchy_worker_live_inventory(string $profile, array $knownBusinessIds = []): array
 {
     $profile = trim($profile);
     if ($profile === '') return [];
 
     $base = rtrim(trim((string)(getenv('REMASK_PYTHON_WORKER_URL') ?: 'http://127.0.0.1:8081')), '/');
     $url = $base . '/api/v1/profiles/' . rawurlencode($profile) . '/live-inventory';
+    $businessIds = [];
+    foreach ($knownBusinessIds as $businessId) {
+        $businessId = trim((string)$businessId);
+        if (preg_match('/^\d{5,30}$/', $businessId)) $businessIds[$businessId] = true;
+    }
+    if ($businessIds !== []) {
+        $url .= '?business_ids=' . rawurlencode(implode(',', array_keys($businessIds)));
+    }
     $headers = ['Accept: application/json'];
     $key = trim((string)(getenv('REMASK_WORKER_API_KEY') ?: ''));
     if ($key !== '') $headers[] = 'X-Remask-Worker-Key: ' . $key;
@@ -619,8 +642,17 @@ $syncProfileReplacement = <<<'PHP'
         $syncWarnings = [];
         $existingSnapshot = hierarchy_profile_snapshot($profile);
 
+        $knownBusinessIds = [];
+        foreach ((array)($existingSnapshot['businesses'] ?? []) as $existingBusiness) {
+            if (!is_array($existingBusiness)) continue;
+            $existingBusinessId = trim((string)($existingBusiness['id'] ?? ''));
+            if (preg_match('/^\d{5,30}$/', $existingBusinessId)) {
+                $knownBusinessIds[$existingBusinessId] = true;
+            }
+        }
+
         try {
-            $liveInventory = hierarchy_worker_live_inventory($profile);
+            $liveInventory = hierarchy_worker_live_inventory($profile, array_keys($knownBusinessIds));
         } catch (Throwable $liveInventoryError) {
             $message = trim((string)$liveInventoryError->getMessage());
             if (
@@ -805,6 +837,11 @@ $syncProfileReplacement = <<<'PHP'
         $snapshot['sync_source'] = 'private_business_suite_browser';
         $snapshot['live_inventory_available'] = $liveReady;
         $snapshot['graph_preflight_available'] = false;
+        $snapshot['sync_complete'] = $liveReady;
+        if (!$liveReady) {
+            $snapshot['sync_error_kind'] = 'PRIVATE_INCONCLUSIVE';
+            $snapshot['sync_error'] = 'Private Business Suite inventory did not confirm live BM/RK state.';
+        }
 
         if (is_array($snapshot['profiles'] ?? null)) {
             foreach ($snapshot['profiles'] as $i => $profileRow) {
