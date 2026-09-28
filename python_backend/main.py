@@ -991,6 +991,52 @@ async def profile_live_inventory(profile_id: str, business_ids: str | None = Non
             businesses=[]
             live_business_ids:set[str]=set()
 
+            async def load_business_inventory(business_id: str):
+                nonlocal browser
+                last_error=None
+                for attempt in range(2):
+                    try:
+                        return await asyncio.wait_for(
+                            browser.snapshot_ad_accounts_for_business(
+                                business_id=str(business_id),
+                                timeout_seconds=12.0,
+                            ),
+                            timeout=18.0,
+                        )
+                    except BrowserBusinessError as exc:
+                        last_error=exc
+                        if (
+                            attempt == 0
+                            and exc.code in {
+                                'CHECKPOINT_REQUIRED',
+                                'SESSION_EXPIRED',
+                                'TWO_FACTOR_REQUIRED',
+                            }
+                        ):
+                            log.warning(
+                                'live inventory profile=%s business=%s auth redirect=%s; reopening profile browser once',
+                                clean_profile,
+                                business_id,
+                                exc.code,
+                            )
+                            try:
+                                await browser.close()
+                            except Exception:
+                                pass
+                            try:
+                                profile_session._business_browser=None
+                            except Exception:
+                                pass
+                            browser=await asyncio.wait_for(
+                                profile_session.facebook_business_browser(),
+                                timeout=24.0,
+                            )
+                            continue
+                        raise
+                if last_error is not None:
+                    raise last_error
+                raise RuntimeError('business inventory retry exhausted')
+
             stage='rk_inventory'
             for business_id,business_name in sorted(
                 business_map.items(),
@@ -1005,12 +1051,8 @@ async def profile_live_inventory(profile_id: str, business_ids: str | None = Non
                 }
                 inventory_started=time.monotonic()
                 try:
-                    inventory=await asyncio.wait_for(
-                        browser.snapshot_ad_accounts_for_business(
-                            business_id=str(business_id),
-                            timeout_seconds=12.0,
-                        ),
-                        timeout=18.0,
+                    inventory=await load_business_inventory(
+                        str(business_id)
                     )
                     row['ad_accounts']=[
                         account
@@ -1036,15 +1078,24 @@ async def profile_live_inventory(profile_id: str, business_ids: str | None = Non
                         f'BM {business_id}: live RK inventory timed out'
                     )
                 except BrowserBusinessError as exc:
-                    if exc.code in {
+                    row['ad_accounts_source']=(
+                        'business_auth_blocked'
+                        if exc.code in {
+                            'CHECKPOINT_REQUIRED',
+                            'SESSION_EXPIRED',
+                            'TWO_FACTOR_REQUIRED',
+                        }
+                        else 'browser_error'
+                    )
+                    row['browser_error_code']=exc.code
+                    row['browser_error']=str(exc)
+                    if isinstance(getattr(exc, 'diagnostic', None), dict):
+                        row['browser_error_diagnostic']=exc.diagnostic
+                    row['auth_blocked']=exc.code in {
                         'CHECKPOINT_REQUIRED',
                         'SESSION_EXPIRED',
                         'TWO_FACTOR_REQUIRED',
-                    }:
-                        raise
-                    row['ad_accounts_source']='browser_error'
-                    row['browser_error_code']=exc.code
-                    row['browser_error']=str(exc)
+                    }
                     warnings.append(
                         f'BM {business_id}: {exc.code}'
                     )
@@ -1126,6 +1177,11 @@ async def profile_live_inventory(profile_id: str, business_ids: str | None = Non
                 'businesses_count':len(businesses),
                 'live_businesses_count':len(live_business_ids),
                 'known_businesses_count':len(known_business_ids),
+                'auth_blocked_businesses':[
+                    str(row.get('id') or '')
+                    for row in businesses
+                    if isinstance(row,dict) and row.get('auth_blocked')
+                ],
                 'discovery_source':discovery_source,
                 'business_inventory_diagnostic':getattr(
                     browser,
