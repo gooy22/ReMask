@@ -1111,8 +1111,29 @@ async def profile_live_inventory(profile_id: str, business_ids: str | None = Non
                         )
                 except asyncio.TimeoutError:
                     row['ad_accounts_source']='business_settings_timeout'
+                    row['diagnostics']=[
+                        getattr(
+                            browser,
+                            '_last_ad_account_section_diagnostic',
+                            {},
+                        )
+                    ]
                     warnings.append(
                         f'BM {business_id}: live RK inventory timed out'
+                    )
+                    log.warning(
+                        'live inventory profile=%s business=%s rk timeout diagnostic=%s',
+                        clean_profile,
+                        business_id,
+                        json.dumps(
+                            getattr(
+                                browser,
+                                '_last_ad_account_section_diagnostic',
+                                {},
+                            ),
+                            ensure_ascii=False,
+                            separators=(',', ':'),
+                        )[:6000],
                     )
                 except BrowserBusinessError as exc:
                     row['ad_accounts_source']=(
