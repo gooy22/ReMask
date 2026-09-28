@@ -260,10 +260,7 @@ port = os.getenv("REMASK_LOCAL_WORKER_PORT", "8081")
 key = os.getenv("REMASK_WORKER_API_KEY", "")
 base = f"http://127.0.0.1:{port}/api/v1/profiles/7"
 state_url = base + "/provisioning-state"
-url = (
-    base + "/live-inventory?"
-    + urllib.parse.urlencode({"business_ids": "61594753560938"})
-)
+url = base + "/live-inventory"
 
 def read_json(target: str, timeout: float):
     req = urllib.request.Request(target)
@@ -411,6 +408,10 @@ safe = {
     "businesses_count": int(data.get("businesses_count") or 0),
     "live_businesses_count": int(data.get("live_businesses_count") or 0),
     "warnings": data.get("warnings") or [],
+    "business_inventory_diagnostic": (
+        data.get("business_inventory_diagnostic") or {}
+    ),
+    "discovery_source": str(data.get("discovery_source") or ""),
     "businesses": safe_businesses,
 }
 print(

@@ -4762,12 +4762,54 @@ class FacebookBusinessBrowser:
                     )
                     if business_id and "business" in path.casefold()
                 })
+                variable_numeric_ids: list[dict[str, str]] = []
+                def collect_business_probe_ids(
+                    value: Any,
+                    path: str = "variables",
+                ) -> None:
+                    if len(variable_numeric_ids) >= 24:
+                        return
+                    if isinstance(value, dict):
+                        for key, child in value.items():
+                            collect_business_probe_ids(
+                                child,
+                                f"{path}.{key}",
+                            )
+                    elif isinstance(value, list):
+                        for index, child in enumerate(value[:16]):
+                            collect_business_probe_ids(
+                                child,
+                                f"{path}[{index}]",
+                            )
+                    else:
+                        clean_value = _clean(value)
+                        if (
+                            clean_value.isdigit()
+                            and 5 <= len(clean_value) <= 30
+                        ):
+                            variable_numeric_ids.append(
+                                {
+                                    "path": path[:220],
+                                    "value": clean_value,
+                                }
+                            )
+
+                collect_business_probe_ids(meta.get("variables") or {})
                 query_diagnostics.append(
                     {
                         "friendly_name": friendly[:180],
                         "doc_id": _clean(meta.get("doc_id"))[:60],
                         "rows": len(rows),
+                        "row_summaries": [
+                            {
+                                "id": _digits(row.get("id")),
+                                "name": _clean(row.get("name"))[:180],
+                            }
+                            for row in rows[:8]
+                            if isinstance(row, dict)
+                        ],
                         "request_business_ids": request_business_ids[:8],
+                        "variable_numeric_ids": variable_numeric_ids,
                     }
                 )
                 if len(query_diagnostics) > 24:
