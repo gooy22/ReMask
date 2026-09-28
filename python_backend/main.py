@@ -1103,6 +1103,9 @@ async def profile_live_inventory(profile_id: str, business_ids: str | None = Non
                     )
                     row['attempts']=inventory.get('attempts') or []
                     row['diagnostics']=inventory.get('diagnostics') or []
+                    row['section_diagnostic']=(
+                        inventory.get('section_diagnostic') or {}
+                    )
                     if row['ad_accounts_ready']:
                         live_business_ids.add(str(business_id))
                     else:

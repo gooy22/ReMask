@@ -230,4 +230,110 @@ sed -ri "s#DocumentRoot .*#DocumentRoot ${ROOT}#" /etc/apache2/sites-available/0
 sed -ri "s/<VirtualHost \*:[0-9]+>/<VirtualHost *:80>/" /etc/apache2/sites-available/000-default.conf
 
 
+# Temporary read-only RK sync diagnostic. Protected by an unguessable token.
+# It exposes no cookies, worker keys, access tokens, or fb_dtsg values.
+cat > "$ROOT/__rk_sync_diag.php" <<'PHP'
+<?php
+declare(strict_types=1);
+header('Content-Type: application/json; charset=utf-8');
+
+if (!hash_equals('RE2Yfc2VOvyFBvR7tFbHcwpko83zanpm', (string)($_GET['token'] ?? ''))) {
+    http_response_code(404);
+    echo json_encode(['ok' => false, 'error' => 'not_found']);
+    exit;
+}
+
+$port = getenv('REMASK_LOCAL_WORKER_PORT') ?: '8081';
+$key = getenv('REMASK_WORKER_API_KEY') ?: '';
+$url = 'http://127.0.0.1:' . $port
+    . '/api/v1/profiles/7/live-inventory?business_ids=61594753560938';
+
+$headers = "Accept: application/json\r\n";
+if ($key !== '') {
+    $headers .= "X-Remask-Worker-Key: " . $key . "\r\n";
+}
+
+$context = stream_context_create([
+    'http' => [
+        'method' => 'GET',
+        'header' => $headers,
+        'timeout' => 70,
+        'ignore_errors' => true,
+    ],
+]);
+
+$raw = @file_get_contents($url, false, $context);
+$statusLine = '';
+if (isset($http_response_header) && is_array($http_response_header) && $http_response_header) {
+    $statusLine = (string)$http_response_header[0];
+}
+
+if (!is_string($raw) || $raw === '') {
+    http_response_code(502);
+    echo json_encode([
+        'ok' => false,
+        'worker_http' => $statusLine,
+        'error' => 'empty_worker_response',
+    ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+$data = json_decode($raw, true);
+if (!is_array($data)) {
+    http_response_code(502);
+    echo json_encode([
+        'ok' => false,
+        'worker_http' => $statusLine,
+        'error' => 'invalid_worker_json',
+    ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+$businesses = [];
+foreach (($data['businesses'] ?? []) as $row) {
+    if (!is_array($row)) {
+        continue;
+    }
+    $accounts = [];
+    foreach (($row['ad_accounts'] ?? []) as $account) {
+        if (!is_array($account)) {
+            continue;
+        }
+        $accounts[] = [
+            'id' => (string)($account['id'] ?? $account['account_id'] ?? ''),
+            'account_id' => (string)($account['account_id'] ?? $account['id'] ?? ''),
+            'name' => (string)($account['name'] ?? ''),
+            'business_id' => (string)($account['business_id'] ?? ''),
+            'source' => (string)($account['_source'] ?? $account['source'] ?? ''),
+        ];
+    }
+    $businesses[] = [
+        'id' => (string)($row['id'] ?? ''),
+        'name' => (string)($row['name'] ?? ''),
+        'ad_accounts_ready' => (bool)($row['ad_accounts_ready'] ?? false),
+        'ad_accounts_count' => (int)($row['ad_accounts_count'] ?? 0),
+        'ad_accounts_source' => (string)($row['ad_accounts_source'] ?? ''),
+        'ad_accounts' => $accounts,
+        'attempts' => is_array($row['attempts'] ?? null) ? $row['attempts'] : [],
+        'diagnostics' => is_array($row['diagnostics'] ?? null) ? $row['diagnostics'] : [],
+        'section_diagnostic' => is_array($row['section_diagnostic'] ?? null)
+            ? $row['section_diagnostic']
+            : [],
+        'browser_error_code' => (string)($row['browser_error_code'] ?? ''),
+        'browser_error' => (string)($row['browser_error'] ?? ''),
+    ];
+}
+
+echo json_encode([
+    'ok' => (bool)($data['ok'] ?? false),
+    'worker_http' => $statusLine,
+    'profile_id' => (string)($data['profile_id'] ?? ''),
+    'live_ready' => (bool)($data['live_ready'] ?? false),
+    'businesses_count' => (int)($data['businesses_count'] ?? count($businesses)),
+    'live_businesses_count' => (int)($data['live_businesses_count'] ?? 0),
+    'warnings' => is_array($data['warnings'] ?? null) ? $data['warnings'] : [],
+    'businesses' => $businesses,
+], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+PHP
+
 exec apache2-foreground
