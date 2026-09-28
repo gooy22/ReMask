@@ -9342,6 +9342,39 @@ class FacebookBusinessBrowser:
                     request_scoped=inventory_scope,
                 )
 
+                # Diagnostic only: expose numeric context values by JSON path,
+                # never the raw request body, cookies, fb_dtsg or access token.
+                variable_numeric_ids: list[dict[str, str]] = []
+                def collect_numeric_ids(value: Any, path: str = "variables") -> None:
+                    if len(variable_numeric_ids) >= 32:
+                        return
+                    if isinstance(value, dict):
+                        for key, child in value.items():
+                            collect_numeric_ids(child, f"{path}.{key}")
+                    elif isinstance(value, list):
+                        for index, child in enumerate(value[:24]):
+                            collect_numeric_ids(child, f"{path}[{index}]")
+                    else:
+                        clean_value = _clean(value)
+                        if clean_value.isdigit() and 5 <= len(clean_value) <= 30:
+                            variable_numeric_ids.append(
+                                {"path": path[:240], "value": clean_value}
+                            )
+
+                collect_numeric_ids(meta.get("variables") or {})
+                row_summaries = [
+                    {
+                        "id": _normalize_ad_account_id(row.get("id")),
+                        "name": _clean(row.get("name"))[:180],
+                        "business_id": _digits(row.get("business_id")),
+                        "business_name": _clean(row.get("business_name"))[:180],
+                        "account_status": row.get("account_status"),
+                        "currency": _clean(row.get("currency"))[:24],
+                    }
+                    for row in rows[:8]
+                    if isinstance(row, dict)
+                ]
+
                 diagnostic = {
                     "friendly_name": _clean(meta.get("friendly_name"))[:180],
                     "doc_id": _clean(meta.get("doc_id"))[:80],
@@ -9351,6 +9384,8 @@ class FacebookBusinessBrowser:
                     "exact_business_context": exact_business_context,
                     "target_business_ids": sorted(target_business_ids)[:8],
                     "row_business_ids": sorted(row_business_ids)[:8],
+                    "variable_numeric_ids": variable_numeric_ids,
+                    "row_summaries": row_summaries,
                     "inventory_scope": inventory_scope,
                     "rows": len(rows),
                     "inventory_observed": observed,

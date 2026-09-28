@@ -258,18 +258,53 @@ import urllib.request
 
 port = os.getenv("REMASK_LOCAL_WORKER_PORT", "8081")
 key = os.getenv("REMASK_WORKER_API_KEY", "")
+base = f"http://127.0.0.1:{port}/api/v1/profiles/7"
+state_url = base + "/provisioning-state"
 url = (
-    f"http://127.0.0.1:{port}/api/v1/profiles/7/live-inventory?"
+    base + "/live-inventory?"
     + urllib.parse.urlencode({"business_ids": "61594753560938"})
 )
-req = urllib.request.Request(url)
-if key:
-    req.add_header("X-Remask-Worker-Key", key)
+
+def read_json(target: str, timeout: float):
+    req = urllib.request.Request(target)
+    if key:
+        req.add_header("X-Remask-Worker-Key", key)
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read().decode("utf-8", "replace"))
 
 try:
-    with urllib.request.urlopen(req, timeout=75) as r:
-        raw = r.read().decode("utf-8", "replace")
-        data = json.loads(raw)
+    state = read_json(state_url, 15)
+    safe_state = {
+        "business_id": str(state.get("business_id") or ""),
+        "business_name": str(state.get("business_name") or ""),
+        "ad_account_id": str(state.get("ad_account_id") or ""),
+        "ad_account_name": str(state.get("ad_account_name") or ""),
+        "ad_account_bindings": [
+            {
+                "business_id": str(row.get("business_id") or ""),
+                "business_name": str(row.get("business_name") or ""),
+                "ad_account_id": str(row.get("ad_account_id") or ""),
+                "account_name": str(row.get("account_name") or ""),
+            }
+            for row in (state.get("ad_account_bindings") or [])
+            if isinstance(row, dict)
+        ],
+        "fan_pages": [
+            {
+                "id": str(row.get("id") or row.get("page_id") or ""),
+                "name": str(row.get("name") or row.get("page_name") or ""),
+                "business_id": str(row.get("business_id") or ""),
+            }
+            for row in (state.get("fan_pages") or [])
+            if isinstance(row, dict)
+        ],
+    }
+    print(
+        "[rk-sync-smoke] state="
+        + json.dumps(safe_state, ensure_ascii=False, separators=(",", ":")),
+        flush=True,
+    )
+    data = read_json(url, 75)
 except Exception as exc:
     print(
         "[rk-sync-smoke] failed="
