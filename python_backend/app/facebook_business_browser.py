@@ -9306,19 +9306,29 @@ class FacebookBusinessBrowser:
                 if "graphql" not in url.casefold():
                     return
                 meta = _request_graphql_meta(request)
-                friendly = _clean(meta.get("friendly_name")).casefold()
+                friendly_raw = _clean(meta.get("friendly_name"))
+                friendly = friendly_raw.casefold()
                 if any(
                     marker in friendly
                     for marker in ("mutation", "create", "update", "delete")
                 ):
                     return
-                if not _graphql_request_ad_account_inventory_scope(meta):
-                    return
 
+                request_scoped = _graphql_request_ad_account_inventory_scope(meta)
+                variable_business_ids = sorted(
+                    {
+                        candidate
+                        for candidate, _path in _walk_business_ids(
+                            meta.get("variables") or {}
+                        )
+                        if candidate
+                    }
+                )
                 diagnostics.append(
                     {
                         "phase": "request_event",
-                        "friendly_name": _clean(meta.get("friendly_name"))[:180],
+                        "inventory_scoped": request_scoped,
+                        "friendly_name": friendly_raw[:180],
                         "doc_id": _clean(meta.get("doc_id"))[:80],
                         "variable_keys": sorted(
                             str(key)
@@ -9328,15 +9338,17 @@ class FacebookBusinessBrowser:
                                 else []
                             )
                         )[:32],
+                        "variable_business_ids": variable_business_ids[:8],
                         "variable_numeric_ids": safe_variable_numeric_ids(meta),
                         "page_url": _clean(
                             getattr(self.page, "url", "")
                         )[:700],
                     }
                 )
-                if len(diagnostics) > 24:
-                    del diagnostics[:-24]
-                inventory_query_seen.set()
+                if len(diagnostics) > 40:
+                    del diagnostics[:-40]
+                if request_scoped:
+                    inventory_query_seen.set()
             except Exception:
                 return
 
@@ -9648,7 +9660,7 @@ class FacebookBusinessBrowser:
                             try:
                                 await asyncio.wait_for(
                                     inventory_response_seen.wait(),
-                                    timeout=min(4.0, response_wait_remaining),
+                                    timeout=min(2.0, response_wait_remaining),
                                 )
                             except asyncio.TimeoutError:
                                 pass
@@ -9661,7 +9673,7 @@ class FacebookBusinessBrowser:
                         if body_read_remaining > 0:
                             _done, pending_inventory = await asyncio.wait(
                                 list(inventory_response_tasks),
-                                timeout=min(4.0, body_read_remaining),
+                                timeout=min(2.0, body_read_remaining),
                             )
                         else:
                             pending_inventory = set()
@@ -9721,14 +9733,28 @@ class FacebookBusinessBrowser:
             remaining = max(0.0, deadline - time.monotonic())
             if remaining > 0 and not inventory_observed:
                 await self.page.wait_for_timeout(
-                    int(min(1600.0, remaining * 1000.0))
+                    int(min(800.0, remaining * 1000.0))
                 )
 
+            # Never let diagnostics/body reads overrun the snapshot's own
+            # deadline and get killed by the outer 18s live-inventory watchdog.
             if response_tasks:
-                await asyncio.gather(
-                    *list(response_tasks),
-                    return_exceptions=True,
-                )
+                remaining = max(0.0, deadline - time.monotonic())
+                pending_response_tasks: set[asyncio.Task[Any]] = set()
+                if remaining > 0:
+                    _done, pending_response_tasks = await asyncio.wait(
+                        list(response_tasks),
+                        timeout=min(1.5, remaining),
+                    )
+                else:
+                    pending_response_tasks = set(response_tasks)
+                for task in pending_response_tasks:
+                    task.cancel()
+                if pending_response_tasks:
+                    await asyncio.gather(
+                        *list(pending_response_tasks),
+                        return_exceptions=True,
+                    )
 
             self._last_ad_account_section_diagnostic = {
                 "stage": "inventory_complete",
@@ -9768,8 +9794,11 @@ class FacebookBusinessBrowser:
             except Exception:
                 pass
             if response_tasks:
+                remaining_tasks = list(response_tasks)
+                for task in remaining_tasks:
+                    task.cancel()
                 await asyncio.gather(
-                    *list(response_tasks),
+                    *remaining_tasks,
                     return_exceptions=True,
                 )
 
