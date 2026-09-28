@@ -4799,9 +4799,28 @@ class FacebookBusinessBrowser:
 
         def on_response(response: Any) -> None:
             try:
+                url = _clean(getattr(response, "url", ""))
+                if "graphql" not in url.casefold():
+                    return
+                request = getattr(response, "request", None)
+                meta = (
+                    _request_graphql_meta(request)
+                    if request is not None
+                    else {}
+                )
+                friendly = _clean(meta.get("friendly_name")).casefold()
+                if any(
+                    marker in friendly
+                    for marker in ("mutation", "create", "update", "delete")
+                ):
+                    return
+
                 task = asyncio.create_task(inspect_response(response))
                 response_tasks.add(task)
                 task.add_done_callback(response_tasks.discard)
+                if _graphql_request_ad_account_inventory_scope(meta):
+                    inventory_response_tasks.add(task)
+                    task.add_done_callback(inventory_response_tasks.discard)
             except Exception:
                 return
 
@@ -9274,6 +9293,7 @@ class FacebookBusinessBrowser:
         diagnostics: list[dict[str, Any]] = []
         inventory_observed = False
         response_tasks: set[asyncio.Task[Any]] = set()
+        inventory_response_tasks: set[asyncio.Task[Any]] = set()
 
         async def inspect_response(response: Any) -> None:
             nonlocal inventory_observed
@@ -9542,6 +9562,26 @@ class FacebookBusinessBrowser:
                         )
                     await asyncio.sleep(0)
 
+                    # A read-only RK GraphQL response may have arrived on the
+                    # redirected shell. Its body becomes unavailable as soon as
+                    # the next navigation starts. Drain targeted inventory
+                    # response bodies before another goto instead of racing
+                    # Network.getResponseBody against navigation.
+                    if inventory_response_tasks:
+                        body_read_remaining = max(
+                            0.0,
+                            deadline - time.monotonic(),
+                        )
+                        if body_read_remaining > 0:
+                            _done, pending_inventory = await asyncio.wait(
+                                list(inventory_response_tasks),
+                                timeout=min(2.0, body_read_remaining),
+                            )
+                        else:
+                            pending_inventory = set()
+                    else:
+                        pending_inventory = set()
+
                     attempts.append(
                         {
                             "requested_url": target[:700],
@@ -9557,6 +9597,11 @@ class FacebookBusinessBrowser:
                         }
                     )
                     if inventory_observed:
+                        break
+                    if pending_inventory:
+                        # Preserve the current document so the in-flight RK
+                        # response can finish instead of invalidating its body
+                        # with another navigation.
                         break
                 except BrowserBusinessError:
                     raise
