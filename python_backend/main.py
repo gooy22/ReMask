@@ -958,9 +958,22 @@ async def profile_live_inventory(profile_id: str, business_ids: str | None = Non
             else:
                 discovery_started=time.monotonic()
                 try:
+                    try:
+                        business_discovery_timeout=float(
+                            os.getenv(
+                                'REMASK_LIVE_INVENTORY_BUSINESS_DISCOVERY_TIMEOUT_SECONDS',
+                                '28',
+                            )
+                        )
+                    except (TypeError,ValueError):
+                        business_discovery_timeout=28.0
+                    business_discovery_timeout=max(
+                        20.0,
+                        min(business_discovery_timeout,40.0),
+                    )
                     business_map=await asyncio.wait_for(
                         browser.snapshot_businesses(),
-                        timeout=18.0,
+                        timeout=business_discovery_timeout,
                     )
                     business_diag=getattr(
                         browser,
@@ -987,7 +1000,22 @@ async def profile_live_inventory(profile_id: str, business_ids: str | None = Non
                 except asyncio.TimeoutError:
                     warnings.append('Business discovery timed out')
                     business_map={}
-                    discovery_source='business_suite_home_timeout'
+                    discovery_source='business_suite_discovery_timeout'
+                    business_diag=getattr(
+                        browser,
+                        '_last_business_inventory_diagnostic',
+                        {},
+                    )
+                    log.warning(
+                        'live inventory profile=%s business_discovery timeout=%.1fs diagnostic=%s',
+                        clean_profile,
+                        business_discovery_timeout,
+                        json.dumps(
+                            business_diag,
+                            ensure_ascii=False,
+                            separators=(',', ':'),
+                        )[:6000],
+                    )
                 finally:
                     log.info(
                         'live inventory profile=%s business_discovery source=%s ms=%d count=%d',
