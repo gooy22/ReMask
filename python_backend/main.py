@@ -870,6 +870,7 @@ async def profile_live_inventory(profile_id: str):
         raise HTTPException(status_code=400,detail='profile_id is required')
 
     started=time.monotonic()
+    stage='resolver'
     try:
         context=await pool.resolver.resolve(clean_profile)
     except ProfileContextError as exc:
@@ -905,12 +906,35 @@ async def profile_live_inventory(profile_id: str):
         known_business_ids.add(latest_business_id)
 
     try:
+        stage='profile_session'
         async with ProfileSession(context) as profile_session:
-            browser=await profile_session.facebook_business_browser()
+            stage='browser_open'
+            browser_open_started=time.monotonic()
+            try:
+                browser=await asyncio.wait_for(
+                    profile_session.facebook_business_browser(),
+                    timeout=24.0,
+                )
+            except asyncio.TimeoutError as exc:
+                log.warning(
+                    'live inventory profile=%s browser_open timeout ms=%d',
+                    clean_profile,
+                    int((time.monotonic()-browser_open_started)*1000),
+                )
+                raise HTTPException(
+                    status_code=504,
+                    detail='LIVE_INVENTORY_BROWSER_OPEN_TIMEOUT',
+                ) from exc
+            log.info(
+                'live inventory profile=%s browser_open ms=%d',
+                clean_profile,
+                int((time.monotonic()-browser_open_started)*1000),
+            )
 
             business_map: dict[str,str] = {}
             discovery_source=''
 
+            stage='business_discovery'
             if known_business_ids:
                 business_map={
                     business_id:business_id
@@ -946,6 +970,7 @@ async def profile_live_inventory(profile_id: str):
             businesses=[]
             live_business_ids:set[str]=set()
 
+            stage='rk_inventory'
             for business_id,business_name in sorted(
                 business_map.items(),
                 key=lambda item: str(item[0]),
@@ -1097,13 +1122,14 @@ async def profile_live_inventory(profile_id: str):
 
     except asyncio.TimeoutError as exc:
         log.warning(
-            'live inventory profile=%s outer timeout ms=%d',
+            'live inventory profile=%s outer timeout stage=%s ms=%d',
             clean_profile,
+            stage,
             int((time.monotonic()-started)*1000),
         )
         raise HTTPException(
             status_code=504,
-            detail='LIVE_INVENTORY_TIMEOUT',
+            detail=f'LIVE_INVENTORY_TIMEOUT:{stage}',
         ) from exc
     except BrowserBusinessError as exc:
         log.warning(
