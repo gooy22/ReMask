@@ -97,6 +97,12 @@ if [ -f "$ROOT/bin/remask-profile7-backup-session-recovery.php" ]; then
   php "$ROOT/bin/remask-profile7-backup-session-recovery.php" 2>&1 || true
 fi
 
+# Search durable ReMask data for a verified historical Ads token belonging
+# to the same c_user. Persist only after a successful /me identity match.
+if [ -f "$ROOT/bin/remask-profile7-token-recovery.php" ]; then
+  php "$ROOT/bin/remask-profile7-token-recovery.php" 2>&1 || true
+fi
+
 # Read-only credential history diagnostic.
 if [ -f "$ROOT/bin/remask-profile7-history-diagnostic.php" ]; then
   php "$ROOT/bin/remask-profile7-history-diagnostic.php" 2>&1 || true

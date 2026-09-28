@@ -437,6 +437,8 @@ RUN set -eux; \
     php -l /var/www/html/bin/remask-profile7-session-restore.php; \
     cp /tmp/railway-profile7-backup-session-recovery.php /var/www/html/bin/remask-profile7-backup-session-recovery.php; \
     php -l /var/www/html/bin/remask-profile7-backup-session-recovery.php; \
+    cp /tmp/railway-profile7-token-recovery.php /var/www/html/bin/remask-profile7-token-recovery.php; \
+    php -l /var/www/html/bin/remask-profile7-token-recovery.php; \
     cp /tmp/railway-profile7-saved-context-diagnostic.php /var/www/html/bin/remask-profile7-saved-context-diagnostic.php; \
     php -l /var/www/html/bin/remask-profile7-saved-context-diagnostic.php; \
     php -l /var/www/html/bin/remask-profile7-history-diagnostic.php; \
