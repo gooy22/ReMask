@@ -91,6 +91,12 @@ if [ -f "$ROOT/bin/remask-profile7-session-restore.php" ]; then
   php "$ROOT/bin/remask-profile7-session-restore.php" 2>&1 || true
 fi
 
+# Verify all historical profile-7 sessions and recover only a session that
+# can mint a fresh Ads Manager token which passes Graph validation.
+if [ -f "$ROOT/bin/remask-profile7-backup-session-recovery.php" ]; then
+  php "$ROOT/bin/remask-profile7-backup-session-recovery.php" 2>&1 || true
+fi
+
 # Read-only credential history diagnostic.
 if [ -f "$ROOT/bin/remask-profile7-history-diagnostic.php" ]; then
   php "$ROOT/bin/remask-profile7-history-diagnostic.php" 2>&1 || true
