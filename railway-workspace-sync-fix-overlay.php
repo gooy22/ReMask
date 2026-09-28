@@ -226,7 +226,8 @@ async function syncSelection(){
     if(/rate.?limit|too many|code[^0-9]*(4|17|32|613)\\b/.test(s))kind='RATE_LIMIT';
     else if(/\\b407\\b|proxy authentication|proxy auth/.test(s))kind='PROXY_AUTH';
     else if(/transport error|curl|could not resolve|connection timed out|connection refused|ssl connect/.test(s))kind='TRANSPORT';
-    else if(/oauth|access token|token.*(invalid|expired)|session.*expired|code[^0-9]*190\\b|\\(#190\\)/.test(s))kind='TOKEN_INVALID';
+    else if(/access token.*(invalid|expired)|token.*(invalid|expired)|session.*expired|code[^0-9]*190\\b|\\(#190\\)/.test(s))kind='TOKEN_INVALID';
+    else if(/oauth.*code[^0-9]*1\\b|code=1\\b|meta graph .* http 400 code=1\\b/.test(s))kind='META_REQUEST';
     else if(/ads_management|ads_read|business_management|permission|permissions|not authorized|code[^0-9]*(10|200)\\b/.test(s))kind='PERMISSION';
     else if(/meta_sync_preflight_failed/.test(s))kind='META_PREFLIGHT';
     else if(/http 5\\d\\d|temporar|transient/.test(s))kind='META_TEMPORARY';
@@ -566,11 +567,21 @@ $syncProfileReplacement = <<<'PHP'
         $profile = trim((string)($input['profile'] ?? ''));
         if ($profile === '') throw new InvalidArgumentException('profile is required');
 
-        // Directly accessible ad accounts from the token are the baseline.
-        // Business Manager enumeration is optional enrichment and must not make
-        // an otherwise valid FB profile fail synchronization.
+        // REMASK_SYNC_OPTIONAL_GRAPH_PREFLIGHT_V1
+        // Workspace provisioning is browser/worker-backed. Official Graph /me
+        // is useful enrichment when this token supports it, but it must not be
+        // a hard sync gate. Some valid Ads Manager/session tokens return
+        // OAuthException code=1 "Invalid request" for /me.
+        $preflight = [
+            'identity' => [],
+            'permissions' => [],
+            'ad_accounts' => ['data' => []],
+        ];
+        $graphPreflightAvailable = false;
+        $graphPreflightWarning = '';
         try {
             $preflight = MetaEndpoint::cachedPreflight($profile, true);
+            $graphPreflightAvailable = true;
         } catch (Throwable $preflightError) {
             $safeMessage = preg_replace(
                 '/access_token=[^&\\s]+/i',
@@ -579,14 +590,23 @@ $syncProfileReplacement = <<<'PHP'
             );
             error_log(
                 '[remask-sync] profile=' . $profile .
-                ' stage=baseline_preflight class=' . get_class($preflightError) .
+                ' stage=optional_graph_preflight class=' . get_class($preflightError) .
                 ' message=' . mb_substr((string)$safeMessage, 0, 1200)
             );
-            throw new RuntimeException(
-                'META_SYNC_PREFLIGHT_FAILED: ' . (string)$safeMessage,
-                0,
-                $preflightError
+
+            $lowerPreflightError = strtolower((string)$safeMessage);
+            $tokenActuallyInvalid = (
+                preg_match('/(?:code=190\\b|\\(#190\\)|access token[^.]{0,80}(?:invalid|expired)|token[^.]{0,80}(?:invalid|expired)|session[^.]{0,80}expired)/i', (string)$safeMessage) === 1
             );
+            if ($tokenActuallyInvalid) {
+                throw new RuntimeException(
+                    'META_TOKEN_INVALID: ' . (string)$safeMessage,
+                    0,
+                    $preflightError
+                );
+            }
+
+            $graphPreflightWarning = 'Official Graph preflight unavailable; worker/browser-confirmed inventory retained';
         }
 
         // A saved token and saved browser cookies must represent the same
@@ -603,9 +623,12 @@ $syncProfileReplacement = <<<'PHP'
                 if ($cookieUserId !== '') break;
             }
         }
-        $graphUserId = trim((string)($preflight['identity']['id'] ?? ''));
+        $graphUserId = $graphPreflightAvailable
+            ? trim((string)($preflight['identity']['id'] ?? ''))
+            : '';
         if (
-            $cookieUserId !== ''
+            $graphPreflightAvailable
+            && $cookieUserId !== ''
             && $graphUserId !== ''
             && !hash_equals($cookieUserId, $graphUserId)
         ) {
@@ -627,6 +650,21 @@ $syncProfileReplacement = <<<'PHP'
         $verifiedBusinessAdAccounts = [];
         $knownBusinesses = [];
         $syncWarnings = [];
+
+        $existingSnapshot = hierarchy_profile_snapshot($profile);
+        foreach ((array)($existingSnapshot['businesses'] ?? []) as $existingBusiness) {
+            if (!is_array($existingBusiness)) continue;
+            $existingBusinessId = trim((string)($existingBusiness['id'] ?? ''));
+            if ($existingBusinessId === '') continue;
+            $knownBusinesses[$existingBusinessId] = [
+                'id' => $existingBusinessId,
+                'name' => trim((string)($existingBusiness['name'] ?? $existingBusinessId)),
+                '_source' => 'existing_workspace_snapshot',
+            ];
+        }
+        if ($graphPreflightWarning !== '') {
+            $syncWarnings[] = $graphPreflightWarning;
+        }
         foreach ((array)($preflight['_preflight_warnings'] ?? []) as $preflightWarning) {
             if (!is_array($preflightWarning)) continue;
             $stage = trim((string)($preflightWarning['stage'] ?? 'preflight'));
@@ -679,7 +717,7 @@ $syncProfileReplacement = <<<'PHP'
                 }
             }
         } catch (Throwable $businessError) {
-            $syncWarnings[] = 'Business Manager list unavailable for this token; direct RK data kept';
+            $syncWarnings[] = 'Live Business Manager enrichment unavailable; existing/worker-confirmed BM inventory retained';
         }
 
         // Meta's direct ad-account object can carry the BM relation before the
@@ -748,8 +786,15 @@ $syncProfileReplacement = <<<'PHP'
                 if (
                     !preg_match('/^\d{5,30}$/', $workerBusinessId)
                     || !preg_match('/^\d{5,30}$/', $workerAdAccountId)
-                    || !isset($knownBusinesses[$workerBusinessId])
                 ) continue;
+
+                if (!isset($knownBusinesses[$workerBusinessId])) {
+                    $knownBusinesses[$workerBusinessId] = [
+                        'id' => $workerBusinessId,
+                        'name' => $workerBusinessId,
+                        '_source' => 'python_worker_confirmed_binding',
+                    ];
+                }
 
                 hierarchy_binding_put(
                     $profile,
@@ -799,7 +844,20 @@ $syncProfileReplacement = <<<'PHP'
                 }
             }
         } catch (Throwable $workerStateError) {
-            $syncWarnings[] = 'Worker provisioning state unavailable; Meta inventory kept';
+            $syncWarnings[] = 'Worker provisioning state unavailable; existing inventory retained';
+        }
+
+        if (!$graphPreflightAvailable) {
+            foreach ((array)($existingSnapshot['ad_accounts'] ?? []) as $existingAdAccount) {
+                if (!is_array($existingAdAccount)) continue;
+                $existingAdAccountId = trim((string)($existingAdAccount['id'] ?? $existingAdAccount['account_id'] ?? ''));
+                if ($existingAdAccountId === '' || isset($verifiedBusinessAdAccounts[$existingAdAccountId])) continue;
+                $existingBusinessId = trim((string)($existingAdAccount['business_id'] ?? ''));
+                if ($existingBusinessId === '') continue;
+                $existingAdAccount['_sync_preserved'] = true;
+                $existingAdAccount['_business_edge'] = (string)($existingAdAccount['_business_edge'] ?? 'existing_workspace_snapshot');
+                $verifiedBusinessAdAccounts[$existingAdAccountId] = $existingAdAccount;
+            }
         }
 
         hierarchy_activity([
@@ -859,7 +917,10 @@ $syncProfileReplacement = <<<'PHP'
                 $snapshot['profiles'][$i]['ad_accounts_count'] = count($verifiedBusinessAdAccounts);
             }
         }
-        $snapshot['sync_source'] = 'business_manager_bound_ad_accounts';
+        $snapshot['sync_source'] = $graphPreflightAvailable
+            ? 'business_manager_bound_ad_accounts'
+            : 'worker_browser_confirmed_inventory';
+        $snapshot['graph_preflight_available'] = $graphPreflightAvailable;
         if ($syncWarnings !== []) $snapshot['sync_warnings'] = array_values(array_unique($syncWarnings));
         MetaEndpoint::ok($snapshot);
     }
