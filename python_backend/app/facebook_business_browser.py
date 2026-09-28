@@ -9159,6 +9159,12 @@ class FacebookBusinessBrowser:
         self.page.on("response", on_response)
         attempts: list[dict[str, Any]] = []
         deadline = time.monotonic() + max(3.0, float(timeout_seconds))
+        self._last_ad_account_section_diagnostic = {
+            "stage": "inventory_start",
+            "business_id": business,
+            "timeout_seconds": float(timeout_seconds),
+            "url": _clean(getattr(self.page, "url", ""))[:700],
+        }
         try:
             targets = [
                 template.format(business_id=business)
@@ -9180,9 +9186,27 @@ class FacebookBusinessBrowser:
                     continue
                 seen.add(target)
                 try:
-                    await self._goto(target)
+                    remaining_before_nav = max(0.0, deadline - time.monotonic())
+                    if remaining_before_nav <= 0:
+                        break
+                    self._last_ad_account_section_diagnostic = {
+                        "stage": "settings_navigation",
+                        "business_id": business,
+                        "target": target[:700],
+                        "remaining_seconds": round(remaining_before_nav, 3),
+                        "attempts": attempts[-6:],
+                        "url": _clean(getattr(self.page, "url", ""))[:700],
+                    }
+                    await asyncio.wait_for(
+                        self._goto(target),
+                        timeout=remaining_before_nav,
+                    )
                     await self._assert_authenticated()
-                    await self.page.wait_for_timeout(900)
+                    post_nav_remaining = max(0.0, deadline - time.monotonic())
+                    if post_nav_remaining > 0:
+                        await self.page.wait_for_timeout(
+                            int(min(900.0, post_nav_remaining * 1000.0))
+                        )
                     attempts.append(
                         {
                             "url": _clean(self.page.url)[:700],
@@ -9193,6 +9217,21 @@ class FacebookBusinessBrowser:
                         break
                 except BrowserBusinessError:
                     raise
+                except asyncio.TimeoutError:
+                    attempts.append(
+                        {
+                            "url": target[:700],
+                            "result": "navigation_timeout",
+                        }
+                    )
+                    self._last_ad_account_section_diagnostic = {
+                        "stage": "settings_navigation_timeout",
+                        "business_id": business,
+                        "target": target[:700],
+                        "attempts": attempts[-6:],
+                        "url": _clean(getattr(self.page, "url", ""))[:700],
+                    }
+                    break
                 except Exception as exc:
                     attempts.append(
                         {
@@ -9216,6 +9255,15 @@ class FacebookBusinessBrowser:
                     return_exceptions=True,
                 )
 
+            self._last_ad_account_section_diagnostic = {
+                "stage": "inventory_complete",
+                "business_id": business,
+                "ready": inventory_observed,
+                "accounts_count": len(accounts),
+                "attempts": attempts[-6:],
+                "diagnostics": diagnostics[-12:],
+                "url": _clean(getattr(self.page, "url", ""))[:700],
+            }
             return {
                 "business_id": business,
                 "ready": inventory_observed,
