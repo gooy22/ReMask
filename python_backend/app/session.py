@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import os
 from dataclasses import dataclass
 from typing import Any
@@ -17,16 +16,7 @@ from .facebook_graph_api import FacebookGraphApi
 
 
 class ProfileContextError(RuntimeError):
-    def __init__(
-        self,
-        message: str,
-        *,
-        retryable: bool = False,
-        category: str = "profile_context",
-    ) -> None:
-        super().__init__(message)
-        self.retryable = bool(retryable)
-        self.category = str(category or "profile_context").strip()
+    pass
 
 
 class ProxyCheckError(RuntimeError):
@@ -54,246 +44,90 @@ class ProfileResolver:
         internal_key: str | None,
         timeout: int = 15,
     ) -> None:
-        self.url = str(resolver_url or "").strip() or None
+        self.url = resolver_url
         self.key = internal_key
+        self.timeout = aiohttp.ClientTimeout(total=timeout)
 
-        clean_url = (self.url or "").lower()
-        self.is_loopback = (
-            clean_url.startswith("http://127.0.0.1")
-            or clean_url.startswith("http://localhost")
-            or clean_url.startswith("http://[::1]")
-        )
-
-        try:
-            configured_attempts = int(
-                os.getenv("REMASK_PROFILE_RESOLVER_ATTEMPTS")
-                or ("6" if self.is_loopback else "3")
-            )
-        except (TypeError, ValueError):
-            configured_attempts = 6 if self.is_loopback else 3
-        self.attempts = max(1, min(configured_attempts, 10))
-
-        try:
-            configured_backoff = float(
-                os.getenv("REMASK_PROFILE_RESOLVER_BACKOFF_SECONDS")
-                or "0.20"
-            )
-        except (TypeError, ValueError):
-            configured_backoff = 0.20
-        self.backoff_seconds = max(0.0, min(configured_backoff, 2.0))
-
-        try:
-            configured_timeout = int(
-                os.getenv("REMASK_PROFILE_RESOLVER_TIMEOUT_SECONDS")
-                or timeout
-            )
-        except (TypeError, ValueError):
-            configured_timeout = int(timeout)
-        self.timeout = aiohttp.ClientTimeout(
-            total=max(1, min(configured_timeout, 30))
-        )
-
-    @staticmethod
-    def _detail(payload: Any) -> str:
-        if not isinstance(payload, dict):
-            return ""
-        raw_detail = payload.get("detail")
-        if isinstance(raw_detail, dict):
-            detail = str(raw_detail.get("message") or "").strip()
-        elif raw_detail is not None:
-            detail = str(raw_detail).strip()
-        else:
-            detail = ""
-        if not detail:
-            detail = str(payload.get("error") or "").strip()
-        return detail
-
-    @staticmethod
-    def _retryable_http(status: int) -> bool:
-        return status in {408, 425, 429} or status >= 500
-
-    def _retry_delay(self, attempt: int) -> float:
-        if self.backoff_seconds <= 0:
-            return 0.0
-        return min(
-            2.0,
-            self.backoff_seconds * (2 ** max(0, int(attempt) - 1)),
-        )
-
-    async def _fetch(
-        self,
-        *,
-        params: dict[str, str],
-        label: str,
-    ) -> dict[str, Any]:
+    async def list_profiles(self) -> list[dict[str, Any]]:
         if not self.url:
-            raise ProfileContextError(
-                "REMASK_PROFILE_RESOLVER_URL is not configured",
-                retryable=False,
-                category="configuration",
-            )
-
+            raise ProfileContextError("REMASK_PROFILE_RESOLVER_URL is not configured")
         headers = {"Accept": "application/json"}
         if self.key:
             headers["X-Remask-Internal-Key"] = self.key
+        try:
+            async with aiohttp.ClientSession(
+                timeout=self.timeout,
+                headers=headers,
+            ) as client:
+                async with client.get(self.url, params={"action": "list"}) as response:
+                    payload = await response.json(content_type=None)
+                    if response.status >= 400 or not isinstance(payload, dict):
+                        detail = ""
+                        if isinstance(payload, dict):
+                            raw_detail = payload.get("detail")
+                            if isinstance(raw_detail, dict):
+                                detail = str(raw_detail.get("message") or "").strip()
+                            elif raw_detail is not None:
+                                detail = str(raw_detail).strip()
+                            if not detail:
+                                detail = str(payload.get("error") or "").strip()
+                        suffix = f": {detail}" if detail else ""
+                        raise ProfileContextError(
+                            f"profile resolver list HTTP {response.status}{suffix}"
+                        )
+        except asyncio.TimeoutError as exc:
+            raise ProfileContextError("profile resolver list timeout") from exc
+        except aiohttp.ClientError as exc:
+            raise ProfileContextError(
+                f"profile resolver list network error: {exc.__class__.__name__}"
+            ) from exc
 
-        for attempt in range(1, self.attempts + 1):
-            try:
-                async with aiohttp.ClientSession(
-                    timeout=self.timeout,
-                    headers=headers,
-                ) as client:
-                    async with client.get(self.url, params=params) as response:
-                        try:
-                            payload = await response.json(content_type=None)
-                        except (ValueError, UnicodeError) as exc:
-                            retryable = (
-                                response.status < 400
-                                or self._retryable_http(response.status)
-                            )
-                            message = (
-                                f"{label} returned invalid JSON "
-                                f"(HTTP {response.status})"
-                            )
-                            if retryable and attempt < self.attempts:
-                                logging.getLogger("remask.profile_resolver").warning(
-                                    "%s attempt=%d/%d retryable=true error=%s",
-                                    label,
-                                    attempt,
-                                    self.attempts,
-                                    message,
-                                )
-                                delay = self._retry_delay(attempt)
-                                if delay:
-                                    await asyncio.sleep(delay)
-                                continue
-                            raise ProfileContextError(
-                                message,
-                                retryable=retryable,
-                                category="resolver_response",
-                            ) from exc
-
-                        if response.status >= 400 or not isinstance(payload, dict):
-                            detail = self._detail(payload)
-                            suffix = f": {detail}" if detail else ""
-                            retryable = self._retryable_http(response.status)
-                            message = (
-                                f"{label} HTTP {response.status}{suffix}"
-                                if response.status >= 400
-                                else f"{label} returned invalid response"
-                            )
-                            if retryable and attempt < self.attempts:
-                                logging.getLogger("remask.profile_resolver").warning(
-                                    "%s attempt=%d/%d retryable=true error=%s",
-                                    label,
-                                    attempt,
-                                    self.attempts,
-                                    message,
-                                )
-                                delay = self._retry_delay(attempt)
-                                if delay:
-                                    await asyncio.sleep(delay)
-                                continue
-                            raise ProfileContextError(
-                                message,
-                                retryable=retryable,
-                                category="resolver_http",
-                            )
-
-                        if attempt > 1:
-                            logging.getLogger("remask.profile_resolver").info(
-                                "%s recovered attempt=%d/%d",
-                                label,
-                                attempt,
-                                self.attempts,
-                            )
-                        return payload
-
-            except ProfileContextError:
-                raise
-            except asyncio.TimeoutError as exc:
-                message = (
-                    f"{label} timeout"
-                    if self.attempts == 1
-                    else f"{label} timeout after {self.attempts} attempts"
-                )
-                if attempt < self.attempts:
-                    logging.getLogger("remask.profile_resolver").warning(
-                        "%s attempt=%d/%d retryable=true error=TimeoutError",
-                        label,
-                        attempt,
-                        self.attempts,
-                    )
-                    delay = self._retry_delay(attempt)
-                    if delay:
-                        await asyncio.sleep(delay)
-                    continue
-                raise ProfileContextError(
-                    message,
-                    retryable=True,
-                    category="resolver_transport",
-                ) from exc
-            except aiohttp.ClientError as exc:
-                message = (
-                    f"{label} network error: {exc.__class__.__name__}"
-                    if self.attempts == 1
-                    else (
-                        f"{label} network error after {self.attempts} attempts: "
-                        f"{exc.__class__.__name__}"
-                    )
-                )
-                if attempt < self.attempts:
-                    logging.getLogger("remask.profile_resolver").warning(
-                        "%s attempt=%d/%d retryable=true error=%s",
-                        label,
-                        attempt,
-                        self.attempts,
-                        exc.__class__.__name__,
-                    )
-                    delay = self._retry_delay(attempt)
-                    if delay:
-                        await asyncio.sleep(delay)
-                    continue
-                raise ProfileContextError(
-                    message,
-                    retryable=True,
-                    category="resolver_transport",
-                ) from exc
-
-        raise ProfileContextError(
-            f"{label} exhausted resolver attempts",
-            retryable=True,
-            category="resolver_transport",
-        )
-
-    async def list_profiles(self) -> list[dict[str, Any]]:
-        payload = await self._fetch(
-            params={"action": "list"},
-            label="profile resolver list",
-        )
         profiles = payload.get("profiles") or []
         if not isinstance(profiles, list):
-            raise ProfileContextError(
-                "profile resolver list returned invalid profiles",
-                retryable=False,
-                category="resolver_response",
-            )
+            raise ProfileContextError("profile resolver list returned invalid profiles")
         return [p for p in profiles if isinstance(p, dict)]
 
     async def resolve(self, profile_id: str) -> ProfileContext:
-        payload = await self._fetch(
-            params={"profile_id": profile_id},
-            label="profile resolver",
-        )
+        if not self.url:
+            raise ProfileContextError("REMASK_PROFILE_RESOLVER_URL is not configured")
+        headers = {"Accept": "application/json"}
+        if self.key:
+            headers["X-Remask-Internal-Key"] = self.key
+        try:
+            async with aiohttp.ClientSession(
+                timeout=self.timeout,
+                headers=headers,
+            ) as client:
+                async with client.get(
+                    self.url,
+                    params={"profile_id": profile_id},
+                ) as response:
+                    payload = await response.json(content_type=None)
+                    if response.status >= 400 or not isinstance(payload, dict):
+                        detail = ""
+                        if isinstance(payload, dict):
+                            raw_detail = payload.get("detail")
+                            if isinstance(raw_detail, dict):
+                                detail = str(raw_detail.get("message") or "").strip()
+                            elif raw_detail is not None:
+                                detail = str(raw_detail).strip()
+                            if not detail:
+                                detail = str(payload.get("error") or "").strip()
+                        suffix = f": {detail}" if detail else ""
+                        raise ProfileContextError(
+                            f"profile resolver HTTP {response.status}{suffix}"
+                        )
+        except asyncio.TimeoutError as exc:
+            raise ProfileContextError("profile resolver timeout") from exc
+        except aiohttp.ClientError as exc:
+            raise ProfileContextError(
+                f"profile resolver network error: {exc.__class__.__name__}"
+            ) from exc
 
         cookies = payload.get("cookies") or {}
         user_agent = str(payload.get("user_agent") or "").strip()
         if not isinstance(cookies, dict) or not user_agent:
-            raise ProfileContextError(
-                "profile resolver returned incomplete context",
-                retryable=False,
-                category="invalid_profile_context",
-            )
+            raise ProfileContextError("profile resolver returned incomplete context")
 
         cookie_map = {str(k): str(v) for k, v in cookies.items()}
         missing_auth_cookies = [
@@ -303,18 +137,12 @@ class ProfileResolver:
         if missing_auth_cookies:
             raise ProfileContextError(
                 "profile resolver returned no logged-in Facebook session: missing "
-                + ", ".join(missing_auth_cookies),
-                retryable=False,
-                category="invalid_profile_context",
+                + ", ".join(missing_auth_cookies)
             )
 
         proxy = str(payload.get("proxy") or "").strip() or None
         if not proxy:
-            raise ProfileContextError(
-                "profile proxy is not configured",
-                retryable=False,
-                category="invalid_profile_context",
-            )
+            raise ProfileContextError("profile proxy is not configured")
 
         return ProfileContext(
             profile_id=profile_id,

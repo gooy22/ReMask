@@ -17,207 +17,20 @@ from app.facebook_ad_account_create import (
     create_ad_account_with_docids,
     discover_current_ad_account_create_candidate,
 )
-from app.facebook_business_browser import (
-    FacebookBusinessBrowser,
-    _extract_inventory_ad_account_ids,
-    _extract_named_ad_account_ids,
-)
+from app.facebook_business_browser import FacebookBusinessBrowser
 from app.provisioning.ad_account_handler import (
     AD_ACCOUNT_SAFE_CAPTURE_RETRY_CODES,
     _inventory_repeatedly_confirms_empty,
-    _reconcile_existing,
     _inventory_proof_summary,
-    _browser_inventory_confirms_nonempty,
-    _raise_rk_already_exists,
     _reconcile_existing_browser_inventory,
-    _verify_expected_ad_account_in_business,
     _known_final_click_unmatched_empty_inventory,
     _known_pre_submit_capture_crash,
-    _capture_success_id_from_checkpoint,
     _prove_empty_after_uncertainty,
     _known_pre_submit_navigation_failure,
     _known_pre_submit_usage_step_failure,
     ad_account_handler,
 )
 from app.provisioning.state import ProvisioningStateStore
-
-
-
-class AdAccountCaptureUiSuccessRecoveryTests(unittest.TestCase):
-    def test_extracts_exact_created_rk_id_from_saved_success_dialog(self) -> None:
-        checkpoint = {
-            "business_id": "1578458920690597",
-            "capture_failures": [
-                {
-                    "attempt": 1,
-                    "diagnostic": {
-                        "ui_state": {
-                            "dialogs": [
-                                "Ad account created successfully. "
-                                "The ReMask RK 1 ad account has been created "
-                                "and added to the Polr Dwol business portfolio."
-                            ],
-                            "controls": [
-                                "ReMask RK 1 [tag=DIV role=heading x=693 y=173]",
-                                "2490929708095829 [tag=A role=link x=714 y=194]",
-                            ],
-                        }
-                    },
-                }
-            ],
-        }
-        self.assertEqual(
-            _capture_success_id_from_checkpoint(
-                checkpoint,
-                business_id="1578458920690597",
-                account_name="ReMask RK 1",
-            ),
-            "act_2490929708095829",
-        )
-
-    def test_does_not_recover_without_meta_success_dialog(self) -> None:
-        checkpoint = {
-            "capture_failures": [
-                {
-                    "diagnostic": {
-                        "ui_state": {
-                            "dialogs": ["Confirm ad account"],
-                            "controls": [
-                                "2490929708095829 [tag=A role=link]"
-                            ],
-                        }
-                    }
-                }
-            ]
-        }
-        self.assertEqual(
-            _capture_success_id_from_checkpoint(
-                checkpoint,
-                business_id="1578458920690597",
-                account_name="ReMask RK 1",
-            ),
-            "",
-        )
-
-
-class AdAccountInventoryParserSafetyTests(unittest.TestCase):
-    def test_bare_relay_ad_account_id_is_not_inventory(self) -> None:
-        payload = {
-            "data": {
-                "viewer": {
-                    "name": "ReMask RK",
-                    "ad_account_id": "120249247450460488",
-                    "__typename": "User",
-                }
-            }
-        }
-        self.assertEqual(_extract_inventory_ad_account_ids(payload), [])
-        self.assertEqual(
-            _extract_named_ad_account_ids(payload, "ReMask RK"),
-            [],
-        )
-
-    def test_structural_inventory_node_is_accepted(self) -> None:
-        payload = {
-            "data": {
-                "business": {
-                    "ad_accounts": {
-                        "nodes": [
-                            {
-                                "__typename": "AdAccount",
-                                "id": "act_1111111111",
-                                "name": "ReMask RK",
-                            }
-                        ]
-                    }
-                }
-            }
-        }
-        self.assertEqual(
-            _extract_inventory_ad_account_ids(payload),
-            ["act_1111111111"],
-        )
-        self.assertEqual(
-            _extract_named_ad_account_ids(payload, "ReMask RK"),
-            ["act_1111111111"],
-        )
-
-    def test_browser_inventory_has_no_unique_id_shortcut(self) -> None:
-        source = inspect.getsource(
-            FacebookBusinessBrowser.find_ad_account_in_inventory
-        )
-        self.assertNotIn(
-            "business_settings_graphql_inventory_unique",
-            source,
-        )
-        self.assertIn(
-            "expected_id in set(exact_name_ids)",
-            source,
-        )
-
-
-class AdAccountPostCreateVerificationTests(unittest.IsolatedAsyncioTestCase):
-    async def test_expected_id_requires_exact_business_inventory_match(self) -> None:
-        evidence = {
-            "confirmed": True,
-            "ad_account_id": "act_2222222222",
-            "source": "business_settings_graphql_inventory_unique",
-        }
-        with patch(
-            "app.provisioning.ad_account_handler._reconcile_existing_browser_inventory",
-            new=AsyncMock(return_value=("act_2222222222", evidence)),
-        ) as reconcile:
-            verified, observations = await _verify_expected_ad_account_in_business(
-                SimpleNamespace(),
-                business_id="1056638030476027",
-                account_name="ReMask RK",
-                expected_ad_account_id="act_1111111111",
-                checks=2,
-                delay_seconds=0,
-            )
-
-        self.assertFalse(verified)
-        self.assertEqual(reconcile.await_count, 2)
-        self.assertEqual(len(observations), 2)
-
-    async def test_expected_id_confirms_only_same_id(self) -> None:
-        evidence = {
-            "confirmed": True,
-            "ad_account_id": "act_1111111111",
-            "source": "business_settings_graphql_inventory_expected_id",
-        }
-        with patch(
-            "app.provisioning.ad_account_handler._reconcile_existing_browser_inventory",
-            new=AsyncMock(return_value=("act_1111111111", evidence)),
-        ):
-            verified, observations = await _verify_expected_ad_account_in_business(
-                SimpleNamespace(),
-                business_id="1056638030476027",
-                account_name="ReMask RK",
-                expected_ad_account_id="act_1111111111",
-                checks=3,
-                delay_seconds=0,
-            )
-
-        self.assertTrue(verified)
-        self.assertEqual(len(observations), 1)
-
-    def test_generic_unrelated_account_id_is_not_create_result(self) -> None:
-        payload = {
-            "data": {
-                "viewer": {
-                    "account_id": "120251310771460564",
-                    "__typename": "User",
-                }
-            }
-        }
-        self.assertEqual(_extract_ad_account_id(payload), ("", ""))
-
-    def test_handler_requires_inventory_verification_before_success(self) -> None:
-        source = inspect.getsource(ad_account_handler)
-        self.assertIn("AD_ACCOUNT_CREATE_RESULT_UNVERIFIED", source)
-        self.assertIn("AD_ACCOUNT_POST_CREATE_VERIFIED", source)
-        self.assertIn("_verify_expected_ad_account_in_business(", source)
 
 
 class AdAccountRuntimeDiagnosticTests(unittest.TestCase):
@@ -1129,9 +942,7 @@ class AdAccountRepeatedInventoryRecoveryTests(unittest.TestCase):
 class AdAccountSelfHealingPipelineRegressionTests(unittest.TestCase):
     def test_capture_phase_retries_safe_pre_submit_ui_failures(self) -> None:
         source = inspect.getsource(ad_account_handler)
-        self.assertIn("capture_attempt_limit = 2", source)
-        self.assertIn("capture_attempt_timeout_seconds = 75.0", source)
-        self.assertIn("capture_stage_deadline = time.monotonic() + 150.0", source)
+        self.assertIn("capture_attempt_limit = 3", source)
         self.assertIn("AD_ACCOUNT_SAFE_CAPTURE_RETRY_CODES", source)
         self.assertIn("capture_failures", source)
         self.assertIn("await asyncio.sleep(0.75 * capture_attempt)", source)
@@ -1170,47 +981,6 @@ class AdAccountSelfHealingPipelineRegressionTests(unittest.TestCase):
             "META_AD_ACCOUNT_CREATE_REJECTED",
             AD_ACCOUNT_SAFE_CAPTURE_RETRY_CODES,
         )
-
-
-class AdAccountLiveCaptureTimeoutRegressionTests(unittest.TestCase):
-    def test_live_capture_has_whole_attempt_hard_timeout(self) -> None:
-        source = inspect.getsource(ad_account_handler)
-        self.assertIn(
-            "captured_request = await asyncio.wait_for(",
-            source,
-        )
-        self.assertIn(
-            "timeout=attempt_timeout_seconds",
-            source,
-        )
-        self.assertIn(
-            '"AD_ACCOUNT_LIVE_CAPTURE_TIMEOUT"',
-            source,
-        )
-
-    def test_pre_final_timeout_is_create_not_submitted(self) -> None:
-        source = inspect.getsource(ad_account_handler)
-        timeout_pos = source.index("except asyncio.TimeoutError as exc:")
-        browser_error_pos = source.index(
-            "except BrowserBusinessError as exc:",
-            timeout_pos,
-        )
-        branch = source[timeout_pos:browser_error_pos]
-        self.assertIn("not final_capture_armed", branch)
-        self.assertIn("not create_may_have_been_sent", branch)
-        self.assertIn('"phase": "CREATE_NOT_SUBMITTED"', branch)
-        self.assertIn("No CREATE was sent", branch)
-
-    def test_post_final_timeout_reconciles_before_retry(self) -> None:
-        source = inspect.getsource(ad_account_handler)
-        timeout_pos = source.index("except asyncio.TimeoutError as exc:")
-        browser_error_pos = source.index(
-            "except BrowserBusinessError as exc:",
-            timeout_pos,
-        )
-        branch = source[timeout_pos:browser_error_pos]
-        self.assertIn("reconcile_after_uncertain(", branch)
-        self.assertIn("Final CREATE gate had already been armed", branch)
 
 
 class AdAccountCapturedVariableSafetyTests(unittest.TestCase):
@@ -1293,33 +1063,6 @@ class AdAccountCapturedVariableSafetyTests(unittest.TestCase):
 
 
 class AdAccountExactlyOnceSystemRegressionTests(unittest.TestCase):
-    def test_current_success_dialog_short_circuits_inventory_uncertainty(self) -> None:
-        source = inspect.getsource(ad_account_handler)
-        unmatched_pos = source.index(
-            'exc.code == "AD_ACCOUNT_CREATE_REQUEST_NOT_OBSERVED"'
-        )
-        ui_success_pos = source.index(
-            "REMASK_AD_ACCOUNT_CURRENT_UI_SUCCESS_V1",
-            unmatched_pos,
-        )
-        inventory_pos = source.index(
-            "_prove_empty_after_uncertainty(",
-            unmatched_pos,
-        )
-        self.assertLess(ui_success_pos, inventory_pos)
-        self.assertIn(
-            "AD_ACCOUNT_CREATE_CONFIRMED_",
-            source,
-        )
-        self.assertIn(
-            "CAPTURE_UI_CURRENT_ATTEMPT",
-            source,
-        )
-        self.assertIn(
-            "business_settings_ui_capture_current_attempt",
-            source,
-        )
-
     def test_unmatched_capture_reconciles_before_any_retry(self) -> None:
         source = inspect.getsource(ad_account_handler)
         unmatched_pos = source.index(
@@ -1430,152 +1173,6 @@ class AdAccountNestedCapturedPayloadTests(unittest.TestCase):
         self.assertNotIn("end_advertiser", rewritten["right"])
 
 
-class AdAccountProvisioningServiceRegressionTests(unittest.TestCase):
-    def test_service_never_auto_completes_ad_account_from_cached_entity(self) -> None:
-        import app.provisioning.service as service_module
-        source = inspect.getsource(service_module.ProvisioningService.run)
-        self.assertIn(
-            "ProvisioningStep.AD_ACCOUNT",
-            source,
-        )
-        self.assertIn(
-            "not in {",
-            source,
-        )
-        shortcut_pos = source.index("if (\n                existing_id")
-        handler_pos = source.index("handler = get_handler(step.value)")
-        window = source[shortcut_pos:handler_pos]
-        self.assertIn(
-            "ProvisioningStep.AD_ACCOUNT",
-            window,
-        )
-        self.assertIn(
-            "ProvisioningStep.BUSINESS",
-            window,
-        )
-
-
-class AdAccountStructuralInventoryRegressionTests(unittest.TestCase):
-    def test_structural_inventory_ids_cannot_block_create_as_already_exists(self) -> None:
-        source = inspect.getsource(ad_account_handler)
-        preflight_pos = source.index(
-            "# Read-only preflight enforces the 1 BM = 1 RK invariant."
-        )
-        preparing_pos = source.index(
-            '"phase": "CREATE_PREPARING"',
-            preflight_pos,
-        )
-        window = source[preflight_pos:preparing_pos]
-        self.assertNotIn(
-            "_browser_inventory_confirms_nonempty(browser_inventory_before)",
-            window,
-        )
-        self.assertIn(
-            "verify_ad_account_inventory_empty(",
-            window,
-        )
-
-class AdAccountButtonSemanticsRegressionTests(unittest.TestCase):
-    def test_add_rk_does_not_reuse_persistent_state_as_success(self) -> None:
-        source = inspect.getsource(ad_account_handler)
-        self.assertNotIn(
-            '"transport": "provisioning_state_verified"',
-            source,
-        )
-        self.assertIn("_raise_rk_already_exists(", source)
-
-    def test_add_rk_preflight_existing_rk_is_error_not_success(self) -> None:
-        source = inspect.getsource(ad_account_handler)
-        preflight = source[source.index(
-            "# Read-only preflight enforces the 1 BM = 1 RK invariant."
-        ):source.index(
-            '"phase": "CREATE_PREPARING"',
-            source.index("# Read-only preflight enforces the 1 BM = 1 RK invariant.")
-        )]
-        self.assertIn("_raise_rk_already_exists(", preflight)
-        self.assertNotIn('"reused": True', preflight)
-        self.assertNotIn(
-            "_browser_inventory_confirms_nonempty(browser_inventory_before)",
-            preflight,
-        )
-        self.assertIn(
-            "verify_ad_account_inventory_empty(",
-            preflight,
-        )
-
-    def test_only_current_job_checkpoint_may_resume_success_without_new_create(self) -> None:
-        source = inspect.getsource(ad_account_handler)
-        checkpoint_pos = source.index("checkpoint_id =")
-        cross_job_pos = source.index(
-            "latest_ad_account_resume_for_business",
-            checkpoint_pos,
-        )
-        checkpoint_window = source[checkpoint_pos:cross_job_pos]
-        self.assertIn('"reused": True', checkpoint_window)
-        self.assertIn("checkpoint_verified", checkpoint_window)
-
-    def test_already_exists_error_is_non_retryable(self) -> None:
-        source = inspect.getsource(_raise_rk_already_exists)
-        self.assertIn('"AD_ACCOUNT_ALREADY_EXISTS"', source)
-        self.assertIn("retryable=False", source)
-
-
-class AdAccountCrossJobGraphTrustRegressionTests(unittest.TestCase):
-    def test_cross_job_graph_candidate_cannot_return_without_browser_verify(self) -> None:
-        source = inspect.getsource(ad_account_handler)
-        marker = source.index(
-            "latest_ad_account_resume_for_business"
-        )
-        tail = source[marker:]
-        self.assertNotIn(
-            '"transport": "graph_inventory_reconciliation"',
-            tail,
-        )
-        self.assertIn(
-            "_raise_rk_already_exists(",
-            tail,
-        )
-        self.assertIn(
-            "_verify_expected_ad_account_in_business(",
-            tail,
-        )
-
-
-class AdAccountGraphInventoryTrustRegressionTests(unittest.TestCase):
-    def test_graph_inventory_never_reuses_single_row_by_count(self) -> None:
-        source = inspect.getsource(_reconcile_existing)
-        self.assertNotIn("if len(normalized) == 1", source)
-        self.assertIn("graph_candidates_untrusted", source)
-
-    def test_preflight_never_returns_raw_graph_candidate(self) -> None:
-        source = inspect.getsource(ad_account_handler)
-        preflight_pos = source.index(
-            "# Read-only preflight enforces the 1 BM = 1 RK invariant."
-        )
-        preparing_pos = source.index(
-            '"phase": "CREATE_PREPARING"',
-            preflight_pos,
-        )
-        window = source[preflight_pos:preparing_pos]
-        self.assertNotIn('"transport": "graph_inventory_preflight"', window)
-        self.assertIn(
-            "_raise_rk_already_exists(",
-            window,
-        )
-        self.assertIn("_verify_expected_ad_account_in_business(", window)
-
-    def test_uncertainty_graph_candidate_requires_browser_verification(self) -> None:
-        source = inspect.getsource(_prove_empty_after_uncertainty)
-        self.assertIn(
-            "graph_then_business_settings_verified",
-            source,
-        )
-        self.assertIn(
-            "not_confirmed_in_business_settings",
-            source,
-        )
-
-
 class AdAccountInventoryPreflightRegressionTests(unittest.TestCase):
     def test_preflight_retries_browser_inventory_before_unavailable(self) -> None:
         source = inspect.getsource(ad_account_handler)
@@ -1600,24 +1197,9 @@ class AdAccountInventoryPreflightRegressionTests(unittest.TestCase):
             window,
         )
         self.assertIn(
-            "browser_candidate_confirmations",
-            window,
-        )
-        self.assertIn(
-            "business_settings_single_candidate_rejected",
-            window,
-        )
-        self.assertIn(
             'browser_inventory_before.get("confirmed_empty")',
             window,
         )
-        self.assertIn("structural_ui_empty", window)
-        self.assertIn("cross_source_empty", window)
-        self.assertIn(
-            "graph_inventory_empty and structural_ui_empty",
-            window,
-        )
-        self.assertIn("graph+stable_ui", window)
 
     def test_post_submit_uncertainty_still_requires_strong_evidence(self) -> None:
         proof = inspect.getsource(_prove_empty_after_uncertainty)

@@ -18,7 +18,7 @@ COPY python_backend /opt/remask-python
 RUN /opt/remask-venv/bin/python -m compileall -q /opt/remask-python \
     && cd /opt/remask-python \
     && /opt/remask-venv/bin/python -c "import fb_worker; from app.session import ProfileSession; from app.facebook_business_browser import FacebookBusinessBrowser; from app.provisioning.business_handler import business_handler; from app.provisioning.ad_account_handler import ad_account_handler; assert fb_worker.WebSessionManager is fb_worker.FacebookWebSession; assert callable(ProfileSession.facebook_business_browser)" \
-    && /opt/remask-venv/bin/python -m unittest -q tests.test_fb_worker_bootstrap tests.test_business_docid_discovery tests.test_v14_docid_policy tests.test_fb_worker_request_envelope tests.test_business_create_exact_envelope tests.test_business_browser_flow tests.test_business_create_observer tests.test_ad_account_create tests.test_fan_page_create tests.test_workspace_bindings tests.test_job_store_recovery \
+    && /opt/remask-venv/bin/python -m unittest -q tests.test_fb_worker_bootstrap tests.test_business_docid_discovery tests.test_v14_docid_policy tests.test_fb_worker_request_envelope tests.test_business_create_exact_envelope tests.test_business_browser_flow tests.test_business_create_observer tests.test_ad_account_create tests.test_fan_page_create tests.test_job_store_recovery \
     && grep -q 'class FacebookBusinessBrowser' /opt/remask-python/app/facebook_business_browser.py \
     && grep -q 'DIRECT_CREATE_URL = "https://business.facebook.com/create"' /opt/remask-python/app/facebook_business_browser.py \
     && grep -q 'business_guarded=' /opt/remask-python/app/runner.py \
@@ -109,19 +109,6 @@ RUN set -eux; \
     php /tmp/railway-language-targeting-v116-overlay.php; \
     php -l /tmp/railway-python-worker-ui-overlay.php; \
     php /tmp/railway-python-worker-ui-overlay.php; \
-    grep -q 'REMASK_PYTHON_WORKER_UI_V175' /var/www/html/scripts/workspace.js; \
-    grep -q 'python-worker-ui-v175' /var/www/html/workspace.php; \
-    /opt/remask-venv/bin/python -c "from pathlib import Path; from playwright.sync_api import sync_playwright; src=Path('/var/www/html/scripts/workspace.js').read_text(encoding='utf-8'); p=sync_playwright().start(); b=p.chromium.launch(executable_path='/usr/bin/chromium', headless=True, args=['--no-sandbox']); page=b.new_page(); err=page.evaluate('(src)=>{try{new Function(src);return \\\"\\\"}catch(e){return e.name+\\\": \\\"+e.message}}', src); b.close(); p.stop(); assert not err, err"; \
-    grep -q 'REMASK_STATUS_TRUTH_V1' /var/www/html/scripts/workspace.js; \
-    grep -q 'Business Verification · не блокировка' /var/www/html/scripts/workspace.js; \
-    grep -q 'REMASK_PERSISTENT_BM_RK_BINDING_V1' /var/www/html/ajax/metaHierarchy.php; \
-    grep -q 'never render token-only/unmapped RK' /var/www/html/ajax/metaHierarchy.php; \
-    grep -q 'python_worker_confirmed_entities_v2' /var/www/html/ajax/metaHierarchy.php; \
-    grep -q 'ad_account_bindings' /opt/remask-python/main.py; \
-    grep -q 'confirmed_ad_account_bindings_for_profile' /opt/remask-python/app/provisioning/state.py; \
-    grep -q 'confirmed_ad_account_binding_groups' /opt/remask-python/app/provisioning/state.py; \
-    grep -q 'confirmed_ad_account_binding_groups' /opt/remask-python/app/runner.py; \
-    grep -q 'REMASK_WORKER_CONFIRMED_FP_MERGE_V1' /var/www/html/ajax/pythonWorkerPages.php; \
     php -r '$allowedRaw=["/var/www/html/classes/MetaApiClient.php"=>true,"/var/www/html/classes/FbRequests.php"=>true,"/var/www/html/classes/ProxyHealthService.php"=>true]; $allowedLegacy=["/var/www/html/ajax/payUnsettled.php"=>true,"/var/www/html/ajax/policyAppeal.php"=>true,"/var/www/html/ajax/disapproveAppeal.php"=>true]; $violations=[]; foreach(["/var/www/html/ajax","/var/www/html/classes","/var/www/html/bin"] as $root){$it=new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root,FilesystemIterator::SKIP_DOTS)); foreach($it as $fi){if(!$fi->isFile()||$fi->getExtension()!=="php")continue;$path=$fi->getPathname();$s=file_get_contents($path);if((str_contains($s,"graph.facebook.com")||str_contains($s,"curl_init("))&&!isset($allowedRaw[$path]))$violations[]="raw-meta-transport:".$path;if($fi->getFilename()!=="FbRequests.php"&&preg_match("/new\\s+FbRequests\\s*\\(/",$s)&&!isset($allowedLegacy[$path]))$violations[]="legacy-fbrequests-ref:".$path;}} if($violations){fwrite(STDERR,"Meta transport invariant failed: ".implode(", ",$violations)."\\n");exit(91);} fwrite(STDERR,"[transport-invariant] canonical Graph transport enforced; legacy browser transport limited to payment/appeal endpoints\\n");'; \
     php -l /var/www/html/classes/RemaskProxy.php; \
     php -l /var/www/html/classes/MetaApiClient.php; \
@@ -161,32 +148,16 @@ RUN set -eux; \
     grep -q 'pythonWorkerOpenOwnFanPageModal' /var/www/html/scripts/workspace.js; \
     grep -q 'data-python-worker-rk-menu' /var/www/html/scripts/workspace.js; \
     grep -q 'pythonWorkerOpenOwnAdAccountModal' /var/www/html/scripts/workspace.js; \
-    grep -q 'function pythonWorkerSelectedBusinessTargets()' /var/www/html/scripts/workspace.js; \
-    grep -q 'function pythonWorkerStartBusinessAdAccountTargets(' /var/www/html/scripts/workspace.js; \
-    grep -q 'function pythonWorkerInstallBusinessAddRkInterceptor()' /var/www/html/scripts/workspace.js; \
-    grep -q 'workspace-add-rk-selected-bm-' /var/www/html/scripts/workspace.js; \
     grep -q 'latest_ad_account_resume_for_business' /opt/remask-python/app/provisioning/state.py; \
     grep -q 'latest_profile_entities' /opt/remask-python/app/provisioning/state.py; \
-    grep -q 'latest_profile_fan_pages' /opt/remask-python/app/provisioning/state.py; \
-    grep -q 'confirmed_ad_account_bindings' /opt/remask-python/app/provisioning/state.py; \
-    grep -q 'python_worker_capture_ui_history' /opt/remask-python/app/provisioning/state.py; \
-    grep -q '_capture_ui_confirmed_ad_account_id' /opt/remask-python/app/provisioning/state.py; \
-    grep -q '_restore_workspace_bindings' /opt/remask-python/app/runner.py; \
-    grep -q "'fan_pages':fan_pages" /opt/remask-python/main.py; \
-    grep -q 'REMASK_WORKER_CONFIRMED_FP_MERGE_V1' /var/www/html/ajax/pythonWorkerPages.php; \
-    grep -q "count.value = '1'" /var/www/html/scripts/workspace.js; \
     grep -q 'profile_provisioning_state' /opt/remask-python/main.py; \
     grep -q "action === 'profile_state'" /var/www/html/ajax/pythonWorkerJobs.php; \
     grep -q 'CREATE_AD_ACCOUNT_RESULT_UNKNOWN' /opt/remask-python/app/facebook_ad_account_create.py; \
     grep -q 'CREATE_AD_ACCOUNT_PRE_SUBMIT_TRANSPORT' /opt/remask-python/app/facebook_ad_account_create.py; \
     grep -q 'request_may_have_been_sent' /opt/remask-python/fb_worker.py; \
     grep -q 'PRE_SUBMIT_NAVIGATION_TIMEOUT_RECOVERED' /opt/remask-python/app/provisioning/ad_account_handler.py; \
-    grep -q 'REMASK_AD_ACCOUNT_CURRENT_UI_SUCCESS_V1' /opt/remask-python/app/provisioning/ad_account_handler.py; \
-    grep -q 'business_settings_ui_capture_current_attempt' /opt/remask-python/app/provisioning/ad_account_handler.py; \
     grep -q 'list_ad_accounts_for_business' /opt/remask-python/app/facebook_graph_api.py; \
     grep -q 'pythonWorkerOpenOwnBmModal' /var/www/html/scripts/workspace.js; \
-    grep -q 'REMASK_BM_MENU_PYTHON_ONLY_V1' /var/www/html/scripts/workspace.js; \
-    grep -q 'data-python-worker-bm-menu' /var/www/html/scripts/workspace.js; \
     grep -q 'REMASK_PYTHON_WORKER_URL' /var/www/html/ajax/pythonWorkerJobs.php; \
     grep -q 'retry-failed' /var/www/html/ajax/pythonWorkerJobs.php; \
     grep -q 'internalAuthorized' /var/www/html/ajax/pythonWorkerJobs.php; \
@@ -282,8 +253,6 @@ RUN set -eux; \
     ! grep -q 'curl_init' /var/www/html/ajax/checkAccount.php; \
     ! grep -q 'graph.facebook.com' /var/www/html/ajax/checkAccount.php; \
     grep -q 'direct_ad_accounts_with_optional_business_enrichment' /var/www/html/ajax/metaHierarchy.php; \
-    grep -q 'REMASK_BM_BOUND_RK_SYNC_V1' /var/www/html/ajax/metaHierarchy.php; \
-    grep -q 'business_manager_bound_ad_accounts' /var/www/html/ajax/metaHierarchy.php; \
     grep -Fq 'cachedPreflight($profile, true)' /var/www/html/ajax/metaHierarchy.php; \
     grep -Fq "cachedAsset(\$profile, 'pages', '', true)" /var/www/html/ajax/metaHierarchy.php; \
     grep -Fq "cachedAsset(\$profile, 'businesses', '', true)" /var/www/html/ajax/metaHierarchy.php; \

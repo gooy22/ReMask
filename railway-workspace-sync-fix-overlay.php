@@ -33,7 +33,7 @@ $listAdAccountsMethod = <<<'PHP_METHOD'
 // REMASK_DIRECT_RK_FUNDING_V2
 function listAdAccounts(int $limit = 0): array
     {
-        $baseFields = 'id,account_id,name,account_status,disable_reason,currency,balance,amount_spent,spend_cap,business{id,name},business_name,timezone_name';
+        $baseFields = 'id,name,account_status,disable_reason,currency,balance,amount_spent,spend_cap,business_name,timezone_name';
         $fundingFields = $baseFields . ',is_prepay_account,funding_source,funding_source_details,expired_funding_source_details';
 
         try {
@@ -71,7 +71,7 @@ function listBusinessAdAccounts(string $businessId, int $limit = 0, bool $includ
         $bounded = $limit > 0;
         $limit = $bounded ? max(1, $limit) : 0;
         $edges = $includeClient ? ['owned_ad_accounts', 'client_ad_accounts'] : ['owned_ad_accounts'];
-        $baseFields = 'id,account_id,name,account_status,disable_reason,currency,amount_spent,balance,business{id,name},business_name,timezone_name,spend_cap';
+        $baseFields = 'id,name,account_status,currency,amount_spent,balance,business{id,name},business_name,timezone_name,spend_cap';
         $fundingFields = $baseFields . ',funding_source,funding_source_details';
         $items = [];
         $seen = [];
@@ -135,48 +135,6 @@ $count = 0;
 $js = str_replace($oldAttention, $newAttention, $js, $count);
 if ($count !== 1) {
     throw new RuntimeException('profileAttention patch failed: ' . $count);
-}
-
-$oldAccountStatus = "function accountStatus(a){ const s=Number(a.account_status||0); return s===1?pill('ACTIVE','ok'):s===2?pill('DISABLED','bad'):s===3?pill('UNSETTLED','warn'):pill(String(a.account_status||'UNKNOWN'),'warn'); }";
-$newAccountStatus = <<<'JS'
-function accountStatus(a){
-  /* REMASK_STATUS_TRUTH_V1 */
-  if(a && a._provisioned_only){
-    return pill('CREATED','ok')+'<div class="sub">Worker confirmed · awaiting Meta inventory sync</div>';
-  }
-  const s=Number(a.account_status||0);
-  const reason=String(a.disable_reason==null?'':a.disable_reason).trim();
-  if(s===1)return pill('ACTIVE','ok');
-  if(s===2){
-    const detail=reason&&reason!=='0'
-      ? '<div class="sub">Meta disable_reason: '+esc(reason)+'</div>'
-      : '<div class="sub">Meta account_status=2</div>';
-    return pill('META: DISABLED','bad')+detail;
-  }
-  if(s===3)return pill('UNSETTLED','warn');
-  return pill('META STATUS '+String(a.account_status||'UNKNOWN'),'warn');
-}
-JS;
-$js = str_replace($oldAccountStatus, $newAccountStatus, $js, $accountStatusPatchCount);
-if ($accountStatusPatchCount !== 1) {
-    throw new RuntimeException('accountStatus patch failed: ' . $accountStatusPatchCount);
-}
-
-$oldBusinessRender = "const pp=row.primary_page||{}; const status=businessAttention(row)?pill('НЕТ RK','warn'):pill(row.verification_status||'READY', row.verification_status==='verified'?'ok':'blue');";
-$newBusinessRender = <<<'JS'
-const pp=row.primary_page||{};
-    const verification=String(row.verification_status||'').trim().toLowerCase();
-    const status=verification==='verified'
-      ? pill('VERIFIED','ok')
-      : verification==='not_verified'
-        ? pill('NOT VERIFIED','blue')+'<div class="sub">Business Verification · не блокировка</div>'
-        : verification
-          ? pill(verification.toUpperCase(),'blue')
-          : pill('VERIFICATION UNKNOWN','warn');
-JS;
-$js = str_replace($oldBusinessRender, $newBusinessRender, $js, $businessRenderPatchCount);
-if ($businessRenderPatchCount !== 1) {
-    throw new RuntimeException('business verification render patch failed: ' . $businessRenderPatchCount);
 }
 
 $newSync = <<<'JS'
@@ -339,175 +297,6 @@ if ($php === false) {
     throw new RuntimeException('metaHierarchy.php not found');
 }
 
-
-$hierarchyHelperSignature = <<<'PHP_SIG'
-function hierarchy_profile_snapshot(string $profile, ?array $workspaceMeta = null): array
-{
-PHP_SIG;
-$hierarchyHelpers = <<<'PHP_HELPERS'
-// REMASK_PERSISTENT_BM_RK_BINDING_V1
-function hierarchy_worker_state(string $profile): array
-{
-    $profile = trim($profile);
-    if ($profile === '') return [];
-
-    $base = rtrim(trim((string)(getenv('REMASK_PYTHON_WORKER_URL') ?: 'http://127.0.0.1:8081')), '/');
-    $url = $base . '/api/v1/profiles/' . rawurlencode($profile) . '/provisioning-state';
-    $headers = ['Accept: application/json'];
-    $key = trim((string)(getenv('REMASK_WORKER_API_KEY') ?: ''));
-    if ($key !== '') $headers[] = 'X-Remask-Worker-Key: ' . $key;
-
-    $ctx = stream_context_create(['http' => [
-        'method' => 'GET',
-        'header' => implode("\r\n", $headers) . "\r\n",
-        'timeout' => 5,
-        'ignore_errors' => true,
-        'follow_location' => 0,
-    ]]);
-
-    $raw = @file_get_contents($url, false, $ctx);
-    if (!is_string($raw) || trim($raw) === '') return [];
-    $json = json_decode($raw, true);
-    return is_array($json) ? $json : [];
-}
-
-function hierarchy_binding_file(): string
-{
-    return '/var/lib/remask/workspace-provisioning-bindings.json';
-}
-
-function hierarchy_binding_all(): array
-{
-    $file = hierarchy_binding_file();
-    $raw = @file_get_contents($file);
-    if (!is_string($raw) || trim($raw) === '') return [];
-    $json = json_decode($raw, true);
-    return is_array($json) ? $json : [];
-}
-
-function hierarchy_binding_get(string $profile): array
-{
-    $all = hierarchy_binding_all();
-    $row = $all[$profile] ?? null;
-    if (!is_array($row)) return [];
-
-    // V1 stored one BM->RK pair directly at profile level. Normalize it into
-    // the V2 list shape so existing volume data remains usable.
-    if (isset($row['business_id']) || isset($row['ad_account_id'])) {
-        $businessId = trim((string)($row['business_id'] ?? ''));
-        $adAccountId = trim((string)($row['ad_account_id'] ?? ''));
-        if (
-            preg_match('/^\d{5,30}$/', $businessId)
-            && preg_match('/^\d{5,30}$/', $adAccountId)
-        ) {
-            return [[
-                'business_id' => $businessId,
-                'ad_account_id' => $adAccountId,
-                'account_name' => trim((string)($row['account_name'] ?? '')),
-                'updated_at' => (int)($row['updated_at'] ?? 0),
-                'source' => (string)($row['source'] ?? 'legacy_binding_v1'),
-            ]];
-        }
-        return [];
-    }
-
-    $items = $row['ad_accounts'] ?? $row;
-    if (!is_array($items)) return [];
-
-    $out = [];
-    foreach ($items as $businessKey => $item) {
-        if (!is_array($item)) continue;
-        $businessId = trim((string)($item['business_id'] ?? $businessKey));
-        $adAccountId = trim((string)($item['ad_account_id'] ?? ''));
-        if (
-            !preg_match('/^\d{5,30}$/', $businessId)
-            || !preg_match('/^\d{5,30}$/', $adAccountId)
-        ) continue;
-        $out[] = [
-            'business_id' => $businessId,
-            'ad_account_id' => $adAccountId,
-            'account_name' => trim((string)($item['account_name'] ?? '')),
-            'updated_at' => (int)($item['updated_at'] ?? 0),
-            'source' => (string)($item['source'] ?? 'python_worker_confirmed_entities'),
-        ];
-    }
-    return $out;
-}
-
-function hierarchy_binding_put(
-    string $profile,
-    string $businessId,
-    string $adAccountId,
-    string $accountName = ''
-): void
-{
-    $profile = trim($profile);
-    $businessId = trim($businessId);
-    $adAccountId = trim($adAccountId);
-    $accountName = trim($accountName);
-    if (
-        $profile === ''
-        || !preg_match('/^\d{5,30}$/', $businessId)
-        || !preg_match('/^\d{5,30}$/', $adAccountId)
-    ) return;
-
-    $file = hierarchy_binding_file();
-    $dir = dirname($file);
-    if (!is_dir($dir)) @mkdir($dir, 0700, true);
-
-    $fp = @fopen($file, 'c+');
-    if (!$fp) return;
-    try {
-        if (!@flock($fp, LOCK_EX)) return;
-        rewind($fp);
-        $raw = stream_get_contents($fp);
-        $all = [];
-        if (is_string($raw) && trim($raw) !== '') {
-            $decoded = json_decode($raw, true);
-            if (is_array($decoded)) $all = $decoded;
-        }
-
-        $profileRow = $all[$profile] ?? [];
-        if (!is_array($profileRow)) $profileRow = [];
-        $existing = hierarchy_binding_get($profile);
-        $normalized = [];
-        foreach ($existing as $item) {
-            if (!is_array($item)) continue;
-            $bid = trim((string)($item['business_id'] ?? ''));
-            if (!preg_match('/^\d{5,30}$/', $bid)) continue;
-            $normalized[$bid] = $item;
-        }
-        $normalized[$businessId] = [
-            'business_id' => $businessId,
-            'ad_account_id' => $adAccountId,
-            'account_name' => $accountName,
-            'updated_at' => time(),
-            'source' => 'python_worker_confirmed_entities_v2',
-        ];
-        $all[$profile] = ['ad_accounts' => $normalized];
-
-        $encoded = json_encode($all, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-        if (!is_string($encoded)) return;
-        ftruncate($fp, 0);
-        rewind($fp);
-        fwrite($fp, $encoded);
-        fflush($fp);
-    } finally {
-        @flock($fp, LOCK_UN);
-        @fclose($fp);
-    }
-}
-PHP_HELPERS;
-$php = str_replace(
-    $hierarchyHelperSignature,
-    $hierarchyHelpers . "\n\n" . $hierarchyHelperSignature,
-    $php,
-    $hierarchyHelperCount
-);
-if ($hierarchyHelperCount !== 1) {
-    throw new RuntimeException('worker binding helper injection failed: ' . $hierarchyHelperCount);
-}
-
 $fundingNeedle = "        \$rk['funding'] = MetaEndpoint::peekCachedAsset(\$profile, 'funding', \$id);";
 $fundingReplacement = <<<'PHP_FUNDING'
         // REMASK_DIRECT_FUNDING_SNAPSHOT_V2
@@ -550,44 +339,6 @@ $syncProfileReplacement = <<<'PHP'
         // Business Manager enumeration is optional enrichment and must not make
         // an otherwise valid FB profile fail synchronization.
         $preflight = MetaEndpoint::cachedPreflight($profile, true);
-
-        // A saved token and saved browser cookies must represent the same
-        // Facebook user. Otherwise me/adaccounts can silently inject RK from a
-        // different account into this Workspace profile.
-        $store = AccountStoreFactory::create(ACCOUNTSFILENAME);
-        $savedAccount = $store->getAccountByName($profile);
-        $cookieUserId = '';
-        if ($savedAccount instanceof FbAccount) {
-            foreach ((array)$savedAccount->cookies as $cookie) {
-                if (!is_array($cookie)) continue;
-                if ((string)($cookie['name'] ?? '') !== 'c_user') continue;
-                $cookieUserId = trim((string)($cookie['value'] ?? ''));
-                if ($cookieUserId !== '') break;
-            }
-        }
-        $graphUserId = trim((string)($preflight['identity']['id'] ?? ''));
-        if (
-            $cookieUserId !== ''
-            && $graphUserId !== ''
-            && !hash_equals($cookieUserId, $graphUserId)
-        ) {
-            MetaEndpoint::invalidateProfileCache($profile);
-            $snapshot = hierarchy_profile_snapshot($profile);
-            $snapshot['sync_source'] = 'profile_identity_guard';
-            $snapshot['identity_mismatch'] = true;
-            $snapshot['sync_warnings'] = [
-                'PROFILE_IDENTITY_MISMATCH: token and saved FB session belong to different users. Cached BM/RK data was cleared; update token or cookies before sync.',
-            ];
-            MetaEndpoint::ok($snapshot);
-        }
-
-        // REMASK_BM_BOUND_RK_SYNC_V1 REMASK_BM_BOUND_RK_SYNC_V2
-        // me/adaccounts may update before owned_ad_accounts/client_ad_accounts
-        // after a fresh CREATE. Keep an RK when Meta's direct object already
-        // points at one of this profile's Business Managers; otherwise a real
-        // newly-created RK disappears from Workspace during edge propagation.
-        $verifiedBusinessAdAccounts = [];
-        $knownBusinesses = [];
         $syncWarnings = [];
         if (!empty($preflight['ad_accounts']['_funding_enrichment_warning'])) {
             $syncWarnings[] = 'RK funding/payment metadata unavailable; RK list kept';
@@ -598,24 +349,8 @@ $syncProfileReplacement = <<<'PHP'
                 if (!is_array($business)) continue;
                 $businessId = trim((string)($business['id'] ?? ''));
                 if ($businessId === '') continue;
-                $knownBusinesses[$businessId] = [
-                    'id' => $businessId,
-                    'name' => trim((string)($business['name'] ?? $businessId)),
-                ];
                 try {
                     $businessAccounts = MetaEndpoint::cachedAsset($profile, 'business_ad_accounts', $businessId, true);
-                    foreach ((array)($businessAccounts['data'] ?? []) as $businessAccount) {
-                        if (!is_array($businessAccount)) continue;
-                        $rkId = trim((string)($businessAccount['id'] ?? ''));
-                        if ($rkId === '') continue;
-                        $row = $businessAccount;
-                        $row['profile'] = $profile;
-                        $row['business_id'] = $businessId;
-                        if (trim((string)($row['business_name'] ?? '')) === '') {
-                            $row['business_name'] = (string)($knownBusinesses[$businessId]['name'] ?? $businessId);
-                        }
-                        $verifiedBusinessAdAccounts[$rkId] = $row;
-                    }
                     foreach ((array)($businessAccounts['_edge_warnings'] ?? []) as $edgeWarning) {
                         if (!is_array($edgeWarning)) continue;
                         $edgeName = trim((string)($edgeWarning['edge'] ?? 'business_ad_accounts'));
@@ -634,126 +369,6 @@ $syncProfileReplacement = <<<'PHP'
             $syncWarnings[] = 'Business Manager list unavailable for this token; direct RK data kept';
         }
 
-        // Meta's direct ad-account object can carry the BM relation before the
-        // BM-owned/client edge catches up. Treat that relation as a valid
-        // read-only ownership proof when it points at a currently returned BM.
-        foreach ((array)($preflight['ad_accounts']['data'] ?? []) as $directAccount) {
-            if (!is_array($directAccount)) continue;
-            $directId = trim((string)($directAccount['id'] ?? ''));
-            if ($directId === '' || isset($verifiedBusinessAdAccounts[$directId])) continue;
-
-            $directBusiness = $directAccount['business'] ?? null;
-            $directBusinessId = '';
-            $directBusinessName = '';
-            if (is_array($directBusiness)) {
-                $directBusinessId = trim((string)($directBusiness['id'] ?? ''));
-                $directBusinessName = trim((string)($directBusiness['name'] ?? ''));
-            }
-            if ($directBusinessId === '') {
-                $directBusinessId = trim((string)($directAccount['business_id'] ?? ''));
-            }
-
-            if ($directBusinessId === '' || !isset($knownBusinesses[$directBusinessId])) continue;
-
-            $row = $directAccount;
-            $row['profile'] = $profile;
-            $row['business_id'] = $directBusinessId;
-            $row['business_name'] = $directBusinessName !== ''
-                ? $directBusinessName
-                : (string)($knownBusinesses[$directBusinessId]['name'] ?? $directBusinessId);
-            $row['_business_edge'] = 'direct_business_reference';
-            $verifiedBusinessAdAccounts[$directId] = $row;
-        }
-
-        // Worker state is authoritative for every confirmed BM->RK relation,
-        // not just the newest pair for the FB profile. This is required for
-        // mass Add RK from the Businesses tab where one profile can own many BM.
-        try {
-            $workerState = hierarchy_worker_state($profile);
-            $workerBindings = $workerState['ad_account_bindings'] ?? null;
-            if (!is_array($workerBindings)) {
-                $workerBindings = [];
-            }
-
-            // Backward-compatible fallback for workers that only expose the
-            // newest relation at top level.
-            if ($workerBindings === []) {
-                $legacyBusinessId = trim((string)($workerState['business_id'] ?? ''));
-                $legacyAdAccountId = trim((string)($workerState['ad_account_id'] ?? ''));
-                if (
-                    preg_match('/^\d{5,30}$/', $legacyBusinessId)
-                    && preg_match('/^\d{5,30}$/', $legacyAdAccountId)
-                ) {
-                    $workerBindings[] = [
-                        'business_id' => $legacyBusinessId,
-                        'ad_account_id' => $legacyAdAccountId,
-                        'account_name' => '',
-                    ];
-                }
-            }
-
-            foreach ($workerBindings as $workerBinding) {
-                if (!is_array($workerBinding)) continue;
-                $workerBusinessId = trim((string)($workerBinding['business_id'] ?? ''));
-                $workerAdAccountId = trim((string)($workerBinding['ad_account_id'] ?? ''));
-                $workerAccountName = trim((string)($workerBinding['account_name'] ?? ''));
-                if (
-                    !preg_match('/^\d{5,30}$/', $workerBusinessId)
-                    || !preg_match('/^\d{5,30}$/', $workerAdAccountId)
-                    || !isset($knownBusinesses[$workerBusinessId])
-                ) continue;
-
-                hierarchy_binding_put(
-                    $profile,
-                    $workerBusinessId,
-                    $workerAdAccountId,
-                    $workerAccountName
-                );
-
-                if (isset($verifiedBusinessAdAccounts[$workerAdAccountId])) {
-                    continue;
-                }
-
-                $workerDirect = null;
-                foreach ((array)($preflight['ad_accounts']['data'] ?? []) as $directAccount) {
-                    if (!is_array($directAccount)) continue;
-                    if (trim((string)($directAccount['id'] ?? '')) === $workerAdAccountId) {
-                        $workerDirect = $directAccount;
-                        break;
-                    }
-                }
-
-                if (is_array($workerDirect)) {
-                    $workerDirect['profile'] = $profile;
-                    $workerDirect['business_id'] = $workerBusinessId;
-                    $workerDirect['business_name'] = (string)($knownBusinesses[$workerBusinessId]['name'] ?? $workerBusinessId);
-                    $workerDirect['_provisioned_only'] = true;
-                    $workerDirect['_raw_account_status'] = $workerDirect['account_status'] ?? null;
-                    $workerDirect['_raw_disable_reason'] = $workerDirect['disable_reason'] ?? null;
-                    $workerDirect['_business_edge'] = 'python_worker_confirmed_binding';
-                    $verifiedBusinessAdAccounts[$workerAdAccountId] = $workerDirect;
-                } else {
-                    $verifiedBusinessAdAccounts[$workerAdAccountId] = [
-                        'profile' => $profile,
-                        'id' => $workerAdAccountId,
-                        'account_id' => $workerAdAccountId,
-                        'name' => $workerAccountName !== '' ? $workerAccountName : ('RK ' . $workerAdAccountId),
-                        'business_id' => $workerBusinessId,
-                        'business_name' => (string)($knownBusinesses[$workerBusinessId]['name'] ?? $workerBusinessId),
-                        'account_status' => null,
-                        'disable_reason' => null,
-                        'currency' => '',
-                        'timezone_name' => '',
-                        'funding' => null,
-                        '_provisioned_only' => true,
-                        '_business_edge' => 'python_worker_confirmed_binding',
-                    ];
-                }
-            }
-        } catch (Throwable $workerStateError) {
-            $syncWarnings[] = 'Worker provisioning state unavailable; Meta inventory kept';
-        }
-
         hierarchy_activity([
             'action'=>'sync_profile',
             'entity_type'=>'profile',
@@ -763,55 +378,7 @@ $syncProfileReplacement = <<<'PHP'
             'details'=>['sync_source'=>'direct_ad_accounts_with_optional_business_enrichment','warnings'=>$syncWarnings],
         ]);
         $snapshot = hierarchy_profile_snapshot($profile);
-
-        $directIds = [];
-        foreach ((array)($preflight['ad_accounts']['data'] ?? []) as $directAccount) {
-            if (!is_array($directAccount)) continue;
-            $directId = trim((string)($directAccount['id'] ?? ''));
-            if ($directId !== '') $directIds[$directId] = true;
-        }
-        $filteredDirect = array_values(array_diff(
-            array_keys($directIds),
-            array_keys($verifiedBusinessAdAccounts)
-        ));
-        // Token-level RK outside the currently returned BM inventory are not
-        // an error. Keep only the count for diagnostics instead of alarming
-        // the Workspace user with a sync warning.
-        $snapshot['token_only_ad_accounts_count'] = count($filteredDirect);
-
-        // Replace the broad me/adaccounts view with exact BM-bound inventory.
-        // This is the data Workspace renders and therefore prevents phantom RK.
-        $snapshot['ad_accounts'] = array_values($verifiedBusinessAdAccounts);
-        $snapshot['ad_accounts_count'] = count($verifiedBusinessAdAccounts);
-
-        $accountsByBusiness = [];
-        foreach ($verifiedBusinessAdAccounts as $verifiedRow) {
-            if (!is_array($verifiedRow)) continue;
-            $verifiedBusinessId = trim((string)($verifiedRow['business_id'] ?? ''));
-            if ($verifiedBusinessId === '') continue;
-            $accountsByBusiness[$verifiedBusinessId][] = $verifiedRow;
-        }
-        if (is_array($snapshot['businesses'] ?? null)) {
-            foreach ($snapshot['businesses'] as $i => $businessRow) {
-                if (!is_array($businessRow)) continue;
-                $businessRowId = trim((string)($businessRow['id'] ?? ''));
-                if ($businessRowId === '') continue;
-                $rowsForBusiness = $accountsByBusiness[$businessRowId] ?? [];
-                $snapshot['businesses'][$i]['ad_account_count'] = count($rowsForBusiness);
-                $snapshot['businesses'][$i]['accounts'] = $rowsForBusiness;
-            }
-        }
-
-        if (is_array($snapshot['profiles'] ?? null)) {
-            foreach ($snapshot['profiles'] as $i => $profileRow) {
-                if (!is_array($profileRow)) continue;
-                $rowName = trim((string)($profileRow['name'] ?? $profileRow['profile'] ?? ''));
-                if ($rowName !== '' && $rowName !== $profile) continue;
-                $snapshot['profiles'][$i]['rk_count'] = count($verifiedBusinessAdAccounts);
-                $snapshot['profiles'][$i]['ad_accounts_count'] = count($verifiedBusinessAdAccounts);
-            }
-        }
-        $snapshot['sync_source'] = 'business_manager_bound_ad_accounts';
+        $snapshot['sync_source'] = 'direct_ad_accounts_with_optional_business_enrichment';
         if ($syncWarnings !== []) $snapshot['sync_warnings'] = array_values(array_unique($syncWarnings));
         MetaEndpoint::ok($snapshot);
     }
@@ -856,166 +423,6 @@ if ($livePreflightCount < 2 || $livePagesCount < 1 || $liveBusinessesCount < 1) 
 
 // Explicit readiness dimensions in the profile snapshot. Cache-only: opening
 // Workspace itself does not create extra Graph traffic.
-
-$bindingSnapshotNeedle = <<<'PHP_BINDING'
-    $businessAccountMap = [];
-    $bmRows = [];
-PHP_BINDING;
-$bindingSnapshotReplacement = <<<'PHP_BINDING'
-    $bindings = hierarchy_binding_get($profile);
-
-    $knownBusinessNames = [];
-    foreach ($businessRows as $businessRow) {
-        if (!is_array($businessRow)) continue;
-        $businessRowId = trim((string)($businessRow['id'] ?? ''));
-        if ($businessRowId === '') continue;
-        $knownBusinessNames[$businessRowId] = trim((string)($businessRow['name'] ?? $businessRowId));
-    }
-
-    $businessAccountMap = [];
-    $bmRows = [];
-PHP_BINDING;
-$php = str_replace(
-    $bindingSnapshotNeedle,
-    $bindingSnapshotReplacement,
-    $php,
-    $bindingSnapshotCount
-);
-if ($bindingSnapshotCount !== 1) {
-    throw new RuntimeException('snapshot binding prelude patch failed: ' . $bindingSnapshotCount);
-}
-
-$rkRowsSnapshotNeedle = <<<'PHP_BINDING'
-    $rkRows = [];
-    foreach ($allAccounts as $rk) {
-PHP_BINDING;
-$rkRowsSnapshotReplacement = <<<'PHP_BINDING'
-    foreach ($bindings as $binding) {
-        if (!is_array($binding)) continue;
-        $boundBusinessId = trim((string)($binding['business_id'] ?? ''));
-        $boundAdAccountId = trim((string)($binding['ad_account_id'] ?? ''));
-        if (
-            !preg_match('/^\d{5,30}$/', $boundBusinessId)
-            || !preg_match('/^\d{5,30}$/', $boundAdAccountId)
-            || !isset($knownBusinessNames[$boundBusinessId])
-            || isset($businessAccountMap[$boundAdAccountId])
-        ) continue;
-
-        $businessAccountMap[$boundAdAccountId] = [
-            'id' => $boundBusinessId,
-            'name' => $knownBusinessNames[$boundBusinessId],
-            'source' => 'python_worker_binding',
-            'account_name' => trim((string)($binding['account_name'] ?? '')),
-        ];
-    }
-
-    $rkRows = [];
-    foreach ($allAccounts as $rk) {
-PHP_BINDING;
-$php = str_replace(
-    $rkRowsSnapshotNeedle,
-    $rkRowsSnapshotReplacement,
-    $php,
-    $rkRowsSnapshotCount
-);
-if ($rkRowsSnapshotCount !== 1) {
-    throw new RuntimeException('snapshot RK binding patch failed: ' . $rkRowsSnapshotCount);
-}
-
-$tokenOnlyNeedle = <<<'PHP_BINDING'
-        $bm = $businessAccountMap[$id] ?? null;
-        $rk['profile'] = $profile;
-PHP_BINDING;
-$tokenOnlyReplacement = <<<'PHP_BINDING'
-        $bm = $businessAccountMap[$id] ?? null;
-        if (!is_array($bm)) continue; // never render token-only/unmapped RK
-        $rk['profile'] = $profile;
-        if ((string)($bm['source'] ?? '') === 'python_worker_binding') {
-            // Worker proved CREATE and the exact BM relation, but Meta's
-            // owned/client edge has not propagated yet. Do not display a
-            // transient token-level account_status=2 as a real disabled RK.
-            $rk['_provisioned_only'] = true;
-            $rk['_raw_account_status'] = $rk['account_status'] ?? null;
-            $rk['_raw_disable_reason'] = $rk['disable_reason'] ?? null;
-        }
-PHP_BINDING;
-$php = str_replace($tokenOnlyNeedle, $tokenOnlyReplacement, $php, $tokenOnlyFilterCount);
-if ($tokenOnlyFilterCount !== 1) {
-    throw new RuntimeException('token-only RK snapshot filter failed: ' . $tokenOnlyFilterCount);
-}
-
-$provisionalNeedle = <<<'PHP_BINDING'
-        $rkRows[] = $rk;
-    }
-PHP_BINDING;
-$provisionalReplacement = <<<'PHP_BINDING'
-        $rkRows[] = $rk;
-    }
-
-    $existingRkIds = [];
-    foreach ($rkRows as $rkRow) {
-        if (!is_array($rkRow)) continue;
-        $existingId = trim((string)($rkRow['id'] ?? ''));
-        if ($existingId !== '') $existingRkIds[$existingId] = true;
-    }
-
-    foreach ($bindings as $binding) {
-        if (!is_array($binding)) continue;
-        $boundBusinessId = trim((string)($binding['business_id'] ?? ''));
-        $boundAdAccountId = trim((string)($binding['ad_account_id'] ?? ''));
-        if (
-            isset($existingRkIds[$boundAdAccountId])
-            || !preg_match('/^\d{5,30}$/', $boundBusinessId)
-            || !preg_match('/^\d{5,30}$/', $boundAdAccountId)
-            || !isset($knownBusinessNames[$boundBusinessId])
-        ) continue;
-
-        $boundAccountName = trim((string)($binding['account_name'] ?? ''));
-        $rkRows[] = [
-            'profile' => $profile,
-            'group' => (string)($profileMeta['group'] ?? ''),
-            'id' => $boundAdAccountId,
-            'account_id' => $boundAdAccountId,
-            'name' => $boundAccountName !== '' ? $boundAccountName : ('RK ' . $boundAdAccountId),
-            'business_id' => $boundBusinessId,
-            'business_name' => $knownBusinessNames[$boundBusinessId],
-            'account_status' => null,
-            'disable_reason' => null,
-            'currency' => '',
-            'timezone_name' => '',
-            'funding' => null,
-            '_provisioned_only' => true,
-            '_source' => 'python_worker_binding',
-        ];
-        $existingRkIds[$boundAdAccountId] = true;
-    }
-
-    $rkByBusiness = [];
-    foreach ($rkRows as $rkRow) {
-        if (!is_array($rkRow)) continue;
-        $rkBusinessId = trim((string)($rkRow['business_id'] ?? ''));
-        if ($rkBusinessId === '') continue;
-        $rkByBusiness[$rkBusinessId][] = $rkRow;
-    }
-    foreach ($bmRows as $i => $bmRow) {
-        if (!is_array($bmRow)) continue;
-        $bmId = trim((string)($bmRow['id'] ?? ''));
-        if ($bmId === '') continue;
-        $rows = $rkByBusiness[$bmId] ?? [];
-        $bmRows[$i]['ad_account_count'] = count($rows);
-        $bmRows[$i]['accounts'] = $rows;
-    }
-PHP_BINDING;
-$php = str_replace(
-    $provisionalNeedle,
-    $provisionalReplacement,
-    $php,
-    $provisionalCount
-);
-if ($provisionalCount !== 1) {
-    throw new RuntimeException('provisional worker RK row patch failed: ' . $provisionalCount);
-}
-
 $pagesNeedle = "    \$businesses = MetaEndpoint::peekCachedAsset(\$profile, 'businesses', '');";
 $pagesReplacement = "    \$pages = MetaEndpoint::peekCachedAsset(\$profile, 'pages', '');\n" . $pagesNeedle;
 $php = str_replace($pagesNeedle, $pagesReplacement, $php, $pagesSnapshotCount);
