@@ -4755,6 +4755,110 @@ class FacebookBusinessBrowser:
                 raw = await response.text()
                 payload = _decode_graphql_text(raw)
                 rows = _extract_business_inventory_rows(payload)
+
+                # Diagnostic inventory evidence from the same private selector
+                # payloads. Keep this structural and bounded: no raw GraphQL
+                # body, auth values, cookies, or fb_dtsg are recorded.
+                explicit_ad_rows = _extract_inventory_ad_account_rows(
+                    payload,
+                    request_scoped=False,
+                )
+                scope_nodes: list[dict[str, str]] = []
+                def collect_scope_nodes(
+                    value: Any,
+                    path: str = "root",
+                ) -> None:
+                    if len(scope_nodes) >= 36:
+                        return
+                    if isinstance(value, dict):
+                        candidate_id = ""
+                        id_key = ""
+                        for key in (
+                            "ad_account_id",
+                            "account_id",
+                            "adAccountId",
+                            "asset_id",
+                            "assetId",
+                            "object_id",
+                            "objectId",
+                            "entity_id",
+                            "entityId",
+                            "page_id",
+                            "pageId",
+                            "business_id",
+                            "businessId",
+                            "id",
+                        ):
+                            candidate_id = _normalize_ad_account_id(
+                                value.get(key)
+                            ) if (
+                                "account" in key.casefold()
+                                or key in {"adAccountId"}
+                            ) else _digits(value.get(key))
+                            if candidate_id:
+                                id_key = key
+                                break
+
+                        semantic = _clean(
+                            value.get("__typename")
+                            or value.get("asset_type")
+                            or value.get("assetType")
+                            or value.get("object_type")
+                            or value.get("objectType")
+                            or value.get("entity_type")
+                            or value.get("entityType")
+                            or value.get("type")
+                            or value.get("category")
+                        )
+                        name = _clean(
+                            value.get("name")
+                            or value.get("title")
+                            or value.get("asset_name")
+                            or value.get("assetName")
+                        )
+                        folded_path = path.casefold()
+                        if candidate_id and (
+                            semantic
+                            or any(
+                                marker in folded_path
+                                for marker in (
+                                    "scope",
+                                    "asset",
+                                    "account",
+                                    "page",
+                                    "business",
+                                )
+                            )
+                        ):
+                            scope_nodes.append(
+                                {
+                                    "path": path[:220],
+                                    "id_key": id_key[:60],
+                                    "id": candidate_id,
+                                    "semantic": semantic[:160],
+                                    "name": name[:180],
+                                }
+                            )
+                        for key, child in value.items():
+                            collect_scope_nodes(
+                                child,
+                                f"{path}.{key}",
+                            )
+                    elif isinstance(value, list):
+                        for index, child in enumerate(value[:40]):
+                            collect_scope_nodes(
+                                child,
+                                f"{path}[{index}]",
+                            )
+
+                folded_friendly_probe = friendly.casefold()
+                if (
+                    "scop" in folded_friendly_probe
+                    or "adaccount" in folded_friendly_probe
+                    or explicit_ad_rows
+                ):
+                    collect_scope_nodes(payload)
+
                 request_business_ids = sorted({
                     business_id
                     for business_id, path in _walk_business_ids(
@@ -4808,6 +4912,23 @@ class FacebookBusinessBrowser:
                             for row in rows[:8]
                             if isinstance(row, dict)
                         ],
+                        "explicit_ad_rows": [
+                            {
+                                "id": _normalize_ad_account_id(
+                                    row.get("id")
+                                ),
+                                "name": _clean(row.get("name"))[:180],
+                                "business_id": _digits(
+                                    row.get("business_id")
+                                ),
+                                "currency": _clean(
+                                    row.get("currency")
+                                )[:24],
+                            }
+                            for row in explicit_ad_rows[:8]
+                            if isinstance(row, dict)
+                        ],
+                        "scope_nodes": scope_nodes[:36],
                         "request_business_ids": request_business_ids[:8],
                         "variable_numeric_ids": variable_numeric_ids,
                     }
