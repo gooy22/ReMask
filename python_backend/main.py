@@ -869,6 +869,7 @@ async def profile_live_inventory(profile_id: str):
     if not clean_profile:
         raise HTTPException(status_code=400,detail='profile_id is required')
 
+    started=time.monotonic()
     try:
         context=await pool.resolver.resolve(clean_profile)
     except ProfileContextError as exc:
@@ -878,15 +879,73 @@ async def profile_live_inventory(profile_id: str):
         ) from exc
 
     warnings: list[str] = []
+
+    # Prefer already-confirmed durable BM identities. For a profile that ReMask
+    # itself provisioned, forcing a fresh Business Suite HOME discovery first
+    # is both redundant and fragile: Meta HOME can take >18s to settle while
+    # the exact Business Settings route is directly addressable.
+    confirmed_bindings=await pool.provisioning_state.confirmed_ad_account_bindings_for_profile(
+        clean_profile
+    )
+    latest_entities=await pool.provisioning_state.latest_profile_entities(
+        clean_profile
+    )
+
+    binding_by_business={
+        str(row.get('business_id') or '').strip():row
+        for row in confirmed_bindings
+        if isinstance(row,dict)
+        and str(row.get('business_id') or '').strip().isdigit()
+    }
+    latest_business_id=str(
+        (latest_entities or {}).get('business_id') or ''
+    ).strip()
+    known_business_ids=set(binding_by_business)
+    if latest_business_id.isdigit():
+        known_business_ids.add(latest_business_id)
+
     try:
         async with ProfileSession(context) as profile_session:
             browser=await profile_session.facebook_business_browser()
-            business_map=await asyncio.wait_for(
-                browser.snapshot_businesses(),
-                timeout=18.0,
-            )
+
+            business_map: dict[str,str] = {}
+            discovery_source=''
+
+            if known_business_ids:
+                business_map={
+                    business_id:business_id
+                    for business_id in sorted(known_business_ids)
+                }
+                discovery_source='worker_confirmed_business_ids'
+                log.info(
+                    'live inventory profile=%s using confirmed businesses=%s',
+                    clean_profile,
+                    ','.join(sorted(known_business_ids)),
+                )
+            else:
+                discovery_started=time.monotonic()
+                try:
+                    business_map=await asyncio.wait_for(
+                        browser.snapshot_businesses(),
+                        timeout=18.0,
+                    )
+                    discovery_source='business_suite_home'
+                except asyncio.TimeoutError:
+                    warnings.append('Business discovery timed out')
+                    business_map={}
+                    discovery_source='business_suite_home_timeout'
+                finally:
+                    log.info(
+                        'live inventory profile=%s business_discovery source=%s ms=%d count=%d',
+                        clean_profile,
+                        discovery_source,
+                        int((time.monotonic()-discovery_started)*1000),
+                        len(business_map),
+                    )
 
             businesses=[]
+            live_business_ids:set[str]=set()
+
             for business_id,business_name in sorted(
                 business_map.items(),
                 key=lambda item: str(item[0]),
@@ -898,13 +957,14 @@ async def profile_live_inventory(profile_id: str):
                     'ad_accounts_count':0,
                     'ad_accounts_ready':False,
                 }
+                inventory_started=time.monotonic()
                 try:
                     inventory=await asyncio.wait_for(
                         browser.snapshot_ad_accounts_for_business(
                             business_id=str(business_id),
-                            timeout_seconds=6.0,
+                            timeout_seconds=12.0,
                         ),
-                        timeout=9.0,
+                        timeout=18.0,
                     )
                     row['ad_accounts']=[
                         account
@@ -916,11 +976,16 @@ async def profile_live_inventory(profile_id: str):
                     row['ad_accounts_source']=str(
                         inventory.get('source') or ''
                     )
-                    if not row['ad_accounts_ready']:
+                    row['attempts']=inventory.get('attempts') or []
+                    row['diagnostics']=inventory.get('diagnostics') or []
+                    if row['ad_accounts_ready']:
+                        live_business_ids.add(str(business_id))
+                    else:
                         warnings.append(
                             f'BM {business_id}: live RK inventory not confirmed'
                         )
                 except asyncio.TimeoutError:
+                    row['ad_accounts_source']='business_settings_timeout'
                     warnings.append(
                         f'BM {business_id}: live RK inventory timed out'
                     )
@@ -931,20 +996,27 @@ async def profile_live_inventory(profile_id: str):
                         'TWO_FACTOR_REQUIRED',
                     }:
                         raise
+                    row['ad_accounts_source']='browser_error'
+                    row['browser_error_code']=exc.code
+                    row['browser_error']=str(exc)
                     warnings.append(
                         f'BM {business_id}: {exc.code}'
                     )
+                finally:
+                    log.info(
+                        'live inventory profile=%s business=%s rk_ms=%d ready=%s accounts=%d source=%s error=%s',
+                        clean_profile,
+                        business_id,
+                        int((time.monotonic()-inventory_started)*1000),
+                        bool(row.get('ad_accounts_ready')),
+                        len(row.get('ad_accounts') or []),
+                        str(row.get('ad_accounts_source') or ''),
+                        str(row.get('browser_error_code') or ''),
+                    )
                 businesses.append(row)
 
-            confirmed_bindings=await pool.provisioning_state.confirmed_ad_account_bindings_for_profile(
-                clean_profile
-            )
-            binding_by_business={
-                str(row.get('business_id') or '').strip():row
-                for row in confirmed_bindings
-                if isinstance(row,dict)
-                and str(row.get('business_id') or '').strip().isdigit()
-            }
+            # Preserve only already-confirmed bindings as a fallback annotation;
+            # they never turn a Business into "live_ready".
             seen_businesses={
                 str(row.get('id') or '').strip()
                 for row in businesses
@@ -999,28 +1071,47 @@ async def profile_live_inventory(profile_id: str):
                     str(row.get('id') or ''),
                 )
             )
-            live_business_ids={
-                str(business_id)
-                for business_id in business_map
-            }
             live_ready=bool(live_business_ids)
-            return {
+            result={
                 'ok':True,
                 'profile_id':clean_profile,
                 'live_ready':live_ready,
                 'businesses':businesses,
                 'businesses_count':len(businesses),
                 'live_businesses_count':len(live_business_ids),
+                'known_businesses_count':len(known_business_ids),
+                'discovery_source':discovery_source,
                 'source':'business_suite_browser_live_inventory',
                 'warnings':warnings,
             }
+            log.info(
+                'live inventory profile=%s complete ms=%d live_ready=%s live_businesses=%d businesses=%d warnings=%d',
+                clean_profile,
+                int((time.monotonic()-started)*1000),
+                live_ready,
+                len(live_business_ids),
+                len(businesses),
+                len(warnings),
+            )
+            return result
 
     except asyncio.TimeoutError as exc:
+        log.warning(
+            'live inventory profile=%s outer timeout ms=%d',
+            clean_profile,
+            int((time.monotonic()-started)*1000),
+        )
         raise HTTPException(
             status_code=504,
             detail='LIVE_INVENTORY_TIMEOUT',
         ) from exc
     except BrowserBusinessError as exc:
+        log.warning(
+            'live inventory profile=%s browser error=%s message=%s',
+            clean_profile,
+            exc.code,
+            exc,
+        )
         raise HTTPException(
             status_code=409 if exc.code in {
                 'CHECKPOINT_REQUIRED',
@@ -1041,7 +1132,6 @@ async def profile_live_inventory(profile_id: str):
             status_code=502,
             detail=f'LIVE_INVENTORY_FAILED: {exc}',
         ) from exc
-
 
 @app.get('/api/v1/profiles/{profile_id}/provisioning-state',dependencies=[Depends(require_key)])
 async def profile_provisioning_state(profile_id: str):
