@@ -3439,6 +3439,41 @@ class BrowserAdAccountPageScopedInventoryRegressionTests(unittest.TestCase):
         )
 
 
+class BrowserLiveInventoryNavigationRegressionTests(unittest.TestCase):
+    def test_live_inventory_activates_real_ad_accounts_section(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser.snapshot_ad_accounts_for_business
+        )
+        self.assertIn(
+            "await self._activate_ad_account_settings_section(",
+            source,
+        )
+        self.assertIn('"landed_url": landed_url[:700]', source)
+        self.assertIn('"activated": activated', source)
+        self.assertIn("if not exact_business_context:", source)
+
+    def test_explicit_row_business_id_binds_inventory_to_target(self):
+        payload = {
+            "data": {
+                "business": {
+                    "assets": {
+                        "nodes": [
+                            {
+                                "asset_type": "AD_ACCOUNT",
+                                "object_id": "29459808963612032",
+                                "business_id": "61594753560938",
+                                "name": "Bound RK",
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+        rows = _extract_inventory_ad_account_rows(payload)
+        self.assertEqual(rows[0]["id"], "act_29459808963612032")
+        self.assertEqual(rows[0]["business_id"], "61594753560938")
+
+
 class BrowserAuthenticationStateTests(unittest.IsolatedAsyncioTestCase):
     async def test_business_suite_body_word_checkpoint_is_not_auth_checkpoint(self):
         browser = FacebookBusinessBrowser(

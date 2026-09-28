@@ -9313,17 +9313,29 @@ class FacebookBusinessBrowser:
                         or "/settings/ad-accounts" in page_url.casefold()
                     )
                 )
-                if business not in target_business_ids and not page_targets_business:
-                    return
 
                 raw = await response.text()
                 payload = _decode_graphql_text(raw)
                 request_scoped = _graphql_request_ad_account_inventory_scope(meta)
                 page_scoped = bool(page_targets_business)
-                inventory_scope = bool(request_scoped or page_scoped)
+                preliminary_scope = bool(request_scoped or page_scoped)
                 rows = _extract_inventory_ad_account_rows(
                     payload,
-                    request_scoped=inventory_scope,
+                    request_scoped=preliminary_scope,
+                )
+                row_business_ids = {
+                    _digits(row.get("business_id"))
+                    for row in rows
+                    if isinstance(row, dict) and _digits(row.get("business_id"))
+                }
+                payload_targets_business = business in row_business_ids
+                exact_business_context = bool(
+                    business in target_business_ids
+                    or page_targets_business
+                    or payload_targets_business
+                )
+                inventory_scope = bool(
+                    preliminary_scope or payload_targets_business
                 )
                 observed = _has_ad_account_inventory_container(
                     payload,
@@ -9335,6 +9347,10 @@ class FacebookBusinessBrowser:
                     "doc_id": _clean(meta.get("doc_id"))[:80],
                     "request_scoped": request_scoped,
                     "page_scoped": page_scoped,
+                    "payload_targets_business": payload_targets_business,
+                    "exact_business_context": exact_business_context,
+                    "target_business_ids": sorted(target_business_ids)[:8],
+                    "row_business_ids": sorted(row_business_ids)[:8],
                     "inventory_scope": inventory_scope,
                     "rows": len(rows),
                     "inventory_observed": observed,
@@ -9350,6 +9366,8 @@ class FacebookBusinessBrowser:
                 if len(diagnostics) > 24:
                     del diagnostics[:-24]
 
+                if not exact_business_context:
+                    return
                 if not observed and not rows:
                     return
 
@@ -9445,16 +9463,62 @@ class FacebookBusinessBrowser:
                         wait_until="commit",
                         timeout=max(1000, int(remaining_before_nav * 1000)),
                     )
+                    landed_url = _clean(self.page.url)
                     post_nav_remaining = max(0.0, deadline - time.monotonic())
                     if post_nav_remaining > 0:
                         await self.page.wait_for_timeout(
-                            int(min(650.0, post_nav_remaining * 1000.0))
+                            int(min(450.0, post_nav_remaining * 1000.0))
                         )
                     await self._assert_authenticated()
+
+                    activated = False
+                    section_diagnostic: dict[str, Any] = {}
+                    try:
+                        activated = await self._activate_ad_account_settings_section(
+                            business_id=business,
+                        )
+                        section_diagnostic = dict(
+                            self._last_ad_account_section_diagnostic or {}
+                        )
+                    except BrowserBusinessError:
+                        raise
+                    except Exception as section_exc:
+                        section_diagnostic = {
+                            "mode": "activation_error",
+                            "error": (
+                                f"{section_exc.__class__.__name__}: "
+                                f"{_clean(section_exc)}"
+                            )[:500],
+                        }
+
+                    final_url = _clean(self.page.url)
+                    post_activation_remaining = max(
+                        0.0,
+                        deadline - time.monotonic(),
+                    )
+                    if post_activation_remaining > 0:
+                        await self.page.wait_for_timeout(
+                            int(
+                                min(
+                                    1100.0 if activated else 500.0,
+                                    post_activation_remaining * 1000.0,
+                                )
+                            )
+                        )
+                    await asyncio.sleep(0)
+
                     attempts.append(
                         {
-                            "url": _clean(self.page.url)[:700],
-                            "result": "loaded",
+                            "requested_url": target[:700],
+                            "landed_url": landed_url[:700],
+                            "url": final_url[:700],
+                            "result": (
+                                "ad_accounts_section_activated"
+                                if activated
+                                else "redirect_or_shell_loaded"
+                            ),
+                            "activated": activated,
+                            "section": section_diagnostic,
                         }
                     )
                     if inventory_observed:
@@ -9506,6 +9570,9 @@ class FacebookBusinessBrowser:
                 "accounts_count": len(accounts),
                 "attempts": attempts[-6:],
                 "diagnostics": diagnostics[-24:],
+                "section_diagnostic": dict(
+                    self._last_ad_account_section_diagnostic or {}
+                ),
                 "url": _clean(getattr(self.page, "url", ""))[:700],
             }
             return {
@@ -9519,7 +9586,10 @@ class FacebookBusinessBrowser:
                 "accounts_count": len(accounts),
                 "source": "business_settings_graphql_inventory",
                 "attempts": attempts[-6:],
-                "diagnostics": diagnostics[-12:],
+                "diagnostics": diagnostics[-24:],
+                "section_diagnostic": dict(
+                    self._last_ad_account_section_diagnostic or {}
+                ),
             }
         finally:
             try:
