@@ -4591,6 +4591,7 @@ class FacebookBusinessBrowser:
             # its Business list. Keep the established lightweight sidebar
             # probe: it samples only a bounded top-left grid and never scans
             # the whole DOM.
+            selector_probe: dict[str, Any] = {}
             try:
                 selector_probe = await self.page.evaluate(
                     """() => {
@@ -4654,10 +4655,23 @@ class FacebookBusinessBrowser:
                             return (b.r.width*b.r.height) - (a.r.width*a.r.height);
                         });
 
+                        const summary = candidates.slice(0, 12).map(row => ({
+                            text: row.text.slice(0, 180),
+                            role: row.role,
+                            tag: row.tag,
+                            x: Math.round(row.r.x),
+                            y: Math.round(row.r.y),
+                            w: Math.round(row.r.width),
+                            h: Math.round(row.r.height)
+                        }));
                         const best = candidates[0];
-                        if (!best) return {clicked:false,candidates:[]};
+                        if (!best) return {clicked:false,candidates:summary};
                         best.el.click();
-                        return {clicked:true};
+                        return {
+                            clicked:true,
+                            best_text:best.text.slice(0,180),
+                            candidates:summary
+                        };
                     }"""
                 )
                 selector_opened = bool(
@@ -4665,9 +4679,46 @@ class FacebookBusinessBrowser:
                     and selector_probe.get("clicked")
                 )
                 if selector_opened:
-                    await self.page.wait_for_timeout(1000)
-            except Exception:
+                    # Meta often hydrates the portfolio list after the menu
+                    # becomes visible. Keep the response listener alive long
+                    # enough for late Relay payloads instead of declaring an
+                    # empty inventory after one animation frame.
+                    hydrate_deadline = time.monotonic() + 4.5
+                    while time.monotonic() < hydrate_deadline:
+                        if network_rows:
+                            break
+                        await self.page.wait_for_timeout(300)
+            except Exception as exc:
                 selector_opened = False
+                selector_probe = {
+                    "clicked": False,
+                    "error": f"{exc.__class__.__name__}: {_clean(exc)}"[:500],
+                }
+
+            # If HOME did not hydrate any Business inventory, try Meta's
+            # Business overview surface while keeping the same listener. Some
+            # accounts/pages land in an asset-scoped HOME that never requests
+            # the portfolio collection.
+            overview_attempt: dict[str, Any] = {}
+            if not network_rows:
+                try:
+                    await self._goto(self.OVERVIEW_URL)
+                    overview_attempt = {
+                        "loaded": True,
+                        "url": _clean(getattr(self.page, "url", ""))[:700],
+                    }
+                    overview_deadline = time.monotonic() + 3.5
+                    while time.monotonic() < overview_deadline:
+                        if network_rows:
+                            break
+                        await self.page.wait_for_timeout(300)
+                except BrowserBusinessError:
+                    raise
+                except Exception as exc:
+                    overview_attempt = {
+                        "loaded": False,
+                        "error": f"{exc.__class__.__name__}: {_clean(exc)}"[:500],
+                    }
 
             # Fallback only: some builds expose Business IDs in href/HTML.
             try:
@@ -4715,7 +4766,9 @@ class FacebookBusinessBrowser:
                 ),
                 "network_businesses": len(network_rows),
                 "dom_businesses": len(dom_output),
-                "queries": query_diagnostics[-12:],
+                "queries": query_diagnostics[-24:],
+                "selector_probe": selector_probe,
+                "overview_attempt": overview_attempt,
                 "url": _clean(getattr(self.page, "url", ""))[:700],
             }
             return output
