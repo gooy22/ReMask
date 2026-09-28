@@ -410,6 +410,100 @@ async def lifespan(app: FastAPI):
     )
     await pool.stop()
 
+_FP_AUTH_GATE_CACHE: dict[str, dict[str, Any]] = {}
+_FP_AUTH_GATE_TTL_SECONDS = 20.0
+
+def _remember_fp_auth_gate(profile_id: str, preflight: dict[str, Any]) -> None:
+    _FP_AUTH_GATE_CACHE[str(profile_id)] = {
+        'at': time.monotonic(),
+        'auth_blocked': bool(preflight.get('auth_blocked')),
+        'auth_error_code': str(preflight.get('auth_error_code') or '').strip().upper(),
+        'facebook_session_ready': bool(preflight.get('facebook_session_ready')),
+    }
+
+def _cached_fp_auth_gate(profile_id: str) -> dict[str, Any] | None:
+    row = _FP_AUTH_GATE_CACHE.get(str(profile_id))
+    if not isinstance(row, dict):
+        return None
+    if time.monotonic() - float(row.get('at') or 0.0) > _FP_AUTH_GATE_TTL_SECONDS:
+        return None
+    return row
+
+def _request_fan_page_profile_ids(request: CreateJobRequest) -> list[str]:
+    out: list[str] = []
+    for profile in request.profiles:
+        has_fp = False
+        for task in profile.tasks:
+            if str(task.action or '').strip().lower() != 'provisioning':
+                continue
+            payload = task.payload if isinstance(task.payload, dict) else {}
+            steps = payload.get('steps') if isinstance(payload.get('steps'), list) else []
+            if any(str(step or '').strip().upper() == 'FAN_PAGES' for step in steps):
+                has_fp = True
+                break
+        if has_fp:
+            profile_id = str(profile.profile_id or '').strip()
+            if profile_id and profile_id not in out:
+                out.append(profile_id)
+    return out
+
+def _view_fan_page_retry_profile_ids(view: dict[str, Any]) -> list[str]:
+    out: list[str] = []
+    for item in view.get('items') or []:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get('status') or '').upper() != 'FAILED':
+            continue
+        has_fp = False
+        for task in item.get('tasks') or []:
+            if not isinstance(task, dict):
+                continue
+            payload = task.get('payload') if isinstance(task.get('payload'), dict) else {}
+            steps = payload.get('steps') if isinstance(payload.get('steps'), list) else []
+            if any(str(step or '').strip().upper() == 'FAN_PAGES' for step in steps):
+                has_fp = True
+                break
+        if has_fp:
+            profile_id = str(item.get('profile_id') or '').strip()
+            if profile_id and profile_id not in out:
+                out.append(profile_id)
+    return out
+
+async def _require_fp_auth_ready(profile_ids: list[str]) -> None:
+    async def check(profile_id: str) -> tuple[str, dict[str, Any]]:
+        cached = _cached_fp_auth_gate(profile_id)
+        if cached is not None:
+            return profile_id, cached
+        preflight = await profile_preflight(profile_id)
+        _remember_fp_auth_gate(profile_id, preflight)
+        return profile_id, preflight
+
+    if not profile_ids:
+        return
+
+    results = await asyncio.gather(
+        *(check(profile_id) for profile_id in profile_ids)
+    )
+    blocked: list[str] = []
+    not_ready: list[str] = []
+    for profile_id, state in results:
+        code = str(state.get('auth_error_code') or '').strip().upper()
+        if bool(state.get('auth_blocked')):
+            blocked.append(f'{profile_id}:{code or "FACEBOOK_AUTH_BLOCKED"}')
+        elif state.get('facebook_session_ready') is not True:
+            not_ready.append(profile_id)
+
+    if blocked:
+        raise HTTPException(
+            status_code=409,
+            detail='FP_AUTH_BLOCKED: ' + ', '.join(blocked),
+        )
+    if not_ready:
+        raise HTTPException(
+            status_code=409,
+            detail='FP_SESSION_NOT_READY: ' + ', '.join(not_ready),
+        )
+
 app=FastAPI(title='ReMask Python Worker',version='0.4.0',lifespan=lifespan)
 
 @app.get('/health',response_model=HealthResponse)
@@ -632,7 +726,7 @@ async def profile_preflight(profile_id: str):
             detail=f'PROFILE_PREFLIGHT_FAILED: {exc}',
         ) from exc
 
-    return {
+    result = {
         'ok':True,
         'profile_id':clean_profile,
         'profile_context':'ok',
@@ -687,6 +781,8 @@ async def profile_preflight(profile_id: str):
         },
         'bm_route_ready':browser_ui_ready,
     }
+    _remember_fp_auth_gate(clean_profile, result)
+    return result
 
 @app.get('/api/v1/facebook/docids',dependencies=[Depends(require_key)])
 async def facebook_docids(operation: str | None = None):
@@ -779,6 +875,9 @@ async def profile_provisioning_state(profile_id: str):
 
 @app.post('/api/v1/jobs',response_model=JobAccepted,dependencies=[Depends(require_key)])
 async def create_job(request: CreateJobRequest) -> JobAccepted:
+    fp_profiles=_request_fan_page_profile_ids(request)
+    if fp_profiles:
+        await _require_fp_auth_ready(fp_profiles)
     job_id,created=await store.create_job(request)
     view=await store.job_view(job_id)
     if view and mirror.enabled:
@@ -814,8 +913,12 @@ async def get_job(job_id: str):
 
 @app.post('/api/v1/jobs/{job_id}/retry-failed',response_model=RetryResponse,dependencies=[Depends(require_key)])
 async def retry_failed(job_id: str) -> RetryResponse:
-    if not await store.job_view(job_id):
+    current_view=await store.job_view(job_id)
+    if not current_view:
         raise HTTPException(status_code=404,detail='job not found')
+    fp_profiles=_view_fan_page_retry_profile_ids(current_view)
+    if fp_profiles:
+        await _require_fp_auth_ready(fp_profiles)
     count=await store.retry_failed(job_id)
     view=await store.job_view(job_id)
     if view and mirror.enabled:

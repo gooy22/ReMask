@@ -1,4 +1,4 @@
-/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 REMASK_PYTHON_WORKER_UI_V140 REMASK_PYTHON_WORKER_UI_V141 REMASK_PYTHON_WORKER_UI_V142 REMASK_PYTHON_WORKER_UI_V143 REMASK_PYTHON_WORKER_UI_V144 REMASK_PYTHON_WORKER_UI_V145 REMASK_PYTHON_WORKER_UI_V146 REMASK_PYTHON_WORKER_UI_V147 REMASK_PYTHON_WORKER_UI_V148 REMASK_PYTHON_WORKER_UI_V149 REMASK_PYTHON_WORKER_UI_V150 REMASK_PYTHON_WORKER_UI_V151 REMASK_PYTHON_WORKER_UI_V152 REMASK_PYTHON_WORKER_UI_V153 REMASK_PYTHON_WORKER_UI_V154 REMASK_PYTHON_WORKER_UI_V155 REMASK_PYTHON_WORKER_UI_V156 REMASK_PYTHON_WORKER_UI_V157 REMASK_PYTHON_WORKER_UI_V158 REMASK_PYTHON_WORKER_UI_V159 REMASK_PYTHON_WORKER_UI_V160 REMASK_PYTHON_WORKER_UI_V161 REMASK_PYTHON_WORKER_UI_V164 REMASK_PYTHON_WORKER_UI_V166 REMASK_PYTHON_WORKER_UI_V169 REMASK_PYTHON_WORKER_UI_V170 REMASK_PYTHON_WORKER_UI_V171 REMASK_PYTHON_WORKER_UI_V172 REMASK_PYTHON_WORKER_UI_V173 REMASK_PYTHON_WORKER_UI_V174 REMASK_PYTHON_WORKER_UI_V175 REMASK_PYTHON_WORKER_UI_V176 REMASK_PYTHON_WORKER_UI_V177 */
+/* REMASK_PYTHON_WORKER_UI_V1 REMASK_PYTHON_WORKER_UI_V2 REMASK_PYTHON_WORKER_UI_V3 REMASK_PYTHON_WORKER_UI_V133 REMASK_PYTHON_WORKER_UI_V134 REMASK_PYTHON_WORKER_UI_V135 REMASK_PYTHON_WORKER_UI_V136 REMASK_PYTHON_WORKER_UI_V137 REMASK_PYTHON_WORKER_UI_V138 REMASK_PYTHON_WORKER_UI_V139 REMASK_PYTHON_WORKER_UI_V140 REMASK_PYTHON_WORKER_UI_V141 REMASK_PYTHON_WORKER_UI_V142 REMASK_PYTHON_WORKER_UI_V143 REMASK_PYTHON_WORKER_UI_V144 REMASK_PYTHON_WORKER_UI_V145 REMASK_PYTHON_WORKER_UI_V146 REMASK_PYTHON_WORKER_UI_V147 REMASK_PYTHON_WORKER_UI_V148 REMASK_PYTHON_WORKER_UI_V149 REMASK_PYTHON_WORKER_UI_V150 REMASK_PYTHON_WORKER_UI_V151 REMASK_PYTHON_WORKER_UI_V152 REMASK_PYTHON_WORKER_UI_V153 REMASK_PYTHON_WORKER_UI_V154 REMASK_PYTHON_WORKER_UI_V155 REMASK_PYTHON_WORKER_UI_V156 REMASK_PYTHON_WORKER_UI_V157 REMASK_PYTHON_WORKER_UI_V158 REMASK_PYTHON_WORKER_UI_V159 REMASK_PYTHON_WORKER_UI_V160 REMASK_PYTHON_WORKER_UI_V161 REMASK_PYTHON_WORKER_UI_V164 REMASK_PYTHON_WORKER_UI_V166 REMASK_PYTHON_WORKER_UI_V169 REMASK_PYTHON_WORKER_UI_V170 REMASK_PYTHON_WORKER_UI_V171 REMASK_PYTHON_WORKER_UI_V172 REMASK_PYTHON_WORKER_UI_V173 REMASK_PYTHON_WORKER_UI_V174 REMASK_PYTHON_WORKER_UI_V175 REMASK_PYTHON_WORKER_UI_V176 REMASK_PYTHON_WORKER_UI_V177 REMASK_PYTHON_WORKER_UI_V178 */
 const restoredPythonWorkerJobId = localStorage.getItem('remask_python_worker_job_v1') || '';
 
 const restoredPythonWorkerBatchIds = (() => {
@@ -1992,9 +1992,38 @@ async function pythonWorkerRetryFailed() {
 
   pythonWorkerUiState.busy = true;
   pythonWorkerSelectionRefresh();
-  pythonWorkerSetText('pythonPwStatus', 'Повторно ставлю FAILED JobItem в очередь...');
+  pythonWorkerSetText('pythonPwStatus', 'Проверяю FAILED Job перед Retry...');
 
   try {
+    const currentItems = pythonWorkerUiState.job && Array.isArray(pythonWorkerUiState.job.items)
+      ? pythonWorkerUiState.job.items
+      : [];
+    const checkpointProfiles = Array.from(new Set(
+      currentItems
+        .filter(function(item) {
+          return item &&
+            String(item.status || '').toUpperCase() === 'FAILED' &&
+            pythonWorkerIsProfileAuthBlockedCode(item.error_code);
+        })
+        .map(function(item) { return String(item.profile_id || '').trim(); })
+        .filter(Boolean)
+    ));
+
+    if (checkpointProfiles.length) {
+      const gate = await pythonWorkerFilterFanPageReadyProfiles(checkpointProfiles);
+      if (gate.blocked.length) {
+        pythonWorkerUiState.busy = false;
+        pythonWorkerSelectionRefresh();
+        pythonWorkerSetText(
+          'pythonPwStatus',
+          'Retry приостановлен: Facebook checkpoint у профиля(ей) ' +
+            gate.blocked.join(', ') + '. Job остаётся FAILED/resumable.'
+        );
+        return;
+      }
+    }
+
+    pythonWorkerSetText('pythonPwStatus', 'Повторно ставлю FAILED JobItem в очередь...');
     const data = await pythonWorkerBridge({
       action: 'retry_failed',
       job_id: pythonWorkerUiState.jobId
@@ -2649,6 +2678,35 @@ async function pythonWorkerStartRkFanPageTargets(targets, mode, configs) {
 }
 
 
+
+async function pythonWorkerFilterFanPageReadyProfiles(profileIds) {
+  const source = Array.from(new Set(
+    (Array.isArray(profileIds) ? profileIds : [])
+      .map(function(value) { return String(value || '').trim(); })
+      .filter(Boolean)
+  ));
+  const ready = [];
+  const blocked = [];
+  const errors = [];
+
+  await pythonWorkerMapLimit(source, 3, async function(profileId) {
+    try {
+      await pythonWorkerProfilePreflight(profileId);
+      ready.push(profileId);
+    } catch (error) {
+      const authMessage = pythonWorkerFpAuthBlockedMessage(error);
+      if (authMessage) {
+        blocked.push(profileId);
+      } else {
+        errors.push(
+          profileId + ': ' + String((error && error.message) || error)
+        );
+      }
+    }
+  });
+
+  return {ready: ready, blocked: blocked, errors: errors};
+}
 
 function pythonWorkerFpAuthBlockedMessage(error) {
   const message = String((error && error.message) || error || '');
@@ -3793,13 +3851,33 @@ async function pythonWorkerStartFanPages(options) {
     throw new Error('Add FP: нужны название, category и count 1–10. Проблема: ' + invalid.join(', '));
   }
 
+  pythonWorkerSetText('pythonPwStatus', 'Add FP: проверяю Facebook-сессии...');
+  const gate = await pythonWorkerFilterFanPageReadyProfiles(profiles);
+  if (!gate.ready.length) {
+    pythonWorkerUiState.busy = false;
+    pythonWorkerSelectionRefresh();
+    pythonWorkerSetText('pythonPwJob', '');
+    throw new Error(
+      gate.blocked.length
+        ? 'CHECKPOINT_REQUIRED: профили ' + gate.blocked.join(', ') +
+          '. Fan Page Job не создан.'
+        : 'FP preflight не прошёл: ' + (gate.errors[0] || 'нет READY профилей.')
+    );
+  }
+
   pythonWorkerUiState.busy = true;
   pythonWorkerSelectionRefresh();
-  pythonWorkerSetText('pythonPwStatus', 'Создаю Fan Page Job для ' + profiles.length + ' FB-профилей...');
+  pythonWorkerSetText(
+    'pythonPwStatus',
+    'Создаю Fan Page Job для ' + gate.ready.length + ' FB-профилей...' +
+      (gate.blocked.length
+        ? ' Пропущены checkpoint-профили: ' + gate.blocked.join(', ') + '.'
+        : '')
+  );
 
   try {
     const nonce = Date.now() + '-' + Math.random().toString(16).slice(2);
-    const payloadProfiles = profiles.map(function(profileId, index) {
+    const payloadProfiles = gate.ready.map(function(profileId, index) {
       const cfg = configs[String(profileId)] || {};
       return {
         profile_id: String(profileId),
