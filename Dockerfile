@@ -268,7 +268,7 @@ RUN set -eux; \
     grep -q 'REMASK_PRIVATE_BROWSER_SYNC_V1' /var/www/html/ajax/metaHierarchy.php; \
     grep -q 'PRIVATE_SYNC_FAILED' /var/www/html/ajax/metaHierarchy.php; \
     grep -q "kind='META_REQUEST'" /var/www/html/scripts/workspace.js; \
-    grep -q 'Meta request timeout after' /var/www/html/scripts/workspace.js; \
+    grep -q 'Private Meta sync timeout after' /var/www/html/scripts/workspace.js; \
     grep -Fq "\$('workspaceActions').disabled=n===0;" /var/www/html/scripts/workspace.js; \
     grep -q 'REMASK_SESSION_CLEAR_EXPLICIT_V2' /var/www/html/ajax/metaProfileManager.php; \
     grep -q 'REMASK_SESSION_ONLY_UPDATE_V1' /var/www/html/ajax/metaProfileManager.php; \
