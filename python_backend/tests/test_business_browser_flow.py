@@ -3230,7 +3230,7 @@ class BrowserInventoryExtractionTests(unittest.TestCase):
         }
         rows=_extract_inventory_ad_account_rows(payload)
         self.assertEqual(len(rows),1)
-        self.assertEqual(rows[0]["id"],"29459808963612032")
+        self.assertEqual(rows[0]["id"],"act_29459808963612032")
         self.assertEqual(rows[0]["name"],"ReMask RK")
 
     def test_ignores_unrelated_numeric_ids(self):
