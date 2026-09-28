@@ -9197,16 +9197,24 @@ class FacebookBusinessBrowser:
                         "attempts": attempts[-6:],
                         "url": _clean(getattr(self.page, "url", ""))[:700],
                     }
-                    await asyncio.wait_for(
-                        self._goto(target),
-                        timeout=remaining_before_nav,
+                    # RK inventory is read-only. Do not wait for Meta's
+                    # heavy Business Settings document to reach
+                    # DOMContentLoaded; the Relay inventory requests are
+                    # emitted after the navigation commits and hydrate the SPA
+                    # asynchronously. Waiting for DOMContentLoaded was consuming
+                    # the entire inventory budget before those responses could
+                    # be observed.
+                    await self.page.goto(
+                        target,
+                        wait_until="commit",
+                        timeout=max(1000, int(remaining_before_nav * 1000)),
                     )
-                    await self._assert_authenticated()
                     post_nav_remaining = max(0.0, deadline - time.monotonic())
                     if post_nav_remaining > 0:
                         await self.page.wait_for_timeout(
-                            int(min(900.0, post_nav_remaining * 1000.0))
+                            int(min(650.0, post_nav_remaining * 1000.0))
                         )
+                    await self._assert_authenticated()
                     attempts.append(
                         {
                             "url": _clean(self.page.url)[:700],
