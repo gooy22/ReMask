@@ -4716,7 +4716,7 @@ class FacebookBusinessBrowser:
                 "network_businesses": len(network_rows),
                 "dom_businesses": len(dom_output),
                 "queries": query_diagnostics[-12:],
-                "url": _clean(self.page.url)[:700],
+                "url": _clean(getattr(self.page, "url", ""))[:700],
             }
             return output
         finally:
