@@ -1488,12 +1488,14 @@ class FacebookBusinessBrowser:
         "पेज बनाएं",
     )
     SETTINGS_AD_ACCOUNTS_URLS = (
-        # Exact migrated Business Settings route observed on current profiles.
+        # Current live profiles can redirect all /latest/settings/ad_accounts
+        # variants into a Page/Profile shell. The legacy Business Settings URL
+        # is the only route observed to preserve the requested business_id, so
+        # give that exact BM context the primary inventory budget.
+        "https://business.facebook.com/settings/ad-accounts/?business_id={business_id}",
         "https://business.facebook.com/latest/settings/ad_accounts/?nav_ref=bm_settings_redirect_migration&bm_redirect_migration=true&business_id={business_id}",
         "https://business.facebook.com/latest/settings/ad_accounts?business_id={business_id}",
         "https://business.facebook.com/latest/settings/ad_accounts/?business_id={business_id}",
-        # Legacy settings route remains only as a final fallback.
-        "https://business.facebook.com/settings/ad-accounts/?business_id={business_id}",
     )
     AD_ACCOUNT_SECTION_NAMES = (
         "Ad accounts",
@@ -9615,10 +9617,22 @@ class FacebookBusinessBrowser:
                         timeout=max(1000, int(remaining_before_nav * 1000)),
                     )
                     landed_url = _clean(self.page.url)
+                    landed_targets_business = bool(
+                        business in _business_ids_from_text(landed_url)
+                        and (
+                            "/settings/ad_accounts" in landed_url.casefold()
+                            or "/settings/ad-accounts" in landed_url.casefold()
+                        )
+                    )
                     post_nav_remaining = max(0.0, deadline - time.monotonic())
                     if post_nav_remaining > 0:
                         await self.page.wait_for_timeout(
-                            int(min(450.0, post_nav_remaining * 1000.0))
+                            int(
+                                min(
+                                    1600.0 if landed_targets_business else 250.0,
+                                    post_nav_remaining * 1000.0,
+                                )
+                            )
                         )
                     await self._assert_authenticated()
 
@@ -9689,7 +9703,10 @@ class FacebookBusinessBrowser:
                         try:
                             await asyncio.wait_for(
                                 inventory_query_seen.wait(),
-                                timeout=min(2.0, body_read_remaining),
+                                timeout=min(
+                                    3.0 if final_page_targets_business else 1.0,
+                                    body_read_remaining,
+                                ),
                             )
                         except asyncio.TimeoutError:
                             pass
