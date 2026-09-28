@@ -962,7 +962,19 @@ async def profile_live_inventory(profile_id: str, business_ids: str | None = Non
                         browser.snapshot_businesses(),
                         timeout=18.0,
                     )
-                    discovery_source='business_suite_home'
+                    business_diag=getattr(
+                        browser,
+                        '_last_business_inventory_diagnostic',
+                        {},
+                    )
+                    discovery_source=str(
+                        (business_diag or {}).get('source')
+                        or 'business_suite_private_inventory'
+                    )
+                    if not business_map:
+                        warnings.append(
+                            'Private Business Suite inventory returned no Business portfolios'
+                        )
                 except asyncio.TimeoutError:
                     warnings.append('Business discovery timed out')
                     business_map={}
@@ -1115,7 +1127,12 @@ async def profile_live_inventory(profile_id: str, business_ids: str | None = Non
                 'live_businesses_count':len(live_business_ids),
                 'known_businesses_count':len(known_business_ids),
                 'discovery_source':discovery_source,
-                'source':'business_suite_browser_live_inventory',
+                'business_inventory_diagnostic':getattr(
+                    browser,
+                    '_last_business_inventory_diagnostic',
+                    {},
+                ),
+                'source':'business_suite_private_inventory',
                 'warnings':warnings,
             }
             log.info(
