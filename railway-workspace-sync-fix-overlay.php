@@ -696,49 +696,9 @@ $syncProfileReplacement = <<<'PHP'
         $knownBusinesses = [];
         $syncWarnings = [];
 
-        $liveInventory = [];
+        // REMASK_SYNC_TOKEN_ONLY_LIVE_V1
+        // Workspace sync for token-only profiles must not depend on c_user/xs.
         $liveInventoryAvailable = false;
-        try {
-            $liveInventory = hierarchy_worker_live_inventory($profile);
-            $liveInventoryAvailable = (($liveInventory['live_ready'] ?? false) === true);
-            foreach ((array)($liveInventory['businesses'] ?? []) as $liveBusiness) {
-                if (!is_array($liveBusiness)) continue;
-                $liveBusinessId = trim((string)($liveBusiness['id'] ?? ''));
-                if ($liveBusinessId === '') continue;
-                $knownBusinesses[$liveBusinessId] = [
-                    'id' => $liveBusinessId,
-                    'name' => trim((string)($liveBusiness['name'] ?? $liveBusinessId)),
-                    '_source' => 'business_suite_browser_live_inventory',
-                ];
-                foreach ((array)($liveBusiness['ad_accounts'] ?? []) as $liveAccount) {
-                    if (!is_array($liveAccount)) continue;
-                    $liveAccountId = trim((string)($liveAccount['id'] ?? $liveAccount['account_id'] ?? ''));
-                    if (str_starts_with($liveAccountId, 'act_')) {
-                        $liveAccountId = substr($liveAccountId, 4);
-                    }
-                    if (!preg_match('/^\\d{5,30}$/', $liveAccountId)) continue;
-                    $row = $liveAccount;
-                    $row['id'] = $liveAccountId;
-                    $row['account_id'] = $liveAccountId;
-                    $row['profile'] = $profile;
-                    $row['business_id'] = $liveBusinessId;
-                    $row['business_name'] = (string)($knownBusinesses[$liveBusinessId]['name'] ?? $liveBusinessId);
-                    $row['_business_edge'] = 'business_suite_browser_live_inventory';
-                    $verifiedBusinessAdAccounts[$liveAccountId] = $row;
-                }
-            }
-            foreach ((array)($liveInventory['warnings'] ?? []) as $liveWarning) {
-                if (is_scalar($liveWarning) && trim((string)$liveWarning) !== '') {
-                    $syncWarnings[] = trim((string)$liveWarning);
-                }
-            }
-        } catch (Throwable $liveInventoryError) {
-            error_log(
-                '[remask-sync] profile=' . $profile .
-                ' stage=browser_live_inventory message=' .
-                mb_substr((string)$liveInventoryError->getMessage(), 0, 1200)
-            );
-        }
 
         $existingSnapshot = hierarchy_profile_snapshot($profile);
         foreach ((array)($existingSnapshot['businesses'] ?? []) as $existingBusiness) {
@@ -753,22 +713,37 @@ $syncProfileReplacement = <<<'PHP'
                 ];
             }
         }
-        if (!$liveInventoryAvailable && $graphPreflightWarning !== '') {
+        if (!$graphPreflightAvailable && $graphPreflightWarning !== '') {
             $syncWarnings[] = $graphPreflightWarning;
         }
-        foreach ((array)($preflight['_preflight_warnings'] ?? []) as $preflightWarning) {
-            if (!is_array($preflightWarning)) continue;
-            $stage = trim((string)($preflightWarning['stage'] ?? 'preflight'));
-            $message = trim((string)($preflightWarning['message'] ?? 'unavailable'));
-            $syncWarnings[] = 'Meta ' . $stage . ' unavailable: ' . $message;
-        }
+        // Identity and permissions are optional for token-only Ads Manager sync.
+        // Keep them in backend diagnostics, not as a user-facing degraded-sync warning.
         if (!empty($preflight['ad_accounts']['_funding_enrichment_warning'])) {
             $syncWarnings[] = 'RK funding/payment metadata unavailable; RK list kept';
         }
         if (!empty($preflight['ad_accounts']['_adaccounts_fallback'])) {
             $fallbackName = trim((string)($preflight['ad_accounts']['_adaccounts_fallback']['field_set'] ?? 'compat'));
-            $syncWarnings[] = 'RK sync used compatible Meta field set: ' . $fallbackName;
+            // Compatibility field fallbacks are normal transport negotiation,
+            // not a degraded sync condition.
+            error_log('[remask-sync] profile=' . $profile . ' RK field_set=' . $fallbackName);
         }
+
+        $directBusinessReferences = [];
+        foreach ((array)($preflight['ad_accounts']['data'] ?? []) as $directAccount) {
+            if (!is_array($directAccount)) continue;
+            $directBusiness = $directAccount['business'] ?? null;
+            if (!is_array($directBusiness)) continue;
+            $directBusinessId = trim((string)($directBusiness['id'] ?? ''));
+            if (!preg_match('/^\\d{5,30}$/', $directBusinessId)) continue;
+            $directBusinessName = trim((string)($directBusiness['name'] ?? $directBusinessId));
+            $directBusinessReferences[$directBusinessId] = true;
+            $knownBusinesses[$directBusinessId] = [
+                'id' => $directBusinessId,
+                'name' => $directBusinessName !== '' ? $directBusinessName : $directBusinessId,
+                '_source' => 'me_adaccounts_business_reference',
+            ];
+        }
+
         try {
             $businesses = MetaEndpoint::cachedAsset($profile, 'businesses', '', true);
             foreach (($businesses['data'] ?? []) as $business) {
@@ -783,8 +758,9 @@ $syncProfileReplacement = <<<'PHP'
                     $businessAccounts = MetaEndpoint::cachedAsset($profile, 'business_ad_accounts', $businessId, true);
                     foreach ((array)($businessAccounts['data'] ?? []) as $businessAccount) {
                         if (!is_array($businessAccount)) continue;
-                        $rkId = trim((string)($businessAccount['id'] ?? ''));
-                        if ($rkId === '') continue;
+                        $rkId = trim((string)($businessAccount['account_id'] ?? $businessAccount['id'] ?? ''));
+                        if (str_starts_with(strtolower($rkId), 'act_')) $rkId = substr($rkId, 4);
+                        if (!preg_match('/^\\d{5,30}$/', $rkId)) continue;
                         $row = $businessAccount;
                         $row['profile'] = $profile;
                         $row['business_id'] = $businessId;
@@ -797,19 +773,29 @@ $syncProfileReplacement = <<<'PHP'
                         if (!is_array($edgeWarning)) continue;
                         $edgeName = trim((string)($edgeWarning['edge'] ?? 'business_ad_accounts'));
                         $edgeKind = trim((string)($edgeWarning['kind'] ?? 'edge_unavailable'));
-                        if ($edgeKind === 'funding_metadata_unavailable') {
-                            $syncWarnings[] = 'BM ' . $businessId . ': ' . $edgeName . ' funding metadata unavailable';
-                        } else {
-                            $syncWarnings[] = 'BM ' . $businessId . ': ' . $edgeName . ' unavailable';
+                        if (!isset($directBusinessReferences[$businessId])) {
+                            if ($edgeKind === 'funding_metadata_unavailable') {
+                                $syncWarnings[] = 'BM ' . $businessId . ': ' . $edgeName . ' funding metadata unavailable';
+                            } else {
+                                $syncWarnings[] = 'BM ' . $businessId . ': ' . $edgeName . ' unavailable';
+                            }
                         }
                     }
                 } catch (Throwable $businessAccountError) {
-                    $syncWarnings[] = 'BM ' . $businessId . ': RK enrichment unavailable';
+                    if (!isset($directBusinessReferences[$businessId])) {
+                        $syncWarnings[] = 'BM ' . $businessId . ': RK enrichment unavailable';
+                    }
                 }
             }
         } catch (Throwable $businessError) {
-            if (!$liveInventoryAvailable) {
-                $syncWarnings[] = 'Live Business Manager inventory unavailable; existing/worker-confirmed BM inventory retained';
+            if ($directBusinessReferences === []) {
+                $syncWarnings[] = 'Business Manager enrichment unavailable; no live BM reference was returned by RK inventory';
+            } else {
+                error_log(
+                    '[remask-sync] profile=' . $profile .
+                    ' stage=business_enrichment_optional message=' .
+                    mb_substr((string)$businessError->getMessage(), 0, 800)
+                );
             }
         }
 
@@ -818,8 +804,9 @@ $syncProfileReplacement = <<<'PHP'
         // read-only ownership proof when it points at a currently returned BM.
         foreach ((array)($preflight['ad_accounts']['data'] ?? []) as $directAccount) {
             if (!is_array($directAccount)) continue;
-            $directId = trim((string)($directAccount['id'] ?? ''));
-            if ($directId === '' || isset($verifiedBusinessAdAccounts[$directId])) continue;
+            $directId = trim((string)($directAccount['account_id'] ?? $directAccount['id'] ?? ''));
+            if (str_starts_with(strtolower($directId), 'act_')) $directId = substr($directId, 4);
+            if (!preg_match('/^\\d{5,30}$/', $directId) || isset($verifiedBusinessAdAccounts[$directId])) continue;
 
             $directBusiness = $directAccount['business'] ?? null;
             $directBusinessId = '';
@@ -832,7 +819,14 @@ $syncProfileReplacement = <<<'PHP'
                 $directBusinessId = trim((string)($directAccount['business_id'] ?? ''));
             }
 
-            if ($directBusinessId === '' || !isset($knownBusinesses[$directBusinessId])) continue;
+            if ($directBusinessId === '' || !preg_match('/^\\d{5,30}$/', $directBusinessId)) continue;
+            if (!isset($knownBusinesses[$directBusinessId])) {
+                $knownBusinesses[$directBusinessId] = [
+                    'id' => $directBusinessId,
+                    'name' => $directBusinessName !== '' ? $directBusinessName : $directBusinessId,
+                    '_source' => 'me_adaccounts_business_reference',
+                ];
+            }
 
             $row = $directAccount;
             $row['profile'] = $profile;
@@ -903,7 +897,9 @@ $syncProfileReplacement = <<<'PHP'
                 $workerDirect = null;
                 foreach ((array)($preflight['ad_accounts']['data'] ?? []) as $directAccount) {
                     if (!is_array($directAccount)) continue;
-                    if (trim((string)($directAccount['id'] ?? '')) === $workerAdAccountId) {
+                    $candidateDirectId = trim((string)($directAccount['account_id'] ?? $directAccount['id'] ?? ''));
+                    if (str_starts_with(strtolower($candidateDirectId), 'act_')) $candidateDirectId = substr($candidateDirectId, 4);
+                    if ($candidateDirectId === $workerAdAccountId) {
                         $workerDirect = $directAccount;
                         break;
                     }
@@ -940,7 +936,7 @@ $syncProfileReplacement = <<<'PHP'
             $syncWarnings[] = 'Worker provisioning state unavailable; existing inventory retained';
         }
 
-        if (!$liveInventoryAvailable) {
+        if (!$graphPreflightAvailable) {
             foreach ((array)($existingSnapshot['ad_accounts'] ?? []) as $existingAdAccount) {
                 if (!is_array($existingAdAccount)) continue;
                 $existingAdAccountId = trim((string)($existingAdAccount['id'] ?? $existingAdAccount['account_id'] ?? ''));
@@ -966,8 +962,9 @@ $syncProfileReplacement = <<<'PHP'
         $directIds = [];
         foreach ((array)($preflight['ad_accounts']['data'] ?? []) as $directAccount) {
             if (!is_array($directAccount)) continue;
-            $directId = trim((string)($directAccount['id'] ?? ''));
-            if ($directId !== '') $directIds[$directId] = true;
+            $directId = trim((string)($directAccount['account_id'] ?? $directAccount['id'] ?? ''));
+            if (str_starts_with(strtolower($directId), 'act_')) $directId = substr($directId, 4);
+            if (preg_match('/^\\d{5,30}$/', $directId)) $directIds[$directId] = true;
         }
         $filteredDirect = array_values(array_diff(
             array_keys($directIds),
@@ -990,34 +987,46 @@ $syncProfileReplacement = <<<'PHP'
             if ($verifiedBusinessId === '') continue;
             $accountsByBusiness[$verifiedBusinessId][] = $verifiedRow;
         }
-        if (is_array($snapshot['businesses'] ?? null)) {
-            foreach ($snapshot['businesses'] as $i => $businessRow) {
-                if (!is_array($businessRow)) continue;
-                $businessRowId = trim((string)($businessRow['id'] ?? ''));
-                if ($businessRowId === '') continue;
-                $rowsForBusiness = $accountsByBusiness[$businessRowId] ?? [];
-                $snapshot['businesses'][$i]['ad_account_count'] = count($rowsForBusiness);
-                $snapshot['businesses'][$i]['accounts'] = $rowsForBusiness;
-            }
+        $businessRowsById = [];
+        foreach ((array)($snapshot['businesses'] ?? []) as $businessRow) {
+            if (!is_array($businessRow)) continue;
+            $businessRowId = trim((string)($businessRow['id'] ?? ''));
+            if ($businessRowId === '') continue;
+            $businessRowsById[$businessRowId] = $businessRow;
         }
+        foreach ($knownBusinesses as $businessId => $knownBusiness) {
+            if (!is_array($knownBusiness)) continue;
+            $businessId = trim((string)$businessId);
+            if ($businessId === '') continue;
+            $existingBusinessRow = $businessRowsById[$businessId] ?? [];
+            $existingBusinessRow['id'] = $businessId;
+            if (trim((string)($existingBusinessRow['name'] ?? '')) === '') {
+                $existingBusinessRow['name'] = trim((string)($knownBusiness['name'] ?? $businessId));
+            }
+            $existingBusinessRow['_sync_source'] = (string)($knownBusiness['_source'] ?? 'live_meta');
+            $rowsForBusiness = $accountsByBusiness[$businessId] ?? [];
+            $existingBusinessRow['ad_account_count'] = count($rowsForBusiness);
+            $existingBusinessRow['accounts'] = $rowsForBusiness;
+            $businessRowsById[$businessId] = $existingBusinessRow;
+        }
+        $snapshot['businesses'] = array_values($businessRowsById);
+        $snapshot['businesses_count'] = count($snapshot['businesses']);
 
         if (is_array($snapshot['profiles'] ?? null)) {
             foreach ($snapshot['profiles'] as $i => $profileRow) {
                 if (!is_array($profileRow)) continue;
                 $rowName = trim((string)($profileRow['name'] ?? $profileRow['profile'] ?? ''));
                 if ($rowName !== '' && $rowName !== $profile) continue;
+                $snapshot['profiles'][$i]['bm_count'] = count($snapshot['businesses']);
                 $snapshot['profiles'][$i]['rk_count'] = count($verifiedBusinessAdAccounts);
+                $snapshot['profiles'][$i]['businesses_count'] = count($snapshot['businesses']);
                 $snapshot['profiles'][$i]['ad_accounts_count'] = count($verifiedBusinessAdAccounts);
             }
         }
-        $snapshot['sync_source'] = $liveInventoryAvailable
-            ? 'business_suite_browser_live_inventory'
-            : (
-                $graphPreflightAvailable
-                    ? 'business_manager_bound_ad_accounts'
-                    : 'worker_browser_confirmed_inventory'
-            );
-        $snapshot['live_inventory_available'] = $liveInventoryAvailable;
+        $snapshot['sync_source'] = $graphPreflightAvailable
+            ? 'me_adaccounts_live_business_reference'
+            : 'worker_confirmed_inventory';
+        $snapshot['live_inventory_available'] = $graphPreflightAvailable;
         $snapshot['graph_preflight_available'] = $graphPreflightAvailable;
         if ($syncWarnings !== []) $snapshot['sync_warnings'] = array_values(array_unique($syncWarnings));
         MetaEndpoint::ok($snapshot);

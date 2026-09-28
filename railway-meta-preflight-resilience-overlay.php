@@ -32,50 +32,23 @@ $service = file_get_contents($servicePath);
 if ($service === false) throw new RuntimeException('MetaAdsService.php not found');
 
 $preflightMethod = <<<'PHP_METHOD'
-// REMASK_META_PREFLIGHT_RESILIENT_V1
+// REMASK_META_PREFLIGHT_RK_BASELINE_V2
 function preflight(?string $accountId = null): array
     {
         $warnings = [];
-
-        try {
-            $identity = $this->getIdentity();
-        } catch (Throwable $identityError) {
-            throw new RuntimeException(
-                'META_PREFLIGHT_IDENTITY_FAILED: ' . $identityError->getMessage(),
-                0,
-                $identityError
-            );
-        }
-
-        $permissions = ['data' => []];
-        $permissionsAvailable = true;
-        try {
-            $permissions = $this->getPermissions();
-        } catch (Throwable $permissionsError) {
-            $permissionsAvailable = false;
-            $warnings[] = [
-                'stage' => 'permissions',
-                'message' => (string)$permissionsError->getMessage(),
-            ];
-        }
-
-        $granted = [];
-        foreach (($permissions['data'] ?? []) as $permission) {
-            if (($permission['status'] ?? '') === 'granted' && isset($permission['permission'])) {
-                $granted[] = $permission['permission'];
-            }
-        }
-
         $result = [
             'api_version' => $this->client->getApiVersion(),
-            'identity' => $identity,
-            'permissions' => $granted,
-            'permissions_available' => $permissionsAvailable,
-            'ads_management_granted' => in_array('ads_management', $granted, true),
-            'ads_read_granted' => in_array('ads_read', $granted, true),
-            'business_management_granted' => in_array('business_management', $granted, true),
+            'identity' => [],
+            'identity_available' => false,
+            'permissions' => [],
+            'permissions_available' => false,
+            'ads_management_granted' => null,
+            'ads_read_granted' => null,
+            'business_management_granted' => null,
         ];
 
+        // Live RK inventory is the sync baseline. Ads Manager tokens can be
+        // valid for me/adaccounts while /me identity returns OAuth code=1.
         try {
             if ($accountId !== null && trim($accountId) !== '') {
                 $result['ad_account'] = $this->getAdAccount($accountId);
@@ -90,6 +63,36 @@ function preflight(?string $accountId = null): array
             );
         }
 
+        try {
+            $result['identity'] = $this->getIdentity();
+            $result['identity_available'] = true;
+        } catch (Throwable $identityError) {
+            $warnings[] = [
+                'stage' => 'identity',
+                'message' => (string)$identityError->getMessage(),
+            ];
+        }
+
+        try {
+            $permissions = $this->getPermissions();
+            $result['permissions_available'] = true;
+            $granted = [];
+            foreach (($permissions['data'] ?? []) as $permission) {
+                if (($permission['status'] ?? '') === 'granted' && isset($permission['permission'])) {
+                    $granted[] = $permission['permission'];
+                }
+            }
+            $result['permissions'] = $granted;
+            $result['ads_management_granted'] = in_array('ads_management', $granted, true);
+            $result['ads_read_granted'] = in_array('ads_read', $granted, true);
+            $result['business_management_granted'] = in_array('business_management', $granted, true);
+        } catch (Throwable $permissionsError) {
+            $warnings[] = [
+                'stage' => 'permissions',
+                'message' => (string)$permissionsError->getMessage(),
+            ];
+        }
+
         if ($warnings !== []) {
             $result['_preflight_warnings'] = $warnings;
         }
@@ -101,4 +104,4 @@ PHP_METHOD;
 $service = remask_replace_service_method($service, 'preflight', $preflightMethod);
 file_put_contents($servicePath, $service);
 
-fwrite(STDERR, "[meta-preflight-resilience] permissions are optional; identity + RK inventory remain authoritative\n");
+fwrite(STDERR, "[meta-preflight-resilience] RK inventory is authoritative; identity/permissions are optional\n");
