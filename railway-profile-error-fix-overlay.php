@@ -43,6 +43,152 @@ if (strpos($workspace, 'async function profileSaveJson(payload)') === false) {
     $workspace = substr($workspace, 0, $pos) . $helper . "\n\n" . substr($workspace, $pos);
 }
 
+if (strpos($workspace, 'REMASK_SESSION_REFRESH_UI_V1') === false) {
+    $sessionRefreshUi = <<<'JS'
+
+// REMASK_SESSION_REFRESH_UI_V1
+function remaskSelectedProfileNameForSessionRefresh(){
+  try{
+    const rows=(typeof selectedRows==='function')?selectedRows('profiles'):[];
+    if(!Array.isArray(rows)||rows.length!==1)return '';
+    const row=rows[0]||{};
+    return String(
+      row.profile || row.profile_name || row.name ||
+      row.profile_id || row.id || ''
+    ).trim();
+  }catch(_){return '';}
+}
+
+function remaskSessionRefreshEnsureModal(){
+  let modal=document.getElementById('remaskSessionRefreshModal');
+  if(modal)return modal;
+
+  modal=document.createElement('div');
+  modal.id='remaskSessionRefreshModal';
+  modal.style.cssText='display:none;position:fixed;inset:0;z-index:100050;background:rgba(0,0,0,.58);align-items:center;justify-content:center;padding:18px;';
+  modal.innerHTML=
+    '<div style="width:min(680px,96vw);max-height:90vh;overflow:auto;background:#17191d;border:1px solid rgba(255,255,255,.14);border-radius:14px;padding:18px;box-shadow:0 20px 70px rgba(0,0,0,.45)">'+
+      '<div style="font-size:18px;font-weight:700;margin-bottom:6px">Обновить FB-сессию</div>'+
+      '<div id="remaskSessionRefreshProfile" style="font-size:13px;opacity:.72;margin-bottom:12px"></div>'+
+      '<div style="font-size:13px;opacity:.8;margin-bottom:8px">Вставь свежий Cookies JSON из уже авторизованной Facebook-сессии. Token и proxy не изменяются.</div>'+
+      '<textarea id="remaskSessionRefreshCookies" spellcheck="false" placeholder='[{"name":"c_user","value":"..."},{"name":"xs","value":"..."}]' style="box-sizing:border-box;width:100%;min-height:210px;resize:vertical;background:#0f1114;color:#fff;border:1px solid rgba(255,255,255,.14);border-radius:10px;padding:12px;font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace"></textarea>'+
+      '<div id="remaskSessionRefreshError" style="display:none;color:#ff6b6b;font-size:13px;margin-top:10px"></div>'+
+      '<div style="display:flex;gap:10px;justify-content:flex-end;margin-top:14px">'+
+        '<button type="button" id="remaskSessionRefreshCancel" style="padding:9px 14px;border-radius:9px;border:1px solid rgba(255,255,255,.15);background:transparent;color:inherit">Отмена</button>'+
+        '<button type="button" id="remaskSessionRefreshSave" style="padding:9px 14px;border-radius:9px;border:0;background:#fff;color:#111;font-weight:700">Обновить и синхронизировать</button>'+
+      '</div>'+
+    '</div>';
+  document.body.appendChild(modal);
+
+  const close=()=>{modal.style.display='none';};
+  modal.querySelector('#remaskSessionRefreshCancel').addEventListener('click',close);
+  modal.addEventListener('click',e=>{if(e.target===modal)close();});
+
+  modal.querySelector('#remaskSessionRefreshSave').addEventListener('click',async()=>{
+    const name=String(modal.dataset.profile||'').trim();
+    const raw=String(modal.querySelector('#remaskSessionRefreshCookies').value||'').trim();
+    const err=modal.querySelector('#remaskSessionRefreshError');
+    const save=modal.querySelector('#remaskSessionRefreshSave');
+    err.style.display='none';
+    err.textContent='';
+
+    try{
+      if(!name)throw new Error('Не выбран FB-профиль.');
+      if(!raw)throw new Error('Вставь Cookies JSON.');
+
+      let parsed;
+      try{parsed=JSON.parse(raw);}catch(_){throw new Error('Cookies JSON имеет неверный формат.');}
+      const list=Array.isArray(parsed)?parsed:Object.values(parsed||{});
+      const names=new Set(
+        list.filter(x=>x&&typeof x==='object'&&String(x.value||'').trim())
+          .map(x=>String(x.name||'').trim())
+      );
+      if(!names.has('c_user')||!names.has('xs')){
+        throw new Error('В cookies должны присутствовать c_user и xs.');
+      }
+
+      save.disabled=true;
+      save.textContent='Обновляю…';
+      if(typeof $==='function'&&$('workspaceStatus')){
+        $('workspaceStatus').textContent='Обновляю FB-сессию профиля '+name+'…';
+      }
+
+      const updated=await profileSaveJson({
+        action:'session_update',
+        name,
+        cookies:raw
+      });
+
+      save.textContent='Синхронизирую…';
+      const snapshot=await apiJson(
+        'ajax/metaHierarchy.php',
+        post({action:'sync_profile',profile:name})
+      );
+      if(typeof applySnapshot==='function')applySnapshot(snapshot);
+
+      close();
+      modal.querySelector('#remaskSessionRefreshCookies').value='';
+      if(typeof $==='function'&&$('workspaceStatus')){
+        $('workspaceStatus').textContent=
+          'FB-сессия '+name+' обновлена'+
+          (updated&&updated.token_refreshed?' · Ads Manager token обновлён':'')+
+          ' · Meta синхронизирована';
+      }
+      if(typeof updateSelectionUi==='function')updateSelectionUi();
+    }catch(e){
+      err.textContent=String((e&&e.message)||e);
+      err.style.display='block';
+      if(typeof $==='function'&&$('workspaceStatus')){
+        $('workspaceStatus').textContent='FB session: '+err.textContent;
+      }
+    }finally{
+      save.disabled=false;
+      save.textContent='Обновить и синхронизировать';
+    }
+  });
+  return modal;
+}
+
+function remaskSessionRefreshUpdateButton(){
+  const actions=document.getElementById('workspaceActions');
+  if(!actions)return;
+  let btn=document.getElementById('remaskSessionRefreshBtn');
+  if(!btn){
+    btn=document.createElement('button');
+    btn.type='button';
+    btn.id='remaskSessionRefreshBtn';
+    btn.className='btn btn-secondary';
+    btn.textContent='Обновить FB-сессию';
+    btn.style.display='none';
+    btn.addEventListener('click',()=>{
+      const name=remaskSelectedProfileNameForSessionRefresh();
+      if(!name)return;
+      const modal=remaskSessionRefreshEnsureModal();
+      modal.dataset.profile=name;
+      modal.querySelector('#remaskSessionRefreshProfile').textContent='Профиль: '+name;
+      modal.querySelector('#remaskSessionRefreshError').style.display='none';
+      modal.style.display='flex';
+      setTimeout(()=>modal.querySelector('#remaskSessionRefreshCookies').focus(),0);
+    });
+    actions.appendChild(btn);
+  }
+  const profileName=remaskSelectedProfileNameForSessionRefresh();
+  const profilesTab=!window.state||String(state.activeTab||'')==='profiles';
+  btn.style.display=(profilesTab&&profileName)?'inline-flex':'none';
+}
+
+(function installRemaskSessionRefreshUi(){
+  const run=()=>remaskSessionRefreshUpdateButton();
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',run,{once:true});
+  else run();
+  document.addEventListener('click',()=>setTimeout(run,0),true);
+  document.addEventListener('change',()=>setTimeout(run,0),true);
+  new MutationObserver(()=>run()).observe(document.documentElement,{childList:true,subtree:true});
+})();
+JS;
+    $workspace .= "\n" . $sessionRefreshUi . "\n";
+}
+
 $mandatoryCookies = <<<'JS'
     if(!cookies||cookies==='[]'||cookies==='{}')throw new Error('Добавь Cookies JSON текущей FB-сессии. Нужны как минимум c_user и xs.');
     let parsed;
@@ -111,7 +257,7 @@ $workspaceScriptPattern = <<<'REGEX'
 REGEX;
 $workspacePage = preg_replace(
     $workspaceScriptPattern,
-    'scripts/workspace.js?v=20260918-responsive-sync-v65',
+    'scripts/workspace.js?v=20260928-session-refresh-v180',
     $workspacePage,
     1,
     $workspaceScriptTagCount

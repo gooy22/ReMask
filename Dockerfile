@@ -270,6 +270,9 @@ RUN set -eux; \
     grep -q 'REMASK_SESSION_ONLY_UPDATE_V1' /var/www/html/ajax/metaProfileManager.php; \
     ! grep -q 'profile7-' /var/www/html/docker-start.sh 2>/dev/null || true; \
     grep -q 'profileSaveJson' /var/www/html/scripts/workspace.js; \
+    grep -q 'REMASK_SESSION_REFRESH_UI_V1' /var/www/html/scripts/workspace.js; \
+    grep -q 'remaskSessionRefreshBtn' /var/www/html/scripts/workspace.js; \
+    grep -q 'session-refresh-v180' /var/www/html/workspace.php; \
     if grep -Fq '\\`' /var/www/html/scripts/workspace.js; then echo 'workspace-invalid-backtick' >&2; exit 92; fi; \
     grep -q 'error_id' /var/www/html/ajax/metaProfileManager.php; \
     ! grep -q 'Добавь Cookies JSON текущей FB-сессии' /var/www/html/scripts/workspace.js; \
