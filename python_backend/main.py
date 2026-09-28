@@ -1109,6 +1109,22 @@ async def profile_live_inventory(profile_id: str, business_ids: str | None = Non
                     if row['ad_accounts_ready']:
                         live_business_ids.add(str(business_id))
                     else:
+                        try:
+                            row['ads_manager_diagnostic']=await asyncio.wait_for(
+                                browser.probe_ads_manager_inventory_context(
+                                    business_id=str(business_id),
+                                    timeout_seconds=10.0,
+                                ),
+                                timeout=13.0,
+                            )
+                        except Exception as ads_probe_exc:
+                            row['ads_manager_diagnostic']={
+                                'source':'ads_manager_read_only_probe',
+                                'error':(
+                                    f'{ads_probe_exc.__class__.__name__}: '
+                                    f'{ads_probe_exc}'
+                                )[:700],
+                            }
                         warnings.append(
                             f'BM {business_id}: live RK inventory not confirmed'
                         )

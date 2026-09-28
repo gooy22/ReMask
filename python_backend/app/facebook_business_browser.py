@@ -10135,6 +10135,299 @@ class FacebookBusinessBrowser:
                     return_exceptions=True,
                 )
 
+    async def probe_ads_manager_inventory_context(
+        self,
+        *,
+        business_id: str,
+        timeout_seconds: float = 10.0,
+    ) -> dict[str, Any]:
+        """Read-only Ads Manager probe for RK/business correlation."""
+        business = _digits(business_id)
+        if not business:
+            raise BrowserBusinessError(
+                "INVALID_BUSINESS_ID",
+                "Ads Manager inventory probe requires a numeric Business ID.",
+                retryable=False,
+            )
+        if self.page is None:
+            raise BrowserBusinessError(
+                "BROWSER_NOT_READY",
+                "Business browser is not open.",
+                retryable=True,
+            )
+
+        diagnostics: list[dict[str, Any]] = []
+        response_tasks: set[asyncio.Task[Any]] = set()
+        account_rows: dict[str, dict[str, Any]] = {}
+        exact_business_evidence = False
+
+        def collect_numeric_paths(
+            value: Any,
+            path: str = "variables",
+        ) -> list[dict[str, str]]:
+            output: list[dict[str, str]] = []
+
+            def walk(item: Any, current: str) -> None:
+                if len(output) >= 28:
+                    return
+                if isinstance(item, dict):
+                    for key, child in item.items():
+                        walk(child, f"{current}.{key}")
+                elif isinstance(item, list):
+                    for index, child in enumerate(item[:20]):
+                        walk(child, f"{current}[{index}]")
+                else:
+                    clean_value = _clean(item)
+                    if clean_value.isdigit() and 5 <= len(clean_value) <= 30:
+                        output.append(
+                            {"path": current[:220], "value": clean_value}
+                        )
+
+            walk(value, path)
+            return output
+
+        async def inspect_response(response: Any) -> None:
+            nonlocal exact_business_evidence
+            try:
+                url = _clean(getattr(response, "url", ""))
+                if "graphql" not in url.casefold():
+                    return
+
+                request = getattr(response, "request", None)
+                meta = (
+                    _request_graphql_meta(request)
+                    if request is not None
+                    else {}
+                )
+                friendly = _clean(meta.get("friendly_name"))
+                folded = friendly.casefold()
+                if any(
+                    marker in folded
+                    for marker in ("mutation", "create", "update", "delete")
+                ):
+                    return
+
+                request_business_ids = {
+                    candidate
+                    for candidate, _path in _walk_business_ids(
+                        meta.get("variables") or {}
+                    )
+                    if candidate
+                }
+                request_business_ids.update(
+                    _business_ids_from_text(_clean(meta.get("decoded_raw")))
+                )
+
+                raw = await response.text()
+                payload = _decode_graphql_text(raw)
+                request_scoped = _graphql_request_ad_account_inventory_scope(meta)
+                rows = _extract_inventory_ad_account_rows(
+                    payload,
+                    request_scoped=request_scoped,
+                )
+                row_business_ids = {
+                    _digits(row.get("business_id"))
+                    for row in rows
+                    if isinstance(row, dict) and _digits(row.get("business_id"))
+                }
+                exact = bool(
+                    business in request_business_ids
+                    or business in row_business_ids
+                )
+                if exact:
+                    exact_business_evidence = True
+
+                row_summaries: list[dict[str, Any]] = []
+                for row in rows[:12]:
+                    if not isinstance(row, dict):
+                        continue
+                    account_id = _normalize_ad_account_id(row.get("id"))
+                    row_summaries.append(
+                        {
+                            "id": account_id,
+                            "name": _clean(row.get("name"))[:180],
+                            "business_id": _digits(row.get("business_id")),
+                            "currency": _clean(row.get("currency"))[:24],
+                        }
+                    )
+                    if account_id:
+                        normalized = dict(row)
+                        normalized["id"] = account_id
+                        normalized["account_id"] = account_id
+                        account_rows[account_id] = normalized
+
+                if (
+                    request_scoped
+                    or rows
+                    or request_business_ids
+                    or "business" in folded
+                    or "account" in folded
+                ):
+                    diagnostics.append(
+                        {
+                            "friendly_name": friendly[:180],
+                            "doc_id": _clean(meta.get("doc_id"))[:80],
+                            "request_scoped": request_scoped,
+                            "exact_business_context": exact,
+                            "request_business_ids": sorted(
+                                request_business_ids
+                            )[:8],
+                            "row_business_ids": sorted(row_business_ids)[:8],
+                            "variable_numeric_ids": collect_numeric_paths(
+                                meta.get("variables") or {}
+                            ),
+                            "rows": row_summaries,
+                        }
+                    )
+                    if len(diagnostics) > 32:
+                        del diagnostics[:-32]
+            except Exception as exc:
+                diagnostics.append(
+                    {
+                        "error": (
+                            f"{exc.__class__.__name__}: {_clean(exc)}"
+                        )[:500]
+                    }
+                )
+                if len(diagnostics) > 32:
+                    del diagnostics[:-32]
+
+        def on_response(response: Any) -> None:
+            try:
+                task = asyncio.create_task(inspect_response(response))
+                response_tasks.add(task)
+                task.add_done_callback(response_tasks.discard)
+            except Exception:
+                return
+
+        self.page.on("response", on_response)
+        requested_url = f"{self.ADS_MANAGER_URL}?business_id={business}"
+        final_url = ""
+        dom: dict[str, Any] = {}
+        error = ""
+        try:
+            deadline = time.monotonic() + max(3.0, float(timeout_seconds))
+            try:
+                await self.page.goto(
+                    requested_url,
+                    wait_until="commit",
+                    timeout=max(1000, int(timeout_seconds * 1000)),
+                )
+            except Exception as exc:
+                error = (
+                    f"{exc.__class__.__name__}: {_clean(exc)}"
+                )[:500]
+
+            remaining = max(0.0, deadline - time.monotonic())
+            if remaining > 0:
+                try:
+                    await self.page.wait_for_load_state(
+                        "domcontentloaded",
+                        timeout=max(250, int(min(4.0, remaining) * 1000)),
+                    )
+                except Exception:
+                    pass
+            await self._assert_authenticated()
+
+            remaining = max(0.0, deadline - time.monotonic())
+            if remaining > 0:
+                await self.page.wait_for_timeout(
+                    int(min(3000.0, remaining * 1000.0))
+                )
+            final_url = _clean(getattr(self.page, "url", ""))
+
+            try:
+                dom_result = await self.page.evaluate(
+                    """() => {
+                        const text = document.body
+                            ? (document.body.innerText || '')
+                            : '';
+                        const html = document.documentElement
+                            ? (document.documentElement.innerHTML || '')
+                            : '';
+                        const controls = [...document.querySelectorAll(
+                            'button,[role="button"],[role="combobox"],a[href]'
+                        )].slice(0, 100).map(el => ({
+                            text: (el.innerText || el.textContent || '')
+                                .replace(/\s+/g, ' ').trim().slice(0, 180),
+                            aria: (el.getAttribute('aria-label') || '').slice(0, 180),
+                            href: (el.href || '').slice(0, 500)
+                        })).filter(row =>
+                            /account|аккаун|konto|compte|cuenta|business|portfolio/i
+                                .test(row.text + ' ' + row.aria + ' ' + row.href)
+                        ).slice(0, 16);
+                        return {
+                            readyState: document.readyState || '',
+                            bodyTextLength: text.length,
+                            actIds: [
+                                ...new Set(
+                                    [...html.matchAll(
+                                        /(?:act[_=:%2F-]*)(\d{5,30})/gi
+                                    )].slice(0, 20).map(m => m[1])
+                                )
+                            ].slice(0, 12),
+                            controls
+                        };
+                    }"""
+                )
+                if isinstance(dom_result, dict):
+                    dom = dom_result
+            except Exception as exc:
+                dom = {
+                    "probe_error": (
+                        f"{exc.__class__.__name__}: {_clean(exc)}"
+                    )[:500]
+                }
+
+            if response_tasks:
+                remaining = max(0.0, deadline - time.monotonic())
+                if remaining > 0:
+                    _done, pending = await asyncio.wait(
+                        list(response_tasks),
+                        timeout=min(1.5, remaining),
+                    )
+                else:
+                    pending = set(response_tasks)
+                for task in pending:
+                    task.cancel()
+                if pending:
+                    await asyncio.gather(
+                        *list(pending),
+                        return_exceptions=True,
+                    )
+        finally:
+            try:
+                self.page.remove_listener("response", on_response)
+            except Exception:
+                pass
+
+        final_business_ids = sorted(_business_ids_from_text(final_url))
+        final_act_ids = sorted(
+            set(
+                re.findall(
+                    r"(?:[?&]act=|act[_:=/%-]+)(\d{5,30})",
+                    unquote_plus(final_url),
+                    flags=re.IGNORECASE,
+                )
+            )
+        )
+        return {
+            "source": "ads_manager_read_only_probe",
+            "business_id": business,
+            "requested_url": requested_url[:700],
+            "final_url": final_url[:700],
+            "final_business_ids": final_business_ids[:8],
+            "final_act_ids": final_act_ids[:8],
+            "exact_business_evidence": exact_business_evidence,
+            "accounts": [
+                account_rows[key]
+                for key in sorted(account_rows)
+            ][:16],
+            "diagnostics": diagnostics[-32:],
+            "dom": dom,
+            "error": error,
+        }
+
     async def verify_ad_account_inventory_empty(
         self,
         *,

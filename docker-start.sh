@@ -396,6 +396,9 @@ for row in data.get("businesses") or []:
             "attempts": row.get("attempts") or [],
             "diagnostics": row.get("diagnostics") or [],
             "section_diagnostic": row.get("section_diagnostic") or {},
+            "ads_manager_diagnostic": (
+                row.get("ads_manager_diagnostic") or {}
+            ),
             "browser_error_code": str(row.get("browser_error_code") or ""),
             "browser_error": str(row.get("browser_error") or ""),
         }
