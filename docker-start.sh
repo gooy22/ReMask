@@ -304,7 +304,7 @@ for attempt in range(1,4):
         time.sleep(3)
 print("[profile7-live-inventory] "+json.dumps({"ok":False,"error":last_error},ensure_ascii=False),file=sys.stderr)
 PY
-  ) >> "$DATA_DIR/python-worker.log" 2>&1 &
+  ) &
 fi
 
 
