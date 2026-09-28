@@ -863,6 +863,186 @@ async def register_facebook_docid(
         'registry':registry_view(clean_operation),
     }
 
+@app.get('/api/v1/profiles/{profile_id}/live-inventory',dependencies=[Depends(require_key)])
+async def profile_live_inventory(profile_id: str):
+    clean_profile=str(profile_id or '').strip()
+    if not clean_profile:
+        raise HTTPException(status_code=400,detail='profile_id is required')
+
+    try:
+        context=await pool.resolver.resolve(clean_profile)
+    except ProfileContextError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f'PROFILE_CONTEXT_ERROR: {exc}',
+        ) from exc
+
+    warnings: list[str] = []
+    try:
+        async with ProfileSession(context) as profile_session:
+            browser=await profile_session.facebook_business_browser()
+            business_map=await asyncio.wait_for(
+                browser.snapshot_businesses(),
+                timeout=18.0,
+            )
+
+            businesses=[]
+            for business_id,business_name in sorted(
+                business_map.items(),
+                key=lambda item: str(item[0]),
+            )[:25]:
+                row={
+                    'id':str(business_id or '').strip(),
+                    'name':str(business_name or business_id or '').strip(),
+                    'ad_accounts':[],
+                    'ad_accounts_count':0,
+                    'ad_accounts_ready':False,
+                }
+                try:
+                    inventory=await asyncio.wait_for(
+                        browser.snapshot_ad_accounts_for_business(
+                            business_id=str(business_id),
+                            timeout_seconds=6.0,
+                        ),
+                        timeout=9.0,
+                    )
+                    row['ad_accounts']=[
+                        account
+                        for account in (inventory.get('accounts') or [])
+                        if isinstance(account,dict)
+                    ]
+                    row['ad_accounts_count']=len(row['ad_accounts'])
+                    row['ad_accounts_ready']=bool(inventory.get('ready'))
+                    row['ad_accounts_source']=str(
+                        inventory.get('source') or ''
+                    )
+                    if not row['ad_accounts_ready']:
+                        warnings.append(
+                            f'BM {business_id}: live RK inventory not confirmed'
+                        )
+                except asyncio.TimeoutError:
+                    warnings.append(
+                        f'BM {business_id}: live RK inventory timed out'
+                    )
+                except BrowserBusinessError as exc:
+                    if exc.code in {
+                        'CHECKPOINT_REQUIRED',
+                        'SESSION_EXPIRED',
+                        'TWO_FACTOR_REQUIRED',
+                    }:
+                        raise
+                    warnings.append(
+                        f'BM {business_id}: {exc.code}'
+                    )
+                businesses.append(row)
+
+            confirmed_bindings=await pool.provisioning_state.confirmed_ad_account_bindings_for_profile(
+                clean_profile
+            )
+            binding_by_business={
+                str(row.get('business_id') or '').strip():row
+                for row in confirmed_bindings
+                if isinstance(row,dict)
+                and str(row.get('business_id') or '').strip().isdigit()
+            }
+            seen_businesses={
+                str(row.get('id') or '').strip()
+                for row in businesses
+                if isinstance(row,dict)
+            }
+            for business_id,binding in binding_by_business.items():
+                if business_id not in seen_businesses:
+                    businesses.append({
+                        'id':business_id,
+                        'name':business_id,
+                        'ad_accounts':[],
+                        'ad_accounts_count':0,
+                        'ad_accounts_ready':False,
+                        'source':'worker_confirmed_fallback',
+                    })
+
+            by_business={
+                str(row.get('id') or '').strip():row
+                for row in businesses
+                if isinstance(row,dict)
+                and str(row.get('id') or '').strip()
+            }
+            for business_id,binding in binding_by_business.items():
+                ad_account_id=str(
+                    binding.get('ad_account_id') or ''
+                ).strip().removeprefix('act_')
+                if not ad_account_id.isdigit():
+                    continue
+                business_row=by_business.get(business_id)
+                if business_row is None:
+                    continue
+                existing={
+                    str(row.get('id') or row.get('account_id') or '').strip().removeprefix('act_')
+                    for row in (business_row.get('ad_accounts') or [])
+                    if isinstance(row,dict)
+                }
+                if ad_account_id not in existing:
+                    business_row.setdefault('ad_accounts',[]).append({
+                        'id':ad_account_id,
+                        'account_id':ad_account_id,
+                        'name':str(binding.get('account_name') or '').strip(),
+                        'business_id':business_id,
+                        '_source':'worker_confirmed_fallback',
+                    })
+                    business_row['ad_accounts_count']=len(
+                        business_row['ad_accounts']
+                    )
+
+            businesses.sort(
+                key=lambda row:(
+                    str(row.get('name') or '').casefold(),
+                    str(row.get('id') or ''),
+                )
+            )
+            live_business_ids={
+                str(business_id)
+                for business_id in business_map
+            }
+            live_ready=bool(live_business_ids)
+            return {
+                'ok':True,
+                'profile_id':clean_profile,
+                'live_ready':live_ready,
+                'businesses':businesses,
+                'businesses_count':len(businesses),
+                'live_businesses_count':len(live_business_ids),
+                'source':'business_suite_browser_live_inventory',
+                'warnings':warnings,
+            }
+
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(
+            status_code=504,
+            detail='LIVE_INVENTORY_TIMEOUT',
+        ) from exc
+    except BrowserBusinessError as exc:
+        raise HTTPException(
+            status_code=409 if exc.code in {
+                'CHECKPOINT_REQUIRED',
+                'SESSION_EXPIRED',
+                'TWO_FACTOR_REQUIRED',
+            } else 502,
+            detail=f'{exc.code}: {exc}',
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.exception(
+            'live inventory failed profile=%s: %s',
+            clean_profile,
+            exc,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=f'LIVE_INVENTORY_FAILED: {exc}',
+        ) from exc
+
+
 @app.get('/api/v1/profiles/{profile_id}/provisioning-state',dependencies=[Depends(require_key)])
 async def profile_provisioning_state(profile_id: str):
     clean_profile=str(profile_id or '').strip()

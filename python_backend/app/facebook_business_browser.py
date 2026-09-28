@@ -982,6 +982,108 @@ def _extract_inventory_ad_account_ids(payload: Any) -> list[str]:
     walk(payload)
     return sorted(found)
 
+def _extract_inventory_ad_account_rows(payload: Any) -> list[dict[str, Any]]:
+    """Extract RK rows only from structurally identified ad-account context.
+
+    Business Settings Relay responses may contain many unrelated numeric IDs.
+    Accept an ID only when its traversal path or typename is already inside an
+    ad-account inventory node. This is read-only inventory evidence.
+    """
+    found: dict[str, dict[str, Any]] = {}
+    ad_markers = (
+        "ad_account",
+        "adaccount",
+        "ad_accounts",
+        "adaccounts",
+        "advertising_account",
+        "advertisingaccount",
+    )
+
+    def is_ad_context(path: str, value: dict[str, Any]) -> bool:
+        folded = path.casefold()
+        typename = _clean(value.get("__typename")).casefold()
+        return any(
+            marker in folded or marker in typename
+            for marker in ad_markers
+        )
+
+    def merge_row(value: dict[str, Any], path: str) -> None:
+        if not is_ad_context(path, value):
+            return
+
+        account_id = ""
+        for key in (
+            "account_id",
+            "ad_account_id",
+            "accountId",
+            "adAccountId",
+            "adaccount_id",
+            "id",
+        ):
+            account_id = _normalize_ad_account_id(value.get(key))
+            if account_id:
+                break
+        if not account_id:
+            return
+
+        business = value.get("business")
+        business_id = ""
+        business_name = ""
+        if isinstance(business, dict):
+            business_id = _digits(business.get("id"))
+            business_name = _clean(business.get("name"))
+        if not business_id:
+            business_id = _digits(
+                value.get("business_id")
+                or value.get("businessId")
+                or value.get("businessID")
+            )
+
+        row = {
+            "id": account_id,
+            "account_id": account_id,
+            "name": _clean(
+                value.get("name")
+                or value.get("account_name")
+                or value.get("ad_account_name")
+                or value.get("adAccountName")
+            ),
+            "account_status": value.get("account_status"),
+            "disable_reason": value.get("disable_reason"),
+            "currency": _clean(value.get("currency")),
+            "timezone_name": _clean(
+                value.get("timezone_name")
+                or value.get("timezoneName")
+            ),
+            "business_id": business_id,
+            "business_name": business_name,
+        }
+
+        previous = found.get(account_id) or {}
+        merged = dict(previous)
+        for key, item in row.items():
+            if item not in ("", None, [], {}):
+                merged[key] = item
+            elif key not in merged:
+                merged[key] = item
+        found[account_id] = merged
+
+    def walk(value: Any, path: str = "root") -> None:
+        if isinstance(value, dict):
+            merge_row(value, path)
+            for key, child in value.items():
+                child_path = f"{path}.{key}"
+                if isinstance(child, dict):
+                    merge_row(child, child_path)
+                walk(child, child_path)
+        elif isinstance(value, list):
+            for index, child in enumerate(value):
+                walk(child, f"{path}[{index}]")
+
+    walk(payload)
+    return [found[key] for key in sorted(found)]
+
+
 def _has_ad_account_inventory_container(payload: Any) -> bool:
     """Return True only when a payload exposes an RK inventory collection.
 
@@ -8663,6 +8765,215 @@ class FacebookBusinessBrowser:
                 pass
             if not found_future.done():
                 found_future.cancel()
+            if response_tasks:
+                await asyncio.gather(
+                    *list(response_tasks),
+                    return_exceptions=True,
+                )
+
+    async def snapshot_ad_accounts_for_business(
+        self,
+        *,
+        business_id: str,
+        timeout_seconds: float = 8.0,
+    ) -> dict[str, Any]:
+        """Read the current RK inventory rendered by Meta Business Settings.
+
+        This observes only read-only GraphQL responses on the exact Business
+        Ad Accounts settings surface. It does not submit mutations.
+        """
+        business = _digits(business_id)
+        if not business:
+            raise BrowserBusinessError(
+                "INVALID_BUSINESS_ID",
+                "Ad Account inventory requires a numeric Business ID.",
+                retryable=False,
+            )
+        if self.page is None:
+            raise BrowserBusinessError(
+                "BROWSER_NOT_READY",
+                "Business browser is not open.",
+                retryable=True,
+            )
+
+        accounts: dict[str, dict[str, Any]] = {}
+        diagnostics: list[dict[str, Any]] = []
+        inventory_observed = False
+        response_tasks: set[asyncio.Task[Any]] = set()
+
+        async def inspect_response(response: Any) -> None:
+            nonlocal inventory_observed
+            try:
+                url = _clean(getattr(response, "url", ""))
+                if "graphql" not in url.casefold():
+                    return
+
+                request = getattr(response, "request", None)
+                meta = (
+                    _request_graphql_meta(request)
+                    if request is not None
+                    else {}
+                )
+                friendly = _clean(meta.get("friendly_name")).casefold()
+                if any(
+                    marker in friendly
+                    for marker in ("mutation", "create", "update", "delete")
+                ):
+                    return
+
+                target_business_ids = {
+                    candidate
+                    for candidate, _ in _walk_business_ids(
+                        meta.get("variables") or {}
+                    )
+                    if candidate
+                }
+                target_business_ids.update(
+                    _business_ids_from_text(_clean(meta.get("decoded_raw")))
+                )
+                page_url = _clean(getattr(self.page, "url", ""))
+                page_targets_business = (
+                    business in _business_ids_from_text(page_url)
+                    and (
+                        "/settings/ad_accounts" in page_url.casefold()
+                        or "/settings/ad-accounts" in page_url.casefold()
+                    )
+                )
+                if business not in target_business_ids and not page_targets_business:
+                    return
+
+                raw = await response.text()
+                payload = _decode_graphql_text(raw)
+                rows = _extract_inventory_ad_account_rows(payload)
+                observed = _has_ad_account_inventory_container(payload)
+                if not observed and not rows:
+                    return
+
+                inventory_observed = True
+                for row in rows:
+                    account_id = _normalize_ad_account_id(row.get("id"))
+                    if not account_id:
+                        continue
+                    normalized = dict(row)
+                    normalized["id"] = account_id
+                    normalized["account_id"] = account_id
+                    normalized["business_id"] = business
+                    current = accounts.get(account_id) or {}
+                    current.update(
+                        {
+                            key: value
+                            for key, value in normalized.items()
+                            if value not in ("", None, [], {})
+                        }
+                    )
+                    current.setdefault("id", account_id)
+                    current.setdefault("account_id", account_id)
+                    current.setdefault("business_id", business)
+                    accounts[account_id] = current
+
+                diagnostics.append(
+                    {
+                        "friendly_name": _clean(meta.get("friendly_name"))[:180],
+                        "rows": len(rows),
+                        "inventory_observed": observed,
+                        "page_url": page_url[:700],
+                    }
+                )
+            except Exception as exc:
+                diagnostics.append(
+                    {
+                        "error": (
+                            f"{exc.__class__.__name__}: {_clean(exc)}"
+                        )[:500]
+                    }
+                )
+
+        def on_response(response: Any) -> None:
+            try:
+                task = asyncio.create_task(inspect_response(response))
+                response_tasks.add(task)
+                task.add_done_callback(response_tasks.discard)
+            except Exception:
+                return
+
+        self.page.on("response", on_response)
+        attempts: list[dict[str, Any]] = []
+        deadline = time.monotonic() + max(3.0, float(timeout_seconds))
+        try:
+            targets = [
+                template.format(business_id=business)
+                for template in self.SETTINGS_AD_ACCOUNTS_URLS
+            ]
+            current = _clean(getattr(self.page, "url", ""))
+            if (
+                business in _business_ids_from_text(current)
+                and (
+                    "/settings/ad_accounts" in current.casefold()
+                    or "/settings/ad-accounts" in current.casefold()
+                )
+            ):
+                targets.insert(0, current)
+
+            seen: set[str] = set()
+            for target in targets:
+                if target in seen or time.monotonic() >= deadline:
+                    continue
+                seen.add(target)
+                try:
+                    await self._goto(target)
+                    await self._assert_authenticated()
+                    await self.page.wait_for_timeout(900)
+                    attempts.append(
+                        {
+                            "url": _clean(self.page.url)[:700],
+                            "result": "loaded",
+                        }
+                    )
+                    if inventory_observed:
+                        break
+                except BrowserBusinessError:
+                    raise
+                except Exception as exc:
+                    attempts.append(
+                        {
+                            "url": target[:700],
+                            "result": "error",
+                            "error": (
+                                f"{exc.__class__.__name__}: {_clean(exc)}"
+                            )[:500],
+                        }
+                    )
+
+            remaining = max(0.0, deadline - time.monotonic())
+            if remaining > 0 and not inventory_observed:
+                await self.page.wait_for_timeout(
+                    int(min(1600.0, remaining * 1000.0))
+                )
+
+            if response_tasks:
+                await asyncio.gather(
+                    *list(response_tasks),
+                    return_exceptions=True,
+                )
+
+            return {
+                "business_id": business,
+                "ready": inventory_observed,
+                "confirmed_empty": bool(inventory_observed and not accounts),
+                "accounts": [
+                    accounts[key]
+                    for key in sorted(accounts)
+                ],
+                "accounts_count": len(accounts),
+                "source": "business_settings_graphql_inventory",
+                "attempts": attempts[-6:],
+                "diagnostics": diagnostics[-12:],
+            }
+        finally:
+            try:
+                self.page.remove_listener("response", on_response)
+            except Exception:
+                pass
             if response_tasks:
                 await asyncio.gather(
                     *list(response_tasks),

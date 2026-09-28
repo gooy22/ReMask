@@ -15,6 +15,7 @@ from app.facebook_business_browser import (
     _extract_inventory_ad_account_ids,
     _extract_named_ad_account_ids,
     _has_ad_account_inventory_container,
+    _extract_inventory_ad_account_rows,
 )
 from app.provisioning.business_handler import business_handler
 from app.provisioning.models import ProvisioningError, ProvisioningStep
@@ -3203,6 +3204,43 @@ class BrowserCreateFormIdentityTests(unittest.IsolatedAsyncioTestCase):
     def test_french_final_submit_action_is_supported(self):
         self.assertIn("Créer", FacebookBusinessBrowser.SUBMIT_NAMES)
         self.assertIn("Continuer", FacebookBusinessBrowser.SUBMIT_NAMES)
+
+
+class BrowserInventoryExtractionTests(unittest.TestCase):
+    def test_extracts_rows_only_from_ad_account_context(self):
+        payload = {
+            "data":{
+                "business":{
+                    "id":"1619103589770310",
+                    "owned_ad_accounts":{
+                        "nodes":[
+                            {
+                                "__typename":"AdAccount",
+                                "id":"act_29459808963612032",
+                                "account_id":"29459808963612032",
+                                "name":"ReMask RK",
+                                "account_status":1,
+                                "currency":"USD",
+                            }
+                        ]
+                    },
+                    "unrelated":{"id":"999999999999999"},
+                }
+            }
+        }
+        rows=_extract_inventory_ad_account_rows(payload)
+        self.assertEqual(len(rows),1)
+        self.assertEqual(rows[0]["id"],"29459808963612032")
+        self.assertEqual(rows[0]["name"],"ReMask RK")
+
+    def test_ignores_unrelated_numeric_ids(self):
+        payload={
+            "data":{
+                "viewer":{"id":"123456789012345","name":"Profile"},
+                "page":{"id":"987654321098765","name":"Fan Page"},
+            }
+        }
+        self.assertEqual(_extract_inventory_ad_account_rows(payload),[])
 
 
 class BrowserAuthenticationStateTests(unittest.IsolatedAsyncioTestCase):

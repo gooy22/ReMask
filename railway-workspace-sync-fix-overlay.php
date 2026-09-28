@@ -392,6 +392,51 @@ function hierarchy_worker_state(string $profile): array
     return is_array($json) ? $json : [];
 }
 
+function hierarchy_worker_live_inventory(string $profile): array
+{
+    $profile = trim($profile);
+    if ($profile === '') return [];
+
+    $base = rtrim(trim((string)(getenv('REMASK_PYTHON_WORKER_URL') ?: 'http://127.0.0.1:8081')), '/');
+    $url = $base . '/api/v1/profiles/' . rawurlencode($profile) . '/live-inventory';
+    $headers = ['Accept: application/json'];
+    $key = trim((string)(getenv('REMASK_WORKER_API_KEY') ?: ''));
+    if ($key !== '') $headers[] = 'X-Remask-Worker-Key: ' . $key;
+
+    $ctx = stream_context_create(['http' => [
+        'method' => 'GET',
+        'header' => implode("\r\n", $headers) . "\r\n",
+        'timeout' => 32,
+        'ignore_errors' => true,
+        'follow_location' => 0,
+    ]]);
+
+    $raw = @file_get_contents($url, false, $ctx);
+    if (!is_string($raw) || trim($raw) === '') {
+        throw new RuntimeException('LIVE_INVENTORY_TRANSPORT_FAILED');
+    }
+
+    $status = 0;
+    foreach ((array)($http_response_header ?? []) as $line) {
+        if (preg_match('#^HTTP/\\S+\\s+(\\d{3})#i', (string)$line, $m)) {
+            $status = (int)$m[1];
+        }
+    }
+
+    $json = json_decode($raw, true);
+    if (!is_array($json)) {
+        throw new RuntimeException('LIVE_INVENTORY_INVALID_JSON');
+    }
+    if ($status < 200 || $status >= 300) {
+        $detail = $json['detail'] ?? $json['error'] ?? ('HTTP ' . $status);
+        throw new RuntimeException(
+            'LIVE_INVENTORY_HTTP_' . $status . ': ' .
+            (is_scalar($detail) ? trim((string)$detail) : 'worker error')
+        );
+    }
+    return $json;
+}
+
 function hierarchy_binding_file(): string
 {
     return '/var/lib/remask/workspace-provisioning-bindings.json';
@@ -651,18 +696,64 @@ $syncProfileReplacement = <<<'PHP'
         $knownBusinesses = [];
         $syncWarnings = [];
 
+        $liveInventory = [];
+        $liveInventoryAvailable = false;
+        try {
+            $liveInventory = hierarchy_worker_live_inventory($profile);
+            $liveInventoryAvailable = (($liveInventory['live_ready'] ?? false) === true);
+            foreach ((array)($liveInventory['businesses'] ?? []) as $liveBusiness) {
+                if (!is_array($liveBusiness)) continue;
+                $liveBusinessId = trim((string)($liveBusiness['id'] ?? ''));
+                if ($liveBusinessId === '') continue;
+                $knownBusinesses[$liveBusinessId] = [
+                    'id' => $liveBusinessId,
+                    'name' => trim((string)($liveBusiness['name'] ?? $liveBusinessId)),
+                    '_source' => 'business_suite_browser_live_inventory',
+                ];
+                foreach ((array)($liveBusiness['ad_accounts'] ?? []) as $liveAccount) {
+                    if (!is_array($liveAccount)) continue;
+                    $liveAccountId = trim((string)($liveAccount['id'] ?? $liveAccount['account_id'] ?? ''));
+                    if (str_starts_with($liveAccountId, 'act_')) {
+                        $liveAccountId = substr($liveAccountId, 4);
+                    }
+                    if (!preg_match('/^\\d{5,30}$/', $liveAccountId)) continue;
+                    $row = $liveAccount;
+                    $row['id'] = $liveAccountId;
+                    $row['account_id'] = $liveAccountId;
+                    $row['profile'] = $profile;
+                    $row['business_id'] = $liveBusinessId;
+                    $row['business_name'] = (string)($knownBusinesses[$liveBusinessId]['name'] ?? $liveBusinessId);
+                    $row['_business_edge'] = 'business_suite_browser_live_inventory';
+                    $verifiedBusinessAdAccounts[$liveAccountId] = $row;
+                }
+            }
+            foreach ((array)($liveInventory['warnings'] ?? []) as $liveWarning) {
+                if (is_scalar($liveWarning) && trim((string)$liveWarning) !== '') {
+                    $syncWarnings[] = trim((string)$liveWarning);
+                }
+            }
+        } catch (Throwable $liveInventoryError) {
+            error_log(
+                '[remask-sync] profile=' . $profile .
+                ' stage=browser_live_inventory message=' .
+                mb_substr((string)$liveInventoryError->getMessage(), 0, 1200)
+            );
+        }
+
         $existingSnapshot = hierarchy_profile_snapshot($profile);
         foreach ((array)($existingSnapshot['businesses'] ?? []) as $existingBusiness) {
             if (!is_array($existingBusiness)) continue;
             $existingBusinessId = trim((string)($existingBusiness['id'] ?? ''));
             if ($existingBusinessId === '') continue;
-            $knownBusinesses[$existingBusinessId] = [
-                'id' => $existingBusinessId,
-                'name' => trim((string)($existingBusiness['name'] ?? $existingBusinessId)),
-                '_source' => 'existing_workspace_snapshot',
-            ];
+            if (!isset($knownBusinesses[$existingBusinessId])) {
+                $knownBusinesses[$existingBusinessId] = [
+                    'id' => $existingBusinessId,
+                    'name' => trim((string)($existingBusiness['name'] ?? $existingBusinessId)),
+                    '_source' => 'existing_workspace_snapshot',
+                ];
+            }
         }
-        if ($graphPreflightWarning !== '') {
+        if (!$liveInventoryAvailable && $graphPreflightWarning !== '') {
             $syncWarnings[] = $graphPreflightWarning;
         }
         foreach ((array)($preflight['_preflight_warnings'] ?? []) as $preflightWarning) {
@@ -717,7 +808,9 @@ $syncProfileReplacement = <<<'PHP'
                 }
             }
         } catch (Throwable $businessError) {
-            $syncWarnings[] = 'Live Business Manager enrichment unavailable; existing/worker-confirmed BM inventory retained';
+            if (!$liveInventoryAvailable) {
+                $syncWarnings[] = 'Live Business Manager inventory unavailable; existing/worker-confirmed BM inventory retained';
+            }
         }
 
         // Meta's direct ad-account object can carry the BM relation before the
@@ -847,7 +940,7 @@ $syncProfileReplacement = <<<'PHP'
             $syncWarnings[] = 'Worker provisioning state unavailable; existing inventory retained';
         }
 
-        if (!$graphPreflightAvailable) {
+        if (!$liveInventoryAvailable) {
             foreach ((array)($existingSnapshot['ad_accounts'] ?? []) as $existingAdAccount) {
                 if (!is_array($existingAdAccount)) continue;
                 $existingAdAccountId = trim((string)($existingAdAccount['id'] ?? $existingAdAccount['account_id'] ?? ''));
@@ -917,9 +1010,14 @@ $syncProfileReplacement = <<<'PHP'
                 $snapshot['profiles'][$i]['ad_accounts_count'] = count($verifiedBusinessAdAccounts);
             }
         }
-        $snapshot['sync_source'] = $graphPreflightAvailable
-            ? 'business_manager_bound_ad_accounts'
-            : 'worker_browser_confirmed_inventory';
+        $snapshot['sync_source'] = $liveInventoryAvailable
+            ? 'business_suite_browser_live_inventory'
+            : (
+                $graphPreflightAvailable
+                    ? 'business_manager_bound_ad_accounts'
+                    : 'worker_browser_confirmed_inventory'
+            );
+        $snapshot['live_inventory_available'] = $liveInventoryAvailable;
         $snapshot['graph_preflight_available'] = $graphPreflightAvailable;
         if ($syncWarnings !== []) $snapshot['sync_warnings'] = array_values(array_unique($syncWarnings));
         MetaEndpoint::ok($snapshot);
