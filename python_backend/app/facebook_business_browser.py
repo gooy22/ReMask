@@ -831,85 +831,6 @@ def _business_ids_from_text(text: str) -> set[str]:
 
 
 
-# REMASK_PRIVATE_BUSINESS_INVENTORY_V1
-def _extract_business_inventory_rows(payload: Any) -> list[dict[str, str]]:
-    """Extract Business portfolio rows from Meta Business Suite Relay payloads.
-
-    Only structurally business-scoped nodes are accepted. Generic numeric IDs
-    are ignored so Page/RK/user IDs cannot become phantom Businesses.
-    """
-    found: dict[str, dict[str, str]] = {}
-    business_markers = (
-        "business",
-        "businessportfolio",
-        "business_portfolio",
-        "businessmanager",
-        "business_manager",
-        "bizkit",
-    )
-
-    def compact(value: str) -> str:
-        return value.casefold().replace("_", "").replace("-", "").replace(" ", "")
-
-    def walk(value: Any, path: str = "root") -> None:
-        if isinstance(value, dict):
-            typename = _clean(value.get("__typename"))
-            folded_path = compact(path)
-            folded_type = compact(typename)
-            business_context = any(
-                compact(marker) in folded_path or compact(marker) in folded_type
-                for marker in business_markers
-            )
-
-            business_id = _digits(
-                value.get("business_id")
-                or value.get("businessId")
-                or value.get("businessID")
-            )
-            if not business_id and business_context:
-                business_id = _digits(value.get("id"))
-
-            name = _clean(
-                value.get("business_name")
-                or value.get("businessName")
-                or value.get("name")
-            )
-
-            explicit_business_key = any(
-                key in value
-                for key in ("business_id", "businessId", "businessID")
-            )
-            strong_context = bool(
-                explicit_business_key
-                or (
-                    business_context
-                    and (
-                        "business" in folded_type
-                        or "businesses" in folded_path
-                        or "businessportfolio" in folded_path
-                        or "bizkit" in folded_path
-                    )
-                )
-            )
-            if business_id and strong_context:
-                row = found.get(business_id) or {
-                    "id": business_id,
-                    "name": "",
-                }
-                if name and not row.get("name"):
-                    row["name"] = name[:240]
-                found[business_id] = row
-
-            for key, child in value.items():
-                walk(child, f"{path}.{key}")
-        elif isinstance(value, list):
-            for index, child in enumerate(value):
-                walk(child, f"{path}[{index}]")
-
-    walk(payload)
-    return [found[key] for key in sorted(found)]
-
-
 def _extract_named_ad_account_ids(
     payload: Any,
     account_name: str,
@@ -1060,108 +981,6 @@ def _extract_inventory_ad_account_ids(payload: Any) -> list[str]:
 
     walk(payload)
     return sorted(found)
-
-def _extract_inventory_ad_account_rows(payload: Any) -> list[dict[str, Any]]:
-    """Extract RK rows only from structurally identified ad-account context.
-
-    Business Settings Relay responses may contain many unrelated numeric IDs.
-    Accept an ID only when its traversal path or typename is already inside an
-    ad-account inventory node. This is read-only inventory evidence.
-    """
-    found: dict[str, dict[str, Any]] = {}
-    ad_markers = (
-        "ad_account",
-        "adaccount",
-        "ad_accounts",
-        "adaccounts",
-        "advertising_account",
-        "advertisingaccount",
-    )
-
-    def is_ad_context(path: str, value: dict[str, Any]) -> bool:
-        folded = path.casefold()
-        typename = _clean(value.get("__typename")).casefold()
-        return any(
-            marker in folded or marker in typename
-            for marker in ad_markers
-        )
-
-    def merge_row(value: dict[str, Any], path: str) -> None:
-        if not is_ad_context(path, value):
-            return
-
-        account_id = ""
-        for key in (
-            "account_id",
-            "ad_account_id",
-            "accountId",
-            "adAccountId",
-            "adaccount_id",
-            "id",
-        ):
-            account_id = _normalize_ad_account_id(value.get(key))
-            if account_id:
-                break
-        if not account_id:
-            return
-
-        business = value.get("business")
-        business_id = ""
-        business_name = ""
-        if isinstance(business, dict):
-            business_id = _digits(business.get("id"))
-            business_name = _clean(business.get("name"))
-        if not business_id:
-            business_id = _digits(
-                value.get("business_id")
-                or value.get("businessId")
-                or value.get("businessID")
-            )
-
-        row = {
-            "id": account_id,
-            "account_id": account_id,
-            "name": _clean(
-                value.get("name")
-                or value.get("account_name")
-                or value.get("ad_account_name")
-                or value.get("adAccountName")
-            ),
-            "account_status": value.get("account_status"),
-            "disable_reason": value.get("disable_reason"),
-            "currency": _clean(value.get("currency")),
-            "timezone_name": _clean(
-                value.get("timezone_name")
-                or value.get("timezoneName")
-            ),
-            "business_id": business_id,
-            "business_name": business_name,
-        }
-
-        previous = found.get(account_id) or {}
-        merged = dict(previous)
-        for key, item in row.items():
-            if item not in ("", None, [], {}):
-                merged[key] = item
-            elif key not in merged:
-                merged[key] = item
-        found[account_id] = merged
-
-    def walk(value: Any, path: str = "root") -> None:
-        if isinstance(value, dict):
-            merge_row(value, path)
-            for key, child in value.items():
-                child_path = f"{path}.{key}"
-                if isinstance(child, dict):
-                    merge_row(child, child_path)
-                walk(child, child_path)
-        elif isinstance(value, list):
-            for index, child in enumerate(value):
-                walk(child, f"{path}[{index}]")
-
-    walk(payload)
-    return [found[key] for key in sorted(found)]
-
 
 def _has_ad_account_inventory_container(payload: Any) -> bool:
     """Return True only when a payload exposes an RK inventory collection.
@@ -1448,7 +1267,6 @@ class FacebookBusinessBrowser:
         self._profile_lock: asyncio.Lock | None = None
         self._profile_lock_acquired = False
         self._last_selector_diagnostic: dict[str, Any] = {}
-        self._last_business_inventory_diagnostic: dict[str, Any] = {}
         self._last_ad_account_section_diagnostic: dict[str, Any] = {}
         self._browser_events: list[dict[str, Any]] = []
         self._ad_account_runtime_phase = "IDLE"
@@ -1880,43 +1698,21 @@ class FacebookBusinessBrowser:
         body = (await self._body_text()).lower()
 
         if "/login" in lower_url or "login.php" in lower_url:
-            diagnostic = await self._diagnostic("login")
-            diagnostic["auth_evidence"] = "login_url"
+            await self._diagnostic("login")
             raise BrowserBusinessError(
                 "SESSION_EXPIRED",
                 "Facebook redirected the profile to login.",
                 retryable=False,
-                diagnostic=diagnostic,
+                diagnostic={"url": url},
             )
 
-        try:
-            parsed_url = urlsplit(url)
-            current_host = _clean(parsed_url.hostname).lower()
-            current_path = _clean(parsed_url.path).lower()
-        except Exception:
-            current_host = ""
-            current_path = ""
-
-        # A generic occurrence of the word "checkpoint" in Business Suite body
-        # text is NOT proof of an account checkpoint. Meta's SPA can expose
-        # internal/help text containing that word on otherwise authenticated
-        # pages. Only a real Facebook checkpoint route is authoritative here.
-        checkpoint_url = (
-            current_host.endswith("facebook.com")
-            and (
-                current_path == "/checkpoint"
-                or current_path.startswith("/checkpoint/")
-            )
-        )
-        if checkpoint_url:
-            diagnostic = await self._diagnostic("checkpoint")
-            diagnostic["auth_evidence"] = "checkpoint_url"
-            diagnostic["checkpoint_path"] = current_path
+        if "/checkpoint" in lower_url or "checkpoint" in body[:4000]:
+            await self._diagnostic("checkpoint")
             raise BrowserBusinessError(
                 "CHECKPOINT_REQUIRED",
                 "Facebook requires a checkpoint for this profile.",
                 retryable=False,
-                diagnostic=diagnostic,
+                diagnostic={"url": url},
             )
 
         if (
@@ -1924,13 +1720,12 @@ class FacebookBusinessBrowser:
             or "enter security code" in body
             or "authentication code" in body
         ):
-            diagnostic = await self._diagnostic("two_factor")
-            diagnostic["auth_evidence"] = "two_factor_body"
+            await self._diagnostic("two_factor")
             raise BrowserBusinessError(
                 "TWO_FACTOR_REQUIRED",
                 "Facebook requires two-factor authentication.",
                 retryable=False,
-                diagnostic=diagnostic,
+                diagnostic={"url": url},
             )
 
         if (
@@ -4510,348 +4305,168 @@ class FacebookBusinessBrowser:
         }
 
     async def snapshot_businesses(self) -> dict[str, str]:
-        """Read Business portfolios from Meta's own Business Suite traffic.
+        await self._goto(self.HOME_URL)
 
-        Primary source: read-only Relay/GraphQL responses emitted by the
-        authenticated Business Suite frontend. DOM/link parsing remains only a
-        fallback/diagnostic source.
-        """
-        if self.page is None:
-            await self.open()
-
-        network_rows: dict[str, str] = {}
-        query_diagnostics: list[dict[str, Any]] = []
-        response_tasks: set[asyncio.Task[Any]] = set()
-
-        async def inspect_response(response: Any) -> None:
-            try:
-                url = _clean(getattr(response, "url", ""))
-                if "graphql" not in url.casefold():
-                    return
-                request = getattr(response, "request", None)
-                meta = _request_graphql_meta(request) if request is not None else {}
-                friendly = _clean(meta.get("friendly_name"))
-                folded_friendly = friendly.casefold()
-                if any(
-                    marker in folded_friendly
-                    for marker in ("mutation", "create", "update", "delete")
-                ):
-                    return
-
-                raw = await response.text()
-                payload = _decode_graphql_text(raw)
-                rows = _extract_business_inventory_rows(payload)
-                request_business_ids = sorted({
-                    business_id
-                    for business_id, path in _walk_business_ids(
-                        meta.get("variables") or {}
-                    )
-                    if business_id and "business" in path.casefold()
-                })
-                query_diagnostics.append(
-                    {
-                        "friendly_name": friendly[:180],
-                        "doc_id": _clean(meta.get("doc_id"))[:60],
-                        "rows": len(rows),
-                        "request_business_ids": request_business_ids[:8],
-                    }
-                )
-                if len(query_diagnostics) > 24:
-                    del query_diagnostics[:-24]
-
-                for row in rows:
-                    business_id = _digits(row.get("id"))
-                    if not business_id:
-                        continue
-                    business_name = _clean(row.get("name"))
-                    if (
-                        business_id not in network_rows
-                        or (business_name and not network_rows[business_id])
-                    ):
-                        network_rows[business_id] = business_name
-
-                # Meta frequently moves the Business node deeper into a generic
-                # viewer payload while keeping the exact target business_id in
-                # read-only query variables. That explicit key is private
-                # Business Suite evidence too; use it as an ID-only fallback.
-                for business_id in request_business_ids:
-                    network_rows.setdefault(business_id, "")
-            except Exception as exc:
-                query_diagnostics.append(
-                    {
-                        "error": f"{exc.__class__.__name__}: {_clean(exc)}"[:500],
-                    }
-                )
-
-        def on_response(response: Any) -> None:
-            try:
-                task = asyncio.create_task(inspect_response(response))
-                response_tasks.add(task)
-                task.add_done_callback(response_tasks.discard)
-            except Exception:
-                return
-
-        listener_installed = False
-        if hasattr(self.page, "on"):
-            try:
-                self.page.on("response", on_response)
-                listener_installed = True
-            except Exception:
-                listener_installed = False
-
-        dom_output: dict[str, str] = {}
-        async def collect_dom_businesses() -> int:
-            before = len(dom_output)
-            try:
-                href_rows = await self.page.locator("a[href]").evaluate_all(
-                    """els => els.slice(0, 3000).map(el => ({
-                        href: el.href || "",
-                        text: (el.innerText || el.textContent || "").trim()
-                    }))"""
-                )
-            except Exception:
-                href_rows = []
-
-            for row in href_rows:
-                if not isinstance(row, dict):
-                    continue
-                href = str(row.get("href") or "")
-                text = _clean(row.get("text"))
-                for business_id in _business_ids_from_text(href):
-                    if (
-                        business_id not in dom_output
-                        or (text and not dom_output[business_id])
-                    ):
-                        dom_output[business_id] = text
-
-            try:
-                content = await self.page.content()
-            except Exception:
-                content = ""
-            for business_id in _business_ids_from_text(content):
-                dom_output.setdefault(business_id, "")
-            return len(dom_output) - before
-
+        # The home document often contains only the currently selected
+        # portfolio. Open the real top-left portfolio selector first so the
+        # rendered DOM also contains the other portfolios available to this
+        # Facebook profile. This makes CREATE reconciliation useful even when
+        # Meta does not switch the current portfolio after creation.
         selector_opened = False
-        stage_started = time.monotonic()
-        self._last_business_inventory_diagnostic = {
-            "source": "in_progress",
-            "stage": "home_navigation",
-            "network_businesses": 0,
-            "dom_businesses": 0,
-            "queries": [],
-            "url": _clean(getattr(self.page, "url", ""))[:700],
-        }
         try:
-            await self._goto(self.HOME_URL)
-            self._last_business_inventory_diagnostic.update({
-                "stage": "home_loaded",
-                "home_ms": int((time.monotonic() - stage_started) * 1000),
-                "url": _clean(getattr(self.page, "url", ""))[:700],
-            })
-            await self.page.wait_for_timeout(900)
+            selector_probe = await self.page.evaluate(
+                """() => {
+                    const visible = (el) => {
+                        if (!el || el === document.body || el === document.documentElement) {
+                            return false;
+                        }
+                        const r = el.getBoundingClientRect();
+                        const s = getComputedStyle(el);
+                        return r.width > 0 && r.height > 0
+                            && s.display !== 'none'
+                            && s.visibility !== 'hidden'
+                            && s.pointerEvents !== 'none';
+                    };
+                    const label = (el) => [
+                        (el.getAttribute && el.getAttribute('aria-label')) || '',
+                        (el.getAttribute && el.getAttribute('title')) || '',
+                        el.innerText || el.textContent || ''
+                    ].join(' ').replace(/\\s+/g, ' ').trim();
 
-            # Opening the portfolio selector causes Meta's frontend to hydrate
-            # its Business list. Keep the established lightweight sidebar
-            # probe: it samples only a bounded top-left grid and never scans
-            # the whole DOM.
-            selector_probe: dict[str, Any] = {}
-            self._last_business_inventory_diagnostic.update({
-                "stage": "selector_probe",
-                "network_businesses": len(network_rows),
-                "dom_businesses": len(dom_output),
-            })
-            try:
-                selector_probe = await self.page.evaluate(
-                    """() => {
-                        const visible = (el) => {
-                            if (!el || el === document.body || el === document.documentElement) return false;
-                            const r = el.getBoundingClientRect();
-                            const s = getComputedStyle(el);
-                            return r.width > 0 && r.height > 0
-                                && s.display !== 'none'
-                                && s.visibility !== 'hidden'
-                                && s.pointerEvents !== 'none';
-                        };
-                        const label = (el) => [
-                            (el.getAttribute && el.getAttribute('aria-label')) || '',
-                            (el.getAttribute && el.getAttribute('title')) || '',
-                            el.innerText || el.textContent || ''
-                        ].join(' ').replace(/\\s+/g, ' ').trim();
+                    const xs = [20, 52, 88, 124, 160, 196, 228];
+                    const ys = [
+                        58, 72, 86, 100, 114, 128, 142, 156,
+                        170, 184, 198, 212, 226, 240, 254, 268
+                    ];
+                    const seen = new Set();
+                    const rows = [];
 
-                        const xs = [20, 52, 88, 124, 160, 196, 228];
-                        const ys = [58,72,86,100,114,128,142,156,170,184,198,212,226,240,254,268];
-                        const seen = new Set();
-                        const rows = [];
+                    for (const y of ys) {
+                        for (const x of xs) {
+                            const stack = document.elementsFromPoint(x, y) || [];
+                            for (const el of stack.slice(0, 10)) {
+                                if (seen.has(el) || !visible(el)) continue;
+                                seen.add(el);
+                                const r = el.getBoundingClientRect();
+                                const text = label(el);
+                                const role = (el.getAttribute && el.getAttribute('role')) || '';
+                                const tabindex = (el.getAttribute && el.getAttribute('tabindex')) || '';
+                                const tag = el.tagName || '';
 
-                        for (const y of ys) {
-                            for (const x of xs) {
-                                const stack = document.elementsFromPoint(x, y) || [];
-                                for (const el of stack.slice(0, 10)) {
-                                    if (seen.has(el) || !visible(el)) continue;
-                                    seen.add(el);
-                                    const r = el.getBoundingClientRect();
-                                    const text = label(el);
-                                    const role = (el.getAttribute && el.getAttribute('role')) || '';
-                                    const tabindex = (el.getAttribute && el.getAttribute('tabindex')) || '';
-                                    const tag = el.tagName || '';
-                                    if (r.x > 300 || r.y < 48 || r.y > 285) continue;
-                                    if (r.width < 70 || r.width > 300) continue;
-                                    if (r.height < 22 || r.height > 100) continue;
-                                    if (!text) continue;
-                                    rows.push({el,r,text,role,tabindex,tag});
-                                }
+                                if (r.x > 300 || r.y < 48 || r.y > 285) continue;
+                                if (r.width < 70 || r.width > 300) continue;
+                                if (r.height < 22 || r.height > 100) continue;
+                                if (!text) continue;
+
+                                rows.push({el, r, text, role, tabindex, tag});
                             }
                         }
+                    }
 
-                        const homeRows = rows.filter(row =>
-                            /^(Home|Startseite|Start|Главная|Головна)$/i.test(row.text)
-                        );
-                        const homeY = homeRows.length
-                            ? Math.min(...homeRows.map(row => row.r.y))
-                            : 285;
-                        const candidates = rows.filter(row =>
-                            row.r.y < homeY - 2
-                            && !/^Meta Business Suite$/i.test(row.text)
-                            && !/^(Home|Startseite|Start|Главная|Головна)$/i.test(row.text)
-                            && !/^(Create|Создать|Створити|Erstellen)$/i.test(row.text)
-                        );
-                        candidates.sort((a,b) => {
-                            const ai = (a.role === 'button' || a.tag === 'BUTTON' || a.tabindex === '0') ? 1 : 0;
-                            const bi = (b.role === 'button' || b.tag === 'BUTTON' || b.tabindex === '0') ? 1 : 0;
-                            if (ai !== bi) return bi - ai;
-                            if (a.r.y !== b.r.y) return b.r.y - a.r.y;
-                            return (b.r.width*b.r.height) - (a.r.width*a.r.height);
-                        });
+                    const homeRows = rows.filter(row =>
+                        /^(Home|Startseite|Start|Главная|Головна)$/i.test(row.text)
+                    );
+                    const homeY = homeRows.length
+                        ? Math.min(...homeRows.map(row => row.r.y))
+                        : 285;
 
-                        const summary = candidates.slice(0, 12).map(row => ({
-                            text: row.text.slice(0, 180),
-                            role: row.role,
-                            tag: row.tag,
-                            x: Math.round(row.r.x),
-                            y: Math.round(row.r.y),
-                            w: Math.round(row.r.width),
-                            h: Math.round(row.r.height)
-                        }));
-                        const best = candidates[0];
-                        if (!best) return {clicked:false,candidates:summary};
-                        best.el.click();
+                    const candidates = rows.filter(row =>
+                        row.r.y < homeY - 2
+                        && !/^Meta Business Suite$/i.test(row.text)
+                        && !/^(Home|Startseite|Start|Главная|Головна)$/i.test(row.text)
+                        && !/^(Create|Создать|Створити|Erstellen)$/i.test(row.text)
+                    );
+
+                    candidates.sort((a,b) => {
+                        const ai = (
+                            a.role === 'button' ||
+                            a.tag === 'BUTTON' ||
+                            a.tabindex === '0'
+                        ) ? 1 : 0;
+                        const bi = (
+                            b.role === 'button' ||
+                            b.tag === 'BUTTON' ||
+                            b.tabindex === '0'
+                        ) ? 1 : 0;
+                        if (ai !== bi) return bi - ai;
+                        // Portfolio selector normally sits directly above Home.
+                        if (a.r.y !== b.r.y) return b.r.y - a.r.y;
+                        return (b.r.width * b.r.height) - (a.r.width * a.r.height);
+                    });
+
+                    const best = candidates[0];
+                    if (!best) {
                         return {
-                            clicked:true,
-                            best_text:best.text.slice(0,180),
-                            candidates:summary
+                            clicked:false,
+                            candidates:candidates.slice(0,12).map(row => ({
+                                text:row.text,
+                                x:Math.round(row.r.x),
+                                y:Math.round(row.r.y),
+                                w:Math.round(row.r.width),
+                                h:Math.round(row.r.height)
+                            }))
                         };
-                    }"""
-                )
-                selector_opened = bool(
-                    isinstance(selector_probe, dict)
-                    and selector_probe.get("clicked")
-                )
-                if selector_opened:
-                    self._last_business_inventory_diagnostic.update({
-                        "stage": "selector_hydration",
-                        "selector_probe": selector_probe,
-                    })
-                    # Meta often hydrates the portfolio list after the menu
-                    # becomes visible. Keep the response listener alive long
-                    # enough for late Relay payloads instead of declaring an
-                    # empty inventory after one animation frame.
-                    hydrate_deadline = time.monotonic() + 4.5
-                    while time.monotonic() < hydrate_deadline:
-                        if network_rows:
-                            break
-                        await self.page.wait_for_timeout(300)
-                    # Capture the open selector DOM before navigating away.
-                    # Some Meta builds render BM links in the menu but do not
-                    # issue a dedicated portfolio GraphQL request.
-                    await collect_dom_businesses()
-            except Exception as exc:
-                selector_opened = False
-                selector_probe = {
-                    "clicked": False,
-                    "error": f"{exc.__class__.__name__}: {_clean(exc)}"[:500],
-                }
-
-            # If HOME did not hydrate any Business inventory, try Meta's
-            # Business overview surface while keeping the same listener. Some
-            # accounts/pages land in an asset-scoped HOME that never requests
-            # the portfolio collection.
-            overview_attempt: dict[str, Any] = {}
-            if not network_rows and not dom_output:
-                self._last_business_inventory_diagnostic.update({
-                    "stage": "overview_navigation",
-                    "selector_probe": selector_probe,
-                    "network_businesses": len(network_rows),
-                    "dom_businesses": len(dom_output),
-                    "queries": query_diagnostics[-24:],
-                    "url": _clean(getattr(self.page, "url", ""))[:700],
-                })
-                overview_started = time.monotonic()
-                try:
-                    await self._goto(self.OVERVIEW_URL)
-                    overview_attempt = {
-                        "loaded": True,
-                        "url": _clean(getattr(self.page, "url", ""))[:700],
-                        "navigation_ms": int((time.monotonic() - overview_started) * 1000),
-                    }
-                    self._last_business_inventory_diagnostic.update({
-                        "stage": "overview_loaded",
-                        "overview_attempt": overview_attempt,
-                    })
-                    overview_deadline = time.monotonic() + 3.5
-                    while time.monotonic() < overview_deadline:
-                        if network_rows:
-                            break
-                        await self.page.wait_for_timeout(300)
-                    await collect_dom_businesses()
-                except BrowserBusinessError:
-                    raise
-                except Exception as exc:
-                    overview_attempt = {
-                        "loaded": False,
-                        "error": f"{exc.__class__.__name__}: {_clean(exc)}"[:500],
                     }
 
-            # Final fallback for whichever surface is currently mounted.
-            await collect_dom_businesses()
-
-            if response_tasks:
-                await asyncio.gather(
-                    *list(response_tasks),
-                    return_exceptions=True,
-                )
-
-            output = dict(network_rows)
-            for business_id, business_name in dom_output.items():
-                if business_id not in output or (business_name and not output[business_id]):
-                    output[business_id] = business_name
-
-            self._last_business_inventory_diagnostic = {
-                "stage": "complete",
-                "source": (
-                    "business_suite_private_graphql"
-                    if network_rows
-                    else ("business_suite_dom_fallback" if dom_output else "none")
-                ),
-                "network_businesses": len(network_rows),
-                "dom_businesses": len(dom_output),
-                "queries": query_diagnostics[-24:],
-                "selector_probe": selector_probe,
-                "overview_attempt": overview_attempt,
-                "url": _clean(getattr(self.page, "url", ""))[:700],
-            }
-            return output
-        finally:
-            if listener_installed and hasattr(self.page, "remove_listener"):
-                try:
-                    self.page.remove_listener("response", on_response)
-                except Exception:
-                    pass
+                    best.el.click();
+                    return {
+                        clicked:true,
+                        clickedCandidate:{
+                            text:best.text,
+                            x:Math.round(best.r.x),
+                            y:Math.round(best.r.y),
+                            w:Math.round(best.r.width),
+                            h:Math.round(best.r.height)
+                        }
+                    };
+                }"""
+            )
+            selector_opened = bool(
+                isinstance(selector_probe, dict)
+                and selector_probe.get("clicked")
+            )
             if selector_opened:
-                try:
-                    await self.page.keyboard.press("Escape")
-                except Exception:
-                    pass
+                await self.page.wait_for_timeout(550)
+        except Exception:
+            selector_opened = False
+
+        href_rows: list[dict[str, str]] = []
+        try:
+            href_rows = await self.page.locator("a[href]").evaluate_all(
+                """els => els.slice(0, 3000).map(el => ({
+                    href: el.href || "",
+                    text: (el.innerText || el.textContent || "").trim()
+                }))"""
+            )
+        except Exception:
+            href_rows = []
+
+        output: dict[str, str] = {}
+        for row in href_rows:
+            if not isinstance(row, dict):
+                continue
+            href = str(row.get("href") or "")
+            text = _clean(row.get("text"))
+            for business_id in _business_ids_from_text(href):
+                if business_id not in output or (text and not output[business_id]):
+                    output[business_id] = text
+
+        try:
+            content = await self.page.content()
+        except Exception:
+            content = ""
+
+        for business_id in _business_ids_from_text(content):
+            output.setdefault(business_id, "")
+
+        if selector_opened:
+            try:
+                await self.page.keyboard.press("Escape")
+                await self.page.wait_for_timeout(120)
+            except Exception:
+                pass
+
+        return output
 
     @staticmethod
     def _request_matches_ad_account_create(
@@ -9025,271 +8640,6 @@ class FacebookBusinessBrowser:
                 pass
             if not found_future.done():
                 found_future.cancel()
-            if response_tasks:
-                await asyncio.gather(
-                    *list(response_tasks),
-                    return_exceptions=True,
-                )
-
-    async def snapshot_ad_accounts_for_business(
-        self,
-        *,
-        business_id: str,
-        timeout_seconds: float = 8.0,
-    ) -> dict[str, Any]:
-        """Read the current RK inventory rendered by Meta Business Settings.
-
-        This observes only read-only GraphQL responses on the exact Business
-        Ad Accounts settings surface. It does not submit mutations.
-        """
-        business = _digits(business_id)
-        if not business:
-            raise BrowserBusinessError(
-                "INVALID_BUSINESS_ID",
-                "Ad Account inventory requires a numeric Business ID.",
-                retryable=False,
-            )
-        if self.page is None:
-            raise BrowserBusinessError(
-                "BROWSER_NOT_READY",
-                "Business browser is not open.",
-                retryable=True,
-            )
-
-        accounts: dict[str, dict[str, Any]] = {}
-        diagnostics: list[dict[str, Any]] = []
-        inventory_observed = False
-        response_tasks: set[asyncio.Task[Any]] = set()
-
-        async def inspect_response(response: Any) -> None:
-            nonlocal inventory_observed
-            try:
-                url = _clean(getattr(response, "url", ""))
-                if "graphql" not in url.casefold():
-                    return
-
-                request = getattr(response, "request", None)
-                meta = (
-                    _request_graphql_meta(request)
-                    if request is not None
-                    else {}
-                )
-                friendly = _clean(meta.get("friendly_name")).casefold()
-                if any(
-                    marker in friendly
-                    for marker in ("mutation", "create", "update", "delete")
-                ):
-                    return
-
-                target_business_ids = {
-                    candidate
-                    for candidate, _ in _walk_business_ids(
-                        meta.get("variables") or {}
-                    )
-                    if candidate
-                }
-                target_business_ids.update(
-                    _business_ids_from_text(_clean(meta.get("decoded_raw")))
-                )
-                page_url = _clean(getattr(self.page, "url", ""))
-                page_targets_business = (
-                    business in _business_ids_from_text(page_url)
-                    and (
-                        "/settings/ad_accounts" in page_url.casefold()
-                        or "/settings/ad-accounts" in page_url.casefold()
-                    )
-                )
-                if business not in target_business_ids and not page_targets_business:
-                    return
-
-                raw = await response.text()
-                payload = _decode_graphql_text(raw)
-                rows = _extract_inventory_ad_account_rows(payload)
-                observed = _has_ad_account_inventory_container(payload)
-                if not observed and not rows:
-                    return
-
-                inventory_observed = True
-                for row in rows:
-                    account_id = _normalize_ad_account_id(row.get("id"))
-                    if not account_id:
-                        continue
-                    normalized = dict(row)
-                    normalized["id"] = account_id
-                    normalized["account_id"] = account_id
-                    normalized["business_id"] = business
-                    current = accounts.get(account_id) or {}
-                    current.update(
-                        {
-                            key: value
-                            for key, value in normalized.items()
-                            if value not in ("", None, [], {})
-                        }
-                    )
-                    current.setdefault("id", account_id)
-                    current.setdefault("account_id", account_id)
-                    current.setdefault("business_id", business)
-                    accounts[account_id] = current
-
-                diagnostics.append(
-                    {
-                        "friendly_name": _clean(meta.get("friendly_name"))[:180],
-                        "rows": len(rows),
-                        "inventory_observed": observed,
-                        "page_url": page_url[:700],
-                    }
-                )
-            except Exception as exc:
-                diagnostics.append(
-                    {
-                        "error": (
-                            f"{exc.__class__.__name__}: {_clean(exc)}"
-                        )[:500]
-                    }
-                )
-
-        def on_response(response: Any) -> None:
-            try:
-                task = asyncio.create_task(inspect_response(response))
-                response_tasks.add(task)
-                task.add_done_callback(response_tasks.discard)
-            except Exception:
-                return
-
-        self.page.on("response", on_response)
-        attempts: list[dict[str, Any]] = []
-        deadline = time.monotonic() + max(3.0, float(timeout_seconds))
-        self._last_ad_account_section_diagnostic = {
-            "stage": "inventory_start",
-            "business_id": business,
-            "timeout_seconds": float(timeout_seconds),
-            "url": _clean(getattr(self.page, "url", ""))[:700],
-        }
-        try:
-            targets = [
-                template.format(business_id=business)
-                for template in self.SETTINGS_AD_ACCOUNTS_URLS
-            ]
-            current = _clean(getattr(self.page, "url", ""))
-            if (
-                business in _business_ids_from_text(current)
-                and (
-                    "/settings/ad_accounts" in current.casefold()
-                    or "/settings/ad-accounts" in current.casefold()
-                )
-            ):
-                targets.insert(0, current)
-
-            seen: set[str] = set()
-            for target in targets:
-                if target in seen or time.monotonic() >= deadline:
-                    continue
-                seen.add(target)
-                try:
-                    remaining_before_nav = max(0.0, deadline - time.monotonic())
-                    if remaining_before_nav <= 0:
-                        break
-                    self._last_ad_account_section_diagnostic = {
-                        "stage": "settings_navigation",
-                        "business_id": business,
-                        "target": target[:700],
-                        "remaining_seconds": round(remaining_before_nav, 3),
-                        "attempts": attempts[-6:],
-                        "url": _clean(getattr(self.page, "url", ""))[:700],
-                    }
-                    # RK inventory is read-only. Do not wait for Meta's
-                    # heavy Business Settings document to reach
-                    # DOMContentLoaded; the Relay inventory requests are
-                    # emitted after the navigation commits and hydrate the SPA
-                    # asynchronously. Waiting for DOMContentLoaded was consuming
-                    # the entire inventory budget before those responses could
-                    # be observed.
-                    await self.page.goto(
-                        target,
-                        wait_until="commit",
-                        timeout=max(1000, int(remaining_before_nav * 1000)),
-                    )
-                    post_nav_remaining = max(0.0, deadline - time.monotonic())
-                    if post_nav_remaining > 0:
-                        await self.page.wait_for_timeout(
-                            int(min(650.0, post_nav_remaining * 1000.0))
-                        )
-                    await self._assert_authenticated()
-                    attempts.append(
-                        {
-                            "url": _clean(self.page.url)[:700],
-                            "result": "loaded",
-                        }
-                    )
-                    if inventory_observed:
-                        break
-                except BrowserBusinessError:
-                    raise
-                except asyncio.TimeoutError:
-                    attempts.append(
-                        {
-                            "url": target[:700],
-                            "result": "navigation_timeout",
-                        }
-                    )
-                    self._last_ad_account_section_diagnostic = {
-                        "stage": "settings_navigation_timeout",
-                        "business_id": business,
-                        "target": target[:700],
-                        "attempts": attempts[-6:],
-                        "url": _clean(getattr(self.page, "url", ""))[:700],
-                    }
-                    break
-                except Exception as exc:
-                    attempts.append(
-                        {
-                            "url": target[:700],
-                            "result": "error",
-                            "error": (
-                                f"{exc.__class__.__name__}: {_clean(exc)}"
-                            )[:500],
-                        }
-                    )
-
-            remaining = max(0.0, deadline - time.monotonic())
-            if remaining > 0 and not inventory_observed:
-                await self.page.wait_for_timeout(
-                    int(min(1600.0, remaining * 1000.0))
-                )
-
-            if response_tasks:
-                await asyncio.gather(
-                    *list(response_tasks),
-                    return_exceptions=True,
-                )
-
-            self._last_ad_account_section_diagnostic = {
-                "stage": "inventory_complete",
-                "business_id": business,
-                "ready": inventory_observed,
-                "accounts_count": len(accounts),
-                "attempts": attempts[-6:],
-                "diagnostics": diagnostics[-12:],
-                "url": _clean(getattr(self.page, "url", ""))[:700],
-            }
-            return {
-                "business_id": business,
-                "ready": inventory_observed,
-                "confirmed_empty": bool(inventory_observed and not accounts),
-                "accounts": [
-                    accounts[key]
-                    for key in sorted(accounts)
-                ],
-                "accounts_count": len(accounts),
-                "source": "business_settings_graphql_inventory",
-                "attempts": attempts[-6:],
-                "diagnostics": diagnostics[-12:],
-            }
-        finally:
-            try:
-                self.page.remove_listener("response", on_response)
-            except Exception:
-                pass
             if response_tasks:
                 await asyncio.gather(
                     *list(response_tasks),

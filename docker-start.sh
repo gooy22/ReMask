@@ -150,9 +150,6 @@ PY
     tail -n 160 "$DATA_DIR/python-worker.log" >&2 || true
   fi
 
-  # Live inventory is verified after Apache starts, because ProfileResolver
-  # calls the local PHP context endpoint.
-
   # Keep monitoring after startup too. A Chromium-heavy BUSINESS job can leave
   # the worker process alive while its HTTP loop is no longer responsive.
   # Restart only after three consecutive failed health probes to avoid killing
@@ -228,6 +225,8 @@ a2enconf remask-servername 2>/dev/null || true
 
 sed -ri "s#DocumentRoot .*#DocumentRoot ${ROOT}#" /etc/apache2/sites-available/000-default.conf
 sed -ri "s/<VirtualHost \*:[0-9]+>/<VirtualHost *:80>/" /etc/apache2/sites-available/000-default.conf
+
+
 
 
 exec apache2-foreground

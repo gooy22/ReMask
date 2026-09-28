@@ -9,7 +9,6 @@ from unittest.mock import AsyncMock, patch
 from app.facebook_business_browser import BrowserBusinessError, FacebookBusinessBrowser
 from app.provisioning.fan_pages_handler import (
     _browser_retryable,
-    _checkpoint_auth_block,
     _reconcile_uncertain_page,
     _target_names,
     fan_pages_handler,
@@ -66,33 +65,6 @@ class FanPageProvisioningStructureTests(unittest.TestCase):
 
 
 class FanPageProvisioningRuntimeTests(unittest.IsolatedAsyncioTestCase):
-
-    async def test_auth_checkpoint_records_safe_resume_state(self) -> None:
-        state = SimpleNamespace(checkpoint=AsyncMock(return_value={}))
-        exc = BrowserBusinessError(
-            "CHECKPOINT_REQUIRED",
-            "Facebook requires a checkpoint",
-            retryable=False,
-            diagnostic={"url": "https://www.facebook.com/checkpoint/"},
-        )
-        await _checkpoint_auth_block(
-            provisioning_state=state,
-            item_id="item-auth",
-            profile_id="6",
-            scope_key="rk-fp-test",
-            business_id="1619103589770310",
-            ad_account_id="29459808963612032",
-            exc=exc,
-            target_names=["RK Page"],
-            created_pages=[],
-            safe_before_submit=True,
-        )
-        payload = state.checkpoint.await_args.args[-1]
-        self.assertEqual(payload["phase"], "PROFILE_AUTH_BLOCKED")
-        self.assertEqual(payload["resume_from"], "CREATE_NEXT")
-        self.assertTrue(payload["safe_before_submit"])
-        self.assertEqual(payload["auth_error_code"], "CHECKPOINT_REQUIRED")
-
     async def test_state_recovers_cross_scope_rk_and_confirmed_fan_pages(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = ProvisioningStateStore(tmp + "/state.sqlite3")

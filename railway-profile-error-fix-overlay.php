@@ -43,133 +43,6 @@ if (strpos($workspace, 'async function profileSaveJson(payload)') === false) {
     $workspace = substr($workspace, 0, $pos) . $helper . "\n\n" . substr($workspace, $pos);
 }
 
-if (strpos($workspace, 'REMASK_SESSION_REFRESH_UI_V1') === false) {
-    $sessionRefreshUi = <<<'JS'
-
-// REMASK_SESSION_REFRESH_UI_V1
-function remaskSelectedProfileNameForSessionRefresh(){
-  try{
-    const rows=(typeof selectedRows==='function')?selectedRows('profiles'):[];
-    if(!Array.isArray(rows)||rows.length!==1)return '';
-    const row=rows[0]||{};
-    return String(
-      row.profile || row.profile_name || row.name ||
-      row.profile_id || row.id || ''
-    ).trim();
-  }catch(_){
-    return '';
-  }
-}
-
-async function remaskSessionRefreshRun(){
-  const name=remaskSelectedProfileNameForSessionRefresh();
-  if(!name){
-    if(typeof $==='function'&&$('workspaceStatus')){
-      $('workspaceStatus').textContent='Выбери ровно один FB-профиль.';
-    }
-    return;
-  }
-
-  const raw=window.prompt(
-    'Профиль '+name+'\nВставь свежий Cookies JSON текущей авторизованной Facebook-сессии. Token и proxy не изменяются.'
-  );
-  if(raw===null)return;
-
-  const cookies=String(raw||'').trim();
-  try{
-    if(!cookies)throw new Error('Cookies JSON пустой.');
-    let parsed;
-    try{
-      parsed=JSON.parse(cookies);
-    }catch(_){
-      throw new Error('Cookies JSON имеет неверный формат.');
-    }
-    const list=Array.isArray(parsed)?parsed:Object.values(parsed||{});
-    const names=new Set(
-      list
-        .filter(function(item){
-          return item&&typeof item==='object'&&String(item.value||'').trim()!=='';
-        })
-        .map(function(item){return String(item.name||'').trim();})
-    );
-    if(!names.has('c_user')||!names.has('xs')){
-      throw new Error('В cookies должны присутствовать c_user и xs.');
-    }
-
-    if(typeof $==='function'&&$('workspaceStatus')){
-      $('workspaceStatus').textContent='Обновляю FB-сессию профиля '+name+'…';
-    }
-
-    const updated=await profileSaveJson({
-      action:'session_update',
-      name:name,
-      cookies:cookies
-    });
-
-    if(typeof $==='function'&&$('workspaceStatus')){
-      $('workspaceStatus').textContent='FB-сессия сохранена. Синхронизирую '+name+'…';
-    }
-
-    const snapshot=await apiJson(
-      'ajax/metaHierarchy.php',
-      post({action:'sync_profile',profile:name})
-    );
-    if(typeof applySnapshot==='function')applySnapshot(snapshot);
-
-    if(typeof $==='function'&&$('workspaceStatus')){
-      $('workspaceStatus').textContent=
-        'FB-сессия '+name+' обновлена'+
-        (updated&&updated.token_refreshed?' · Ads Manager token обновлён':'')+
-        ' · Meta синхронизирована';
-    }
-    if(typeof updateSelectionUi==='function')updateSelectionUi();
-  }catch(error){
-    const message=String((error&&error.message)||error);
-    if(typeof $==='function'&&$('workspaceStatus')){
-      $('workspaceStatus').textContent='FB session: '+message;
-    }
-    throw error;
-  }
-}
-
-function remaskSessionRefreshUpdateButton(){
-  const actions=document.getElementById('workspaceActions');
-  if(!actions)return;
-
-  let button=document.getElementById('remaskSessionRefreshBtn');
-  if(!button){
-    button=document.createElement('button');
-    button.type='button';
-    button.id='remaskSessionRefreshBtn';
-    button.className='btn btn-secondary';
-    button.textContent='Обновить FB-сессию';
-    button.style.display='none';
-    button.addEventListener('click',function(event){
-      event.preventDefault();
-      remaskSessionRefreshRun().catch(function(){});
-    });
-    actions.appendChild(button);
-  }
-
-  const profileName=remaskSelectedProfileNameForSessionRefresh();
-  const onProfiles=typeof state==='undefined'||String(state.activeTab||'')==='profiles';
-  button.style.display=(onProfiles&&profileName)?'inline-flex':'none';
-}
-
-(function(){
-  const update=function(){remaskSessionRefreshUpdateButton();};
-  if(document.readyState==='loading'){
-    document.addEventListener('DOMContentLoaded',update,{once:true});
-  }else{
-    update();
-  }
-  document.addEventListener('click',function(){setTimeout(update,0);},true);
-  document.addEventListener('change',function(){setTimeout(update,0);},true);
-})();
-JS;
-    $workspace .= "\n" . $sessionRefreshUi . "\n";
-}
-
 $mandatoryCookies = <<<'JS'
     if(!cookies||cookies==='[]'||cookies==='{}')throw new Error('Добавь Cookies JSON текущей FB-сессии. Нужны как минимум c_user и xs.');
     let parsed;
@@ -204,7 +77,7 @@ $editPattern = <<<'REGEX'
 REGEX;
 $workspace = preg_replace(
     $editPattern,
-    "await profileSaveJson({action:'save',name:p.name,token:$('editToken').value.trim(),cookies,proxy:$('editProxy').value.trim(),clear_proxy:$('editClearProxy').checked?'1':'0'});",
+    "await profileSaveJson({action:'save',name:p.name,token:$('editToken').value.trim(),cookies,proxy:$('editProxy').value.trim(),clear_proxy:$('editClearProxy').checked?'1':'0',clear_session:$('editClearSession').checked?'1':'0'});",
     $workspace,
     -1,
     $editPatchCount
@@ -238,7 +111,7 @@ $workspaceScriptPattern = <<<'REGEX'
 REGEX;
 $workspacePage = preg_replace(
     $workspaceScriptPattern,
-    'scripts/workspace.js?v=20260928-session-refresh-v180',
+    'scripts/workspace.js?v=20260918-responsive-sync-v65',
     $workspacePage,
     1,
     $workspaceScriptTagCount

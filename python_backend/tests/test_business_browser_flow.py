@@ -12,11 +12,9 @@ from app.facebook_business_browser import (
     FacebookBusinessBrowser,
     _ad_account_required_attribution_post_data,
     _extract_created_ad_account_id,
-    _extract_business_inventory_rows,
     _extract_inventory_ad_account_ids,
     _extract_named_ad_account_ids,
     _has_ad_account_inventory_container,
-    _extract_inventory_ad_account_rows,
 )
 from app.provisioning.business_handler import business_handler
 from app.provisioning.models import ProvisioningError, ProvisioningStep
@@ -3207,128 +3205,7 @@ class BrowserCreateFormIdentityTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Continuer", FacebookBusinessBrowser.SUBMIT_NAMES)
 
 
-class LiveInventoryBusinessDiscoveryBudgetRegressionTests(unittest.TestCase):
-    def test_live_inventory_uses_dedicated_business_discovery_budget(self):
-        main_path = Path(__file__).resolve().parents[1] / "main.py"
-        source = main_path.read_text(encoding="utf-8")
-        self.assertIn(
-            "REMASK_LIVE_INVENTORY_BUSINESS_DISCOVERY_TIMEOUT_SECONDS",
-            source,
-        )
-        call_pos = source.index("browser.snapshot_businesses()")
-        window = source[max(0, call_pos - 700): call_pos + 700]
-        self.assertNotIn("timeout=18.0", window)
-
-
-class BrowserBusinessInventoryExtractionTests(unittest.TestCase):
-    def test_business_inventory_accepts_explicit_business_id_in_generic_viewer(self):
-        payload = {
-            "data": {
-                "viewer": {
-                    "portfolio_edge": {
-                        "node": {
-                            "business_id": "1619103589770310",
-                            "name": "My Business",
-                        }
-                    }
-                }
-            }
-        }
-        self.assertEqual(
-            _extract_business_inventory_rows(payload),
-            [{"id": "1619103589770310", "name": "My Business"}],
-        )
-
-    def test_business_inventory_still_ignores_generic_numeric_ids(self):
-        payload = {
-            "data": {
-                "viewer": {"id": "123456789012345", "name": "Profile"},
-                "page": {"id": "987654321098765", "name": "Fan Page"},
-            }
-        }
-        self.assertEqual(_extract_business_inventory_rows(payload), [])
-
-
-class BrowserInventoryExtractionTests(unittest.TestCase):
-    def test_extracts_rows_only_from_ad_account_context(self):
-        payload = {
-            "data":{
-                "business":{
-                    "id":"1619103589770310",
-                    "owned_ad_accounts":{
-                        "nodes":[
-                            {
-                                "__typename":"AdAccount",
-                                "id":"act_29459808963612032",
-                                "account_id":"29459808963612032",
-                                "name":"ReMask RK",
-                                "account_status":1,
-                                "currency":"USD",
-                            }
-                        ]
-                    },
-                    "unrelated":{"id":"999999999999999"},
-                }
-            }
-        }
-        rows=_extract_inventory_ad_account_rows(payload)
-        self.assertEqual(len(rows),1)
-        self.assertEqual(rows[0]["id"],"act_29459808963612032")
-        self.assertEqual(rows[0]["name"],"ReMask RK")
-
-    def test_ignores_unrelated_numeric_ids(self):
-        payload={
-            "data":{
-                "viewer":{"id":"123456789012345","name":"Profile"},
-                "page":{"id":"987654321098765","name":"Fan Page"},
-            }
-        }
-        self.assertEqual(_extract_inventory_ad_account_rows(payload),[])
-
-
 class BrowserAuthenticationStateTests(unittest.IsolatedAsyncioTestCase):
-    async def test_business_suite_body_word_checkpoint_is_not_auth_checkpoint(self):
-        browser = FacebookBusinessBrowser(
-            SimpleNamespace(profile_id="profile-checkpoint-word")
-        )
-        browser.page = SimpleNamespace(
-            url="https://business.facebook.com/latest/home"
-        )
-        browser._body_text = AsyncMock(
-            return_value=(
-                "Meta Business Suite checkpoint status internal label "
-                "Create a post Advertising settings"
-            )
-        )
-        browser._diagnostic = AsyncMock(return_value={})
-
-        await browser._assert_authenticated()
-
-        browser._diagnostic.assert_not_awaited()
-
-    async def test_real_checkpoint_url_is_auth_checkpoint(self):
-        browser = FacebookBusinessBrowser(
-            SimpleNamespace(profile_id="profile-real-checkpoint")
-        )
-        browser.page = SimpleNamespace(
-            url="https://www.facebook.com/checkpoint/828281030927956/"
-        )
-        browser._body_text = AsyncMock(return_value="Continue")
-        browser._diagnostic = AsyncMock(
-            return_value={
-                "url":"https://www.facebook.com/checkpoint/828281030927956/"
-            }
-        )
-
-        with self.assertRaises(BrowserBusinessError) as caught:
-            await browser._assert_authenticated()
-
-        self.assertEqual(caught.exception.code, "CHECKPOINT_REQUIRED")
-        self.assertEqual(
-            caught.exception.diagnostic.get("auth_evidence"),
-            "checkpoint_url",
-        )
-
     async def test_temporary_feature_block_is_not_retryable(self):
         browser = FacebookBusinessBrowser(
             SimpleNamespace(profile_id="profile-temp-block")

@@ -27,44 +27,6 @@ def _browser_retryable(exc: BrowserBusinessError) -> bool:
     return bool(exc.retryable) or exc.code in _AUTH_RECOVERY_CODES
 
 
-async def _checkpoint_auth_block(
-    *,
-    provisioning_state: Any,
-    item_id: str,
-    profile_id: str,
-    scope_key: str,
-    business_id: str,
-    ad_account_id: str,
-    exc: BrowserBusinessError,
-    target_names: list[str],
-    created_pages: list[dict[str, Any]],
-    safe_before_submit: bool,
-) -> None:
-    await provisioning_state.checkpoint(
-        item_id,
-        profile_id,
-        scope_key,
-        ProvisioningStep.FAN_PAGES,
-        {
-            "phase": "PROFILE_AUTH_BLOCKED",
-            "resume_from": "CREATE_NEXT" if safe_before_submit else "RECONCILE_CREATE",
-            "target_names": target_names,
-            "created_pages": created_pages,
-            "business_id": _clean(business_id),
-            "ad_account_id": _clean(ad_account_id),
-            "auth_error_code": exc.code,
-            "last_error_code": exc.code,
-            "last_error": str(exc)[:4000],
-            "browser_diagnostic": (
-                exc.diagnostic if isinstance(exc.diagnostic, dict) else {}
-            ),
-            "safe_before_submit": bool(safe_before_submit),
-            "activity": "FAN_PAGE_PROFILE_AUTH_BLOCKED",
-            "activity_at": int(time.time()),
-        },
-    )
-
-
 def _checkpoint_result(step_state: Any) -> dict[str, Any]:
     if not isinstance(step_state, dict):
         return {}
@@ -347,30 +309,6 @@ async def _attach_page_to_business(
                 before_submit=before_attach,
             )
     except BrowserBusinessError as exc:
-        if exc.code in _AUTH_RECOVERY_CODES:
-            current_state = await provisioning_state.step(
-                item_id,
-                ProvisioningStep.FAN_PAGES,
-            )
-            current_phase = _clean(
-                _checkpoint_result(current_state).get("phase")
-            ).upper()
-            await _checkpoint_auth_block(
-                provisioning_state=provisioning_state,
-                item_id=item_id,
-                profile_id=profile_id,
-                scope_key=scope_key,
-                business_id=business,
-                ad_account_id=ad_account,
-                exc=exc,
-                target_names=target_names,
-                created_pages=created_pages,
-                safe_before_submit=current_phase not in {
-                    "PAGE_ADD_CLICK_INTENT",
-                    "PAGE_ADD_SUBMITTED",
-                    "PAGE_ADD_RESULT_UNKNOWN",
-                },
-            )
         if exc.code == "PAGE_ATTACH_RESULT_UNKNOWN":
             await provisioning_state.checkpoint(
                 item_id,
@@ -718,18 +656,6 @@ async def fan_pages_handler(
             current_pages = await _fresh_page_inventory(session)
         except BrowserBusinessError as exc:
             if exc.code in _AUTH_RECOVERY_CODES:
-                await _checkpoint_auth_block(
-                    provisioning_state=provisioning_state,
-                    item_id=item_id,
-                    profile_id=profile_id,
-                    scope_key=scope_key,
-                    business_id=business_id,
-                    ad_account_id=ad_account_id,
-                    exc=exc,
-                    target_names=names,
-                    created_pages=created_pages,
-                    safe_before_submit=True,
-                )
                 raise ProvisioningError(
                     exc.code,
                     str(exc),
@@ -830,29 +756,6 @@ async def fan_pages_handler(
                     "FACEBOOK_TEMPORARILY_BLOCKED",
                     "FAN_PAGE_CREATE_REJECTED",
                 }:
-                    if exc.code in _AUTH_RECOVERY_CODES:
-                        current_state = await provisioning_state.step(
-                            item_id,
-                            ProvisioningStep.FAN_PAGES,
-                        )
-                        current_phase = _clean(
-                            _checkpoint_result(current_state).get("phase")
-                        ).upper()
-                        await _checkpoint_auth_block(
-                            provisioning_state=provisioning_state,
-                            item_id=item_id,
-                            profile_id=profile_id,
-                            scope_key=scope_key,
-                            business_id=business_id,
-                            ad_account_id=ad_account_id,
-                            exc=exc,
-                            target_names=names,
-                            created_pages=created_pages,
-                            safe_before_submit=current_phase not in {
-                                "PAGE_CREATE_CLICK_INTENT",
-                                "PAGE_CREATE_RESULT_UNKNOWN",
-                            },
-                        )
                     raise ProvisioningError(
                         exc.code,
                         str(exc),

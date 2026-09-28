@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import time
 from typing import Any
 
 import aiohttp
@@ -14,47 +13,6 @@ from .proxy import ProxyChecker
 from .registry import get_handler
 from .state import ProvisioningStateStore
 from .transport import ProvisioningTransport, TransportError
-
-
-_MUTATING_BROWSER_STEPS = {
-    ProvisioningStep.FAN_PAGES,
-    ProvisioningStep.BUSINESS,
-    ProvisioningStep.AD_ACCOUNT,
-}
-_PROFILE_MUTATION_LAST_FINISHED: dict[str, float] = {}
-_PROFILE_MUTATION_COOLDOWN_SECONDS = max(
-    0.0,
-    min(
-        120.0,
-        float(os.getenv("REMASK_PROFILE_MUTATION_COOLDOWN_SECONDS") or "8"),
-    ),
-)
-
-
-async def _await_profile_mutation_cooldown(profile_id: str) -> float:
-    """Serialize bursts on one FB profile without trying to mimic human timing."""
-    if _PROFILE_MUTATION_COOLDOWN_SECONDS <= 0:
-        return 0.0
-
-    key = str(profile_id or "").strip()
-    if not key:
-        return 0.0
-
-    last = float(_PROFILE_MUTATION_LAST_FINISHED.get(key) or 0.0)
-    if last <= 0:
-        return 0.0
-
-    elapsed = max(0.0, time.monotonic() - last)
-    remaining = max(0.0, _PROFILE_MUTATION_COOLDOWN_SECONDS - elapsed)
-    if remaining > 0:
-        await asyncio.sleep(remaining)
-    return remaining
-
-
-def _mark_profile_mutation_finished(profile_id: str) -> None:
-    key = str(profile_id or "").strip()
-    if key:
-        _PROFILE_MUTATION_LAST_FINISHED[key] = time.monotonic()
 
 
 class ProvisioningService:
@@ -155,8 +113,11 @@ class ProvisioningService:
 
                     handler = get_handler(step.value)
 
-                    if step in _MUTATING_BROWSER_STEPS:
-                        await _await_profile_mutation_cooldown(profile_id)
+                    if step in {
+                        ProvisioningStep.FAN_PAGES,
+                        ProvisioningStep.BUSINESS,
+                        ProvisioningStep.AD_ACCOUNT,
+                    }:
                         step_timeout = browser_step_timeout(step)
                         timeout_code = (
                             "FAN_PAGES_TIMEOUT"
@@ -174,27 +135,21 @@ class ProvisioningService:
                         )
 
                         try:
-                            try:
-                                result = await asyncio.wait_for(
-                                    handler(
-                                        session,
-                                        step_params,
-                                        state,
-                                        transport=self.transport,
-                                        idempotency_key=step_key,
-                                        provisioning_state=self.state,
-                                        item_id=item_id,
-                                        profile_id=profile_id,
-                                        scope_key=scope_key,
-                                        step_state=prior,
-                                    ),
-                                    timeout=step_timeout,
-                                )
-                            finally:
-                                # Count every mutation attempt, including a safe
-                                # pre-submit failure, so an immediate manual Retry
-                                # cannot hammer the same FB profile in a burst.
-                                _mark_profile_mutation_finished(profile_id)
+                            result = await asyncio.wait_for(
+                                handler(
+                                    session,
+                                    step_params,
+                                    state,
+                                    transport=self.transport,
+                                    idempotency_key=step_key,
+                                    provisioning_state=self.state,
+                                    item_id=item_id,
+                                    profile_id=profile_id,
+                                    scope_key=scope_key,
+                                    step_state=prior,
+                                ),
+                                timeout=step_timeout,
+                            )
                         except asyncio.TimeoutError as exc:
                             raise ProvisioningError(
                                 timeout_code,
