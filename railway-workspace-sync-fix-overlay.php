@@ -162,7 +162,8 @@ async function syncSelection(){
     const message=errorText(e);
     const s=message.toLowerCase();
     let kind='META_API';
-    if(/rate.?limit|too many|code[^0-9]*(4|17|32|613)\\b/.test(s))kind='RATE_LIMIT';
+    if(/fbtool_session_required|session_required|saved facebook session is no longer active|active facebook session/.test(s))kind='SESSION_REQUIRED';
+    else if(/rate.?limit|too many|code[^0-9]*(4|17|32|613)\\b/.test(s))kind='RATE_LIMIT';
     else if(/\\b407\\b|proxy authentication|proxy auth/.test(s))kind='PROXY_AUTH';
     else if(/transport error|curl|could not resolve|connection timed out|connection refused|ssl connect/.test(s))kind='TRANSPORT';
     else if(/oauth|access token|token.*(invalid|expired)|session.*expired|code[^0-9]*190\\b|\\(#190\\)/.test(s))kind='TOKEN_INVALID';
@@ -335,14 +336,77 @@ $syncProfileReplacement = <<<'PHP'
         $profile = trim((string)($input['profile'] ?? ''));
         if ($profile === '') throw new InvalidArgumentException('profile is required');
 
-        // Directly accessible ad accounts from the token are the baseline.
-        // Business Manager enumeration is optional enrichment and must not make
-        // an otherwise valid FB profile fail synchronization.
-        $preflight = MetaEndpoint::cachedPreflight($profile, true);
+        // REMASK_FBTOOL_SYNC_REFRESH_V1
+        // Ads Manager tokens extracted by FBTOOL can become unusable for Graph
+        // reads while a fresh browser session can still mint a replacement EAAB.
+        // ReMask historically handled exactly this in FbRequests::GetNewToken().
+        // Restore that behavior once, only for Graph code=1 Invalid request.
+        require_once __DIR__ . '/../classes/FbRequests.php';
+        require_once __DIR__ . '/../classes/AccountStoreFactory.php';
+
         $syncWarnings = [];
+        $tokenRefreshed = false;
+        try {
+            $preflight = MetaEndpoint::cachedPreflight($profile, true);
+        } catch (Throwable $preflightError) {
+            $preflightMessage = trim((string)$preflightError->getMessage());
+            $isAdsTokenInvalidRequest = (
+                stripos($preflightMessage, 'Invalid request') !== false
+                && preg_match('/code\s*=\s*1\b/i', $preflightMessage)
+            );
+            if (!$isAdsTokenInvalidRequest) {
+                throw $preflightError;
+            }
+
+            $store = AccountStoreFactory::create(ACCOUNTSFILENAME);
+            $account = $store->getAccountByName($profile);
+            if (!$account instanceof FbAccount) {
+                throw new RuntimeException(
+                    'FBTOOL_PROFILE_CONTEXT_MISSING: saved FB profile was not found.'
+                );
+            }
+            if (!$account->isLegacyReady()) {
+                throw new RuntimeException(
+                    'FBTOOL_SESSION_REQUIRED: Ads Manager token needs an active Facebook session; saved c_user/xs are missing.'
+                );
+            }
+
+            $oldToken = trim((string)$account->token);
+            $requests = new FbRequests();
+            $freshToken = $requests->RefreshAdsManagerToken($account);
+            $freshToken = is_string($freshToken) ? trim($freshToken) : '';
+
+            if ($freshToken === '') {
+                throw new RuntimeException(
+                    'FBTOOL_SESSION_REQUIRED: Ads Manager could not refresh the token because the saved Facebook session is no longer active.'
+                );
+            }
+
+            if (!hash_equals($oldToken, $freshToken)) {
+                $account->token = $freshToken;
+                $store->addOrUpdateAccount($account);
+                $tokenRefreshed = true;
+            }
+
+            try {
+                $preflight = MetaEndpoint::cachedPreflight($profile, true);
+            } catch (Throwable $retryError) {
+                throw new RuntimeException(
+                    'FBTOOL_TOKEN_REFRESH_FAILED: Ads Manager returned a token, but Meta Graph still rejected the refreshed profile transport: '
+                    . $retryError->getMessage(),
+                    0,
+                    $retryError
+                );
+            }
+        }
+
+        if ($tokenRefreshed) {
+            $syncWarnings[] = 'Ads Manager token refreshed from the active Facebook session';
+        }
         if (!empty($preflight['ad_accounts']['_funding_enrichment_warning'])) {
             $syncWarnings[] = 'RK funding/payment metadata unavailable; RK list kept';
         }
+
         try {
             $businesses = MetaEndpoint::cachedAsset($profile, 'businesses', '', true);
             foreach (($businesses['data'] ?? []) as $business) {
@@ -375,11 +439,18 @@ $syncProfileReplacement = <<<'PHP'
             'entity_id'=>$profile,
             'profile_name'=>$profile,
             'summary'=>'Синхронизация FB-профиля завершена',
-            'details'=>['sync_source'=>'direct_ad_accounts_with_optional_business_enrichment','warnings'=>$syncWarnings],
+            'details'=>[
+                'sync_source'=>'ads_manager_token_refresh_then_graph',
+                'token_refreshed'=>$tokenRefreshed,
+                'warnings'=>$syncWarnings,
+            ],
         ]);
         $snapshot = hierarchy_profile_snapshot($profile);
-        $snapshot['sync_source'] = 'direct_ad_accounts_with_optional_business_enrichment';
-        if ($syncWarnings !== []) $snapshot['sync_warnings'] = array_values(array_unique($syncWarnings));
+        $snapshot['sync_source'] = 'ads_manager_token_refresh_then_graph';
+        $snapshot['token_refreshed'] = $tokenRefreshed;
+        if ($syncWarnings !== []) {
+            $snapshot['sync_warnings'] = array_values(array_unique($syncWarnings));
+        }
         MetaEndpoint::ok($snapshot);
     }
 PHP;
