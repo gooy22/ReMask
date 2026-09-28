@@ -17,6 +17,7 @@ from app.facebook_business_browser import (
     _extract_named_ad_account_ids,
     _has_ad_account_inventory_container,
     _extract_inventory_ad_account_rows,
+    _graphql_request_ad_account_inventory_scope,
 )
 from app.provisioning.business_handler import business_handler
 from app.provisioning.models import ProvisioningError, ProvisioningStep
@@ -3284,6 +3285,95 @@ class BrowserInventoryExtractionTests(unittest.TestCase):
             }
         }
         self.assertEqual(_extract_inventory_ad_account_rows(payload),[])
+
+
+    def test_extracts_generic_meta_asset_row_when_type_marks_ad_account(self):
+        payload = {
+            "data": {
+                "business": {
+                    "business_assets": {
+                        "nodes": [
+                            {
+                                "asset_type": "AD_ACCOUNT",
+                                "object_id": "29459808963612032",
+                                "name": "Generic RK",
+                                "currency": "USD",
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+        rows = _extract_inventory_ad_account_rows(payload)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["id"], "act_29459808963612032")
+        self.assertEqual(rows[0]["name"], "Generic RK")
+        self.assertTrue(_has_ad_account_inventory_container(payload))
+
+    def test_request_scoped_generic_asset_connection_is_authoritative_when_empty(self):
+        payload = {
+            "data": {
+                "business": {
+                    "assets": {
+                        "edges": [],
+                        "count": 0,
+                        "page_info": {"has_next_page": False},
+                    }
+                }
+            }
+        }
+        self.assertFalse(_has_ad_account_inventory_container(payload))
+        self.assertTrue(
+            _has_ad_account_inventory_container(
+                payload,
+                request_scoped=True,
+            )
+        )
+
+    def test_request_scoped_generic_asset_node_extracts_object_id(self):
+        payload = {
+            "data": {
+                "business": {
+                    "assets": {
+                        "edges": [
+                            {
+                                "node": {
+                                    "object_id": "29459808963612032",
+                                    "name": "Scoped RK",
+                                    "currency": "USD",
+                                }
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+        self.assertEqual(
+            _extract_inventory_ad_account_rows(
+                payload,
+                request_scoped=True,
+            )[0]["id"],
+            "act_29459808963612032",
+        )
+
+    def test_graphql_inventory_scope_accepts_generic_asset_query_with_ad_account_type(self):
+        meta = {
+            "friendly_name": "BizKitSettingsAssetsQuery",
+            "variables": {
+                "businessID": "61594753560938",
+                "assetType": "AD_ACCOUNT",
+            },
+            "decoded_raw": "",
+        }
+        self.assertTrue(_graphql_request_ad_account_inventory_scope(meta))
+
+    def test_graphql_inventory_scope_rejects_create_mutation(self):
+        meta = {
+            "friendly_name": "AdAccountCreateMutation",
+            "variables": {"assetType": "AD_ACCOUNT"},
+            "decoded_raw": "",
+        }
+        self.assertFalse(_graphql_request_ad_account_inventory_scope(meta))
 
 
 class BrowserAuthenticationStateTests(unittest.IsolatedAsyncioTestCase):

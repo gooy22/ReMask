@@ -689,6 +689,126 @@ def _normalize_ad_account_id(value: Any) -> str:
     return "act_" + raw
 
 
+def _compact_semantic(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "", _clean(value).casefold())
+
+
+def _dict_is_explicit_ad_account_asset(value: dict[str, Any]) -> bool:
+    typename = _compact_semantic(value.get("__typename"))
+    if "adaccount" in typename or "advertisingaccount" in typename:
+        return True
+
+    for key in (
+        "asset_type",
+        "assetType",
+        "asset_kind",
+        "assetKind",
+        "asset_category",
+        "assetCategory",
+        "object_type",
+        "objectType",
+        "entity_type",
+        "entityType",
+        "type",
+        "category",
+    ):
+        semantic = _compact_semantic(value.get(key))
+        if (
+            "adaccount" in semantic
+            or "advertisingaccount" in semantic
+            or semantic in {"adsaccount", "adsaccounts"}
+        ):
+            return True
+    return False
+
+
+def _graphql_request_ad_account_inventory_scope(meta: dict[str, Any]) -> bool:
+    """Return True when a read-only Relay request explicitly targets RK assets."""
+    friendly = _clean(meta.get("friendly_name")).casefold()
+    if any(word in friendly for word in ("mutation", "create", "update", "delete")):
+        return False
+
+    variables = meta.get("variables")
+    variables_text = ""
+    if isinstance(variables, dict):
+        try:
+            variables_text = json.dumps(
+                variables,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).casefold()
+        except (TypeError, ValueError):
+            variables_text = str(variables).casefold()
+
+    decoded = _clean(meta.get("decoded_raw")).casefold()
+    combined = " ".join((friendly, variables_text, decoded[:6000]))
+    compact = re.sub(r"[^a-z0-9]+", "", combined)
+
+    if any(
+        marker in compact
+        for marker in (
+            "adaccount",
+            "adaccounts",
+            "advertisingaccount",
+            "advertisingaccounts",
+        )
+    ):
+        return True
+
+    def walk(value: Any, parent_key: str = "") -> bool:
+        if isinstance(value, dict):
+            if _dict_is_explicit_ad_account_asset(value):
+                return True
+            for key, child in value.items():
+                folded_key = _compact_semantic(key)
+                if folded_key in {
+                    "assettype",
+                    "assetkind",
+                    "assetcategory",
+                    "objecttype",
+                    "entitytype",
+                    "type",
+                    "category",
+                }:
+                    semantic = _compact_semantic(child)
+                    if (
+                        "adaccount" in semantic
+                        or "advertisingaccount" in semantic
+                        or semantic in {"adsaccount", "adsaccounts"}
+                    ):
+                        return True
+                if walk(child, str(key)):
+                    return True
+        elif isinstance(value, list):
+            return any(walk(child, parent_key) for child in value)
+        return False
+
+    return walk(variables if isinstance(variables, dict) else {})
+
+
+def _generic_asset_connection_path(path: str) -> bool:
+    compact = re.sub(r"[^a-z0-9]+", "", path.casefold())
+    has_asset_marker = any(
+        marker in compact
+        for marker in (
+            "asset",
+            "assignedobject",
+            "businessobject",
+        )
+    )
+    has_collection_marker = any(
+        marker in path.casefold()
+        for marker in (
+            ".edges[",
+            ".nodes[",
+            ".items[",
+            ".results[",
+            ".data[",
+        )
+    )
+    return has_asset_marker and has_collection_marker
+
+
 def _extract_created_ad_account_id(payload: Any) -> tuple[str, str]:
     """Extract exactly one Ad Account ID from a matched CREATE response.
 
@@ -1061,12 +1181,18 @@ def _extract_inventory_ad_account_ids(payload: Any) -> list[str]:
     walk(payload)
     return sorted(found)
 
-def _extract_inventory_ad_account_rows(payload: Any) -> list[dict[str, Any]]:
-    """Extract RK rows only from structurally identified ad-account context.
+def _extract_inventory_ad_account_rows(
+    payload: Any,
+    *,
+    request_scoped: bool = False,
+) -> list[dict[str, Any]]:
+    """Extract RK rows from explicit or request-scoped Business Settings assets.
 
-    Business Settings Relay responses may contain many unrelated numeric IDs.
-    Accept an ID only when its traversal path or typename is already inside an
-    ad-account inventory node. This is read-only inventory evidence.
+    Meta now serves some Business Settings lists through generic asset
+    connections.  In that shape the traversal path may say only "assets" while
+    the row identifies itself with asset_type/object_type and object_id/asset_id.
+    Generic numeric ids are still rejected unless the request or row proves RK
+    semantics.
     """
     found: dict[str, dict[str, Any]] = {}
     ad_markers = (
@@ -1081,58 +1207,130 @@ def _extract_inventory_ad_account_rows(payload: Any) -> list[dict[str, Any]]:
     def is_ad_context(path: str, value: dict[str, Any]) -> bool:
         folded = path.casefold()
         typename = _clean(value.get("__typename")).casefold()
-        return any(
-            marker in folded or marker in typename
-            for marker in ad_markers
+        explicit_asset = _dict_is_explicit_ad_account_asset(value)
+        strong_id = any(
+            _normalize_ad_account_id(value.get(key))
+            for key in (
+                "account_id",
+                "ad_account_id",
+                "accountId",
+                "adAccountId",
+                "adaccount_id",
+            )
+        )
+        return (
+            any(marker in folded or marker in typename for marker in ad_markers)
+            or explicit_asset
+            or (
+                request_scoped
+                and (strong_id or _generic_asset_connection_path(path))
+            )
         )
 
     def merge_row(value: dict[str, Any], path: str) -> None:
         if not is_ad_context(path, value):
             return
 
+        explicit_asset = _dict_is_explicit_ad_account_asset(value)
+        generic_asset_context = (
+            explicit_asset
+            or (request_scoped and _generic_asset_connection_path(path))
+        )
+
+        candidate_values = [value]
+        if generic_asset_context:
+            for child_key in (
+                "asset",
+                "object",
+                "entity",
+                "ad_account",
+                "adAccount",
+                "advertising_account",
+                "advertisingAccount",
+            ):
+                child = value.get(child_key)
+                if isinstance(child, dict):
+                    candidate_values.insert(0, child)
+
         account_id = ""
-        for key in (
-            "account_id",
-            "ad_account_id",
-            "accountId",
-            "adAccountId",
-            "adaccount_id",
-            "id",
-        ):
-            account_id = _normalize_ad_account_id(value.get(key))
+        row_source = value
+        for candidate in candidate_values:
+            id_keys = [
+                "account_id",
+                "ad_account_id",
+                "accountId",
+                "adAccountId",
+                "adaccount_id",
+            ]
+            if generic_asset_context or _dict_is_explicit_ad_account_asset(candidate):
+                id_keys.extend(
+                    (
+                        "asset_id",
+                        "assetId",
+                        "object_id",
+                        "objectId",
+                        "entity_id",
+                        "entityId",
+                    )
+                )
+            id_keys.append("id")
+
+            for key in id_keys:
+                account_id = _normalize_ad_account_id(candidate.get(key))
+                if account_id:
+                    row_source = candidate
+                    break
             if account_id:
                 break
+
         if not account_id:
             return
 
         business = value.get("business")
+        if not isinstance(business, dict) and row_source is not value:
+            business = row_source.get("business")
+
         business_id = ""
         business_name = ""
         if isinstance(business, dict):
             business_id = _digits(business.get("id"))
             business_name = _clean(business.get("name"))
         if not business_id:
-            business_id = _digits(
-                value.get("business_id")
-                or value.get("businessId")
-                or value.get("businessID")
-            )
+            for source in (row_source, value):
+                business_id = _digits(
+                    source.get("business_id")
+                    or source.get("businessId")
+                    or source.get("businessID")
+                )
+                if business_id:
+                    break
+
+        def first_value(*keys: str) -> Any:
+            for source in (row_source, value):
+                for key in keys:
+                    item = source.get(key)
+                    if item not in ("", None):
+                        return item
+            return None
 
         row = {
             "id": account_id,
             "account_id": account_id,
             "name": _clean(
-                value.get("name")
-                or value.get("account_name")
-                or value.get("ad_account_name")
-                or value.get("adAccountName")
+                first_value(
+                    "name",
+                    "account_name",
+                    "ad_account_name",
+                    "adAccountName",
+                    "asset_name",
+                    "assetName",
+                )
             ),
-            "account_status": value.get("account_status"),
-            "disable_reason": value.get("disable_reason"),
-            "currency": _clean(value.get("currency")),
+            "account_status": first_value("account_status", "accountStatus"),
+            "disable_reason": first_value("disable_reason", "disableReason"),
+            "currency": _clean(first_value("currency")),
             "timezone_name": _clean(
-                value.get("timezone_name")
-                or value.get("timezoneName")
+                first_value("timezone_name", "timezoneName")
             ),
             "business_id": business_id,
             "business_name": business_name,
@@ -1163,12 +1361,12 @@ def _extract_inventory_ad_account_rows(payload: Any) -> list[dict[str, Any]]:
     return [found[key] for key in sorted(found)]
 
 
-def _has_ad_account_inventory_container(payload: Any) -> bool:
-    """Return True only when a payload exposes an RK inventory collection.
-
-    This is used to distinguish an authoritative empty Ad Accounts inventory
-    from an unrelated GraphQL response that simply happens to contain no RK id.
-    """
+def _has_ad_account_inventory_container(
+    payload: Any,
+    *,
+    request_scoped: bool = False,
+) -> bool:
+    """Return True when a payload exposes an authoritative RK collection."""
     collection_keys = (
         "ad_accounts",
         "adaccounts",
@@ -1179,14 +1377,50 @@ def _has_ad_account_inventory_container(payload: Any) -> bool:
         "client_ad_accounts",
         "clientadaccounts",
     )
+    generic_asset_keys = (
+        "assets",
+        "businessassets",
+        "assignedassets",
+        "assetlist",
+        "assetconnection",
+        "businesssettingsassets",
+    )
 
-    def walk(value: Any) -> bool:
+    def walk(value: Any, path: str = "root") -> bool:
         if isinstance(value, dict):
+            if _dict_is_explicit_ad_account_asset(value):
+                return True
+
             typename = _clean(value.get("__typename")).casefold()
             compact_type = (
                 typename.replace("_", "").replace("-", "").replace(" ", "")
             )
             if "adaccountconnection" in compact_type:
+                return True
+
+            connection_fields = {
+                "edges",
+                "nodes",
+                "items",
+                "results",
+                "count",
+                "total_count",
+                "totalCount",
+                "page_info",
+                "pageInfo",
+            }
+            has_connection_shape = any(field in value for field in connection_fields)
+            if (
+                request_scoped
+                and has_connection_shape
+                and (
+                    _generic_asset_connection_path(path)
+                    or any(
+                        isinstance(value.get(field), list)
+                        for field in ("edges", "nodes", "items", "results")
+                    )
+                )
+            ):
                 return True
 
             for key, child in value.items():
@@ -1198,37 +1432,33 @@ def _has_ad_account_inventory_container(payload: Any) -> bool:
                     marker.replace("_", "") in compact
                     for marker in collection_keys
                 )
+                generic_asset_key = any(
+                    marker in compact for marker in generic_asset_keys
+                )
                 connection_shape = (
                     isinstance(child, dict)
-                    and any(
-                        field in child
-                        for field in (
-                            "edges",
-                            "nodes",
-                            "items",
-                            "count",
-                            "total_count",
-                            "totalCount",
-                            "page_info",
-                            "pageInfo",
-                        )
-                    )
+                    and any(field in child for field in connection_fields)
                     and (
                         "adaccount" in compact
                         or "advertisingaccount" in compact
+                        or (request_scoped and generic_asset_key)
                     )
                 )
                 if (
                     isinstance(child, (dict, list))
-                    and (plural_key or connection_shape)
+                    and (
+                        plural_key
+                        or connection_shape
+                        or (request_scoped and generic_asset_key)
+                    )
                 ):
                     return True
-                if walk(child):
+                if walk(child, f"{path}.{key}"):
                     return True
 
         elif isinstance(value, list):
-            for child in value:
-                if walk(child):
+            for index, child in enumerate(value):
+                if walk(child, f"{path}[{index}]"):
                     return True
 
         return False
@@ -9104,8 +9334,15 @@ class FacebookBusinessBrowser:
 
                 raw = await response.text()
                 payload = _decode_graphql_text(raw)
-                rows = _extract_inventory_ad_account_rows(payload)
-                observed = _has_ad_account_inventory_container(payload)
+                request_scoped = _graphql_request_ad_account_inventory_scope(meta)
+                rows = _extract_inventory_ad_account_rows(
+                    payload,
+                    request_scoped=request_scoped,
+                )
+                observed = _has_ad_account_inventory_container(
+                    payload,
+                    request_scoped=request_scoped,
+                )
                 if not observed and not rows:
                     return
 
@@ -9134,8 +9371,16 @@ class FacebookBusinessBrowser:
                 diagnostics.append(
                     {
                         "friendly_name": _clean(meta.get("friendly_name"))[:180],
+                        "doc_id": _clean(meta.get("doc_id"))[:80],
+                        "request_scoped": request_scoped,
                         "rows": len(rows),
                         "inventory_observed": observed,
+                        "payload_type": type(payload).__name__,
+                        "payload_keys": (
+                            sorted(str(key) for key in payload.keys())[:24]
+                            if isinstance(payload, dict)
+                            else []
+                        ),
                         "page_url": page_url[:700],
                     }
                 )
