@@ -4573,7 +4573,14 @@ class FacebookBusinessBrowser:
             except Exception:
                 return
 
-        self.page.on("response", on_response)
+        listener_installed = False
+        if hasattr(self.page, "on"):
+            try:
+                self.page.on("response", on_response)
+                listener_installed = True
+            except Exception:
+                listener_installed = False
+
         selector_opened = False
         dom_output: dict[str, str] = {}
         try:
@@ -4677,10 +4684,11 @@ class FacebookBusinessBrowser:
             }
             return output
         finally:
-            try:
-                self.page.remove_listener("response", on_response)
-            except Exception:
-                pass
+            if listener_installed and hasattr(self.page, "remove_listener"):
+                try:
+                    self.page.remove_listener("response", on_response)
+                except Exception:
+                    pass
             if selector_opened:
                 try:
                     await self.page.keyboard.press("Escape")
