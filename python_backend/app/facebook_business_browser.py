@@ -4633,8 +4633,22 @@ class FacebookBusinessBrowser:
             return len(dom_output) - before
 
         selector_opened = False
+        stage_started = time.monotonic()
+        self._last_business_inventory_diagnostic = {
+            "source": "in_progress",
+            "stage": "home_navigation",
+            "network_businesses": 0,
+            "dom_businesses": 0,
+            "queries": [],
+            "url": _clean(getattr(self.page, "url", ""))[:700],
+        }
         try:
             await self._goto(self.HOME_URL)
+            self._last_business_inventory_diagnostic.update({
+                "stage": "home_loaded",
+                "home_ms": int((time.monotonic() - stage_started) * 1000),
+                "url": _clean(getattr(self.page, "url", ""))[:700],
+            })
             await self.page.wait_for_timeout(900)
 
             # Opening the portfolio selector causes Meta's frontend to hydrate
@@ -4642,6 +4656,11 @@ class FacebookBusinessBrowser:
             # probe: it samples only a bounded top-left grid and never scans
             # the whole DOM.
             selector_probe: dict[str, Any] = {}
+            self._last_business_inventory_diagnostic.update({
+                "stage": "selector_probe",
+                "network_businesses": len(network_rows),
+                "dom_businesses": len(dom_output),
+            })
             try:
                 selector_probe = await self.page.evaluate(
                     """() => {
@@ -4729,6 +4748,10 @@ class FacebookBusinessBrowser:
                     and selector_probe.get("clicked")
                 )
                 if selector_opened:
+                    self._last_business_inventory_diagnostic.update({
+                        "stage": "selector_hydration",
+                        "selector_probe": selector_probe,
+                    })
                     # Meta often hydrates the portfolio list after the menu
                     # becomes visible. Keep the response listener alive long
                     # enough for late Relay payloads instead of declaring an
@@ -4755,12 +4778,26 @@ class FacebookBusinessBrowser:
             # the portfolio collection.
             overview_attempt: dict[str, Any] = {}
             if not network_rows and not dom_output:
+                self._last_business_inventory_diagnostic.update({
+                    "stage": "overview_navigation",
+                    "selector_probe": selector_probe,
+                    "network_businesses": len(network_rows),
+                    "dom_businesses": len(dom_output),
+                    "queries": query_diagnostics[-24:],
+                    "url": _clean(getattr(self.page, "url", ""))[:700],
+                })
+                overview_started = time.monotonic()
                 try:
                     await self._goto(self.OVERVIEW_URL)
                     overview_attempt = {
                         "loaded": True,
                         "url": _clean(getattr(self.page, "url", ""))[:700],
+                        "navigation_ms": int((time.monotonic() - overview_started) * 1000),
                     }
+                    self._last_business_inventory_diagnostic.update({
+                        "stage": "overview_loaded",
+                        "overview_attempt": overview_attempt,
+                    })
                     overview_deadline = time.monotonic() + 3.5
                     while time.monotonic() < overview_deadline:
                         if network_rows:
@@ -4790,6 +4827,7 @@ class FacebookBusinessBrowser:
                     output[business_id] = business_name
 
             self._last_business_inventory_diagnostic = {
+                "stage": "complete",
                 "source": (
                     "business_suite_private_graphql"
                     if network_rows
