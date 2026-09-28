@@ -162,7 +162,7 @@ async function syncSelection(){
     const message=errorText(e);
     const s=message.toLowerCase();
     let kind='META_API';
-    if(/fbtool_session_required|session_required|saved facebook session is no longer active|active facebook session/.test(s))kind='SESSION_REQUIRED';
+    if(/fb_session_expired|fbtool_session_required|session_required|saved facebook session is no longer active|active facebook session/.test(s))kind='SESSION_EXPIRED';
     else if(/rate.?limit|too many|code[^0-9]*(4|17|32|613)\\b/.test(s))kind='RATE_LIMIT';
     else if(/\\b407\\b|proxy authentication|proxy auth/.test(s))kind='PROXY_AUTH';
     else if(/transport error|curl|could not resolve|connection timed out|connection refused|ssl connect/.test(s))kind='TRANSPORT';
@@ -249,6 +249,18 @@ async function syncSelection(){
 
     if(failures.length){
       $('workspaceStatus').textContent=`Синхронизация Meta частично/полностью не выполнена: ${failures.join(' · ')}`;
+      const expired=results.filter(x=>x&&x.error_kind==='SESSION_EXPIRED');
+      if(
+        tab==='profiles' &&
+        rows.length===1 &&
+        expired.length===1 &&
+        typeof remaskSessionRefreshRun==='function'
+      ){
+        $('workspaceStatus').textContent=
+          'FB-сессия профиля '+String(expired[0].profile||'')+
+          ' истекла. Открываю обновление session; текущий token и proxy сохраняются.';
+        setTimeout(()=>{try{remaskSessionRefreshRun();}catch(_){}},150);
+      }
     }else if(warnings.length){
       $('workspaceStatus').textContent=`Meta синхронизирована. ${warnings.join(' · ')}`;
     }else{
@@ -378,8 +390,9 @@ $syncProfileReplacement = <<<'PHP'
             $freshToken = is_string($freshToken) ? trim($freshToken) : '';
 
             if ($freshToken === '') {
+                // REMASK_FB_SESSION_EXPIRED_V1
                 throw new RuntimeException(
-                    'FBTOOL_SESSION_REQUIRED: Ads Manager could not refresh the token because the saved Facebook session is no longer active.'
+                    'FB_SESSION_EXPIRED: saved Facebook session is no longer active. Refresh c_user/xs for this profile; current token and proxy are preserved.'
                 );
             }
 
@@ -393,7 +406,7 @@ $syncProfileReplacement = <<<'PHP'
                 $preflight = MetaEndpoint::cachedPreflight($profile, true);
             } catch (Throwable $retryError) {
                 throw new RuntimeException(
-                    'FBTOOL_TOKEN_REFRESH_FAILED: Ads Manager returned a token, but Meta Graph still rejected the refreshed profile transport: '
+                    'FBTOOL_GRAPH_INCOMPATIBLE: Ads Manager returned a fresh token, but Official Graph still rejected the refreshed fbtool transport: '
                     . $retryError->getMessage(),
                     0,
                     $retryError

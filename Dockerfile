@@ -262,7 +262,7 @@ RUN set -eux; \
     ! grep -q 'mbInstagramPositions' /var/www/html/creatives.php; \
     grep -q 'REMASK_CREATIVE_CAPABILITIES_V1' /var/www/html/classes/MetaAdsService.php; \
     grep -q 'delivery_estimate' /var/www/html/classes/MetaAdsService.php; \
-    grep -q 'REMASK_SYNC_ERROR_CLASSIFIER_V1' /var/www/html/scripts/workspace.js; \
+    grep -q 'REMASK_SYNC_ERROR_CLASSIFIER_V1' /var/www/html/scripts/workspace.js;     grep -q 'REMASK_FB_SESSION_EXPIRED_V1' /var/www/html/ajax/metaHierarchy.php;     grep -q "error_kind==='SESSION_EXPIRED'" /var/www/html/scripts/workspace.js; \
     grep -q "kind='META_REQUEST'" /var/www/html/scripts/workspace.js; \
     grep -q 'Meta request timeout after' /var/www/html/scripts/workspace.js; \
     grep -Fq "\$('workspaceActions').disabled=n===0;" /var/www/html/scripts/workspace.js; \
