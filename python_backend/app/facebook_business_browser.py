@@ -4737,46 +4737,6 @@ class FacebookBusinessBrowser:
         query_diagnostics: list[dict[str, Any]] = []
         response_tasks: set[asyncio.Task[Any]] = set()
 
-        def on_request(request: Any) -> None:
-            try:
-                url = _clean(getattr(request, "url", ""))
-                if "graphql" not in url.casefold():
-                    return
-                meta = _request_graphql_meta(request)
-                friendly = _clean(meta.get("friendly_name")).casefold()
-                if any(
-                    marker in friendly
-                    for marker in ("mutation", "create", "update", "delete")
-                ):
-                    return
-                if not _graphql_request_ad_account_inventory_scope(meta):
-                    return
-
-                diagnostics.append(
-                    {
-                        "phase": "request_event",
-                        "friendly_name": _clean(meta.get("friendly_name"))[:180],
-                        "doc_id": _clean(meta.get("doc_id"))[:80],
-                        "variable_keys": sorted(
-                            str(key)
-                            for key in (
-                                (meta.get("variables") or {}).keys()
-                                if isinstance(meta.get("variables"), dict)
-                                else []
-                            )
-                        )[:32],
-                        "variable_numeric_ids": safe_variable_numeric_ids(meta),
-                        "page_url": _clean(
-                            getattr(self.page, "url", "")
-                        )[:700],
-                    }
-                )
-                if len(diagnostics) > 24:
-                    del diagnostics[:-24]
-                inventory_query_seen.set()
-            except Exception:
-                return
-
         async def inspect_response(response: Any) -> None:
             try:
                 url = _clean(getattr(response, "url", ""))
@@ -9209,7 +9169,6 @@ class FacebookBusinessBrowser:
             except Exception:
                 return
 
-        self.page.on("request", on_request)
         self.page.on("response", on_response)
         attempts: list[dict[str, Any]] = []
         try:
@@ -9384,6 +9343,46 @@ class FacebookBusinessBrowser:
             walk(meta.get("variables") or {})
             return found
 
+        def on_request(request: Any) -> None:
+            try:
+                url = _clean(getattr(request, "url", ""))
+                if "graphql" not in url.casefold():
+                    return
+                meta = _request_graphql_meta(request)
+                friendly = _clean(meta.get("friendly_name")).casefold()
+                if any(
+                    marker in friendly
+                    for marker in ("mutation", "create", "update", "delete")
+                ):
+                    return
+                if not _graphql_request_ad_account_inventory_scope(meta):
+                    return
+
+                diagnostics.append(
+                    {
+                        "phase": "request_event",
+                        "friendly_name": _clean(meta.get("friendly_name"))[:180],
+                        "doc_id": _clean(meta.get("doc_id"))[:80],
+                        "variable_keys": sorted(
+                            str(key)
+                            for key in (
+                                (meta.get("variables") or {}).keys()
+                                if isinstance(meta.get("variables"), dict)
+                                else []
+                            )
+                        )[:32],
+                        "variable_numeric_ids": safe_variable_numeric_ids(meta),
+                        "page_url": _clean(
+                            getattr(self.page, "url", "")
+                        )[:700],
+                    }
+                )
+                if len(diagnostics) > 24:
+                    del diagnostics[:-24]
+                inventory_query_seen.set()
+            except Exception:
+                return
+
         async def inspect_response(response: Any) -> None:
             nonlocal inventory_observed
             try:
@@ -9537,6 +9536,7 @@ class FacebookBusinessBrowser:
             except Exception:
                 return
 
+        self.page.on("request", on_request)
         self.page.on("response", on_response)
         attempts: list[dict[str, Any]] = []
         deadline = time.monotonic() + max(3.0, float(timeout_seconds))
