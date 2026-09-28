@@ -9751,13 +9751,13 @@ class FacebookBusinessBrowser:
                 *[target for target in targets if target != legacy_exact],
             ]
             current = _clean(getattr(self.page, "url", ""))
-            if (
+            current_folded = current.casefold()
+            current_is_exact_legacy = bool(
                 business in _business_ids_from_text(current)
-                and (
-                    "/settings/ad_accounts" in current.casefold()
-                    or "/settings/ad-accounts" in current.casefold()
-                )
-            ):
+                and "/settings/ad-accounts" in current_folded
+                and "/latest/" not in current_folded
+            )
+            if current_is_exact_legacy and current != legacy_exact:
                 targets.insert(0, current)
 
             seen: set[str] = set()
