@@ -205,23 +205,10 @@ try {
         );
         $store->addOrUpdateAccount($updated);
 
+        // REMASK_PRIVATE_SESSION_UPDATE_V1
+        // Updating browser cookies must not touch the Ads Manager/Graph token.
         $tokenRefreshed = false;
         $refreshError = '';
-        try {
-            require_once __DIR__ . '/../classes/FbRequests.php';
-            $requests = new FbRequests();
-            if (method_exists($requests, 'RefreshAdsManagerToken')) {
-                $freshToken = $requests->RefreshAdsManagerToken($updated);
-                $freshToken = is_string($freshToken) ? trim($freshToken) : '';
-                if ($freshToken !== '' && !hash_equals((string)$updated->token, $freshToken)) {
-                    $updated->token = $freshToken;
-                    $store->addOrUpdateAccount($updated);
-                    $tokenRefreshed = true;
-                }
-            }
-        } catch (Throwable $refreshException) {
-            $refreshError = 'ADS_MANAGER_TOKEN_REFRESH_FAILED';
-        }
 
         $saved = $store->getAccountByName($name);
         if (!$saved instanceof FbAccount) {
