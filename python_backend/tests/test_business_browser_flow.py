@@ -3207,6 +3207,19 @@ class BrowserCreateFormIdentityTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Continuer", FacebookBusinessBrowser.SUBMIT_NAMES)
 
 
+class LiveInventoryBusinessDiscoveryBudgetRegressionTests(unittest.TestCase):
+    def test_live_inventory_uses_dedicated_business_discovery_budget(self):
+        main_path = Path(__file__).resolve().parents[1] / "main.py"
+        source = main_path.read_text(encoding="utf-8")
+        self.assertIn(
+            "REMASK_LIVE_INVENTORY_BUSINESS_DISCOVERY_TIMEOUT_SECONDS",
+            source,
+        )
+        call_pos = source.index("browser.snapshot_businesses()")
+        window = source[max(0, call_pos - 700): call_pos + 700]
+        self.assertNotIn("timeout=18.0", window)
+
+
 class BrowserBusinessInventoryExtractionTests(unittest.TestCase):
     def test_business_inventory_accepts_explicit_business_id_in_generic_viewer(self):
         payload = {
