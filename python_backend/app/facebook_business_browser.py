@@ -18085,9 +18085,16 @@ timeout_seconds=4.0,
                 self.page.remove_listener("response", observe_response)
             except Exception:
                 pass
+            # REMASK_PAGE_ATTACH_CANCEL_SAFE_V1
+            # asyncio.wait_for() waits for cancellation cleanup. Keep Playwright
+            # route teardown bounded so a timed-out Page attach cannot remain
+            # stuck in PAGE_ATTACH_OPENING for minutes.
             try:
-                await self.page.unroute("**/api/graphql/**", gate)
-            except Exception:
+                await asyncio.wait_for(
+                    self.page.unroute("**/api/graphql/**", gate),
+                    timeout=1.0,
+                )
+            except BaseException:
                 pass
 
         await self.page.wait_for_timeout(1500)
