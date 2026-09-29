@@ -40,12 +40,14 @@ file_put_contents($hierarchyPath, $hierarchy);
 $js = file_get_contents($workspacePath);
 if ($js === false) throw new RuntimeException('workspace.js not found');
 
-// Only call ads_management missing after Meta explicitly returned a negative
-// permission result. null/undefined means UNKNOWN and must not create a warning.
+// Workspace private sync does not use official Graph permissions as readiness
+// gates. Never turn ads_management/business_management into profile attention.
 $jsCounts = [];
 $patterns = [
-    "!p.ads_management_granted" => "p.ads_management_granted===false",
-    "!p.business_management_granted" => "p.business_management_granted===false",
+    "!p.ads_management_granted" => "false",
+    "p.ads_management_granted===false" => "false",
+    "!p.business_management_granted" => "false",
+    "p.business_management_granted===false" => "false",
 ];
 foreach ($patterns as $old => $new) {
     $count = 0;
@@ -55,10 +57,15 @@ foreach ($patterns as $old => $new) {
 
 if (
     strpos($js, "!p.ads_management_granted") !== false
+    || strpos($js, "p.ads_management_granted===false") !== false
     || strpos($js, "!p.business_management_granted") !== false
+    || strpos($js, "p.business_management_granted===false") !== false
 ) {
-    throw new RuntimeException('falsey permission warning remains in final workspace.js');
+    throw new RuntimeException('Graph permission readiness gate remains in final workspace.js');
 }
+
+$legacyReasonCount = 0;
+$js = str_replace('нет ads_management', '', $js, $legacyReasonCount);
 
 if (strpos($js, 'REMASK_META_PERMISSION_TRISTATE_FINAL_V2') === false) {
     $js .= "\n/* REMASK_META_PERMISSION_TRISTATE_FINAL_V2 */\n";
