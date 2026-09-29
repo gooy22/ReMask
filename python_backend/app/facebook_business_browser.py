@@ -1034,6 +1034,30 @@ def _business_ids_from_text(text: str) -> set[str]:
     return {value for value in output if _digits(value)}
 
 
+async def _settle_tasks_bounded(
+    tasks: Any,
+    *,
+    timeout_seconds: float = 0.6,
+    cancel_pending: bool = False,
+) -> int:
+    """Bound cleanup of read-only Playwright diagnostic tasks."""
+    active = {
+        task
+        for task in list(tasks or [])
+        if isinstance(task, asyncio.Task) and not task.done()
+    }
+    if cancel_pending:
+        for task in active:
+            task.cancel()
+    if not active:
+        return 0
+    _done, pending = await asyncio.wait(
+        active,
+        timeout=max(0.05, float(timeout_seconds)),
+    )
+    return len(pending)
+
+
 def _business_ids_from_private_selector_request(meta: Any) -> set[str]:
     """Extract live BM IDs from Meta's NorthStar business scope selector request.
 
@@ -5353,9 +5377,10 @@ class FacebookBusinessBrowser:
             await collect_dom_businesses()
 
             if response_tasks:
-                await asyncio.gather(
-                    *list(response_tasks),
-                    return_exceptions=True,
+                await _settle_tasks_bounded(
+                    response_tasks,
+                    timeout_seconds=0.8,
+                    cancel_pending=True,
                 )
 
             output = dict(network_rows)
@@ -9568,9 +9593,10 @@ class FacebookBusinessBrowser:
             if not found_future.done():
                 found_future.cancel()
             if response_tasks:
-                await asyncio.gather(
-                    *list(response_tasks),
-                    return_exceptions=True,
+                await _settle_tasks_bounded(
+                    response_tasks,
+                    timeout_seconds=0.5,
+                    cancel_pending=True,
                 )
 
     async def snapshot_ad_accounts_for_business(
@@ -10249,9 +10275,10 @@ class FacebookBusinessBrowser:
                 for task in pending_response_tasks:
                     task.cancel()
                 if pending_response_tasks:
-                    await asyncio.gather(
-                        *list(pending_response_tasks),
-                        return_exceptions=True,
+                    await _settle_tasks_bounded(
+                        pending_response_tasks,
+                        timeout_seconds=0.5,
+                        cancel_pending=True,
                     )
 
             self._last_ad_account_section_diagnostic = {
@@ -10292,12 +10319,10 @@ class FacebookBusinessBrowser:
             except Exception:
                 pass
             if response_tasks:
-                remaining_tasks = list(response_tasks)
-                for task in remaining_tasks:
-                    task.cancel()
-                await asyncio.gather(
-                    *remaining_tasks,
-                    return_exceptions=True,
+                await _settle_tasks_bounded(
+                    response_tasks,
+                    timeout_seconds=0.5,
+                    cancel_pending=True,
                 )
 
     async def probe_ads_manager_inventory_context(
@@ -10470,6 +10495,7 @@ class FacebookBusinessBrowser:
         final_url = ""
         dom: dict[str, Any] = {}
         error = ""
+        cleanup_pending_tasks = 0
         try:
             deadline = time.monotonic() + max(3.0, float(timeout_seconds))
             try:
@@ -10556,9 +10582,10 @@ class FacebookBusinessBrowser:
                 for task in pending:
                     task.cancel()
                 if pending:
-                    await asyncio.gather(
-                        *list(pending),
-                        return_exceptions=True,
+                    cleanup_pending_tasks = await _settle_tasks_bounded(
+                        pending,
+                        timeout_seconds=0.5,
+                        cancel_pending=True,
                     )
         finally:
             try:
@@ -10614,6 +10641,7 @@ class FacebookBusinessBrowser:
             ][:16],
             "diagnostics": diagnostics[-32:],
             "dom": dom,
+            "cleanup_pending_tasks": cleanup_pending_tasks,
             "error": error,
         }
 
