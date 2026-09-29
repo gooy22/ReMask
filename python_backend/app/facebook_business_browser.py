@@ -1939,9 +1939,23 @@ class FacebookBusinessBrowser:
         if self.page is not None:
             return
 
+        browser_slot_wait_started = time.monotonic()
         await _BROWSER_SEMAPHORE.acquire()
         self._semaphore_acquired = True
         self._browser_slot_acquired_at = time.monotonic()
+        browser_slot_wait_ms = int(
+            (self._browser_slot_acquired_at - browser_slot_wait_started) * 1000
+        )
+        if browser_slot_wait_ms >= 1000:
+            try:
+                import logging
+                logging.getLogger("remask_worker").warning(
+                    "[%s] browser slot waited %dms before open",
+                    self.profile_id,
+                    browser_slot_wait_ms,
+                )
+            except Exception:
+                pass
 
         stale_cleanup = await _reap_stale_chromium_processes()
         if stale_cleanup.get("found"):
@@ -5574,20 +5588,44 @@ class FacebookBusinessBrowser:
             }
             return output
         finally:
-            if response_listener_installed and hasattr(self.page, "remove_listener"):
+            # REMASK_BUSINESS_SNAPSHOT_CANCEL_SAFE_V1
+            # asyncio.wait_for() cancels snapshot_businesses() on timeout and
+            # then waits for this finally block to finish. Any unbounded
+            # Playwright await here can therefore turn a 28s timeout into a
+            # permanent browser lease that blocks every later sync.
+            if response_listener_installed and self.page is not None and hasattr(self.page, "remove_listener"):
                 try:
                     self.page.remove_listener("response", on_response)
                 except Exception:
                     pass
-            if request_listener_installed and hasattr(self.page, "remove_listener"):
+            if request_listener_installed and self.page is not None and hasattr(self.page, "remove_listener"):
                 try:
                     self.page.remove_listener("request", inspect_request)
                 except Exception:
                     pass
-            if selector_opened:
+
+            if response_tasks:
                 try:
-                    await self.page.keyboard.press("Escape")
-                except Exception:
+                    await asyncio.wait_for(
+                        _settle_tasks_bounded(
+                            response_tasks,
+                            timeout_seconds=0.35,
+                            cancel_pending=True,
+                        ),
+                        timeout=0.6,
+                    )
+                except BaseException:
+                    for task in list(response_tasks):
+                        if not task.done():
+                            task.cancel()
+
+            if selector_opened and self.page is not None:
+                try:
+                    await asyncio.wait_for(
+                        self.page.keyboard.press("Escape"),
+                        timeout=0.75,
+                    )
+                except BaseException:
                     pass
 
     @staticmethod
