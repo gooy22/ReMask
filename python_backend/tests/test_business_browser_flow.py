@@ -3520,6 +3520,17 @@ class BrowserLiveInventoryNavigationRegressionTests(unittest.TestCase):
         self.assertEqual(rows[0]["business_id"], "61594753560938")
 
 
+class BrowserBusinessDiscoveryBootstrapRegressionTests(unittest.TestCase):
+    def test_business_discovery_has_ads_manager_bootstrap_without_hints(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser.snapshot_businesses
+        )
+        self.assertIn("self.ADS_MANAGER_URL", source)
+        self.assertIn('"stage": "ads_manager_bootstrap"', source)
+        self.assertIn("timeout_seconds=6.0", source)
+        self.assertNotIn("await self._goto(self.HOME_URL)", source)
+
+
 class BrowserAuthenticationStateTests(unittest.IsolatedAsyncioTestCase):
     async def test_business_suite_body_word_checkpoint_is_not_auth_checkpoint(self):
         browser = FacebookBusinessBrowser(

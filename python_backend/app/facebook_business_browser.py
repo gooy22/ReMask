@@ -5256,6 +5256,37 @@ class FacebookBusinessBrowser:
                 dom_output.setdefault(business_id, "")
             return len(dom_output) - before
 
+        async def navigate_inventory_surface(
+            url: str,
+            *,
+            timeout_seconds: float,
+        ) -> dict[str, Any]:
+            started = time.monotonic()
+            error = ""
+            try:
+                await self.page.goto(
+                    url,
+                    wait_until="commit",
+                    timeout=max(1000, int(timeout_seconds * 1000)),
+                )
+            except Exception as exc:
+                error = f"{exc.__class__.__name__}: {_clean(exc)}"[:500]
+
+            await self._assert_authenticated()
+            current_url = _clean(getattr(self.page, "url", ""))
+            return {
+                "loaded": bool(
+                    current_url
+                    and current_url != "about:blank"
+                    and "facebook.com" in current_url.casefold()
+                ),
+                "url": current_url[:700],
+                "navigation_ms": int(
+                    (time.monotonic() - started) * 1000
+                ),
+                "error": error,
+            }
+
         selector_opened = False
         stage_started = time.monotonic()
         self._last_business_inventory_diagnostic = {
@@ -5267,13 +5298,17 @@ class FacebookBusinessBrowser:
             "url": _clean(getattr(self.page, "url", ""))[:700],
         }
         try:
-            await self._goto(self.HOME_URL)
+            home_attempt = await navigate_inventory_surface(
+                self.HOME_URL,
+                timeout_seconds=6.0,
+            )
             self._last_business_inventory_diagnostic.update({
                 "stage": "home_loaded",
                 "home_ms": int((time.monotonic() - stage_started) * 1000),
+                "home_attempt": home_attempt,
                 "url": _clean(getattr(self.page, "url", ""))[:700],
             })
-            await self.page.wait_for_timeout(900)
+            await self.page.wait_for_timeout(700)
 
             # Opening the portfolio selector causes Meta's frontend to hydrate
             # its Business list. Keep the established lightweight sidebar
@@ -5396,10 +5431,42 @@ class FacebookBusinessBrowser:
                     "error": f"{exc.__class__.__name__}: {_clean(exc)}"[:500],
                 }
 
-            # If HOME did not hydrate any Business inventory, try Meta's
-            # Business overview surface while keeping the same listener. Some
-            # accounts/pages land in an asset-scoped HOME that never requests
-            # the portfolio collection.
+            # HOME is not deterministic for Page-pinned sessions. If it
+            # emits no live Business selector traffic, open Ads Manager with no
+            # business/account hint. Meta chooses the current live scope and
+            # emits the same NorthStar selector requests used as BM evidence.
+            ads_manager_attempt: dict[str, Any] = {}
+            if not network_rows and not dom_output:
+                self._last_business_inventory_diagnostic.update({
+                    "stage": "ads_manager_bootstrap",
+                    "selector_probe": selector_probe,
+                    "network_businesses": len(network_rows),
+                    "dom_businesses": len(dom_output),
+                    "queries": query_diagnostics[-24:],
+                    "url": _clean(getattr(self.page, "url", ""))[:700],
+                })
+                try:
+                    ads_manager_attempt = await navigate_inventory_surface(
+                        self.ADS_MANAGER_URL,
+                        timeout_seconds=6.0,
+                    )
+                    bootstrap_deadline = time.monotonic() + 3.0
+                    while time.monotonic() < bootstrap_deadline:
+                        if network_rows:
+                            break
+                        await self.page.wait_for_timeout(200)
+                    await collect_dom_businesses()
+                except BrowserBusinessError:
+                    raise
+                except Exception as exc:
+                    ads_manager_attempt = {
+                        "loaded": False,
+                        "error": (
+                            f"{exc.__class__.__name__}: {_clean(exc)}"
+                        )[:500],
+                    }
+
+            # Final live fallback: Business overview.
             overview_attempt: dict[str, Any] = {}
             if not network_rows and not dom_output:
                 self._last_business_inventory_diagnostic.update({
@@ -5412,12 +5479,10 @@ class FacebookBusinessBrowser:
                 })
                 overview_started = time.monotonic()
                 try:
-                    await self._goto(self.OVERVIEW_URL)
-                    overview_attempt = {
-                        "loaded": True,
-                        "url": _clean(getattr(self.page, "url", ""))[:700],
-                        "navigation_ms": int((time.monotonic() - overview_started) * 1000),
-                    }
+                    overview_attempt = await navigate_inventory_surface(
+                        self.OVERVIEW_URL,
+                        timeout_seconds=5.0,
+                    )
                     self._last_business_inventory_diagnostic.update({
                         "stage": "overview_loaded",
                         "overview_attempt": overview_attempt,
@@ -5462,6 +5527,7 @@ class FacebookBusinessBrowser:
                 "dom_businesses": len(dom_output),
                 "queries": query_diagnostics[-24:],
                 "selector_probe": selector_probe,
+                "ads_manager_attempt": ads_manager_attempt,
                 "overview_attempt": overview_attempt,
                 "url": _clean(getattr(self.page, "url", ""))[:700],
             }
