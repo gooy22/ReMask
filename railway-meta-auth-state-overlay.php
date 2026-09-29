@@ -44,8 +44,8 @@ if ($js === false) throw new RuntimeException('workspace.js not found');
 // permission result. null/undefined means UNKNOWN and must not create a warning.
 $jsCounts = [];
 $patterns = [
-    "if(!p.ads_management_granted)" => "if(p.ads_management_granted===false)",
-    "if (!p.ads_management_granted)" => "if (p.ads_management_granted===false)",
+    "!p.ads_management_granted" => "p.ads_management_granted===false",
+    "!p.business_management_granted" => "p.business_management_granted===false",
 ];
 foreach ($patterns as $old => $new) {
     $count = 0;
@@ -54,10 +54,10 @@ foreach ($patterns as $old => $new) {
 }
 
 if (
-    strpos($js, "if(!p.ads_management_granted)") !== false
-    || strpos($js, "if (!p.ads_management_granted)") !== false
+    strpos($js, "!p.ads_management_granted") !== false
+    || strpos($js, "!p.business_management_granted") !== false
 ) {
-    throw new RuntimeException('falsey ads_management warning remains in final workspace.js');
+    throw new RuntimeException('falsey permission warning remains in final workspace.js');
 }
 
 if (strpos($js, 'REMASK_META_PERMISSION_TRISTATE_FINAL_V2') === false) {
