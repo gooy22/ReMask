@@ -892,6 +892,9 @@ async def profile_live_inventory(
     confirmed_bindings=await pool.provisioning_state.confirmed_ad_account_bindings_for_profile(
         clean_profile
     )
+    confirmed_businesses=await pool.provisioning_state.confirmed_businesses_for_profile(
+        clean_profile
+    )
     latest_entities=await pool.provisioning_state.latest_profile_entities(
         clean_profile
     )
@@ -906,6 +909,17 @@ async def profile_live_inventory(
         (latest_entities or {}).get('business_id') or ''
     ).strip()
     known_business_ids=set(binding_by_business)
+    confirmed_business_names={}
+    for row in confirmed_businesses:
+        if not isinstance(row,dict):
+            continue
+        business_id=str(row.get('business_id') or '').strip()
+        if not business_id.isdigit():
+            continue
+        known_business_ids.add(business_id)
+        confirmed_business_names[business_id]=str(
+            row.get('business_name') or business_id
+        ).strip() or business_id
     if latest_business_id.isdigit():
         known_business_ids.add(latest_business_id)
 
@@ -966,6 +980,7 @@ async def profile_live_inventory(
 
             business_map: dict[str,str] = {}
             discovery_source=''
+            business_inventory_ready=False
             prevalidated_inventory: dict[str,dict] = {}
 
             # REMASK_CONFIRMED_HINT_FAST_REVALIDATION_V1
@@ -1057,6 +1072,7 @@ async def profile_live_inventory(
                     )
 
                 if business_map:
+                    business_inventory_ready=True
                     discovery_source='confirmed_snapshot_ads_manager_revalidation'
                     log.info(
                         'live inventory profile=%s fast revalidation ms=%d businesses=%d; Business Suite discovery skipped',
@@ -1086,6 +1102,7 @@ async def profile_live_inventory(
                         browser.snapshot_businesses(),
                         timeout=business_discovery_timeout,
                     )
+                    business_inventory_ready=bool(business_map)
                     business_diag=getattr(
                         browser,
                         '_last_business_inventory_diagnostic',
@@ -1154,7 +1171,19 @@ async def profile_live_inventory(
             discovery_revalidation=False
             if not business_map and known_business_ids:
                 business_map={
-                    business_id: business_id
+                    business_id: (
+                        confirmed_business_names.get(business_id)
+                        or str(
+                            (binding_by_business.get(business_id) or {}).get(
+                                'business_name'
+                            )
+                            or (binding_by_business.get(business_id) or {}).get(
+                                'account_name'
+                            )
+                            or business_id
+                        ).strip()
+                        or business_id
+                    )
                     for business_id in sorted(known_business_ids)
                     if str(business_id).isdigit()
                 }
@@ -1512,8 +1541,43 @@ async def profile_live_inventory(
                     pages_source,
                 )
 
-            live_ready=bool(live_business_ids)
-            if live_ready and discovery_revalidation:
+            rk_ready_businesses=[
+                str(row.get('id') or '').strip()
+                for row in businesses
+                if isinstance(row,dict)
+                and bool(row.get('ad_accounts_ready'))
+            ]
+            rk_inconclusive_businesses=[
+                str(row.get('id') or '').strip()
+                for row in businesses
+                if isinstance(row,dict)
+                and str(row.get('id') or '').strip()
+                and not bool(row.get('ad_accounts_ready'))
+            ]
+            ad_accounts_complete=(
+                bool(businesses)
+                and not rk_inconclusive_businesses
+            )
+
+            # REMASK_COMPONENT_SYNC_READINESS_V1
+            # Synchronization is useful even when one Meta surface is flaky.
+            # BM, RK and Pages are independent components; callers preserve the
+            # last confirmed value for a component that was inconclusive.
+            business_component_ready=bool(
+                business_inventory_ready or live_business_ids
+            )
+            live_ready=bool(
+                business_component_ready
+                or pages_ready
+            )
+            sync_partial=bool(
+                warnings
+                or not business_component_ready
+                or not pages_ready
+                or (bool(businesses) and not ad_accounts_complete)
+            )
+
+            if live_business_ids and discovery_revalidation:
                 warnings=[
                     warning
                     for warning in warnings
@@ -1529,6 +1593,11 @@ async def profile_live_inventory(
                 'ok':True,
                 'profile_id':clean_profile,
                 'live_ready':live_ready,
+                'sync_partial':sync_partial,
+                'businesses_ready':business_component_ready,
+                'ad_accounts_complete':ad_accounts_complete,
+                'rk_ready_businesses':rk_ready_businesses,
+                'rk_inconclusive_businesses':rk_inconclusive_businesses,
                 'businesses':businesses,
                 'businesses_count':len(businesses),
                 'live_businesses_count':len(live_business_ids),
@@ -1552,12 +1621,16 @@ async def profile_live_inventory(
                 'warnings':warnings,
             }
             log.info(
-                'live inventory profile=%s complete ms=%d live_ready=%s live_businesses=%d businesses=%d pages=%d warnings=%d',
+                'live inventory profile=%s complete ms=%d live_ready=%s partial=%s businesses_ready=%s rk_complete=%s live_businesses=%d businesses=%d pages_ready=%s pages=%d warnings=%d',
                 clean_profile,
                 int((time.monotonic()-started)*1000),
                 live_ready,
+                sync_partial,
+                business_component_ready,
+                ad_accounts_complete,
                 len(live_business_ids),
                 len(businesses),
+                pages_ready,
                 len(pages),
                 len(warnings),
             )
