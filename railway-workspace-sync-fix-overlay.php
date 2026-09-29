@@ -1627,6 +1627,41 @@ $bindingSnapshotNeedle = <<<'PHP_BINDING'
 PHP_BINDING;
 $bindingSnapshotReplacement = <<<'PHP_BINDING'
     $bindings = hierarchy_binding_get($profile);
+    $workerState = hierarchy_worker_state($profile);
+
+    // REMASK_LOCAL_WORKER_BUSINESS_MERGE_V1
+    // A successful Add BM already has a confirmed business_id. Surface it in
+    // Workspace immediately without starting another Facebook inventory read.
+    $existingBusinessIds = [];
+    foreach ($businessRows as $businessRow) {
+        if (!is_array($businessRow)) continue;
+        $businessRowId = trim((string)($businessRow['id'] ?? ''));
+        if ($businessRowId !== '') $existingBusinessIds[$businessRowId] = true;
+    }
+    foreach ((array)($workerState['businesses'] ?? []) as $workerBusiness) {
+        if (!is_array($workerBusiness)) continue;
+        $businessId = trim((string)(
+            $workerBusiness['business_id']
+            ?? $workerBusiness['id']
+            ?? ''
+        ));
+        if (
+            !preg_match('/^\d{5,30}$/', $businessId)
+            || isset($existingBusinessIds[$businessId])
+        ) continue;
+
+        $businessRows[] = [
+            'id' => $businessId,
+            'name' => trim((string)(
+                $workerBusiness['business_name']
+                ?? $workerBusiness['name']
+                ?? $businessId
+            )),
+            '_provisioned_only' => true,
+            '_source' => 'python_worker_business_success_history',
+        ];
+        $existingBusinessIds[$businessId] = true;
+    }
 
     $knownBusinessNames = [];
     foreach ($businessRows as $businessRow) {
