@@ -1024,6 +1024,26 @@ async def profile_live_inventory(profile_id: str, business_ids: str | None = Non
                     len(business_map),
                 )
 
+            # If Meta's HOME/selector emitted no BM rows, do not stop here.
+            # ReMask already has durable BM identities from previously confirmed
+            # provisioning/live state. Re-open those exact BM candidates and only
+            # accept them after the current browser proves their RK scope live.
+            discovery_revalidation=False
+            if not business_map and known_business_ids:
+                business_map={
+                    business_id: business_id
+                    for business_id in sorted(known_business_ids)
+                    if str(business_id).isdigit()
+                }
+                if business_map:
+                    discovery_revalidation=True
+                    discovery_source='confirmed_business_hint_live_revalidation'
+                    log.info(
+                        'live inventory profile=%s selector empty; revalidating known businesses=%s',
+                        clean_profile,
+                        ','.join(sorted(business_map)),
+                    )
+
             businesses=[]
             live_business_ids:set[str]=set()
 
@@ -1306,6 +1326,18 @@ async def profile_live_inventory(profile_id: str, business_ids: str | None = Non
                 )
             )
             live_ready=bool(live_business_ids)
+            if live_ready and discovery_revalidation:
+                warnings=[
+                    warning
+                    for warning in warnings
+                    if warning != 'Private Business Suite inventory returned no Business portfolios'
+                ]
+                log.info(
+                    'live inventory profile=%s known BM revalidation recovered live state businesses=%s',
+                    clean_profile,
+                    ','.join(sorted(live_business_ids)),
+                )
+
             result={
                 'ok':True,
                 'profile_id':clean_profile,
