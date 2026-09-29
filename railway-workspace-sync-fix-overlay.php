@@ -1392,13 +1392,38 @@ $syncProfileReplacement = <<<'PHP'
         }
 
         if (!$adAccountsComplete) {
-            $preserved = array_values(array_filter(
-                (array)($previousLive['ad_accounts'] ?? []),
-                static fn($row) => is_array($row)
-            ));
-            if ($preserved !== []) {
-                $adAccountRows = $preserved;
-                $syncWarnings[] = 'RK inventory partially/inconclusive; last confirmed RK snapshot preserved';
+            $readyBusinessIds = [];
+            foreach ((array)($liveInventory['rk_ready_businesses'] ?? []) as $readyBusinessId) {
+                $readyBusinessId = trim((string)$readyBusinessId);
+                if ($readyBusinessId !== '') $readyBusinessIds[$readyBusinessId] = true;
+            }
+
+            $existingAccountIds = [];
+            foreach ($adAccountRows as $row) {
+                if (!is_array($row)) continue;
+                $id = trim((string)($row['id'] ?? $row['account_id'] ?? ''));
+                if ($id !== '') $existingAccountIds[$id] = true;
+            }
+
+            $preservedCount = 0;
+            foreach ((array)($previousLive['ad_accounts'] ?? []) as $row) {
+                if (!is_array($row)) continue;
+                $businessId = trim((string)($row['business_id'] ?? ''));
+                if ($businessId !== '' && isset($readyBusinessIds[$businessId])) {
+                    // The current live read for this exact BM is authoritative,
+                    // including a confirmed-empty RK list.
+                    continue;
+                }
+                $id = trim((string)($row['id'] ?? $row['account_id'] ?? ''));
+                if ($id === '' || isset($existingAccountIds[$id])) continue;
+                $row['_sync_preserved'] = true;
+                $adAccountRows[] = $row;
+                $existingAccountIds[$id] = true;
+                $preservedCount++;
+            }
+
+            if ($preservedCount > 0) {
+                $syncWarnings[] = 'RK inventory partially inconclusive; preserved prior RK only for unconfirmed BMs';
             }
         }
 
