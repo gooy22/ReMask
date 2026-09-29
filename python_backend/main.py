@@ -532,6 +532,17 @@ async def ready():
         'ready':True,
         'queued_items':await store.queue_count(),
         'worker_concurrency':CONCURRENCY,
+        'browser_concurrency':max(
+            1,
+            int(os.getenv('REMASK_BM_BROWSER_CONCURRENCY') or '1'),
+        ),
+        'browser_queue_wait_seconds':max(
+            30,
+            min(
+                int(os.getenv('REMASK_BROWSER_QUEUE_WAIT_SECONDS') or '180'),
+                300,
+            ),
+        ),
         'profiles_visible':len(profiles),
         'profile_resolver':'ok',
         'db_path':str(DB_PATH),
