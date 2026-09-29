@@ -157,6 +157,37 @@ class ProvisioningService:
 
                     if step in _MUTATING_BROWSER_STEPS:
                         await _await_profile_mutation_cooldown(profile_id)
+
+                        # REMASK_BROWSER_QUEUE_ACTIVITY_V1
+                        # The Job is already RUNNING at this point, but it may
+                        # still be waiting for the single Chromium lease. Persist
+                        # that fact so the UI does not present queue wait as a
+                        # mysterious stuck Meta phase.
+                        try:
+                            browser_queue_wait = float(
+                                os.getenv("REMASK_BROWSER_QUEUE_WAIT_SECONDS")
+                                or "180"
+                            )
+                        except (TypeError, ValueError):
+                            browser_queue_wait = 180.0
+                        browser_queue_wait = max(
+                            30.0,
+                            min(browser_queue_wait, 300.0),
+                        )
+                        await self.state.checkpoint(
+                            item_id,
+                            profile_id,
+                            scope_key,
+                            step,
+                            {
+                                "activity": "BROWSER_QUEUE_WAIT",
+                                "activity_at": int(time.time()),
+                                "browser_queue_wait_limit_seconds": int(
+                                    browser_queue_wait
+                                ),
+                            },
+                        )
+
                         step_timeout = browser_step_timeout(step)
                         timeout_code = (
                             "FAN_PAGES_TIMEOUT"
