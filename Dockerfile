@@ -118,11 +118,14 @@ RUN set -eux; \
     grep -q 'REMASK_SYNC_CSRF_SAFE_TRANSPORT_V1' /var/www/html/scripts/workspace.js; \
     grep -q 'REMASK_SYNC_RESULT_RECONCILIATION_V1' /var/www/html/scripts/workspace.js; \
     grep -q 'REMASK_POST_JOB_LOCAL_REFRESH_V1' /var/www/html/scripts/workspace.js; \
+    grep -q 'REMASK_FP_SINGLE_BROWSER_PASS_V1' /var/www/html/scripts/workspace.js; \
     grep -q "action:'snapshot_profile'" /var/www/html/scripts/workspace.js; \
     grep -q 'REMASK_SYNC_CSRF_SAFE_TRANSPORT_V1' /var/www/html/scripts/workspace.js; \
     grep -q "action:'sync_result'" /var/www/html/scripts/workspace.js; \
     grep -q "hierarchy_sync_result_put" /var/www/html/ajax/metaHierarchy.php; \
     grep -q 'REMASK_COMPONENT_SNAPSHOT_MERGE_V1' /var/www/html/ajax/metaHierarchy.php; \
+    grep -q 'REMASK_LOCAL_WORKER_BUSINESS_MERGE_V1' /var/www/html/ajax/metaHierarchy.php; \
+    grep -q 'REMASK_DISPLAY_MERGE_WORKER_CONFIRMED_V1' /var/www/html/ajax/metaHierarchy.php; \
     grep -q "\$action === 'snapshot_profile'" /var/www/html/ajax/metaHierarchy.php; \
     grep -q "\$action === 'sync_result'" /var/www/html/ajax/metaHierarchy.php; \
     grep -q 'syncApiJson' /var/www/html/scripts/workspace.js; \
@@ -163,6 +166,7 @@ RUN set -eux; \
     grep -q 'facebook_business_suite_ui' /opt/remask-python/app/provisioning/business_handler.py; \
     grep -q 'REMASK_PAGE_ATTACH_DEADLINE_V1' /opt/remask-python/app/provisioning/business_handler.py; \
     grep -q 'REMASK_PAGE_ATTACH_CANCEL_SAFE_V1' /opt/remask-python/app/facebook_business_browser.py; \
+    grep -q 'REMASK_FP_REUSE_PROFILE_BROWSER_V1' /opt/remask-python/app/provisioning/fan_pages_handler.py; \
     grep -q 'PAGE_ATTACH_TIMEOUT' /opt/remask-python/app/provisioning/business_handler.py; \
     grep -q 'provisioning_state.checkpoint' /opt/remask-python/app/provisioning/business_handler.py; \
     grep -q 'async def checkpoint' /opt/remask-python/app/provisioning/state.py; \
