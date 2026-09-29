@@ -337,7 +337,10 @@ RUN set -eux; \
     grep -q "'proxy_status'" /var/www/html/ajax/metaHierarchy.php; \
     grep -q "'pages_count'" /var/www/html/ajax/metaHierarchy.php; \
     grep -q "'network_identity' => 'profile_bound'" /var/www/html/ajax/metaHierarchy.php; \
-    grep -Fq "p.proxy_configured===true && ps!==''&&ps!=='LIVE'" /var/www/html/scripts/workspace.js; \
+    grep -Fq "bad=['DEAD','FAILED','ERROR','AUTH_FAILED','PROXY_AUTH','UNREACHABLE']" /var/www/html/scripts/workspace.js; \
+    grep -q 'REMASK_DISPLAY_MERGE_WORKER_CONFIRMED_V1' /var/www/html/ajax/metaHierarchy.php; \
+    grep -q 'REMASK_LOCAL_WORKER_BUSINESS_MERGE_V1' /var/www/html/ajax/metaHierarchy.php; \
+    grep -q 'REMASK_NO_LEGACY_LIVE_GRAPH_MUTATION_PREFLIGHT_V1' /var/www/html/ajax/metaHierarchy.php; \
     grep -q 'REMASK_BM_OWNED_CLIENT_V2' /var/www/html/classes/MetaAdsService.php; \
     grep -Eq 'REMASK_DIRECT_RK_FUNDING_V(2|3)' /var/www/html/classes/MetaAdsService.php; \
     grep -q 'is_adset_budget_sharing_enabled' /var/www/html/classes/MetaAdsService.php; \
