@@ -57,29 +57,13 @@ function rmx_pwp_worker_state(string $profile): array {
     return is_array($json) ? $json : [];
 }
 
-function rmx_pwp_worker_preflight(string $profile): array {
-    $base = rtrim(trim((string)(getenv('REMASK_PYTHON_WORKER_URL') ?: 'http://127.0.0.1:8081')), '/');
-    $url = $base . '/api/v1/profiles/' . rawurlencode($profile) . '/preflight';
-
-    $headers = ['Accept: application/json'];
-    $key = trim((string)(getenv('REMASK_WORKER_API_KEY') ?: ''));
-    if ($key !== '') $headers[] = 'X-Remask-Worker-Key: ' . $key;
-
-    $ctx = stream_context_create([
-        'http' => [
-            'method' => 'POST',
-            'header' => implode("\r\n", $headers) . "\r\n",
-            'content' => '',
-            'timeout' => 90,
-            'ignore_errors' => true,
-            'follow_location' => 0,
-        ],
-    ]);
-
-    $raw = @file_get_contents($url, false, $ctx);
+function rmx_pwp_live_snapshot(string $profile): array {
+    $raw = @file_get_contents('/var/lib/remask/workspace-live-meta-snapshots.json');
     if (!is_string($raw) || trim($raw) === '') return [];
-    $json = json_decode($raw, true);
-    return is_array($json) ? $json : [];
+    $all = json_decode($raw, true);
+    if (!is_array($all)) return [];
+    $row = $all[$profile] ?? null;
+    return is_array($row) ? $row : [];
 }
 
 try {
@@ -95,36 +79,27 @@ try {
         rmx_pwp_out(['ok'=>false,'error'=>'PROFILE_REQUIRED'], 400);
     }
 
-    // REMASK_PRIVATE_PAGE_SOURCE_V1
-    // Never call official Graph from the Add-BM modal. First consume only
-    // already-cached rows, then worker-confirmed Fan Pages, and if still empty
-    // ask the profile-bound browser preflight to discover Pages privately.
-    $result = MetaEndpoint::peekCachedAsset($profile, 'pages', '');
-    $rows = is_array($result['data'] ?? null) ? $result['data'] : [];
+    // REMASK_SYNC_SNAPSHOT_PAGE_SOURCE_V1
+    // Add-BM never talks to Facebook. Synchronization is the single ingestion
+    // point; this modal only reads the last live-confirmed snapshot.
+    $liveSnapshot = rmx_pwp_live_snapshot($profile);
+    $rows = is_array($liveSnapshot['pages'] ?? null)
+        ? $liveSnapshot['pages']
+        : [];
 
     $pagesById = [];
 
     foreach ($rows as $row) {
         if (!is_array($row)) continue;
         $id = trim((string)($row['id'] ?? ''));
-        if ($id === '') continue;
-        $businessId = '';
-        $business = $row['business'] ?? null;
-        if (is_array($business)) {
-            $businessId = trim((string)($business['id'] ?? ''));
-        } elseif (is_scalar($business)) {
-            $businessId = trim((string)$business);
-        }
-        if ($businessId === '') {
-            $businessId = trim((string)($row['business_id'] ?? ''));
-        }
+        if ($id === '' || !ctype_digit($id)) continue;
 
         $pagesById[$id] = [
             'id' => $id,
             'name' => trim((string)($row['name'] ?? $id)),
             'category' => trim((string)($row['category'] ?? '')),
-            'business_id' => $businessId,
-            'source' => 'meta',
+            'business_id' => trim((string)($row['business_id'] ?? '')),
+            'source' => 'last_confirmed_live_sync',
         ];
     }
 
@@ -167,26 +142,8 @@ try {
         ];
     }
 
-    if ($pagesById === []) {
-        $preflight = rmx_pwp_worker_preflight($profile);
-        $privatePages = is_array($preflight['pages'] ?? null)
-            ? $preflight['pages']
-            : [];
-
-        foreach ($privatePages as $page) {
-            if (!is_array($page)) continue;
-            $id = trim((string)($page['id'] ?? ''));
-            if ($id === '' || !ctype_digit($id)) continue;
-
-            $pagesById[$id] = [
-                'id' => $id,
-                'name' => trim((string)($page['name'] ?? $id)),
-                'category' => trim((string)($page['category'] ?? '')),
-                'business_id' => trim((string)($page['business_id'] ?? '')),
-                'source' => 'facebook_business_browser',
-            ];
-        }
-    }
+    // No second Facebook read here. If sync did not capture Pages, the UI
+    // tells the user to synchronize instead of silently fetching again.
 
     $pages = array_values($pagesById);
 
@@ -196,6 +153,9 @@ try {
         'pages' => $pages,
         'count' => count($pages),
         'worker_confirmed_count' => $workerConfirmed,
+        'sync_required' => ($pages === []),
+        'snapshot_updated_at' => (int)($liveSnapshot['updated_at'] ?? 0),
+        'source' => 'last_confirmed_live_sync',
     ]);
 } catch (Throwable $e) {
     error_log('[python-worker-pages] ' . get_class($e) . ': ' . $e->getMessage());
@@ -255,6 +215,15 @@ function rmx_pwbm_worker_state(string $profile): array {
     return is_array($json) ? $json : [];
 }
 
+function rmx_pwbm_live_snapshot(string $profile): array {
+    $raw = @file_get_contents('/var/lib/remask/workspace-live-meta-snapshots.json');
+    if (!is_string($raw) || trim($raw) === '') return [];
+    $all = json_decode($raw, true);
+    if (!is_array($all)) return [];
+    $row = $all[$profile] ?? null;
+    return is_array($row) ? $row : [];
+}
+
 try {
     $raw = (string)file_get_contents('php://input');
     $input = $_POST;
@@ -268,11 +237,12 @@ try {
         rmx_pwbm_out(['ok'=>false,'error'=>'PROFILE_REQUIRED'], 400);
     }
 
-    // REMASK_PRIVATE_BUSINESS_SOURCE_V1
-    // Add-RK/BM selectors must not fall back to official Graph. Use the local
-    // snapshot plus Python worker-confirmed provisioning state only.
-    $result = MetaEndpoint::peekCachedAsset($profile, 'businesses', '');
-    $rows = is_array($result['data'] ?? null) ? $result['data'] : [];
+    // REMASK_SYNC_SNAPSHOT_BUSINESS_SOURCE_V1
+    // Add-RK/BM selectors read the last live-confirmed sync snapshot only.
+    $liveSnapshot = rmx_pwbm_live_snapshot($profile);
+    $rows = is_array($liveSnapshot['businesses'] ?? null)
+        ? $liveSnapshot['businesses']
+        : [];
 
     $businesses = [];
     foreach ($rows as $row) {
@@ -309,6 +279,9 @@ try {
         'profile' => $profile,
         'businesses' => $businesses,
         'count' => count($businesses),
+        'sync_required' => ($businesses === []),
+        'snapshot_updated_at' => (int)($liveSnapshot['updated_at'] ?? 0),
+        'source' => 'last_confirmed_live_sync',
     ]);
 } catch (Throwable $e) {
     error_log('[python-worker-businesses] ' . get_class($e) . ': ' . $e->getMessage());
