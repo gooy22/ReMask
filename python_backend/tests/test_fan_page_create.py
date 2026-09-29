@@ -58,6 +58,13 @@ class FanPageProvisioningStructureTests(unittest.TestCase):
         )
 
 
+    def test_uncertain_page_inventory_uses_fresh_session_browser(self) -> None:
+        from app.provisioning.fan_pages_handler import _fresh_page_inventory
+        source = inspect.getsource(_fresh_page_inventory)
+        self.assertIn("fresh_facebook_business_browser", source)
+        self.assertNotIn("async with FacebookBusinessBrowser(", source)
+
+
     def test_profile_auth_challenges_are_resumable_not_blind_auto_retries(self) -> None:
         for code in ("CHECKPOINT_REQUIRED", "SESSION_EXPIRED", "TWO_FACTOR_REQUIRED"):
             exc = BrowserBusinessError(code, "profile auth required", retryable=False)
