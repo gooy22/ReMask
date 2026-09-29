@@ -963,6 +963,43 @@ function hierarchy_live_snapshot_apply_display(
         static fn($row) => is_array($row)
     ));
 
+    // REMASK_DISPLAY_MERGE_WORKER_CONFIRMED_V1
+    // The last live snapshot is authoritative for live inventory, but a newer
+    // successful worker CREATE must remain visible immediately. Merge only
+    // durable worker-confirmed rows; never merge arbitrary stale cache rows.
+    $businessIds = [];
+    foreach ($businesses as $row) {
+        $id = is_array($row) ? trim((string)($row['id'] ?? '')) : '';
+        if ($id !== '') $businessIds[$id] = true;
+    }
+    foreach ((array)($snapshot['businesses'] ?? []) as $row) {
+        if (!is_array($row)) continue;
+        $id = trim((string)($row['id'] ?? ''));
+        $source = trim((string)($row['_source'] ?? ''));
+        $workerConfirmed = ($row['_provisioned_only'] ?? false) === true
+            || str_starts_with($source, 'python_worker_');
+        if ($id === '' || !$workerConfirmed || isset($businessIds[$id])) continue;
+        $businesses[] = $row;
+        $businessIds[$id] = true;
+    }
+
+    $accountIds = [];
+    foreach ($adAccounts as $row) {
+        if (!is_array($row)) continue;
+        $id = trim((string)($row['id'] ?? $row['account_id'] ?? ''));
+        if ($id !== '') $accountIds[$id] = true;
+    }
+    foreach ((array)($snapshot['ad_accounts'] ?? []) as $row) {
+        if (!is_array($row)) continue;
+        $id = trim((string)($row['id'] ?? $row['account_id'] ?? ''));
+        $source = trim((string)($row['_source'] ?? ''));
+        $workerConfirmed = ($row['_provisioned_only'] ?? false) === true
+            || str_starts_with($source, 'python_worker_');
+        if ($id === '' || !$workerConfirmed || isset($accountIds[$id])) continue;
+        $adAccounts[] = $row;
+        $accountIds[$id] = true;
+    }
+
     $snapshot['businesses'] = $businesses;
     $snapshot['businesses_count'] = count($businesses);
     $snapshot['ad_accounts'] = $adAccounts;
