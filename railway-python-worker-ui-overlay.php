@@ -57,6 +57,31 @@ function rmx_pwp_worker_state(string $profile): array {
     return is_array($json) ? $json : [];
 }
 
+function rmx_pwp_worker_preflight(string $profile): array {
+    $base = rtrim(trim((string)(getenv('REMASK_PYTHON_WORKER_URL') ?: 'http://127.0.0.1:8081')), '/');
+    $url = $base . '/api/v1/profiles/' . rawurlencode($profile) . '/preflight';
+
+    $headers = ['Accept: application/json'];
+    $key = trim((string)(getenv('REMASK_WORKER_API_KEY') ?: ''));
+    if ($key !== '') $headers[] = 'X-Remask-Worker-Key: ' . $key;
+
+    $ctx = stream_context_create([
+        'http' => [
+            'method' => 'POST',
+            'header' => implode("\r\n", $headers) . "\r\n",
+            'content' => '',
+            'timeout' => 90,
+            'ignore_errors' => true,
+            'follow_location' => 0,
+        ],
+    ]);
+
+    $raw = @file_get_contents($url, false, $ctx);
+    if (!is_string($raw) || trim($raw) === '') return [];
+    $json = json_decode($raw, true);
+    return is_array($json) ? $json : [];
+}
+
 try {
     $raw = (string)file_get_contents('php://input');
     $input = $_POST;
@@ -70,13 +95,12 @@ try {
         rmx_pwp_out(['ok'=>false,'error'=>'PROFILE_REQUIRED'], 400);
     }
 
+    // REMASK_PRIVATE_PAGE_SOURCE_V1
+    // Never call official Graph from the Add-BM modal. First consume only
+    // already-cached rows, then worker-confirmed Fan Pages, and if still empty
+    // ask the profile-bound browser preflight to discover Pages privately.
     $result = MetaEndpoint::peekCachedAsset($profile, 'pages', '');
     $rows = is_array($result['data'] ?? null) ? $result['data'] : [];
-
-    if ($rows === []) {
-        $result = MetaEndpoint::cachedAsset($profile, 'pages', '', false);
-        $rows = is_array($result['data'] ?? null) ? $result['data'] : [];
-    }
 
     $pagesById = [];
 
@@ -143,6 +167,27 @@ try {
         ];
     }
 
+    if ($pagesById === []) {
+        $preflight = rmx_pwp_worker_preflight($profile);
+        $privatePages = is_array($preflight['pages'] ?? null)
+            ? $preflight['pages']
+            : [];
+
+        foreach ($privatePages as $page) {
+            if (!is_array($page)) continue;
+            $id = trim((string)($page['id'] ?? ''));
+            if ($id === '' || !ctype_digit($id)) continue;
+
+            $pagesById[$id] = [
+                'id' => $id,
+                'name' => trim((string)($page['name'] ?? $id)),
+                'category' => trim((string)($page['category'] ?? '')),
+                'business_id' => trim((string)($page['business_id'] ?? '')),
+                'source' => 'facebook_business_browser',
+            ];
+        }
+    }
+
     $pages = array_values($pagesById);
 
     rmx_pwp_out([
@@ -186,6 +231,30 @@ function rmx_pwbm_out(array $payload, int $status = 200): void {
     exit;
 }
 
+function rmx_pwbm_worker_state(string $profile): array {
+    $base = rtrim(trim((string)(getenv('REMASK_PYTHON_WORKER_URL') ?: 'http://127.0.0.1:8081')), '/');
+    $url = $base . '/api/v1/profiles/' . rawurlencode($profile) . '/provisioning-state';
+
+    $headers = ['Accept: application/json'];
+    $key = trim((string)(getenv('REMASK_WORKER_API_KEY') ?: ''));
+    if ($key !== '') $headers[] = 'X-Remask-Worker-Key: ' . $key;
+
+    $ctx = stream_context_create([
+        'http' => [
+            'method' => 'GET',
+            'header' => implode("\r\n", $headers) . "\r\n",
+            'timeout' => 5,
+            'ignore_errors' => true,
+            'follow_location' => 0,
+        ],
+    ]);
+
+    $raw = @file_get_contents($url, false, $ctx);
+    if (!is_string($raw) || trim($raw) === '') return [];
+    $json = json_decode($raw, true);
+    return is_array($json) ? $json : [];
+}
+
 try {
     $raw = (string)file_get_contents('php://input');
     $input = $_POST;
@@ -199,12 +268,11 @@ try {
         rmx_pwbm_out(['ok'=>false,'error'=>'PROFILE_REQUIRED'], 400);
     }
 
+    // REMASK_PRIVATE_BUSINESS_SOURCE_V1
+    // Add-RK/BM selectors must not fall back to official Graph. Use the local
+    // snapshot plus Python worker-confirmed provisioning state only.
     $result = MetaEndpoint::peekCachedAsset($profile, 'businesses', '');
     $rows = is_array($result['data'] ?? null) ? $result['data'] : [];
-    if ($rows === []) {
-        $result = MetaEndpoint::cachedAsset($profile, 'businesses', '', false);
-        $rows = is_array($result['data'] ?? null) ? $result['data'] : [];
-    }
 
     $businesses = [];
     foreach ($rows as $row) {
@@ -215,6 +283,25 @@ try {
             'id' => $id,
             'name' => trim((string)($row['name'] ?? $row['business_name'] ?? $id)),
         ];
+    }
+
+    $workerState = rmx_pwbm_worker_state($profile);
+    $workerBusinessId = trim((string)($workerState['business_id'] ?? ''));
+    if ($workerBusinessId !== '' && ctype_digit($workerBusinessId)) {
+        $exists = false;
+        foreach ($businesses as $business) {
+            if (trim((string)($business['id'] ?? '')) === $workerBusinessId) {
+                $exists = true;
+                break;
+            }
+        }
+        if (!$exists) {
+            $businesses[] = [
+                'id' => $workerBusinessId,
+                'name' => trim((string)($workerState['business_name'] ?? $workerBusinessId)),
+                'source' => 'python_worker_confirmed',
+            ];
+        }
     }
 
     rmx_pwbm_out([
