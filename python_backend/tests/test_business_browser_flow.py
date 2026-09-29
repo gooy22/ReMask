@@ -239,6 +239,17 @@ class BrowserLeaseRegressionTests(unittest.TestCase):
         self.assertIn("_lease_watchdog_task", source)
         self.assertIn("watchdog.cancel()", source)
 
+    def test_browser_open_bounds_global_queue_wait(self):
+        source = inspect.getsource(FacebookBusinessBrowser.open)
+        self.assertIn("REMASK_BROWSER_QUEUE_WAIT_SECONDS", source)
+        self.assertIn("BROWSER_QUEUE_TIMEOUT", source)
+        self.assertIn("_BROWSER_SEMAPHORE.acquire()", source)
+
+    def test_page_attach_cleanup_is_cancellation_safe(self):
+        source = inspect.getsource(FacebookBusinessBrowser.add_existing_page)
+        self.assertIn("REMASK_PAGE_ATTACH_CANCEL_SAFE_V1", source)
+        self.assertIn("timeout=1.0", source)
+
 
 class BrowserInventoryPayloadTests(unittest.TestCase):
     def test_extract_named_ad_account_id_from_inventory_payload(self):
