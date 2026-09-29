@@ -864,7 +864,8 @@ function hierarchy_live_snapshot_put(
     array $businesses,
     array $adAccounts,
     array $pages,
-    array $profileRow
+    array $profileRow,
+    array $readiness = []
 ): void
 {
     $profile = trim($profile);
@@ -936,6 +937,12 @@ function hierarchy_live_snapshot_put(
             'businesses' => array_values($cleanBusinesses),
             'ad_accounts' => array_values($cleanAccounts),
             'pages' => array_values($cleanPages),
+            'readiness' => [
+                'businesses_ready' => ($readiness['businesses_ready'] ?? false) === true,
+                'ad_accounts_complete' => ($readiness['ad_accounts_complete'] ?? false) === true,
+                'pages_ready' => ($readiness['pages_ready'] ?? false) === true,
+                'sync_partial' => ($readiness['sync_partial'] ?? false) === true,
+            ],
             'updated_at' => time(),
             'source' => 'last_confirmed_live_meta_inventory',
         ];
@@ -1070,6 +1077,15 @@ function hierarchy_live_snapshot_apply_display(
     }
 
     $snapshot['profile'] = $freshProfile;
+    $savedReadiness = is_array($saved['readiness'] ?? null)
+        ? $saved['readiness']
+        : [];
+    foreach (['businesses_ready','ad_accounts_complete','pages_ready','sync_partial'] as $key) {
+        if (!array_key_exists($key, $snapshot) && array_key_exists($key, $savedReadiness)) {
+            $snapshot[$key] = ($savedReadiness[$key] ?? false) === true;
+        }
+    }
+
     $snapshot['last_confirmed_live_meta_at'] = (int)($saved['updated_at'] ?? 0);
     $snapshot['display_source'] = 'last_confirmed_live_meta_inventory';
     return $snapshot;
@@ -1667,7 +1683,13 @@ $syncProfileReplacement = <<<'PHP'
                 $businessRows,
                 $adAccountRows,
                 $pageRows,
-                $responseProfile
+                $responseProfile,
+                [
+                    'businesses_ready' => $businessesReady,
+                    'ad_accounts_complete' => $adAccountsComplete,
+                    'pages_ready' => $pagesReady,
+                    'sync_partial' => $syncPartial,
+                ]
             );
             $snapshot['last_confirmed_live_meta_at'] = time();
             $snapshot['display_source'] = 'live_meta_inventory';
