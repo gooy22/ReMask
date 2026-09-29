@@ -195,17 +195,14 @@ if ($applySnapshotPatchCount !== 1) {
 }
 
 $oldAttention = "function profileAttention(p){ const ps=String(p.proxy_health?.status||'').toUpperCase(); return !p.synced || !p.proxy_configured || (ps!==''&&ps!=='LIVE') || !p.ads_management_granted || p.bm_count===0 || p.rk_count===0; }";
-$newAttention = "function profileAttention(p){ const ps=String(p.proxy_health?.status||'').toUpperCase(); return !p.synced || (p.proxy_configured && ps!==''&&ps!=='LIVE') || p.ads_management_granted===false; }";
+$newAttention = "function profileAttention(p){ const ps=String(p.proxy_health?.status||'').toUpperCase(); return !p.synced || p.proxy_configured===false || (p.proxy_configured===true && ps!==''&&ps!=='LIVE'); }";
 $count = 0;
 $js = str_replace($oldAttention, $newAttention, $js, $count);
 if ($count !== 1) {
     throw new RuntimeException('profileAttention patch failed: ' . $count);
 }
 
-$permissionConditionPatterns = [
-    "if(!p.ads_management_granted)" => "if(p.ads_management_granted===false)",
-    "if (!p.ads_management_granted)" => "if (p.ads_management_granted===false)",
-];
+$permissionConditionPatterns = [];
 foreach ($permissionConditionPatterns as $permissionOld => $permissionNew) {
     $permissionCount = 0;
     $js = str_replace($permissionOld, $permissionNew, $js, $permissionCount);
@@ -1043,15 +1040,24 @@ $syncProfileReplacement = <<<'PHP'
                 $snapshot['profiles'][$i]['rk_count'] = count($adAccountRows);
                 $snapshot['profiles'][$i]['ad_accounts_count'] = count($adAccountRows);
                 $snapshot['profiles'][$i]['token_status'] = 'PRIVATE';
+                $snapshot['profiles'][$i]['permissions_available'] = null;
+                $snapshot['profiles'][$i]['ads_management_granted'] = null;
+                $snapshot['profiles'][$i]['ads_read_granted'] = null;
+                $snapshot['profiles'][$i]['business_management_granted'] = null;
 
                 $currentTransport = is_array($snapshot['profiles'][$i]['transport'] ?? null)
                     ? $snapshot['profiles'][$i]['transport']
                     : [];
-                $proxyConfigured = array_key_exists('proxy_configured', $snapshot['profiles'][$i])
-                    ? (bool)$snapshot['profiles'][$i]['proxy_configured']
-                    : (bool)($currentTransport['proxy_configured'] ?? false);
+                // The private live-inventory endpoint cannot reach browser_open
+                // unless the profile resolver supplied a configured proxy.
+                // Therefore a completed worker call is authoritative for this
+                // sync response: stale snapshot metadata must never clear proxy.
+                $proxyConfigured = true;
 
-                $snapshot['profiles'][$i]['proxy_configured'] = $proxyConfigured;
+                $snapshot['profiles'][$i]['proxy_configured'] = true;
+                $snapshot['profiles'][$i]['proxy_status'] = (
+                    strtoupper((string)($snapshot['profiles'][$i]['proxy_status'] ?? '')) === 'NOT_CONFIGURED'
+                ) ? 'NOT_CHECKED' : ($snapshot['profiles'][$i]['proxy_status'] ?? 'NOT_CHECKED');
                 $snapshot['profiles'][$i]['transport'] = array_merge(
                     $currentTransport,
                     [
