@@ -2802,6 +2802,7 @@ async function pythonWorkerStartAutoRkFanPages() {
     }
 
     const pageCache = new Map();
+    const pageInventoryErrors = new Map();
     const activeProfiles = Array.from(new Set(
       activeTargets.map(function(target) {
         return String(target.profile_id || '').trim();
@@ -2813,19 +2814,43 @@ async function pythonWorkerStartAutoRkFanPages() {
         const pages = await pythonWorkerLoadPages(profileId);
         pageCache.set(profileId, Array.isArray(pages) ? pages : []);
       } catch (error) {
-        // Fast path must not force manual work when the cache endpoint is
-        // temporarily unavailable. No trustworthy candidate means create one.
-        pageCache.set(profileId, []);
-        console.warn('[ReMask Worker UI] FP auto page cache fallback:', profileId, error);
+        // REMASK_FP_AUTO_NO_BLIND_CREATE_V1
+        // Missing/unreadable inventory is not proof that the profile has zero
+        // Pages. Never convert a cache/sync failure into a fresh CREATE,
+        // otherwise a transient endpoint/parser problem can duplicate Pages.
+        const message = String((error && error.message) || error || 'Pages inventory unavailable');
+        pageInventoryErrors.set(profileId, message);
+        console.warn('[ReMask Worker UI] FP auto inventory unavailable:', profileId, error);
       }
     });
+
+    const inventoryReadyTargets = activeTargets.filter(function(target) {
+      return !pageInventoryErrors.has(String(target.profile_id || '').trim());
+    });
+    const inventoryBlockedProfiles = Array.from(pageInventoryErrors.keys());
+
+    if (!inventoryReadyTargets.length) {
+      pythonWorkerUiState.fpResolving = false;
+      if (pythonWorkerUiState.batchKind === 'rk_fp') {
+        pythonWorkerClearBatchState();
+      }
+      pythonWorkerUiState.busy = false;
+      pythonWorkerSelectionRefresh();
+      pythonWorkerSetText(
+        'pythonPwStatus',
+        'FP авто не запущено: нет подтверждённого Page inventory для профиля(ей) ' +
+          inventoryBlockedProfiles.join(', ') +
+          '. Синхронизируй эти профили; новые FP вслепую не создавались.'
+      );
+      return;
+    }
 
     const usedPageIds = new Set();
     const configs = {};
     let attachCount = 0;
     let createCount = 0;
 
-    activeTargets.forEach(function(target, index) {
+    inventoryReadyTargets.forEach(function(target, index) {
       const profileId = String(target.profile_id || '').trim();
       const businessId = String(target.business_id || '').trim();
       const adAccountId = String(target.ad_account_id || '').trim();
@@ -2875,11 +2900,14 @@ async function pythonWorkerStartAutoRkFanPages() {
       createCount + ' FP будут созданы автоматически.' +
       (blockedProfiles.length
         ? ' Пропущены checkpoint-профили: ' + blockedProfiles.join(', ') + '.'
+        : '') +
+      (inventoryBlockedProfiles.length
+        ? ' Пропущены профили без подтверждённого Page inventory: ' + inventoryBlockedProfiles.join(', ') + '.'
         : '')
     );
 
     pythonWorkerUiState.fpResolving = false;
-    await pythonWorkerStartRkFanPageTargets(activeTargets, 'auto', configs);
+    await pythonWorkerStartRkFanPageTargets(inventoryReadyTargets, 'auto', configs);
   } catch (error) {
     pythonWorkerUiState.fpResolving = false;
     pythonWorkerSelectionRefresh();
