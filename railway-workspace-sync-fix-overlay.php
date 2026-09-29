@@ -570,8 +570,11 @@ $hierarchyHelpers = <<<'PHP_HELPERS'
 // REMASK_PERSISTENT_BM_RK_BINDING_V1
 function hierarchy_worker_state(string $profile): array
 {
+    static $cache = [];
+
     $profile = trim($profile);
     if ($profile === '') return [];
+    if (array_key_exists($profile, $cache)) return $cache[$profile];
 
     $base = rtrim(trim((string)(getenv('REMASK_PYTHON_WORKER_URL') ?: 'http://127.0.0.1:8081')), '/');
     $url = $base . '/api/v1/profiles/' . rawurlencode($profile) . '/provisioning-state';
@@ -582,15 +585,21 @@ function hierarchy_worker_state(string $profile): array
     $ctx = stream_context_create(['http' => [
         'method' => 'GET',
         'header' => implode("\r\n", $headers) . "\r\n",
-        'timeout' => 5,
+        // Local same-container endpoint. Do not make Workspace rendering
+        // wait five seconds per profile if the worker is unavailable.
+        'timeout' => 1.5,
         'ignore_errors' => true,
         'follow_location' => 0,
     ]]);
 
     $raw = @file_get_contents($url, false, $ctx);
-    if (!is_string($raw) || trim($raw) === '') return [];
+    if (!is_string($raw) || trim($raw) === '') {
+        $cache[$profile] = [];
+        return [];
+    }
     $json = json_decode($raw, true);
-    return is_array($json) ? $json : [];
+    $cache[$profile] = is_array($json) ? $json : [];
+    return $cache[$profile];
 }
 
 function hierarchy_worker_live_inventory(
