@@ -480,6 +480,23 @@ async def _reconcile_existing(
                     }
                 )
                 return "", diagnostics
+    except BrowserBusinessError as exc:
+        if exc.code in {
+            "CHECKPOINT_REQUIRED",
+            "SESSION_EXPIRED",
+            "TWO_FACTOR_REQUIRED",
+        }:
+            raise
+        diagnostics.append(
+            {
+                "stage": "inventory",
+                "transport": "private_browser",
+                "result": "unavailable",
+                "error_code": exc.code,
+                "error": str(exc)[:1200],
+            }
+        )
+        return "", diagnostics
     except Exception as exc:
         diagnostics.append(
             {
