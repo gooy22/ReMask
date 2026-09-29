@@ -290,12 +290,26 @@ async function syncSelection(){
 
   // REMASK_SYNC_ERROR_CLASSIFIER_V1
   const errorText=(e)=>{
-    let raw='';
-    if(e&&typeof e==='object'){
-      if(e.message)raw=String(e.message);
-      else if(e.error)raw=String(e.error);
-    }
-    if(!raw)raw=String(e||'Unknown sync error');
+    const pick=(value,depth=0)=>{
+      if(depth>4||value==null)return '';
+      if(typeof value==='string'||typeof value==='number'||typeof value==='boolean'){
+        return String(value);
+      }
+      if(typeof value==='object'){
+        for(const key of ['message','detail','error_description','error','reason']){
+          if(Object.prototype.hasOwnProperty.call(value,key)){
+            const nested=pick(value[key],depth+1);
+            if(nested)return nested;
+          }
+        }
+        try{
+          const encoded=JSON.stringify(value);
+          if(encoded&&encoded!=='{}')return encoded;
+        }catch(_){}
+      }
+      return '';
+    };
+    const raw=pick(e)||'Unknown sync error';
     return raw.replace(/access_token=[^&\\s]+/ig,'access_token=[redacted]');
   };
   const classifySyncError=(e)=>{
@@ -328,59 +342,12 @@ async function syncSelection(){
     }
   };
 
-  // REMASK_SYNC_DIRECT_FETCH_V1
-  // The generic apiJson helper has its own short transport deadline in the
-  // legacy Workspace runtime. A healthy private Meta sync can legitimately
-  // take >10s, so sync requests must use a dedicated long-lived fetch instead
-  // of being aborted by that helper while the server is still working.
-  const syncApiJson=async(url,body)=>{
-    const controller=new AbortController();
-    const timer=setTimeout(()=>controller.abort(),65000);
-    try{
-      const response=await fetch(url,{
-        method:'POST',
-        body,
-        credentials:'same-origin',
-        cache:'no-store',
-        signal:controller.signal,
-        headers:{'X-Requested-With':'XMLHttpRequest'}
-      });
-      const raw=await response.text();
-      let data=null;
-      try{
-        data=raw?JSON.parse(raw):{};
-      }catch(_){
-        throw new Error('Private Meta sync returned invalid JSON (HTTP '+response.status+')');
-      }
-
-      if(data&&typeof data==='object'&&Object.prototype.hasOwnProperty.call(data,'res')){
-        const wrapped=data.res;
-        if(typeof wrapped==='string'){
-          try{data=JSON.parse(wrapped);}catch(_){data=wrapped;}
-        }else if(wrapped&&typeof wrapped==='object'){
-          data=wrapped;
-        }
-      }
-
-      if(!response.ok){
-        const detail=(data&&typeof data==='object'&&(data.error||data.detail||data.message))
-          ? String(data.error||data.detail||data.message)
-          : ('HTTP '+response.status);
-        throw new Error(detail);
-      }
-      if(data&&typeof data==='object'&&data.error){
-        throw new Error(String(data.error));
-      }
-      return data;
-    }catch(e){
-      if(e&&e.name==='AbortError'){
-        throw new Error('Private Meta sync timeout after 65000ms');
-      }
-      throw e;
-    }finally{
-      clearTimeout(timer);
-    }
-  };
+  // REMASK_SYNC_CSRF_SAFE_TRANSPORT_V1
+  // Use the native Workspace request helper for every sync request. It carries
+  // the current auth/CSRF contract. If the mobile browser drops the long
+  // request, request_id reconciliation below reads the server-side result
+  // instead of bypassing CSRF with a second custom fetch implementation.
+  const syncApiJson=async(url,body)=>apiJson(url,body);
 
   // REMASK_SYNC_RESULT_RECONCILIATION_V1
   const syncRequestId=()=>{
@@ -456,7 +423,10 @@ async function syncSelection(){
       return finishSyncResponse(d,profile);
     }catch(e){
       const x=classifySyncError(e);
-      if(x.kind==='CLIENT_TRANSPORT'){
+      if(
+        x.kind==='CLIENT_TRANSPORT'
+        || /load failed|failed to fetch|network request failed|http 403|csrf/i.test(x.message)
+      ){
         const reconciled=await reconcileDroppedSync(profile,requestId);
         if(reconciled)return reconciled;
       }
@@ -479,7 +449,10 @@ async function syncSelection(){
       return finishSyncResponse(d,row.profile,row.id);
     }catch(e){
       const x=classifySyncError(e);
-      if(x.kind==='CLIENT_TRANSPORT'){
+      if(
+        x.kind==='CLIENT_TRANSPORT'
+        || /load failed|failed to fetch|network request failed|http 403|csrf/i.test(x.message)
+      ){
         const reconciled=await reconcileDroppedSync(row.profile,requestId);
         if(reconciled)return reconciled;
       }
