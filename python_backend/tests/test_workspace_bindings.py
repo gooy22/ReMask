@@ -126,6 +126,44 @@ class WorkspaceProvisioningBindingsTests(unittest.IsolatedAsyncioTestCase):
             {"61594753560938", "2487306152656679"},
         )
 
+    async def test_primary_page_relation_is_recovered_from_business_success(self) -> None:
+        profile = "7"
+        await self.store.complete(
+            "item-fp-owned",
+            profile,
+            "add-fp-owned",
+            ProvisioningStep.FAN_PAGES,
+            {
+                "phase": "DONE",
+                "pages": [
+                    {
+                        "id": "123456789012345",
+                        "name": "Owned Page",
+                        "category": "Digital creator",
+                    }
+                ],
+            },
+        )
+        await self.store.complete(
+            "item-bm-owned",
+            profile,
+            "add-bm-page-123456789012345",
+            ProvisioningStep.BUSINESS,
+            {
+                "phase": "DONE",
+                "business_id": "2487306152656679",
+                "business_name": "Owned BM",
+                "primary_page_id": "123456789012345",
+            },
+        )
+
+        pages = await self.store.latest_profile_fan_pages(profile)
+
+        self.assertEqual(len(pages), 1)
+        self.assertEqual(pages[0]["business_id"], "2487306152656679")
+        self.assertTrue(pages[0]["attached"])
+
+
     async def test_confirmed_fan_page_survives_without_graph_inventory(self) -> None:
         profile = "6"
         await self.store.complete(
