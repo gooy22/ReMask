@@ -929,7 +929,8 @@ async def business_handler(
                 )
 
                 async def before_page_submit(patch: dict[str, Any]) -> None:
-                    await provisioning_state.checkpoint(
+                    nonlocal checkpoint
+                    checkpoint = await provisioning_state.checkpoint(
                         item_id,
                         profile_id,
                         scope_key,
@@ -942,11 +943,72 @@ async def business_handler(
                         },
                     )
 
-                page_result = await browser.add_existing_page(
-                    business_id=business_id,
-                    page_id=page_id,
-                    before_submit=before_page_submit,
-                )
+                # REMASK_PAGE_ATTACH_DEADLINE_V1
+                # Meta's Add-Page UI contains several Playwright waits. Without
+                # a whole-operation deadline those waits can accumulate for
+                # minutes while the Job still shows PAGE_ATTACH_OPENING.
+                try:
+                    page_result = await asyncio.wait_for(
+                        browser.add_existing_page(
+                            business_id=business_id,
+                            page_id=page_id,
+                            before_submit=before_page_submit,
+                        ),
+                        timeout=90.0,
+                    )
+                except asyncio.TimeoutError as exc:
+                    phase = _clean(checkpoint.get("phase")).upper()
+                    activity = _clean(checkpoint.get("activity")).upper()
+                    submitted_or_clicked = phase in {
+                        "PAGE_ADD_CLICK_INTENT",
+                        "PAGE_ADD_SUBMITTED",
+                    } or activity in {
+                        "PAGE_ADD_CLICK_INTENT",
+                        "PAGE_ADD_SUBMITTED",
+                        "PAGE_ADD_RESPONSE_UNCONFIRMED",
+                        "PAGE_ADD_RESPONSE_OBSERVED",
+                    }
+
+                    checkpoint = await provisioning_state.checkpoint(
+                        item_id,
+                        profile_id,
+                        scope_key,
+                        ProvisioningStep.BUSINESS,
+                        {
+                            "activity": "PAGE_ATTACH_TIMEOUT",
+                            "activity_at": int(time.time()),
+                            "business_id": business_id,
+                            "business_name": bm_name,
+                            "primary_page_id": page_id,
+                            "page_attach_timeout_seconds": 90,
+                            "page_attach_timeout_phase": phase,
+                            "page_attach_timeout_previous_activity": activity,
+                        },
+                    )
+
+                    if submitted_or_clicked:
+                        raise ProvisioningError(
+                            "PAGE_ATTACH_RESULT_UNKNOWN",
+                            (
+                                f"Business {business_id} exists and the Page-add "
+                                f"flow for Page {page_id} timed out after a final "
+                                "click or submit may have reached Meta. Retry is "
+                                "verification-only; ReMask will not submit the "
+                                "Page-add action a second time."
+                            ),
+                            retryable=True,
+                        ) from exc
+
+                    raise ProvisioningError(
+                        "PAGE_ATTACH_TIMEOUT",
+                        (
+                            f"Business {business_id} exists, but opening/filling "
+                            f"the Meta Add Page flow for Page {page_id} exceeded "
+                            "90 seconds before any irreversible submit was "
+                            "checkpointed."
+                        ),
+                        retryable=True,
+                    ) from exc
 
                 checkpoint = await provisioning_state.checkpoint(
                     item_id,
