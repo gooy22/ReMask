@@ -148,6 +148,52 @@ if ($js === false) {
     throw new RuntimeException('workspace.js not found');
 }
 
+$oldApplySnapshot = "function applySnapshot(s){ if(!s?.profile)return; const p=s.profile.name; state.inventory.profiles=state.inventory.profiles.filter(x=>x.name!==p).concat([s.profile]); state.inventory.businesses=state.inventory.businesses.filter(x=>x.profile!==p).concat(s.businesses||[]); state.inventory.ad_accounts=state.inventory.ad_accounts.filter(x=>x.profile!==p).concat(s.ad_accounts||[]); }";
+$newApplySnapshot = <<<'JS'
+function applySnapshot(s){
+  if(!s || typeof s!=='object')return false;
+  const profileRow=(s.profile && typeof s.profile==='object')
+    ? s.profile
+    : (Array.isArray(s.profiles)
+      ? s.profiles.find(x=>x && String(x.name||x.profile||'').trim()===String(s.profile_name||'').trim())
+        || (s.profiles.length===1?s.profiles[0]:null)
+      : null);
+  const p=String(
+    profileRow?.name
+    || profileRow?.profile
+    || s.profile_name
+    || ''
+  ).trim();
+  if(!p)return false;
+
+  const normalizedProfile=profileRow && typeof profileRow==='object'
+    ? {...profileRow,name:String(profileRow.name||profileRow.profile||p)}
+    : {name:p,synced:true};
+
+  const businesses=(Array.isArray(s.businesses)?s.businesses:[])
+    .filter(x=>x&&typeof x==='object')
+    .map(x=>({...x,profile:String(x.profile||p)}));
+  const accounts=(Array.isArray(s.ad_accounts)?s.ad_accounts:[])
+    .filter(x=>x&&typeof x==='object')
+    .map(x=>({...x,profile:String(x.profile||p)}));
+
+  state.inventory.profiles=state.inventory.profiles
+    .filter(x=>String(x.name||x.profile||'')!==p)
+    .concat([normalizedProfile]);
+  state.inventory.businesses=state.inventory.businesses
+    .filter(x=>String(x.profile||'')!==p)
+    .concat(businesses);
+  state.inventory.ad_accounts=state.inventory.ad_accounts
+    .filter(x=>String(x.profile||'')!==p)
+    .concat(accounts);
+  return true;
+}
+JS;
+$js = str_replace($oldApplySnapshot, $newApplySnapshot, $js, $applySnapshotPatchCount);
+if ($applySnapshotPatchCount !== 1) {
+    throw new RuntimeException('applySnapshot contract patch failed: ' . $applySnapshotPatchCount);
+}
+
 $oldAttention = "function profileAttention(p){ const ps=String(p.proxy_health?.status||'').toUpperCase(); return !p.synced || !p.proxy_configured || (ps!==''&&ps!=='LIVE') || !p.ads_management_granted || p.bm_count===0 || p.rk_count===0; }";
 $newAttention = "function profileAttention(p){ const ps=String(p.proxy_health?.status||'').toUpperCase(); return !p.synced || (p.proxy_configured && ps!==''&&ps!=='LIVE') || p.ads_management_granted===false; }";
 $count = 0;
@@ -249,7 +295,14 @@ async function syncSelection(){
   const syncProfileSafe=async(profile)=>{
     try{
       const d=await withTimeout(apiJson('ajax/metaHierarchy.php',post({action:'sync_profile',profile})));
-      applySnapshot(d);
+      const applied=applySnapshot(d);
+      if(d && d.sync_complete===true && !applied){
+        return {
+          error:'Live Meta sync returned success but Workspace snapshot was not applied',
+          error_kind:'SNAPSHOT_NOT_APPLIED',
+          profile
+        };
+      }
       if(d && d.sync_complete===false){
         return {
           error:String(d.sync_error||'Private Business Suite inventory was inconclusive'),
@@ -267,7 +320,15 @@ async function syncSelection(){
   const syncBusinessSafe=async(row)=>{
     try{
       const d=await withTimeout(apiJson('ajax/metaHierarchy.php',post({action:'sync_profile',profile:row.profile,business_id:row.id})));
-      applySnapshot(d);
+      const applied=applySnapshot(d);
+      if(d && d.sync_complete===true && !applied){
+        return {
+          error:'Live Meta sync returned success but Workspace snapshot was not applied',
+          error_kind:'SNAPSHOT_NOT_APPLIED',
+          profile:row.profile,
+          business_id:row.id
+        };
+      }
       if(d && d.sync_complete===false){
         return {
           error:String(d.sync_error||'Private Business Suite inventory was inconclusive'),
@@ -820,11 +881,13 @@ $syncProfileReplacement = <<<'PHP'
             $snapshot['sync_error'] = 'Private Business Suite inventory did not confirm live BM/RK state.';
         }
 
+        $responseProfile = null;
         if (is_array($snapshot['profiles'] ?? null)) {
             foreach ($snapshot['profiles'] as $i => $profileRow) {
                 if (!is_array($profileRow)) continue;
                 $rowName = trim((string)($profileRow['name'] ?? $profileRow['profile'] ?? ''));
                 if ($rowName !== '' && $rowName !== $profile) continue;
+                $snapshot['profiles'][$i]['name'] = $rowName !== '' ? $rowName : $profile;
                 $snapshot['profiles'][$i]['synced'] = true;
                 $snapshot['profiles'][$i]['bm_count'] = count($businessRows);
                 $snapshot['profiles'][$i]['rk_count'] = count($adAccountRows);
@@ -836,8 +899,22 @@ $syncProfileReplacement = <<<'PHP'
                     'direct_fallback' => false,
                     'source' => 'business_suite_browser',
                 ];
+                $responseProfile = $snapshot['profiles'][$i];
+                break;
             }
         }
+        if (!is_array($responseProfile)) {
+            $responseProfile = [
+                'name' => $profile,
+                'synced' => true,
+                'bm_count' => count($businessRows),
+                'rk_count' => count($adAccountRows),
+                'ad_accounts_count' => count($adAccountRows),
+                'token_status' => 'PRIVATE',
+            ];
+        }
+        $snapshot['profile'] = $responseProfile;
+        $snapshot['profile_name'] = $profile;
 
         hierarchy_activity([
             'action' => 'sync_profile',
@@ -1103,5 +1180,14 @@ fwrite(STDERR, "[workspace-sync-fix] metaHierarchy.php patched; live writes + TO
 if (strpos($php, 'hierarchy_worker_live_inventory($profile)') === false) {
     throw new RuntimeException('live Meta sync must call worker without BM hints');
 }
+if (
+    strpos($php, "\$snapshot['profile'] = \$responseProfile;") === false
+    || strpos($js, 'SNAPSHOT_NOT_APPLIED') === false
+    || strpos($js, 'function applySnapshot(s){') === false
+    || strpos($js, 'return true;') === false
+) {
+    throw new RuntimeException('workspace sync snapshot contract invariant failed');
+}
 fwrite(STDERR, "[workspace-sync-fix] live Meta sync is authoritative; provisioning bindings are not merged\n");
+fwrite(STDERR, "[workspace-sync-fix] response/applySnapshot contract enforced\n");
 fwrite(STDERR, "[workspace-sync-fix] clean sync stabilization ready; no diagnostic probe installed\n");

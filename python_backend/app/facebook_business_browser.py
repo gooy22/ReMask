@@ -10701,6 +10701,19 @@ class FacebookBusinessBrowser:
             except Exception:
                 return
 
+        # Repeated syncs can reuse the mounted Ads Manager SPA and skip the
+        # NorthStar selector requests used as BM -> RK evidence. Reset only the
+        # document, not the browser context/cookies, so every probe performs a
+        # fresh authenticated frontend bootstrap.
+        try:
+            await self.page.goto(
+                "about:blank",
+                wait_until="commit",
+                timeout=1500,
+            )
+        except Exception:
+            pass
+
         self.page.on("request", inspect_request)
         self.page.on("response", on_response)
         requested_url = f"{self.ADS_MANAGER_URL}?business_id={business}"
