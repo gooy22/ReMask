@@ -2013,34 +2013,11 @@ async function pythonWorkerRetryFailed() {
   pythonWorkerSetText('pythonPwStatus', 'Проверяю FAILED Job перед Retry...');
 
   try {
-    const currentItems = pythonWorkerUiState.job && Array.isArray(pythonWorkerUiState.job.items)
-      ? pythonWorkerUiState.job.items
-      : [];
-    const checkpointProfiles = Array.from(new Set(
-      currentItems
-        .filter(function(item) {
-          return item &&
-            String(item.status || '').toUpperCase() === 'FAILED' &&
-            pythonWorkerIsProfileAuthBlockedCode(item.error_code);
-        })
-        .map(function(item) { return String(item.profile_id || '').trim(); })
-        .filter(Boolean)
-    ));
-
-    if (checkpointProfiles.length) {
-      const gate = await pythonWorkerFilterFanPageReadyProfiles(checkpointProfiles);
-      if (gate.blocked.length) {
-        pythonWorkerUiState.busy = false;
-        pythonWorkerSelectionRefresh();
-        pythonWorkerSetText(
-          'pythonPwStatus',
-          'Retry приостановлен: Facebook checkpoint у профиля(ей) ' +
-            gate.blocked.join(', ') + '. Job остаётся FAILED/resumable.'
-        );
-        return;
-      }
-    }
-
+    // REMASK_RETRY_SINGLE_BROWSER_PASS_V1
+    // Retry resumes from persisted checkpoints and lets the Job perform the
+    // authoritative session check. Do not open a separate Facebook preflight
+    // before every retry; that duplicated browser work and could itself fail
+    // before the resumable Job was even re-queued.
     pythonWorkerSetText('pythonPwStatus', 'Повторно ставлю FAILED JobItem в очередь...');
     const data = await pythonWorkerBridge({
       action: 'retry_failed',
