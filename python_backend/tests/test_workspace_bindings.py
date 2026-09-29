@@ -77,6 +77,21 @@ class WorkspaceProvisioningBindingsTests(unittest.IsolatedAsyncioTestCase):
             expected,
         )
 
+    async def test_confirmed_create_survives_page_attach_failure_state(self) -> None:
+        profile = "7"
+        await self.store.remember_entity(
+            profile,
+            "add-bm-page-333333333333333",
+            ProvisioningStep.BUSINESS,
+            {"business_id": "2487306152656679"},
+        )
+
+        rows = await self.store.confirmed_businesses_for_profile(profile)
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["business_id"], "2487306152656679")
+        self.assertEqual(rows[0]["source"], "python_worker_confirmed_entity")
+
     async def test_profile_keeps_all_confirmed_businesses_even_without_rk(self) -> None:
         profile = "7"
         await self.store.complete(
