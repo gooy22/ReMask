@@ -1460,6 +1460,58 @@ async def profile_live_inventory(
                     str(row.get('id') or ''),
                 )
             )
+
+            # REMASK_SYNC_SINGLE_SOURCE_PAGES_V1
+            # Sync is the only inventory fetch. Reuse this browser session to
+            # collect Pages once; downstream UI reads the persisted snapshot.
+            stage='page_inventory'
+            pages=[]
+            pages_source=''
+            pages_ready=False
+            pages_started=time.monotonic()
+            try:
+                discovered_pages=await asyncio.wait_for(
+                    browser.discover_managed_pages(fast=True),
+                    timeout=14.0,
+                )
+                pages=[
+                    {
+                        'id':str(row.get('id') or '').strip(),
+                        'name':str(row.get('name') or row.get('id') or '').strip(),
+                        'category':str(row.get('category') or '').strip(),
+                        'tasks':[str(task) for task in (row.get('tasks') or []) if isinstance(task,(str,int))],
+                        'business_id':str(row.get('business_id') or '').strip(),
+                        'is_owned':row.get('is_owned'),
+                    }
+                    for row in (discovered_pages or [])
+                    if isinstance(row,dict)
+                    and str(row.get('id') or '').strip().isdigit()
+                ]
+                pages.sort(
+                    key=lambda page:(
+                        1 if str(page.get('business_id') or '').strip() else 0,
+                        str(page.get('name') or '').casefold(),
+                        str(page.get('id') or ''),
+                    )
+                )
+                pages_source='facebook_business_browser'
+                pages_ready=True
+            except asyncio.TimeoutError:
+                pages_source='facebook_business_browser_timeout'
+                warnings.append('Fan Page inventory timed out')
+            except BrowserBusinessError as exc:
+                pages_source='facebook_business_browser_error'
+                warnings.append(f'Fan Page inventory: {exc.code}')
+            finally:
+                log.info(
+                    'live inventory profile=%s pages_ms=%d ready=%s pages=%d source=%s',
+                    clean_profile,
+                    int((time.monotonic()-pages_started)*1000),
+                    pages_ready,
+                    len(pages),
+                    pages_source,
+                )
+
             live_ready=bool(live_business_ids)
             if live_ready and discovery_revalidation:
                 warnings=[
@@ -1493,15 +1545,20 @@ async def profile_live_inventory(
                     {},
                 ),
                 'source':'business_suite_private_inventory',
+                'pages':pages,
+                'pages_count':len(pages),
+                'pages_ready':pages_ready,
+                'pages_source':pages_source,
                 'warnings':warnings,
             }
             log.info(
-                'live inventory profile=%s complete ms=%d live_ready=%s live_businesses=%d businesses=%d warnings=%d',
+                'live inventory profile=%s complete ms=%d live_ready=%s live_businesses=%d businesses=%d pages=%d warnings=%d',
                 clean_profile,
                 int((time.monotonic()-started)*1000),
                 live_ready,
                 len(live_business_ids),
                 len(businesses),
+                len(pages),
                 len(warnings),
             )
             return result
