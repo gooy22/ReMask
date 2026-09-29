@@ -114,7 +114,7 @@ RUN set -eux; \
     grep -q 'REMASK_PYTHON_WORKER_UI_V179' /var/www/html/scripts/workspace.js; \
     grep -q 'python-worker-ui-v185' /var/www/html/workspace.php;     grep -q 'auth_evidence' /opt/remask-python/app/facebook_business_browser.py;     grep -q 'checkpoint_url' /opt/remask-python/app/facebook_business_browser.py;     ! grep -q '"checkpoint" in body\[:4000\]' /opt/remask-python/app/facebook_business_browser.py;     grep -q 'pythonWorkerFilterFanPageReadyProfiles' /var/www/html/scripts/workspace.js;     grep -q '_request_fan_page_profile_ids' /opt/remask-python/main.py;     grep -q '_require_fp_auth_ready' /opt/remask-python/main.py;     grep -q 'REMASK_PROFILE_MUTATION_COOLDOWN_SECONDS' /opt/remask-python/app/provisioning/service.py;     grep -q '_await_profile_mutation_cooldown' /opt/remask-python/app/provisioning/service.py;     grep -q 'pythonWorkerIsProfileAuthBlockedCode' /var/www/html/scripts/workspace.js;     grep -q 'preflight.auth_blocked = authBlocked' /var/www/html/scripts/workspace.js; \
     grep -q 'REMASK_META_PERMISSION_TRISTATE_FINAL_V2' /var/www/html/scripts/workspace.js; \
-    grep -Fq "p.ads_management_granted===false" /var/www/html/scripts/workspace.js; \
+    ! grep -q 'нет ads_management' /var/www/html/scripts/workspace.js; \
     grep -Fq "'proxy_configured' => \$proxy !== null" /var/www/html/ajax/metaHierarchy.php; \
     /opt/remask-venv/bin/python -c "from pathlib import Path; from playwright.sync_api import sync_playwright; src=Path('/var/www/html/scripts/workspace.js').read_text(encoding='utf-8'); p=sync_playwright().start(); b=p.chromium.launch(executable_path='/usr/bin/chromium', headless=True, args=['--no-sandbox']); page=b.new_page(); err=page.evaluate('(src)=>{try{new Function(src);return \\\"\\\"}catch(e){return e.name+\\\": \\\"+e.message}}', src); b.close(); p.stop(); assert not err, err"; \
     grep -q 'ad_account_bindings' /opt/remask-python/main.py; \
@@ -305,7 +305,7 @@ RUN set -eux; \
     grep -q "'proxy_status'" /var/www/html/ajax/metaHierarchy.php; \
     grep -q "'pages_count'" /var/www/html/ajax/metaHierarchy.php; \
     grep -q "'network_identity' => 'profile_bound'" /var/www/html/ajax/metaHierarchy.php; \
-    grep -Fq "p.proxy_configured && ps!==''&&ps!=='LIVE'" /var/www/html/scripts/workspace.js; \
+    grep -Fq "p.proxy_configured===true && ps!==''&&ps!=='LIVE'" /var/www/html/scripts/workspace.js; \
     grep -q 'REMASK_BM_OWNED_CLIENT_V2' /var/www/html/classes/MetaAdsService.php; \
     grep -Eq 'REMASK_DIRECT_RK_FUNDING_V(2|3)' /var/www/html/classes/MetaAdsService.php; \
     grep -q 'is_adset_budget_sharing_enabled' /var/www/html/classes/MetaAdsService.php; \
