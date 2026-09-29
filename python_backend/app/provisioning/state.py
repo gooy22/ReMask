@@ -616,7 +616,19 @@ class ProvisioningStateStore:
             return []
 
         with self._connect() as con:
-            rows = con.execute(
+            entity_rows = con.execute(
+                """
+                SELECT scope_key,business_id,updated_at
+                FROM provisioning_entities
+                WHERE profile_id=?
+                  AND business_id IS NOT NULL
+                  AND business_id<>''
+                ORDER BY updated_at DESC
+                LIMIT ?
+                """,
+                (profile, bounded_limit),
+            ).fetchall()
+            step_rows = con.execute(
                 """
                 SELECT scope_key,status,result_json,updated_at
                 FROM provisioning_steps
@@ -633,10 +645,29 @@ class ProvisioningStateStore:
                 ),
             ).fetchall()
 
-        businesses: list[dict[str, Any]] = []
-        seen: set[str] = set()
+        # remember_entity() writes provisioning_entities immediately after
+        # Meta confirms CREATE, before Page attach completes. That ID must stay
+        # durable/visible even if the later Page attach step fails.
+        by_id: dict[str, dict[str, Any]] = {}
+        for row in entity_rows:
+            business_id = str(row["business_id"] or "").strip()
+            if not business_id.isdigit():
+                continue
+            by_id.setdefault(
+                business_id,
+                {
+                    "business_id": business_id,
+                    "business_name": business_id,
+                    "primary_page_id": "",
+                    "scope_key": str(row["scope_key"] or ""),
+                    "updated_at": int(row["updated_at"] or 0),
+                    "source": "python_worker_confirmed_entity",
+                },
+            )
 
-        for row in rows:
+        # Successful BUSINESS result enriches the confirmed entity with its
+        # human name / Page relation, but is not required for the BM to exist.
+        for row in step_rows:
             if str(row["status"] or "").strip().upper() != "SUCCESS":
                 continue
             try:
@@ -647,28 +678,43 @@ class ProvisioningStateStore:
                 continue
 
             business_id = str(result.get("business_id") or "").strip()
-            if not business_id.isdigit() or business_id in seen:
+            if not business_id.isdigit():
                 continue
 
-            seen.add(business_id)
-            businesses.append(
-                {
-                    "business_id": business_id,
-                    "business_name": str(
-                        result.get("business_name")
-                        or result.get("name")
-                        or business_id
-                    ).strip(),
-                    "primary_page_id": str(
-                        result.get("primary_page_id") or ""
-                    ).strip(),
-                    "scope_key": str(row["scope_key"] or ""),
-                    "updated_at": int(row["updated_at"] or 0),
-                    "source": "python_worker_business_success_history",
-                }
+            existing = by_id.get(business_id, {})
+            updated_at = max(
+                int(existing.get("updated_at") or 0),
+                int(row["updated_at"] or 0),
             )
+            by_id[business_id] = {
+                "business_id": business_id,
+                "business_name": str(
+                    result.get("business_name")
+                    or result.get("name")
+                    or existing.get("business_name")
+                    or business_id
+                ).strip(),
+                "primary_page_id": str(
+                    result.get("primary_page_id")
+                    or existing.get("primary_page_id")
+                    or ""
+                ).strip(),
+                "scope_key": str(
+                    row["scope_key"]
+                    or existing.get("scope_key")
+                    or ""
+                ),
+                "updated_at": updated_at,
+                "source": "python_worker_business_success_history",
+            }
 
-        return businesses
+        rows = list(by_id.values())
+        rows.sort(
+            key=lambda row: int(row.get("updated_at") or 0),
+            reverse=True,
+        )
+        return rows[:bounded_limit]
+
 
     async def latest_profile_fan_pages(
         self,
