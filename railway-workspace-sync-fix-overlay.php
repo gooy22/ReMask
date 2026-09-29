@@ -1147,8 +1147,62 @@ PHP_SIG;
 $hierarchySnapshotWrapper = <<<'PHP_WRAPPER'
 function hierarchy_profile_snapshot(string $profile, ?array $workspaceMeta = null): array
 {
-    $snapshot = hierarchy_profile_snapshot_base($profile, $workspaceMeta);
-    return hierarchy_live_snapshot_apply_display($profile, $snapshot);
+    $snapshot = hierarchy_live_snapshot_apply_display(
+        $profile,
+        hierarchy_profile_snapshot_base($profile, $workspaceMeta)
+    );
+
+    // REMASK_LOCAL_WORKER_PAGE_MERGE_V1
+    // A successful Add FP already contains a confirmed Page ID. Surface it in
+    // Workspace immediately from durable worker state; do not launch another
+    // Facebook inventory read merely to display what ReMask just created.
+    $workerState = hierarchy_worker_state($profile);
+    $pages = array_values(array_filter(
+        (array)($snapshot['pages'] ?? []),
+        static fn($row) => is_array($row)
+    ));
+    $seenPageIds = [];
+    foreach ($pages as $row) {
+        $id = trim((string)($row['id'] ?? $row['page_id'] ?? ''));
+        if ($id !== '') $seenPageIds[$id] = true;
+    }
+    foreach ((array)($workerState['fan_pages'] ?? []) as $workerPage) {
+        if (!is_array($workerPage)) continue;
+        $pageId = trim((string)($workerPage['id'] ?? $workerPage['page_id'] ?? ''));
+        if (
+            !preg_match('/^\d{5,30}$/', $pageId)
+            || isset($seenPageIds[$pageId])
+        ) continue;
+
+        $pages[] = [
+            'profile' => $profile,
+            'id' => $pageId,
+            'page_id' => $pageId,
+            'name' => trim((string)($workerPage['name'] ?? $pageId)),
+            'category' => trim((string)($workerPage['category'] ?? '')),
+            'business_id' => trim((string)($workerPage['business_id'] ?? '')),
+            '_provisioned_only' => true,
+            '_source' => 'python_worker_fan_page_success_history',
+        ];
+        $seenPageIds[$pageId] = true;
+    }
+    $snapshot['pages'] = $pages;
+    $snapshot['pages_count'] = count($pages);
+
+    if (is_array($snapshot['profiles'] ?? null)) {
+        foreach ($snapshot['profiles'] as $i => $row) {
+            if (!is_array($row)) continue;
+            $name = trim((string)($row['name'] ?? $row['profile'] ?? ''));
+            if ($name !== '' && $name !== $profile) continue;
+            $snapshot['profiles'][$i]['pages_count'] = count($pages);
+            break;
+        }
+    }
+    if (is_array($snapshot['profile'] ?? null)) {
+        $snapshot['profile']['pages_count'] = count($pages);
+    }
+
+    return $snapshot;
 }
 PHP_WRAPPER;
 
