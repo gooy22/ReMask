@@ -147,13 +147,25 @@ try {
 
     $pages = array_values($pagesById);
 
+    $snapshotReadiness = is_array($liveSnapshot['readiness'] ?? null)
+        ? $liveSnapshot['readiness']
+        : [];
+    $pagesInventoryConfirmed = (
+        ($snapshotReadiness['pages_ready'] ?? false) === true
+    );
+
     rmx_pwp_out([
         'ok' => true,
         'profile' => $profile,
         'pages' => $pages,
         'count' => count($pages),
         'worker_confirmed_count' => $workerConfirmed,
-        'sync_required' => ($pages === []),
+        'pages_inventory_confirmed' => $pagesInventoryConfirmed,
+        'sync_required' => (
+            $pages === []
+            && !$pagesInventoryConfirmed
+            && $workerConfirmed === 0
+        ),
         'snapshot_updated_at' => (int)($liveSnapshot['updated_at'] ?? 0),
         'source' => 'last_confirmed_live_sync',
     ]);
@@ -302,12 +314,24 @@ try {
         $seenBusinessIds[$workerBusinessId] = true;
     }
 
+    $snapshotReadiness = is_array($liveSnapshot['readiness'] ?? null)
+        ? $liveSnapshot['readiness']
+        : [];
+    $businessInventoryConfirmed = (
+        ($snapshotReadiness['businesses_ready'] ?? false) === true
+    );
+
     rmx_pwbm_out([
         'ok' => true,
         'profile' => $profile,
         'businesses' => $businesses,
         'count' => count($businesses),
-        'sync_required' => ($businesses === []),
+        'businesses_inventory_confirmed' => $businessInventoryConfirmed,
+        'sync_required' => (
+            $businesses === []
+            && !$businessInventoryConfirmed
+            && $workerBusinesses === []
+        ),
         'snapshot_updated_at' => (int)($liveSnapshot['updated_at'] ?? 0),
         'source' => 'last_confirmed_live_sync',
     ]);
