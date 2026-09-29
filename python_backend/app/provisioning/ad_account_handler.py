@@ -722,8 +722,7 @@ async def _prove_empty_after_uncertainty(
         graph_empty_confirmed and browser_empty_confirmations >= 1
     ) and browser_empty_confirmations < max(2, int(browser_required_checks)):
         try:
-            async with FacebookBusinessBrowser(
-                session.context,
+            async with session.fresh_facebook_business_browser(
                 timeout_seconds=45,
             ) as inventory_browser:
                 ui_inventory = (
@@ -1441,8 +1440,7 @@ async def ad_account_handler(
 
     if not bool(browser_inventory_before.get("confirmed_empty")):
         try:
-            async with FacebookBusinessBrowser(
-                session.context,
+            async with session.fresh_facebook_business_browser(
                 timeout_seconds=45,
             ) as inventory_browser:
                 ui_inventory_before = (
@@ -1746,8 +1744,7 @@ async def ad_account_handler(
 
             async def _run_capture_attempt() -> dict[str, Any]:
                 nonlocal browser
-                async with FacebookBusinessBrowser(
-                    session.context,
+                async with session.fresh_facebook_business_browser(
                     timeout_seconds=90,
                 ) as active_browser:
                     browser = active_browser
@@ -2616,8 +2613,7 @@ async def ad_account_handler(
                         }
                     )
                     try:
-                        async with FacebookBusinessBrowser(
-                            session.context,
+                        async with session.fresh_facebook_business_browser(
                             timeout_seconds=90,
                         ) as browser:
                             refreshed_capture = (
