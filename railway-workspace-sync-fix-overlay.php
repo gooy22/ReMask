@@ -222,7 +222,7 @@ if ($applySnapshotPatchCount !== 1) {
 }
 
 $oldAttention = "function profileAttention(p){ const ps=String(p.proxy_health?.status||'').toUpperCase(); return !p.synced || !p.proxy_configured || (ps!==''&&ps!=='LIVE') || !p.ads_management_granted || p.bm_count===0 || p.rk_count===0; }";
-$newAttention = "function profileAttention(p){ const ps=String(p.proxy_health?.status||'').toUpperCase(); return !p.synced || p.proxy_configured===false || (p.proxy_configured===true && ps!==''&&ps!=='LIVE'); }";
+$newAttention = "function profileAttention(p){ const ps=String(p.proxy_health?.status||'').toUpperCase(); const bad=['DEAD','FAILED','ERROR','AUTH_FAILED','PROXY_AUTH','UNREACHABLE']; return !p.synced || p.proxy_configured===false || bad.includes(ps); }";
 $count = 0;
 $js = str_replace($oldAttention, $newAttention, $js, $count);
 if ($count !== 1) {
