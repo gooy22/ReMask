@@ -112,14 +112,18 @@ RUN set -eux; \
     php -l /tmp/railway-meta-auth-state-overlay.php; \
     php /tmp/railway-meta-auth-state-overlay.php; \
     grep -q 'REMASK_PYTHON_WORKER_UI_V179' /var/www/html/scripts/workspace.js; \
-    grep -q 'python-worker-ui-v191' /var/www/html/workspace.php;     grep -q 'auth_evidence' /opt/remask-python/app/facebook_business_browser.py;     grep -q 'checkpoint_url' /opt/remask-python/app/facebook_business_browser.py;     ! grep -q '"checkpoint" in body\[:4000\]' /opt/remask-python/app/facebook_business_browser.py;     grep -q 'pythonWorkerFilterFanPageReadyProfiles' /var/www/html/scripts/workspace.js;     grep -q '_request_fan_page_profile_ids' /opt/remask-python/main.py;     grep -q '_require_fp_auth_ready' /opt/remask-python/main.py;     grep -q 'REMASK_PROFILE_MUTATION_COOLDOWN_SECONDS' /opt/remask-python/app/provisioning/service.py;     grep -q '_await_profile_mutation_cooldown' /opt/remask-python/app/provisioning/service.py;     grep -q 'pythonWorkerIsProfileAuthBlockedCode' /var/www/html/scripts/workspace.js;     grep -q 'preflight.auth_blocked = authBlocked' /var/www/html/scripts/workspace.js; \
+    grep -q 'python-worker-ui-v192' /var/www/html/workspace.php;     grep -q 'auth_evidence' /opt/remask-python/app/facebook_business_browser.py;     grep -q 'checkpoint_url' /opt/remask-python/app/facebook_business_browser.py;     ! grep -q '"checkpoint" in body\[:4000\]' /opt/remask-python/app/facebook_business_browser.py;     grep -q 'pythonWorkerFilterFanPageReadyProfiles' /var/www/html/scripts/workspace.js;     grep -q '_request_fan_page_profile_ids' /opt/remask-python/main.py;     grep -q '_require_fp_auth_ready' /opt/remask-python/main.py;     grep -q 'REMASK_PROFILE_MUTATION_COOLDOWN_SECONDS' /opt/remask-python/app/provisioning/service.py;     grep -q '_await_profile_mutation_cooldown' /opt/remask-python/app/provisioning/service.py;     grep -q 'pythonWorkerIsProfileAuthBlockedCode' /var/www/html/scripts/workspace.js;     grep -q 'preflight.auth_blocked = authBlocked' /var/www/html/scripts/workspace.js; \
     grep -q 'REMASK_META_PERMISSION_TRISTATE_FINAL_V2' /var/www/html/scripts/workspace.js; \
     grep -q 'existingProfile=state.inventory.profiles.find' /var/www/html/scripts/workspace.js; \
     grep -q 'REMASK_SYNC_CSRF_SAFE_TRANSPORT_V1' /var/www/html/scripts/workspace.js; \
     grep -q 'REMASK_SYNC_RESULT_RECONCILIATION_V1' /var/www/html/scripts/workspace.js; \
+    grep -q 'REMASK_POST_JOB_LOCAL_REFRESH_V1' /var/www/html/scripts/workspace.js; \
+    grep -q "action:'snapshot_profile'" /var/www/html/scripts/workspace.js; \
     grep -q 'REMASK_SYNC_CSRF_SAFE_TRANSPORT_V1' /var/www/html/scripts/workspace.js; \
     grep -q "action:'sync_result'" /var/www/html/scripts/workspace.js; \
     grep -q "hierarchy_sync_result_put" /var/www/html/ajax/metaHierarchy.php; \
+    grep -q 'REMASK_COMPONENT_SNAPSHOT_MERGE_V1' /var/www/html/ajax/metaHierarchy.php; \
+    grep -q "\$action === 'snapshot_profile'" /var/www/html/ajax/metaHierarchy.php; \
     grep -q "\$action === 'sync_result'" /var/www/html/ajax/metaHierarchy.php; \
     grep -q 'syncApiJson' /var/www/html/scripts/workspace.js; \
     ! grep -q 'нет ads_management' /var/www/html/scripts/workspace.js; \
@@ -127,6 +131,10 @@ RUN set -eux; \
     /opt/remask-venv/bin/python -c "from pathlib import Path; from playwright.sync_api import sync_playwright; src=Path('/var/www/html/scripts/workspace.js').read_text(encoding='utf-8'); p=sync_playwright().start(); b=p.chromium.launch(executable_path='/usr/bin/chromium', headless=True, args=['--no-sandbox']); page=b.new_page(); err=page.evaluate('(src)=>{try{new Function(src);return \\\"\\\"}catch(e){return e.name+\\\": \\\"+e.message}}', src); b.close(); p.stop(); assert not err, err"; \
     grep -q 'ad_account_bindings' /opt/remask-python/main.py; \
     grep -q 'confirmed_ad_account_bindings_for_profile' /opt/remask-python/app/provisioning/state.py; \
+    grep -q 'confirmed_businesses_for_profile' /opt/remask-python/app/provisioning/state.py; \
+    grep -q 'REMASK_COMPONENT_SYNC_READINESS_V1' /opt/remask-python/main.py; \
+    grep -q 'BROWSER_QUEUE_TIMEOUT' /opt/remask-python/app/facebook_business_browser.py; \
+    ! grep -q 'session.graph_api()' /opt/remask-python/app/provisioning/ad_account_handler.py; \
     grep -q 'confirmed_ad_account_binding_groups' /opt/remask-python/app/provisioning/state.py; \
     grep -q 'confirmed_ad_account_binding_groups' /opt/remask-python/app/runner.py; \
     grep -q 'REMASK_WORKER_CONFIRMED_FP_MERGE_V1' /var/www/html/ajax/pythonWorkerPages.php; \
@@ -296,7 +304,7 @@ RUN set -eux; \
     grep -q 'profileSaveJson' /var/www/html/scripts/workspace.js; \
     grep -q 'REMASK_SESSION_REFRESH_UI_V1' /var/www/html/scripts/workspace.js; \
     grep -q 'remaskSessionRefreshBtn' /var/www/html/scripts/workspace.js; \
-    grep -q 'python-worker-ui-v191' /var/www/html/workspace.php; \
+    grep -q 'python-worker-ui-v192' /var/www/html/workspace.php; \
     if grep -Fq '\\`' /var/www/html/scripts/workspace.js; then echo 'workspace-invalid-backtick' >&2; exit 92; fi; \
     grep -q 'error_id' /var/www/html/ajax/metaProfileManager.php; \
     ! grep -q 'Добавь Cookies JSON текущей FB-сессии' /var/www/html/scripts/workspace.js; \
