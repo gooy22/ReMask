@@ -77,6 +77,40 @@ class WorkspaceProvisioningBindingsTests(unittest.IsolatedAsyncioTestCase):
             expected,
         )
 
+    async def test_profile_keeps_all_confirmed_businesses_even_without_rk(self) -> None:
+        profile = "7"
+        await self.store.complete(
+            "item-bm-a",
+            profile,
+            "add-bm-page-111111111111111",
+            ProvisioningStep.BUSINESS,
+            {
+                "phase": "DONE",
+                "business_id": "61594753560938",
+                "business_name": "BM A",
+                "primary_page_id": "111111111111111",
+            },
+        )
+        await self.store.complete(
+            "item-bm-b",
+            profile,
+            "add-bm-page-222222222222222",
+            ProvisioningStep.BUSINESS,
+            {
+                "phase": "DONE",
+                "business_id": "2487306152656679",
+                "business_name": "BM B",
+                "primary_page_id": "222222222222222",
+            },
+        )
+
+        rows = await self.store.confirmed_businesses_for_profile(profile)
+
+        self.assertEqual(
+            {row["business_id"] for row in rows},
+            {"61594753560938", "2487306152656679"},
+        )
+
     async def test_confirmed_fan_page_survives_without_graph_inventory(self) -> None:
         profile = "6"
         await self.store.complete(
