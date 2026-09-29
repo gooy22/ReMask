@@ -360,7 +360,11 @@ async function syncSelection(){
   };
 
   const reconcileDroppedSync=async(profile,requestId)=>{
-    for(let attempt=0;attempt<12;attempt++){
+    // Backend private inventory can legitimately run close to the 64s worker
+    // deadline. Mobile/Safari may drop the original request much earlier, so
+    // reconciliation must cover the full server window instead of giving up
+    // after ~15 seconds.
+    for(let attempt=0;attempt<52;attempt++){
       if(attempt>0)await new Promise(resolve=>setTimeout(resolve,1250));
       try{
         const d=await syncApiJson(
