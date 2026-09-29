@@ -160,16 +160,12 @@ async def _fresh_page_inventory(session: Any) -> list[dict[str, Any]]:
         session.context,
         timeout_seconds=60,
     ) as browser:
-        try:
-            rows = await browser.discover_managed_pages(fast=True)
-        except BrowserBusinessError as exc:
-            # A freshly authenticated Your Pages surface with no parseable
-            # Pages is the expected state for a brand-new FB account. Treat it
-            # as an empty inventory; uncertain CREATE recovery still requires
-            # several independent fresh reads before another CREATE is allowed.
-            if exc.code == "FAN_PAGES_NOT_DISCOVERED":
-                return []
-            raise
+        # REMASK_PAGE_RECONCILE_NO_FALSE_EMPTY_V1
+        # discover_managed_pages() returns [] only when Facebook itself exposes
+        # an explicit empty state. A parser/UI mismatch raises
+        # FAN_PAGES_NOT_DISCOVERED and must remain inconclusive; treating that
+        # as [] could authorize a duplicate Page CREATE on retry.
+        rows = await browser.discover_managed_pages(fast=True)
         return _normalize_pages(rows)
 
 
