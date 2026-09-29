@@ -2759,47 +2759,13 @@ async function pythonWorkerStartAutoRkFanPages() {
   );
 
   try {
-    const profiles = Array.from(new Set(
-      targets.map(function(target) {
-        return String(target.profile_id || '').trim();
-      }).filter(Boolean)
-    ));
-
-    const authBlocked = new Map();
-    await pythonWorkerMapLimit(profiles, 3, async function(profileId) {
-      try {
-        await pythonWorkerProfilePreflight(profileId);
-      } catch (error) {
-        const blocked = pythonWorkerFpAuthBlockedMessage(error);
-        if (blocked) {
-          authBlocked.set(profileId, blocked);
-        } else {
-          console.warn('[ReMask Worker UI] FP preflight soft-failed:', profileId, error);
-        }
-      }
-    });
-
-    const activeTargets = targets.filter(function(target) {
-      return !authBlocked.has(String(target.profile_id || '').trim());
-    });
-    const blockedProfiles = Array.from(authBlocked.keys());
-
-    if (!activeTargets.length) {
-      pythonWorkerUiState.fpResolving = false;
-      if (pythonWorkerUiState.batchKind === 'rk_fp') {
-        pythonWorkerClearBatchState();
-      }
-      pythonWorkerUiState.busy = false;
-      pythonWorkerSelectionRefresh();
-      pythonWorkerSetText('pythonPwJob', '');
-      pythonWorkerSetText(
-        'pythonPwStatus',
-        'FP авто приостановлено: Facebook checkpoint у профиля(ей) ' +
-          blockedProfiles.join(', ') +
-          '. Backend Job сохранён; новых Jobs и FP не создавалось.'
-      );
-      return;
-    }
+    // REMASK_FP_AUTO_SINGLE_BROWSER_PASS_V1
+    // Do not open Facebook here for a separate auth preflight. Page selection
+    // is based on already synchronized/local confirmed inventory; the actual
+    // FAN_PAGES Job performs the one authoritative browser/session check and
+    // reports checkpoint/2FA/session errors per profile.
+    const activeTargets = targets.slice();
+    const blockedProfiles = [];
 
     const pageCache = new Map();
     const pageInventoryErrors = new Map();
