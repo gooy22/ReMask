@@ -382,55 +382,113 @@ async function syncSelection(){
     }
   };
 
-  const syncProfileSafe=async(profile)=>{
+  // REMASK_SYNC_RESULT_RECONCILIATION_V1
+  const syncRequestId=()=>{
     try{
-      const d=await withTimeout(syncApiJson('ajax/metaHierarchy.php',post({action:'sync_profile',profile})));
-      const applied=applySnapshot(d);
-      if(d && d.sync_complete===true && !applied){
+      if(globalThis.crypto&&typeof globalThis.crypto.randomUUID==='function'){
+        return globalThis.crypto.randomUUID().replace(/-/g,'_');
+      }
+    }catch(_){}
+    return 'sync_'+Date.now()+'_'+Math.random().toString(36).slice(2,12);
+  };
+
+  const reconcileDroppedSync=async(profile,requestId)=>{
+    for(let attempt=0;attempt<12;attempt++){
+      if(attempt>0)await new Promise(resolve=>setTimeout(resolve,1250));
+      try{
+        const d=await syncApiJson(
+          'ajax/metaHierarchy.php',
+          post({action:'sync_result',profile,request_id:requestId})
+        );
+        if(!d||d.pending===true)continue;
+        if(d.sync_complete===true){
+          const applied=applySnapshot(d);
+          if(!applied){
+            return {
+              error:'Live Meta sync finished but reconciled snapshot was not applied',
+              error_kind:'SNAPSHOT_NOT_APPLIED',
+              profile
+            };
+          }
+          return d;
+        }
         return {
-          error:'Live Meta sync returned success but Workspace snapshot was not applied',
-          error_kind:'SNAPSHOT_NOT_APPLIED',
+          error:String(d.sync_error||'Private Meta sync failed after client reconnect'),
+          error_kind:String(d.sync_error_kind||'PRIVATE_SYNC'),
           profile
         };
+      }catch(_){
+        // The status request itself is intentionally retried; it is read-only
+        // and does not start another Meta sync.
       }
-      if(d && d.sync_complete===false){
-        return {
-          error:String(d.sync_error||'Private Business Suite inventory was inconclusive'),
-          error_kind:String(d.sync_error_kind||'PRIVATE_INCONCLUSIVE'),
-          profile
-        };
-      }
-      return d;
+    }
+    return null;
+  };
+
+  const finishSyncResponse=(d,profile,business_id='')=>{
+    const applied=applySnapshot(d);
+    if(d && d.sync_complete===true && !applied){
+      return {
+        error:'Live Meta sync returned success but Workspace snapshot was not applied',
+        error_kind:'SNAPSHOT_NOT_APPLIED',
+        profile,
+        business_id
+      };
+    }
+    if(d && d.sync_complete===false){
+      return {
+        error:String(d.sync_error||'Private Business Suite inventory was inconclusive'),
+        error_kind:String(d.sync_error_kind||'PRIVATE_INCONCLUSIVE'),
+        profile,
+        business_id
+      };
+    }
+    return d;
+  };
+
+  const syncProfileSafe=async(profile)=>{
+    const requestId=syncRequestId();
+    try{
+      const d=await withTimeout(syncApiJson(
+        'ajax/metaHierarchy.php',
+        post({action:'sync_profile',profile,request_id:requestId})
+      ));
+      return finishSyncResponse(d,profile);
     }catch(e){
       const x=classifySyncError(e);
+      if(x.kind==='CLIENT_TRANSPORT'){
+        const reconciled=await reconcileDroppedSync(profile,requestId);
+        if(reconciled)return reconciled;
+      }
       return {error:x.message,error_kind:x.kind,profile};
     }
   };
 
   const syncBusinessSafe=async(row)=>{
+    const requestId=syncRequestId();
     try{
-      const d=await withTimeout(syncApiJson('ajax/metaHierarchy.php',post({action:'sync_profile',profile:row.profile,business_id:row.id})));
-      const applied=applySnapshot(d);
-      if(d && d.sync_complete===true && !applied){
-        return {
-          error:'Live Meta sync returned success but Workspace snapshot was not applied',
-          error_kind:'SNAPSHOT_NOT_APPLIED',
+      const d=await withTimeout(syncApiJson(
+        'ajax/metaHierarchy.php',
+        post({
+          action:'sync_profile',
           profile:row.profile,
-          business_id:row.id
-        };
-      }
-      if(d && d.sync_complete===false){
-        return {
-          error:String(d.sync_error||'Private Business Suite inventory was inconclusive'),
-          error_kind:String(d.sync_error_kind||'PRIVATE_INCONCLUSIVE'),
-          profile:row.profile,
-          business_id:row.id
-        };
-      }
-      return d;
+          business_id:row.id,
+          request_id:requestId
+        })
+      ));
+      return finishSyncResponse(d,row.profile,row.id);
     }catch(e){
       const x=classifySyncError(e);
-      return {error:x.message,error_kind:x.kind,profile:row.profile,business_id:row.id};
+      if(x.kind==='CLIENT_TRANSPORT'){
+        const reconciled=await reconcileDroppedSync(row.profile,requestId);
+        if(reconciled)return reconciled;
+      }
+      return {
+        error:x.message,
+        error_kind:x.kind,
+        profile:row.profile,
+        business_id:row.id
+      };
     }
   };
 
@@ -634,6 +692,99 @@ function hierarchy_worker_live_inventory(
         );
     }
     return $json;
+}
+
+function hierarchy_sync_result_file(): string
+{
+    return '/var/lib/remask/workspace-sync-results.json';
+}
+
+function hierarchy_sync_result_put(
+    string $requestId,
+    string $profile,
+    array $result
+): void
+{
+    $requestId = trim($requestId);
+    $profile = trim($profile);
+    if (
+        !preg_match('/^[A-Za-z0-9_-]{8,96}$/', $requestId)
+        || $profile === ''
+    ) return;
+
+    $file = hierarchy_sync_result_file();
+    $dir = dirname($file);
+    if (!is_dir($dir)) @mkdir($dir, 0700, true);
+
+    $fp = @fopen($file, 'c+');
+    if (!$fp) return;
+    try {
+        if (!@flock($fp, LOCK_EX)) return;
+        rewind($fp);
+        $raw = stream_get_contents($fp);
+        $all = [];
+        if (is_string($raw) && trim($raw) !== '') {
+            $decoded = json_decode($raw, true);
+            if (is_array($decoded)) $all = $decoded;
+        }
+
+        $now = time();
+        foreach ($all as $key => $row) {
+            if (
+                !is_array($row)
+                || (int)($row['updated_at'] ?? 0) < ($now - 1800)
+            ) {
+                unset($all[$key]);
+            }
+        }
+
+        // Store only status metadata. The actual snapshot is rebuilt from
+        // current account state + last confirmed live inventory on read.
+        $all[$requestId] = [
+            'profile' => $profile,
+            'updated_at' => $now,
+            'status' => (string)($result['status'] ?? 'failed'),
+            'sync_complete' => ($result['sync_complete'] ?? false) === true,
+            'sync_error_kind' => trim((string)($result['sync_error_kind'] ?? '')),
+            'sync_error' => trim((string)($result['sync_error'] ?? '')),
+        ];
+
+        $encoded = json_encode(
+            $all,
+            JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
+        );
+        if (!is_string($encoded)) return;
+        ftruncate($fp, 0);
+        rewind($fp);
+        fwrite($fp, $encoded);
+        fflush($fp);
+    } finally {
+        @flock($fp, LOCK_UN);
+        @fclose($fp);
+    }
+}
+
+function hierarchy_sync_result_get(
+    string $requestId,
+    string $profile
+): array
+{
+    $requestId = trim($requestId);
+    $profile = trim($profile);
+    if (
+        !preg_match('/^[A-Za-z0-9_-]{8,96}$/', $requestId)
+        || $profile === ''
+    ) return [];
+
+    $raw = @file_get_contents(hierarchy_sync_result_file());
+    if (!is_string($raw) || trim($raw) === '') return [];
+    $all = json_decode($raw, true);
+    if (!is_array($all)) return [];
+    $row = $all[$requestId] ?? null;
+    if (!is_array($row)) return [];
+    if (trim((string)($row['profile'] ?? '')) !== $profile) return [];
+    if ((int)($row['updated_at'] ?? 0) < (time() - 1800)) return [];
+    return $row;
 }
 
 function hierarchy_binding_file(): string
@@ -1003,9 +1154,60 @@ if (strpos($php, 'REMASK_DIRECT_FUNDING_SNAPSHOT_V1') === false) {
 }
 
 $syncProfileReplacement = <<<'PHP'
-    if ($action === 'sync_profile') {
+    if ($action === 'sync_result') {
         $profile = trim((string)($input['profile'] ?? ''));
+        $requestId = trim((string)($input['request_id'] ?? ''));
         if ($profile === '') throw new InvalidArgumentException('profile is required');
+        if (!preg_match('/^[A-Za-z0-9_-]{8,96}$/', $requestId)) {
+            throw new InvalidArgumentException('request_id is required');
+        }
+
+        $savedResult = hierarchy_sync_result_get($requestId, $profile);
+        if ($savedResult === []) {
+            MetaEndpoint::ok([
+                'profile_name' => $profile,
+                'request_id' => $requestId,
+                'pending' => true,
+            ]);
+        }
+
+        if (($savedResult['sync_complete'] ?? false) === true) {
+            $reconciled = hierarchy_live_snapshot_apply_display(
+                $profile,
+                hierarchy_profile_snapshot($profile)
+            );
+            $reconciled['request_id'] = $requestId;
+            $reconciled['pending'] = false;
+            $reconciled['sync_complete'] = true;
+            $reconciled['sync_reconciled'] = true;
+            MetaEndpoint::ok($reconciled);
+        }
+
+        MetaEndpoint::ok([
+            'profile_name' => $profile,
+            'request_id' => $requestId,
+            'pending' => false,
+            'sync_complete' => false,
+            'sync_error_kind' => (string)($savedResult['sync_error_kind'] ?? 'PRIVATE_SYNC'),
+            'sync_error' => (string)($savedResult['sync_error'] ?? 'Private Meta sync failed'),
+            'sync_reconciled' => true,
+        ]);
+    }
+
+    if ($action === 'sync_profile') {
+        // Keep backend reconciliation alive even if a mobile browser/network
+        // closes the long HTTP request before Meta finishes.
+        @ignore_user_abort(true);
+
+        $profile = trim((string)($input['profile'] ?? ''));
+        $requestId = trim((string)($input['request_id'] ?? ''));
+        if ($profile === '') throw new InvalidArgumentException('profile is required');
+        if (
+            $requestId !== ''
+            && !preg_match('/^[A-Za-z0-9_-]{8,96}$/', $requestId)
+        ) {
+            throw new InvalidArgumentException('invalid request_id');
+        }
 
         // REMASK_PRIVATE_BROWSER_SYNC_V1
         // Workspace sync is sourced only from the profile-bound Business Suite
@@ -1055,11 +1257,26 @@ $syncProfileReplacement = <<<'PHP'
             );
         } catch (Throwable $liveInventoryError) {
             $message = trim((string)$liveInventoryError->getMessage());
-            if (
+            $errorKind = (
                 stripos($message, 'SESSION_EXPIRED') !== false
                 || stripos($message, 'CHECKPOINT_REQUIRED') !== false
                 || stripos($message, 'TWO_FACTOR_REQUIRED') !== false
-            ) {
+            ) ? 'FB_SESSION_EXPIRED' : 'PRIVATE_SYNC';
+
+            if ($requestId !== '') {
+                hierarchy_sync_result_put(
+                    $requestId,
+                    $profile,
+                    [
+                        'status' => 'failed',
+                        'sync_complete' => false,
+                        'sync_error_kind' => $errorKind,
+                        'sync_error' => $message,
+                    ]
+                );
+            }
+
+            if ($errorKind === 'FB_SESSION_EXPIRED') {
                 throw new RuntimeException('FB_SESSION_EXPIRED: ' . $message, 0, $liveInventoryError);
             }
             throw new RuntimeException('PRIVATE_SYNC_FAILED: ' . $message, 0, $liveInventoryError);
@@ -1270,6 +1487,20 @@ $syncProfileReplacement = <<<'PHP'
         if ($syncWarnings !== []) {
             $snapshot['sync_warnings'] = array_values(array_unique($syncWarnings));
         }
+
+        if ($requestId !== '') {
+            hierarchy_sync_result_put(
+                $requestId,
+                $profile,
+                [
+                    'status' => $syncComplete ? 'success' : 'failed',
+                    'sync_complete' => $syncComplete,
+                    'sync_error_kind' => (string)($snapshot['sync_error_kind'] ?? ''),
+                    'sync_error' => (string)($snapshot['sync_error'] ?? ''),
+                ]
+            );
+        }
+
         MetaEndpoint::ok($snapshot);
     }
 PHP;
@@ -1554,6 +1785,9 @@ if (
     || strpos($php, "\$snapshot['profile'] = \$responseProfile;") === false
     || strpos($js, 'SNAPSHOT_NOT_APPLIED') === false
     || strpos($js, 'function applySnapshot(s){') === false
+    || strpos($js, 'REMASK_SYNC_RESULT_RECONCILIATION_V1') === false
+    || strpos($php, "hierarchy_sync_result_put(") === false
+    || strpos($php, "\$action === 'sync_result'") === false
     || strpos($js, 'return true;') === false
     || strpos($php, "'proxy_configured' => \$proxy !== null") === false
     || strpos($php, "'permissions_available' => !is_array(\$preflight)") === false
