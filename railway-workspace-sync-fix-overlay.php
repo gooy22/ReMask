@@ -1587,32 +1587,11 @@ if ($start === false || $end === false) {
 $end += strlen($endNeedle);
 $php = substr($php, 0, $start) . $syncProfileReplacement . substr($php, $end);
 
-// Mutations must validate the current profile transport and current asset access.
-// Never rely on a potentially stale read cache immediately before creating BM/RK.
-$php = str_replace(
-    "\$preflight = MetaEndpoint::cachedPreflight(\$profile, false);",
-    "\$preflight = MetaEndpoint::cachedPreflight(\$profile, true);",
-    $php,
-    $livePreflightCount
-);
-$php = str_replace(
-    "\$pages = MetaEndpoint::cachedAsset(\$profile, 'pages', '', false);",
-    "\$pages = MetaEndpoint::cachedAsset(\$profile, 'pages', '', true);",
-    $php,
-    $livePagesCount
-);
-$php = str_replace(
-    "\$businesses = MetaEndpoint::cachedAsset(\$profile, 'businesses', '', false);",
-    "\$businesses = MetaEndpoint::cachedAsset(\$profile, 'businesses', '', true);",
-    $php,
-    $liveBusinessesCount
-);
-if ($livePreflightCount < 2 || $livePagesCount < 1 || $liveBusinessesCount < 1) {
-    throw new RuntimeException(
-        'live mutation preflight patch failed: preflight=' . $livePreflightCount .
-        ' pages=' . $livePagesCount . ' businesses=' . $liveBusinessesCount
-    );
-}
+// REMASK_NO_LEGACY_LIVE_GRAPH_MUTATION_PREFLIGHT_V1
+// Active FP/BM/RK mutations are owned by the Python private-browser worker.
+// Do not turn legacy MetaEndpoint cache reads into forced live Graph traffic.
+// The legacy backend remains cache-only and the UI interceptors route creation
+// through the worker.
 
 // Explicit readiness dimensions in the profile snapshot. Cache-only: opening
 // Workspace itself does not create extra Graph traffic.
