@@ -2211,29 +2211,11 @@ async function pythonWorkerLoadBusinesses(profileId, csrfRetried) {
     throw new Error(errorText);
   }
 
-  const businesses = Array.isArray(data.businesses) ? data.businesses.slice() : [];
-
-  try {
-    const persisted = await pythonWorkerProfileProvisioningState(profileId);
-    const persistedBusinessId = String((persisted && persisted.business_id) || '').trim();
-    if (
-      /^\d+$/.test(persistedBusinessId) &&
-      !businesses.some(function(item) {
-        return String((item && item.id) || '').trim() === persistedBusinessId;
-      })
-    ) {
-      businesses.unshift({
-        id: persistedBusinessId,
-        name: 'ReMask BM ' + persistedBusinessId,
-        source: 'provisioning_state',
-        ad_account_id: String((persisted && persisted.ad_account_id) || '').trim()
-      });
-    }
-  } catch (stateError) {
-    console.warn('[ReMask Worker UI] provisioning state fallback failed:', stateError);
-  }
-
-  return businesses;
+  // REMASK_BUSINESS_ENDPOINT_SINGLE_SOURCE_V1
+  // pythonWorkerBusinesses.php already merges last live snapshot + every
+  // worker-confirmed Business. Do not make a second provisioning-state request
+  // that can reintroduce the old "newest BM only" view.
+  return Array.isArray(data.businesses) ? data.businesses.slice() : [];
 }
 
 async function pythonWorkerStartAdAccounts(options) {
