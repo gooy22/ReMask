@@ -1274,7 +1274,11 @@ async function pythonWorkerLoadPages(profileId, csrfRetried) {
     throw new Error(errorText);
   }
 
-  return Array.isArray(data.pages) ? data.pages : [];
+  const pages = Array.isArray(data.pages) ? data.pages : [];
+  if (!pages.length && data.sync_required === true) {
+    throw new Error('Pages отсутствуют в последней синхронизации. Нажми синхронизацию профиля и открой окно снова.');
+  }
+  return pages;
 }
 
 function pythonWorkerApplyPages(cfg, pages, sourceLabel) {
@@ -1385,7 +1389,7 @@ function pythonWorkerApplyPages(cfg, pages, sourceLabel) {
 
   cfg.pageHint.textContent =
     'Pages: ' + list.length +
-    ' · источник: ' + String(sourceLabel || 'ReMask private browser') +
+    ' · источник: ' + String(sourceLabel || 'последняя синхронизация') +
     (warnings.length ? ' · ' + warnings.join(' · ') : '') +
     (
       preferred
@@ -1674,17 +1678,17 @@ async function pythonWorkerOpenOwnBmModal() {
       cfg.page.textContent = '';
       const failed = document.createElement('option');
       failed.value = '';
-      failed.textContent = 'Кэш Pages недоступен';
+      failed.textContent = 'Pages нет в последней синхронизации';
       cfg.page.appendChild(failed);
       cfg.page.disabled = false;
       cfg.loaded = true;
 
       cfg.sessionHint.className = 'pwbm-session error';
       cfg.sessionHint.textContent =
-        'Pages из ReMask/private browser недоступны · можно ввести Primary Page ID вручную';
+        'Pages не были получены последней синхронизацией · синхронизируй профиль или введи Primary Page ID вручную';
       cfg.pageHint.className = 'error';
       cfg.pageHint.textContent =
-        'Не удалось получить Pages из ReMask/private browser: ' + cfg.error +
+        'Нет Pages в сохранённом результате синхронизации: ' + cfg.error +
         '. Введи Primary Page ID вручную.';
 
       refreshReadyState();
