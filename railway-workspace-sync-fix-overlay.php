@@ -306,6 +306,7 @@ async function syncSelection(){
     else if(/\\b407\\b|proxy authentication|proxy auth/.test(s))kind='PROXY_AUTH';
     else if(/live_inventory_browser_open_timeout|browser slot waited|profile_browser_lock_timeout|browser_open timeout/.test(s))kind='BROWSER_BUSY';
     else if(/business discovery timed out|live_inventory_timeout:business_discovery/.test(s))kind='BM_DISCOVERY_TIMEOUT';
+    else if(/load failed|failed to fetch|network request failed/.test(s))kind='CLIENT_TRANSPORT';
     else if(/transport error|curl|could not resolve|connection timed out|connection refused|ssl connect/.test(s))kind='TRANSPORT';
     else if(/access token.*(invalid|expired)|token.*(invalid|expired)|session.*expired|code[^0-9]*190\\b|\\(#190\\)/.test(s))kind='TOKEN_INVALID';
     else if(/oauth.*code[^0-9]*1\\b|code=1\\b|meta graph .* http 400 code=1\\b/.test(s))kind='META_REQUEST';
@@ -327,9 +328,63 @@ async function syncSelection(){
     }
   };
 
+  // REMASK_SYNC_DIRECT_FETCH_V1
+  // The generic apiJson helper has its own short transport deadline in the
+  // legacy Workspace runtime. A healthy private Meta sync can legitimately
+  // take >10s, so sync requests must use a dedicated long-lived fetch instead
+  // of being aborted by that helper while the server is still working.
+  const syncApiJson=async(url,body)=>{
+    const controller=new AbortController();
+    const timer=setTimeout(()=>controller.abort(),65000);
+    try{
+      const response=await fetch(url,{
+        method:'POST',
+        body,
+        credentials:'same-origin',
+        cache:'no-store',
+        signal:controller.signal,
+        headers:{'X-Requested-With':'XMLHttpRequest'}
+      });
+      const raw=await response.text();
+      let data=null;
+      try{
+        data=raw?JSON.parse(raw):{};
+      }catch(_){
+        throw new Error('Private Meta sync returned invalid JSON (HTTP '+response.status+')');
+      }
+
+      if(data&&typeof data==='object'&&Object.prototype.hasOwnProperty.call(data,'res')){
+        const wrapped=data.res;
+        if(typeof wrapped==='string'){
+          try{data=JSON.parse(wrapped);}catch(_){data=wrapped;}
+        }else if(wrapped&&typeof wrapped==='object'){
+          data=wrapped;
+        }
+      }
+
+      if(!response.ok){
+        const detail=(data&&typeof data==='object'&&(data.error||data.detail||data.message))
+          ? String(data.error||data.detail||data.message)
+          : ('HTTP '+response.status);
+        throw new Error(detail);
+      }
+      if(data&&typeof data==='object'&&data.error){
+        throw new Error(String(data.error));
+      }
+      return data;
+    }catch(e){
+      if(e&&e.name==='AbortError'){
+        throw new Error('Private Meta sync timeout after 65000ms');
+      }
+      throw e;
+    }finally{
+      clearTimeout(timer);
+    }
+  };
+
   const syncProfileSafe=async(profile)=>{
     try{
-      const d=await withTimeout(apiJson('ajax/metaHierarchy.php',post({action:'sync_profile',profile})));
+      const d=await withTimeout(syncApiJson('ajax/metaHierarchy.php',post({action:'sync_profile',profile})));
       const applied=applySnapshot(d);
       if(d && d.sync_complete===true && !applied){
         return {
@@ -354,7 +409,7 @@ async function syncSelection(){
 
   const syncBusinessSafe=async(row)=>{
     try{
-      const d=await withTimeout(apiJson('ajax/metaHierarchy.php',post({action:'sync_profile',profile:row.profile,business_id:row.id})));
+      const d=await withTimeout(syncApiJson('ajax/metaHierarchy.php',post({action:'sync_profile',profile:row.profile,business_id:row.id})));
       const applied=applySnapshot(d);
       if(d && d.sync_complete===true && !applied){
         return {
