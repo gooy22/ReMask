@@ -266,7 +266,7 @@ async function syncSelection(){
 
   const syncBusinessSafe=async(row)=>{
     try{
-      const d=await withTimeout(apiJson('ajax/metaHierarchy.php',post({action:'sync_profile',profile:row.profile})));
+      const d=await withTimeout(apiJson('ajax/metaHierarchy.php',post({action:'sync_profile',profile:row.profile,business_id:row.id})));
       applySnapshot(d);
       if(d && d.sync_complete===false){
         return {
@@ -651,6 +651,14 @@ $syncProfileReplacement = <<<'PHP'
             if (preg_match('/^\d{5,30}$/', $existingBusinessId)) {
                 $knownBusinessIds[$existingBusinessId] = true;
             }
+        }
+
+        // A Business-row sync already knows the exact BM selected by the user.
+        // Pass it to the worker as a navigation hint instead of spending the
+        // private-sync budget rediscovering the same portfolio from HOME.
+        $requestedBusinessId = trim((string)($input['business_id'] ?? ''));
+        if (preg_match('/^\d{5,30}$/', $requestedBusinessId)) {
+            $knownBusinessIds[$requestedBusinessId] = true;
         }
 
         try {
