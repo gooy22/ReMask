@@ -981,20 +981,13 @@ async def profile_live_inventory(
             stage='browser_open'
             browser_open_started=time.monotonic()
             try:
-                browser=await asyncio.wait_for(
-                    profile_session.facebook_business_browser(),
-                    timeout=24.0,
-                )
-            except asyncio.TimeoutError as exc:
-                log.warning(
-                    'live inventory profile=%s browser_open timeout ms=%d',
-                    clean_profile,
-                    int((time.monotonic()-browser_open_started)*1000),
-                )
-                raise HTTPException(
-                    status_code=504,
-                    detail='LIVE_INVENTORY_BROWSER_OPEN_TIMEOUT',
-                ) from exc
+                # REMASK_LIVE_SYNC_USE_BROWSER_QUEUE_WATCHDOG_V1
+                # FacebookBusinessBrowser.open() already owns the global queue
+                # deadline and returns BROWSER_QUEUE_TIMEOUT with a precise
+                # diagnostic. The old 24s wrapper conflicted with the 1-browser
+                # production pool and made concurrent sync look like a browser
+                # failure even when it was only waiting its turn.
+                browser=await profile_session.facebook_business_browser()
             log.info(
                 'live inventory profile=%s browser_open ms=%d',
                 clean_profile,
