@@ -42,6 +42,22 @@ class FanPageProvisioningStructureTests(unittest.TestCase):
         self.assertIn("attach_existing", handler_source)
 
 
+    def test_page_inventory_never_treats_parser_failure_as_empty(self) -> None:
+        browser_source = inspect.getsource(
+            FacebookBusinessBrowser.discover_managed_pages
+        )
+        self.assertIn("REMASK_PAGE_EXPLICIT_EMPTY_V1", browser_source)
+        self.assertIn("explicit_empty", browser_source)
+
+        from app.provisioning.fan_pages_handler import _fresh_page_inventory
+        inventory_source = inspect.getsource(_fresh_page_inventory)
+        self.assertIn("REMASK_PAGE_RECONCILE_NO_FALSE_EMPTY_V1", inventory_source)
+        self.assertNotIn(
+            'if exc.code == "FAN_PAGES_NOT_DISCOVERED"',
+            inventory_source,
+        )
+
+
     def test_profile_auth_challenges_are_resumable_not_blind_auto_retries(self) -> None:
         for code in ("CHECKPOINT_REQUIRED", "SESSION_EXPIRED", "TWO_FACTOR_REQUIRED"):
             exc = BrowserBusinessError(code, "profile auth required", retryable=False)
