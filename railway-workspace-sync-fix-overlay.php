@@ -1188,6 +1188,19 @@ $syncProfileReplacement = <<<'PHP'
         ]);
     }
 
+    if ($action === 'snapshot_profile') {
+        $profile = trim((string)($input['profile'] ?? ''));
+        if ($profile === '') throw new InvalidArgumentException('profile is required');
+
+        $snapshot = hierarchy_live_snapshot_apply_display(
+            $profile,
+            hierarchy_profile_snapshot($profile)
+        );
+        $snapshot['snapshot_only'] = true;
+        $snapshot['sync_source'] = 'local_confirmed_state';
+        MetaEndpoint::ok($snapshot);
+    }
+
     if ($action === 'sync_profile') {
         // Keep backend reconciliation alive even if a mobile browser/network
         // closes the long HTTP request before Meta finishes.
@@ -1355,24 +1368,49 @@ $syncProfileReplacement = <<<'PHP'
             }
         }
 
-        // If browser inventory was inconclusive, preserve the previous private
-        // snapshot rather than erasing working rows.
+        // REMASK_COMPONENT_SNAPSHOT_MERGE_V1
+        // BM, RK and Pages are independent inventory components. A flaky RK
+        // surface must not erase a freshly confirmed BM/Page result, and a
+        // Page timeout must not turn an otherwise good BM/RK sync into failure.
         $liveReady = (($liveInventory['live_ready'] ?? false) === true);
-        if (!$liveReady && $adAccountRows === []) {
-            foreach ((array)($existingSnapshot['ad_accounts'] ?? []) as $row) {
-                if (!is_array($row)) continue;
-                $id = trim((string)($row['id'] ?? $row['account_id'] ?? ''));
-                if ($id === '') continue;
-                $row['_sync_preserved'] = true;
-                $adAccountRows[] = $row;
+        $businessesReady = (($liveInventory['businesses_ready'] ?? false) === true);
+        $adAccountsComplete = (($liveInventory['ad_accounts_complete'] ?? false) === true);
+        $pagesReady = (($liveInventory['pages_ready'] ?? false) === true);
+        $syncPartial = (($liveInventory['sync_partial'] ?? false) === true);
+
+        $previousLive = hierarchy_live_snapshot_get($profile);
+
+        if (!$businessesReady) {
+            $preserved = array_values(array_filter(
+                (array)($previousLive['businesses'] ?? []),
+                static fn($row) => is_array($row)
+            ));
+            if ($preserved !== []) {
+                $businessRows = $preserved;
+                $syncWarnings[] = 'BM inventory not confirmed; last confirmed BM snapshot preserved';
             }
-            if ($businessRows === []) {
-                $businessRows = array_values(array_filter(
-                    (array)($existingSnapshot['businesses'] ?? []),
-                    static fn($row) => is_array($row)
-                ));
+        }
+
+        if (!$adAccountsComplete) {
+            $preserved = array_values(array_filter(
+                (array)($previousLive['ad_accounts'] ?? []),
+                static fn($row) => is_array($row)
+            ));
+            if ($preserved !== []) {
+                $adAccountRows = $preserved;
+                $syncWarnings[] = 'RK inventory partially/inconclusive; last confirmed RK snapshot preserved';
             }
-            $syncWarnings[] = 'Live browser inventory was inconclusive; previous private snapshot preserved';
+        }
+
+        if (!$pagesReady) {
+            $preserved = array_values(array_filter(
+                (array)($previousLive['pages'] ?? []),
+                static fn($row) => is_array($row)
+            ));
+            if ($preserved !== []) {
+                $pageRows = $preserved;
+                $syncWarnings[] = 'Page inventory not confirmed; last confirmed Page snapshot preserved';
+            }
         }
 
         $snapshot = $existingSnapshot;
@@ -1382,8 +1420,21 @@ $syncProfileReplacement = <<<'PHP'
         $snapshot['ad_accounts_count'] = count($adAccountRows);
         $snapshot['pages'] = array_values($pageRows);
         $snapshot['pages_count'] = count($pageRows);
-        $snapshot['pages_ready'] = (($liveInventory['pages_ready'] ?? false) === true);
+        $snapshot['businesses_ready'] = $businessesReady;
+        $snapshot['ad_accounts_complete'] = $adAccountsComplete;
+        $snapshot['pages_ready'] = $pagesReady;
         $snapshot['pages_source'] = (string)($liveInventory['pages_source'] ?? '');
+        $snapshot['sync_partial'] = $syncPartial;
+        $snapshot['rk_ready_businesses'] = array_values(
+            (array)($liveInventory['rk_ready_businesses'] ?? [])
+        );
+        $snapshot['rk_inconclusive_businesses'] = array_values(
+            (array)($liveInventory['rk_inconclusive_businesses'] ?? [])
+        );
+
+        // A component-aware sync is successful if at least one live inventory
+        // component was confirmed. Incomplete components are warnings, not a
+        // fake whole-profile failure.
         $syncComplete = $liveReady;
 
         $snapshot['sync_source'] = 'private_business_suite_browser';
@@ -1391,9 +1442,11 @@ $syncProfileReplacement = <<<'PHP'
         $snapshot['confirmed_worker_bindings'] = $workerConfirmedCount;
         $snapshot['graph_preflight_available'] = false;
         $snapshot['sync_complete'] = $syncComplete;
+        unset($snapshot['sync_error_kind'], $snapshot['sync_error']);
+
         if (!$syncComplete) {
             $snapshot['sync_error_kind'] = 'PRIVATE_INCONCLUSIVE';
-            $snapshot['sync_error'] = 'Private Business Suite inventory did not confirm live BM/RK state.';
+            $snapshot['sync_error'] = 'Private Facebook inventory did not confirm any live BM/RK/Page component.';
         }
 
         $responseProfile = null;
@@ -1493,8 +1546,13 @@ $syncProfileReplacement = <<<'PHP'
                 'live_ready' => $liveReady,
                 'worker_confirmed_bindings' => $workerConfirmedCount,
                 'sync_complete' => $syncComplete,
+                'sync_partial' => $syncPartial,
+                'businesses_ready' => $businessesReady,
+                'ad_accounts_complete' => $adAccountsComplete,
+                'pages_ready' => $pagesReady,
                 'businesses' => count($businessRows),
                 'ad_accounts' => count($adAccountRows),
+                'pages' => count($pageRows),
                 'warnings' => $syncWarnings,
             ],
         ]);
@@ -1803,6 +1861,8 @@ if (
     || strpos($js, 'REMASK_SYNC_RESULT_RECONCILIATION_V1') === false
     || strpos($php, "hierarchy_sync_result_put(") === false
     || strpos($php, "\$action === 'sync_result'") === false
+    || strpos($php, "\$action === 'snapshot_profile'") === false
+    || strpos($php, 'REMASK_COMPONENT_SNAPSHOT_MERGE_V1') === false
     || strpos($js, 'return true;') === false
     || strpos($php, "'proxy_configured' => \$proxy !== null") === false
     || strpos($php, "'permissions_available' => !is_array(\$preflight)") === false
