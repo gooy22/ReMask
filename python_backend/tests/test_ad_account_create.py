@@ -156,6 +156,14 @@ class AdAccountInventoryParserSafetyTests(unittest.TestCase):
         )
 
 
+class AdAccountPrivateReconciliationTests(unittest.TestCase):
+    def test_reconcile_existing_does_not_use_official_graph(self) -> None:
+        source = inspect.getsource(_reconcile_existing)
+        self.assertNotIn("session.graph_api", source)
+        self.assertIn("probe_ads_manager_inventory_context", source)
+        self.assertIn("snapshot_ad_accounts_for_business", source)
+
+
 class AdAccountPostCreateVerificationTests(unittest.IsolatedAsyncioTestCase):
     async def test_expected_id_requires_exact_business_inventory_match(self) -> None:
         evidence = {
