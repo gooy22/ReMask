@@ -1825,14 +1825,14 @@ async function pythonWorkerPoll() {
         isFanPageJob
           ? (
               unconfirmed.length
-                ? 'FP созданы. Page ID сохранены в Job. Локальное обновление Workspace не применилось:: ' + unconfirmed.join(', ') + '.'
+                ? 'FP созданы. Page ID сохранены в Job. Локальное обновление Workspace не применилось: ' + unconfirmed.join(', ') + '.'
                 : 'Fan Pages созданы. Workspace обновлён из подтверждённого Job state; live sync запускается отдельно.'
             )
           : isAdAccountJob
           ? (
               unconfirmed.length
                 ? (
-                    'RK создан. ad_account_id сохранён в Job. Workspace sync не ' +
+                    'RK создан. ad_account_id сохранён в Job. Локальный snapshot не ' +
                     'подтвердил профили: ' + unconfirmed.join(', ') + '.'
                   )
                 : 'Рекламный кабинет создан. Workspace обновлён из подтверждённого Job state; live sync запускается отдельно.'
@@ -1840,7 +1840,7 @@ async function pythonWorkerPoll() {
           : (
               unconfirmed.length
                 ? (
-                    'BM создан. ID сохранён в Job. Обычный Meta inventory sync не ' +
+                    'BM создан. ID сохранён в Job. Локальный snapshot не ' +
                     'подтвердил профили: ' + unconfirmed.join(', ') +
                     '. Это не отменяет успешный CREATE.'
                   )
@@ -1898,12 +1898,12 @@ async function pythonWorkerPoll() {
             isAdAccountJob
               ? (
                   'Часть RK создана. Успешные ad_account_id сохранены в Job; ' +
-                  'Локальное обновление Workspace не применилось:: ' + unconfirmed.join(', ') +
+                  'Локальное обновление Workspace не применилось: ' + unconfirmed.join(', ') +
                   '. Ошибки остальных: ' + (errors.join(' · ') || 'неизвестная ошибка')
                 )
               : (
                   'Часть BM создана. Успешные BM ID сохранены в Job; Meta inventory ' +
-                  'sync не подтвердил: ' + unconfirmed.join(', ') +
+                  'локальный snapshot не применился: ' + unconfirmed.join(', ') +
                   '. Ошибки остальных: ' + (errors.join(' · ') || 'неизвестная ошибка')
                 )
           );
