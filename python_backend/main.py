@@ -932,10 +932,22 @@ async def profile_live_inventory(
         if hinted_business_id.isdigit():
             known_business_ids.add(hinted_business_id)
 
-    # BM:RK pairs below come only from the last live-confirmed Workspace
-    # snapshot. They are hints for surviving Meta selector/UI drift; they are
-    # never accepted without a fresh live Ads Manager observation.
+    # Seed live revalidation with worker-confirmed BM->RK relations first.
+    # These IDs were persisted only after a successful/confirmed RK workflow.
+    # They remain navigation hints: current Meta must still prove them live.
     known_accounts_by_business: dict[str,set[str]] = {}
+    for binding in confirmed_bindings:
+        if not isinstance(binding,dict):
+            continue
+        business_id=str(binding.get('business_id') or '').strip()
+        account_id=str(binding.get('ad_account_id') or '').strip().removeprefix('act_')
+        if business_id.isdigit() and account_id.isdigit():
+            known_accounts_by_business.setdefault(
+                business_id,set()
+            ).add(account_id)
+
+    # Last-live Workspace snapshot adds any relations not yet represented in
+    # worker history. Hints never create success without a fresh live probe.
     for raw_pair in str(ad_account_hints or '').split(','):
         raw_pair=raw_pair.strip()
         if not raw_pair or ':' not in raw_pair:
