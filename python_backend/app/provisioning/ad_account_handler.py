@@ -392,16 +392,101 @@ async def _reconcile_existing(
     business_id: str,
     account_name: str,
 ) -> tuple[str, list[dict[str, Any]]]:
+    """Read current RK inventory through the profile-bound private browser.
+
+    This is the canonical reconciliation transport. Official Graph permissions
+    are deliberately irrelevant to Add RK.
+    """
     diagnostics: list[dict[str, Any]] = []
+    business = _clean(business_id)
     try:
-        graph = await session.graph_api()
-        rows = await graph.list_ad_accounts_for_business(business_id)
+        browser = await session.facebook_business_browser()
+
+        probe = {}
+        try:
+            probe = await asyncio.wait_for(
+                browser.probe_ads_manager_inventory_context(
+                    business_id=business,
+                    timeout_seconds=8.0,
+                ),
+                timeout=10.0,
+            )
+        except Exception as exc:
+            diagnostics.append(
+                {
+                    "stage": "inventory",
+                    "transport": "ads_manager_private_browser",
+                    "result": "probe_unavailable",
+                    "error": f"{exc.__class__.__name__}: {exc}"[:1200],
+                }
+            )
+
+        rows = []
+        if isinstance(probe, dict) and probe.get("confirmed"):
+            rows = [
+                row
+                for row in (probe.get("confirmed_accounts") or [])
+                if isinstance(row, dict)
+            ]
+            diagnostics.append(
+                {
+                    "stage": "inventory",
+                    "transport": str(
+                        probe.get("confirmation_source")
+                        or "ads_manager_private_browser"
+                    ),
+                    "result": "ok",
+                    "count": len(rows),
+                }
+            )
+        else:
+            inventory = await asyncio.wait_for(
+                browser.snapshot_ad_accounts_for_business(
+                    business_id=business,
+                    timeout_seconds=8.0,
+                ),
+                timeout=10.0,
+            )
+            rows = [
+                row
+                for row in (inventory.get("accounts") or [])
+                if isinstance(row, dict)
+            ]
+            if inventory.get("ready"):
+                diagnostics.append(
+                    {
+                        "stage": "inventory",
+                        "transport": str(
+                            inventory.get("source")
+                            or "business_settings_private_browser"
+                        ),
+                        "result": "ok",
+                        "count": len(rows),
+                        "confirmed_empty": bool(
+                            inventory.get("confirmed_empty")
+                        ),
+                    }
+                )
+            else:
+                diagnostics.append(
+                    {
+                        "stage": "inventory",
+                        "transport": str(
+                            inventory.get("source")
+                            or "business_settings_private_browser"
+                        ),
+                        "result": "unavailable",
+                        "count": len(rows),
+                    }
+                )
+                return "", diagnostics
     except Exception as exc:
         diagnostics.append(
             {
                 "stage": "inventory",
+                "transport": "private_browser",
                 "result": "unavailable",
-                "error": f"{exc.__class__.__name__}: {exc}",
+                "error": f"{exc.__class__.__name__}: {exc}"[:1200],
             }
         )
         return "", diagnostics
@@ -422,184 +507,19 @@ async def _reconcile_existing(
             }
         )
 
-    diagnostics.append(
-        {
-            "stage": "inventory",
-            "result": "ok",
-            "business_id": business_id,
-            "count": len(normalized),
-            "ids": [row["id"] for row in normalized[:20]],
-        }
-    )
+    wanted = _clean(account_name).casefold()
+    if wanted:
+        exact = [
+            row for row in normalized
+            if _clean(row.get("name")).casefold() == wanted
+        ]
+        if len(exact) == 1:
+            return str(exact[0]["id"]), diagnostics
 
-    if not normalized:
-        return "", diagnostics
+    if len(normalized) == 1:
+        return str(normalized[0]["id"]), diagnostics
 
-    # Graph inventory is advisory only. Never turn a lone numeric ID into an
-    # existing RK just because it is the only row returned by the token.
-    # At most expose an exact-name candidate; the caller must still verify that
-    # same ID through live Business Settings before it can suppress CREATE.
-    name_matches = [
-        row
-        for row in normalized
-        if _clean(row.get("name")).casefold() == _clean(account_name).casefold()
-    ]
-    if len(name_matches) == 1:
-        return str(name_matches[0]["id"]), diagnostics
-
-    diagnostics[-1]["graph_candidates_untrusted"] = [
-        row["id"] for row in normalized[:20]
-    ]
-    diagnostics[-1]["reason"] = "no_exact_name_match"
     return "", diagnostics
-
-
-async def _reconcile_existing_browser_inventory(
-    session: Any,
-    *,
-    business_id: str,
-    account_name: str,
-    expected_ad_account_id: str = "",
-) -> tuple[str, dict[str, Any]]:
-    """Read-only fallback using Meta Business Settings inventory surfaces.
-
-    Prefer Meta's own GraphQL inventory. If Relay no longer exposes enough
-    request metadata to bind the response conclusively, use the exact same
-    fresh browser session to verify Meta's explicit empty-state UI. Three
-    independent fresh sessions are still required by the uncertainty proof
-    when Graph API is unavailable, so a single transient UI state cannot
-    unlock a duplicate CREATE guard.
-    """
-    try:
-        async with FacebookBusinessBrowser(
-            session.context,
-            timeout_seconds=45,
-        ) as browser:
-            raw_result = await browser.find_ad_account_in_inventory(
-                business_id=business_id,
-                account_name=account_name,
-                expected_ad_account_id=expected_ad_account_id,
-                timeout_seconds=10.0,
-            )
-            result = (
-                dict(raw_result)
-                if isinstance(raw_result, dict)
-                else {
-                    "confirmed": False,
-                    "confirmed_empty": False,
-                    "source": "business_settings_graphql_inventory",
-                    "reason": "invalid_result",
-                }
-            )
-
-            found_id = _normalize_ad_account_id(
-                result.get("ad_account_id")
-            )
-            if bool(result.get("confirmed")) and found_id:
-                return found_id, result
-
-            if bool(result.get("confirmed_empty")):
-                return "", result
-
-            try:
-                ui_inventory = (
-                    await browser.verify_ad_account_inventory_empty(
-                        business_id=business_id,
-                    )
-                )
-            except Exception as ui_exc:
-                ui_inventory = {
-                    "confirmed_empty": False,
-                    "source": "business_settings_ui",
-                    "error": (
-                        f"{ui_exc.__class__.__name__}: {_clean(ui_exc)}"
-                    )[:500],
-                }
-
-            if (
-                isinstance(ui_inventory, dict)
-                and bool(ui_inventory.get("confirmed_empty"))
-            ):
-                return "", {
-                    **result,
-                    "confirmed": False,
-                    "confirmed_empty": True,
-                    "source": "business_settings_inventory_ui_fallback",
-                    "primary_source": _clean(result.get("source")),
-                    "ui_fallback": ui_inventory,
-                }
-
-            result["ui_fallback"] = (
-                ui_inventory
-                if isinstance(ui_inventory, dict)
-                else {
-                    "confirmed_empty": False,
-                    "source": "business_settings_ui",
-                    "reason": "invalid_result",
-                }
-            )
-            return "", result
-    except Exception as exc:
-        return "", {
-            "confirmed": False,
-            "confirmed_empty": False,
-            "source": "business_settings_inventory",
-            "error": f"{exc.__class__.__name__}: {_clean(exc)}"[:500],
-        }
-
-
-def _browser_inventory_confirms_nonempty(value: Any) -> bool:
-    """Return True when exact Business Settings inventory structurally has RK.
-
-    This deliberately does not choose or trust any ad-account ID. It only
-    answers the question needed by Add RK: is the selected Business already
-    non-empty?
-    """
-    if not isinstance(value, dict):
-        return False
-
-    candidates: list[dict[str, Any]] = []
-    evidence = value.get("evidence")
-    if isinstance(evidence, dict):
-        candidates.append(evidence)
-    diagnostics = value.get("diagnostics")
-    if isinstance(diagnostics, list):
-        candidates.extend(
-            row for row in diagnostics if isinstance(row, dict)
-        )
-
-    for row in candidates:
-        if not bool(row.get("exact_business_context")):
-            continue
-        inventory_ids = row.get("inventory_ids")
-        if isinstance(inventory_ids, list) and any(
-            _normalize_ad_account_id(item) for item in inventory_ids
-        ):
-            return True
-        exact_name_ids = row.get("exact_name_ids")
-        if isinstance(exact_name_ids, list) and any(
-            _normalize_ad_account_id(item) for item in exact_name_ids
-        ):
-            return True
-    return False
-
-
-def _raise_rk_already_exists(
-    *,
-    business_id: str,
-    ad_account_id: str = "",
-) -> None:
-    rk = _normalize_ad_account_id(ad_account_id)
-    suffix = f" ({rk})" if rk else ""
-    raise ProvisioningError(
-        "AD_ACCOUNT_ALREADY_EXISTS",
-        (
-            f"Business {business_id} already has an RK{suffix}. "
-            "Add RK only creates a new advertising account and never reuses "
-            "an existing one."
-        ),
-        retryable=False,
-    )
 
 
 async def _verify_expected_ad_account_in_business(
