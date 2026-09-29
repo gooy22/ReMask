@@ -301,6 +301,9 @@ RUN set -eux; \
     grep -q 'hierarchy_worker_live_inventory' /var/www/html/ajax/metaHierarchy.php; \
     grep -q 'REMASK_PRIVATE_BUSINESS_INVENTORY_V1' /opt/remask-python/app/facebook_business_browser.py; \
     grep -q 'business_suite_private_inventory' /opt/remask-python/main.py; \
+    grep -q 'ad_account_hints' /opt/remask-python/main.py; \
+    grep -q 'ads_manager_live_act_matches_confirmed_snapshot' /opt/remask-python/app/facebook_business_browser.py; \
+    grep -q 'hierarchy_live_snapshot_get($profile)' /var/www/html/ajax/metaHierarchy.php; \
     grep -q 'graph_preflight_available' /var/www/html/ajax/metaHierarchy.php; \
     grep -q "'token_status'" /var/www/html/ajax/metaHierarchy.php; \
     grep -q "'proxy_status'" /var/www/html/ajax/metaHierarchy.php; \
