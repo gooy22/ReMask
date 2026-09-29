@@ -864,7 +864,11 @@ async def register_facebook_docid(
     }
 
 @app.get('/api/v1/profiles/{profile_id}/live-inventory',dependencies=[Depends(require_key)])
-async def profile_live_inventory(profile_id: str, business_ids: str | None = None):
+async def profile_live_inventory(
+    profile_id: str,
+    business_ids: str | None = None,
+    ad_account_hints: str | None = None,
+):
     clean_profile=str(profile_id or '').strip()
     if not clean_profile:
         raise HTTPException(status_code=400,detail='profile_id is required')
@@ -913,6 +917,26 @@ async def profile_live_inventory(profile_id: str, business_ids: str | None = Non
         hinted_business_id=hinted_business_id.strip()
         if hinted_business_id.isdigit():
             known_business_ids.add(hinted_business_id)
+
+    # BM:RK pairs below come only from the last live-confirmed Workspace
+    # snapshot. They are hints for surviving Meta selector/UI drift; they are
+    # never accepted without a fresh live Ads Manager observation.
+    known_accounts_by_business: dict[str,set[str]] = {}
+    for raw_pair in str(ad_account_hints or '').split(','):
+        raw_pair=raw_pair.strip()
+        if not raw_pair or ':' not in raw_pair:
+            continue
+        hinted_business_id,hinted_account_id=raw_pair.split(':',1)
+        hinted_business_id=hinted_business_id.strip()
+        hinted_account_id=hinted_account_id.strip()
+        if (
+            hinted_business_id.isdigit()
+            and hinted_account_id.isdigit()
+        ):
+            known_business_ids.add(hinted_business_id)
+            known_accounts_by_business.setdefault(
+                hinted_business_id,set()
+            ).add(hinted_account_id)
 
     try:
         stage='profile_session'
@@ -1057,6 +1081,12 @@ async def profile_live_inventory(profile_id: str, business_ids: str | None = Non
                                 browser.probe_ads_manager_inventory_context(
                                     business_id=str(business_id),
                                     timeout_seconds=10.0,
+                                    expected_account_ids=sorted(
+                                        known_accounts_by_business.get(
+                                            str(business_id),
+                                            set(),
+                                        )
+                                    ),
                                 ),
                                 timeout=12.0,
                             )
@@ -1092,7 +1122,10 @@ async def profile_live_inventory(profile_id: str, business_ids: str | None = Non
                                     'confirmed_empty':False,
                                     'accounts':confirmed_accounts,
                                     'accounts_count':len(confirmed_accounts),
-                                    'source':'ads_manager_business_scope_inventory',
+                                    'source':str(
+                                        ads_probe.get('confirmation_source')
+                                        or 'ads_manager_business_scope_inventory'
+                                    ),
                                     'attempts':[{
                                         'requested_url':str(
                                             ads_probe.get('requested_url') or ''
