@@ -153,6 +153,9 @@ RUN set -eux; \
     grep -q 'async def facebook_web' /opt/remask-python/app/session.py; \
     grep -q 'def facebook_business_browser' /opt/remask-python/app/session.py; \
     grep -q 'facebook_business_suite_ui' /opt/remask-python/app/provisioning/business_handler.py; \
+    grep -q 'REMASK_PAGE_ATTACH_DEADLINE_V1' /opt/remask-python/app/provisioning/business_handler.py; \
+    grep -q 'REMASK_PAGE_ATTACH_CANCEL_SAFE_V1' /opt/remask-python/app/facebook_business_browser.py; \
+    grep -q 'PAGE_ATTACH_TIMEOUT' /opt/remask-python/app/provisioning/business_handler.py; \
     grep -q 'provisioning_state.checkpoint' /opt/remask-python/app/provisioning/business_handler.py; \
     grep -q 'async def checkpoint' /opt/remask-python/app/provisioning/state.py; \
     grep -q 'resume_from' /opt/remask-python/app/provisioning/business_handler.py; \
