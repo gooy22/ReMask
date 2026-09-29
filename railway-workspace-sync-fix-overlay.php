@@ -850,6 +850,7 @@ function hierarchy_live_snapshot_put(
     string $profile,
     array $businesses,
     array $adAccounts,
+    array $pages,
     array $profileRow
 ): void
 {
@@ -877,6 +878,15 @@ function hierarchy_live_snapshot_put(
         $cleanAccounts[] = $row;
     }
 
+    $cleanPages = [];
+    foreach ($pages as $row) {
+        if (!is_array($row)) continue;
+        $id = trim((string)($row['id'] ?? ''));
+        if (!preg_match('/^\d{5,30}$/', $id)) continue;
+        $row['profile'] = $profile;
+        $cleanPages[] = $row;
+    }
+
     // Persist only live Meta inventory identity/counts. Profile readiness
     // (proxy/session/permissions/token health) must always come from the
     // current account store and current cached preflight, never from an old
@@ -889,6 +899,7 @@ function hierarchy_live_snapshot_put(
         'bm_count' => count($cleanBusinesses),
         'rk_count' => count($cleanAccounts),
         'ad_accounts_count' => count($cleanAccounts),
+        'pages_count' => count($cleanPages),
     ];
 
     $file = hierarchy_live_snapshot_file();
@@ -911,6 +922,7 @@ function hierarchy_live_snapshot_put(
             'profile' => $persistedProfile,
             'businesses' => array_values($cleanBusinesses),
             'ad_accounts' => array_values($cleanAccounts),
+            'pages' => array_values($cleanPages),
             'updated_at' => time(),
             'source' => 'last_confirmed_live_meta_inventory',
         ];
@@ -946,11 +958,17 @@ function hierarchy_live_snapshot_apply_display(
         (array)($saved['ad_accounts'] ?? []),
         static fn($row) => is_array($row)
     ));
+    $pages = array_values(array_filter(
+        (array)($saved['pages'] ?? []),
+        static fn($row) => is_array($row)
+    ));
 
     $snapshot['businesses'] = $businesses;
     $snapshot['businesses_count'] = count($businesses);
     $snapshot['ad_accounts'] = $adAccounts;
     $snapshot['ad_accounts_count'] = count($adAccounts);
+    $snapshot['pages'] = $pages;
+    $snapshot['pages_count'] = count($pages);
 
     // Keep the fresh profile row authoritative. The persisted live snapshot is
     // allowed to restore BM/RK and their counts only. This prevents an old
@@ -966,6 +984,7 @@ function hierarchy_live_snapshot_apply_display(
             $row['bm_count'] = count($businesses);
             $row['rk_count'] = count($adAccounts);
             $row['ad_accounts_count'] = count($adAccounts);
+            $row['pages_count'] = count($pages);
             $snapshot['profiles'][$i] = $row;
             $freshProfile = $row;
             break;
@@ -981,6 +1000,7 @@ function hierarchy_live_snapshot_apply_display(
             $row['bm_count'] = count($businesses);
             $row['rk_count'] = count($adAccounts);
             $row['ad_accounts_count'] = count($adAccounts);
+            $row['pages_count'] = count($pages);
             $freshProfile = $row;
         }
     }
@@ -992,6 +1012,7 @@ function hierarchy_live_snapshot_apply_display(
             'bm_count' => count($businesses),
             'rk_count' => count($adAccounts),
             'ad_accounts_count' => count($adAccounts),
+            'pages_count' => count($pages),
         ];
         if (is_array($snapshot['profiles'] ?? null)) {
             $snapshot['profiles'][] = $freshProfile;
@@ -1314,6 +1335,20 @@ $syncProfileReplacement = <<<'PHP'
         // merged into the result of a live Meta synchronization.
         $workerConfirmedCount = 0;
 
+        $pageRows = [];
+        $seenPages = [];
+        foreach ((array)($liveInventory['pages'] ?? []) as $livePage) {
+            if (!is_array($livePage)) continue;
+            $pageId = trim((string)($livePage['id'] ?? ''));
+            if (!preg_match('/^\d{5,30}$/', $pageId) || isset($seenPages[$pageId])) continue;
+            $row = $livePage;
+            $row['id'] = $pageId;
+            $row['profile'] = $profile;
+            $row['_source'] = (string)($liveInventory['pages_source'] ?? 'facebook_business_browser');
+            $seenPages[$pageId] = true;
+            $pageRows[] = $row;
+        }
+
         foreach ((array)($liveInventory['warnings'] ?? []) as $warning) {
             if (is_scalar($warning) && trim((string)$warning) !== '') {
                 $syncWarnings[] = trim((string)$warning);
@@ -1345,6 +1380,10 @@ $syncProfileReplacement = <<<'PHP'
         $snapshot['businesses_count'] = count($businessRows);
         $snapshot['ad_accounts'] = array_values($adAccountRows);
         $snapshot['ad_accounts_count'] = count($adAccountRows);
+        $snapshot['pages'] = array_values($pageRows);
+        $snapshot['pages_count'] = count($pageRows);
+        $snapshot['pages_ready'] = (($liveInventory['pages_ready'] ?? false) === true);
+        $snapshot['pages_source'] = (string)($liveInventory['pages_source'] ?? '');
         $syncComplete = $liveReady;
 
         $snapshot['sync_source'] = 'private_business_suite_browser';
@@ -1368,6 +1407,7 @@ $syncProfileReplacement = <<<'PHP'
                 $snapshot['profiles'][$i]['bm_count'] = count($businessRows);
                 $snapshot['profiles'][$i]['rk_count'] = count($adAccountRows);
                 $snapshot['profiles'][$i]['ad_accounts_count'] = count($adAccountRows);
+                $snapshot['profiles'][$i]['pages_count'] = count($pageRows);
                 $snapshot['profiles'][$i]['token_status'] = 'PRIVATE';
                 $snapshot['profiles'][$i]['permissions_available'] = null;
                 $snapshot['profiles'][$i]['ads_management_granted'] = null;
@@ -1412,6 +1452,7 @@ $syncProfileReplacement = <<<'PHP'
                 'bm_count' => count($businessRows),
                 'rk_count' => count($adAccountRows),
                 'ad_accounts_count' => count($adAccountRows),
+                'pages_count' => count($pageRows),
                 'token_status' => 'PRIVATE',
                 'proxy_configured' => true,
                 'ads_management_granted' => null,
@@ -1434,6 +1475,7 @@ $syncProfileReplacement = <<<'PHP'
                 $profile,
                 $businessRows,
                 $adAccountRows,
+                $pageRows,
                 $responseProfile
             );
             $snapshot['last_confirmed_live_meta_at'] = time();
