@@ -156,8 +156,7 @@ def _find_created_page(
 
 
 async def _fresh_page_inventory(session: Any) -> list[dict[str, Any]]:
-    async with FacebookBusinessBrowser(
-        session.context,
+    async with session.fresh_facebook_business_browser(
         timeout_seconds=60,
     ) as browser:
         # REMASK_PAGE_RECONCILE_NO_FALSE_EMPTY_V1
