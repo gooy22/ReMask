@@ -1286,10 +1286,7 @@ $syncProfileReplacement = <<<'PHP'
         }
 
         if (($savedResult['sync_complete'] ?? false) === true) {
-            $reconciled = hierarchy_live_snapshot_apply_display(
-                $profile,
-                hierarchy_profile_snapshot($profile)
-            );
+            $reconciled = hierarchy_profile_snapshot($profile);
             $reconciled['request_id'] = $requestId;
             $reconciled['pending'] = false;
             $reconciled['sync_complete'] = true;
@@ -1312,10 +1309,7 @@ $syncProfileReplacement = <<<'PHP'
         $profile = trim((string)($input['profile'] ?? ''));
         if ($profile === '') throw new InvalidArgumentException('profile is required');
 
-        $snapshot = hierarchy_live_snapshot_apply_display(
-            $profile,
-            hierarchy_profile_snapshot($profile)
-        );
+        $snapshot = hierarchy_profile_snapshot($profile);
         $snapshot['snapshot_only'] = true;
         $snapshot['sync_source'] = 'local_confirmed_state';
         MetaEndpoint::ok($snapshot);
