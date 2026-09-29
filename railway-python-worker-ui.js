@@ -1771,8 +1771,17 @@ async function pythonWorkerPoll() {
           ? running.result
           : {};
         const detail = String(result.activity || result.phase || '').trim();
+        const activityAt = Number(result.activity_at || 0);
+        const ageSeconds = activityAt > 0
+          ? Math.max(0, Math.floor(Date.now() / 1000 - activityAt))
+          : 0;
+        const deadlineHint = detail === 'PAGE_ATTACH_OPENING'
+          ? ' / 90s'
+          : '';
         runningSteps.push(
-          String(running.step) + (detail ? ' · ' + detail : '')
+          String(running.step) +
+          (detail ? ' · ' + detail : '') +
+          (ageSeconds ? ' · ' + ageSeconds + 's' + deadlineHint : '')
         );
       }
     }
