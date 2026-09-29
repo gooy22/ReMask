@@ -1604,6 +1604,7 @@ async def profile_live_inventory(
             result={
                 'ok':True,
                 'profile_id':clean_profile,
+                'session_ready':True,
                 'live_ready':live_ready,
                 'sync_partial':sync_partial,
                 'businesses_ready':business_component_ready,
