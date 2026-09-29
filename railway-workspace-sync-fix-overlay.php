@@ -586,6 +586,150 @@ function hierarchy_binding_get(string $profile): array
     return $out;
 }
 
+function hierarchy_live_snapshot_file(): string
+{
+    return '/var/lib/remask/workspace-live-meta-snapshots.json';
+}
+
+function hierarchy_live_snapshot_all(): array
+{
+    $file = hierarchy_live_snapshot_file();
+    $raw = @file_get_contents($file);
+    if (!is_string($raw) || trim($raw) === '') return [];
+    $json = json_decode($raw, true);
+    return is_array($json) ? $json : [];
+}
+
+function hierarchy_live_snapshot_get(string $profile): array
+{
+    $profile = trim($profile);
+    if ($profile === '') return [];
+    $all = hierarchy_live_snapshot_all();
+    $row = $all[$profile] ?? null;
+    return is_array($row) ? $row : [];
+}
+
+function hierarchy_live_snapshot_put(
+    string $profile,
+    array $businesses,
+    array $adAccounts,
+    array $profileRow
+): void
+{
+    $profile = trim($profile);
+    if ($profile === '') return;
+
+    $cleanBusinesses = [];
+    foreach ($businesses as $row) {
+        if (!is_array($row)) continue;
+        $id = trim((string)($row['id'] ?? ''));
+        if (!preg_match('/^\d{5,30}$/', $id)) continue;
+        $row['profile'] = $profile;
+        $cleanBusinesses[] = $row;
+    }
+
+    $cleanAccounts = [];
+    foreach ($adAccounts as $row) {
+        if (!is_array($row)) continue;
+        $id = trim((string)($row['id'] ?? $row['account_id'] ?? ''));
+        if (str_starts_with($id, 'act_')) $id = substr($id, 4);
+        if (!preg_match('/^\d{5,30}$/', $id)) continue;
+        $row['profile'] = $profile;
+        $row['id'] = $id;
+        $row['account_id'] = $id;
+        $cleanAccounts[] = $row;
+    }
+
+    $profileRow['name'] = trim((string)($profileRow['name'] ?? $profile));
+    if ($profileRow['name'] === '') $profileRow['name'] = $profile;
+    $profileRow['synced'] = true;
+    $profileRow['bm_count'] = count($cleanBusinesses);
+    $profileRow['rk_count'] = count($cleanAccounts);
+    $profileRow['ad_accounts_count'] = count($cleanAccounts);
+
+    $file = hierarchy_live_snapshot_file();
+    $dir = dirname($file);
+    if (!is_dir($dir)) @mkdir($dir, 0700, true);
+
+    $fp = @fopen($file, 'c+');
+    if (!$fp) return;
+    try {
+        if (!@flock($fp, LOCK_EX)) return;
+        rewind($fp);
+        $raw = stream_get_contents($fp);
+        $all = [];
+        if (is_string($raw) && trim($raw) !== '') {
+            $decoded = json_decode($raw, true);
+            if (is_array($decoded)) $all = $decoded;
+        }
+
+        $all[$profile] = [
+            'profile' => $profileRow,
+            'businesses' => array_values($cleanBusinesses),
+            'ad_accounts' => array_values($cleanAccounts),
+            'updated_at' => time(),
+            'source' => 'last_confirmed_live_meta_inventory',
+        ];
+
+        $encoded = json_encode(
+            $all,
+            JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
+        );
+        if (!is_string($encoded)) return;
+        ftruncate($fp, 0);
+        rewind($fp);
+        fwrite($fp, $encoded);
+        fflush($fp);
+    } finally {
+        @flock($fp, LOCK_UN);
+        @fclose($fp);
+    }
+}
+
+function hierarchy_live_snapshot_apply_display(
+    string $profile,
+    array $snapshot
+): array
+{
+    $saved = hierarchy_live_snapshot_get($profile);
+    if ($saved === []) return $snapshot;
+
+    $businesses = array_values(array_filter(
+        (array)($saved['businesses'] ?? []),
+        static fn($row) => is_array($row)
+    ));
+    $adAccounts = array_values(array_filter(
+        (array)($saved['ad_accounts'] ?? []),
+        static fn($row) => is_array($row)
+    ));
+    $profileRow = is_array($saved['profile'] ?? null)
+        ? $saved['profile']
+        : null;
+
+    $snapshot['businesses'] = $businesses;
+    $snapshot['businesses_count'] = count($businesses);
+    $snapshot['ad_accounts'] = $adAccounts;
+    $snapshot['ad_accounts_count'] = count($adAccounts);
+    if ($profileRow !== null) {
+        $snapshot['profile'] = $profileRow;
+        if (is_array($snapshot['profiles'] ?? null)) {
+            $matched = false;
+            foreach ($snapshot['profiles'] as $i => $row) {
+                if (!is_array($row)) continue;
+                $name = trim((string)($row['name'] ?? $row['profile'] ?? ''));
+                if ($name !== $profile) continue;
+                $snapshot['profiles'][$i] = $profileRow;
+                $matched = true;
+                break;
+            }
+            if (!$matched) $snapshot['profiles'][] = $profileRow;
+        }
+    }
+    $snapshot['last_confirmed_live_meta_at'] = (int)($saved['updated_at'] ?? 0);
+    $snapshot['display_source'] = 'last_confirmed_live_meta_inventory';
+    return $snapshot;
+}
+
 function hierarchy_binding_put(
     string $profile,
     string $businessId,
@@ -650,9 +794,24 @@ function hierarchy_binding_put(
     }
 }
 PHP_HELPERS;
+$hierarchyBaseSignature = <<<'PHP_SIG'
+function hierarchy_profile_snapshot_base(string $profile, ?array $workspaceMeta = null): array
+{
+PHP_SIG;
+
+$hierarchySnapshotWrapper = <<<'PHP_WRAPPER'
+function hierarchy_profile_snapshot(string $profile, ?array $workspaceMeta = null): array
+{
+    $snapshot = hierarchy_profile_snapshot_base($profile, $workspaceMeta);
+    return hierarchy_live_snapshot_apply_display($profile, $snapshot);
+}
+PHP_WRAPPER;
+
 $php = str_replace(
     $hierarchyHelperSignature,
-    $hierarchyHelpers . "\n\n" . $hierarchyHelperSignature,
+    $hierarchyHelpers . "\n\n" .
+        $hierarchySnapshotWrapper . "\n\n" .
+        $hierarchyBaseSignature,
     $php,
     $hierarchyHelperCount
 );
@@ -705,66 +864,9 @@ $syncProfileReplacement = <<<'PHP'
         $syncWarnings = [];
         $existingSnapshot = hierarchy_profile_snapshot($profile);
 
-        $knownBusinessIds = [];
-        $knownBusinessSources = [];
-
-        foreach ((array)($existingSnapshot['businesses'] ?? []) as $existingBusiness) {
-            if (!is_array($existingBusiness)) continue;
-            $existingBusinessId = trim((string)($existingBusiness['id'] ?? ''));
-            if (preg_match('/^\d{5,30}$/', $existingBusinessId)) {
-                $knownBusinessIds[$existingBusinessId] = true;
-                $knownBusinessSources[$existingBusinessId]['snapshot'] = true;
-            }
-        }
-
-        // Workspace keeps durable BM -> RK relations on the persistent volume.
-        // These are stronger navigation hints than rediscovering the portfolio
-        // from Business Suite HOME on every sync.
-        foreach (hierarchy_binding_get($profile) as $bindingHint) {
-            if (!is_array($bindingHint)) continue;
-            $bindingBusinessId = trim((string)($bindingHint['business_id'] ?? ''));
-            if (preg_match('/^\d{5,30}$/', $bindingBusinessId)) {
-                $knownBusinessIds[$bindingBusinessId] = true;
-                $knownBusinessSources[$bindingBusinessId]['workspace_binding'] = true;
-            }
-        }
-
-        // The Python provisioning store may know the BM even when Workspace's
-        // rendered snapshot is empty. Read it before falling back to HOME discovery.
-        $workerStateHint = hierarchy_worker_state($profile);
-        $stateBusinessId = trim((string)($workerStateHint['business_id'] ?? ''));
-        if (preg_match('/^\d{5,30}$/', $stateBusinessId)) {
-            $knownBusinessIds[$stateBusinessId] = true;
-            $knownBusinessSources[$stateBusinessId]['worker_state'] = true;
-        }
-        foreach ((array)($workerStateHint['ad_account_bindings'] ?? []) as $stateBinding) {
-            if (!is_array($stateBinding)) continue;
-            $stateBindingBusinessId = trim((string)($stateBinding['business_id'] ?? ''));
-            if (preg_match('/^\d{5,30}$/', $stateBindingBusinessId)) {
-                $knownBusinessIds[$stateBindingBusinessId] = true;
-                $knownBusinessSources[$stateBindingBusinessId]['worker_state_binding'] = true;
-            }
-        }
-
-        // A Business-row sync also sends the exact selected BM when fresh JS is
-        // loaded, but correctness no longer depends on that browser-side hint.
-        $requestedBusinessId = trim((string)($input['business_id'] ?? ''));
-        if (preg_match('/^\d{5,30}$/', $requestedBusinessId)) {
-            $knownBusinessIds[$requestedBusinessId] = true;
-            $knownBusinessSources[$requestedBusinessId]['request'] = true;
-        }
-
-        error_log(
-            '[remask-private-sync] profile=' . $profile .
-            ' business_hints=' . json_encode(
-                array_map(
-                    static fn(array $sources): array => array_keys($sources),
-                    $knownBusinessSources
-                ),
-                JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
-            )
-        );
-
+        // Live synchronization has exactly one authority: the current
+        // authenticated Facebook private UI. Do not spend time consulting
+        // provisioning state or historical bindings before starting it.
         try {
             $liveInventory = hierarchy_worker_live_inventory($profile);
         } catch (Throwable $liveInventoryError) {
@@ -915,6 +1017,17 @@ $syncProfileReplacement = <<<'PHP'
         }
         $snapshot['profile'] = $responseProfile;
         $snapshot['profile_name'] = $profile;
+
+        if ($liveReady) {
+            hierarchy_live_snapshot_put(
+                $profile,
+                $businessRows,
+                $adAccountRows,
+                $responseProfile
+            );
+            $snapshot['last_confirmed_live_meta_at'] = time();
+            $snapshot['display_source'] = 'live_meta_inventory';
+        }
 
         hierarchy_activity([
             'action' => 'sync_profile',
@@ -1181,13 +1294,20 @@ if (strpos($php, 'hierarchy_worker_live_inventory($profile)') === false) {
     throw new RuntimeException('live Meta sync must call worker without BM hints');
 }
 if (
-    strpos($php, "\$snapshot['profile'] = \$responseProfile;") === false
+    strpos($php, 'hierarchy_live_snapshot_put(') === false
+    || strpos($php, 'hierarchy_live_snapshot_apply_display(') === false
+    || strpos($php, 'hierarchy_profile_snapshot_base(') === false
+    || strpos($php, "\$snapshot['profile'] = \$responseProfile;") === false
     || strpos($js, 'SNAPSHOT_NOT_APPLIED') === false
     || strpos($js, 'function applySnapshot(s){') === false
     || strpos($js, 'return true;') === false
 ) {
     throw new RuntimeException('workspace sync snapshot contract invariant failed');
 }
-fwrite(STDERR, "[workspace-sync-fix] live Meta sync is authoritative; provisioning bindings are not merged\n");
+if (strpos($php, '[remask-private-sync]') !== false) {
+    throw new RuntimeException('obsolete pre-live BM hint stage still present');
+}
+fwrite(STDERR, "[workspace-sync-fix] live Meta sync is authoritative; no pre-live binding/state lookup\n");
+fwrite(STDERR, "[workspace-sync-fix] last confirmed live snapshot persists for display only\n");
 fwrite(STDERR, "[workspace-sync-fix] response/applySnapshot contract enforced\n");
 fwrite(STDERR, "[workspace-sync-fix] clean sync stabilization ready; no diagnostic probe installed\n");
