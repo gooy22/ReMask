@@ -280,6 +280,8 @@ async function syncSelection(){
     let kind='PRIVATE_SYNC';
     if(/rate.?limit|too many|code[^0-9]*(4|17|32|613)\\b/.test(s))kind='RATE_LIMIT';
     else if(/\\b407\\b|proxy authentication|proxy auth/.test(s))kind='PROXY_AUTH';
+    else if(/live_inventory_browser_open_timeout|browser slot waited|profile_browser_lock_timeout|browser_open timeout/.test(s))kind='BROWSER_BUSY';
+    else if(/business discovery timed out|live_inventory_timeout:business_discovery/.test(s))kind='BM_DISCOVERY_TIMEOUT';
     else if(/transport error|curl|could not resolve|connection timed out|connection refused|ssl connect/.test(s))kind='TRANSPORT';
     else if(/access token.*(invalid|expired)|token.*(invalid|expired)|session.*expired|code[^0-9]*190\\b|\\(#190\\)/.test(s))kind='TOKEN_INVALID';
     else if(/oauth.*code[^0-9]*1\\b|code=1\\b|meta graph .* http 400 code=1\\b/.test(s))kind='META_REQUEST';
