@@ -287,6 +287,11 @@ class BusinessInventoryProbeTests(unittest.IsolatedAsyncioTestCase):
             def __init__(self):
                 self.script = ""
                 self.keyboard = _Keyboard()
+                self.url = "https://business.facebook.com/latest/home"
+
+            async def goto(self, url, **kwargs):
+                self.url = str(url)
+                return None
 
             async def evaluate(self, script):
                 self.script = script
