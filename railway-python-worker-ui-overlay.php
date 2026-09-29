@@ -256,22 +256,50 @@ try {
     }
 
     $workerState = rmx_pwbm_worker_state($profile);
-    $workerBusinessId = trim((string)($workerState['business_id'] ?? ''));
-    if ($workerBusinessId !== '' && ctype_digit($workerBusinessId)) {
-        $exists = false;
-        foreach ($businesses as $business) {
-            if (trim((string)($business['id'] ?? '')) === $workerBusinessId) {
-                $exists = true;
-                break;
-            }
-        }
-        if (!$exists) {
-            $businesses[] = [
-                'id' => $workerBusinessId,
-                'name' => trim((string)($workerState['business_name'] ?? $workerBusinessId)),
-                'source' => 'python_worker_confirmed',
-            ];
-        }
+    $workerBusinesses = is_array($workerState['businesses'] ?? null)
+        ? $workerState['businesses']
+        : [];
+
+    // Backward compatibility with older worker responses that exposed only one
+    // newest Business.
+    $legacyWorkerBusinessId = trim((string)($workerState['business_id'] ?? ''));
+    if ($legacyWorkerBusinessId !== '' && ctype_digit($legacyWorkerBusinessId)) {
+        $workerBusinesses[] = [
+            'business_id' => $legacyWorkerBusinessId,
+            'business_name' => trim((string)($workerState['business_name'] ?? $legacyWorkerBusinessId)),
+        ];
+    }
+
+    $seenBusinessIds = [];
+    foreach ($businesses as $business) {
+        if (!is_array($business)) continue;
+        $id = trim((string)($business['id'] ?? ''));
+        if ($id !== '') $seenBusinessIds[$id] = true;
+    }
+
+    foreach ($workerBusinesses as $workerBusiness) {
+        if (!is_array($workerBusiness)) continue;
+        $workerBusinessId = trim((string)(
+            $workerBusiness['business_id']
+            ?? $workerBusiness['id']
+            ?? ''
+        ));
+        if (
+            $workerBusinessId === ''
+            || !ctype_digit($workerBusinessId)
+            || isset($seenBusinessIds[$workerBusinessId])
+        ) continue;
+
+        $businesses[] = [
+            'id' => $workerBusinessId,
+            'name' => trim((string)(
+                $workerBusiness['business_name']
+                ?? $workerBusiness['name']
+                ?? $workerBusinessId
+            )),
+            'source' => 'python_worker_confirmed',
+        ];
+        $seenBusinessIds[$workerBusinessId] = true;
     }
 
     rmx_pwbm_out([
