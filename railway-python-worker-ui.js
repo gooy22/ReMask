@@ -497,6 +497,11 @@ async function pythonWorkerHealthCheck() {
         ? readiness.worker_concurrency
         : (worker.worker_concurrency || 0)
     );
+    const browserConcurrency = Number(
+      (readiness && readiness.browser_concurrency) != null
+        ? readiness.browser_concurrency
+        : 0
+    );
     const profilesVisible = Number((readiness && readiness.profiles_visible) || 0);
     const revision = String((readiness && readiness.revision) || '').trim();
     const bmPayloadVersion = String(
@@ -515,7 +520,8 @@ async function pythonWorkerHealthCheck() {
         ' · профили ' + profilesVisible +
         ' · volume ' + (volumeMounted ? 'YES' : 'NO') +
         ' · очередь ' + queued +
-        ' · concurrency ' + concurrency;
+        ' · workers ' + concurrency +
+        (browserConcurrency ? ' · Chromium ' + browserConcurrency : '');
     } else {
       el.dataset.state = 'offline';
       el.textContent =
@@ -1770,13 +1776,18 @@ async function pythonWorkerPoll() {
         const result = running.result && typeof running.result === 'object'
           ? running.result
           : {};
-        const detail = String(result.activity || result.phase || '').trim();
+        const rawDetail = String(result.activity || result.phase || '').trim();
+        const detail = rawDetail === 'BROWSER_QUEUE_WAIT'
+          ? 'ожидание Chromium'
+          : rawDetail;
         const activityAt = Number(result.activity_at || 0);
         const ageSeconds = activityAt > 0
           ? Math.max(0, Math.floor(Date.now() / 1000 - activityAt))
           : 0;
-        const deadlineHint = detail === 'PAGE_ATTACH_OPENING'
+        const deadlineHint = rawDetail === 'PAGE_ATTACH_OPENING'
           ? ' / 90s'
+          : rawDetail === 'BROWSER_QUEUE_WAIT'
+          ? ' / очередь до ' + String(result.browser_queue_wait_limit_seconds || 180) + 's'
           : '';
         runningSteps.push(
           String(running.step) +
