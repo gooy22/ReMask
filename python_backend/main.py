@@ -944,86 +944,85 @@ async def profile_live_inventory(profile_id: str, business_ids: str | None = Non
             discovery_source=''
 
             stage='business_discovery'
-            if known_business_ids:
-                business_map={
-                    business_id:business_id
-                    for business_id in sorted(known_business_ids)
-                }
-                discovery_source='worker_confirmed_business_ids'
-                log.info(
-                    'live inventory profile=%s using confirmed businesses=%s',
-                    clean_profile,
-                    ','.join(sorted(known_business_ids)),
-                )
-            else:
-                discovery_started=time.monotonic()
+            discovery_started=time.monotonic()
+            try:
                 try:
-                    try:
-                        business_discovery_timeout=float(
-                            os.getenv(
-                                'REMASK_LIVE_INVENTORY_BUSINESS_DISCOVERY_TIMEOUT_SECONDS',
-                                '28',
-                            )
+                    business_discovery_timeout=float(
+                        os.getenv(
+                            'REMASK_LIVE_INVENTORY_BUSINESS_DISCOVERY_TIMEOUT_SECONDS',
+                            '28',
                         )
-                    except (TypeError,ValueError):
-                        business_discovery_timeout=28.0
-                    business_discovery_timeout=max(
-                        20.0,
-                        min(business_discovery_timeout,40.0),
                     )
-                    business_map=await asyncio.wait_for(
-                        browser.snapshot_businesses(),
-                        timeout=business_discovery_timeout,
+                except (TypeError,ValueError):
+                    business_discovery_timeout=28.0
+                business_discovery_timeout=max(
+                    20.0,
+                    min(business_discovery_timeout,40.0),
+                )
+                business_map=await asyncio.wait_for(
+                    browser.snapshot_businesses(),
+                    timeout=business_discovery_timeout,
+                )
+                business_diag=getattr(
+                    browser,
+                    '_last_business_inventory_diagnostic',
+                    {},
+                )
+                discovery_source=str(
+                    (business_diag or {}).get('source')
+                    or 'business_suite_private_inventory'
+                )
+
+                hinted_only=sorted(
+                    set(known_business_ids) - set(business_map)
+                )
+                if hinted_only:
+                    log.info(
+                        'live inventory profile=%s stale_or_unconfirmed_business_hints=%s',
+                        clean_profile,
+                        ','.join(hinted_only),
                     )
-                    business_diag=getattr(
-                        browser,
-                        '_last_business_inventory_diagnostic',
-                        {},
-                    )
-                    discovery_source=str(
-                        (business_diag or {}).get('source')
-                        or 'business_suite_private_inventory'
-                    )
-                    if not business_map:
-                        warnings.append(
-                            'Private Business Suite inventory returned no Business portfolios'
-                        )
-                        log.warning(
-                            'live inventory profile=%s business_discovery diagnostic=%s',
-                            clean_profile,
-                            json.dumps(
-                                business_diag,
-                                ensure_ascii=False,
-                                separators=(',', ':'),
-                            )[:6000],
-                        )
-                except asyncio.TimeoutError:
-                    warnings.append('Business discovery timed out')
-                    business_map={}
-                    discovery_source='business_suite_discovery_timeout'
-                    business_diag=getattr(
-                        browser,
-                        '_last_business_inventory_diagnostic',
-                        {},
+
+                if not business_map:
+                    warnings.append(
+                        'Private Business Suite inventory returned no Business portfolios'
                     )
                     log.warning(
-                        'live inventory profile=%s business_discovery timeout=%.1fs diagnostic=%s',
+                        'live inventory profile=%s business_discovery diagnostic=%s',
                         clean_profile,
-                        business_discovery_timeout,
                         json.dumps(
                             business_diag,
                             ensure_ascii=False,
                             separators=(',', ':'),
                         )[:6000],
                     )
-                finally:
-                    log.info(
-                        'live inventory profile=%s business_discovery source=%s ms=%d count=%d',
-                        clean_profile,
-                        discovery_source,
-                        int((time.monotonic()-discovery_started)*1000),
-                        len(business_map),
-                    )
+            except asyncio.TimeoutError:
+                warnings.append('Business discovery timed out')
+                business_map={}
+                discovery_source='business_suite_discovery_timeout'
+                business_diag=getattr(
+                    browser,
+                    '_last_business_inventory_diagnostic',
+                    {},
+                )
+                log.warning(
+                    'live inventory profile=%s business_discovery timeout=%.1fs diagnostic=%s',
+                    clean_profile,
+                    business_discovery_timeout,
+                    json.dumps(
+                        business_diag,
+                        ensure_ascii=False,
+                        separators=(',', ':'),
+                    )[:6000],
+                )
+            finally:
+                log.info(
+                    'live inventory profile=%s business_discovery source=%s ms=%d count=%d',
+                    clean_profile,
+                    discovery_source,
+                    int((time.monotonic()-discovery_started)*1000),
+                    len(business_map),
+                )
 
             businesses=[]
             live_business_ids:set[str]=set()

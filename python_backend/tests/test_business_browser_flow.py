@@ -13,6 +13,7 @@ from app.facebook_business_browser import (
     _ad_account_required_attribution_post_data,
     _extract_created_ad_account_id,
     _extract_business_inventory_rows,
+    _business_ids_from_private_selector_request,
     _extract_inventory_ad_account_ids,
     _extract_named_ad_account_ids,
     _has_ad_account_inventory_container,
@@ -24,6 +25,47 @@ from app.provisioning.models import ProvisioningError, ProvisioningStep
 from app.provisioning.state import ProvisioningStateStore
 from app.provisioning.service import ProvisioningService
 
+
+
+class PrivateBusinessSelectorRequestTests(unittest.TestCase):
+    def test_first_level_scope_is_live_business(self) -> None:
+        meta = {
+            "friendly_name": (
+                "NorthStarBusinessUnifiedScopingSelector"
+                "PopoverContainerAllFirstLevelScopesQuery"
+            ),
+            "variables": {
+                "firstLevelScopeId": "61594753560938",
+                "zeroLevelScopeId": "1289628847574478",
+            },
+        }
+        self.assertEqual(
+            _business_ids_from_private_selector_request(meta),
+            {"61594753560938"},
+        )
+
+    def test_zero_level_scope_is_never_promoted_to_business(self) -> None:
+        meta = {
+            "friendly_name": (
+                "NorthStarBusinessUnifiedScopingSelector"
+                "PopoverContainerAllFirstLevelScopesQuery"
+            ),
+            "variables": {"zeroLevelScopeId": "2172569806673120"},
+        }
+        self.assertEqual(
+            _business_ids_from_private_selector_request(meta),
+            set(),
+        )
+
+    def test_unrelated_query_cannot_create_business(self) -> None:
+        meta = {
+            "friendly_name": "SomeOtherQuery",
+            "variables": {"businessId": "61594753560938"},
+        }
+        self.assertEqual(
+            _business_ids_from_private_selector_request(meta),
+            set(),
+        )
 
 
 class AdAccountEndToEndLocaleSystemRegressionTests(unittest.TestCase):

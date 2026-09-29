@@ -1034,6 +1034,50 @@ def _business_ids_from_text(text: str) -> set[str]:
     return {value for value in output if _digits(value)}
 
 
+def _business_ids_from_private_selector_request(meta: Any) -> set[str]:
+    """Extract live BM IDs from Meta's NorthStar business scope selector request.
+
+    zeroLevelScopeId is intentionally excluded: it is an asset scope
+    (Page/RK/etc.), not a Business portfolio.
+    """
+    if not isinstance(meta, dict):
+        return set()
+    friendly = _clean(meta.get("friendly_name"))
+    folded = friendly.casefold()
+    if "northstarbusinessunifiedscopingselector" not in folded:
+        return set()
+    if any(marker in folded for marker in ("mutation", "create", "update", "delete")):
+        return set()
+
+    variables = meta.get("variables")
+    if not isinstance(variables, dict):
+        return set()
+
+    output: set[str] = set()
+    keys = (
+        "firstLevelScopeId",
+        "businessIdForAddAA",
+        "businessIDForAddAA",
+        "businessId",
+        "businessID",
+    )
+    for key in keys:
+        candidate = _digits(variables.get(key))
+        if candidate:
+            output.add(candidate)
+
+    for wrapper_key in ("input", "params", "context"):
+        wrapped = variables.get(wrapper_key)
+        if not isinstance(wrapped, dict):
+            continue
+        for key in keys:
+            candidate = _digits(wrapped.get(key))
+            if candidate:
+                output.add(candidate)
+
+    return output
+
+
 
 # REMASK_PRIVATE_BUSINESS_INVENTORY_V1
 def _extract_business_inventory_rows(payload: Any) -> list[dict[str, str]]:
@@ -4821,6 +4865,32 @@ class FacebookBusinessBrowser:
         query_diagnostics: list[dict[str, Any]] = []
         response_tasks: set[asyncio.Task[Any]] = set()
 
+        def inspect_request(request: Any) -> None:
+            try:
+                meta = _request_graphql_meta(request)
+                live_business_ids = _business_ids_from_private_selector_request(meta)
+                if not live_business_ids:
+                    return
+                for business_id in sorted(live_business_ids):
+                    network_rows.setdefault(business_id, "")
+                query_diagnostics.append(
+                    {
+                        "phase": "selector_request",
+                        "friendly_name": _clean(meta.get("friendly_name"))[:180],
+                        "doc_id": _clean(meta.get("doc_id"))[:60],
+                        "live_business_ids": sorted(live_business_ids)[:8],
+                    }
+                )
+                if len(query_diagnostics) > 24:
+                    del query_diagnostics[:-24]
+            except Exception as exc:
+                query_diagnostics.append(
+                    {
+                        "phase": "selector_request",
+                        "error": f"{exc.__class__.__name__}: {_clean(exc)}"[:500],
+                    }
+                )
+
         async def inspect_response(response: Any) -> None:
             try:
                 url = _clean(getattr(response, "url", ""))
@@ -5052,13 +5122,19 @@ class FacebookBusinessBrowser:
             except Exception:
                 return
 
-        listener_installed = False
+        response_listener_installed = False
+        request_listener_installed = False
         if hasattr(self.page, "on"):
             try:
                 self.page.on("response", on_response)
-                listener_installed = True
+                response_listener_installed = True
             except Exception:
-                listener_installed = False
+                response_listener_installed = False
+            try:
+                self.page.on("request", inspect_request)
+                request_listener_installed = True
+            except Exception:
+                request_listener_installed = False
 
         dom_output: dict[str, str] = {}
         async def collect_dom_businesses() -> int:
@@ -5303,9 +5379,14 @@ class FacebookBusinessBrowser:
             }
             return output
         finally:
-            if listener_installed and hasattr(self.page, "remove_listener"):
+            if response_listener_installed and hasattr(self.page, "remove_listener"):
                 try:
                     self.page.remove_listener("response", on_response)
+                except Exception:
+                    pass
+            if request_listener_installed and hasattr(self.page, "remove_listener"):
+                try:
+                    self.page.remove_listener("request", inspect_request)
                 except Exception:
                     pass
             if selector_opened:
