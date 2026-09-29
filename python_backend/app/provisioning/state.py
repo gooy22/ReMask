@@ -759,6 +759,45 @@ class ProvisioningStateStore:
                 """,
                 (profile, ProvisioningStep.FAN_PAGES.value),
             ).fetchall()
+            business_rows = con.execute(
+                """
+                SELECT result_json,updated_at
+                FROM provisioning_steps
+                WHERE profile_id=?
+                  AND step=?
+                  AND status='SUCCESS'
+                  AND result_json IS NOT NULL
+                ORDER BY updated_at DESC
+                LIMIT 250
+                """,
+                (profile, ProvisioningStep.BUSINESS.value),
+            ).fetchall()
+
+        # REMASK_PAGE_BUSINESS_RELATION_V1
+        # Add BM can attach a previously created Page after the FAN_PAGES step
+        # has already completed. Reconstruct that durable Page->BM relation from
+        # successful BUSINESS results so the same Page is not offered as free
+        # for a second Business without requiring another Facebook sync.
+        page_business: dict[str, str] = {}
+        for business_row in business_rows:
+            try:
+                business_result = json.loads(
+                    str(business_row["result_json"] or "{}")
+                )
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if not isinstance(business_result, dict):
+                continue
+            page_id = str(
+                business_result.get("primary_page_id")
+                or business_result.get("page_id")
+                or ""
+            ).strip()
+            business_id = str(
+                business_result.get("business_id") or ""
+            ).strip()
+            if page_id.isdigit() and business_id.isdigit():
+                page_business.setdefault(page_id, business_id)
 
         pages: list[dict[str, Any]] = []
         seen: set[str] = set()
@@ -794,6 +833,25 @@ class ProvisioningStateStore:
                             or ""
                         ).strip(),
                         "reused": bool(page.get("reused")),
+                        "business_id": str(
+                            page.get("business_id")
+                            or result.get("business_id")
+                            or page_business.get(page_id)
+                            or ""
+                        ).strip(),
+                        "ad_account_id": str(
+                            page.get("ad_account_id")
+                            or result.get("ad_account_id")
+                            or ""
+                        ).strip().removeprefix("act_"),
+                        "attached": bool(
+                            page.get("attached")
+                            or page.get("already_attached")
+                            or page_business.get(page_id)
+                        ),
+                        "already_attached": bool(
+                            page.get("already_attached")
+                        ),
                         "source": "python_worker_confirmed",
                         "scope_key": str(row["scope_key"] or ""),
                         "updated_at": int(row["updated_at"] or 0),
