@@ -286,14 +286,11 @@ async def _attach_page_to_business(
         and checkpoint_business == business
         and checkpoint_page == page
     ):
-        async with FacebookBusinessBrowser(
-            session.context,
-            timeout_seconds=60,
-        ) as browser:
-            attached = await browser.verify_page_attached(
-                business_id=business,
-                page_id=page,
-            )
+        browser = await session.facebook_business_browser()
+        attached = await browser.verify_page_attached(
+            business_id=business,
+            page_id=page,
+        )
         if not attached:
             raise ProvisioningError(
                 "PAGE_ATTACH_RESULT_UNKNOWN",
@@ -337,15 +334,16 @@ async def _attach_page_to_business(
         )
 
     try:
-        async with FacebookBusinessBrowser(
-            session.context,
-            timeout_seconds=75,
-        ) as browser:
-            result = await browser.add_existing_page(
-                business_id=business,
-                page_id=page,
-                before_submit=before_attach,
-            )
+        # REMASK_FP_REUSE_PROFILE_BROWSER_V1
+        # Creation/attach work within one Job shares the same profile-bound
+        # Chromium lease. Independent fresh browsers are reserved only for
+        # uncertainty reconciliation where separate observations matter.
+        browser = await session.facebook_business_browser()
+        result = await browser.add_existing_page(
+            business_id=business,
+            page_id=page,
+            before_submit=before_attach,
+        )
     except BrowserBusinessError as exc:
         if exc.code in _AUTH_RECOVERY_CODES:
             current_state = await provisioning_state.step(
@@ -810,16 +808,13 @@ async def fan_pages_handler(
                 )
 
             try:
-                async with FacebookBusinessBrowser(
-                    session.context,
-                    timeout_seconds=75,
-                ) as browser:
-                    create_result = await browser.create_fan_page(
-                        page_name=page_name,
-                        category=category,
-                        bio=bio,
-                        before_submit=before_submit,
-                    )
+                browser = await session.facebook_business_browser()
+                create_result = await browser.create_fan_page(
+                    page_name=page_name,
+                    category=category,
+                    bio=bio,
+                    before_submit=before_submit,
+                )
                 break
 
             except BrowserBusinessError as exc:
