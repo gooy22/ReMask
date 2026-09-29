@@ -5307,6 +5307,21 @@ class FacebookBusinessBrowser:
                 dom_output.setdefault(business_id, "")
             return len(dom_output) - before
 
+        async def collect_dom_businesses_bounded() -> int:
+            try:
+                return await asyncio.wait_for(
+                    collect_dom_businesses(),
+                    timeout=2.5,
+                )
+            except asyncio.TimeoutError:
+                query_diagnostics.append({
+                    "phase": "dom_probe",
+                    "error": "DOM_PROBE_TIMEOUT",
+                })
+                return 0
+            except BaseException:
+                raise
+
         async def navigate_inventory_surface(
             url: str,
             *,
@@ -5474,7 +5489,7 @@ class FacebookBusinessBrowser:
                     # Capture the open selector DOM before navigating away.
                     # Some Meta builds render BM links in the menu but do not
                     # issue a dedicated portfolio GraphQL request.
-                    await collect_dom_businesses()
+                    await collect_dom_businesses_bounded()
             except Exception as exc:
                 selector_opened = False
                 selector_probe = {
@@ -5506,7 +5521,7 @@ class FacebookBusinessBrowser:
                         if network_rows:
                             break
                         await self.page.wait_for_timeout(200)
-                    await collect_dom_businesses()
+                    await collect_dom_businesses_bounded()
                 except BrowserBusinessError:
                     raise
                 except Exception as exc:
@@ -5543,7 +5558,7 @@ class FacebookBusinessBrowser:
                         if network_rows:
                             break
                         await self.page.wait_for_timeout(300)
-                    await collect_dom_businesses()
+                    await collect_dom_businesses_bounded()
                 except BrowserBusinessError:
                     raise
                 except Exception as exc:
@@ -5553,7 +5568,7 @@ class FacebookBusinessBrowser:
                     }
 
             # Final fallback for whichever surface is currently mounted.
-            await collect_dom_businesses()
+            await collect_dom_businesses_bounded()
 
             if response_tasks:
                 await _settle_tasks_bounded(
