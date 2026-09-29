@@ -4669,11 +4669,47 @@ class FacebookBusinessBrowser:
             if link_pages:
                 pages.extend(link_pages)
 
+            # REMASK_PAGE_EXPLICIT_EMPTY_V1
+            # An unparseable/changed Facebook Pages DOM is NOT proof that the
+            # profile has zero Pages. Only an explicit empty-state message may
+            # turn a successful authenticated read into a conclusive [] result.
+            explicit_empty = False
+            try:
+                body_text = await self.page.locator("body").inner_text(timeout=1500)
+            except Exception:
+                body_text = ""
+            normalized_body = re.sub(r"\s+", " ", _clean(body_text)).casefold()
+            empty_markers = (
+                "you don't have any pages",
+                "you do not have any pages",
+                "no pages to show",
+                "create your first page",
+                "у вас нет страниц",
+                "страниц пока нет",
+                "у вас немає сторінок",
+                "сторінок ще немає",
+                "vous n'avez aucune page",
+                "vous ne gérez aucune page",
+                "du hast keine seiten",
+                "keine seiten vorhanden",
+                "no tienes páginas",
+                "no hay páginas",
+                "não tens páginas",
+                "nenhuma página",
+            )
+            explicit_empty = any(
+                marker in normalized_body
+                for marker in empty_markers
+            )
+
             diagnostics.append(
                 f"{url}: bytes={len(document)} "
                 f"json_pages={len(_extract_pages_from_browser_document(document))} "
-                f"link_pages={len(link_pages)} merged_candidates={len(pages)}"
+                f"link_pages={len(link_pages)} merged_candidates={len(pages)} "
+                f"explicit_empty={explicit_empty}"
             )
+            if explicit_empty and not pages:
+                return []
             for row in pages:
                 if not isinstance(row, dict):
                     continue
