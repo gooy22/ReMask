@@ -1940,7 +1940,33 @@ class FacebookBusinessBrowser:
             return
 
         browser_slot_wait_started = time.monotonic()
-        await _BROWSER_SEMAPHORE.acquire()
+        try:
+            queue_wait_seconds = float(
+                os.getenv("REMASK_BROWSER_QUEUE_WAIT_SECONDS") or "180"
+            )
+        except (TypeError, ValueError):
+            queue_wait_seconds = 180.0
+        queue_wait_seconds = max(30.0, min(queue_wait_seconds, 300.0))
+
+        try:
+            await asyncio.wait_for(
+                _BROWSER_SEMAPHORE.acquire(),
+                timeout=queue_wait_seconds,
+            )
+        except asyncio.TimeoutError as exc:
+            raise BrowserBusinessError(
+                "BROWSER_QUEUE_TIMEOUT",
+                (
+                    "Chromium queue did not provide a browser slot within "
+                    f"{int(queue_wait_seconds)}s. No Meta action was sent."
+                ),
+                retryable=True,
+                diagnostic={
+                    "stage": "browser_queue",
+                    "wait_seconds": int(queue_wait_seconds),
+                },
+            ) from exc
+
         self._semaphore_acquired = True
         self._browser_slot_acquired_at = time.monotonic()
         browser_slot_wait_ms = int(
