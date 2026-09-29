@@ -164,6 +164,15 @@ class AdAccountPrivateReconciliationTests(unittest.TestCase):
         self.assertIn("snapshot_ad_accounts_for_business", source)
 
 
+    def test_handler_never_opens_second_raw_browser_behind_cached_lease(self) -> None:
+        source = inspect.getsource(ad_account_handler)
+        proof_source = inspect.getsource(_prove_empty_after_uncertainty)
+        self.assertNotIn("async with FacebookBusinessBrowser(", source)
+        self.assertNotIn("async with FacebookBusinessBrowser(", proof_source)
+        self.assertIn("fresh_facebook_business_browser", source)
+        self.assertIn("fresh_facebook_business_browser", proof_source)
+
+
 class AdAccountPostCreateVerificationTests(unittest.IsolatedAsyncioTestCase):
     async def test_expected_id_requires_exact_business_inventory_match(self) -> None:
         evidence = {
