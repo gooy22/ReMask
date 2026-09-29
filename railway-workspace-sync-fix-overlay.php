@@ -705,7 +705,7 @@ $syncProfileReplacement = <<<'PHP'
         );
 
         try {
-            $liveInventory = hierarchy_worker_live_inventory($profile, array_keys($knownBusinessIds));
+            $liveInventory = hierarchy_worker_live_inventory($profile);
         } catch (Throwable $liveInventoryError) {
             $message = trim((string)$liveInventoryError->getMessage());
             if (
@@ -773,90 +773,9 @@ $syncProfileReplacement = <<<'PHP'
             $seenBusiness[$businessId] = true;
         }
 
-        // Durable worker state is only a propagation fallback. It never calls
-        // Graph and it never fabricates an unconfirmed new relation.
+        // Provisioning bindings are historical state only. They are never
+        // merged into the result of a live Meta synchronization.
         $workerConfirmedCount = 0;
-        try {
-            $workerState = hierarchy_worker_state($profile);
-            $workerBindings = $workerState['ad_account_bindings'] ?? [];
-            if (!is_array($workerBindings)) $workerBindings = [];
-            if ($workerBindings === []) {
-                $legacyBusinessId = trim((string)($workerState['business_id'] ?? ''));
-                $legacyAdAccountId = trim((string)($workerState['ad_account_id'] ?? ''));
-                if (
-                    preg_match('/^\\d{5,30}$/', $legacyBusinessId)
-                    && preg_match('/^\\d{5,30}$/', $legacyAdAccountId)
-                ) {
-                    $workerBindings[] = [
-                        'business_id' => $legacyBusinessId,
-                        'ad_account_id' => $legacyAdAccountId,
-                        'account_name' => '',
-                    ];
-                }
-            }
-
-            foreach ($workerBindings as $binding) {
-                if (!is_array($binding)) continue;
-                $businessId = trim((string)($binding['business_id'] ?? ''));
-                $accountId = trim((string)($binding['ad_account_id'] ?? ''));
-                if (str_starts_with($accountId, 'act_')) $accountId = substr($accountId, 4);
-                if (
-                    !preg_match('/^\\d{5,30}$/', $businessId)
-                    || !preg_match('/^\\d{5,30}$/', $accountId)
-                ) continue;
-
-                if (!isset($seenBusiness[$businessId])) {
-                    $businessRows[] = [
-                        'profile' => $profile,
-                        'id' => $businessId,
-                        'name' => $businessId,
-                        'verification_status' => '',
-                        'primary_page' => null,
-                        'ad_account_count' => 0,
-                        'accounts' => [],
-                        '_source' => 'python_worker_confirmed_binding',
-                        '_live_ready' => false,
-                    ];
-                    $seenBusiness[$businessId] = true;
-                }
-
-                if (!isset($seenAccount[$accountId])) {
-                    $fallback = [
-                        'profile' => $profile,
-                        'id' => $accountId,
-                        'account_id' => $accountId,
-                        'name' => trim((string)($binding['account_name'] ?? '')) ?: ('RK ' . $accountId),
-                        'business_id' => $businessId,
-                        'business_name' => $businessId,
-                        'account_status' => null,
-                        'disable_reason' => null,
-                        'currency' => '',
-                        'timezone_name' => '',
-                        'funding' => null,
-                        '_provisioned_only' => true,
-                        '_business_edge' => 'python_worker_confirmed_binding',
-                    ];
-                    $adAccountRows[] = $fallback;
-                    $seenAccount[$accountId] = true;
-                    foreach ($businessRows as $i => $businessRow) {
-                        if ((string)($businessRow['id'] ?? '') !== $businessId) continue;
-                        $businessRows[$i]['accounts'][] = $fallback;
-                        $businessRows[$i]['ad_account_count'] = count($businessRows[$i]['accounts']);
-                        break;
-                    }
-                }
-
-                $workerConfirmedCount++;
-                hierarchy_binding_put(
-                    $profile,
-                    $businessId,
-                    $accountId,
-                    trim((string)($binding['account_name'] ?? ''))
-                );
-            }
-        } catch (Throwable $workerStateError) {
-            $syncWarnings[] = 'Worker provisioning state unavailable; live browser inventory kept';
-        }
 
         foreach ((array)($liveInventory['warnings'] ?? []) as $warning) {
             if (is_scalar($warning) && trim((string)$warning) !== '') {
@@ -889,12 +808,9 @@ $syncProfileReplacement = <<<'PHP'
         $snapshot['businesses_count'] = count($businessRows);
         $snapshot['ad_accounts'] = array_values($adAccountRows);
         $snapshot['ad_accounts_count'] = count($adAccountRows);
-        $bindingReady = (!$liveReady && $workerConfirmedCount > 0 && count($businessRows) > 0);
-        $syncComplete = ($liveReady || $bindingReady);
+        $syncComplete = $liveReady;
 
-        $snapshot['sync_source'] = $liveReady
-            ? 'private_business_suite_browser'
-            : ($bindingReady ? 'private_browser_plus_confirmed_worker_binding' : 'private_business_suite_browser');
+        $snapshot['sync_source'] = 'private_business_suite_browser';
         $snapshot['live_inventory_available'] = $liveReady;
         $snapshot['confirmed_worker_bindings'] = $workerConfirmedCount;
         $snapshot['graph_preflight_available'] = false;
@@ -1184,12 +1100,8 @@ if ($profileStatusCount !== 1) {
 file_put_contents($hierarchy, $php);
 fwrite(STDERR, "[workspace-sync-fix] metaHierarchy.php patched; live writes + TOKEN/PROXY/PAGES/BM/RK readiness\n");
 
-if (
-    strpos($php, 'workspace_binding') === false
-    || strpos($php, 'worker_state_binding') === false
-    || strpos($php, '[remask-private-sync]') === false
-) {
-    throw new RuntimeException('server-side BM sync hint fallback marker missing');
+if (strpos($php, 'hierarchy_worker_live_inventory($profile)') === false) {
+    throw new RuntimeException('live Meta sync must call worker without BM hints');
 }
-fwrite(STDERR, "[workspace-sync-fix] server-side BM hints enabled from snapshot/binding/worker/request\n");
+fwrite(STDERR, "[workspace-sync-fix] live Meta sync is authoritative; provisioning bindings are not merged\n");
 fwrite(STDERR, "[workspace-sync-fix] clean sync stabilization ready; no diagnostic probe installed\n");
