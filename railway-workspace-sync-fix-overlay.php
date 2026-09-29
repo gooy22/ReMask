@@ -503,7 +503,11 @@ function hierarchy_worker_state(string $profile): array
     return is_array($json) ? $json : [];
 }
 
-function hierarchy_worker_live_inventory(string $profile, array $knownBusinessIds = []): array
+function hierarchy_worker_live_inventory(
+    string $profile,
+    array $knownBusinessIds = [],
+    array $knownAdAccountHints = []
+): array
 {
     $profile = trim($profile);
     if ($profile === '') return [];
@@ -515,9 +519,28 @@ function hierarchy_worker_live_inventory(string $profile, array $knownBusinessId
         $businessId = trim((string)$businessId);
         if (preg_match('/^\d{5,30}$/', $businessId)) $businessIds[$businessId] = true;
     }
+    $query = [];
     if ($businessIds !== []) {
-        $url .= '?business_ids=' . rawurlencode(implode(',', array_keys($businessIds)));
+        $query['business_ids'] = implode(',', array_keys($businessIds));
     }
+
+    $hintPairs = [];
+    foreach ($knownAdAccountHints as $businessId => $accountIds) {
+        $businessId = trim((string)$businessId);
+        if (!preg_match('/^\d{5,30}$/', $businessId)) continue;
+        foreach ((array)$accountIds as $accountId) {
+            $accountId = trim((string)$accountId);
+            if (!preg_match('/^\d{5,30}$/', $accountId)) continue;
+            $hintPairs[$businessId . ':' . $accountId] = true;
+        }
+    }
+    if ($hintPairs !== []) {
+        $query['ad_account_hints'] = implode(',', array_keys($hintPairs));
+    }
+    if ($query !== []) {
+        $url .= '?' . http_build_query($query, '', '&', PHP_QUERY_RFC3986);
+    }
+
     $headers = ['Accept: application/json'];
     $key = trim((string)(getenv('REMASK_WORKER_API_KEY') ?: ''));
     if ($key !== '') $headers[] = 'X-Remask-Worker-Key: ' . $key;
@@ -936,11 +959,45 @@ $syncProfileReplacement = <<<'PHP'
         $syncWarnings = [];
         $existingSnapshot = hierarchy_profile_snapshot($profile);
 
-        // Live synchronization has exactly one authority: the current
-        // authenticated Facebook private UI. Do not spend time consulting
-        // provisioning state or historical bindings before starting it.
+        // Live synchronization authority remains the current authenticated
+        // Facebook private UI. The last *confirmed live* snapshot is used only
+        // as a navigation hint when Meta's selector fails to enumerate BM/RK.
+        // A hint can never create a success by itself; the worker must still
+        // re-open Meta and prove the current account live.
+        $confirmedLive = hierarchy_live_snapshot_get($profile);
+        $knownBusinessIds = [];
+        $knownAdAccountHints = [];
+
+        foreach ((array)($confirmedLive['businesses'] ?? []) as $row) {
+            if (!is_array($row)) continue;
+            $businessId = trim((string)($row['id'] ?? ''));
+            if (preg_match('/^\d{5,30}$/', $businessId)) {
+                $knownBusinessIds[$businessId] = true;
+            }
+        }
+        foreach ((array)($confirmedLive['ad_accounts'] ?? []) as $row) {
+            if (!is_array($row)) continue;
+            $businessId = trim((string)($row['business_id'] ?? ''));
+            $accountId = trim((string)($row['id'] ?? $row['account_id'] ?? ''));
+            if (str_starts_with($accountId, 'act_')) $accountId = substr($accountId, 4);
+            if (
+                preg_match('/^\d{5,30}$/', $businessId)
+                && preg_match('/^\d{5,30}$/', $accountId)
+            ) {
+                $knownBusinessIds[$businessId] = true;
+                $knownAdAccountHints[$businessId][$accountId] = true;
+            }
+        }
+
         try {
-            $liveInventory = hierarchy_worker_live_inventory($profile);
+            $liveInventory = hierarchy_worker_live_inventory(
+                $profile,
+                array_keys($knownBusinessIds),
+                array_map(
+                    static fn($ids) => array_keys((array)$ids),
+                    $knownAdAccountHints
+                )
+            );
         } catch (Throwable $liveInventoryError) {
             $message = trim((string)$liveInventoryError->getMessage());
             if (
@@ -1428,8 +1485,12 @@ if ($profileStatusCount !== 1) {
 file_put_contents($hierarchy, $php);
 fwrite(STDERR, "[workspace-sync-fix] metaHierarchy.php patched; live writes + TOKEN/PROXY/PAGES/BM/RK readiness\n");
 
-if (strpos($php, 'hierarchy_worker_live_inventory($profile)') === false) {
-    throw new RuntimeException('live Meta sync must call worker without BM hints');
+if (
+    strpos($php, 'hierarchy_worker_live_inventory(') === false
+    || strpos($php, 'hierarchy_live_snapshot_get($profile)') === false
+    || strpos($php, "'ad_account_hints'") === false
+) {
+    throw new RuntimeException('live Meta sync confirmed-hint contract missing');
 }
 if (
     strpos($php, 'hierarchy_live_snapshot_put(') === false
