@@ -31,7 +31,7 @@ foreach ($legacyBackendReplacements as $old => $new) {
 if (
     strpos($hierarchy, "'proxy_configured' => \$proxy !== null") === false
     || strpos($hierarchy, "'permissions_available' => !is_array(\$preflight)") === false
-    || strpos($hierarchy, "'ads_management_granted' => !is_array(\$preflight)") === false
+    || strpos($hierarchy, "array_key_exists('ads_management_granted', \$preflight)") === false
 ) {
     throw new RuntimeException('canonical Workspace readiness fields are missing');
 }
