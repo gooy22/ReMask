@@ -202,6 +202,15 @@ if ($count !== 1) {
     throw new RuntimeException('profileAttention patch failed: ' . $count);
 }
 
+$permissionConditionPatterns = [
+    "if(!p.ads_management_granted)" => "if(p.ads_management_granted===false)",
+    "if (!p.ads_management_granted)" => "if (p.ads_management_granted===false)",
+];
+foreach ($permissionConditionPatterns as $permissionOld => $permissionNew) {
+    $permissionCount = 0;
+    $js = str_replace($permissionOld, $permissionNew, $js, $permissionCount);
+}
+
 $oldAccountStatus = "function accountStatus(a){ const s=Number(a.account_status||0); return s===1?pill('ACTIVE','ok'):s===2?pill('DISABLED','bad'):s===3?pill('UNSETTLED','warn'):pill(String(a.account_status||'UNKNOWN'),'warn'); }";
 $newAccountStatus = <<<'JS'
 function accountStatus(a){
@@ -640,12 +649,19 @@ function hierarchy_live_snapshot_put(
         $cleanAccounts[] = $row;
     }
 
-    $profileRow['name'] = trim((string)($profileRow['name'] ?? $profile));
-    if ($profileRow['name'] === '') $profileRow['name'] = $profile;
-    $profileRow['synced'] = true;
-    $profileRow['bm_count'] = count($cleanBusinesses);
-    $profileRow['rk_count'] = count($cleanAccounts);
-    $profileRow['ad_accounts_count'] = count($cleanAccounts);
+    // Persist only live Meta inventory identity/counts. Profile readiness
+    // (proxy/session/permissions/token health) must always come from the
+    // current account store and current cached preflight, never from an old
+    // live-inventory snapshot.
+    $profileName = trim((string)($profileRow['name'] ?? $profile));
+    if ($profileName === '') $profileName = $profile;
+    $persistedProfile = [
+        'name' => $profileName,
+        'synced' => true,
+        'bm_count' => count($cleanBusinesses),
+        'rk_count' => count($cleanAccounts),
+        'ad_accounts_count' => count($cleanAccounts),
+    ];
 
     $file = hierarchy_live_snapshot_file();
     $dir = dirname($file);
@@ -664,7 +680,7 @@ function hierarchy_live_snapshot_put(
         }
 
         $all[$profile] = [
-            'profile' => $profileRow,
+            'profile' => $persistedProfile,
             'businesses' => array_values($cleanBusinesses),
             'ad_accounts' => array_values($cleanAccounts),
             'updated_at' => time(),
@@ -702,29 +718,59 @@ function hierarchy_live_snapshot_apply_display(
         (array)($saved['ad_accounts'] ?? []),
         static fn($row) => is_array($row)
     ));
-    $profileRow = is_array($saved['profile'] ?? null)
-        ? $saved['profile']
-        : null;
 
     $snapshot['businesses'] = $businesses;
     $snapshot['businesses_count'] = count($businesses);
     $snapshot['ad_accounts'] = $adAccounts;
     $snapshot['ad_accounts_count'] = count($adAccounts);
-    if ($profileRow !== null) {
-        $snapshot['profile'] = $profileRow;
-        if (is_array($snapshot['profiles'] ?? null)) {
-            $matched = false;
-            foreach ($snapshot['profiles'] as $i => $row) {
-                if (!is_array($row)) continue;
-                $name = trim((string)($row['name'] ?? $row['profile'] ?? ''));
-                if ($name !== $profile) continue;
-                $snapshot['profiles'][$i] = $profileRow;
-                $matched = true;
-                break;
-            }
-            if (!$matched) $snapshot['profiles'][] = $profileRow;
+
+    // Keep the fresh profile row authoritative. The persisted live snapshot is
+    // allowed to restore BM/RK and their counts only. This prevents an old
+    // snapshot from erasing proxy_configured, proxy health or permission state.
+    $freshProfile = null;
+    if (is_array($snapshot['profiles'] ?? null)) {
+        foreach ($snapshot['profiles'] as $i => $row) {
+            if (!is_array($row)) continue;
+            $name = trim((string)($row['name'] ?? $row['profile'] ?? ''));
+            if ($name !== $profile) continue;
+            $row['name'] = $name !== '' ? $name : $profile;
+            $row['synced'] = true;
+            $row['bm_count'] = count($businesses);
+            $row['rk_count'] = count($adAccounts);
+            $row['ad_accounts_count'] = count($adAccounts);
+            $snapshot['profiles'][$i] = $row;
+            $freshProfile = $row;
+            break;
         }
     }
+
+    if ($freshProfile === null && is_array($snapshot['profile'] ?? null)) {
+        $row = $snapshot['profile'];
+        $name = trim((string)($row['name'] ?? $row['profile'] ?? ''));
+        if ($name === '' || $name === $profile) {
+            $row['name'] = $name !== '' ? $name : $profile;
+            $row['synced'] = true;
+            $row['bm_count'] = count($businesses);
+            $row['rk_count'] = count($adAccounts);
+            $row['ad_accounts_count'] = count($adAccounts);
+            $freshProfile = $row;
+        }
+    }
+
+    if ($freshProfile === null) {
+        $freshProfile = [
+            'name' => $profile,
+            'synced' => true,
+            'bm_count' => count($businesses),
+            'rk_count' => count($adAccounts),
+            'ad_accounts_count' => count($adAccounts),
+        ];
+        if (is_array($snapshot['profiles'] ?? null)) {
+            $snapshot['profiles'][] = $freshProfile;
+        }
+    }
+
+    $snapshot['profile'] = $freshProfile;
     $snapshot['last_confirmed_live_meta_at'] = (int)($saved['updated_at'] ?? 0);
     $snapshot['display_source'] = 'last_confirmed_live_meta_inventory';
     return $snapshot;
@@ -995,17 +1041,34 @@ $syncProfileReplacement = <<<'PHP'
                 $snapshot['profiles'][$i]['rk_count'] = count($adAccountRows);
                 $snapshot['profiles'][$i]['ad_accounts_count'] = count($adAccountRows);
                 $snapshot['profiles'][$i]['token_status'] = 'PRIVATE';
-                $snapshot['profiles'][$i]['transport'] = [
-                    'network_identity' => 'profile_bound',
-                    'session_context' => true,
-                    'direct_fallback' => false,
-                    'source' => 'business_suite_browser',
-                ];
+
+                $currentTransport = is_array($snapshot['profiles'][$i]['transport'] ?? null)
+                    ? $snapshot['profiles'][$i]['transport']
+                    : [];
+                $proxyConfigured = array_key_exists('proxy_configured', $snapshot['profiles'][$i])
+                    ? (bool)$snapshot['profiles'][$i]['proxy_configured']
+                    : (bool)($currentTransport['proxy_configured'] ?? false);
+
+                $snapshot['profiles'][$i]['proxy_configured'] = $proxyConfigured;
+                $snapshot['profiles'][$i]['transport'] = array_merge(
+                    $currentTransport,
+                    [
+                        'network_identity' => 'profile_bound',
+                        'proxy_configured' => $proxyConfigured,
+                        'session_context' => true,
+                        'direct_fallback' => false,
+                        'source' => 'business_suite_browser',
+                    ]
+                );
                 $responseProfile = $snapshot['profiles'][$i];
                 break;
             }
         }
         if (!is_array($responseProfile)) {
+            // Reaching live inventory already proves that the internal resolver
+            // supplied a configured proxy and a logged-in FB session. Permission
+            // state is intentionally UNKNOWN here because private sync does not
+            // query official Graph permissions.
             $responseProfile = [
                 'name' => $profile,
                 'synced' => true,
@@ -1013,6 +1076,17 @@ $syncProfileReplacement = <<<'PHP'
                 'rk_count' => count($adAccountRows),
                 'ad_accounts_count' => count($adAccountRows),
                 'token_status' => 'PRIVATE',
+                'proxy_configured' => true,
+                'ads_management_granted' => null,
+                'business_management_granted' => null,
+                'permissions_available' => null,
+                'transport' => [
+                    'network_identity' => 'profile_bound',
+                    'proxy_configured' => true,
+                    'session_context' => true,
+                    'direct_fallback' => false,
+                    'source' => 'business_suite_browser',
+                ],
             ];
         }
         $snapshot['profile'] = $responseProfile;
@@ -1267,9 +1341,41 @@ PHP_CODE;
 $profileFieldsReplacement = <<<'PHP_CODE'
             'legacy_ready' => $account->isLegacyReady(),
             'token_status' => ($preflight !== null && !empty($preflight['identity']['id'])) ? 'READY' : 'NOT_SYNCED',
+            'proxy_configured' => $proxy !== null,
             'proxy_status' => $proxy === null
                 ? 'NOT_CONFIGURED'
                 : strtoupper((string)(($profileMeta['proxy_health']['status'] ?? '') ?: 'NOT_CHECKED')),
+            'permissions_available' => !is_array($preflight)
+                ? null
+                : (
+                    array_key_exists('permissions_available', $preflight)
+                        ? (bool)$preflight['permissions_available']
+                        : true
+                ),
+            'ads_management_granted' => !is_array($preflight)
+                ? null
+                : (
+                    array_key_exists('permissions_available', $preflight)
+                    && $preflight['permissions_available'] === false
+                        ? null
+                        : (bool)($preflight['ads_management_granted'] ?? false)
+                ),
+            'ads_read_granted' => !is_array($preflight)
+                ? null
+                : (
+                    array_key_exists('permissions_available', $preflight)
+                    && $preflight['permissions_available'] === false
+                        ? null
+                        : (bool)($preflight['ads_read_granted'] ?? false)
+                ),
+            'business_management_granted' => !is_array($preflight)
+                ? null
+                : (
+                    array_key_exists('permissions_available', $preflight)
+                    && $preflight['permissions_available'] === false
+                        ? null
+                        : (bool)($preflight['business_management_granted'] ?? false)
+                ),
             'pages_count' => count(is_array($pages['data'] ?? null) ? $pages['data'] : []),
             'bm_count' => count($bmRows),
             'rk_count' => count($rkRows),
@@ -1301,6 +1407,9 @@ if (
     || strpos($js, 'SNAPSHOT_NOT_APPLIED') === false
     || strpos($js, 'function applySnapshot(s){') === false
     || strpos($js, 'return true;') === false
+    || strpos($php, "'proxy_configured' => \$proxy !== null") === false
+    || strpos($php, "'permissions_available' => !is_array(\$preflight)") === false
+    || strpos($php, "array_merge(\n                    \$currentTransport") === false
 ) {
     throw new RuntimeException('workspace sync snapshot contract invariant failed');
 }
