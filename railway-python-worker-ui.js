@@ -1043,11 +1043,16 @@ async function pythonWorkerRefreshProfile(profileId) {
     return false;
   }
 
+  // REMASK_POST_JOB_LOCAL_REFRESH_V1
+  // A successful FP/BM/RK mutation already persisted its exact IDs in worker
+  // state. Do not immediately hit Facebook again and turn a successful CREATE
+  // into a noisy sync failure. Refresh Workspace from local confirmed state;
+  // the explicit Sync button remains the only live inventory operation.
   try {
     const data = await apiJson(
       'ajax/metaHierarchy.php',
       post({
-        action: 'sync_profile',
+        action: 'snapshot_profile',
         profile: profileId
       })
     );
@@ -1056,7 +1061,7 @@ async function pythonWorkerRefreshProfile(profileId) {
     if (typeof render === 'function') render();
     return true;
   } catch (error) {
-    console.error('[ReMask Worker UI] sync_profile failed for ' + profileId + ':', error);
+    console.error('[ReMask Worker UI] local snapshot refresh failed for ' + profileId + ':', error);
     return false;
   }
 }
@@ -1811,8 +1816,8 @@ async function pythonWorkerPoll() {
         isFanPageJob
           ? (
               unconfirmed.length
-                ? 'FP созданы. Page ID сохранены в Job. Workspace sync не подтвердил: ' + unconfirmed.join(', ') + '.'
-                : 'Fan Pages созданы и Workspace sync завершён.'
+                ? 'FP созданы. Page ID сохранены в Job. Локальное обновление Workspace не применилось:: ' + unconfirmed.join(', ') + '.'
+                : 'Fan Pages созданы. Workspace обновлён из подтверждённого Job state; live sync запускается отдельно.'
             )
           : isAdAccountJob
           ? (
@@ -1821,7 +1826,7 @@ async function pythonWorkerPoll() {
                     'RK создан. ad_account_id сохранён в Job. Workspace sync не ' +
                     'подтвердил профили: ' + unconfirmed.join(', ') + '.'
                   )
-                : 'Рекламный кабинет создан и Workspace sync завершён.'
+                : 'Рекламный кабинет создан. Workspace обновлён из подтверждённого Job state; live sync запускается отдельно.'
             )
           : (
               unconfirmed.length
@@ -1830,7 +1835,7 @@ async function pythonWorkerPoll() {
                     'подтвердил профили: ' + unconfirmed.join(', ') +
                     '. Это не отменяет успешный CREATE.'
                   )
-                : 'Business Manager создан и подтверждён Workspace sync.'
+                : 'Business Manager создан. Workspace обновлён из подтверждённого Job state; live sync запускается отдельно.'
             )
       );
 
@@ -1884,7 +1889,7 @@ async function pythonWorkerPoll() {
             isAdAccountJob
               ? (
                   'Часть RK создана. Успешные ad_account_id сохранены в Job; ' +
-                  'Workspace sync не подтвердил: ' + unconfirmed.join(', ') +
+                  'Локальное обновление Workspace не применилось:: ' + unconfirmed.join(', ') +
                   '. Ошибки остальных: ' + (errors.join(' · ') || 'неизвестная ошибка')
                 )
               : (
