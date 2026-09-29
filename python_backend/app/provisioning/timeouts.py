@@ -33,33 +33,29 @@ def browser_queue_waves() -> int:
 
 
 def browser_step_timeout(step: ProvisioningStep) -> float:
-    """Total queue + active-runtime guard for one browser-backed step.
+    """Bound one browser-backed provisioning step.
 
-    Active Meta operations keep their shorter in-handler watchdogs. This outer
-    guard additionally allows time for a task to wait for the bounded Chromium
-    pool during bulk jobs.
+    Queue wait is bounded independently by FacebookBusinessBrowser.open().
+    Therefore this timeout protects active business logic and must not scale
+    into tens of minutes just because worker concurrency is high.
     """
-    waves = browser_queue_waves()
-
     if step is ProvisioningStep.FAN_PAGES:
         explicit = _env_float("REMASK_FAN_PAGES_STEP_TIMEOUT")
         if explicit is not None:
-            return max(90.0, min(explicit, 7200.0))
-        return min(7200.0, max(420.0, waves * 210.0 + 180.0))
+            return max(90.0, min(explicit, 900.0))
+        return 300.0
 
     if step is ProvisioningStep.BUSINESS:
         explicit = _env_float("REMASK_BUSINESS_STEP_TIMEOUT")
         if explicit is not None:
-            return max(60.0, min(explicit, 7200.0))
-        return min(7200.0, max(300.0, waves * 180.0 + 120.0))
+            return max(90.0, min(explicit, 900.0))
+        return 240.0
 
     if step is ProvisioningStep.AD_ACCOUNT:
         explicit = _env_float("REMASK_AD_ACCOUNT_STEP_TIMEOUT")
         if explicit is not None:
-            return max(45.0, min(explicit, 7200.0))
-        # create_ad_account is bounded to 115s after browser open. 150s per
-        # wave leaves room for Chromium/context setup and teardown.
-        return min(7200.0, max(300.0, waves * 150.0 + 120.0))
+            return max(75.0, min(explicit, 900.0))
+        return 240.0
 
     raise ValueError(f"unsupported browser step: {step}")
 
