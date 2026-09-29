@@ -1559,6 +1559,70 @@ $syncProfileReplacement = <<<'PHP'
             }
         }
 
+        // REMASK_SYNC_MERGE_WORKER_CONFIRMED_V1
+        // A successful provisioning Job is durable evidence created by ReMask.
+        // Meta can lag for minutes before the same BM/RK/Page appears on every
+        // inventory surface. Never make a just-created entity disappear merely
+        // because one live list is incomplete. Merge only worker-confirmed
+        // rows from the pre-sync snapshot; arbitrary cache rows are excluded.
+        $mergeWorkerRows = static function(array $liveRows, array $existingRows, callable $idOf): array {
+            $seen = [];
+            foreach ($liveRows as $row) {
+                if (!is_array($row)) continue;
+                $id = trim((string)$idOf($row));
+                if ($id !== '') $seen[$id] = true;
+            }
+
+            foreach ($existingRows as $row) {
+                if (!is_array($row)) continue;
+                $source = trim((string)($row['_source'] ?? ''));
+                $workerConfirmed = (($row['_provisioned_only'] ?? false) === true)
+                    || str_starts_with($source, 'python_worker_');
+                if (!$workerConfirmed) continue;
+
+                $id = trim((string)$idOf($row));
+                if ($id === '' || isset($seen[$id])) continue;
+                $row['_sync_preserved_worker'] = true;
+                $liveRows[] = $row;
+                $seen[$id] = true;
+            }
+
+            return array_values($liveRows);
+        };
+
+        $businessRows = $mergeWorkerRows(
+            $businessRows,
+            (array)($existingSnapshot['businesses'] ?? []),
+            static fn($row) => (string)($row['id'] ?? '')
+        );
+        $adAccountRows = $mergeWorkerRows(
+            $adAccountRows,
+            (array)($existingSnapshot['ad_accounts'] ?? []),
+            static fn($row) => (string)($row['id'] ?? $row['account_id'] ?? '')
+        );
+        $pageRows = $mergeWorkerRows(
+            $pageRows,
+            (array)($existingSnapshot['pages'] ?? []),
+            static fn($row) => (string)($row['id'] ?? $row['page_id'] ?? '')
+        );
+
+        // Rebuild Business -> RK display edges after durable RK rows are merged.
+        $accountsByBusiness = [];
+        foreach ($adAccountRows as $row) {
+            if (!is_array($row)) continue;
+            $businessId = trim((string)($row['business_id'] ?? ''));
+            if ($businessId === '') continue;
+            $accountsByBusiness[$businessId][] = $row;
+        }
+        foreach ($businessRows as $i => $row) {
+            if (!is_array($row)) continue;
+            $businessId = trim((string)($row['id'] ?? ''));
+            if ($businessId === '') continue;
+            $accounts = $accountsByBusiness[$businessId] ?? [];
+            $businessRows[$i]['accounts'] = array_values($accounts);
+            $businessRows[$i]['ad_account_count'] = count($accounts);
+        }
+
         $snapshot = $existingSnapshot;
         $snapshot['businesses'] = array_values($businessRows);
         $snapshot['businesses_count'] = count($businessRows);
