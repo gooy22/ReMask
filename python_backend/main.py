@@ -1711,9 +1711,11 @@ async def profile_provisioning_state(profile_id: str):
 
 @app.post('/api/v1/jobs',response_model=JobAccepted,dependencies=[Depends(require_key)])
 async def create_job(request: CreateJobRequest) -> JobAccepted:
-    fp_profiles=_request_fan_page_profile_ids(request)
-    if fp_profiles:
-        await _require_fp_auth_ready(fp_profiles)
+    # REMASK_FP_JOB_SINGLE_BROWSER_PASS_V1
+    # Do not run a separate Facebook browser preflight before FAN_PAGES. The
+    # provisioning Job itself owns proxy/session/auth validation and persists a
+    # resumable checkpoint on CHECKPOINT/2FA/session expiry. A preflight here
+    # would open Facebook twice for the same user action.
     job_id,created=await store.create_job(request)
     view=await store.job_view(job_id)
     if view and mirror.enabled:
@@ -1752,9 +1754,9 @@ async def retry_failed(job_id: str) -> RetryResponse:
     current_view=await store.job_view(job_id)
     if not current_view:
         raise HTTPException(status_code=404,detail='job not found')
-    fp_profiles=_view_fan_page_retry_profile_ids(current_view)
-    if fp_profiles:
-        await _require_fp_auth_ready(fp_profiles)
+    # Retry resumes through the persisted FAN_PAGES checkpoint. The handler
+    # verifies the current Facebook session itself before any irreversible
+    # action, so a second preflight browser pass is redundant.
     count=await store.retry_failed(job_id)
     view=await store.job_view(job_id)
     if view and mirror.enabled:
