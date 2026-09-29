@@ -10553,6 +10553,7 @@ class FacebookBusinessBrowser:
         *,
         business_id: str,
         timeout_seconds: float = 10.0,
+        expected_account_ids: list[str] | None = None,
     ) -> dict[str, Any]:
         """Read-only Ads Manager probe for RK/business correlation."""
         business = _digits(business_id)
@@ -10574,6 +10575,11 @@ class FacebookBusinessBrowser:
         account_rows: dict[str, dict[str, Any]] = {}
         request_scope_accounts: set[str] = set()
         exact_business_evidence = False
+        expected_accounts = {
+            _normalize_ad_account_id(value)
+            for value in (expected_account_ids or [])
+            if _normalize_ad_account_id(value)
+        }
 
         def collect_numeric_paths(
             value: Any,
@@ -10955,12 +10961,41 @@ class FacebookBusinessBrowser:
             )
         )
         confirmed_account_id = request_confirmed_account_id
+        confirmation_source = (
+            "ads_manager_request_scope"
+            if request_confirmed_account_id
+            else ""
+        )
         if not confirmed_account_id:
             confirmed_account_id = _confirmed_ads_manager_scope_account_id(
                 business_id=business,
                 final_act_ids=final_act_ids,
                 diagnostics=diagnostics,
             )
+            if confirmed_account_id:
+                confirmation_source = "ads_manager_business_scope"
+
+        # Meta sometimes reuses a mounted Ads Manager build that no longer
+        # emits the NorthStar BM/RK selector request. When that happens, a
+        # previously *live-confirmed* BM->RK pair may be used only as a hint:
+        # the current authenticated Ads Manager must independently land on the
+        # same single RK while the probe was opened with this Business ID.
+        # This never invents a new RK and never accepts a worker-only binding.
+        if (
+            not confirmed_account_id
+            and len(final_act_ids) == 1
+            and final_act_ids[0] in expected_accounts
+        ):
+            confirmed_account_id = final_act_ids[0]
+            confirmation_source = "ads_manager_live_act_matches_confirmed_snapshot"
+            diagnostics.append({
+                "phase": "confirmed_snapshot_live_act",
+                "business_id": business,
+                "account_id": confirmed_account_id,
+                "requested_with_business_id": True,
+                "live_act_match": True,
+            })
+
         confirmed_accounts: list[dict[str, Any]] = []
         if confirmed_account_id:
             existing = account_rows.get(confirmed_account_id) or {}
@@ -10971,7 +11006,10 @@ class FacebookBusinessBrowser:
                     "account_id": confirmed_account_id,
                     "name": _clean(existing.get("name")),
                     "business_id": business,
-                    "_source": "ads_manager_business_scope_confirmed",
+                    "_source": (
+                        confirmation_source
+                        or "ads_manager_business_scope_confirmed"
+                    ),
                 }
             )
 
@@ -10985,6 +11023,8 @@ class FacebookBusinessBrowser:
             "exact_business_evidence": exact_business_evidence,
             "request_scope_account_ids": sorted(request_scope_accounts)[:8],
             "request_time_confirmed": bool(request_confirmed_account_id),
+            "confirmation_source": confirmation_source,
+            "expected_account_ids": sorted(expected_accounts)[:8],
             "confirmed": bool(confirmed_account_id),
             "confirmed_account_id": confirmed_account_id,
             "confirmed_accounts": confirmed_accounts,
