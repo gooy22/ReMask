@@ -645,21 +645,64 @@ $syncProfileReplacement = <<<'PHP'
         $existingSnapshot = hierarchy_profile_snapshot($profile);
 
         $knownBusinessIds = [];
+        $knownBusinessSources = [];
+
         foreach ((array)($existingSnapshot['businesses'] ?? []) as $existingBusiness) {
             if (!is_array($existingBusiness)) continue;
             $existingBusinessId = trim((string)($existingBusiness['id'] ?? ''));
             if (preg_match('/^\d{5,30}$/', $existingBusinessId)) {
                 $knownBusinessIds[$existingBusinessId] = true;
+                $knownBusinessSources[$existingBusinessId]['snapshot'] = true;
             }
         }
 
-        // A Business-row sync already knows the exact BM selected by the user.
-        // Pass it to the worker as a navigation hint instead of spending the
-        // private-sync budget rediscovering the same portfolio from HOME.
+        // Workspace keeps durable BM -> RK relations on the persistent volume.
+        // These are stronger navigation hints than rediscovering the portfolio
+        // from Business Suite HOME on every sync.
+        foreach (hierarchy_binding_get($profile) as $bindingHint) {
+            if (!is_array($bindingHint)) continue;
+            $bindingBusinessId = trim((string)($bindingHint['business_id'] ?? ''));
+            if (preg_match('/^\d{5,30}$/', $bindingBusinessId)) {
+                $knownBusinessIds[$bindingBusinessId] = true;
+                $knownBusinessSources[$bindingBusinessId]['workspace_binding'] = true;
+            }
+        }
+
+        // The Python provisioning store may know the BM even when Workspace's
+        // rendered snapshot is empty. Read it before falling back to HOME discovery.
+        $workerStateHint = hierarchy_worker_state($profile);
+        $stateBusinessId = trim((string)($workerStateHint['business_id'] ?? ''));
+        if (preg_match('/^\d{5,30}$/', $stateBusinessId)) {
+            $knownBusinessIds[$stateBusinessId] = true;
+            $knownBusinessSources[$stateBusinessId]['worker_state'] = true;
+        }
+        foreach ((array)($workerStateHint['ad_account_bindings'] ?? []) as $stateBinding) {
+            if (!is_array($stateBinding)) continue;
+            $stateBindingBusinessId = trim((string)($stateBinding['business_id'] ?? ''));
+            if (preg_match('/^\d{5,30}$/', $stateBindingBusinessId)) {
+                $knownBusinessIds[$stateBindingBusinessId] = true;
+                $knownBusinessSources[$stateBindingBusinessId]['worker_state_binding'] = true;
+            }
+        }
+
+        // A Business-row sync also sends the exact selected BM when fresh JS is
+        // loaded, but correctness no longer depends on that browser-side hint.
         $requestedBusinessId = trim((string)($input['business_id'] ?? ''));
         if (preg_match('/^\d{5,30}$/', $requestedBusinessId)) {
             $knownBusinessIds[$requestedBusinessId] = true;
+            $knownBusinessSources[$requestedBusinessId]['request'] = true;
         }
+
+        error_log(
+            '[remask-private-sync] profile=' . $profile .
+            ' business_hints=' . json_encode(
+                array_map(
+                    static fn(array $sources): array => array_keys($sources),
+                    $knownBusinessSources
+                ),
+                JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
+            )
+        );
 
         try {
             $liveInventory = hierarchy_worker_live_inventory($profile, array_keys($knownBusinessIds));
@@ -1141,4 +1184,12 @@ if ($profileStatusCount !== 1) {
 file_put_contents($hierarchy, $php);
 fwrite(STDERR, "[workspace-sync-fix] metaHierarchy.php patched; live writes + TOKEN/PROXY/PAGES/BM/RK readiness\n");
 
+if (
+    strpos($php, 'workspace_binding') === false
+    || strpos($php, 'worker_state_binding') === false
+    || strpos($php, '[remask-private-sync]') === false
+) {
+    throw new RuntimeException('server-side BM sync hint fallback marker missing');
+}
+fwrite(STDERR, "[workspace-sync-fix] server-side BM hints enabled from snapshot/binding/worker/request\n");
 fwrite(STDERR, "[workspace-sync-fix] clean sync stabilization ready; no diagnostic probe installed\n");
