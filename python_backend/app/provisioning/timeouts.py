@@ -104,5 +104,7 @@ def browser_provisioning_hard_timeout(
     if explicit_total is not None:
         return max(180.0, min(explicit_total, 7200.0))
 
-    total = sum(browser_step_timeout(step) for step in normalized) + 180.0
-    return min(7200.0, max(300.0, total))
+    # Queue wait has its own watchdog, so the hard task guard only needs a
+    # small cleanup margin beyond the active step deadlines.
+    total = sum(browser_step_timeout(step) for step in normalized) + 60.0
+    return min(1200.0, max(180.0, total))
