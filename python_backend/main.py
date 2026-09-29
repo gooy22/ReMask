@@ -1681,6 +1681,9 @@ async def profile_provisioning_state(profile_id: str):
     if not clean_profile:
         raise HTTPException(status_code=400,detail='profile_id is required')
     entities=await pool.provisioning_state.latest_profile_entities(clean_profile)
+    businesses=await pool.provisioning_state.confirmed_businesses_for_profile(
+        clean_profile
+    )
     ad_account_bindings=await pool.provisioning_state.confirmed_ad_account_bindings_for_profile(
         clean_profile
     )
@@ -1688,6 +1691,7 @@ async def profile_provisioning_state(profile_id: str):
     return {
         'ok':True,
         **entities,
+        'businesses':businesses,
         'ad_account_bindings':ad_account_bindings,
         'fan_pages':fan_pages,
     }
