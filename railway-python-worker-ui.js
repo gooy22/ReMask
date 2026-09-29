@@ -3869,33 +3869,21 @@ async function pythonWorkerStartFanPages(options) {
     throw new Error('Add FP: нужны название, category и count 1–10. Проблема: ' + invalid.join(', '));
   }
 
-  pythonWorkerSetText('pythonPwStatus', 'Add FP: проверяю Facebook-сессии...');
-  const gate = await pythonWorkerFilterFanPageReadyProfiles(profiles);
-  if (!gate.ready.length) {
-    pythonWorkerUiState.busy = false;
-    pythonWorkerSelectionRefresh();
-    pythonWorkerSetText('pythonPwJob', '');
-    throw new Error(
-      gate.blocked.length
-        ? 'CHECKPOINT_REQUIRED: профили ' + gate.blocked.join(', ') +
-          '. Fan Page Job не создан.'
-        : 'FP preflight не прошёл: ' + (gate.errors[0] || 'нет READY профилей.')
-    );
-  }
-
+  // REMASK_FP_SINGLE_BROWSER_PASS_V1
+  // Do not open Facebook once for a UI preflight and then again for the actual
+  // Fan Page Job. PROXY_CHECK + FAN_PAGES is the single authoritative browser
+  // operation; auth/checkpoint errors are returned by that Job and remain
+  // retryable through the persisted checkpoint state.
   pythonWorkerUiState.busy = true;
   pythonWorkerSelectionRefresh();
   pythonWorkerSetText(
     'pythonPwStatus',
-    'Создаю Fan Page Job для ' + gate.ready.length + ' FB-профилей...' +
-      (gate.blocked.length
-        ? ' Пропущены checkpoint-профили: ' + gate.blocked.join(', ') + '.'
-        : '')
+    'Создаю Fan Page Job для ' + profiles.length + ' FB-профилей...'
   );
 
   try {
     const nonce = Date.now() + '-' + Math.random().toString(16).slice(2);
-    const payloadProfiles = gate.ready.map(function(profileId, index) {
+    const payloadProfiles = profiles.map(function(profileId, index) {
       const cfg = configs[String(profileId)] || {};
       return {
         profile_id: String(profileId),
