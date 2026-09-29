@@ -1422,6 +1422,7 @@ $syncProfileReplacement = <<<'PHP'
         // BM, RK and Pages are independent inventory components. A flaky RK
         // surface must not erase a freshly confirmed BM/Page result, and a
         // Page timeout must not turn an otherwise good BM/RK sync into failure.
+        $sessionReady = (($liveInventory['session_ready'] ?? false) === true);
         $liveReady = (($liveInventory['live_ready'] ?? false) === true);
         $businessesReady = (($liveInventory['businesses_ready'] ?? false) === true);
         $adAccountsComplete = (($liveInventory['ad_accounts_complete'] ?? false) === true);
@@ -1507,10 +1508,18 @@ $syncProfileReplacement = <<<'PHP'
             (array)($liveInventory['rk_inconclusive_businesses'] ?? [])
         );
 
-        // A component-aware sync is successful if at least one live inventory
-        // component was confirmed. Incomplete components are warnings, not a
-        // fake whole-profile failure.
-        $syncComplete = $liveReady;
+        // REMASK_SYNC_SESSION_SUCCESS_V1
+        // A private sync request that opened the authenticated profile browser
+        // and completed normally is a successful sync transaction even when a
+        // specific Meta inventory surface is temporarily inconclusive. In that
+        // case we preserve the last confirmed component snapshots and surface
+        // warnings instead of converting healthy transport into
+        // PRIVATE_INCONCLUSIVE.
+        $syncComplete = $sessionReady;
+        if ($sessionReady && !$liveReady) {
+            $syncPartial = true;
+            $syncWarnings[] = 'No new BM/RK/Page component was confirmed; previous confirmed inventory was preserved';
+        }
 
         $snapshot['sync_source'] = 'private_business_suite_browser';
         $snapshot['live_inventory_available'] = $liveReady;
@@ -1520,8 +1529,8 @@ $syncProfileReplacement = <<<'PHP'
         unset($snapshot['sync_error_kind'], $snapshot['sync_error']);
 
         if (!$syncComplete) {
-            $snapshot['sync_error_kind'] = 'PRIVATE_INCONCLUSIVE';
-            $snapshot['sync_error'] = 'Private Facebook inventory did not confirm any live BM/RK/Page component.';
+            $snapshot['sync_error_kind'] = 'PRIVATE_SYNC';
+            $snapshot['sync_error'] = 'Private Facebook session did not complete the synchronization transaction.';
         }
 
         $responseProfile = null;
