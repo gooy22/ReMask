@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
 
@@ -426,6 +427,15 @@ class MetaSession:
     async def facebook_controller(self) -> BusinessLogicController:
         return BusinessLogicController(await self.facebook_web())
 
+    def _business_browser_timeout(self) -> int:
+        try:
+            browser_timeout = int(
+                os.getenv("REMASK_BM_BROWSER_TIMEOUT_SECONDS", "45")
+            )
+        except (TypeError, ValueError):
+            browser_timeout = 45
+        return max(20, min(browser_timeout, 90))
+
     async def facebook_business_browser(self):
         current = self._business_browser
         if current is not None:
@@ -436,27 +446,55 @@ class MetaSession:
             if current is None:
                 from .facebook_business_browser import FacebookBusinessBrowser
 
-                try:
-                    browser_timeout = int(
-                        os.getenv("REMASK_BM_BROWSER_TIMEOUT_SECONDS", "45")
-                    )
-                except (TypeError, ValueError):
-                    browser_timeout = 45
-                browser_timeout = max(
-                    20,
-                    min(
-                        browser_timeout,
-                        90,
-                    ),
-                )
-
                 current = FacebookBusinessBrowser(
                     self.context,
-                    timeout_seconds=browser_timeout,
+                    timeout_seconds=self._business_browser_timeout(),
                 )
                 await current.open()
                 self._business_browser = current
             return current
+
+    @asynccontextmanager
+    async def fresh_facebook_business_browser(
+        self,
+        *,
+        timeout_seconds: int | None = None,
+    ):
+        """Yield one fresh profile browser without self-deadlocking the pool.
+
+        ReMask production normally permits one Chromium lease at a time. Older
+        reconciliation code opened an independent FacebookBusinessBrowser while
+        the ProfileSession still owned its cached browser, so the second browser
+        waited on the global semaphore until BROWSER_QUEUE_TIMEOUT. Reset the
+        cached lease first, then open the fresh observation in the same session.
+        """
+        from .facebook_business_browser import FacebookBusinessBrowser
+
+        async with self._business_browser_lock:
+            previous = self._business_browser
+            self._business_browser = None
+            if previous is not None:
+                await previous.close()
+
+            bounded_timeout = (
+                self._business_browser_timeout()
+                if timeout_seconds is None
+                else max(20, min(int(timeout_seconds), 90))
+            )
+            current = FacebookBusinessBrowser(
+                self.context,
+                timeout_seconds=bounded_timeout,
+            )
+            await current.open()
+            self._business_browser = current
+
+        try:
+            yield current
+        finally:
+            async with self._business_browser_lock:
+                if self._business_browser is current:
+                    self._business_browser = None
+                await current.close()
 
     async def graph_api(self) -> FacebookGraphApi:
         current = self._graph_api
