@@ -41,6 +41,17 @@ class LiveInventoryCancellationRegressionTests(unittest.TestCase):
         self.assertIn("browser_slot_wait_started", source)
         self.assertIn("browser slot waited %dms before open", source)
 
+    def test_ads_manager_can_revalidate_last_live_confirmed_rk(self) -> None:
+        source = inspect.getsource(
+            FacebookBusinessBrowser.probe_ads_manager_inventory_context
+        )
+        self.assertIn("expected_account_ids", source)
+        self.assertIn(
+            "ads_manager_live_act_matches_confirmed_snapshot",
+            source,
+        )
+        self.assertIn("final_act_ids[0] in expected_accounts", source)
+
 
 class PrivateBusinessSelectorTextTests(unittest.TestCase):
     def test_selector_serialized_state_extracts_first_level_business(self):
