@@ -1299,12 +1299,12 @@ function pythonWorkerApplyPages(cfg, pages, sourceLabel) {
   if (!list.length) {
     const empty = document.createElement('option');
     empty.value = '';
-    empty.textContent = 'Meta вернула 0 Pages';
+    empty.textContent = 'Pages не найдены';
     cfg.page.appendChild(empty);
-    cfg.error = 'Meta вернула 0 Pages';
+    cfg.error = 'Pages не найдены';
     cfg.pageHint.className = 'error';
     cfg.pageHint.textContent =
-      'Meta вернула 0 Pages. Введи Primary Page ID вручную.';
+      'Pages не найдены. Введи Primary Page ID вручную.';
     cfg.page.disabled = false;
     cfg.loaded = true;
     return;
@@ -1385,7 +1385,7 @@ function pythonWorkerApplyPages(cfg, pages, sourceLabel) {
 
   cfg.pageHint.textContent =
     'Pages: ' + list.length +
-    ' · источник: ' + String(sourceLabel || 'Meta') +
+    ' · источник: ' + String(sourceLabel || 'ReMask private browser') +
     (warnings.length ? ' · ' + warnings.join(' · ') : '') +
     (
       preferred
@@ -1478,7 +1478,7 @@ async function pythonWorkerOpenOwnBmModal() {
 
   const note = document.createElement('div');
   note.className = 'pwbm-note';
-  note.textContent = 'Pages загружаются из текущего профиля. Для каждого профиля укажи отдельное название BM и Primary Page.';
+  note.textContent = 'Pages загружаются из сохранённого состояния ReMask или текущей приватной FB-сессии. Для каждого профиля укажи отдельное название BM и Primary Page.';
   body.appendChild(note);
 
   const rows = {};
@@ -1681,10 +1681,10 @@ async function pythonWorkerOpenOwnBmModal() {
 
       cfg.sessionHint.className = 'pwbm-session error';
       cfg.sessionHint.textContent =
-        'Кэш синхронизации недоступен · можно ввести Primary Page ID вручную';
+        'Pages из ReMask/private browser недоступны · можно ввести Primary Page ID вручную';
       cfg.pageHint.className = 'error';
       cfg.pageHint.textContent =
-        'Не удалось прочитать Pages из синхронизации: ' + cfg.error +
+        'Не удалось получить Pages из ReMask/private browser: ' + cfg.error +
         '. Введи Primary Page ID вручную.';
 
       refreshReadyState();
