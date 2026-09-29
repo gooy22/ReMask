@@ -166,9 +166,36 @@ function applySnapshot(s){
   ).trim();
   if(!p)return false;
 
+  const existingProfile=state.inventory.profiles.find(
+    x=>x && String(x.name||x.profile||'').trim()===p
+  ) || null;
+
+  // A sync response is partial by design. Never replace the whole profile row
+  // with it: that used to drop the persisted proxy descriptor from client
+  // state and render "proxy://" immediately after a successful sync.
   const normalizedProfile=profileRow && typeof profileRow==='object'
-    ? {...profileRow,name:String(profileRow.name||profileRow.profile||p)}
-    : {name:p,synced:true};
+    ? {
+        ...(existingProfile&&typeof existingProfile==='object'?existingProfile:{}),
+        ...profileRow,
+        name:String(profileRow.name||profileRow.profile||p),
+      }
+    : {
+        ...(existingProfile&&typeof existingProfile==='object'?existingProfile:{}),
+        name:p,
+        synced:true,
+      };
+
+  // If the worker reached private inventory, proxy_configured=true is
+  // authoritative for this sync, but keep the existing proxy descriptor and
+  // proxy health payload unless the response explicitly supplied replacements.
+  if(existingProfile && normalizedProfile.proxy_configured===true){
+    if(normalizedProfile.proxy==null && existingProfile.proxy!=null){
+      normalizedProfile.proxy=existingProfile.proxy;
+    }
+    if(normalizedProfile.proxy_health==null && existingProfile.proxy_health!=null){
+      normalizedProfile.proxy_health=existingProfile.proxy_health;
+    }
+  }
 
   const businesses=(Array.isArray(s.businesses)?s.businesses:[])
     .filter(x=>x&&typeof x==='object')
