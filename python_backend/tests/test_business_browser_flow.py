@@ -28,6 +28,20 @@ from app.provisioning.service import ProvisioningService
 
 
 
+class LiveInventoryCancellationRegressionTests(unittest.TestCase):
+    def test_business_snapshot_timeout_cleanup_is_bounded(self) -> None:
+        source = inspect.getsource(FacebookBusinessBrowser.snapshot_businesses)
+        self.assertIn("REMASK_BUSINESS_SNAPSHOT_CANCEL_SAFE_V1", source)
+        self.assertIn("collect_dom_businesses_bounded", source)
+        self.assertIn('timeout=0.75', source)
+        self.assertIn('_settle_tasks_bounded', source)
+
+    def test_browser_open_tracks_global_slot_wait(self) -> None:
+        source = inspect.getsource(FacebookBusinessBrowser.open)
+        self.assertIn("browser_slot_wait_started", source)
+        self.assertIn("browser slot waited %dms before open", source)
+
+
 class PrivateBusinessSelectorTextTests(unittest.TestCase):
     def test_selector_serialized_state_extracts_first_level_business(self):
         html = """
