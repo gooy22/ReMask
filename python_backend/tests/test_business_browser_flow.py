@@ -14,6 +14,7 @@ from app.facebook_business_browser import (
     _extract_created_ad_account_id,
     _extract_business_inventory_rows,
     _business_ids_from_private_selector_request,
+    _business_ids_from_private_selector_text,
     _extract_inventory_ad_account_ids,
     _extract_named_ad_account_ids,
     _has_ad_account_inventory_container,
@@ -25,6 +26,38 @@ from app.provisioning.models import ProvisioningError, ProvisioningStep
 from app.provisioning.state import ProvisioningStateStore
 from app.provisioning.service import ProvisioningService
 
+
+
+class PrivateBusinessSelectorTextTests(unittest.TestCase):
+    def test_selector_serialized_state_extracts_first_level_business(self):
+        html = """
+        <script>
+        {"friendly":"NorthStarBusinessUnifiedScopingSelectorPopoverContainerAllFirstLevelScopesQuery",
+         "variables":{"firstLevelScopeId":"61594753560938",
+                      "zeroLevelScopeId":"1289628847574478"}}
+        </script>
+        """
+        self.assertEqual(
+            _business_ids_from_private_selector_text(html),
+            {"61594753560938"},
+        )
+
+    def test_selector_serialized_state_does_not_promote_zero_level(self):
+        html = """
+        NorthStarBusinessUnifiedScopingSelectorPopoverContainerAllFirstLevelScopesQuery
+        {"zeroLevelScopeId":"2172569806673120"}
+        """
+        self.assertEqual(
+            _business_ids_from_private_selector_text(html),
+            set(),
+        )
+
+    def test_unrelated_serialized_business_id_is_rejected(self):
+        html = '{"businessId":"61594753560938","zeroLevelScopeId":"2172569806673120"}'
+        self.assertEqual(
+            _business_ids_from_private_selector_text(html),
+            set(),
+        )
 
 
 class PrivateBusinessSelectorRequestTests(unittest.TestCase):

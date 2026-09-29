@@ -1121,6 +1121,41 @@ async def _settle_tasks_bounded(
     return len(pending)
 
 
+def _business_ids_from_private_selector_text(text: str) -> set[str]:
+    """Extract live BM IDs from serialized Meta NorthStar selector state.
+
+    Only first-level/business scope fields are accepted, and only from a
+    bounded window that also contains the NorthStar selector marker.
+    zeroLevelScopeId is intentionally ignored because it is an asset scope.
+    """
+    raw = str(text or "")
+    if not raw:
+        return set()
+
+    selector_pattern = re.compile(
+        r"NorthStarBusinessUnifiedScopingSelector",
+        flags=re.IGNORECASE,
+    )
+    id_pattern = re.compile(
+        r'["\\\'](?:firstLevelScopeId|businessIdForAddAA|businessIDForAddAA|businessId|businessID)["\\\']'
+        r'\s*[:=]\s*["\\\']?(\d{5,30})',
+        flags=re.IGNORECASE,
+    )
+
+    output: set[str] = set()
+    for match in selector_pattern.finditer(raw):
+        start = max(0, match.start() - 12000)
+        end = min(len(raw), match.end() + 12000)
+        window = raw[start:end]
+        for candidate in id_pattern.findall(window):
+            digits = _digits(candidate)
+            if digits:
+                output.add(digits)
+        if len(output) >= 32:
+            break
+    return output
+
+
 def _business_ids_from_private_selector_request(meta: Any) -> set[str]:
     """Extract live BM IDs from Meta's NorthStar business scope selector request.
 
@@ -5254,6 +5289,8 @@ class FacebookBusinessBrowser:
                 content = ""
             for business_id in _business_ids_from_text(content):
                 dom_output.setdefault(business_id, "")
+            for business_id in _business_ids_from_private_selector_text(content):
+                dom_output.setdefault(business_id, "")
             return len(dom_output) - before
 
         async def navigate_inventory_surface(
@@ -5521,7 +5558,11 @@ class FacebookBusinessBrowser:
                 "source": (
                     "business_suite_private_graphql"
                     if network_rows
-                    else ("business_suite_dom_fallback" if dom_output else "none")
+                    else (
+                        "business_suite_live_dom_or_relay_state"
+                        if dom_output
+                        else "none"
+                    )
                 ),
                 "network_businesses": len(network_rows),
                 "dom_businesses": len(dom_output),
