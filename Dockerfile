@@ -136,6 +136,10 @@ RUN set -eux; \
     grep -q 'confirmed_ad_account_bindings_for_profile' /opt/remask-python/app/provisioning/state.py; \
     grep -q 'confirmed_businesses_for_profile' /opt/remask-python/app/provisioning/state.py; \
     grep -q 'REMASK_COMPONENT_SYNC_READINESS_V1' /opt/remask-python/main.py; \
+    grep -q 'REMASK_SYNC_SESSION_SUCCESS_V1' /var/www/html/ajax/metaHierarchy.php; \
+    grep -q 'REMASK_LOCAL_WORKER_PAGE_MERGE_V1' /var/www/html/ajax/metaHierarchy.php; \
+    grep -q 'REMASK_PAGE_EXPLICIT_EMPTY_V1' /opt/remask-python/app/facebook_business_browser.py; \
+    grep -q 'REMASK_PAGE_RECONCILE_NO_FALSE_EMPTY_V1' /opt/remask-python/app/provisioning/fan_pages_handler.py; \
     grep -q 'BROWSER_QUEUE_TIMEOUT' /opt/remask-python/app/facebook_business_browser.py; \
     ! grep -q 'session.graph_api()' /opt/remask-python/app/provisioning/ad_account_handler.py; \
     grep -q 'confirmed_ad_account_binding_groups' /opt/remask-python/app/provisioning/state.py; \
