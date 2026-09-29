@@ -230,4 +230,90 @@ sed -ri "s#DocumentRoot .*#DocumentRoot ${ROOT}#" /etc/apache2/sites-available/0
 sed -ri "s/<VirtualHost \*:[0-9]+>/<VirtualHost *:80>/" /etc/apache2/sites-available/000-default.conf
 
 
+# Temporary two-pass read-only verification for repeated live Meta sync.
+# It passes NO BM/RK hints and performs no Meta mutation. Remove after verification.
+(
+  for _ in $(seq 1 80); do
+    if /opt/remask-venv/bin/python - <<'PY'
+import urllib.request
+try:
+    with urllib.request.urlopen("http://127.0.0.1/health", timeout=0.5) as response:
+        raise SystemExit(0 if response.status == 200 else 1)
+except Exception:
+    raise SystemExit(1)
+PY
+    then
+      break
+    fi
+    sleep 0.5
+  done
+
+  /opt/remask-venv/bin/python - <<'PY'
+import json
+import os
+import time
+import urllib.request
+
+port = os.getenv("REMASK_LOCAL_WORKER_PORT", "8081")
+key = os.getenv("REMASK_WORKER_API_KEY", "")
+url = f"http://127.0.0.1:{port}/api/v1/profiles/7/live-inventory"
+
+def run_once(index):
+    req = urllib.request.Request(url)
+    if key:
+        req.add_header("X-Remask-Worker-Key", key)
+    started = time.monotonic()
+    try:
+        with urllib.request.urlopen(req, timeout=75) as response:
+            data = json.loads(response.read().decode("utf-8", "replace"))
+        safe_businesses = []
+        for row in data.get("businesses") or []:
+            if not isinstance(row, dict):
+                continue
+            safe_businesses.append({
+                "id": str(row.get("id") or ""),
+                "ad_accounts_ready": bool(row.get("ad_accounts_ready")),
+                "ad_accounts_source": str(row.get("ad_accounts_source") or ""),
+                "account_ids": [
+                    str(account.get("account_id") or account.get("id") or "")
+                    for account in (row.get("ad_accounts") or [])
+                    if isinstance(account, dict)
+                ],
+            })
+        safe = {
+            "ok": bool(data.get("ok")),
+            "profile_id": str(data.get("profile_id") or ""),
+            "live_ready": bool(data.get("live_ready")),
+            "businesses_count": int(data.get("businesses_count") or 0),
+            "live_businesses_count": int(data.get("live_businesses_count") or 0),
+            "warnings": data.get("warnings") or [],
+            "businesses": safe_businesses,
+            "elapsed_ms": int((time.monotonic() - started) * 1000),
+        }
+        print(
+            f"[live-sync-repeat-check] run={index} result="
+            + json.dumps(safe, ensure_ascii=False, separators=(",", ":")),
+            flush=True,
+        )
+    except Exception as exc:
+        print(
+            f"[live-sync-repeat-check] run={index} failed="
+            + json.dumps(
+                {
+                    "type": exc.__class__.__name__,
+                    "error": str(exc)[:700],
+                    "elapsed_ms": int((time.monotonic() - started) * 1000),
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+            flush=True,
+        )
+
+run_once(1)
+time.sleep(2.0)
+run_once(2)
+PY
+) &
+
 exec apache2-foreground
