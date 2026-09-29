@@ -1354,30 +1354,27 @@ $profileFieldsReplacement = <<<'PHP_CODE'
                         ? (bool)$preflight['permissions_available']
                         : null
                 ),
-            'ads_management_granted' => !is_array($preflight)
-                ? null
-                : (
-                    array_key_exists('permissions_available', $preflight)
-                    && $preflight['permissions_available'] === false
-                        ? null
-                        : (bool)($preflight['ads_management_granted'] ?? false)
-                ),
-            'ads_read_granted' => !is_array($preflight)
-                ? null
-                : (
-                    array_key_exists('permissions_available', $preflight)
-                    && $preflight['permissions_available'] === false
-                        ? null
-                        : (bool)($preflight['ads_read_granted'] ?? false)
-                ),
-            'business_management_granted' => !is_array($preflight)
-                ? null
-                : (
-                    array_key_exists('permissions_available', $preflight)
-                    && $preflight['permissions_available'] === false
-                        ? null
-                        : (bool)($preflight['business_management_granted'] ?? false)
-                ),
+            'ads_management_granted' => (
+                is_array($preflight)
+                && ($preflight['permissions_available'] ?? null) === true
+                && array_key_exists('ads_management_granted', $preflight)
+            )
+                ? (bool)$preflight['ads_management_granted']
+                : null,
+            'ads_read_granted' => (
+                is_array($preflight)
+                && ($preflight['permissions_available'] ?? null) === true
+                && array_key_exists('ads_read_granted', $preflight)
+            )
+                ? (bool)$preflight['ads_read_granted']
+                : null,
+            'business_management_granted' => (
+                is_array($preflight)
+                && ($preflight['permissions_available'] ?? null) === true
+                && array_key_exists('business_management_granted', $preflight)
+            )
+                ? (bool)$preflight['business_management_granted']
+                : null,
             'pages_count' => count(is_array($pages['data'] ?? null) ? $pages['data'] : []),
             'bm_count' => count($bmRows),
             'rk_count' => count($rkRows),
