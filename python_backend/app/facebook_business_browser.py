@@ -10756,6 +10756,52 @@ class FacebookBusinessBrowser:
 
             final_url = _clean(getattr(self.page, "url", ""))
 
+            # Fast path: once Meta's live request variables bind the requested
+            # Business to one zero-level RK and Ads Manager itself selects the
+            # same act in the final URL, the relationship is already proven.
+            # Do not keep parsing DOM/GraphQL response bodies after that point:
+            # those diagnostics are optional and have previously kept the
+            # entire sync open even after the RK was known.
+            if request_confirmed_account_id:
+                for task in list(response_tasks):
+                    if not task.done():
+                        task.cancel()
+                if response_tasks:
+                    cleanup_pending_tasks = await _settle_tasks_bounded(
+                        set(response_tasks),
+                        timeout_seconds=0.2,
+                        cancel_pending=True,
+                    )
+                return {
+                    "source": "ads_manager_read_only_probe",
+                    "business_id": business,
+                    "requested_url": requested_url[:700],
+                    "final_url": final_url[:700],
+                    "final_business_ids": sorted(
+                        _business_ids_from_text(final_url)
+                    )[:8],
+                    "final_act_ids": [request_confirmed_account_id],
+                    "exact_business_evidence": True,
+                    "request_scope_account_ids": sorted(
+                        request_scope_accounts
+                    )[:8],
+                    "request_time_confirmed": True,
+                    "confirmed": True,
+                    "confirmed_account_id": request_confirmed_account_id,
+                    "confirmed_accounts": [{
+                        "id": request_confirmed_account_id,
+                        "account_id": request_confirmed_account_id,
+                        "name": "",
+                        "business_id": business,
+                        "_source": "ads_manager_request_scope_fastpath",
+                    }],
+                    "accounts": [],
+                    "diagnostics": diagnostics[-16:],
+                    "dom": {},
+                    "cleanup_pending_tasks": cleanup_pending_tasks,
+                    "error": error,
+                }
+
             try:
                 remaining = max(0.0, deadline - time.monotonic())
                 if remaining <= 0:
