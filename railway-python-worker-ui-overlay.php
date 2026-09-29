@@ -321,7 +321,7 @@ HTML;
 
     $php = preg_replace(
         '#scripts/workspace\.js(?:\?[^"\']*)?#',
-        'scripts/workspace.js?v=20260929-python-worker-ui-v186',
+        'scripts/workspace.js?v=20260929-python-worker-ui-v187',
         $php,
         1,
         $scriptCount
@@ -343,7 +343,7 @@ if ($workerPos === false) {
 
 $php = preg_replace(
     '#scripts/workspace\.js(?:\?[^"\']*)?#',
-    'scripts/workspace.js?v=20260929-python-worker-ui-v186',
+    'scripts/workspace.js?v=20260929-python-worker-ui-v187',
     $php,
     1
 ) ?? $php;
