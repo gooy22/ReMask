@@ -1036,9 +1036,9 @@ async def profile_live_inventory(profile_id: str, business_ids: str | None = Non
                             ads_probe=await asyncio.wait_for(
                                 browser.probe_ads_manager_inventory_context(
                                     business_id=str(business_id),
-                                    timeout_seconds=15.0,
+                                    timeout_seconds=10.0,
                                 ),
-                                timeout=19.0,
+                                timeout=12.0,
                             )
                         except asyncio.TimeoutError:
                             ads_probe={
@@ -1092,9 +1092,9 @@ async def profile_live_inventory(profile_id: str, business_ids: str | None = Non
                         settings_inventory=await asyncio.wait_for(
                             browser.snapshot_ad_accounts_for_business(
                                 business_id=str(business_id),
-                                timeout_seconds=11.0,
+                                timeout_seconds=8.0,
                             ),
-                            timeout=15.0,
+                            timeout=10.0,
                         )
                         settings_inventory['ads_manager_diagnostic']=ads_probe
                         return settings_inventory

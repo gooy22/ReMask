@@ -786,6 +786,69 @@ def _graphql_request_ad_account_inventory_scope(meta: dict[str, Any]) -> bool:
     return walk(variables if isinstance(variables, dict) else {})
 
 
+def _ads_manager_scope_account_from_request(
+    meta: Any,
+    *,
+    business_id: str,
+) -> str:
+    """Extract one RK from Meta's live Ads Manager selector request.
+
+    This accepts only an explicit BM/RK scope pair carried together in the
+    request variables. Generic account IDs and response rows are ignored.
+    """
+    business = _digits(business_id)
+    if not business or not isinstance(meta, dict):
+        return ""
+
+    friendly = _clean(meta.get("friendly_name")).casefold()
+    if any(marker in friendly for marker in ("mutation", "create", "update", "delete")):
+        return ""
+
+    variables = meta.get("variables")
+    if not isinstance(variables, dict):
+        return ""
+
+    first_level = _digits(variables.get("firstLevelScopeId"))
+    zero_level = _digits(variables.get("zeroLevelScopeId"))
+    add_business = _digits(
+        variables.get("businessIdForAddAA")
+        or variables.get("businessIDForAddAA")
+    )
+    scope_ids = {
+        _digits(value)
+        for value in (variables.get("scopeIDs") or [])
+        if _digits(value)
+    } if isinstance(variables.get("scopeIDs"), list) else set()
+
+    selector_query = "northstarbusinessunifiedscopingselector" in friendly
+    if (
+        selector_query
+        and first_level == business
+        and zero_level
+        and zero_level != business
+        and (add_business == business or business in scope_ids)
+    ):
+        return zero_level
+
+    global_scope = _digits(
+        variables.get("globalScopeID")
+        or variables.get("globalScopeId")
+    )
+    local_scope = _digits(
+        variables.get("localScopeID")
+        or variables.get("localScopeId")
+    )
+    if (
+        "scope" in friendly
+        and global_scope == business
+        and local_scope
+        and local_scope != business
+    ):
+        return local_scope
+
+    return ""
+
+
 def _confirmed_ads_manager_scope_account_id(
     *,
     business_id: str,
@@ -10349,6 +10412,7 @@ class FacebookBusinessBrowser:
         diagnostics: list[dict[str, Any]] = []
         response_tasks: set[asyncio.Task[Any]] = set()
         account_rows: dict[str, dict[str, Any]] = {}
+        request_scope_accounts: set[str] = set()
         exact_business_evidence = False
 
         def collect_numeric_paths(
@@ -10375,6 +10439,46 @@ class FacebookBusinessBrowser:
 
             walk(value, path)
             return output
+
+        def inspect_request(request: Any) -> None:
+            nonlocal exact_business_evidence
+            try:
+                meta = _request_graphql_meta(request)
+                account_id = _ads_manager_scope_account_from_request(
+                    meta,
+                    business_id=business,
+                )
+                if not account_id:
+                    return
+                request_scope_accounts.add(account_id)
+                exact_business_evidence = True
+                diagnostics.append(
+                    {
+                        "phase": "request_scope_pair",
+                        "friendly_name": _clean(meta.get("friendly_name"))[:180],
+                        "doc_id": _clean(meta.get("doc_id"))[:80],
+                        "request_scoped": True,
+                        "exact_business_context": True,
+                        "request_business_ids": [business],
+                        "row_business_ids": [],
+                        "variable_numeric_ids": collect_numeric_paths(
+                            meta.get("variables") or {}
+                        ),
+                        "rows": [],
+                        "request_scope_account_id": account_id,
+                    }
+                )
+                if len(diagnostics) > 32:
+                    del diagnostics[:-32]
+            except Exception as exc:
+                diagnostics.append(
+                    {
+                        "phase": "request_scope_pair",
+                        "error": (
+                            f"{exc.__class__.__name__}: {_clean(exc)}"
+                        )[:500],
+                    }
+                )
 
         async def inspect_response(response: Any) -> None:
             nonlocal exact_business_evidence
@@ -10490,45 +10594,67 @@ class FacebookBusinessBrowser:
             except Exception:
                 return
 
+        self.page.on("request", inspect_request)
         self.page.on("response", on_response)
         requested_url = f"{self.ADS_MANAGER_URL}?business_id={business}"
         final_url = ""
         dom: dict[str, Any] = {}
         error = ""
         cleanup_pending_tasks = 0
+        request_confirmed_account_id = ""
         try:
             deadline = time.monotonic() + max(3.0, float(timeout_seconds))
             try:
                 await self.page.goto(
                     requested_url,
                     wait_until="commit",
-                    timeout=max(1000, int(timeout_seconds * 1000)),
+                    timeout=max(
+                        1000,
+                        int(min(6.0, float(timeout_seconds)) * 1000),
+                    ),
                 )
             except Exception as exc:
                 error = (
                     f"{exc.__class__.__name__}: {_clean(exc)}"
                 )[:500]
 
-            remaining = max(0.0, deadline - time.monotonic())
-            if remaining > 0:
-                try:
-                    await self.page.wait_for_load_state(
-                        "domcontentloaded",
-                        timeout=max(250, int(min(4.0, remaining) * 1000)),
-                    )
-                except Exception:
-                    pass
             await self._assert_authenticated()
 
-            remaining = max(0.0, deadline - time.monotonic())
-            if remaining > 0:
-                await self.page.wait_for_timeout(
-                    int(min(3000.0, remaining * 1000.0))
+            # Correlate Meta's request-time BM/RK selector pair with the
+            # account that Ads Manager actually selected in its URL. This is
+            # enough to confirm RK without waiting for any GraphQL body.
+            while time.monotonic() < deadline:
+                final_url = _clean(getattr(self.page, "url", ""))
+                current_act_ids = {
+                    _digits(value)
+                    for value in re.findall(
+                        r"(?:[?&]act=|act[_:=/%-]+)(\d{5,30})",
+                        unquote_plus(final_url),
+                        flags=re.IGNORECASE,
+                    )
+                    if _digits(value)
+                }
+                matching = sorted(
+                    request_scope_accounts.intersection(current_act_ids)
                 )
+                if len(matching) == 1:
+                    request_confirmed_account_id = matching[0]
+                    break
+                remaining = max(0.0, deadline - time.monotonic())
+                if remaining <= 0:
+                    break
+                await self.page.wait_for_timeout(
+                    int(min(150.0, remaining * 1000.0))
+                )
+
             final_url = _clean(getattr(self.page, "url", ""))
 
             try:
-                dom_result = await self.page.evaluate(
+                remaining = max(0.0, deadline - time.monotonic())
+                if remaining <= 0:
+                    raise asyncio.TimeoutError()
+                dom_result = await asyncio.wait_for(
+                    self.page.evaluate(
                     """() => {
                         const text = document.body
                             ? (document.body.innerText || '')
@@ -10560,6 +10686,8 @@ class FacebookBusinessBrowser:
                             controls
                         };
                     }"""
+                    ),
+                    timeout=min(1.0, remaining),
                 )
                 if isinstance(dom_result, dict):
                     dom = dom_result
@@ -10589,6 +10717,10 @@ class FacebookBusinessBrowser:
                     )
         finally:
             try:
+                self.page.remove_listener("request", inspect_request)
+            except Exception:
+                pass
+            try:
                 self.page.remove_listener("response", on_response)
             except Exception:
                 pass
@@ -10603,11 +10735,13 @@ class FacebookBusinessBrowser:
                 )
             )
         )
-        confirmed_account_id = _confirmed_ads_manager_scope_account_id(
-            business_id=business,
-            final_act_ids=final_act_ids,
-            diagnostics=diagnostics,
-        )
+        confirmed_account_id = request_confirmed_account_id
+        if not confirmed_account_id:
+            confirmed_account_id = _confirmed_ads_manager_scope_account_id(
+                business_id=business,
+                final_act_ids=final_act_ids,
+                diagnostics=diagnostics,
+            )
         confirmed_accounts: list[dict[str, Any]] = []
         if confirmed_account_id:
             existing = account_rows.get(confirmed_account_id) or {}
@@ -10630,6 +10764,8 @@ class FacebookBusinessBrowser:
             "final_business_ids": final_business_ids[:8],
             "final_act_ids": final_act_ids[:8],
             "exact_business_evidence": exact_business_evidence,
+            "request_scope_account_ids": sorted(request_scope_accounts)[:8],
+            "request_time_confirmed": bool(request_confirmed_account_id),
             "confirmed": bool(confirmed_account_id),
             "confirmed_account_id": confirmed_account_id,
             "confirmed_accounts": confirmed_accounts,

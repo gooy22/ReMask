@@ -1,8 +1,69 @@
 import unittest
 
 from app.facebook_business_browser import (
+    _ads_manager_scope_account_from_request,
     _confirmed_ads_manager_scope_account_id,
 )
+
+
+class AdsManagerRequestScopeTests(unittest.TestCase):
+    def test_request_pair_extracts_target_rk(self):
+        meta = {
+            "friendly_name": (
+                "NorthStarBusinessUnifiedScopingSelector"
+                "FirstAndZeroLevelScopesSectionAllZeroLevelScopesQuery"
+            ),
+            "variables": {
+                "firstLevelScopeId": "61594753560938",
+                "zeroLevelScopeId": "2172569806673120",
+                "businessIdForAddAA": "61594753560938",
+                "scopeIDs": ["61594753560938"],
+            },
+        }
+        self.assertEqual(
+            _ads_manager_scope_account_from_request(
+                meta,
+                business_id="61594753560938",
+            ),
+            "2172569806673120",
+        )
+
+    def test_request_pair_rejects_page_or_wrong_business(self):
+        meta = {
+            "friendly_name": (
+                "NorthStarBusinessUnifiedScopingSelector"
+                "FirstAndZeroLevelScopesSectionAllZeroLevelScopesQuery"
+            ),
+            "variables": {
+                "firstLevelScopeId": "99999999999999",
+                "zeroLevelScopeId": "1289628847574478",
+                "businessIdForAddAA": "99999999999999",
+            },
+        }
+        self.assertEqual(
+            _ads_manager_scope_account_from_request(
+                meta,
+                business_id="61594753560938",
+            ),
+            "",
+        )
+
+    def test_request_pair_rejects_generic_query(self):
+        meta = {
+            "friendly_name": "SomeGenericAccountQuery",
+            "variables": {
+                "firstLevelScopeId": "61594753560938",
+                "zeroLevelScopeId": "2172569806673120",
+                "businessIdForAddAA": "61594753560938",
+            },
+        }
+        self.assertEqual(
+            _ads_manager_scope_account_from_request(
+                meta,
+                business_id="61594753560938",
+            ),
+            "",
+        )
 
 
 class AdsManagerScopeConfirmationTests(unittest.TestCase):
