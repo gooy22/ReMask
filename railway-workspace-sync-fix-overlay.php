@@ -279,6 +279,9 @@ if ($businessRenderPatchCount !== 1) {
 
 $newSync = <<<'JS'
  // REMASK_SYNC_STABILIZED_V2
+// REMASK_SYNC_SERIAL_BROWSER_V1
+// Production has a bounded Chromium pool (default 1). Serializing Workspace
+// sync prevents the UI from creating its own browser-slot stampede.
 async function syncSelection(){
   if(state.running)return;
   const tab=state.activeTab, rows=selectedRows(tab);
@@ -474,14 +477,14 @@ async function syncSelection(){
     if(tab==='profiles'){
       results=await concurrent(
         rows,
-        3,
+        1,
         r=>syncProfileSafe(r.name),
         (done,total)=>{$('workspaceStatus').textContent=`Синхронизация FB: ${done}/${total}`;setProgress(done,total)}
       );
     }else if(tab==='businesses'){
       results=await concurrent(
         rows,
-        3,
+        1,
         r=>syncBusinessSafe(r),
         (done,total)=>{$('workspaceStatus').textContent=`Синхронизация BM: ${done}/${total}`;setProgress(done,total)}
       );
@@ -489,7 +492,7 @@ async function syncSelection(){
       const profiles=[...new Set(rows.map(r=>r.profile).filter(Boolean))];
       results=await concurrent(
         profiles,
-        3,
+        1,
         p=>syncProfileSafe(p),
         (done,total)=>{$('workspaceStatus').textContent=`Синхронизация RK: ${done}/${total}`;setProgress(done,total)}
       );
