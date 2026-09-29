@@ -587,6 +587,89 @@ class ProvisioningStateStore:
             "funding_source_id": funding_source_id,
         }
 
+    async def confirmed_businesses_for_profile(
+        self,
+        profile_id: str,
+        *,
+        limit: int = 250,
+    ) -> list[dict[str, Any]]:
+        """Return every confirmed Business for one FB profile.
+
+        A profile can own multiple Businesses, including Businesses that do not
+        have an RK yet. Sync must not collapse that history to the newest BM or
+        only to BM->RK bindings.
+        """
+        return await asyncio.to_thread(
+            self._confirmed_businesses_for_profile_sync,
+            profile_id,
+            limit,
+        )
+
+    def _confirmed_businesses_for_profile_sync(
+        self,
+        profile_id: str,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        profile = str(profile_id or "").strip()
+        bounded_limit = max(1, min(int(limit or 250), 1000))
+        if not profile:
+            return []
+
+        with self._connect() as con:
+            rows = con.execute(
+                """
+                SELECT scope_key,status,result_json,updated_at
+                FROM provisioning_steps
+                WHERE profile_id=?
+                  AND step=?
+                  AND result_json IS NOT NULL
+                ORDER BY updated_at DESC
+                LIMIT ?
+                """,
+                (
+                    profile,
+                    ProvisioningStep.BUSINESS.value,
+                    bounded_limit,
+                ),
+            ).fetchall()
+
+        businesses: list[dict[str, Any]] = []
+        seen: set[str] = set()
+
+        for row in rows:
+            if str(row["status"] or "").strip().upper() != "SUCCESS":
+                continue
+            try:
+                result = json.loads(str(row["result_json"] or "{}"))
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if not isinstance(result, dict):
+                continue
+
+            business_id = str(result.get("business_id") or "").strip()
+            if not business_id.isdigit() or business_id in seen:
+                continue
+
+            seen.add(business_id)
+            businesses.append(
+                {
+                    "business_id": business_id,
+                    "business_name": str(
+                        result.get("business_name")
+                        or result.get("name")
+                        or business_id
+                    ).strip(),
+                    "primary_page_id": str(
+                        result.get("primary_page_id") or ""
+                    ).strip(),
+                    "scope_key": str(row["scope_key"] or ""),
+                    "updated_at": int(row["updated_at"] or 0),
+                    "source": "python_worker_business_success_history",
+                }
+            )
+
+        return businesses
+
     async def latest_profile_fan_pages(
         self,
         profile_id: str,
