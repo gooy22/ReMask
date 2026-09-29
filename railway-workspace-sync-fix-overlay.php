@@ -1352,7 +1352,7 @@ $profileFieldsReplacement = <<<'PHP_CODE'
                 : (
                     array_key_exists('permissions_available', $preflight)
                         ? (bool)$preflight['permissions_available']
-                        : true
+                        : null
                 ),
             'ads_management_granted' => !is_array($preflight)
                 ? null
