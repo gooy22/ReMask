@@ -22,8 +22,35 @@ class LiveSyncContractTests(unittest.TestCase):
             )
         )
 
-    def test_empty_target_set_is_not_complete(self) -> None:
+    def test_empty_target_set_requires_explicit_empty_inventory_proof(self) -> None:
         self.assertFalse(api._live_inventory_targets_ready({}, set()))
+        self.assertTrue(
+            api._live_inventory_targets_ready(
+                {},
+                set(),
+                confirmed_empty=True,
+            )
+        )
+
+    def test_business_inventory_empty_detection_uses_live_selector_query(self) -> None:
+        self.assertTrue(
+            api._business_inventory_confirmed_empty({
+                "stage": "complete",
+                "queries": [{
+                    "friendly_name": "NorthStarBusinessUnifiedScopingSelectorQuery",
+                    "rows": 0,
+                }],
+            })
+        )
+        self.assertFalse(
+            api._business_inventory_confirmed_empty({
+                "stage": "complete",
+                "queries": [{
+                    "friendly_name": "CometNotificationsQuery",
+                    "rows": 0,
+                }],
+            })
+        )
 
     def test_live_endpoint_never_reinjects_durable_fallback_rows(self) -> None:
         source=inspect.getsource(api.profile_live_inventory)
@@ -35,8 +62,11 @@ class LiveSyncContractTests(unittest.TestCase):
         self.assertIn("REMASK_SYNC_PRIVATE_LIST_PAGES_FIRST_V1", source)
         self.assertIn("list_pages_via_private_graphql", source)
         self.assertIn("discover_managed_pages(fast=True)", source)
-        self.assertIn("REMASK_EXACT_HINTS_REMAIN_REQUIRED_TARGETS_V1", source)
-        self.assertIn("for business_id in sorted(known_accounts_by_business)", source)
+        self.assertIn("REMASK_SCOPED_HINT_FASTPATH_ONLY_V1", source)
+        self.assertIn("REMASK_HISTORICAL_HINTS_ARE_FALLBACK_ONLY_V1", source)
+        self.assertIn("REMASK_STALE_HINT_ROWS_EXCLUDED_V1", source)
+        self.assertIn("REMASK_FULL_PROFILE_DISCOVERY_BUDGET_V1", source)
+        self.assertIn("business_inventory_confirmed_empty", source)
         self.assertIn("invalidating browser session", source)
 
     def test_browser_open_cancellation_releases_owned_resources(self) -> None:
