@@ -94,11 +94,30 @@ try {
         $id = trim((string)($row['id'] ?? ''));
         if ($id === '' || !ctype_digit($id)) continue;
 
+        $businessId = trim((string)($row['business_id'] ?? ''));
+        $ownership = trim((string)($row['business_ownership'] ?? ''));
+        if (!in_array(
+            $ownership,
+            ['owned_by_business', 'unowned_confirmed', 'unknown'],
+            true
+        )) {
+            $ownership = $businessId !== ''
+                ? 'owned_by_business'
+                : 'unknown';
+        }
+
         $pagesById[$id] = [
             'id' => $id,
             'name' => trim((string)($row['name'] ?? $id)),
             'category' => trim((string)($row['category'] ?? '')),
-            'business_id' => trim((string)($row['business_id'] ?? '')),
+            'business_id' => $businessId,
+            'business_ownership' => $ownership,
+            'is_owned' => is_bool($row['is_owned'] ?? null)
+                ? $row['is_owned']
+                : null,
+            'advertising_restriction_info' => is_array(
+                $row['advertising_restriction_info'] ?? null
+            ) ? $row['advertising_restriction_info'] : [],
             'source' => 'last_confirmed_live_sync',
         ];
     }
@@ -125,6 +144,7 @@ try {
                 $workerBusinessId !== ''
             ) {
                 $pagesById[$id]['business_id'] = $workerBusinessId;
+                $pagesById[$id]['business_ownership'] = 'owned_by_business';
             }
             if ($workerAdAccountId !== '') {
                 $pagesById[$id]['ad_account_id'] = $workerAdAccountId;
@@ -132,16 +152,37 @@ try {
             continue;
         }
 
+        $workerOwnership = trim((string)(
+            $workerPage['business_ownership'] ?? ''
+        ));
+        if (!in_array(
+            $workerOwnership,
+            ['owned_by_business', 'unowned_confirmed', 'unknown'],
+            true
+        )) {
+            $workerOwnership = $workerBusinessId !== ''
+                ? 'owned_by_business'
+                : 'unknown';
+        }
+
         $pagesById[$id] = [
             'id' => $id,
             'name' => trim((string)($workerPage['name'] ?? $id)),
             'category' => trim((string)($workerPage['category'] ?? '')),
             'business_id' => $workerBusinessId,
+            'business_ownership' => $workerOwnership,
+            'is_owned' => is_bool($workerPage['is_owned'] ?? null)
+                ? $workerPage['is_owned']
+                : null,
+            'advertising_restriction_info' => is_array(
+                $workerPage['advertising_restriction_info'] ?? null
+            ) ? $workerPage['advertising_restriction_info'] : [],
             'ad_account_id' => $workerAdAccountId,
             'source' => 'python_worker_confirmed',
         ];
     }
 
+    // REMASK_PAGE_OWNERSHIP_PRESERVED_V1
     // No second Facebook read here. If sync did not capture Pages, the UI
     // tells the user to synchronize instead of silently fetching again.
 
