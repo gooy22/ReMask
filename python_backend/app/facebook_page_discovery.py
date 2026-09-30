@@ -26,6 +26,8 @@ class PageDiscoveryResult:
     source: str
     candidate: DocIdCandidate | None = None
     diagnostics: list[str] = field(default_factory=list)
+    inventory_ready: bool = True
+    confirmed_empty: bool = False
 
 
 def _clean(value: Any) -> str:
@@ -55,6 +57,9 @@ def _normalize_page(row: Any) -> dict[str, Any] | None:
         "id": page_id,
         "name": name,
         "category": _clean(row.get("category")),
+        # REMASK_PAGE_OWNERSHIP_CONFIDENCE_V1
+        # Missing Business metadata is UNKNOWN, not proof that the Page is free.
+        "business_ownership": "unknown",
     }
 
     tasks = row.get("tasks")
@@ -65,6 +70,7 @@ def _normalize_page(row: Any) -> dict[str, Any] | None:
             if isinstance(item, (str, int))
         ]
 
+    business_present = "business" in row or "business_id" in row
     business = row.get("business")
     if isinstance(business, dict):
         business_id = _clean(business.get("id"))
@@ -74,6 +80,16 @@ def _normalize_page(row: Any) -> dict[str, Any] | None:
                 "name": _clean(business.get("name")),
             }
             output["business_id"] = business_id
+            output["business_ownership"] = "owned_by_business"
+        elif business_present:
+            output["business_ownership"] = "unowned_confirmed"
+    elif business_present:
+        explicit_business_id = _clean(row.get("business_id"))
+        if explicit_business_id:
+            output["business_id"] = explicit_business_id
+            output["business_ownership"] = "owned_by_business"
+        elif business in (None, "", False):
+            output["business_ownership"] = "unowned_confirmed"
 
     if isinstance(row.get("is_owned"), bool):
         output["is_owned"] = bool(row.get("is_owned"))
@@ -85,16 +101,8 @@ def _normalize_page(row: Any) -> dict[str, Any] | None:
             "restriction_type": _clean(restriction.get("restriction_type")),
         }
 
-    business = row.get("business")
-    if isinstance(business, dict):
-        business_id = _clean(business.get("id"))
-        if business_id:
-            output["business_id"] = business_id
-    elif isinstance(business, (str, int)):
-        business_id = _clean(business)
-        if business_id:
-            output["business_id"] = business_id
-
+    # Preserve Facebook's separate is_owned flag as metadata, but do not
+    # reinterpret it as Business ownership.
     if isinstance(row.get("is_owned"), bool):
         output["is_owned"] = bool(row.get("is_owned"))
 
@@ -399,6 +407,8 @@ async def list_pages_via_private_graphql(
                 source="facebook_web_graphql",
                 candidate=candidate,
                 diagnostics=diagnostics,
+                inventory_ready=True,
+                confirmed_empty=False,
             )
 
         if _errors(response) and _looks_stale(response):
@@ -431,6 +441,8 @@ async def list_pages_via_private_graphql(
                 source="facebook_web_graphql",
                 candidate=candidate,
                 diagnostics=diagnostics,
+                inventory_ready=True,
+                confirmed_empty=True,
             )
 
         diagnostics.append(
