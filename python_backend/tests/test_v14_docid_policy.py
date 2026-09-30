@@ -14,7 +14,10 @@ from app.facebook_docids import (
     upsert_candidate,
 )
 from app.facebook_query_discovery import discover_persisted_query
-from app.facebook_page_discovery import list_pages_via_private_graphql
+from app.facebook_page_discovery import (
+    _extract_page_query_near_markers,
+    list_pages_via_private_graphql,
+)
 
 
 class _HtmlOnlySession:
@@ -58,6 +61,28 @@ class _ListPagesRecoverySession:
                 }
             }
         }
+
+
+class ListPagesMarkerParserTests(unittest.TestCase):
+    def test_asset_owner_id_is_not_misclassified_as_doc_id(self):
+        doc_id, friendly = _extract_page_query_near_markers(
+            '{"pages_can_administer":[],"assetOwnerId":"123456789",'
+            '"fb_api_req_friendly_name":"AccountQualityUserPagesWrapper_UserPageQuery",'
+            '"doc_id":"9988112277665544"}'
+        )
+        self.assertEqual(doc_id, "9988112277665544")
+        self.assertEqual(
+            friendly,
+            "AccountQualityUserPagesWrapper_UserPageQuery",
+        )
+
+    def test_generic_id_without_explicit_doc_id_is_not_accepted(self):
+        doc_id, _ = _extract_page_query_near_markers(
+            '{"pages_can_administer":[],"assetOwnerId":"123456789",'
+            '"AccountQualityUserPagesWrapper_UserPageQuery_facebookRelayOperation":'
+            '{"id":"9988112277665544"}}'
+        )
+        self.assertEqual(doc_id, "")
 
 
 class ListPagesSelfHealTests(unittest.IsolatedAsyncioTestCase):
