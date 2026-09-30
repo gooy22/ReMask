@@ -11039,15 +11039,46 @@ class FacebookBusinessBrowser:
             # those diagnostics are optional and have previously kept the
             # entire sync open even after the RK was known.
             if request_confirmed_account_id:
-                for task in list(response_tasks):
-                    if not task.done():
-                        task.cancel()
+                # REMASK_ADS_FAST_METADATA_SETTLE_V1
+                # Identity is already proven. Give response readers a very
+                # short window to enrich the SAME live RK with metadata that is
+                # already in flight; never navigate to another surface just for
+                # diagnostics.
                 if response_tasks:
-                    cleanup_pending_tasks = await _settle_tasks_bounded(
-                        set(response_tasks),
-                        timeout_seconds=0.2,
-                        cancel_pending=True,
-                    )
+                    remaining = max(0.0, deadline - time.monotonic())
+                    if remaining > 0:
+                        _done, pending = await asyncio.wait(
+                            list(response_tasks),
+                            timeout=min(0.8, remaining),
+                        )
+                    else:
+                        pending = set(response_tasks)
+                    for task in pending:
+                        task.cancel()
+                    if pending:
+                        cleanup_pending_tasks = await _settle_tasks_bounded(
+                            pending,
+                            timeout_seconds=0.2,
+                            cancel_pending=True,
+                        )
+
+                existing = dict(
+                    account_rows.get(request_confirmed_account_id) or {}
+                )
+                confirmed_row = {
+                    **existing,
+                    "id": request_confirmed_account_id,
+                    "account_id": request_confirmed_account_id,
+                    "name": _clean(existing.get("name")),
+                    "business_id": business,
+                    "_source": "ads_manager_request_scope_fastpath",
+                }
+                metadata_ready = bool(
+                    confirmed_row.get("name")
+                    or confirmed_row.get("account_status") not in (None, "")
+                    or confirmed_row.get("currency")
+                    or confirmed_row.get("timezone_name")
+                )
                 return {
                     "source": "ads_manager_read_only_probe",
                     "business_id": business,
@@ -11069,14 +11100,12 @@ class FacebookBusinessBrowser:
                     ),
                     "confirmed": True,
                     "confirmed_account_id": request_confirmed_account_id,
-                    "confirmed_accounts": [{
-                        "id": request_confirmed_account_id,
-                        "account_id": request_confirmed_account_id,
-                        "name": "",
-                        "business_id": business,
-                        "_source": "ads_manager_request_scope_fastpath",
-                    }],
-                    "accounts": [],
+                    "confirmed_accounts": [confirmed_row],
+                    "metadata_ready": metadata_ready,
+                    "accounts": [
+                        account_rows[key]
+                        for key in sorted(account_rows)
+                    ][:16],
                     "diagnostics": diagnostics[-16:],
                     "dom": {},
                     "cleanup_pending_tasks": cleanup_pending_tasks,
@@ -11335,6 +11364,16 @@ class FacebookBusinessBrowser:
             "confirmed": bool(confirmed_account_id),
             "confirmed_account_id": confirmed_account_id,
             "confirmed_accounts": confirmed_accounts,
+            "metadata_ready": any(
+                bool(
+                    row.get("name")
+                    or row.get("account_status") not in (None, "")
+                    or row.get("currency")
+                    or row.get("timezone_name")
+                )
+                for row in confirmed_accounts
+                if isinstance(row, dict)
+            ),
             # Keep generic parser rows diagnostic-only. They are not accepted
             # unless their ID independently matches the scope-confirmed RK.
             "accounts": [
