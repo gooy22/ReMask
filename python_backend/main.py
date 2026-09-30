@@ -864,17 +864,61 @@ async def register_facebook_docid(
         'registry':registry_view(clean_operation),
     }
 
+def _business_inventory_confirmed_empty(diagnostic: object) -> bool:
+    """Return True only when live Meta inventory explicitly observed zero BMs."""
+    if not isinstance(diagnostic,dict):
+        return False
+    if str(diagnostic.get('stage') or '') != 'complete':
+        return False
+    queries=diagnostic.get('queries')
+    if not isinstance(queries,list):
+        return False
+    for row in queries:
+        if not isinstance(row,dict):
+            continue
+        friendly=str(row.get('friendly_name') or '').casefold()
+        if not friendly:
+            continue
+        inventory_query=(
+            'northstarbusinessunifiedscopingselector' in friendly
+            or (
+                ('business' in friendly or 'portfolio' in friendly)
+                and any(
+                    marker in friendly
+                    for marker in (
+                        'selector','scope','list','manage','owned',
+                        'switch','portfolio',
+                    )
+                )
+            )
+        )
+        if not inventory_query:
+            continue
+        try:
+            rows_count=int(row.get('rows') or 0)
+        except (TypeError,ValueError):
+            rows_count=0
+        live_ids=row.get('live_business_ids')
+        if rows_count == 0 and not live_ids:
+            return True
+    return False
+
+
 def _live_inventory_targets_ready(
     business_map: dict[str,str],
     live_business_ids: set[str],
+    *,
+    confirmed_empty: bool = False,
 ) -> bool:
-    """True only when every Business targeted by this sync has live RK proof."""
+    """A live inventory can be valid with zero BMs when Meta proved it empty."""
     targets={
         str(business_id or '').strip()
         for business_id in business_map
         if str(business_id or '').strip().isdigit()
     }
-    return bool(targets) and targets.issubset({
+    if not targets:
+        return bool(confirmed_empty)
+    return targets.issubset({
         str(business_id or '').strip()
         for business_id in live_business_ids
         if str(business_id or '').strip().isdigit()
@@ -1101,7 +1145,11 @@ async def profile_live_inventory(
             # exact pair against the current authenticated Ads Manager first.
             # This avoids spending 8-20s on the flaky Business Suite selector
             # before probing the account Meta is already opening live.
-            if known_accounts_by_business:
+            # REMASK_SCOPED_HINT_FASTPATH_ONLY_V1
+            # Historical BM->RK bindings are hints, not the authoritative full
+            # profile inventory. Use this direct fast path only for an explicit
+            # scoped request; full profile Sync performs live BM discovery first.
+            if known_accounts_by_business and requested_business_ids:
                 stage='confirmed_hint_revalidation'
                 fast_started=time.monotonic()
                 for hinted_business_id,expected_ids in sorted(
@@ -1262,23 +1310,23 @@ async def profile_live_inventory(
                     )
 
             discovery_revalidation=False
-            if known_accounts_by_business:
-                # REMASK_EXACT_HINTS_REMAIN_REQUIRED_TARGETS_V1
-                # Exact BM->RK bindings are only navigation hints, but once a
-                # full Sync elects to validate them none may silently disappear
-                # merely because another hinted BM passed fast revalidation.
-                # Keep every exact hinted Business in the required target set.
+            business_inventory_confirmed_empty=False
+            if known_accounts_by_business and requested_business_ids:
+                # REMASK_SCOPED_HINTS_ARE_REQUIRED_TARGETS_V1
+                # Scoped Sync asks for exact BMs, so those requested live targets
+                # remain required. Full profile Sync never promotes historical
+                # bindings into required current inventory.
                 fast_confirmed_businesses=set(business_map)
                 business_map={
                     business_id: business_map.get(business_id,business_id)
-                    for business_id in sorted(known_accounts_by_business)
+                    for business_id in sorted(requested_business_ids)
                     if str(business_id).isdigit()
                 }
                 discovery_revalidation=True
-                discovery_source='confirmed_account_hint_targeted_revalidation'
+                discovery_source='requested_business_live_revalidation'
                 log.info(
-                    'live inventory profile=%s exact BM/RK hints targeted=%d '
-                    'fast_confirmed=%d; Business Suite discovery skipped targets=%s',
+                    'live inventory profile=%s scoped targets=%d '
+                    'fast_confirmed=%d targets=%s',
                     clean_profile,
                     len(business_map),
                     len(fast_confirmed_businesses),
@@ -1293,14 +1341,17 @@ async def profile_live_inventory(
                         business_discovery_timeout=float(
                             os.getenv(
                                 'REMASK_LIVE_INVENTORY_BUSINESS_DISCOVERY_TIMEOUT_SECONDS',
-                                '28',
+                                '14',
                             )
                         )
                     except (TypeError,ValueError):
-                        business_discovery_timeout=28.0
+                        business_discovery_timeout=14.0
+                    # REMASK_FULL_PROFILE_DISCOVERY_BUDGET_V1
+                    # Full inventory discovery must leave time for RK and FP
+                    # phases inside the 48s endpoint budget.
                     business_discovery_timeout=max(
-                        20.0,
-                        min(business_discovery_timeout,40.0),
+                        8.0,
+                        min(business_discovery_timeout,16.0),
                     )
                     discovery_wall_timeout=budget(business_discovery_timeout)
                     business_map=await hard_deadline(
@@ -1316,6 +1367,9 @@ async def profile_live_inventory(
                         (business_diag or {}).get('source')
                         or 'business_suite_private_inventory'
                     )
+                    business_inventory_confirmed_empty=(
+                        _business_inventory_confirmed_empty(business_diag)
+                    )
 
                     hinted_only=sorted(
                         set(known_business_ids) - set(business_map)
@@ -1327,9 +1381,9 @@ async def profile_live_inventory(
                             ','.join(hinted_only),
                         )
 
-                    if not business_map:
+                    if not business_map and not business_inventory_confirmed_empty:
                         warnings.append(
-                            'Private Business Suite inventory returned no Business portfolios'
+                            'Private Business Suite inventory returned no confirmed Business portfolios'
                         )
                         log.warning(
                             'live inventory profile=%s business_discovery diagnostic=%s',
@@ -1378,11 +1432,15 @@ async def profile_live_inventory(
                         len(business_map),
                     )
 
-            # If Meta's HOME/selector emitted no BM rows, do not stop here.
-            # ReMask already has durable BM identities from previously confirmed
-            # provisioning/live state. Re-open those exact BM candidates and only
-            # accept them after the current browser proves their RK scope live.
-            if not business_map and known_business_ids:
+            # REMASK_HISTORICAL_HINTS_ARE_FALLBACK_ONLY_V1
+            # If live BM discovery was inconclusive, durable IDs may be probed as
+            # recovery candidates. They are not current inventory until each one
+            # is re-confirmed live, and stale candidates are removed afterwards.
+            if (
+                not business_map
+                and not business_inventory_confirmed_empty
+                and known_business_ids
+            ):
                 business_map={
                     business_id: business_id
                     for business_id in sorted(known_business_ids)
@@ -1642,6 +1700,35 @@ async def profile_live_inventory(
                     )
                 businesses.append(row)
 
+            if discovery_revalidation and not requested_business_ids:
+                # REMASK_STALE_HINT_ROWS_EXCLUDED_V1
+                # Fallback candidates are historical until current Meta proves
+                # their RK scope. Do not persist stale/unconfirmed BM rows.
+                dropped_hint_ids=[
+                    str(row.get('id') or '')
+                    for row in businesses
+                    if isinstance(row,dict)
+                    and not bool(row.get('ad_accounts_ready'))
+                ]
+                businesses=[
+                    row
+                    for row in businesses
+                    if isinstance(row,dict)
+                    and bool(row.get('ad_accounts_ready'))
+                ]
+                business_map={
+                    str(row.get('id') or ''):str(
+                        row.get('name') or row.get('id') or ''
+                    )
+                    for row in businesses
+                    if str(row.get('id') or '').isdigit()
+                }
+                if dropped_hint_ids:
+                    warnings.append(
+                        'Historical BM hints not confirmed live: '
+                        + ','.join(dropped_hint_ids[:8])
+                    )
+
             # REMASK_LIVE_PAYLOAD_EXCLUDES_DURABLE_FALLBACK_V1
             # Durable provisioning bindings are navigation targets only.
             # They must never be injected into the live inventory payload.
@@ -1794,7 +1881,11 @@ async def profile_live_inventory(
             )
 
             # REMASK_LIVE_TARGET_SET_REQUIRED_V1
-            live_ready=_live_inventory_targets_ready(business_map,live_business_ids)
+            live_ready=_live_inventory_targets_ready(
+                business_map,
+                live_business_ids,
+                confirmed_empty=business_inventory_confirmed_empty,
+            )
             if live_ready and discovery_revalidation:
                 warnings=[
                     warning
@@ -1813,6 +1904,7 @@ async def profile_live_inventory(
                 # REMASK_SYNC_SESSION_READY_V1
                 'session_ready':True,
                 'live_ready':live_ready,
+                'business_inventory_confirmed_empty':business_inventory_confirmed_empty,
                 'businesses':businesses,
                 'businesses_count':len(businesses),
                 'live_businesses_count':len(live_business_ids),
