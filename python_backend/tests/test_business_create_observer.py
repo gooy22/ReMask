@@ -1,6 +1,7 @@
+import asyncio
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from app.facebook_business_browser import (
     FacebookBusinessBrowser,
@@ -320,6 +321,60 @@ class BusinessInventoryProbeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("elementsFromPoint", browser.page.script)
         self.assertNotIn("querySelectorAll('*')", browser.page.script)
         self.assertNotIn('querySelectorAll("*")', browser.page.script)
+
+    async def test_snapshot_selector_probe_has_hard_deadline(self):
+        class _Links:
+            async def evaluate_all(self, script):
+                return []
+
+        class _Keyboard:
+            async def press(self, key):
+                return None
+
+        class _Page:
+            def __init__(self):
+                self.script = ""
+                self.keyboard = _Keyboard()
+                self.url = "https://business.facebook.com/latest/home"
+
+            async def goto(self, url, **kwargs):
+                self.url = str(url)
+                return None
+
+            async def evaluate(self, script):
+                self.script = script
+                await asyncio.Event().wait()
+
+            async def wait_for_timeout(self, ms):
+                return None
+
+            def locator(self, selector):
+                return _Links()
+
+            async def content(self):
+                return "<html><body>Meta Business Suite</body></html>"
+
+        async def immediate_timeout(tasks, timeout=None):
+            task_set = set(tasks)
+            return set(), task_set
+
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-selector-hard-deadline")
+        )
+        browser.page = _Page()
+
+        with patch(
+            "app.facebook_business_browser.asyncio.wait",
+            side_effect=immediate_timeout,
+        ):
+            result = await browser.snapshot_businesses()
+
+        self.assertEqual(result, {})
+        self.assertIn("elementsFromPoint", browser.page.script)
+        self.assertEqual(
+            browser._last_business_inventory_diagnostic.get("stage"),
+            "selector_probe_hard_timeout",
+        )
 
 
 if __name__ == "__main__":
