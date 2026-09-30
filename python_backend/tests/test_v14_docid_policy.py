@@ -14,6 +14,7 @@ from app.facebook_docids import (
     upsert_candidate,
 )
 from app.facebook_query_discovery import discover_persisted_query
+from app.facebook_page_discovery import list_pages_via_private_graphql
 
 
 class _HtmlOnlySession:
@@ -25,6 +26,67 @@ class _HtmlOnlySession:
     async def fetch_text_with_headers(self, url, **kwargs):
         self.calls.append(url)
         return 200, self.body, url, dict(self.headers)
+
+
+class _ListPagesRecoverySession:
+    def __init__(self):
+        self.used_doc_ids = []
+        self.body = (
+            '{"pages_can_administer":[],"assetOwnerId":"123456789",'
+            '"fb_api_req_friendly_name":"AccountQualityUserPagesWrapper_UserPageQuery",'
+            '"doc_id":"9988112277665544"}'
+        )
+
+    async def bootstrap(self):
+        return SimpleNamespace(actor_id="123456789")
+
+    async def fetch_text_with_headers(self, url, **kwargs):
+        return 200, self.body, url, {}
+
+    async def graphql(self, doc_id, variables, **kwargs):
+        self.used_doc_ids.append(doc_id)
+        return {
+            "data": {
+                "userData": {
+                    "pages_can_administer": [
+                        {
+                            "id": "61594993341059",
+                            "name": "Recovered Page",
+                            "category": "Test",
+                        }
+                    ]
+                }
+            }
+        }
+
+
+class ListPagesSelfHealTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.store_patch = patch.object(
+            facebook_docids,
+            "STORE_PATH",
+            Path(self.tmp.name) / "docids.json",
+        )
+        self.store_patch.start()
+
+    def tearDown(self):
+        self.store_patch.stop()
+        self.tmp.cleanup()
+
+    async def test_missing_list_pages_candidate_is_recovered_at_runtime(self):
+        session = _ListPagesRecoverySession()
+
+        self.assertEqual(list_candidates("LIST_PAGES"), [])
+        result = await list_pages_via_private_graphql(session)
+
+        self.assertEqual(session.used_doc_ids, ["9988112277665544"])
+        self.assertEqual([row["id"] for row in result.pages], ["61594993341059"])
+        self.assertEqual(result.candidate.doc_id, "9988112277665544")
+        self.assertIn(
+            "9988112277665544",
+            [candidate.doc_id for candidate in list_candidates("LIST_PAGES")],
+        )
 
 
 class HtmlOnlyDiscoveryTests(unittest.IsolatedAsyncioTestCase):

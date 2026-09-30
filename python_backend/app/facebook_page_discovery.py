@@ -342,7 +342,29 @@ async def list_pages_via_private_graphql(
     candidates = list_candidates("LIST_PAGES")
 
     if not candidates:
-        raise PageDiscoveryError("No LIST_PAGES doc_id candidates configured")
+        # REMASK_LIST_PAGES_SELF_HEAL_V1
+        # A missing/invalidated persisted doc_id must not force the entire
+        # profile Sync into browser-only Page discovery. The current Meta
+        # frontend often exposes the read-only LIST_PAGES operation in its
+        # initial HTML/response headers; rediscover it and persist it before
+        # falling back to the heavier browser surface.
+        discovered = await discover_current_list_pages_docid_by_marker(session)
+        if discovered is None:
+            discovered = await discover_current_list_pages_docid(
+                session,
+                max_scripts=6,
+            )
+        if discovered is not None:
+            candidates = [discovered]
+            diagnostics.append(
+                "runtime LIST_PAGES candidate recovered "
+                f"doc_id={discovered.doc_id}"
+            )
+
+    if not candidates:
+        raise PageDiscoveryError(
+            "No LIST_PAGES doc_id candidates configured after runtime discovery"
+        )
 
     for candidate in candidates:
         try:
