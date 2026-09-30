@@ -1410,12 +1410,28 @@ $syncProfileReplacement = <<<'PHP'
         $sessionReady = (($liveInventory['session_ready'] ?? false) === true);
         $pagesReady = (($liveInventory['pages_ready'] ?? false) === true);
 
+        // REMASK_PRESERVE_CONFIRMED_PAGES_ON_PARTIAL_V1
+        // A failed Page probe must never erase a previously confirmed FP list.
+        // Prefer the durable last-confirmed live snapshot over the transient
+        // display snapshot, then fall back to the latter for legacy data.
         if (!$pagesReady && $pageRows === []) {
             $preservedPages = array_values(array_filter(
-                (array)($existingSnapshot['pages'] ?? []),
+                (array)($confirmedLive['pages'] ?? []),
                 static fn($row) => is_array($row)
             ));
+            if ($preservedPages === []) {
+                $preservedPages = array_values(array_filter(
+                    (array)($existingSnapshot['pages'] ?? []),
+                    static fn($row) => is_array($row)
+                ));
+            }
             if ($preservedPages !== []) {
+                foreach ($preservedPages as &$preservedPage) {
+                    if (is_array($preservedPage)) {
+                        $preservedPage['_sync_preserved'] = true;
+                    }
+                }
+                unset($preservedPage);
                 $pageRows = $preservedPages;
                 $syncWarnings[] = 'Page inventory inconclusive; previous confirmed Pages preserved';
             }
@@ -1486,23 +1502,29 @@ $syncProfileReplacement = <<<'PHP'
         $snapshot['pages_ready'] = $pagesReady;
         $snapshot['pages_source'] = (string)($liveInventory['pages_source'] ?? '');
 
-        // REMASK_KNOWN_GOOD_SYNC_RESULT_V1
-        // Do not mask a failed live BM/RK confirmation as a successful sync.
-        // The restored worker path must prove at least one Business inventory
-        // surface live, exactly like the known-good 2026-09-28 flow.
-        $syncComplete = $liveReady;
+        // REMASK_FULL_SYNC_REQUIRES_PAGES_V1
+        // "Sync complete" means the profile inventory needed by Workspace is
+        // actually refreshed: BM/RK plus Fan Pages. A BM-only success with
+        // pages_ready=false is partial and must not advertise a complete sync.
+        $syncComplete = ($liveReady && $pagesReady);
 
         $snapshot['sync_source'] = 'private_business_suite_browser';
         $snapshot['live_inventory_available'] = $liveReady;
         $snapshot['confirmed_worker_bindings'] = $workerConfirmedCount;
         $snapshot['graph_preflight_available'] = false;
         $snapshot['sync_complete'] = $syncComplete;
-        $snapshot['sync_partial'] = false;
+        $snapshot['sync_partial'] = (!$syncComplete && ($liveReady || $pagesReady));
         unset($snapshot['sync_error_kind'], $snapshot['sync_error']);
 
         if (!$syncComplete) {
             $snapshot['sync_error_kind'] = 'PRIVATE_INCONCLUSIVE';
-            $snapshot['sync_error'] = 'Live private BM/RK inventory was not confirmed.';
+            if (!$liveReady) {
+                $snapshot['sync_error'] = 'Live private BM/RK inventory was not confirmed.';
+            } elseif (!$pagesReady) {
+                $snapshot['sync_error'] = 'Live Fan Page inventory was not confirmed.';
+            } else {
+                $snapshot['sync_error'] = 'Live Meta inventory was not fully confirmed.';
+            }
         }
 
         $responseProfile = null;
@@ -1579,7 +1601,10 @@ $syncProfileReplacement = <<<'PHP'
         $snapshot['profile'] = $responseProfile;
         $snapshot['profile_name'] = $profile;
 
-        if ($liveReady) {
+        // REMASK_PERSIST_ONLY_COMPLETE_META_SNAPSHOT_V1
+        // Never replace the durable last-confirmed snapshot with a BM-only or
+        // Page-only partial result. This is what previously erased FP rows.
+        if ($syncComplete) {
             hierarchy_live_snapshot_put(
                 $profile,
                 $businessRows,
@@ -1604,6 +1629,8 @@ $syncProfileReplacement = <<<'PHP'
                 'sync_complete' => $syncComplete,
                 'businesses' => count($businessRows),
                 'ad_accounts' => count($adAccountRows),
+                'pages' => count($pageRows),
+                'pages_ready' => $pagesReady,
                 'warnings' => $syncWarnings,
             ],
         ]);
