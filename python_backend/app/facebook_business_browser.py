@@ -2197,13 +2197,31 @@ class FacebookBusinessBrowser:
         if watchdog is not None and watchdog is not current:
             watchdog.cancel()
 
+        # REMASK_BROWSER_CLOSE_HARD_DEADLINE_V1
         async def bounded_cleanup(awaitable: Any, *, timeout: float) -> None:
+            task: asyncio.Task[Any] | None = None
             try:
-                await asyncio.wait_for(awaitable, timeout=timeout)
+                task = asyncio.create_task(awaitable)
+                done, _pending = await asyncio.wait(
+                    {task},
+                    timeout=max(0.05, float(timeout)),
+                )
+                if task in done:
+                    task.result()
+                    return
+                task.cancel()
+                task.add_done_callback(
+                    lambda finished: (
+                        None
+                        if finished.cancelled()
+                        else finished.exception()
+                    )
+                )
             except BaseException:
-                # Cleanup must never wedge the worker. A crashed Meta renderer
-                # can make Playwright close calls stall; the next, broader
-                # cleanup level still gets a chance to terminate Chromium.
+                # Cleanup must never wedge the worker. In particular, do not
+                # await Playwright cancellation after the wall-clock deadline.
+                if task is not None and not task.done():
+                    task.cancel()
                 pass
 
         page = self.page
@@ -10889,6 +10907,30 @@ class FacebookBusinessBrowser:
 
             final_url = _clean(getattr(self.page, "url", ""))
 
+            # REMASK_ADS_REQUEST_SCOPE_EXPECTED_CONFIRM_V1
+            # Fresh NorthStar selector traffic is direct live evidence of the
+            # BM->RK relationship. The request parser only yields an RK when
+            # the same request binds this Business first-level scope to that
+            # zero-level ad-account scope. If that live RK also matches the
+            # expected previously confirmed pair, do not require a duplicate
+            # act= echo in the final URL.
+            expected_request_matches = sorted(
+                request_scope_accounts.intersection(expected_accounts)
+            )
+            if (
+                not request_confirmed_account_id
+                and exact_business_evidence
+                and len(expected_request_matches) == 1
+            ):
+                request_confirmed_account_id = expected_request_matches[0]
+                diagnostics.append({
+                    "phase": "request_scope_expected_live_confirmed",
+                    "business_id": business,
+                    "account_id": request_confirmed_account_id,
+                    "request_scope_match": True,
+                    "expected_match": True,
+                })
+
             # Fast path: once Meta's live request variables bind the requested
             # Business to one zero-level RK and Ads Manager itself selects the
             # same act in the final URL, the relationship is already proven.
@@ -10919,6 +10961,11 @@ class FacebookBusinessBrowser:
                         request_scope_accounts
                     )[:8],
                     "request_time_confirmed": True,
+                    "confirmation_source": (
+                        "ads_manager_request_scope_expected_match"
+                        if expected_request_matches
+                        else "ads_manager_request_scope_fastpath"
+                    ),
                     "confirmed": True,
                     "confirmed_account_id": request_confirmed_account_id,
                     "confirmed_accounts": [{
