@@ -909,6 +909,24 @@ async def profile_live_inventory(
     if latest_business_id.isdigit():
         known_business_ids.add(latest_business_id)
 
+    # REMASK_DURABLE_BINDING_ACCOUNT_HINTS_V1
+    # Provisioning state already persists worker-confirmed BM->RK pairs. Use
+    # those IDs only as targets for a fresh browser revalidation. Do not make
+    # fast sync depend on PHP re-sending the same relation in ad_account_hints.
+    known_accounts_by_business: dict[str,set[str]] = {}
+    for row in confirmed_bindings:
+        if not isinstance(row,dict):
+            continue
+        hinted_business_id=str(row.get('business_id') or '').strip()
+        hinted_account_id=str(row.get('ad_account_id') or '').strip()
+        if hinted_account_id.startswith('act_'):
+            hinted_account_id=hinted_account_id[4:]
+        if hinted_business_id.isdigit() and hinted_account_id.isdigit():
+            known_business_ids.add(hinted_business_id)
+            known_accounts_by_business.setdefault(
+                hinted_business_id,set()
+            ).add(hinted_account_id)
+
     # REMASK_PRIVATE_SYNC_BUSINESS_HINTS_V1
     # Workspace may already know BM IDs even when Business Suite HOME fails to
     # render the portfolio selector. Treat them as navigation hints only; the
@@ -921,7 +939,6 @@ async def profile_live_inventory(
     # BM:RK pairs below come only from the last live-confirmed Workspace
     # snapshot. They are hints for surviving Meta selector/UI drift; they are
     # never accepted without a fresh live Ads Manager observation.
-    known_accounts_by_business: dict[str,set[str]] = {}
     for raw_pair in str(ad_account_hints or '').split(','):
         raw_pair=raw_pair.strip()
         if not raw_pair or ':' not in raw_pair:
@@ -962,6 +979,12 @@ async def profile_live_inventory(
                 'live inventory profile=%s browser_open ms=%d',
                 clean_profile,
                 int((time.monotonic()-browser_open_started)*1000),
+            )
+            log.info(
+                'live inventory profile=%s durable_targets businesses=%d exact_pairs=%d',
+                clean_profile,
+                len(known_business_ids),
+                sum(len(ids) for ids in known_accounts_by_business.values()),
             )
 
             business_map: dict[str,str] = {}
@@ -1065,6 +1088,27 @@ async def profile_live_inventory(
                         len(business_map),
                     )
 
+            discovery_revalidation=False
+            if not business_map and known_accounts_by_business:
+                # REMASK_EXACT_HINTS_SKIP_FULL_BM_DISCOVERY_V1
+                # We already know exact BM->RK candidates. Full Business Suite
+                # HOME/selector discovery can hang during Playwright cancellation
+                # for >60s, so do not put it in front of targeted live proof.
+                business_map={
+                    business_id: business_id
+                    for business_id in sorted(known_accounts_by_business)
+                    if str(business_id).isdigit()
+                }
+                if business_map:
+                    discovery_revalidation=True
+                    discovery_source='confirmed_account_hint_targeted_revalidation'
+                    log.info(
+                        'live inventory profile=%s exact BM/RK hints present; '
+                        'full Business Suite discovery skipped targets=%s',
+                        clean_profile,
+                        ','.join(sorted(business_map)),
+                    )
+
             if not business_map:
                 stage='business_discovery'
                 discovery_started=time.monotonic()
@@ -1151,7 +1195,6 @@ async def profile_live_inventory(
             # ReMask already has durable BM identities from previously confirmed
             # provisioning/live state. Re-open those exact BM candidates and only
             # accept them after the current browser proves their RK scope live.
-            discovery_revalidation=False
             if not business_map and known_business_ids:
                 business_map={
                     business_id: business_id
