@@ -1409,34 +1409,23 @@ $syncProfileReplacement = <<<'PHP'
         $snapshot['pages_ready'] = $pagesReady;
         $snapshot['pages_source'] = (string)($liveInventory['pages_source'] ?? '');
 
-        // REMASK_STABLE_PARTIAL_SYNC_V1
-        // Treat BM, RK and Page reads as independent inventory surfaces. If
-        // the proxy-bound authenticated browser session completed, preserve
-        // the last confirmed inventory instead of turning one flaky selector
-        // into a whole-profile PRIVATE_INCONCLUSIVE failure.
-        $hasConfirmedInventory = (
-            count($businessRows) > 0
-            || count($adAccountRows) > 0
-            || count($pageRows) > 0
-        );
-        $syncComplete = (
-            $liveReady
-            || ($sessionReady && ($hasConfirmedInventory || $pagesReady))
-        );
+        // REMASK_KNOWN_GOOD_SYNC_RESULT_V1
+        // Do not mask a failed live BM/RK confirmation as a successful sync.
+        // The restored worker path must prove at least one Business inventory
+        // surface live, exactly like the known-good 2026-09-28 flow.
+        $syncComplete = $liveReady;
 
         $snapshot['sync_source'] = 'private_business_suite_browser';
         $snapshot['live_inventory_available'] = $liveReady;
         $snapshot['confirmed_worker_bindings'] = $workerConfirmedCount;
         $snapshot['graph_preflight_available'] = false;
         $snapshot['sync_complete'] = $syncComplete;
-        $snapshot['sync_partial'] = ($syncComplete && !$liveReady);
+        $snapshot['sync_partial'] = false;
         unset($snapshot['sync_error_kind'], $snapshot['sync_error']);
 
-        if ($syncComplete && !$liveReady) {
-            $syncWarnings[] = 'Meta inventory partially inconclusive; last confirmed state preserved';
-        } elseif (!$syncComplete) {
-            $snapshot['sync_error_kind'] = 'PRIVATE_SYNC';
-            $snapshot['sync_error'] = 'Private Facebook session did not complete a usable synchronization.';
+        if (!$syncComplete) {
+            $snapshot['sync_error_kind'] = 'PRIVATE_INCONCLUSIVE';
+            $snapshot['sync_error'] = 'Live private BM/RK inventory was not confirmed.';
         }
 
         $responseProfile = null;
