@@ -4763,18 +4763,19 @@ class FacebookBusinessBrowser:
                         settle_ms=650,
                     )
 
-                    relay_deadline = time.monotonic() + 2.4
-                    while time.monotonic() < relay_deadline:
-                        if relay_pages:
-                            break
-                        await self.page.wait_for_timeout(180)
+                    if response_listener_installed:
+                        relay_deadline = time.monotonic() + 2.4
+                        while time.monotonic() < relay_deadline:
+                            if relay_pages:
+                                break
+                            await self.page.wait_for_timeout(180)
 
-                    if response_tasks:
-                        await _settle_tasks_bounded(
-                            response_tasks,
-                            timeout_seconds=0.5,
-                            cancel_pending=False,
-                        )
+                        if response_tasks:
+                            await _settle_tasks_bounded(
+                                response_tasks,
+                                timeout_seconds=0.5,
+                                cancel_pending=False,
+                            )
 
                     if relay_pages:
                         for row in relay_pages.values():
