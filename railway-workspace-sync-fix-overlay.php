@@ -1441,6 +1441,41 @@ $syncProfileReplacement = <<<'PHP'
             $syncWarnings[] = 'Live browser inventory was inconclusive; previous private snapshot preserved';
         }
 
+        // REMASK_SCOPED_SYNC_MERGE_LIVE_SIBLINGS_V1
+        // A row-scoped BM sync proves only the requested Business. Merge that
+        // fresh result into the last confirmed live profile snapshot instead
+        // of replacing the whole profile inventory and accidentally deleting
+        // sibling BMs/RKs that were not part of this request.
+        if ($liveReady && $requestedBusinessId !== '') {
+            foreach ((array)($confirmedLive['businesses'] ?? []) as $row) {
+                if (!is_array($row)) continue;
+                $businessId = trim((string)($row['id'] ?? ''));
+                if (
+                    !preg_match('/^\d{5,30}$/', $businessId)
+                    || $businessId === $requestedBusinessId
+                    || isset($seenBusiness[$businessId])
+                ) continue;
+                $businessRows[] = $row;
+                $seenBusiness[$businessId] = true;
+            }
+
+            foreach ((array)($confirmedLive['ad_accounts'] ?? []) as $row) {
+                if (!is_array($row)) continue;
+                $businessId = trim((string)($row['business_id'] ?? ''));
+                $accountId = trim((string)($row['id'] ?? $row['account_id'] ?? ''));
+                if (str_starts_with($accountId, 'act_')) $accountId = substr($accountId, 4);
+                if (
+                    !preg_match('/^\d{5,30}$/', $businessId)
+                    || !preg_match('/^\d{5,30}$/', $accountId)
+                    || $businessId === $requestedBusinessId
+                    || isset($seenAccount[$accountId])
+                ) continue;
+                $row['_sync_preserved_sibling'] = true;
+                $adAccountRows[] = $row;
+                $seenAccount[$accountId] = true;
+            }
+        }
+
         $snapshot = $existingSnapshot;
         $snapshot['businesses'] = array_values($businessRows);
         $snapshot['businesses_count'] = count($businessRows);
