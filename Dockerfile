@@ -314,7 +314,7 @@ RUN set -eux; \
     grep -q 'private_business_suite_browser' /var/www/html/ajax/metaHierarchy.php; \
     grep -q 'hierarchy_worker_live_inventory' /var/www/html/ajax/metaHierarchy.php; \
     grep -q 'REMASK_PRIVATE_BUSINESS_INVENTORY_V1' /opt/remask-python/app/facebook_business_browser.py; \
-    grep -q 'REMASK_BUSINESS_DISCOVERY_NO_UNBOUNDED_SELECTOR_V1' /opt/remask-python/app/facebook_business_browser.py; \
+    grep -q 'REMASK_BUSINESS_SELECTOR_HARD_DEADLINE_V1' /opt/remask-python/app/facebook_business_browser.py; \
     grep -q 'business_suite_private_inventory' /opt/remask-python/main.py; \
     grep -q 'REMASK_SYNC_SINGLE_SOURCE_PAGES_V1' /opt/remask-python/main.py; \
     grep -q "'pages':pages" /opt/remask-python/main.py; \
