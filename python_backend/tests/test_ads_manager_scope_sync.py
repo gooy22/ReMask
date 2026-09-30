@@ -1,9 +1,22 @@
 import unittest
 
 from app.facebook_business_browser import (
+    _ad_account_compare_digits,
     _ads_manager_scope_account_from_request,
     _confirmed_ads_manager_scope_account_id,
 )
+
+
+class AdsManagerExpectedAccountNormalizationTests(unittest.TestCase):
+    def test_expected_rk_act_prefix_matches_live_numeric_act(self):
+        self.assertEqual(
+            _ad_account_compare_digits("act_2172569806673120"),
+            "2172569806673120",
+        )
+        self.assertEqual(
+            _ad_account_compare_digits("2172569806673120"),
+            "2172569806673120",
+        )
 
 
 class AdsManagerRequestScopeTests(unittest.TestCase):
