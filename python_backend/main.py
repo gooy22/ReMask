@@ -863,6 +863,23 @@ async def register_facebook_docid(
         'registry':registry_view(clean_operation),
     }
 
+def _live_inventory_targets_ready(
+    business_map: dict[str,str],
+    live_business_ids: set[str],
+) -> bool:
+    """True only when every Business targeted by this sync has live RK proof."""
+    targets={
+        str(business_id or '').strip()
+        for business_id in business_map
+        if str(business_id or '').strip().isdigit()
+    }
+    return bool(targets) and targets.issubset({
+        str(business_id or '').strip()
+        for business_id in live_business_ids
+        if str(business_id or '').strip().isdigit()
+    })
+
+
 @app.get('/api/v1/profiles/{profile_id}/live-inventory',dependencies=[Depends(require_key)])
 async def profile_live_inventory(
     profile_id: str,
@@ -884,6 +901,28 @@ async def profile_live_inventory(
         ) from exc
 
     warnings: list[str] = []
+
+    # REMASK_LIVE_INVENTORY_TOTAL_BUDGET_V1
+    # PHP waits 64s and the browser close path itself may need several seconds.
+    # Keep browser work below that transport ceiling instead of letting nested
+    # 10-28s stages accumulate without a global wall-clock limit.
+    try:
+        total_budget_seconds=float(
+            os.getenv('REMASK_LIVE_INVENTORY_TOTAL_TIMEOUT_SECONDS','48')
+        )
+    except (TypeError,ValueError):
+        total_budget_seconds=48.0
+    total_budget_seconds=max(30.0,min(total_budget_seconds,50.0))
+    deadline_at=started+total_budget_seconds
+
+    def budget(cap_seconds: float) -> float:
+        remaining=deadline_at-time.monotonic()
+        if remaining <= 0.25:
+            raise HTTPException(
+                status_code=504,
+                detail=f'LIVE_INVENTORY_TIMEOUT:{stage}',
+            )
+        return max(0.05,min(float(cap_seconds),remaining))
 
     # REMASK_HARD_DEADLINE_TASK_V1
     # asyncio.wait_for() may wait for cancellation cleanup from a wedged
@@ -1061,9 +1100,28 @@ async def profile_live_inventory(
                                 timeout_seconds=7.0,
                                 expected_account_ids=sorted(expected_ids),
                             ),
-                            10.0,
+                            budget(10.0),
                         )
                     except (asyncio.TimeoutError,BrowserBusinessError) as exc:
+                        if isinstance(exc,asyncio.TimeoutError):
+                            log.warning(
+                                'live inventory profile=%s business=%s fast live '
+                                'revalidation hit hard timeout; invalidating browser session',
+                                clean_profile,
+                                hinted_business_id,
+                            )
+                            try:
+                                await browser.close()
+                            except Exception:
+                                pass
+                            try:
+                                profile_session._business_browser=None
+                            except Exception:
+                                pass
+                            raise HTTPException(
+                                status_code=504,
+                                detail='LIVE_INVENTORY_TIMEOUT:confirmed_hint_revalidation',
+                            ) from exc
                         business_key=str(hinted_business_id)
                         prevalidated_inventory[business_key]={
                             'business_id':business_key,
@@ -1235,9 +1293,9 @@ async def profile_live_inventory(
                         20.0,
                         min(business_discovery_timeout,40.0),
                     )
-                    business_map=await asyncio.wait_for(
+                    business_map=await hard_deadline(
                         browser.snapshot_businesses(),
-                        timeout=business_discovery_timeout,
+                        budget(business_discovery_timeout),
                     )
                     business_diag=getattr(
                         browser,
@@ -1272,17 +1330,15 @@ async def profile_live_inventory(
                                 separators=(',', ':'),
                             )[:6000],
                         )
-                except asyncio.TimeoutError:
-                    warnings.append('Business discovery timed out')
-                    business_map={}
-                    discovery_source='business_suite_discovery_timeout'
+                except asyncio.TimeoutError as exc:
                     business_diag=getattr(
                         browser,
                         '_last_business_inventory_diagnostic',
                         {},
                     )
                     log.warning(
-                        'live inventory profile=%s business_discovery timeout=%.1fs diagnostic=%s',
+                        'live inventory profile=%s business_discovery timeout=%.1fs '
+                        'diagnostic=%s; invalidating browser session',
                         clean_profile,
                         business_discovery_timeout,
                         json.dumps(
@@ -1291,6 +1347,18 @@ async def profile_live_inventory(
                             separators=(',', ':'),
                         )[:6000],
                     )
+                    try:
+                        await browser.close()
+                    except Exception:
+                        pass
+                    try:
+                        profile_session._business_browser=None
+                    except Exception:
+                        pass
+                    raise HTTPException(
+                        status_code=504,
+                        detail='LIVE_INVENTORY_TIMEOUT:business_discovery',
+                    ) from exc
                 finally:
                     log.info(
                         'live inventory profile=%s business_discovery source=%s ms=%d count=%d',
@@ -1331,7 +1399,7 @@ async def profile_live_inventory(
                 for attempt in range(2):
                     try:
                         try:
-                            ads_probe=await asyncio.wait_for(
+                            ads_probe=await hard_deadline(
                                 browser.probe_ads_manager_inventory_context(
                                     business_id=str(business_id),
                                     timeout_seconds=10.0,
@@ -1342,24 +1410,27 @@ async def profile_live_inventory(
                                         )
                                     ),
                                 ),
-                                timeout=12.0,
+                                budget(12.0),
                             )
-                        except asyncio.TimeoutError:
-                            ads_probe={
-                                'source':'ads_manager_read_only_probe',
-                                'business_id':str(business_id),
-                                'confirmed':False,
-                                'confirmed_accounts':[],
-                                'error':'ADS_MANAGER_SCOPE_TIMEOUT',
-                                'timed_out':True,
-                            }
+                        except asyncio.TimeoutError as exc:
                             log.warning(
-                                'live inventory profile=%s business=%s '
-                                'Ads Manager scope probe timed out; '
-                                'continuing with Business Settings inventory',
+                                'live inventory profile=%s business=%s Ads Manager '
+                                'scope probe timed out; invalidating browser session',
                                 clean_profile,
                                 business_id,
                             )
+                            try:
+                                await browser.close()
+                            except Exception:
+                                pass
+                            try:
+                                profile_session._business_browser=None
+                            except Exception:
+                                pass
+                            raise HTTPException(
+                                status_code=504,
+                                detail='LIVE_INVENTORY_TIMEOUT:rk_ads_manager',
+                            ) from exc
 
                         if ads_probe.get('confirmed'):
                             confirmed_accounts=[
@@ -1396,12 +1467,12 @@ async def profile_live_inventory(
                                     'ads_manager_diagnostic':ads_probe,
                                 }
 
-                        settings_inventory=await asyncio.wait_for(
+                        settings_inventory=await hard_deadline(
                             browser.snapshot_ad_accounts_for_business(
                                 business_id=str(business_id),
                                 timeout_seconds=8.0,
                             ),
-                            timeout=10.0,
+                            budget(10.0),
                         )
                         settings_inventory['ads_manager_diagnostic']=ads_probe
                         return settings_inventory
@@ -1431,7 +1502,7 @@ async def profile_live_inventory(
                                 pass
                             browser=await asyncio.wait_for(
                                 profile_session.facebook_business_browser(),
-                                timeout=24.0,
+                                timeout=budget(18.0),
                             )
                             continue
                         raise
@@ -1495,20 +1566,10 @@ async def profile_live_inventory(
                                 separators=(',', ':'),
                             )[:9000],
                         )
-                except asyncio.TimeoutError:
-                    row['ad_accounts_source']='business_settings_timeout'
-                    row['diagnostics']=[
-                        getattr(
-                            browser,
-                            '_last_ad_account_section_diagnostic',
-                            {},
-                        )
-                    ]
-                    warnings.append(
-                        f'BM {business_id}: live RK inventory timed out'
-                    )
+                except asyncio.TimeoutError as exc:
                     log.warning(
-                        'live inventory profile=%s business=%s rk timeout diagnostic=%s',
+                        'live inventory profile=%s business=%s RK inventory timed '
+                        'out; invalidating browser session diagnostic=%s',
                         clean_profile,
                         business_id,
                         json.dumps(
@@ -1521,6 +1582,18 @@ async def profile_live_inventory(
                             separators=(',', ':'),
                         )[:6000],
                     )
+                    try:
+                        await browser.close()
+                    except Exception:
+                        pass
+                    try:
+                        profile_session._business_browser=None
+                    except Exception:
+                        pass
+                    raise HTTPException(
+                        status_code=504,
+                        detail='LIVE_INVENTORY_TIMEOUT:rk_inventory',
+                    ) from exc
                 except BrowserBusinessError as exc:
                     row['ad_accounts_source']=(
                         'business_auth_blocked'
@@ -1556,56 +1629,9 @@ async def profile_live_inventory(
                     )
                 businesses.append(row)
 
-            # Preserve only already-confirmed bindings as a fallback annotation;
-            # they never turn a Business into "live_ready".
-            seen_businesses={
-                str(row.get('id') or '').strip()
-                for row in businesses
-                if isinstance(row,dict)
-            }
-            for business_id,binding in binding_by_business.items():
-                if business_id not in seen_businesses:
-                    businesses.append({
-                        'id':business_id,
-                        'name':business_id,
-                        'ad_accounts':[],
-                        'ad_accounts_count':0,
-                        'ad_accounts_ready':False,
-                        'source':'worker_confirmed_fallback',
-                    })
-
-            by_business={
-                str(row.get('id') or '').strip():row
-                for row in businesses
-                if isinstance(row,dict)
-                and str(row.get('id') or '').strip()
-            }
-            for business_id,binding in binding_by_business.items():
-                ad_account_id=str(
-                    binding.get('ad_account_id') or ''
-                ).strip().removeprefix('act_')
-                if not ad_account_id.isdigit():
-                    continue
-                business_row=by_business.get(business_id)
-                if business_row is None:
-                    continue
-                existing={
-                    str(row.get('id') or row.get('account_id') or '').strip().removeprefix('act_')
-                    for row in (business_row.get('ad_accounts') or [])
-                    if isinstance(row,dict)
-                }
-                if ad_account_id not in existing:
-                    business_row.setdefault('ad_accounts',[]).append({
-                        'id':ad_account_id,
-                        'account_id':ad_account_id,
-                        'name':str(binding.get('account_name') or '').strip(),
-                        'business_id':business_id,
-                        '_source':'worker_confirmed_fallback',
-                    })
-                    business_row['ad_accounts_count']=len(
-                        business_row['ad_accounts']
-                    )
-
+            # REMASK_LIVE_PAYLOAD_EXCLUDES_DURABLE_FALLBACK_V1
+            # Durable provisioning bindings are navigation targets only.
+            # They must never be injected into the live inventory payload.
             businesses.sort(
                 key=lambda row:(
                     str(row.get('name') or '').casefold(),
@@ -1627,7 +1653,7 @@ async def profile_live_inventory(
             try:
                 discovered_pages=await hard_deadline(
                     browser.discover_managed_pages(fast=False),
-                    18.0,
+                    budget(18.0),
                 )
                 pages=[
                     {
@@ -1654,6 +1680,14 @@ async def profile_live_inventory(
             except asyncio.TimeoutError:
                 pages_source='facebook_business_browser_timeout'
                 warnings.append('Fan Page inventory timed out')
+                try:
+                    await browser.close()
+                except Exception:
+                    pass
+                try:
+                    profile_session._business_browser=None
+                except Exception:
+                    pass
             except BrowserBusinessError as exc:
                 pages_source='facebook_business_browser_error'
                 warnings.append(f'Fan Page inventory: {exc.code}')
@@ -1667,7 +1701,8 @@ async def profile_live_inventory(
                     pages_source,
                 )
 
-            live_ready=bool(live_business_ids)
+            # REMASK_LIVE_TARGET_SET_REQUIRED_V1
+            live_ready=_live_inventory_targets_ready(business_map,live_business_ids)
             if live_ready and discovery_revalidation:
                 warnings=[
                     warning

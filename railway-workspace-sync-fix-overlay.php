@@ -393,19 +393,23 @@ async function syncSelection(){
   };
 
   const finishSyncResponse=(d,profile,business_id='')=>{
+    // REMASK_FAILED_SYNC_DOES_NOT_MUTATE_WORKSPACE_V1
+    // A partial/failed browser result is diagnostic only. Keep the last
+    // confirmed Workspace state untouched unless the full BM/RK/FP contract
+    // completed successfully.
+    if(d && d.sync_complete===false){
+      return {
+        error:String(d.sync_error||'Private Business Suite inventory was inconclusive'),
+        error_kind:String(d.sync_error_kind||'PRIVATE_INCONCLUSIVE'),
+        profile,
+        business_id
+      };
+    }
     const applied=applySnapshot(d);
     if(d && d.sync_complete===true && !applied){
       return {
         error:'Live Meta sync returned success but Workspace snapshot was not applied',
         error_kind:'SNAPSHOT_NOT_APPLIED',
-        profile,
-        business_id
-      };
-    }
-    if(d && d.sync_complete===false){
-      return {
-        error:String(d.sync_error||'Private Business Suite inventory was inconclusive'),
-        error_kind:String(d.sync_error_kind||'PRIVATE_INCONCLUSIVE'),
         profile,
         business_id
       };
@@ -465,19 +469,25 @@ async function syncSelection(){
     }
   };
 
+  // REMASK_SYNC_BROWSER_SERIAL_V1
+  // Production is intentionally one Chromium lease in a 1 GB container.
+  // Match client request concurrency to that capacity instead of queueing
+  // three long HTTP requests behind one browser semaphore.
+  const syncConcurrency=1;
+
   try{
     let results=[];
     if(tab==='profiles'){
       results=await concurrent(
         rows,
-        3,
+        syncConcurrency,
         r=>syncProfileSafe(r.name),
         (done,total)=>{$('workspaceStatus').textContent=`Синхронизация FB: ${done}/${total}`;setProgress(done,total)}
       );
     }else if(tab==='businesses'){
       results=await concurrent(
         rows,
-        3,
+        syncConcurrency,
         r=>syncBusinessSafe(r),
         (done,total)=>{$('workspaceStatus').textContent=`Синхронизация BM: ${done}/${total}`;setProgress(done,total)}
       );
@@ -485,7 +495,7 @@ async function syncSelection(){
       const profiles=[...new Set(rows.map(r=>r.profile).filter(Boolean))];
       results=await concurrent(
         profiles,
-        3,
+        syncConcurrency,
         p=>syncProfileSafe(p),
         (done,total)=>{$('workspaceStatus').textContent=`Синхронизация RK: ${done}/${total}`;setProgress(done,total)}
       );
@@ -1534,7 +1544,7 @@ $syncProfileReplacement = <<<'PHP'
                 $rowName = trim((string)($profileRow['name'] ?? $profileRow['profile'] ?? ''));
                 if ($rowName !== '' && $rowName !== $profile) continue;
                 $snapshot['profiles'][$i]['name'] = $rowName !== '' ? $rowName : $profile;
-                $snapshot['profiles'][$i]['synced'] = true;
+                $snapshot['profiles'][$i]['synced'] = $syncComplete;
                 $snapshot['profiles'][$i]['bm_count'] = count($businessRows);
                 $snapshot['profiles'][$i]['rk_count'] = count($adAccountRows);
                 $snapshot['profiles'][$i]['ad_accounts_count'] = count($adAccountRows);
@@ -1579,7 +1589,7 @@ $syncProfileReplacement = <<<'PHP'
             // query official Graph permissions.
             $responseProfile = [
                 'name' => $profile,
-                'synced' => true,
+                'synced' => $syncComplete,
                 'bm_count' => count($businessRows),
                 'rk_count' => count($adAccountRows),
                 'ad_accounts_count' => count($adAccountRows),
