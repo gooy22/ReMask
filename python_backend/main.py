@@ -918,26 +918,6 @@ async def profile_live_inventory(
         if hinted_business_id.isdigit():
             known_business_ids.add(hinted_business_id)
 
-    # BM:RK pairs below come only from the last live-confirmed Workspace
-    # snapshot. They are hints for surviving Meta selector/UI drift; they are
-    # never accepted without a fresh live Ads Manager observation.
-    known_accounts_by_business: dict[str,set[str]] = {}
-    for raw_pair in str(ad_account_hints or '').split(','):
-        raw_pair=raw_pair.strip()
-        if not raw_pair or ':' not in raw_pair:
-            continue
-        hinted_business_id,hinted_account_id=raw_pair.split(':',1)
-        hinted_business_id=hinted_business_id.strip()
-        hinted_account_id=hinted_account_id.strip()
-        if (
-            hinted_business_id.isdigit()
-            and hinted_account_id.isdigit()
-        ):
-            known_business_ids.add(hinted_business_id)
-            known_accounts_by_business.setdefault(
-                hinted_business_id,set()
-            ).add(hinted_account_id)
-
     try:
         stage='profile_session'
         async with ProfileSession(context) as profile_session:
@@ -966,107 +946,20 @@ async def profile_live_inventory(
 
             business_map: dict[str,str] = {}
             discovery_source=''
-            prevalidated_inventory: dict[str,dict] = {}
 
-            # REMASK_CONFIRMED_HINT_FAST_REVALIDATION_V1
-            # When Workspace has a last-live-confirmed BM->RK pair, validate that
-            # exact pair against the current authenticated Ads Manager first.
-            # This avoids spending 8-20s on the flaky Business Suite selector
-            # before probing the account Meta is already opening live.
-            if known_accounts_by_business:
-                stage='confirmed_hint_revalidation'
-                fast_started=time.monotonic()
-                for hinted_business_id,expected_ids in sorted(
-                    known_accounts_by_business.items()
-                )[:25]:
-                    try:
-                        ads_probe=await asyncio.wait_for(
-                            browser.probe_ads_manager_inventory_context(
-                                business_id=str(hinted_business_id),
-                                timeout_seconds=7.0,
-                                expected_account_ids=sorted(expected_ids),
-                            ),
-                            timeout=8.5,
-                        )
-                    except (asyncio.TimeoutError,BrowserBusinessError) as exc:
-                        log.warning(
-                            'live inventory profile=%s business=%s fast live revalidation failed=%s',
-                            clean_profile,
-                            hinted_business_id,
-                            f'{exc.__class__.__name__}: {exc}',
-                        )
-                        continue
-
-                    if not ads_probe.get('confirmed'):
-                        continue
-                    confirmed_accounts=[
-                        account
-                        for account in (
-                            ads_probe.get('confirmed_accounts') or []
-                        )
-                        if isinstance(account,dict)
-                    ]
-                    confirmed_ids={
-                        str(
-                            account.get('id')
-                            or account.get('account_id')
-                            or ''
-                        ).replace('act_','').strip()
-                        for account in confirmed_accounts
-                    }
-                    expected_clean={
-                        str(value).replace('act_','').strip()
-                        for value in expected_ids
-                    }
-                    if not confirmed_accounts or not (
-                        confirmed_ids & expected_clean
-                    ):
-                        continue
-
-                    business_key=str(hinted_business_id)
-                    business_map[business_key]=business_key
-                    prevalidated_inventory[business_key]={
-                        'business_id':business_key,
-                        'ready':True,
-                        'confirmed_empty':False,
-                        'accounts':confirmed_accounts,
-                        'accounts_count':len(confirmed_accounts),
-                        'source':str(
-                            ads_probe.get('confirmation_source')
-                            or 'ads_manager_confirmed_snapshot_revalidation'
-                        ),
-                        'attempts':[{
-                            'requested_url':str(
-                                ads_probe.get('requested_url') or ''
-                            ),
-                            'landed_url':str(
-                                ads_probe.get('final_url') or ''
-                            ),
-                            'result':'confirmed_snapshot_live_revalidated',
-                        }],
-                        'diagnostics':ads_probe.get('diagnostics') or [],
-                        'section_diagnostic':{},
-                        'ads_manager_diagnostic':ads_probe,
-                    }
-                    log.info(
-                        'live inventory profile=%s business=%s fast live revalidation ready=True accounts=%d source=%s',
-                        clean_profile,
-                        business_key,
-                        len(confirmed_accounts),
-                        prevalidated_inventory[business_key]['source'],
-                    )
-
-                if business_map:
-                    discovery_source='confirmed_snapshot_ads_manager_revalidation'
-                    log.info(
-                        'live inventory profile=%s fast revalidation ms=%d businesses=%d; Business Suite discovery skipped',
-                        clean_profile,
-                        int((time.monotonic()-fast_started)*1000),
-                        len(business_map),
-                    )
-
-            if not business_map:
-                stage='business_discovery'
+            stage='business_discovery'
+            if known_business_ids:
+                business_map={
+                    business_id:business_id
+                    for business_id in sorted(known_business_ids)
+                }
+                discovery_source='worker_confirmed_business_ids'
+                log.info(
+                    'live inventory profile=%s using confirmed businesses=%s',
+                    clean_profile,
+                    ','.join(sorted(known_business_ids)),
+                )
+            else:
                 discovery_started=time.monotonic()
                 try:
                     try:
@@ -1095,17 +988,6 @@ async def profile_live_inventory(
                         (business_diag or {}).get('source')
                         or 'business_suite_private_inventory'
                     )
-
-                    hinted_only=sorted(
-                        set(known_business_ids) - set(business_map)
-                    )
-                    if hinted_only:
-                        log.info(
-                            'live inventory profile=%s stale_or_unconfirmed_business_hints=%s',
-                            clean_profile,
-                            ','.join(hinted_only),
-                        )
-
                     if not business_map:
                         warnings.append(
                             'Private Business Suite inventory returned no Business portfolios'
@@ -1147,68 +1029,21 @@ async def profile_live_inventory(
                         len(business_map),
                     )
 
-            # If Meta's HOME/selector emitted no BM rows, do not stop here.
-            # ReMask already has durable BM identities from previously confirmed
-            # provisioning/live state. Re-open those exact BM candidates and only
-            # accept them after the current browser proves their RK scope live.
-            discovery_revalidation=False
-            if not business_map and known_business_ids:
-                business_map={
-                    business_id: business_id
-                    for business_id in sorted(known_business_ids)
-                    if str(business_id).isdigit()
-                }
-                if business_map:
-                    discovery_revalidation=True
-                    discovery_source='confirmed_business_hint_live_revalidation'
-                    log.info(
-                        'live inventory profile=%s selector empty; revalidating known businesses=%s',
-                        clean_profile,
-                        ','.join(sorted(business_map)),
-                    )
-
             businesses=[]
             live_business_ids:set[str]=set()
 
             async def load_business_inventory(business_id: str):
                 nonlocal browser
-                business_key=str(business_id)
-                if business_key in prevalidated_inventory:
-                    return dict(prevalidated_inventory[business_key])
                 last_error=None
                 for attempt in range(2):
                     try:
-                        try:
-                            ads_probe=await asyncio.wait_for(
-                                browser.probe_ads_manager_inventory_context(
-                                    business_id=str(business_id),
-                                    timeout_seconds=10.0,
-                                    expected_account_ids=sorted(
-                                        known_accounts_by_business.get(
-                                            str(business_id),
-                                            set(),
-                                        )
-                                    ),
-                                ),
-                                timeout=12.0,
-                            )
-                        except asyncio.TimeoutError:
-                            ads_probe={
-                                'source':'ads_manager_read_only_probe',
-                                'business_id':str(business_id),
-                                'confirmed':False,
-                                'confirmed_accounts':[],
-                                'error':'ADS_MANAGER_SCOPE_TIMEOUT',
-                                'timed_out':True,
-                            }
-                            log.warning(
-                                'live inventory profile=%s business=%s '
-                                'Ads Manager scope probe timed out; '
-                                'continuing with Business Settings inventory',
-                                clean_profile,
-                                business_id,
-                            )
-
+                        ads_probe=await asyncio.wait_for(
+                            browser.probe_ads_manager_inventory_context(
+                                business_id=str(business_id),
+                                timeout_seconds=10.0,
+                            ),
+                            timeout=13.0,
+                        )
                         if ads_probe.get('confirmed'):
                             confirmed_accounts=[
                                 account
@@ -1224,10 +1059,7 @@ async def profile_live_inventory(
                                     'confirmed_empty':False,
                                     'accounts':confirmed_accounts,
                                     'accounts_count':len(confirmed_accounts),
-                                    'source':str(
-                                        ads_probe.get('confirmation_source')
-                                        or 'ads_manager_business_scope_inventory'
-                                    ),
+                                    'source':'ads_manager_business_scope_inventory',
                                     'attempts':[{
                                         'requested_url':str(
                                             ads_probe.get('requested_url') or ''
@@ -1247,9 +1079,9 @@ async def profile_live_inventory(
                         settings_inventory=await asyncio.wait_for(
                             browser.snapshot_ad_accounts_for_business(
                                 business_id=str(business_id),
-                                timeout_seconds=8.0,
+                                timeout_seconds=12.0,
                             ),
-                            timeout=10.0,
+                            timeout=18.0,
                         )
                         settings_inventory['ads_manager_diagnostic']=ads_probe
                         return settings_inventory
@@ -1460,76 +1292,11 @@ async def profile_live_inventory(
                     str(row.get('id') or ''),
                 )
             )
-
-            # REMASK_SYNC_SINGLE_SOURCE_PAGES_V1
-            # Sync is the only inventory fetch. Reuse this browser session to
-            # collect Pages once; downstream UI reads the persisted snapshot.
-            stage='page_inventory'
-            pages=[]
-            pages_source=''
-            pages_ready=False
-            pages_started=time.monotonic()
-            try:
-                discovered_pages=await asyncio.wait_for(
-                    browser.discover_managed_pages(fast=True),
-                    timeout=14.0,
-                )
-                pages=[
-                    {
-                        'id':str(row.get('id') or '').strip(),
-                        'name':str(row.get('name') or row.get('id') or '').strip(),
-                        'category':str(row.get('category') or '').strip(),
-                        'tasks':[str(task) for task in (row.get('tasks') or []) if isinstance(task,(str,int))],
-                        'business_id':str(row.get('business_id') or '').strip(),
-                        'is_owned':row.get('is_owned'),
-                    }
-                    for row in (discovered_pages or [])
-                    if isinstance(row,dict)
-                    and str(row.get('id') or '').strip().isdigit()
-                ]
-                pages.sort(
-                    key=lambda page:(
-                        1 if str(page.get('business_id') or '').strip() else 0,
-                        str(page.get('name') or '').casefold(),
-                        str(page.get('id') or ''),
-                    )
-                )
-                pages_source='facebook_business_browser'
-                pages_ready=True
-            except asyncio.TimeoutError:
-                pages_source='facebook_business_browser_timeout'
-                warnings.append('Fan Page inventory timed out')
-            except BrowserBusinessError as exc:
-                pages_source='facebook_business_browser_error'
-                warnings.append(f'Fan Page inventory: {exc.code}')
-            finally:
-                log.info(
-                    'live inventory profile=%s pages_ms=%d ready=%s pages=%d source=%s',
-                    clean_profile,
-                    int((time.monotonic()-pages_started)*1000),
-                    pages_ready,
-                    len(pages),
-                    pages_source,
-                )
-
             live_ready=bool(live_business_ids)
-            if live_ready and discovery_revalidation:
-                warnings=[
-                    warning
-                    for warning in warnings
-                    if warning != 'Private Business Suite inventory returned no Business portfolios'
-                ]
-                log.info(
-                    'live inventory profile=%s known BM revalidation recovered live state businesses=%s',
-                    clean_profile,
-                    ','.join(sorted(live_business_ids)),
-                )
-
             result={
                 'ok':True,
                 'profile_id':clean_profile,
-                # REMASK_SYNC_SESSION_READY_V1
-                'session_ready':True,
+                'sync_contract':'REMASK_KNOWN_GOOD_LIVE_SYNC_V1',
                 'live_ready':live_ready,
                 'businesses':businesses,
                 'businesses_count':len(businesses),
@@ -1547,20 +1314,15 @@ async def profile_live_inventory(
                     {},
                 ),
                 'source':'business_suite_private_inventory',
-                'pages':pages,
-                'pages_count':len(pages),
-                'pages_ready':pages_ready,
-                'pages_source':pages_source,
                 'warnings':warnings,
             }
             log.info(
-                'live inventory profile=%s complete ms=%d live_ready=%s live_businesses=%d businesses=%d pages=%d warnings=%d',
+                'live inventory profile=%s complete ms=%d live_ready=%s live_businesses=%d businesses=%d warnings=%d',
                 clean_profile,
                 int((time.monotonic()-started)*1000),
                 live_ready,
                 len(live_business_ids),
                 len(businesses),
-                len(pages),
                 len(warnings),
             )
             return result
