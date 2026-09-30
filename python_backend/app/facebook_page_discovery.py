@@ -481,9 +481,14 @@ def _extract_page_query_near_markers(
         if "assetOwnerId" not in window:
             continue
 
+        # Only explicit GraphQL document-id fields are safe here.
+        # A generic "id" near pages_can_administer can be assetOwnerId,
+        # Page ID, actor ID, etc. Generic Relay operation "id" extraction is
+        # handled by discover_persisted_query(), which scopes it to the
+        # operation/friendly-name envelope.
         doc_matches = list(
             re.finditer(
-                r'(?:"|\')?(?:doc_id|docID|id)(?:"|\')?\s*[:=]\s*'
+                r'(?:"|\')?(?:doc_id|docID)(?:"|\')?\s*[:=]\s*'
                 r'(?:"|\')([0-9]{5,40})(?:"|\')',
                 window,
                 flags=re.IGNORECASE,
