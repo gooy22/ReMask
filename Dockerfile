@@ -227,6 +227,7 @@ RUN set -eux; \
     php -l /var/www/html/ajax/metaHierarchy.php; \
     grep -q 'REMASK_PRIVATE_BROWSER_SYNC_V1' /var/www/html/ajax/metaHierarchy.php; \
     grep -q 'hierarchy_worker_live_inventory' /var/www/html/ajax/metaHierarchy.php; \
+    grep -q 'REMASK_REQUESTED_BUSINESS_SYNC_SCOPE_V1' /var/www/html/ajax/metaHierarchy.php; \
     grep -q 'private_business_suite_browser' /var/www/html/ajax/metaHierarchy.php; \
     grep -q 'REMASK_FBTOOL_ADS_TOKEN_REFRESH_V1' /var/www/html/classes/FbRequests.php; \
 
@@ -322,6 +323,7 @@ RUN set -eux; \
     ! grep -q "rmx_pwp_worker_preflight" /var/www/html/ajax/pythonWorkerPages.php; \
     grep -q 'ad_account_hints' /opt/remask-python/main.py; \
     grep -q 'REMASK_CONFIRMED_HINT_FAST_REVALIDATION_V1' /opt/remask-python/main.py; \
+    grep -q 'REMASK_REQUESTED_BUSINESS_WORKER_SCOPE_V1' /opt/remask-python/main.py; \
     grep -q 'REMASK_DURABLE_BINDING_ACCOUNT_HINTS_V1' /opt/remask-python/main.py; \
     grep -q 'REMASK_EXACT_HINTS_SKIP_FULL_BM_DISCOVERY_V1' /opt/remask-python/main.py; \
     grep -q 'Business Suite discovery skipped' /opt/remask-python/main.py; \
