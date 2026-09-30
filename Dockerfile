@@ -337,6 +337,8 @@ RUN set -eux; \
     grep -q 'REMASK_REQUESTED_BUSINESS_WORKER_SCOPE_V1' /opt/remask-python/main.py; \
     grep -q 'REMASK_HARD_DEADLINE_TASK_V1' /opt/remask-python/main.py; \
     grep -q 'REMASK_LIVE_INVENTORY_TOTAL_BUDGET_V1' /opt/remask-python/main.py; \
+    grep -q 'REMASK_SYNC_RESOLVER_BOUNDED_V1' /opt/remask-python/main.py; \
+    grep -q 'browser_open_timeout=budget(24.0)' /opt/remask-python/main.py; \
     grep -q 'REMASK_LIVE_TARGET_SET_REQUIRED_V1' /opt/remask-python/main.py; \
     grep -q 'REMASK_LIVE_PAYLOAD_EXCLUDES_DURABLE_FALLBACK_V1' /opt/remask-python/main.py; \
     ! grep -q 'worker_confirmed_fallback' /opt/remask-python/main.py; \

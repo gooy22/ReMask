@@ -892,8 +892,20 @@ async def profile_live_inventory(
 
     started=time.monotonic()
     stage='resolver'
+    # REMASK_SYNC_RESOLVER_BOUNDED_V1
+    # ProfileResolver can retry its own 15s transport several times. The live
+    # Sync transport cannot inherit that 30-90s retry horizon before Chromium
+    # even opens, so impose one endpoint-level resolver wall-clock bound.
     try:
-        context=await pool.resolver.resolve(clean_profile)
+        context=await asyncio.wait_for(
+            pool.resolver.resolve(clean_profile),
+            timeout=12.0,
+        )
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(
+            status_code=504,
+            detail='LIVE_INVENTORY_TIMEOUT:resolver',
+        ) from exc
     except ProfileContextError as exc:
         raise HTTPException(
             status_code=422,
@@ -1051,9 +1063,10 @@ async def profile_live_inventory(
             stage='browser_open'
             browser_open_started=time.monotonic()
             try:
+                browser_open_timeout=budget(24.0)
                 browser=await asyncio.wait_for(
                     profile_session.facebook_business_browser(),
-                    timeout=24.0,
+                    timeout=browser_open_timeout,
                 )
             except asyncio.TimeoutError as exc:
                 log.warning(
@@ -1094,13 +1107,14 @@ async def profile_live_inventory(
                     known_accounts_by_business.items()
                 )[:25]:
                     try:
+                        fast_probe_timeout=budget(10.0)
                         ads_probe=await hard_deadline(
                             browser.probe_ads_manager_inventory_context(
                                 business_id=str(hinted_business_id),
                                 timeout_seconds=7.0,
                                 expected_account_ids=sorted(expected_ids),
                             ),
-                            budget(10.0),
+                            fast_probe_timeout,
                         )
                     except (asyncio.TimeoutError,BrowserBusinessError) as exc:
                         if isinstance(exc,asyncio.TimeoutError):
@@ -1287,9 +1301,10 @@ async def profile_live_inventory(
                         20.0,
                         min(business_discovery_timeout,40.0),
                     )
+                    discovery_wall_timeout=budget(business_discovery_timeout)
                     business_map=await hard_deadline(
                         browser.snapshot_businesses(),
-                        budget(business_discovery_timeout),
+                        discovery_wall_timeout,
                     )
                     business_diag=getattr(
                         browser,
@@ -1393,6 +1408,7 @@ async def profile_live_inventory(
                 for attempt in range(2):
                     try:
                         try:
+                            rk_ads_timeout=budget(12.0)
                             ads_probe=await hard_deadline(
                                 browser.probe_ads_manager_inventory_context(
                                     business_id=str(business_id),
@@ -1404,7 +1420,7 @@ async def profile_live_inventory(
                                         )
                                     ),
                                 ),
-                                budget(12.0),
+                                rk_ads_timeout,
                             )
                         except asyncio.TimeoutError as exc:
                             log.warning(
@@ -1461,12 +1477,13 @@ async def profile_live_inventory(
                                     'ads_manager_diagnostic':ads_probe,
                                 }
 
+                        rk_settings_timeout=budget(10.0)
                         settings_inventory=await hard_deadline(
                             browser.snapshot_ad_accounts_for_business(
                                 business_id=str(business_id),
                                 timeout_seconds=8.0,
                             ),
-                            budget(10.0),
+                            rk_settings_timeout,
                         )
                         settings_inventory['ads_manager_diagnostic']=ads_probe
                         return settings_inventory
@@ -1494,9 +1511,10 @@ async def profile_live_inventory(
                                 profile_session._business_browser=None
                             except Exception:
                                 pass
+                            browser_reopen_timeout=budget(18.0)
                             browser=await asyncio.wait_for(
                                 profile_session.facebook_business_browser(),
-                                timeout=budget(18.0),
+                                timeout=browser_reopen_timeout,
                             )
                             continue
                         raise
@@ -1645,9 +1663,10 @@ async def profile_live_inventory(
             pages_ready=False
             pages_started=time.monotonic()
             try:
+                page_inventory_timeout=budget(18.0)
                 discovered_pages=await hard_deadline(
                     browser.discover_managed_pages(fast=False),
-                    budget(18.0),
+                    page_inventory_timeout,
                 )
                 pages=[
                     {

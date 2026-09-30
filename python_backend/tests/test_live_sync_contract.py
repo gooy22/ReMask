@@ -29,6 +29,8 @@ class LiveSyncContractTests(unittest.TestCase):
         source=inspect.getsource(api.profile_live_inventory)
         self.assertNotIn("worker_confirmed_fallback", source)
         self.assertIn("REMASK_LIVE_INVENTORY_TOTAL_BUDGET_V1", source)
+        self.assertIn("REMASK_SYNC_RESOLVER_BOUNDED_V1", source)
+        self.assertIn("browser_open_timeout=budget(24.0)", source)
         self.assertIn("REMASK_LIVE_PAYLOAD_EXCLUDES_DURABLE_FALLBACK_V1", source)
         self.assertIn("REMASK_EXACT_HINTS_REMAIN_REQUIRED_TARGETS_V1", source)
         self.assertIn("for business_id in sorted(known_accounts_by_business)", source)
