@@ -349,6 +349,11 @@ async def list_pages_via_private_graphql(
         # initial HTML/response headers; rediscover it and persist it before
         # falling back to the heavier browser surface.
         discovered = await discover_current_list_pages_docid_by_marker(session)
+        if discovered is None:
+            discovered = await discover_current_list_pages_docid(
+                session,
+                max_scripts=6,
+            )
         if discovered is not None:
             candidates = [discovered]
             diagnostics.append(
