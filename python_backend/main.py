@@ -1402,7 +1402,7 @@ async def profile_live_inventory(
                     )
                     log.warning(
                         'live inventory profile=%s business_discovery timeout=%.1fs '
-                        'diagnostic=%s; invalidating browser session',
+                        'diagnostic=%s; releasing browser lease',
                         clean_profile,
                         business_discovery_timeout,
                         json.dumps(
@@ -1415,14 +1415,20 @@ async def profile_live_inventory(
                         await browser.close()
                     except Exception:
                         pass
-                    try:
-                        profile_session._business_browser=None
-                    except Exception:
-                        pass
-                    raise HTTPException(
-                        status_code=504,
-                        detail='LIVE_INVENTORY_TIMEOUT:business_discovery',
-                    ) from exc
+                    # REMASK_DISCOVERY_TIMEOUT_HINT_FALLBACK_V1
+                    # A timed-out selector must not erase the ability to
+                    # revalidate known candidates. The browser object can reopen
+                    # itself on the next probe after close().
+                    if known_business_ids:
+                        warnings.append(
+                            'Business discovery timed out; checking known BM hints live'
+                        )
+                        discovery_source='business_suite_discovery_timeout_hint_fallback'
+                    else:
+                        raise HTTPException(
+                            status_code=504,
+                            detail='LIVE_INVENTORY_TIMEOUT:business_discovery',
+                        ) from exc
                 finally:
                     log.info(
                         'live inventory profile=%s business_discovery source=%s ms=%d count=%d',
@@ -1481,10 +1487,10 @@ async def profile_live_inventory(
                                 ),
                                 rk_ads_timeout,
                             )
-                        except asyncio.TimeoutError as exc:
+                        except asyncio.TimeoutError:
                             log.warning(
                                 'live inventory profile=%s business=%s Ads Manager '
-                                'scope probe timed out; invalidating browser session',
+                                'scope probe timed out; releasing browser lease',
                                 clean_profile,
                                 business_id,
                             )
@@ -1492,14 +1498,11 @@ async def profile_live_inventory(
                                 await browser.close()
                             except Exception:
                                 pass
-                            try:
-                                profile_session._business_browser=None
-                            except Exception:
-                                pass
-                            raise HTTPException(
-                                status_code=504,
-                                detail='LIVE_INVENTORY_TIMEOUT:rk_ads_manager',
-                            ) from exc
+                            # REMASK_RK_TIMEOUT_IS_ROW_FAILURE_V1
+                            # One BM timeout is an inconclusive row, not a fatal
+                            # profile transport failure. The outer row loop marks
+                            # it unready and continues with other current BMs/FPs.
+                            raise
 
                         if ads_probe.get('confirmed'):
                             confirmed_accounts=[
