@@ -1188,6 +1188,16 @@ $syncProfileReplacement = <<<'PHP'
         ]);
     }
 
+    if ($action === 'snapshot_profile') {
+        $profile = trim((string)($input['profile'] ?? ''));
+        if ($profile === '') throw new InvalidArgumentException('profile is required');
+
+        $snapshot = hierarchy_profile_snapshot($profile);
+        $snapshot['snapshot_only'] = true;
+        $snapshot['sync_source'] = 'local_confirmed_state';
+        MetaEndpoint::ok($snapshot);
+    }
+
     if ($action === 'sync_profile') {
         // Keep backend reconciliation alive even if a mobile browser/network
         // closes the long HTTP request before Meta finishes.
@@ -1355,6 +1365,20 @@ $syncProfileReplacement = <<<'PHP'
             }
         }
 
+        $sessionReady = (($liveInventory['session_ready'] ?? false) === true);
+        $pagesReady = (($liveInventory['pages_ready'] ?? false) === true);
+
+        if (!$pagesReady && $pageRows === []) {
+            $preservedPages = array_values(array_filter(
+                (array)($existingSnapshot['pages'] ?? []),
+                static fn($row) => is_array($row)
+            ));
+            if ($preservedPages !== []) {
+                $pageRows = $preservedPages;
+                $syncWarnings[] = 'Page inventory inconclusive; previous confirmed Pages preserved';
+            }
+        }
+
         // If browser inventory was inconclusive, preserve the previous private
         // snapshot rather than erasing working rows.
         $liveReady = (($liveInventory['live_ready'] ?? false) === true);
@@ -1382,18 +1406,37 @@ $syncProfileReplacement = <<<'PHP'
         $snapshot['ad_accounts_count'] = count($adAccountRows);
         $snapshot['pages'] = array_values($pageRows);
         $snapshot['pages_count'] = count($pageRows);
-        $snapshot['pages_ready'] = (($liveInventory['pages_ready'] ?? false) === true);
+        $snapshot['pages_ready'] = $pagesReady;
         $snapshot['pages_source'] = (string)($liveInventory['pages_source'] ?? '');
-        $syncComplete = $liveReady;
+
+        // REMASK_STABLE_PARTIAL_SYNC_V1
+        // Meta's BM/RK/Page surfaces are independently flaky. If the
+        // proxy-bound authenticated browser session completed, preserve the
+        // last confirmed inventory and return PARTIAL success instead of
+        // converting a healthy session into PRIVATE_INCONCLUSIVE.
+        $hasConfirmedInventory = (
+            count($businessRows) > 0
+            || count($adAccountRows) > 0
+            || count($pageRows) > 0
+        );
+        $syncComplete = (
+            $liveReady
+            || ($sessionReady && ($hasConfirmedInventory || $pagesReady))
+        );
 
         $snapshot['sync_source'] = 'private_business_suite_browser';
         $snapshot['live_inventory_available'] = $liveReady;
         $snapshot['confirmed_worker_bindings'] = $workerConfirmedCount;
         $snapshot['graph_preflight_available'] = false;
         $snapshot['sync_complete'] = $syncComplete;
-        if (!$syncComplete) {
-            $snapshot['sync_error_kind'] = 'PRIVATE_INCONCLUSIVE';
-            $snapshot['sync_error'] = 'Private Business Suite inventory did not confirm live BM/RK state.';
+        $snapshot['sync_partial'] = ($syncComplete && !$liveReady);
+        unset($snapshot['sync_error_kind'], $snapshot['sync_error']);
+
+        if ($syncComplete && !$liveReady) {
+            $syncWarnings[] = 'Meta inventory partially inconclusive; last confirmed state preserved';
+        } elseif (!$syncComplete) {
+            $snapshot['sync_error_kind'] = 'PRIVATE_SYNC';
+            $snapshot['sync_error'] = 'Private Facebook session did not complete a usable synchronization.';
         }
 
         $responseProfile = null;
@@ -1802,6 +1845,8 @@ if (
     || strpos($js, 'function applySnapshot(s){') === false
     || strpos($js, 'REMASK_SYNC_RESULT_RECONCILIATION_V1') === false
     || strpos($php, "hierarchy_sync_result_put(") === false
+    || strpos($php, "\$action === 'snapshot_profile'") === false
+    || strpos($php, 'REMASK_STABLE_PARTIAL_SYNC_V1') === false
     || strpos($php, "\$action === 'sync_result'") === false
     || strpos($js, 'return true;') === false
     || strpos($php, "'proxy_configured' => \$proxy !== null") === false
