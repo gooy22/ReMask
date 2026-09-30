@@ -1250,10 +1250,33 @@ $syncProfileReplacement = <<<'PHP'
             }
         }
 
+        // REMASK_SYNC_HINTED_BM_ONLY_V1
+        // The durable worker binding is never accepted as current inventory.
+        // It only restores the last worker-confirmed BM->RK navigation hint
+        // when the live display snapshot has lost the account row. The Python
+        // worker still has to reopen Ads Manager and confirm that exact RK live.
+        foreach (hierarchy_binding_get($profile) as $binding) {
+            if (!is_array($binding)) continue;
+            $businessId = trim((string)($binding['business_id'] ?? ''));
+            $accountId = trim((string)($binding['ad_account_id'] ?? ''));
+            if (
+                !preg_match('/^\d{5,30}$/', $businessId)
+                || !preg_match('/^\d{5,30}$/', $accountId)
+            ) continue;
+            $knownBusinessIds[$businessId] = true;
+            $knownAdAccountHints[$businessId][$accountId] = true;
+        }
+
+        // If we know exact BM->RK pairs, probe only those BMs. Unhinted stale
+        // Business IDs must not consume 15-20 seconds each before the target RK.
+        $liveBusinessHints = $knownAdAccountHints !== []
+            ? array_keys($knownAdAccountHints)
+            : array_keys($knownBusinessIds);
+
         try {
             $liveInventory = hierarchy_worker_live_inventory(
                 $profile,
-                array_keys($knownBusinessIds),
+                $liveBusinessHints,
                 array_map(
                     static fn($ids) => array_keys((array)$ids),
                     $knownAdAccountHints
@@ -1845,7 +1868,7 @@ if (
 if (strpos($php, '[remask-private-sync]') !== false) {
     throw new RuntimeException('obsolete pre-live BM hint stage still present');
 }
-fwrite(STDERR, "[workspace-sync-fix] live Meta sync is authoritative; no pre-live binding/state lookup\n");
+fwrite(STDERR, "[workspace-sync-fix] live Meta sync is authoritative; durable BM/RK state is navigation-hint only\n");
 fwrite(STDERR, "[workspace-sync-fix] last confirmed live snapshot persists for display only\n");
 fwrite(STDERR, "[workspace-sync-fix] response/applySnapshot contract enforced\n");
 fwrite(STDERR, "[workspace-sync-fix] clean sync stabilization ready; no diagnostic probe installed\n");
