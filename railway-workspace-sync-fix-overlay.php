@@ -393,19 +393,26 @@ async function syncSelection(){
   };
 
   const finishSyncResponse=(d,profile,business_id='')=>{
-    const applied=applySnapshot(d);
-    if(d && d.sync_complete===true && !applied){
+    // REMASK_FAILED_SYNC_NEVER_APPLIES_V1
+    if(!d || d.sync_complete!==true){
       return {
-        error:'Live Meta sync returned success but Workspace snapshot was not applied',
-        error_kind:'SNAPSHOT_NOT_APPLIED',
+        error:String(
+          (d && d.sync_error)
+          || 'Private Meta inventory was not fully confirmed'
+        ),
+        error_kind:String(
+          (d && d.sync_error_kind)
+          || 'PRIVATE_INCONCLUSIVE'
+        ),
         profile,
         business_id
       };
     }
-    if(d && d.sync_complete===false){
+    const applied=applySnapshot(d);
+    if(!applied){
       return {
-        error:String(d.sync_error||'Private Business Suite inventory was inconclusive'),
-        error_kind:String(d.sync_error_kind||'PRIVATE_INCONCLUSIVE'),
+        error:'Live Meta sync returned success but Workspace snapshot was not applied',
+        error_kind:'SNAPSHOT_NOT_APPLIED',
         profile,
         business_id
       };
@@ -467,27 +474,27 @@ async function syncSelection(){
 
   try{
     let results=[];
-    if(tab==='profiles'){
-      results=await concurrent(
-        rows,
-        3,
-        r=>syncProfileSafe(r.name),
-        (done,total)=>{$('workspaceStatus').textContent=`Синхронизация FB: ${done}/${total}`;setProgress(done,total)}
-      );
-    }else if(tab==='businesses'){
-      results=await concurrent(
-        rows,
-        3,
-        r=>syncBusinessSafe(r),
-        (done,total)=>{$('workspaceStatus').textContent=`Синхронизация BM: ${done}/${total}`;setProgress(done,total)}
-      );
-    }else if(tab==='ad_accounts'){
-      const profiles=[...new Set(rows.map(r=>r.profile).filter(Boolean))];
+    if(tab==='profiles' || tab==='businesses' || tab==='ad_accounts'){
+      // REMASK_PROFILE_WIDE_SYNC_V1
+      // User-facing Sync always refreshes complete FB profiles. Row scope is
+      // only for internal mutation verification, never for Workspace Sync.
+      const profiles=[...new Set(
+        rows.map(function(row){
+          if(tab==='profiles'){
+            return String((row && (row.name||row.profile))||'').trim();
+          }
+          return String((row && (row.profile||row.profile_name))||'').trim();
+        }).filter(Boolean)
+      )];
       results=await concurrent(
         profiles,
-        3,
+        1,
         p=>syncProfileSafe(p),
-        (done,total)=>{$('workspaceStatus').textContent=`Синхронизация RK: ${done}/${total}`;setProgress(done,total)}
+        (done,total)=>{
+          $('workspaceStatus').textContent=
+            `Синхронизация FB-профилей: ${done}/${total}`;
+          setProgress(done,total);
+        }
       );
     }else{
       try{
@@ -1286,11 +1293,13 @@ $syncProfileReplacement = <<<'PHP'
                 : [];
         }
 
-        // If we know exact BM->RK pairs, probe only those BMs. Unhinted stale
-        // Business IDs must not consume 15-20 seconds each before the target RK.
-        $liveBusinessHints = $knownAdAccountHints !== []
-            ? array_keys($knownAdAccountHints)
-            : array_keys($knownBusinessIds);
+        // REMASK_PROFILE_FULL_SYNC_SCOPE_V1
+        // business_ids is an explicit scoped-sync contract. Normal Workspace
+        // profile sync sends only BM->RK hints; it must still enumerate the
+        // complete current Business inventory.
+        $liveBusinessHints = $requestedBusinessId !== ''
+            ? [$requestedBusinessId]
+            : [];
 
         try {
             $liveInventory = hierarchy_worker_live_inventory(
@@ -1407,90 +1416,35 @@ $syncProfileReplacement = <<<'PHP'
             }
         }
 
+        // REMASK_SYNC_CONTRACT_V3
+        // Python owns current inventory truth. PHP must not reinterpret one
+        // successful BM as a whole-profile success or mix preserved rows into
+        // the current live attempt.
         $sessionReady = (($liveInventory['session_ready'] ?? false) === true);
+        $businessInventoryReady = (
+            ($liveInventory['business_inventory_ready'] ?? false) === true
+        );
+        $rkInventoryReady = (
+            ($liveInventory['rk_inventory_ready'] ?? false) === true
+        );
+        $rkMetadataReady = (
+            ($liveInventory['rk_metadata_ready'] ?? false) === true
+        );
         $pagesReady = (($liveInventory['pages_ready'] ?? false) === true);
-
-        // REMASK_PRESERVE_CONFIRMED_PAGES_ON_PARTIAL_V1
-        // A failed Page probe must never erase a previously confirmed FP list.
-        // Prefer the durable last-confirmed live snapshot over the transient
-        // display snapshot, then fall back to the latter for legacy data.
-        if (!$pagesReady && $pageRows === []) {
-            $preservedPages = array_values(array_filter(
-                (array)($confirmedLive['pages'] ?? []),
-                static fn($row) => is_array($row)
-            ));
-            if ($preservedPages === []) {
-                $preservedPages = array_values(array_filter(
-                    (array)($existingSnapshot['pages'] ?? []),
-                    static fn($row) => is_array($row)
-                ));
-            }
-            if ($preservedPages !== []) {
-                foreach ($preservedPages as &$preservedPage) {
-                    if (is_array($preservedPage)) {
-                        $preservedPage['_sync_preserved'] = true;
-                    }
-                }
-                unset($preservedPage);
-                $pageRows = $preservedPages;
-                $syncWarnings[] = 'Page inventory inconclusive; previous confirmed Pages preserved';
-            }
-        }
-
-        // If browser inventory was inconclusive, preserve the previous private
-        // snapshot rather than erasing working rows.
-        $liveReady = (($liveInventory['live_ready'] ?? false) === true);
-        if (!$liveReady && $adAccountRows === []) {
-            foreach ((array)($existingSnapshot['ad_accounts'] ?? []) as $row) {
-                if (!is_array($row)) continue;
-                $id = trim((string)($row['id'] ?? $row['account_id'] ?? ''));
-                if ($id === '') continue;
-                $row['_sync_preserved'] = true;
-                $adAccountRows[] = $row;
-            }
-            if ($businessRows === []) {
-                $businessRows = array_values(array_filter(
-                    (array)($existingSnapshot['businesses'] ?? []),
-                    static fn($row) => is_array($row)
-                ));
-            }
-            $syncWarnings[] = 'Live browser inventory was inconclusive; previous private snapshot preserved';
-        }
-
-        // REMASK_SCOPED_SYNC_MERGE_LIVE_SIBLINGS_V1
-        // A row-scoped BM sync proves only the requested Business. Merge that
-        // fresh result into the last confirmed live profile snapshot instead
-        // of replacing the whole profile inventory and accidentally deleting
-        // sibling BMs/RKs that were not part of this request.
-        if ($liveReady && $requestedBusinessId !== '') {
-            foreach ((array)($confirmedLive['businesses'] ?? []) as $row) {
-                if (!is_array($row)) continue;
-                $businessId = trim((string)($row['id'] ?? ''));
-                if (
-                    !preg_match('/^\d{5,30}$/', $businessId)
-                    || $businessId === $requestedBusinessId
-                    || isset($seenBusiness[$businessId])
-                ) continue;
-                $businessRows[] = $row;
-                $seenBusiness[$businessId] = true;
-            }
-
-            foreach ((array)($confirmedLive['ad_accounts'] ?? []) as $row) {
-                if (!is_array($row)) continue;
-                $businessId = trim((string)($row['business_id'] ?? ''));
-                $accountId = trim((string)($row['id'] ?? $row['account_id'] ?? ''));
-                if (str_starts_with($accountId, 'act_')) $accountId = substr($accountId, 4);
-                if (
-                    !preg_match('/^\d{5,30}$/', $businessId)
-                    || !preg_match('/^\d{5,30}$/', $accountId)
-                    || $businessId === $requestedBusinessId
-                    || isset($seenAccount[$accountId])
-                ) continue;
-                $row['_sync_preserved_sibling'] = true;
-                $adAccountRows[] = $row;
-                $seenAccount[$accountId] = true;
-            }
-        }
+        $syncScope = trim((string)(
+            $liveInventory['sync_scope']
+            ?? ($requestedBusinessId !== '' ? 'business_scoped' : 'profile_full')
+        ));
+        $workerSyncComplete = (
+            ($liveInventory['sync_complete'] ?? false) === true
+        );
+        $syncComplete = (
+            $workerSyncComplete
+            && $sessionReady
+            && $businessInventoryReady
+            && $rkInventoryReady
+            && $pagesReady
+        );
 
         $snapshot = $existingSnapshot;
         $snapshot['businesses'] = array_values($businessRows);
@@ -1500,26 +1454,50 @@ $syncProfileReplacement = <<<'PHP'
         $snapshot['pages'] = array_values($pageRows);
         $snapshot['pages_count'] = count($pageRows);
         $snapshot['pages_ready'] = $pagesReady;
-        $snapshot['pages_source'] = (string)($liveInventory['pages_source'] ?? '');
-
-        // REMASK_FULL_SYNC_REQUIRES_PAGES_V1
-        // "Sync complete" means the profile inventory needed by Workspace is
-        // actually refreshed: BM/RK plus Fan Pages. A BM-only success with
-        // pages_ready=false is partial and must not advertise a complete sync.
-        $syncComplete = ($liveReady && $pagesReady);
-
+        $snapshot['pages_confirmed_empty'] = (
+            ($liveInventory['pages_confirmed_empty'] ?? false) === true
+        );
+        $snapshot['pages_source'] = (string)(
+            $liveInventory['pages_source'] ?? ''
+        );
+        $snapshot['business_inventory_ready'] = $businessInventoryReady;
+        $snapshot['business_inventory_confirmed_empty'] = (
+            ($liveInventory['business_inventory_confirmed_empty'] ?? false) === true
+        );
+        $snapshot['rk_inventory_ready'] = $rkInventoryReady;
+        $snapshot['rk_metadata_ready'] = $rkMetadataReady;
+        $snapshot['rk_unconfirmed_business_ids'] = array_values(array_filter(
+            (array)($liveInventory['rk_unconfirmed_business_ids'] ?? []),
+            static fn($value) => is_scalar($value)
+        ));
+        $snapshot['sync_scope'] = $syncScope;
         $snapshot['sync_source'] = 'private_business_suite_browser';
-        $snapshot['live_inventory_available'] = $liveReady;
+        $snapshot['live_inventory_available'] = (
+            $businessInventoryReady && $rkInventoryReady
+        );
         $snapshot['confirmed_worker_bindings'] = $workerConfirmedCount;
         $snapshot['graph_preflight_available'] = false;
         $snapshot['sync_complete'] = $syncComplete;
-        $snapshot['sync_partial'] = (!$syncComplete && ($liveReady || $pagesReady));
+        $snapshot['sync_partial'] = (
+            !$syncComplete
+            && ($businessInventoryReady || $rkInventoryReady || $pagesReady)
+        );
         unset($snapshot['sync_error_kind'], $snapshot['sync_error']);
+
+        if (!$rkMetadataReady && $rkInventoryReady) {
+            $syncWarnings[] = (
+                'RK identity inventory confirmed; some RK metadata remains incomplete'
+            );
+        }
 
         if (!$syncComplete) {
             $snapshot['sync_error_kind'] = 'PRIVATE_INCONCLUSIVE';
-            if (!$liveReady) {
-                $snapshot['sync_error'] = 'Live private BM/RK inventory was not confirmed.';
+            if (!$sessionReady) {
+                $snapshot['sync_error'] = 'Private Facebook session was not confirmed.';
+            } elseif (!$businessInventoryReady) {
+                $snapshot['sync_error'] = 'Live Business inventory was not confirmed.';
+            } elseif (!$rkInventoryReady) {
+                $snapshot['sync_error'] = 'Live RK inventory was not fully confirmed.';
             } elseif (!$pagesReady) {
                 $snapshot['sync_error'] = 'Live Fan Page inventory was not confirmed.';
             } else {
@@ -1534,7 +1512,12 @@ $syncProfileReplacement = <<<'PHP'
                 $rowName = trim((string)($profileRow['name'] ?? $profileRow['profile'] ?? ''));
                 if ($rowName !== '' && $rowName !== $profile) continue;
                 $snapshot['profiles'][$i]['name'] = $rowName !== '' ? $rowName : $profile;
-                $snapshot['profiles'][$i]['synced'] = true;
+                // REMASK_SYNCED_ONLY_PROFILE_FULL_V1
+                $snapshot['profiles'][$i]['synced'] = (
+                    $syncComplete && $syncScope === 'profile_full'
+                )
+                    ? true
+                    : (($profileRow['synced'] ?? false) === true);
                 $snapshot['profiles'][$i]['bm_count'] = count($businessRows);
                 $snapshot['profiles'][$i]['rk_count'] = count($adAccountRows);
                 $snapshot['profiles'][$i]['ad_accounts_count'] = count($adAccountRows);
@@ -1579,7 +1562,9 @@ $syncProfileReplacement = <<<'PHP'
             // query official Graph permissions.
             $responseProfile = [
                 'name' => $profile,
-                'synced' => true,
+                'synced' => (
+                    $syncComplete && $syncScope === 'profile_full'
+                ),
                 'bm_count' => count($businessRows),
                 'rk_count' => count($adAccountRows),
                 'ad_accounts_count' => count($adAccountRows),
@@ -1604,7 +1589,8 @@ $syncProfileReplacement = <<<'PHP'
         // REMASK_PERSIST_ONLY_COMPLETE_META_SNAPSHOT_V1
         // Never replace the durable last-confirmed snapshot with a BM-only or
         // Page-only partial result. This is what previously erased FP rows.
-        if ($syncComplete) {
+        // REMASK_PERSIST_PROFILE_FULL_ONLY_V1
+        if ($syncComplete && $syncScope === 'profile_full') {
             hierarchy_live_snapshot_put(
                 $profile,
                 $businessRows,
@@ -1624,7 +1610,14 @@ $syncProfileReplacement = <<<'PHP'
             'summary' => 'Приватная синхронизация FB-профиля завершена',
             'details' => [
                 'sync_source' => 'private_business_suite_browser',
-                'live_ready' => $liveReady,
+                'live_ready' => (
+                    $businessInventoryReady && $rkInventoryReady
+                ),
+                'business_inventory_ready' => $businessInventoryReady,
+                'rk_inventory_ready' => $rkInventoryReady,
+                'rk_metadata_ready' => $rkMetadataReady,
+                'pages_inventory_ready' => $pagesReady,
+                'sync_scope' => $syncScope,
                 'worker_confirmed_bindings' => $workerConfirmedCount,
                 'sync_complete' => $syncComplete,
                 'businesses' => count($businessRows),
