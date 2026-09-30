@@ -344,7 +344,10 @@ RUN set -eux; \
     grep -q 'REMASK_LIVE_PAYLOAD_EXCLUDES_DURABLE_FALLBACK_V1' /opt/remask-python/main.py; \
     ! grep -q 'worker_confirmed_fallback' /opt/remask-python/main.py; \
     grep -q 'REMASK_FULL_PROFILE_SYNC_PAGES_V2' /opt/remask-python/main.py; \
-    grep -q 'discover_managed_pages(fast=False)' /opt/remask-python/main.py; \
+    grep -q 'REMASK_SYNC_PRIVATE_LIST_PAGES_FIRST_V1' /opt/remask-python/main.py; \
+    grep -q 'list_pages_via_private_graphql' /opt/remask-python/main.py; \
+    grep -q 'discover_managed_pages(fast=True)' /opt/remask-python/main.py; \
+    grep -q 'REMASK_PAGE_LIVE_RELAY_DISCOVERY_V1' /opt/remask-python/app/facebook_business_browser.py; \
     ! grep -q 'skipped_for_business_scoped_sync' /opt/remask-python/main.py; \
     grep -q 'ads_manager_hint_revalidation_unconfirmed' /opt/remask-python/main.py; \
     grep -q 'REMASK_DURABLE_BINDING_ACCOUNT_HINTS_V1' /opt/remask-python/main.py; \

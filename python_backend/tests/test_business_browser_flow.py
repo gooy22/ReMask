@@ -3,6 +3,7 @@ import inspect
 import os
 import tempfile
 import unittest
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -4282,6 +4283,78 @@ class BrowserPageDiscoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(pages[0]["id"], "123456789")
         self.assertEqual(pages[0]["name"], "Demo Fan Page")
         self.assertEqual(pages[0]["source"], "browser_dom_link")
+
+
+    async def test_discovers_pages_from_live_relay_response(self):
+        class _Request:
+            method = "POST"
+            url = "https://www.facebook.com/api/graphql/"
+            post_data = (
+                "fb_api_req_friendly_name=PagesCometManagedPagesListQuery"
+                "&doc_id=1234567890123456"
+                "&variables=%7B%7D"
+            )
+            headers = {}
+
+        class _Response:
+            url = "https://www.facebook.com/api/graphql/"
+            request = _Request()
+
+            async def text(self):
+                return json.dumps({
+                    "data": {
+                        "viewer": {
+                            "pages_can_administer": [
+                                {
+                                    "__typename": "Page",
+                                    "id": "987654321",
+                                    "name": "Relay Fan Page",
+                                    "category": "Community",
+                                }
+                            ]
+                        }
+                    }
+                })
+
+        class _RenderedPage:
+            def __init__(self):
+                self.listeners = {}
+
+            def on(self, event, callback):
+                self.listeners[event] = callback
+
+            def remove_listener(self, event, callback):
+                if self.listeners.get(event) is callback:
+                    self.listeners.pop(event, None)
+
+            async def wait_for_timeout(self, ms):
+                await asyncio.sleep(0)
+
+            async def content(self):
+                return "<html><body>No Page JSON needed</body></html>"
+
+        page = _RenderedPage()
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-pages-relay")
+        )
+        browser.page = page
+
+        async def _goto(url, **kwargs):
+            callback = page.listeners.get("response")
+            if callback:
+                callback(_Response())
+                await asyncio.sleep(0)
+            return url
+
+        browser._goto = AsyncMock(side_effect=_goto)
+
+        pages = await browser.discover_managed_pages(fast=True)
+
+        self.assertEqual(len(pages), 1)
+        self.assertEqual(pages[0]["id"], "987654321")
+        self.assertEqual(pages[0]["name"], "Relay Fan Page")
+        self.assertEqual(pages[0]["source"], "browser_relay_graphql")
+        self.assertNotIn("response", page.listeners)
 
 
 class _FakeBrowser:

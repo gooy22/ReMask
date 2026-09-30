@@ -15,6 +15,7 @@ from app.runner import WorkerPool
 from app.session import ProfileContextError, ProfileSession, ProxyCheckError
 from app.store import JobStore
 from app.facebook_business_browser import BrowserBusinessError, FacebookBusinessBrowser
+from app.facebook_page_discovery import PageDiscoveryError, list_pages_via_private_graphql
 from app.facebook_docids import (
     list_candidates,
     registry_view,
@@ -1652,67 +1653,145 @@ async def profile_live_inventory(
             )
 
             # REMASK_FULL_PROFILE_SYNC_PAGES_V2
-            # A profile Sync must refresh Fan Pages as well as BM/RK. Add-BM
-            # consumes this same last-confirmed snapshot for Primary Page, so a
-            # BM-scoped RK probe must never skip the profile-level Page inventory.
-            # Use all safe Your-Pages surfaces but keep the whole phase on a
-            # wall-clock deadline so Pages cannot reintroduce the old 64s stall.
+            # REMASK_SYNC_PRIVATE_LIST_PAGES_FIRST_V1
+            # Page inventory is part of the same profile Sync contract. Try the
+            # private Facebook Web persisted query first (cookies + proxy +
+            # fb_dtsg/doc_id; never official Graph API). If that route is stale
+            # or unavailable, fall back to one bounded live browser Your-Pages
+            # surface with Relay-response capture.
             stage='page_inventory'
             pages=[]
             pages_source=''
             pages_ready=False
             pages_started=time.monotonic()
-            try:
-                page_inventory_timeout=budget(18.0)
-                discovered_pages=await hard_deadline(
-                    browser.discover_managed_pages(fast=False),
-                    page_inventory_timeout,
-                )
-                pages=[
-                    {
-                        'id':str(row.get('id') or '').strip(),
-                        'name':str(row.get('name') or row.get('id') or '').strip(),
+            page_primary_error=''
+
+            def normalize_page_rows(rows: Any) -> list[dict[str, Any]]:
+                normalized=[]
+                seen=set()
+                for row in rows or []:
+                    if not isinstance(row,dict):
+                        continue
+                    page_id=str(row.get('id') or row.get('page_id') or '').strip()
+                    if not page_id.isdigit() or page_id in seen:
+                        continue
+                    seen.add(page_id)
+                    normalized.append({
+                        'id':page_id,
+                        'name':str(
+                            row.get('name')
+                            or row.get('page_name')
+                            or page_id
+                        ).strip(),
                         'category':str(row.get('category') or '').strip(),
-                        'tasks':[str(task) for task in (row.get('tasks') or []) if isinstance(task,(str,int))],
-                        'business_id':str(row.get('business_id') or '').strip(),
+                        'tasks':[
+                            str(task)
+                            for task in (row.get('tasks') or [])
+                            if isinstance(task,(str,int))
+                        ],
+                        'business_id':str(
+                            row.get('business_id')
+                            or (
+                                row.get('business',{}).get('id')
+                                if isinstance(row.get('business'),dict)
+                                else ''
+                            )
+                            or ''
+                        ).strip(),
                         'is_owned':row.get('is_owned'),
-                    }
-                    for row in (discovered_pages or [])
-                    if isinstance(row,dict)
-                    and str(row.get('id') or '').strip().isdigit()
-                ]
-                pages.sort(
+                        '_source':str(row.get('source') or '').strip(),
+                    })
+                normalized.sort(
                     key=lambda page:(
                         1 if str(page.get('business_id') or '').strip() else 0,
                         str(page.get('name') or '').casefold(),
                         str(page.get('id') or ''),
                     )
                 )
-                pages_source='facebook_business_browser'
+                return normalized
+
+            try:
+                private_pages_timeout=budget(7.0)
+                facebook_web=await profile_session.facebook_web()
+                private_page_result=await hard_deadline(
+                    list_pages_via_private_graphql(facebook_web),
+                    private_pages_timeout,
+                )
+                pages=normalize_page_rows(private_page_result.pages)
+                pages_source=str(
+                    private_page_result.source
+                    or 'facebook_web_graphql'
+                )
                 pages_ready=True
-            except asyncio.TimeoutError:
-                pages_source='facebook_business_browser_timeout'
-                warnings.append('Fan Page inventory timed out')
-                try:
-                    await browser.close()
-                except Exception:
-                    pass
-                try:
-                    profile_session._business_browser=None
-                except Exception:
-                    pass
-            except BrowserBusinessError as exc:
-                pages_source='facebook_business_browser_error'
-                warnings.append(f'Fan Page inventory: {exc.code}')
-            finally:
                 log.info(
-                    'live inventory profile=%s pages_ms=%d ready=%s pages=%d source=%s',
+                    'live inventory profile=%s private LIST_PAGES ready=True '
+                    'pages=%d source=%s',
                     clean_profile,
-                    int((time.monotonic()-pages_started)*1000),
-                    pages_ready,
                     len(pages),
                     pages_source,
                 )
+            except PageDiscoveryError as exc:
+                page_primary_error=f'{exc.__class__.__name__}: {exc}'
+                log.info(
+                    'live inventory profile=%s private LIST_PAGES unavailable=%s; '
+                    'using browser Relay fallback',
+                    clean_profile,
+                    str(exc)[:500],
+                )
+            except asyncio.TimeoutError:
+                page_primary_error='PRIVATE_LIST_PAGES_TIMEOUT'
+                log.warning(
+                    'live inventory profile=%s private LIST_PAGES timed out; '
+                    'using browser Relay fallback',
+                    clean_profile,
+                )
+            except Exception as exc:
+                page_primary_error=f'{exc.__class__.__name__}: {exc}'
+                log.warning(
+                    'live inventory profile=%s private LIST_PAGES failed=%s; '
+                    'using browser Relay fallback',
+                    clean_profile,
+                    page_primary_error[:500],
+                )
+
+            if not pages_ready:
+                try:
+                    page_inventory_timeout=budget(11.0)
+                    discovered_pages=await hard_deadline(
+                        browser.discover_managed_pages(fast=True),
+                        page_inventory_timeout,
+                    )
+                    pages=normalize_page_rows(discovered_pages)
+                    pages_source='facebook_business_browser_relay'
+                    pages_ready=True
+                except asyncio.TimeoutError:
+                    pages_source='facebook_business_browser_timeout'
+                    warnings.append('Fan Page inventory timed out')
+                    try:
+                        await browser.close()
+                    except Exception:
+                        pass
+                    try:
+                        profile_session._business_browser=None
+                    except Exception:
+                        pass
+                except BrowserBusinessError as exc:
+                    pages_source='facebook_business_browser_error'
+                    warnings.append(f'Fan Page inventory: {exc.code}')
+                    page_primary_error=(
+                        page_primary_error + ' | ' if page_primary_error else ''
+                    ) + f'{exc.code}: {exc}'
+
+            log.info(
+                'live inventory profile=%s pages_ms=%d ready=%s pages=%d '
+                'source=%s primary_error=%s',
+                clean_profile,
+                int((time.monotonic()-pages_started)*1000),
+                pages_ready,
+                len(pages),
+                pages_source,
+                page_primary_error[:700],
+            )
 
             # REMASK_LIVE_TARGET_SET_REQUIRED_V1
             live_ready=_live_inventory_targets_ready(business_map,live_business_ids)

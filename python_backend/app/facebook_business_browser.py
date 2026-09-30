@@ -2289,18 +2289,34 @@ class FacebookBusinessBrowser:
 
         self._release_semaphore()
 
-    async def _goto(self, url: str) -> str:
+    async def _goto(
+        self,
+        url: str,
+        *,
+        timeout_ms: int | None = None,
+        wait_until: str = "domcontentloaded",
+        settle_ms: int = 900,
+    ) -> str:
         if self.page is None:
             await self.open()
+
+        navigation_timeout = (
+            self.timeout_ms
+            if timeout_ms is None
+            else max(1000, int(timeout_ms))
+        )
+        navigation_wait_until = _clean(wait_until) or "domcontentloaded"
+        navigation_settle_ms = max(0, int(settle_ms))
 
         for attempt in range(2):
             try:
                 await self.page.goto(
                     url,
-                    wait_until="domcontentloaded",
-                    timeout=self.timeout_ms,
+                    wait_until=navigation_wait_until,
+                    timeout=navigation_timeout,
                 )
-                await self.page.wait_for_timeout(900)
+                if navigation_settle_ms:
+                    await self.page.wait_for_timeout(navigation_settle_ms)
                 await self._assert_authenticated()
                 return _clean(self.page.url)
 
@@ -4592,13 +4608,21 @@ class FacebookBusinessBrowser:
         fast: bool = False,
     ) -> list[dict[str, Any]]:
         """
-        Discover Fan Pages from the authenticated browser session.
+        Discover Pages from the authenticated browser session.
 
-        This is read-only and is used when the PHP/profile cache has no Pages.
-        It deliberately inspects Meta's rendered Pages surfaces instead of
-        issuing a reconstructed LIST_PAGES mutation.
+        REMASK_PAGE_LIVE_RELAY_DISCOVERY_V1
+        Prefer live read-only Relay responses emitted by Facebook's own
+        "Your Pages" surface. DOM/embedded JSON remains a fallback. This keeps
+        Page discovery on the same authenticated browser transport while
+        avoiding a 45s DOMContentLoaded wait on a modern SPA.
         """
-        from .facebook_page_discovery import _extract_pages_from_browser_document
+        from .facebook_page_discovery import (
+            _extract_known_page_lists,
+            _extract_pages_from_browser_document,
+        )
+
+        if self.page is None:
+            await self.open()
 
         surfaces = (
             "https://www.facebook.com/pages/?category=your_pages",
@@ -4608,123 +4632,276 @@ class FacebookBusinessBrowser:
             "https://www.facebook.com/pages/",
         )
         merged: dict[str, dict[str, Any]] = {}
+        relay_pages: dict[str, dict[str, Any]] = {}
         diagnostics: list[str] = []
+        response_tasks: set[asyncio.Task[Any]] = set()
+        response_listener_installed = False
 
-        for url in surfaces:
+        def merge_page(
+            target: dict[str, dict[str, Any]],
+            row: Any,
+            *,
+            source: str = "",
+        ) -> None:
+            if not isinstance(row, dict):
+                return
+            page_id = _digits(row.get("id") or row.get("page_id"))
+            name = _clean(row.get("name") or row.get("page_name"))
+            if not page_id or not name:
+                return
+            normalized = dict(row)
+            normalized["id"] = page_id
+            normalized["name"] = name[:240]
+            if source and not _clean(normalized.get("source")):
+                normalized["source"] = source
+            current = target.get(page_id)
+            if current is None:
+                target[page_id] = normalized
+                return
+            for key, value in normalized.items():
+                if key not in current or current.get(key) in ("", None, [], {}):
+                    current[key] = value
+
+        async def inspect_page_response(response: Any) -> None:
             try:
-                await self._goto(url)
-                await self.page.wait_for_timeout(1200)
-                document = await self.page.content()
-            except BrowserBusinessError:
-                raise
+                url = _clean(getattr(response, "url", ""))
+                if "graphql" not in url.casefold():
+                    return
+                request = getattr(response, "request", None)
+                meta = _request_graphql_meta(request) if request is not None else {}
+                friendly = _clean(meta.get("friendly_name"))
+                folded_friendly = friendly.casefold()
+                if any(
+                    marker in folded_friendly
+                    for marker in ("mutation", "create", "update", "delete")
+                ):
+                    return
+
+                raw = await response.text()
+                folded_raw = str(raw or "").casefold()
+                page_inventory_shape = (
+                    (
+                        "page" in folded_friendly
+                        and any(
+                            marker in folded_friendly
+                            for marker in (
+                                "manage",
+                                "admin",
+                                "your",
+                                "switch",
+                                "list",
+                                "profile",
+                            )
+                        )
+                    )
+                    or any(
+                        marker in folded_raw
+                        for marker in (
+                            "pages_can_administer",
+                            "pagescanadminister",
+                            "owned_pages",
+                            "managed_pages",
+                            "pages_you_manage",
+                        )
+                    )
+                )
+                if not page_inventory_shape:
+                    return
+
+                payload = _decode_graphql_text(raw)
+                chunks = payload if isinstance(payload, list) else [payload]
+                found = 0
+                for chunk in chunks:
+                    if not isinstance(chunk, dict):
+                        continue
+                    for row in _extract_known_page_lists(chunk):
+                        before = len(relay_pages)
+                        merge_page(
+                            relay_pages,
+                            row,
+                            source="browser_relay_graphql",
+                        )
+                        if len(relay_pages) > before:
+                            found += 1
+                if found:
+                    diagnostics.append(
+                        "relay "
+                        f"friendly={friendly[:120] or '-'} "
+                        f"doc={_clean(meta.get('doc_id'))[:48] or '-'} "
+                        f"pages={len(relay_pages)}"
+                    )
             except Exception as exc:
                 diagnostics.append(
-                    f"{url}: {exc.__class__.__name__}: {exc}"
+                    f"relay response {exc.__class__.__name__}: {_clean(exc)[:240]}"
                 )
-                continue
 
-            pages = _extract_pages_from_browser_document(document)
-
-            # Current Facebook "Your Pages" surfaces may render Page cards as
-            # normal anchors without a parseable Page JSON object. Collect
-            # those visible links too; this is read-only DOM inspection.
-            link_rows: list[dict[str, str]] = []
+        def on_response(response: Any) -> None:
             try:
-                link_rows = await self.page.locator(
-                    'main a[href], [role="main"] a[href], a[href]'
-                ).evaluate_all(
-                    """els => els.slice(0, 2500).map(el => ({
-                        href: el.href || '',
-                        text: (
-                            el.innerText
-                            || el.getAttribute('aria-label')
-                            || el.getAttribute('title')
-                            || ''
-                        ).replace(/\\s+/g, ' ').trim()
-                    })).filter(row => row.href && row.text)"""
-                )
-            except Exception as exc:
-                diagnostics.append(
-                    f"{url}: anchor scan {exc.__class__.__name__}"
-                )
+                task = asyncio.create_task(inspect_page_response(response))
+                response_tasks.add(task)
+                task.add_done_callback(response_tasks.discard)
+            except Exception:
+                return
 
-            link_pages: list[dict[str, Any]] = []
-            seen_link_ids: set[str] = set()
-            link_patterns = (
-                re.compile(r"[?&](?:page_id|id)=(\d{5,25})(?:&|$)", re.IGNORECASE),
-                re.compile(r"/pages/(?:[^/?#]+/)?(\d{5,25})(?:[/?#]|$)", re.IGNORECASE),
-            )
-            for link_row in link_rows:
-                if not isinstance(link_row, dict):
-                    continue
-                href = _clean(link_row.get("href"))
-                name = _clean(link_row.get("text"))
-                if not href or not name:
-                    continue
-                page_id = ""
-                for pattern in link_patterns:
-                    match = pattern.search(href)
-                    if match:
-                        page_id = _digits(match.group(1))
-                        if page_id:
+        if hasattr(self.page, "on"):
+            try:
+                self.page.on("response", on_response)
+                response_listener_installed = True
+            except Exception:
+                response_listener_installed = False
+
+        try:
+            for url in surfaces:
+                try:
+                    # The generic _goto default is intentionally generous for
+                    # mutation wizards. Page inventory is read-only and must not
+                    # inherit that 45s timeout.
+                    await self._goto(
+                        url,
+                        timeout_ms=6500,
+                        wait_until="commit",
+                        settle_ms=650,
+                    )
+
+                    relay_deadline = time.monotonic() + 2.4
+                    while time.monotonic() < relay_deadline:
+                        if relay_pages:
                             break
-                if not page_id or page_id in seen_link_ids:
+                        await self.page.wait_for_timeout(180)
+
+                    if response_tasks:
+                        await _settle_tasks_bounded(
+                            response_tasks,
+                            timeout_seconds=0.5,
+                            cancel_pending=False,
+                        )
+
+                    if relay_pages:
+                        for row in relay_pages.values():
+                            merge_page(merged, row)
+                        diagnostics.append(
+                            f"{url}: relay_pages={len(relay_pages)}"
+                        )
+                        break
+
+                    document = await self.page.content()
+                except BrowserBusinessError:
+                    raise
+                except Exception as exc:
+                    diagnostics.append(
+                        f"{url}: {exc.__class__.__name__}: {exc}"
+                    )
                     continue
 
-                # Do not treat generic Facebook navigation/profile anchors as
-                # Pages unless this is a Pages surface or the URL itself says
-                # /pages/. All scanned URLs here are explicit Your Pages/Page
-                # surfaces, so this condition remains intentionally narrow.
-                if "/pages/" not in href.lower() and "category=your_pages" not in url.lower():
-                    continue
+                pages = _extract_pages_from_browser_document(document)
+                json_page_count = len(pages)
 
-                seen_link_ids.add(page_id)
-                link_pages.append({
-                    "id": page_id,
-                    "name": name[:240],
-                    "category": "",
-                    "source": "browser_dom_link",
-                })
+                # Only run the broader anchor scan when embedded/Relay state did
+                # not already identify a Page.
+                link_pages: list[dict[str, Any]] = []
+                if not pages:
+                    link_rows: list[dict[str, str]] = []
+                    try:
+                        link_rows = await self.page.locator(
+                            'main a[href], [role="main"] a[href], a[href]'
+                        ).evaluate_all(
+                            """els => els.slice(0, 900).map(el => ({
+                                href: el.href || '',
+                                text: (
+                                    el.innerText
+                                    || el.getAttribute('aria-label')
+                                    || el.getAttribute('title')
+                                    || ''
+                                ).replace(/\\s+/g, ' ').trim()
+                            })).filter(row => row.href && row.text)"""
+                        )
+                    except Exception as exc:
+                        diagnostics.append(
+                            f"{url}: anchor scan {exc.__class__.__name__}"
+                        )
 
-            if link_pages:
-                pages.extend(link_pages)
+                    seen_link_ids: set[str] = set()
+                    link_patterns = (
+                        re.compile(
+                            r"[?&](?:page_id|id)=(\d{5,25})(?:&|$)",
+                            re.IGNORECASE,
+                        ),
+                        re.compile(
+                            r"/pages/(?:[^/?#]+/)?(\d{5,25})(?:[/?#]|$)",
+                            re.IGNORECASE,
+                        ),
+                    )
+                    for link_row in link_rows:
+                        if not isinstance(link_row, dict):
+                            continue
+                        href = _clean(link_row.get("href"))
+                        name = _clean(link_row.get("text"))
+                        if not href or not name:
+                            continue
+                        page_id = ""
+                        for pattern in link_patterns:
+                            match = pattern.search(href)
+                            if match:
+                                page_id = _digits(match.group(1))
+                                if page_id:
+                                    break
+                        if not page_id or page_id in seen_link_ids:
+                            continue
+                        if (
+                            "/pages/" not in href.lower()
+                            and "category=your_pages" not in url.lower()
+                        ):
+                            continue
+                        seen_link_ids.add(page_id)
+                        link_pages.append({
+                            "id": page_id,
+                            "name": name[:240],
+                            "category": "",
+                            "source": "browser_dom_link",
+                        })
 
-            diagnostics.append(
-                f"{url}: bytes={len(document)} "
-                f"json_pages={len(_extract_pages_from_browser_document(document))} "
-                f"link_pages={len(link_pages)} merged_candidates={len(pages)}"
+                for row in [*pages, *link_pages]:
+                    merge_page(merged, row)
+
+                diagnostics.append(
+                    f"{url}: bytes={len(document)} "
+                    f"json_pages={json_page_count} "
+                    f"link_pages={len(link_pages)} "
+                    f"merged_candidates={len(merged)}"
+                )
+                if merged:
+                    break
+
+            if not merged:
+                diag = await self._diagnostic("browser_pages_empty")
+                diag["page_discovery"] = diagnostics[-10:]
+                raise BrowserBusinessError(
+                    "FAN_PAGES_NOT_DISCOVERED",
+                    "Authenticated Facebook browser surfaces returned no parseable Fan Pages.",
+                    retryable=False,
+                    diagnostic=diag,
+                )
+
+            return sorted(
+                merged.values(),
+                key=lambda row: _clean(row.get("name")).casefold(),
             )
-            for row in pages:
-                if not isinstance(row, dict):
-                    continue
-                page_id = _digits(row.get("id"))
-                if not page_id:
-                    continue
-                current = merged.get(page_id)
-                if current is None:
-                    merged[page_id] = dict(row)
-                    continue
-                for key, value in row.items():
-                    if key not in current or current.get(key) in ("", None, [], {}):
-                        current[key] = value
-
-            if merged:
-                break
-
-        if not merged:
-            diag = await self._diagnostic("browser_pages_empty")
-            diag["page_discovery"] = diagnostics[-8:]
-            raise BrowserBusinessError(
-                "FAN_PAGES_NOT_DISCOVERED",
-                "Authenticated Facebook browser surfaces returned no parseable Fan Pages.",
-                retryable=False,
-                diagnostic=diag,
-            )
-
-        return sorted(
-            merged.values(),
-            key=lambda row: _clean(row.get("name")).casefold(),
-        )
+        finally:
+            if (
+                response_listener_installed
+                and self.page is not None
+                and hasattr(self.page, "remove_listener")
+            ):
+                try:
+                    self.page.remove_listener("response", on_response)
+                except Exception:
+                    pass
+            if response_tasks:
+                await _settle_tasks_bounded(
+                    response_tasks,
+                    timeout_seconds=0.5,
+                    cancel_pending=True,
+                )
 
     async def preflight(self) -> BrowserPreflightResult:
         diagnostics: list[str] = []
