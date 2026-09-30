@@ -485,10 +485,15 @@ async function syncSelection(){
         (done,total)=>{$('workspaceStatus').textContent=`Синхронизация FB: ${done}/${total}`;setProgress(done,total)}
       );
     }else if(tab==='businesses'){
+      // REMASK_BUSINESS_TAB_FULL_PROFILE_SYNC_V1
+      // BM/RK/FP belong to one profile inventory. Selecting one or several BM
+      // rows must refresh the whole owning profile once, not create a partial
+      // snapshot scoped to one BM.
+      const profiles=[...new Set(rows.map(r=>r.profile).filter(Boolean))];
       results=await concurrent(
-        rows,
+        profiles,
         syncConcurrency,
-        r=>syncBusinessSafe(r),
+        p=>syncProfileSafe(p),
         (done,total)=>{$('workspaceStatus').textContent=`Синхронизация BM: ${done}/${total}`;setProgress(done,total)}
       );
     }else if(tab==='ad_accounts'){
