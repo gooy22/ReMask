@@ -1613,21 +1613,21 @@ async def profile_live_inventory(
                 )
             )
 
-            # REMASK_SYNC_SINGLE_SOURCE_PAGES_V1
-            # Sync is the only inventory fetch. Reuse this browser session to
-            # collect Pages once; downstream UI reads the persisted snapshot.
+            # REMASK_FULL_PROFILE_SYNC_PAGES_V2
+            # A profile Sync must refresh Fan Pages as well as BM/RK. Add-BM
+            # consumes this same last-confirmed snapshot for Primary Page, so a
+            # BM-scoped RK probe must never skip the profile-level Page inventory.
+            # Use all safe Your-Pages surfaces but keep the whole phase on a
+            # wall-clock deadline so Pages cannot reintroduce the old 64s stall.
             stage='page_inventory'
             pages=[]
             pages_source=''
             pages_ready=False
             pages_started=time.monotonic()
             try:
-                if requested_business_ids:
-                    pages_source='skipped_for_business_scoped_sync'
-                    raise StopAsyncIteration()
                 discovered_pages=await hard_deadline(
-                    browser.discover_managed_pages(fast=True),
-                    14.0,
+                    browser.discover_managed_pages(fast=False),
+                    18.0,
                 )
                 pages=[
                     {
@@ -1651,8 +1651,6 @@ async def profile_live_inventory(
                 )
                 pages_source='facebook_business_browser'
                 pages_ready=True
-            except StopAsyncIteration:
-                pass
             except asyncio.TimeoutError:
                 pages_source='facebook_business_browser_timeout'
                 warnings.append('Fan Page inventory timed out')
