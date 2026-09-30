@@ -18,7 +18,7 @@ COPY python_backend /opt/remask-python
 RUN /opt/remask-venv/bin/python -m compileall -q /opt/remask-python \
     && cd /opt/remask-python \
     && /opt/remask-venv/bin/python -c "import fb_worker; from app.session import ProfileSession; from app.facebook_business_browser import FacebookBusinessBrowser; from app.provisioning.business_handler import business_handler; from app.provisioning.ad_account_handler import ad_account_handler; assert fb_worker.WebSessionManager is fb_worker.FacebookWebSession; assert callable(ProfileSession.facebook_business_browser)" \
-    && /opt/remask-venv/bin/python -m unittest -q tests.test_fb_worker_bootstrap tests.test_business_docid_discovery tests.test_v14_docid_policy tests.test_fb_worker_request_envelope tests.test_business_create_exact_envelope tests.test_business_browser_flow tests.test_business_create_observer tests.test_ad_account_create tests.test_fan_page_create tests.test_workspace_bindings tests.test_job_store_recovery tests.test_ads_manager_scope_sync \
+    && /opt/remask-venv/bin/python -m unittest -q tests.test_fb_worker_bootstrap tests.test_business_docid_discovery tests.test_v14_docid_policy tests.test_fb_worker_request_envelope tests.test_business_create_exact_envelope tests.test_business_browser_flow tests.test_business_create_observer tests.test_ad_account_create tests.test_fan_page_create tests.test_workspace_bindings tests.test_job_store_recovery tests.test_ads_manager_scope_sync tests.test_live_sync_contract \
     && grep -q 'class FacebookBusinessBrowser' /opt/remask-python/app/facebook_business_browser.py \
     && grep -q 'DIRECT_CREATE_URL = "https://business.facebook.com/create"' /opt/remask-python/app/facebook_business_browser.py \
     && grep -q 'business_guarded=' /opt/remask-python/app/runner.py \
@@ -117,6 +117,10 @@ RUN set -eux; \
     grep -q 'existingProfile=state.inventory.profiles.find' /var/www/html/scripts/workspace.js; \
     grep -q 'REMASK_SYNC_CSRF_SAFE_TRANSPORT_V1' /var/www/html/scripts/workspace.js; \
     grep -q 'REMASK_SYNC_RESULT_RECONCILIATION_V1' /var/www/html/scripts/workspace.js; \
+    grep -q 'REMASK_FAILED_SYNC_DOES_NOT_MUTATE_WORKSPACE_V1' /var/www/html/scripts/workspace.js; \
+    grep -q 'REMASK_SYNC_BROWSER_SERIAL_V1' /var/www/html/scripts/workspace.js; \
+    grep -q 'const syncConcurrency=1;' /var/www/html/scripts/workspace.js; \
+    /opt/remask-venv/bin/python -c "from pathlib import Path; s=Path('/var/www/html/scripts/workspace.js').read_text(encoding='utf-8'); a=s.index('const finishSyncResponse='); b=s.index('const syncProfileSafe=',a); q=s[a:b]; assert q.index('sync_complete===false') < q.index('applySnapshot(d)'), 'failed sync mutates Workspace before failure check'" ; \
     grep -q 'REMASK_SYNC_CSRF_SAFE_TRANSPORT_V1' /var/www/html/scripts/workspace.js; \
     grep -q "action:'sync_result'" /var/www/html/scripts/workspace.js; \
     grep -q "hierarchy_sync_result_put" /var/www/html/ajax/metaHierarchy.php; \
@@ -323,6 +327,8 @@ RUN set -eux; \
     grep -q 'REMASK_ADS_REQUEST_SCOPE_EXPECTED_CONFIRM_V1' /opt/remask-python/app/facebook_business_browser.py; \
     grep -q 'REMASK_AD_ACCOUNT_COMPARE_DIGITS_V1' /opt/remask-python/app/facebook_business_browser.py; \
     grep -q 'REMASK_BROWSER_CLOSE_HARD_DEADLINE_V1' /opt/remask-python/app/facebook_business_browser.py; \
+    grep -q 'REMASK_BROWSER_OPEN_CANCEL_CLEANUP_V1' /opt/remask-python/app/facebook_business_browser.py; \
+    grep -q 'REMASK_BROWSER_OPEN_EARLY_CANCEL_CLEANUP_V1' /opt/remask-python/app/facebook_business_browser.py; \
     grep -q 'business_suite_private_inventory' /opt/remask-python/main.py; \
     grep -q "'pages':pages" /opt/remask-python/main.py; \
     grep -q "'pages' => array_values(\$cleanPages)" /var/www/html/ajax/metaHierarchy.php; \
@@ -331,12 +337,21 @@ RUN set -eux; \
     grep -q 'REMASK_CONFIRMED_HINT_FAST_REVALIDATION_V1' /opt/remask-python/main.py; \
     grep -q 'REMASK_REQUESTED_BUSINESS_WORKER_SCOPE_V1' /opt/remask-python/main.py; \
     grep -q 'REMASK_HARD_DEADLINE_TASK_V1' /opt/remask-python/main.py; \
+    grep -q 'REMASK_LIVE_INVENTORY_TOTAL_BUDGET_V1' /opt/remask-python/main.py; \
+    grep -q 'REMASK_SYNC_RESOLVER_BOUNDED_V1' /opt/remask-python/main.py; \
+    grep -q 'browser_open_timeout=budget(24.0)' /opt/remask-python/main.py; \
+    grep -q 'REMASK_LIVE_TARGET_SET_REQUIRED_V1' /opt/remask-python/main.py; \
+    grep -q 'REMASK_LIVE_PAYLOAD_EXCLUDES_DURABLE_FALLBACK_V1' /opt/remask-python/main.py; \
+    ! grep -q 'worker_confirmed_fallback' /opt/remask-python/main.py; \
     grep -q 'REMASK_FULL_PROFILE_SYNC_PAGES_V2' /opt/remask-python/main.py; \
-    grep -q 'discover_managed_pages(fast=False)' /opt/remask-python/main.py; \
+    grep -q 'REMASK_SYNC_PRIVATE_LIST_PAGES_FIRST_V1' /opt/remask-python/main.py; \
+    grep -q 'list_pages_via_private_graphql' /opt/remask-python/main.py; \
+    grep -q 'discover_managed_pages(fast=True)' /opt/remask-python/main.py; \
+    grep -q 'REMASK_PAGE_LIVE_RELAY_DISCOVERY_V1' /opt/remask-python/app/facebook_business_browser.py; \
     ! grep -q 'skipped_for_business_scoped_sync' /opt/remask-python/main.py; \
     grep -q 'ads_manager_hint_revalidation_unconfirmed' /opt/remask-python/main.py; \
     grep -q 'REMASK_DURABLE_BINDING_ACCOUNT_HINTS_V1' /opt/remask-python/main.py; \
-    grep -q 'REMASK_EXACT_HINTS_SKIP_FULL_BM_DISCOVERY_V1' /opt/remask-python/main.py; \
+    grep -q 'REMASK_EXACT_HINTS_REMAIN_REQUIRED_TARGETS_V1' /opt/remask-python/main.py; \
     grep -q 'Business Suite discovery skipped' /opt/remask-python/main.py; \
     grep -q 'ads_manager_live_act_matches_confirmed_snapshot' /opt/remask-python/app/facebook_business_browser.py; \
     grep -q 'hierarchy_live_snapshot_get($profile)' /var/www/html/ajax/metaHierarchy.php; \
