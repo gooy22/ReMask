@@ -1528,10 +1528,10 @@ async def profile_live_inventory(
             result={
                 'ok':True,
                 'profile_id':clean_profile,
-                // REMASK_SYNC_SESSION_READY_V1
-                // Reaching this result means resolver + proxy-bound browser +
-                // authenticated private session completed normally, even if a
-                // particular BM/RK selector was temporarily inconclusive.
+                # REMASK_SYNC_SESSION_READY_V1
+                # Reaching this result means resolver + proxy-bound browser +
+                # authenticated private session completed normally, even if a
+                # particular BM/RK selector was temporarily inconclusive.
                 'session_ready':True,
                 'live_ready':live_ready,
                 'businesses':businesses,
