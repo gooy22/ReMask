@@ -315,10 +315,14 @@ RUN set -eux; \
     grep -q 'hierarchy_worker_live_inventory' /var/www/html/ajax/metaHierarchy.php; \
     grep -q 'REMASK_PRIVATE_BUSINESS_INVENTORY_V1' /opt/remask-python/app/facebook_business_browser.py; \
     grep -q 'business_suite_private_inventory' /opt/remask-python/main.py; \
-    grep -q 'REMASK_KNOWN_GOOD_LIVE_SYNC_V1' /opt/remask-python/main.py; \
+    grep -q 'REMASK_SYNC_SINGLE_SOURCE_PAGES_V1' /opt/remask-python/main.py; \
+    grep -q "'pages':pages" /opt/remask-python/main.py; \
     grep -q "'pages' => array_values(\$cleanPages)" /var/www/html/ajax/metaHierarchy.php; \
     ! grep -q "rmx_pwp_worker_preflight" /var/www/html/ajax/pythonWorkerPages.php; \
     grep -q 'ad_account_hints' /opt/remask-python/main.py; \
+    grep -q 'REMASK_CONFIRMED_HINT_FAST_REVALIDATION_V1' /opt/remask-python/main.py; \
+    grep -q 'Business Suite discovery skipped' /opt/remask-python/main.py; \
+    grep -q 'ads_manager_live_act_matches_confirmed_snapshot' /opt/remask-python/app/facebook_business_browser.py; \
     grep -q 'hierarchy_live_snapshot_get($profile)' /var/www/html/ajax/metaHierarchy.php; \
     grep -q 'graph_preflight_available' /var/www/html/ajax/metaHierarchy.php; \
     grep -q "'token_status'" /var/www/html/ajax/metaHierarchy.php; \
