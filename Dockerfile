@@ -321,6 +321,8 @@ RUN set -eux; \
     ! grep -q "rmx_pwp_worker_preflight" /var/www/html/ajax/pythonWorkerPages.php; \
     grep -q 'ad_account_hints' /opt/remask-python/main.py; \
     grep -q 'REMASK_CONFIRMED_HINT_FAST_REVALIDATION_V1' /opt/remask-python/main.py; \
+    grep -q 'REMASK_DURABLE_BINDING_ACCOUNT_HINTS_V1' /opt/remask-python/main.py; \
+    grep -q 'REMASK_EXACT_HINTS_SKIP_FULL_BM_DISCOVERY_V1' /opt/remask-python/main.py; \
     grep -q 'Business Suite discovery skipped' /opt/remask-python/main.py; \
     grep -q 'ads_manager_live_act_matches_confirmed_snapshot' /opt/remask-python/app/facebook_business_browser.py; \
     grep -q 'hierarchy_live_snapshot_get($profile)' /var/www/html/ajax/metaHierarchy.php; \
