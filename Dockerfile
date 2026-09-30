@@ -328,6 +328,7 @@ RUN set -eux; \
     grep -q 'REMASK_AD_ACCOUNT_COMPARE_DIGITS_V1' /opt/remask-python/app/facebook_business_browser.py; \
     grep -q 'REMASK_BROWSER_CLOSE_HARD_DEADLINE_V1' /opt/remask-python/app/facebook_business_browser.py; \
     grep -q 'REMASK_BROWSER_OPEN_CANCEL_CLEANUP_V1' /opt/remask-python/app/facebook_business_browser.py; \
+    grep -q 'REMASK_BROWSER_OPEN_EARLY_CANCEL_CLEANUP_V1' /opt/remask-python/app/facebook_business_browser.py; \
     grep -q 'business_suite_private_inventory' /opt/remask-python/main.py; \
     grep -q "'pages':pages" /opt/remask-python/main.py; \
     grep -q "'pages' => array_values(\$cleanPages)" /var/www/html/ajax/metaHierarchy.php; \

@@ -1963,7 +1963,15 @@ class FacebookBusinessBrowser:
             except Exception:
                 pass
 
-        stale_cleanup = await _reap_stale_chromium_processes()
+        # REMASK_BROWSER_OPEN_EARLY_CANCEL_CLEANUP_V1
+        # The browser semaphore is already owned here. Cancellation can arrive
+        # before the Playwright startup try/except below, so release the lease
+        # explicitly if the pre-open stale-process sweep is interrupted.
+        try:
+            stale_cleanup = await _reap_stale_chromium_processes()
+        except asyncio.CancelledError:
+            self._release_semaphore()
+            raise
         if stale_cleanup.get("found"):
             try:
                 import logging
@@ -2005,12 +2013,15 @@ class FacebookBusinessBrowser:
             name=f"remask-browser-lease-{self.profile_id or 'unknown'}",
         )
 
-        self._profile_lock = await _get_profile_lock(self.profile_id)
         try:
+            self._profile_lock = await _get_profile_lock(self.profile_id)
             await asyncio.wait_for(
                 self._profile_lock.acquire(),
                 timeout=30.0,
             )
+        except asyncio.CancelledError:
+            await self.close()
+            raise
         except asyncio.TimeoutError as exc:
             await self.close()
             raise BrowserBusinessError(
@@ -2026,7 +2037,9 @@ class FacebookBusinessBrowser:
         try:
             from playwright.async_api import async_playwright
         except Exception as exc:
-            self._release_semaphore()
+            # The profile lock is already held here; close() must release both
+            # the profile lock and the global semaphore.
+            await self.close()
             raise BrowserBusinessError(
                 "BROWSER_UNAVAILABLE",
                 "Playwright is unavailable in the worker image.",

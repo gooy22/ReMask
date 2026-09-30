@@ -44,6 +44,9 @@ class LiveSyncContractTests(unittest.TestCase):
         self.assertLess(cancel_index, generic_index)
         self.assertLess(cancel_index, cleanup_index)
         self.assertIn("REMASK_BROWSER_OPEN_CANCEL_CLEANUP_V1", source)
+        self.assertIn("REMASK_BROWSER_OPEN_EARLY_CANCEL_CLEANUP_V1", source)
+        self.assertGreaterEqual(source.count("except asyncio.CancelledError:"), 3)
+        self.assertIn("await self.close()", source)
 
 
 if __name__ == "__main__":
