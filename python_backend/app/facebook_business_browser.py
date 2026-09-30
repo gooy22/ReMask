@@ -5483,6 +5483,13 @@ class FacebookBusinessBrowser:
                 if selector_eval_task not in done:
                     selector_timed_out = True
                     selector_eval_task.cancel()
+                    selector_eval_task.add_done_callback(
+                        lambda task: (
+                            None
+                            if task.cancelled()
+                            else task.exception()
+                        )
+                    )
                     selector_probe = {
                         "clicked": False,
                         "timed_out": True,
