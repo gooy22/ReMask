@@ -885,6 +885,18 @@ async def profile_live_inventory(
         raise HTTPException(status_code=400,detail='profile_id is required')
 
     started=time.monotonic()
+    try:
+        live_inventory_budget=float(
+            os.getenv('REMASK_LIVE_INVENTORY_TOTAL_TIMEOUT_SECONDS','55')
+        )
+    except (TypeError,ValueError):
+        live_inventory_budget=55.0
+    live_inventory_budget=max(35.0,min(live_inventory_budget,58.0))
+    live_inventory_deadline=started+live_inventory_budget
+
+    def remaining_live_inventory_budget() -> float:
+        return max(0.0,live_inventory_deadline-time.monotonic())
+
     stage='resolver'
     try:
         context=await pool.resolver.resolve(clean_profile)
@@ -980,14 +992,10 @@ async def profile_live_inventory(
         async with ProfileSession(context) as profile_session:
             stage='browser_open'
             browser_open_started=time.monotonic()
-            try:
-                # REMASK_LIVE_SYNC_USE_BROWSER_QUEUE_WATCHDOG_V1
-                # FacebookBusinessBrowser.open() already owns the global queue
-                # deadline and returns BROWSER_QUEUE_TIMEOUT with a precise
-                # diagnostic. The old 24s wrapper conflicted with the 1-browser
-                # production pool and made concurrent sync look like a browser
-                # failure even when it was only waiting its turn.
-                browser=await profile_session.facebook_business_browser()
+            # REMASK_LIVE_SYNC_USE_BROWSER_QUEUE_WATCHDOG_V1
+            # FacebookBusinessBrowser.open() owns the global queue deadline and
+            # returns BROWSER_QUEUE_TIMEOUT with a precise diagnostic.
+            browser=await profile_session.facebook_business_browser()
             log.info(
                 'live inventory profile=%s browser_open ms=%d',
                 clean_profile,
@@ -1111,12 +1119,19 @@ async def profile_live_inventory(
                     except (TypeError,ValueError):
                         business_discovery_timeout=28.0
                     business_discovery_timeout=max(
-                        20.0,
-                        min(business_discovery_timeout,40.0),
+                        8.0,
+                        min(business_discovery_timeout,28.0),
+                    )
+                    remaining=remaining_live_inventory_budget()
+                    if remaining <= 4.0:
+                        raise asyncio.TimeoutError()
+                    discovery_budget=min(
+                        business_discovery_timeout,
+                        max(3.0,remaining-16.0),
                     )
                     business_map=await asyncio.wait_for(
                         browser.snapshot_businesses(),
-                        timeout=business_discovery_timeout,
+                        timeout=discovery_budget,
                     )
                     business_inventory_ready=bool(business_map)
                     business_diag=getattr(
@@ -1322,10 +1337,7 @@ async def profile_live_inventory(
                                 profile_session._business_browser=None
                             except Exception:
                                 pass
-                            browser=await asyncio.wait_for(
-                                profile_session.facebook_business_browser(),
-                                timeout=24.0,
-                            )
+                            browser=await profile_session.facebook_business_browser()
                             continue
                         raise
                 if last_error is not None:
@@ -1346,8 +1358,12 @@ async def profile_live_inventory(
                 }
                 inventory_started=time.monotonic()
                 try:
-                    inventory=await load_business_inventory(
-                        str(business_id)
+                    remaining=remaining_live_inventory_budget()
+                    if remaining <= 3.0:
+                        raise asyncio.TimeoutError()
+                    inventory=await asyncio.wait_for(
+                        load_business_inventory(str(business_id)),
+                        timeout=min(22.0,max(3.0,remaining-2.0)),
                     )
                     row['ad_accounts']=[
                         account
@@ -1515,9 +1531,12 @@ async def profile_live_inventory(
             pages_ready=False
             pages_started=time.monotonic()
             try:
+                remaining=remaining_live_inventory_budget()
+                if remaining <= 2.0:
+                    raise asyncio.TimeoutError()
                 discovered_pages=await asyncio.wait_for(
                     browser.discover_managed_pages(fast=True),
-                    timeout=14.0,
+                    timeout=min(14.0,max(2.0,remaining-1.0)),
                 )
                 pages=[
                     {
@@ -1631,6 +1650,8 @@ async def profile_live_inventory(
                     {},
                 ),
                 'source':'business_suite_private_inventory',
+                'sync_budget_seconds':live_inventory_budget,
+                'sync_elapsed_ms':int((time.monotonic()-started)*1000),
                 'pages':pages,
                 'pages_count':len(pages),
                 'pages_ready':pages_ready,
