@@ -5001,32 +5001,6 @@ class FacebookBusinessBrowser:
         query_diagnostics: list[dict[str, Any]] = []
         response_tasks: set[asyncio.Task[Any]] = set()
 
-        def inspect_request(request: Any) -> None:
-            try:
-                meta = _request_graphql_meta(request)
-                live_business_ids = _business_ids_from_private_selector_request(meta)
-                if not live_business_ids:
-                    return
-                for business_id in sorted(live_business_ids):
-                    network_rows.setdefault(business_id, "")
-                query_diagnostics.append(
-                    {
-                        "phase": "selector_request",
-                        "friendly_name": _clean(meta.get("friendly_name"))[:180],
-                        "doc_id": _clean(meta.get("doc_id"))[:60],
-                        "live_business_ids": sorted(live_business_ids)[:8],
-                    }
-                )
-                if len(query_diagnostics) > 24:
-                    del query_diagnostics[:-24]
-            except Exception as exc:
-                query_diagnostics.append(
-                    {
-                        "phase": "selector_request",
-                        "error": f"{exc.__class__.__name__}: {_clean(exc)}"[:500],
-                    }
-                )
-
         async def inspect_response(response: Any) -> None:
             try:
                 url = _clean(getattr(response, "url", ""))
@@ -5258,19 +5232,13 @@ class FacebookBusinessBrowser:
             except Exception:
                 return
 
-        response_listener_installed = False
-        request_listener_installed = False
+        listener_installed = False
         if hasattr(self.page, "on"):
             try:
                 self.page.on("response", on_response)
-                response_listener_installed = True
+                listener_installed = True
             except Exception:
-                response_listener_installed = False
-            try:
-                self.page.on("request", inspect_request)
-                request_listener_installed = True
-            except Exception:
-                request_listener_installed = False
+                listener_installed = False
 
         dom_output: dict[str, str] = {}
         async def collect_dom_businesses() -> int:
@@ -5303,55 +5271,7 @@ class FacebookBusinessBrowser:
                 content = ""
             for business_id in _business_ids_from_text(content):
                 dom_output.setdefault(business_id, "")
-            for business_id in _business_ids_from_private_selector_text(content):
-                dom_output.setdefault(business_id, "")
             return len(dom_output) - before
-
-        async def collect_dom_businesses_bounded() -> int:
-            try:
-                return await asyncio.wait_for(
-                    collect_dom_businesses(),
-                    timeout=2.5,
-                )
-            except asyncio.TimeoutError:
-                query_diagnostics.append({
-                    "phase": "dom_probe",
-                    "error": "DOM_PROBE_TIMEOUT",
-                })
-                return 0
-            except BaseException:
-                raise
-
-        async def navigate_inventory_surface(
-            url: str,
-            *,
-            timeout_seconds: float,
-        ) -> dict[str, Any]:
-            started = time.monotonic()
-            error = ""
-            try:
-                await self.page.goto(
-                    url,
-                    wait_until="commit",
-                    timeout=max(1000, int(timeout_seconds * 1000)),
-                )
-            except Exception as exc:
-                error = f"{exc.__class__.__name__}: {_clean(exc)}"[:500]
-
-            await self._assert_authenticated()
-            current_url = _clean(getattr(self.page, "url", ""))
-            return {
-                "loaded": bool(
-                    current_url
-                    and current_url != "about:blank"
-                    and "facebook.com" in current_url.casefold()
-                ),
-                "url": current_url[:700],
-                "navigation_ms": int(
-                    (time.monotonic() - started) * 1000
-                ),
-                "error": error,
-            }
 
         selector_opened = False
         stage_started = time.monotonic()
@@ -5364,17 +5284,13 @@ class FacebookBusinessBrowser:
             "url": _clean(getattr(self.page, "url", ""))[:700],
         }
         try:
-            home_attempt = await navigate_inventory_surface(
-                self.HOME_URL,
-                timeout_seconds=6.0,
-            )
+            await self._goto(self.HOME_URL)
             self._last_business_inventory_diagnostic.update({
                 "stage": "home_loaded",
                 "home_ms": int((time.monotonic() - stage_started) * 1000),
-                "home_attempt": home_attempt,
                 "url": _clean(getattr(self.page, "url", ""))[:700],
             })
-            await self.page.wait_for_timeout(700)
+            await self.page.wait_for_timeout(900)
 
             # Opening the portfolio selector causes Meta's frontend to hydrate
             # its Business list. Keep the established lightweight sidebar
@@ -5489,7 +5405,7 @@ class FacebookBusinessBrowser:
                     # Capture the open selector DOM before navigating away.
                     # Some Meta builds render BM links in the menu but do not
                     # issue a dedicated portfolio GraphQL request.
-                    await collect_dom_businesses_bounded()
+                    await collect_dom_businesses()
             except Exception as exc:
                 selector_opened = False
                 selector_probe = {
@@ -5497,42 +5413,10 @@ class FacebookBusinessBrowser:
                     "error": f"{exc.__class__.__name__}: {_clean(exc)}"[:500],
                 }
 
-            # HOME is not deterministic for Page-pinned sessions. If it
-            # emits no live Business selector traffic, open Ads Manager with no
-            # business/account hint. Meta chooses the current live scope and
-            # emits the same NorthStar selector requests used as BM evidence.
-            ads_manager_attempt: dict[str, Any] = {}
-            if not network_rows and not dom_output:
-                self._last_business_inventory_diagnostic.update({
-                    "stage": "ads_manager_bootstrap",
-                    "selector_probe": selector_probe,
-                    "network_businesses": len(network_rows),
-                    "dom_businesses": len(dom_output),
-                    "queries": query_diagnostics[-24:],
-                    "url": _clean(getattr(self.page, "url", ""))[:700],
-                })
-                try:
-                    ads_manager_attempt = await navigate_inventory_surface(
-                        self.ADS_MANAGER_URL,
-                        timeout_seconds=6.0,
-                    )
-                    bootstrap_deadline = time.monotonic() + 3.0
-                    while time.monotonic() < bootstrap_deadline:
-                        if network_rows:
-                            break
-                        await self.page.wait_for_timeout(200)
-                    await collect_dom_businesses_bounded()
-                except BrowserBusinessError:
-                    raise
-                except Exception as exc:
-                    ads_manager_attempt = {
-                        "loaded": False,
-                        "error": (
-                            f"{exc.__class__.__name__}: {_clean(exc)}"
-                        )[:500],
-                    }
-
-            # Final live fallback: Business overview.
+            # If HOME did not hydrate any Business inventory, try Meta's
+            # Business overview surface while keeping the same listener. Some
+            # accounts/pages land in an asset-scoped HOME that never requests
+            # the portfolio collection.
             overview_attempt: dict[str, Any] = {}
             if not network_rows and not dom_output:
                 self._last_business_inventory_diagnostic.update({
@@ -5545,10 +5429,12 @@ class FacebookBusinessBrowser:
                 })
                 overview_started = time.monotonic()
                 try:
-                    overview_attempt = await navigate_inventory_surface(
-                        self.OVERVIEW_URL,
-                        timeout_seconds=5.0,
-                    )
+                    await self._goto(self.OVERVIEW_URL)
+                    overview_attempt = {
+                        "loaded": True,
+                        "url": _clean(getattr(self.page, "url", ""))[:700],
+                        "navigation_ms": int((time.monotonic() - overview_started) * 1000),
+                    }
                     self._last_business_inventory_diagnostic.update({
                         "stage": "overview_loaded",
                         "overview_attempt": overview_attempt,
@@ -5558,7 +5444,7 @@ class FacebookBusinessBrowser:
                         if network_rows:
                             break
                         await self.page.wait_for_timeout(300)
-                    await collect_dom_businesses_bounded()
+                    await collect_dom_businesses()
                 except BrowserBusinessError:
                     raise
                 except Exception as exc:
@@ -5568,13 +5454,12 @@ class FacebookBusinessBrowser:
                     }
 
             # Final fallback for whichever surface is currently mounted.
-            await collect_dom_businesses_bounded()
+            await collect_dom_businesses()
 
             if response_tasks:
-                await _settle_tasks_bounded(
-                    response_tasks,
-                    timeout_seconds=0.8,
-                    cancel_pending=True,
+                await asyncio.gather(
+                    *list(response_tasks),
+                    return_exceptions=True,
                 )
 
             output = dict(network_rows)
@@ -5587,60 +5472,26 @@ class FacebookBusinessBrowser:
                 "source": (
                     "business_suite_private_graphql"
                     if network_rows
-                    else (
-                        "business_suite_live_dom_or_relay_state"
-                        if dom_output
-                        else "none"
-                    )
+                    else ("business_suite_dom_fallback" if dom_output else "none")
                 ),
                 "network_businesses": len(network_rows),
                 "dom_businesses": len(dom_output),
                 "queries": query_diagnostics[-24:],
                 "selector_probe": selector_probe,
-                "ads_manager_attempt": ads_manager_attempt,
                 "overview_attempt": overview_attempt,
                 "url": _clean(getattr(self.page, "url", ""))[:700],
             }
             return output
         finally:
-            # REMASK_BUSINESS_SNAPSHOT_CANCEL_SAFE_V1
-            # asyncio.wait_for() cancels snapshot_businesses() on timeout and
-            # then waits for this finally block to finish. Any unbounded
-            # Playwright await here can therefore turn a 28s timeout into a
-            # permanent browser lease that blocks every later sync.
-            if response_listener_installed and self.page is not None and hasattr(self.page, "remove_listener"):
+            if listener_installed and hasattr(self.page, "remove_listener"):
                 try:
                     self.page.remove_listener("response", on_response)
                 except Exception:
                     pass
-            if request_listener_installed and self.page is not None and hasattr(self.page, "remove_listener"):
+            if selector_opened:
                 try:
-                    self.page.remove_listener("request", inspect_request)
+                    await self.page.keyboard.press("Escape")
                 except Exception:
-                    pass
-
-            if response_tasks:
-                try:
-                    await asyncio.wait_for(
-                        _settle_tasks_bounded(
-                            response_tasks,
-                            timeout_seconds=0.35,
-                            cancel_pending=True,
-                        ),
-                        timeout=0.6,
-                    )
-                except BaseException:
-                    for task in list(response_tasks):
-                        if not task.done():
-                            task.cancel()
-
-            if selector_opened and self.page is not None:
-                try:
-                    await asyncio.wait_for(
-                        self.page.keyboard.press("Escape"),
-                        timeout=0.75,
-                    )
-                except BaseException:
                     pass
 
     @staticmethod
@@ -10498,10 +10349,9 @@ class FacebookBusinessBrowser:
                 for task in pending_response_tasks:
                     task.cancel()
                 if pending_response_tasks:
-                    await _settle_tasks_bounded(
-                        pending_response_tasks,
-                        timeout_seconds=0.5,
-                        cancel_pending=True,
+                    await asyncio.gather(
+                        *list(pending_response_tasks),
+                        return_exceptions=True,
                     )
 
             self._last_ad_account_section_diagnostic = {
@@ -10542,10 +10392,12 @@ class FacebookBusinessBrowser:
             except Exception:
                 pass
             if response_tasks:
-                await _settle_tasks_bounded(
-                    response_tasks,
-                    timeout_seconds=0.5,
-                    cancel_pending=True,
+                remaining_tasks = list(response_tasks)
+                for task in remaining_tasks:
+                    task.cancel()
+                await asyncio.gather(
+                    *remaining_tasks,
+                    return_exceptions=True,
                 )
 
     async def probe_ads_manager_inventory_context(
@@ -10553,7 +10405,6 @@ class FacebookBusinessBrowser:
         *,
         business_id: str,
         timeout_seconds: float = 10.0,
-        expected_account_ids: list[str] | None = None,
     ) -> dict[str, Any]:
         """Read-only Ads Manager probe for RK/business correlation."""
         business = _digits(business_id)
@@ -10573,13 +10424,7 @@ class FacebookBusinessBrowser:
         diagnostics: list[dict[str, Any]] = []
         response_tasks: set[asyncio.Task[Any]] = set()
         account_rows: dict[str, dict[str, Any]] = {}
-        request_scope_accounts: set[str] = set()
         exact_business_evidence = False
-        expected_accounts = {
-            _normalize_ad_account_id(value)
-            for value in (expected_account_ids or [])
-            if _normalize_ad_account_id(value)
-        }
 
         def collect_numeric_paths(
             value: Any,
@@ -10605,46 +10450,6 @@ class FacebookBusinessBrowser:
 
             walk(value, path)
             return output
-
-        def inspect_request(request: Any) -> None:
-            nonlocal exact_business_evidence
-            try:
-                meta = _request_graphql_meta(request)
-                account_id = _ads_manager_scope_account_from_request(
-                    meta,
-                    business_id=business,
-                )
-                if not account_id:
-                    return
-                request_scope_accounts.add(account_id)
-                exact_business_evidence = True
-                diagnostics.append(
-                    {
-                        "phase": "request_scope_pair",
-                        "friendly_name": _clean(meta.get("friendly_name"))[:180],
-                        "doc_id": _clean(meta.get("doc_id"))[:80],
-                        "request_scoped": True,
-                        "exact_business_context": True,
-                        "request_business_ids": [business],
-                        "row_business_ids": [],
-                        "variable_numeric_ids": collect_numeric_paths(
-                            meta.get("variables") or {}
-                        ),
-                        "rows": [],
-                        "request_scope_account_id": account_id,
-                    }
-                )
-                if len(diagnostics) > 32:
-                    del diagnostics[:-32]
-            except Exception as exc:
-                diagnostics.append(
-                    {
-                        "phase": "request_scope_pair",
-                        "error": (
-                            f"{exc.__class__.__name__}: {_clean(exc)}"
-                        )[:500],
-                    }
-                )
 
         async def inspect_response(response: Any) -> None:
             nonlocal exact_business_evidence
@@ -10760,126 +10565,44 @@ class FacebookBusinessBrowser:
             except Exception:
                 return
 
-        # Repeated syncs can reuse the mounted Ads Manager SPA and skip the
-        # NorthStar selector requests used as BM -> RK evidence. Reset only the
-        # document, not the browser context/cookies, so every probe performs a
-        # fresh authenticated frontend bootstrap.
-        try:
-            await self.page.goto(
-                "about:blank",
-                wait_until="commit",
-                timeout=1500,
-            )
-        except Exception:
-            pass
-
-        self.page.on("request", inspect_request)
         self.page.on("response", on_response)
         requested_url = f"{self.ADS_MANAGER_URL}?business_id={business}"
         final_url = ""
         dom: dict[str, Any] = {}
         error = ""
-        cleanup_pending_tasks = 0
-        request_confirmed_account_id = ""
         try:
             deadline = time.monotonic() + max(3.0, float(timeout_seconds))
             try:
                 await self.page.goto(
                     requested_url,
                     wait_until="commit",
-                    timeout=max(
-                        1000,
-                        int(min(6.0, float(timeout_seconds)) * 1000),
-                    ),
+                    timeout=max(1000, int(timeout_seconds * 1000)),
                 )
             except Exception as exc:
                 error = (
                     f"{exc.__class__.__name__}: {_clean(exc)}"
                 )[:500]
 
+            remaining = max(0.0, deadline - time.monotonic())
+            if remaining > 0:
+                try:
+                    await self.page.wait_for_load_state(
+                        "domcontentloaded",
+                        timeout=max(250, int(min(4.0, remaining) * 1000)),
+                    )
+                except Exception:
+                    pass
             await self._assert_authenticated()
 
-            # Correlate Meta's request-time BM/RK selector pair with the
-            # account that Ads Manager actually selected in its URL. This is
-            # enough to confirm RK without waiting for any GraphQL body.
-            while time.monotonic() < deadline:
-                final_url = _clean(getattr(self.page, "url", ""))
-                current_act_ids = {
-                    _digits(value)
-                    for value in re.findall(
-                        r"(?:[?&]act=|act[_:=/%-]+)(\d{5,30})",
-                        unquote_plus(final_url),
-                        flags=re.IGNORECASE,
-                    )
-                    if _digits(value)
-                }
-                matching = sorted(
-                    request_scope_accounts.intersection(current_act_ids)
-                )
-                if len(matching) == 1:
-                    request_confirmed_account_id = matching[0]
-                    break
-                remaining = max(0.0, deadline - time.monotonic())
-                if remaining <= 0:
-                    break
+            remaining = max(0.0, deadline - time.monotonic())
+            if remaining > 0:
                 await self.page.wait_for_timeout(
-                    int(min(150.0, remaining * 1000.0))
+                    int(min(3000.0, remaining * 1000.0))
                 )
-
             final_url = _clean(getattr(self.page, "url", ""))
 
-            # Fast path: once Meta's live request variables bind the requested
-            # Business to one zero-level RK and Ads Manager itself selects the
-            # same act in the final URL, the relationship is already proven.
-            # Do not keep parsing DOM/GraphQL response bodies after that point:
-            # those diagnostics are optional and have previously kept the
-            # entire sync open even after the RK was known.
-            if request_confirmed_account_id:
-                for task in list(response_tasks):
-                    if not task.done():
-                        task.cancel()
-                if response_tasks:
-                    cleanup_pending_tasks = await _settle_tasks_bounded(
-                        set(response_tasks),
-                        timeout_seconds=0.2,
-                        cancel_pending=True,
-                    )
-                return {
-                    "source": "ads_manager_read_only_probe",
-                    "business_id": business,
-                    "requested_url": requested_url[:700],
-                    "final_url": final_url[:700],
-                    "final_business_ids": sorted(
-                        _business_ids_from_text(final_url)
-                    )[:8],
-                    "final_act_ids": [request_confirmed_account_id],
-                    "exact_business_evidence": True,
-                    "request_scope_account_ids": sorted(
-                        request_scope_accounts
-                    )[:8],
-                    "request_time_confirmed": True,
-                    "confirmed": True,
-                    "confirmed_account_id": request_confirmed_account_id,
-                    "confirmed_accounts": [{
-                        "id": request_confirmed_account_id,
-                        "account_id": request_confirmed_account_id,
-                        "name": "",
-                        "business_id": business,
-                        "_source": "ads_manager_request_scope_fastpath",
-                    }],
-                    "accounts": [],
-                    "diagnostics": diagnostics[-16:],
-                    "dom": {},
-                    "cleanup_pending_tasks": cleanup_pending_tasks,
-                    "error": error,
-                }
-
             try:
-                remaining = max(0.0, deadline - time.monotonic())
-                if remaining <= 0:
-                    raise asyncio.TimeoutError()
-                dom_result = await asyncio.wait_for(
-                    self.page.evaluate(
+                dom_result = await self.page.evaluate(
                     """() => {
                         const text = document.body
                             ? (document.body.innerText || '')
@@ -10911,8 +10634,6 @@ class FacebookBusinessBrowser:
                             controls
                         };
                     }"""
-                    ),
-                    timeout=min(1.0, remaining),
                 )
                 if isinstance(dom_result, dict):
                     dom = dom_result
@@ -10935,16 +10656,11 @@ class FacebookBusinessBrowser:
                 for task in pending:
                     task.cancel()
                 if pending:
-                    cleanup_pending_tasks = await _settle_tasks_bounded(
-                        pending,
-                        timeout_seconds=0.5,
-                        cancel_pending=True,
+                    await asyncio.gather(
+                        *list(pending),
+                        return_exceptions=True,
                     )
         finally:
-            try:
-                self.page.remove_listener("request", inspect_request)
-            except Exception:
-                pass
             try:
                 self.page.remove_listener("response", on_response)
             except Exception:
@@ -10960,42 +10676,11 @@ class FacebookBusinessBrowser:
                 )
             )
         )
-        confirmed_account_id = request_confirmed_account_id
-        confirmation_source = (
-            "ads_manager_request_scope"
-            if request_confirmed_account_id
-            else ""
+        confirmed_account_id = _confirmed_ads_manager_scope_account_id(
+            business_id=business,
+            final_act_ids=final_act_ids,
+            diagnostics=diagnostics,
         )
-        if not confirmed_account_id:
-            confirmed_account_id = _confirmed_ads_manager_scope_account_id(
-                business_id=business,
-                final_act_ids=final_act_ids,
-                diagnostics=diagnostics,
-            )
-            if confirmed_account_id:
-                confirmation_source = "ads_manager_business_scope"
-
-        # Meta sometimes reuses a mounted Ads Manager build that no longer
-        # emits the NorthStar BM/RK selector request. When that happens, a
-        # previously *live-confirmed* BM->RK pair may be used only as a hint:
-        # the current authenticated Ads Manager must independently land on the
-        # same single RK while the probe was opened with this Business ID.
-        # This never invents a new RK and never accepts a worker-only binding.
-        if (
-            not confirmed_account_id
-            and len(final_act_ids) == 1
-            and final_act_ids[0] in expected_accounts
-        ):
-            confirmed_account_id = final_act_ids[0]
-            confirmation_source = "ads_manager_live_act_matches_confirmed_snapshot"
-            diagnostics.append({
-                "phase": "confirmed_snapshot_live_act",
-                "business_id": business,
-                "account_id": confirmed_account_id,
-                "requested_with_business_id": True,
-                "live_act_match": True,
-            })
-
         confirmed_accounts: list[dict[str, Any]] = []
         if confirmed_account_id:
             existing = account_rows.get(confirmed_account_id) or {}
@@ -11006,10 +10691,7 @@ class FacebookBusinessBrowser:
                     "account_id": confirmed_account_id,
                     "name": _clean(existing.get("name")),
                     "business_id": business,
-                    "_source": (
-                        confirmation_source
-                        or "ads_manager_business_scope_confirmed"
-                    ),
+                    "_source": "ads_manager_business_scope_confirmed",
                 }
             )
 
@@ -11021,10 +10703,6 @@ class FacebookBusinessBrowser:
             "final_business_ids": final_business_ids[:8],
             "final_act_ids": final_act_ids[:8],
             "exact_business_evidence": exact_business_evidence,
-            "request_scope_account_ids": sorted(request_scope_accounts)[:8],
-            "request_time_confirmed": bool(request_confirmed_account_id),
-            "confirmation_source": confirmation_source,
-            "expected_account_ids": sorted(expected_accounts)[:8],
             "confirmed": bool(confirmed_account_id),
             "confirmed_account_id": confirmed_account_id,
             "confirmed_accounts": confirmed_accounts,
@@ -11036,7 +10714,6 @@ class FacebookBusinessBrowser:
             ][:16],
             "diagnostics": diagnostics[-32:],
             "dom": dom,
-            "cleanup_pending_tasks": cleanup_pending_tasks,
             "error": error,
         }
 
