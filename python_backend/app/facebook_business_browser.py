@@ -16871,6 +16871,304 @@ timeout_seconds=4.0,
 
         return False
 
+    async def _fill_page_add_identifier(
+        self,
+        *,
+        labels: tuple[str, ...],
+        value: str,
+        wait_seconds: float = 4.0,
+    ) -> bool:
+        """Fill only the Page-add identifier field, never a global settings input."""
+        if self.page is None or not value:
+            return False
+
+        deadline = time.monotonic() + max(0.5, float(wait_seconds))
+        marker = "data-remask-page-add-input"
+
+        while True:
+            if await self._fill_first(
+                labels=labels,
+                value=value,
+                fill_timeout_ms=2000,
+            ):
+                return True
+
+            try:
+                marked = await self.page.evaluate(
+                    """(marker) => {
+                        const visible = el => {
+                            if (!el) return false;
+                            const r = el.getBoundingClientRect();
+                            const st = getComputedStyle(el);
+                            return r.width > 0 && r.height > 0
+                                && st.display !== 'none'
+                                && st.visibility !== 'hidden';
+                        };
+                        const clean = text => (text || '')
+                            .normalize('NFKC')
+                            .replace(/[\u200b\u200c\u200d\ufeff]/g, '')
+                            .replace(/\u00a0/g, ' ')
+                            .replace(/\s+/g, ' ')
+                            .trim()
+                            .toLowerCase();
+                        const pageWords = [
+                            'facebook page','page url','page id',
+                            'add a page','add page','existing page',
+                            'страниц','сторін','seite','facebook-seite',
+                            'page facebook','facebook-pagina'
+                        ];
+                        const pageish = el => {
+                            const text = clean(
+                                (el.getAttribute && el.getAttribute('aria-label') || '') + ' ' +
+                                (el.getAttribute && el.getAttribute('title') || '') + ' ' +
+                                (el.innerText || el.textContent || '')
+                            );
+                            return pageWords.some(word => text.includes(word));
+                        };
+
+                        document.querySelectorAll('[' + marker + ']')
+                            .forEach(el => el.removeAttribute(marker));
+
+                        const roots = [];
+                        const addRoot = root => {
+                            if (!root || !visible(root) || roots.includes(root)) return;
+                            if (pageish(root)) roots.push(root);
+                        };
+
+                        document.querySelectorAll(
+                            '[role="dialog"],[aria-modal="true"]'
+                        ).forEach(addRoot);
+
+                        const inputs = [...document.querySelectorAll(
+                            'input:not([type]),input[type="text"],input[type="search"]'
+                        )].filter(visible);
+
+                        for (const input of inputs) {
+                            const identity = clean(
+                                (input.getAttribute('aria-label') || '') + ' ' +
+                                (input.getAttribute('placeholder') || '') + ' ' +
+                                (input.getAttribute('name') || '') + ' ' +
+                                (input.getAttribute('id') || '')
+                            );
+                            if (pageWords.some(word => identity.includes(word))) {
+                                let cur = input;
+                                for (let depth = 0; cur && depth < 8; depth++, cur = cur.parentElement) {
+                                    addRoot(cur);
+                                }
+                            }
+                        }
+
+                        for (const root of roots) {
+                            const candidates = [...root.querySelectorAll(
+                                'input:not([type]),input[type="text"],input[type="search"]'
+                            )].filter(el => {
+                                if (!visible(el) || el.disabled) return false;
+                                const type = clean(el.getAttribute('type'));
+                                return !['hidden','checkbox','radio','submit','button'].includes(type);
+                            });
+                            if (candidates.length === 1) {
+                                candidates[0].setAttribute(marker, '1');
+                                return true;
+                            }
+
+                            const pageInputs = candidates.filter(input => {
+                                const identity = clean(
+                                    (input.getAttribute('aria-label') || '') + ' ' +
+                                    (input.getAttribute('placeholder') || '') + ' ' +
+                                    (input.getAttribute('name') || '') + ' ' +
+                                    (input.getAttribute('id') || '')
+                                );
+                                return pageWords.some(word => identity.includes(word));
+                            });
+                            if (pageInputs.length === 1) {
+                                pageInputs[0].setAttribute(marker, '1');
+                                return true;
+                            }
+                        }
+                        return false;
+                    }""",
+                    marker,
+                )
+            except Exception:
+                marked = False
+
+            if marked:
+                try:
+                    candidate = self.page.locator(
+                        f'[{marker}="1"]'
+                    ).first
+                    if (
+                        await candidate.is_visible()
+                        and await candidate.is_editable()
+                    ):
+                        await candidate.fill(value, timeout=2000)
+                        try:
+                            await self.page.evaluate(
+                                "(marker) => document.querySelectorAll('[' + marker + ']').forEach(el => el.removeAttribute(marker))",
+                                marker,
+                            )
+                        except Exception:
+                            pass
+                        return True
+                except Exception:
+                    pass
+
+            if time.monotonic() >= deadline:
+                break
+            await self.page.wait_for_timeout(250)
+
+        try:
+            await self.page.evaluate(
+                "(marker) => document.querySelectorAll('[' + marker + ']').forEach(el => el.removeAttribute(marker))",
+                marker,
+            )
+        except Exception:
+            pass
+        return False
+
+    async def _click_page_add_surface_action(
+        self,
+        names: tuple[str, ...],
+        *,
+        before_click: Callable[[], Awaitable[None]] | None = None,
+        click_timeout_ms: int = 3000,
+    ) -> bool:
+        """Click a generic Page-add CTA only inside a Page-specific modal/surface."""
+        if self.page is None:
+            return False
+
+        marker = "data-remask-page-add-action"
+        try:
+            marked = await self.page.evaluate(
+                """(args) => {
+                    const [marker, names] = args;
+                    const visible = el => {
+                        if (!el) return false;
+                        const r = el.getBoundingClientRect();
+                        const st = getComputedStyle(el);
+                        return r.width > 0 && r.height > 0
+                            && st.display !== 'none'
+                            && st.visibility !== 'hidden'
+                            && st.pointerEvents !== 'none';
+                    };
+                    const clean = text => (text || '')
+                        .normalize('NFKC')
+                        .replace(/[\u200b\u200c\u200d\ufeff]/g, '')
+                        .replace(/\u00a0/g, ' ')
+                        .replace(/\s+/g, ' ')
+                        .trim()
+                        .toLowerCase();
+                    const allowed = new Set(names.map(clean));
+                    const pageWords = [
+                        'facebook page','page url','page id',
+                        'add a page','add page','existing page',
+                        'страниц','сторін','seite','facebook-seite',
+                        'page facebook','facebook-pagina'
+                    ];
+                    const pageish = el => {
+                        const text = clean(
+                            (el.getAttribute && el.getAttribute('aria-label') || '') + ' ' +
+                            (el.getAttribute && el.getAttribute('title') || '') + ' ' +
+                            (el.innerText || el.textContent || '')
+                        );
+                        return pageWords.some(word => text.includes(word));
+                    };
+
+                    document.querySelectorAll('[' + marker + ']')
+                        .forEach(el => el.removeAttribute(marker));
+
+                    const roots = [];
+                    const addRoot = root => {
+                        if (!root || !visible(root) || roots.includes(root)) return;
+                        if (pageish(root)) roots.push(root);
+                    };
+                    document.querySelectorAll(
+                        '[role="dialog"],[aria-modal="true"]'
+                    ).forEach(addRoot);
+
+                    const pageInputs = [...document.querySelectorAll(
+                        'input:not([type]),input[type="text"],input[type="search"]'
+                    )].filter(input => {
+                        if (!visible(input)) return false;
+                        const identity = clean(
+                            (input.getAttribute('aria-label') || '') + ' ' +
+                            (input.getAttribute('placeholder') || '') + ' ' +
+                            (input.getAttribute('name') || '') + ' ' +
+                            (input.getAttribute('id') || '')
+                        );
+                        return pageWords.some(word => identity.includes(word));
+                    });
+                    for (const input of pageInputs) {
+                        let cur = input;
+                        for (let depth = 0; cur && depth < 8; depth++, cur = cur.parentElement) {
+                            addRoot(cur);
+                        }
+                    }
+
+                    const candidates = [];
+                    for (const root of roots) {
+                        for (const el of root.querySelectorAll(
+                            'button,[role="button"],a,[role="menuitem"]'
+                        )) {
+                            if (!visible(el) || el.disabled
+                                || el.getAttribute('aria-disabled') === 'true') {
+                                continue;
+                            }
+                            const text = clean(
+                                (el.getAttribute('aria-label') || '') + ' ' +
+                                (el.getAttribute('title') || '') + ' ' +
+                                (el.innerText || el.textContent || '')
+                            );
+                            if (!allowed.has(text)) continue;
+                            const r = el.getBoundingClientRect();
+                            candidates.push({el, x:r.x, y:r.y});
+                        }
+                    }
+                    candidates.sort((a,b) => (b.y-a.y) || (b.x-a.x));
+                    if (!candidates.length) return false;
+                    candidates[0].el.setAttribute(marker, '1');
+                    return true;
+                }""",
+                [marker, list(names)],
+            )
+        except Exception:
+            marked = False
+
+        if not marked:
+            return False
+
+        try:
+            locator = self.page.locator(f'[{marker}="1"]')
+            count = min(await locator.count(), 4)
+            for index in range(count):
+                item = locator.nth(index)
+                if not (
+                    await item.is_visible()
+                    and await item.is_enabled()
+                ):
+                    continue
+                if before_click is not None:
+                    await before_click()
+                await item.click(
+                    timeout=max(
+                        250,
+                        min(int(click_timeout_ms), 10000),
+                    )
+                )
+                return True
+        except Exception:
+            return False
+        finally:
+            try:
+                await self.page.evaluate(
+                    "(marker) => document.querySelectorAll('[' + marker + ']').forEach(el => el.removeAttribute(marker))",
+                    marker,
+                )
+            except Exception:
+                pass
+
+        return False
+
     async def _click_named_single_attempt(
         self,
         names: tuple[str, ...],
@@ -17941,7 +18239,7 @@ timeout_seconds=4.0,
                     diagnostic=diag,
                 )
 
-        page_filled = await self._fill_first(
+        page_filled = await self._fill_page_add_identifier(
             labels=(
                 "Facebook Page URL or ID",
                 "Page URL or ID",
@@ -17958,19 +18256,6 @@ timeout_seconds=4.0,
             ),
             value=page,
         )
-        if not page_filled:
-            try:
-                inputs = self.page.locator(
-                    'input:not([type]), input[type="text"], input[type="search"]'
-                )
-                for index in range(min(await inputs.count(), 20)):
-                    candidate = inputs.nth(index)
-                    if await candidate.is_visible() and await candidate.is_editable():
-                        await candidate.fill(page)
-                        page_filled = True
-                        break
-            except Exception:
-                pass
 
         if not page_filled:
             diag = await self._diagnostic("page_preflight_id_field_missing")
@@ -18105,7 +18390,7 @@ timeout_seconds=4.0,
                     diagnostic=diag,
                 )
 
-        page_filled = await self._fill_first(
+        page_filled = await self._fill_page_add_identifier(
             labels=(
                 "Facebook Page URL or ID",
                 "Page URL or ID",
@@ -18122,20 +18407,6 @@ timeout_seconds=4.0,
             ),
             value=page,
         )
-        if not page_filled:
-            try:
-                inputs = self.page.locator(
-                    'input:not([type]), input[type="text"], input[type="search"]'
-                )
-                count = await inputs.count()
-                for index in range(count):
-                    candidate = inputs.nth(index)
-                    if await candidate.is_visible():
-                        await candidate.fill(page)
-                        page_filled = True
-                        break
-            except Exception:
-                pass
 
         if not page_filled:
             diag = await self._diagnostic("page_id_field_missing")
@@ -18145,6 +18416,11 @@ timeout_seconds=4.0,
                 retryable=False,
                 diagnostic=diag,
             )
+
+        # Meta hydrates the Page result/card after the identifier field.
+        # Wait briefly so a slow Business Suite render cannot be mistaken for
+        # a missing review/submit step.
+        await self.page.wait_for_timeout(900)
 
         loop = asyncio.get_running_loop()
         gate_future: asyncio.Future[bool] = loop.create_future()
@@ -18335,6 +18611,24 @@ timeout_seconds=4.0,
                     ),
                     before_click=checkpoint_page_click_intent,
                 )
+                if not final_clicked:
+                    # Some current Meta variants use a generic footer "Add".
+                    # It is unsafe globally because Business Settings contains
+                    # other Add controls, so only accept it inside the active
+                    # Page-specific modal/surface.
+                    final_clicked = await self._click_page_add_surface_action(
+                        (
+                            "Add",
+                            "Добавить",
+                            "Додати",
+                            "Hinzufügen",
+                            "Ajouter",
+                            "যোগ করুন",
+                            "Thêm",
+                            "जोड़ें",
+                        ),
+                        before_click=checkpoint_page_click_intent,
+                    )
                 if final_clicked:
                     clicked_any = True
                     await self.page.wait_for_timeout(700)
