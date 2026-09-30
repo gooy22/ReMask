@@ -1286,15 +1286,51 @@ async function pythonWorkerLoadPages(profileId, csrfRetried) {
 }
 
 function pythonWorkerApplyPages(cfg, pages, sourceLabel) {
+  // REMASK_PAGE_OWNERSHIP_UI_V1
+  const ownershipOf = function(item) {
+    const explicit = String(
+      (item && item.business_ownership) || ''
+    ).trim();
+    if (
+      explicit === 'owned_by_business' ||
+      explicit === 'unowned_confirmed' ||
+      explicit === 'unknown'
+    ) return explicit;
+    return String((item && item.business_id) || '').trim()
+      ? 'owned_by_business'
+      : 'unknown';
+  };
+  const restrictedOf = function(item) {
+    const restriction =
+      item &&
+      item.advertising_restriction_info &&
+      typeof item.advertising_restriction_info === 'object'
+        ? item.advertising_restriction_info
+        : {};
+    return restriction.is_restricted === true;
+  };
+  const selectableAutomatically = function(item) {
+    return (
+      ownershipOf(item) === 'unowned_confirmed' &&
+      !restrictedOf(item)
+    );
+  };
+
   const list = (Array.isArray(pages) ? pages : [])
     .filter(function(item) {
       return item && String(item.id || '').trim();
     })
     .slice()
     .sort(function(a, b) {
-      const aBusiness = String((a && a.business_id) || '').trim();
-      const bBusiness = String((b && b.business_id) || '').trim();
-      if (!!aBusiness !== !!bBusiness) return aBusiness ? 1 : -1;
+      const rank = function(item) {
+        const ownership = ownershipOf(item);
+        if (ownership === 'unowned_confirmed' && !restrictedOf(item)) return 0;
+        if (ownership === 'unknown' && !restrictedOf(item)) return 1;
+        if (ownership === 'owned_by_business') return 2;
+        return 3;
+      };
+      const diff = rank(a) - rank(b);
+      if (diff) return diff;
       return String((a && a.name) || '').localeCompare(
         String((b && b.name) || ''),
         undefined,
@@ -1312,7 +1348,7 @@ function pythonWorkerApplyPages(cfg, pages, sourceLabel) {
     cfg.error = 'Pages не найдены';
     cfg.pageHint.className = 'error';
     cfg.pageHint.textContent =
-      'Pages не найдены. Введи Primary Page ID вручную.';
+      'Pages не найдены в последней полной синхронизации.';
     cfg.page.disabled = false;
     cfg.loaded = true;
     return;
@@ -1324,26 +1360,32 @@ function pythonWorkerApplyPages(cfg, pages, sourceLabel) {
   cfg.page.appendChild(placeholder);
 
   let pagesAlreadyInBusiness = 0;
+  let unknownOwnership = 0;
   let restrictedPages = 0;
 
   for (const item of list) {
     const option = document.createElement('option');
     const pageId = String(item.id || '').trim();
     const businessId = String(item.business_id || '').trim();
-    const restriction =
-      item.advertising_restriction_info &&
-      typeof item.advertising_restriction_info === 'object'
-        ? item.advertising_restriction_info
-        : {};
-    const restricted = restriction.is_restricted === true;
+    const ownership = ownershipOf(item);
+    const restricted = restrictedOf(item);
 
-    if (businessId) pagesAlreadyInBusiness += 1;
+    if (ownership === 'owned_by_business') pagesAlreadyInBusiness += 1;
+    if (ownership === 'unknown') unknownOwnership += 1;
     if (restricted) restrictedPages += 1;
 
     option.value = pageId;
 
     let suffix = '';
-    if (businessId) suffix += ' · уже в BM ' + businessId;
+    if (ownership === 'owned_by_business') {
+      suffix += businessId
+        ? ' · уже в BM ' + businessId
+        : ' · уже в BM';
+    } else if (ownership === 'unowned_confirmed') {
+      suffix += ' · свободна';
+    } else {
+      suffix += ' · владелец BM не подтверждён';
+    }
     if (restricted) suffix += ' · restricted';
 
     option.textContent =
@@ -1352,18 +1394,18 @@ function pythonWorkerApplyPages(cfg, pages, sourceLabel) {
       pageId +
       suffix;
 
-    if (businessId) {
+    if (ownership === 'owned_by_business' || restricted) {
       option.disabled = true;
-      option.dataset.ineligibleReason = 'already_owned_by_business';
+      option.dataset.ineligibleReason =
+        ownership === 'owned_by_business'
+          ? 'already_owned_by_business'
+          : 'restricted';
     }
 
     cfg.page.appendChild(option);
   }
 
-  const preferred = list.find(function(item) {
-    return !String((item && item.business_id) || '').trim();
-  }) || null;
-
+  const preferred = list.find(selectableAutomatically) || null;
   cfg.page.value = String((preferred && preferred.id) || '');
 
   const currentName = String((cfg.name && cfg.name.value) || '').trim();
@@ -1385,7 +1427,10 @@ function pythonWorkerApplyPages(cfg, pages, sourceLabel) {
 
   const warnings = [];
   if (pagesAlreadyInBusiness) {
-    warnings.push('уже показывают владельца BM: ' + pagesAlreadyInBusiness);
+    warnings.push('уже в BM: ' + pagesAlreadyInBusiness);
+  }
+  if (unknownOwnership) {
+    warnings.push('владелец BM неизвестен: ' + unknownOwnership);
   }
   if (restrictedPages) {
     warnings.push('restricted: ' + restrictedPages);
@@ -1397,11 +1442,10 @@ function pythonWorkerApplyPages(cfg, pages, sourceLabel) {
     (warnings.length ? ' · ' + warnings.join(' · ') : '') +
     (
       preferred
-        ? ' · выбрана Page без известного владельца BM.'
-        : ' · свободная Page не определена автоматически; выбери вручную.'
+        ? ' · автоматически выбрана подтверждённо свободная Page.'
+        : ' · подтверждённо свободная Page не найдена; unknown можно выбрать вручную после проверки.'
     );
 }
-
 
 function pythonWorkerEnsureBmModalStyle() {
   if (document.getElementById('pythonWorkerBmModalStyle')) return;
