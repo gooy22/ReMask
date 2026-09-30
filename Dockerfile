@@ -120,6 +120,8 @@ RUN set -eux; \
     grep -q 'REMASK_FAILED_SYNC_DOES_NOT_MUTATE_WORKSPACE_V1' /var/www/html/scripts/workspace.js; \
     grep -q 'REMASK_SYNC_BROWSER_SERIAL_V1' /var/www/html/scripts/workspace.js; \
     grep -q 'const syncConcurrency=1;' /var/www/html/scripts/workspace.js; \
+    grep -q 'REMASK_BUSINESS_TAB_FULL_PROFILE_SYNC_V1' /var/www/html/scripts/workspace.js; \
+    ! grep -q 'r=>syncBusinessSafe(r)' /var/www/html/scripts/workspace.js; \
     /opt/remask-venv/bin/python -c "from pathlib import Path; s=Path('/var/www/html/scripts/workspace.js').read_text(encoding='utf-8'); a=s.index('const finishSyncResponse='); b=s.index('const syncProfileSafe=',a); q=s[a:b]; assert q.index('sync_complete===false') < q.index('applySnapshot(d)'), 'failed sync mutates Workspace before failure check'" ; \
     grep -q 'REMASK_SYNC_CSRF_SAFE_TRANSPORT_V1' /var/www/html/scripts/workspace.js; \
     grep -q "action:'sync_result'" /var/www/html/scripts/workspace.js; \
@@ -351,8 +353,12 @@ RUN set -eux; \
     ! grep -q 'skipped_for_business_scoped_sync' /opt/remask-python/main.py; \
     grep -q 'ads_manager_hint_revalidation_unconfirmed' /opt/remask-python/main.py; \
     grep -q 'REMASK_DURABLE_BINDING_ACCOUNT_HINTS_V1' /opt/remask-python/main.py; \
-    grep -q 'REMASK_EXACT_HINTS_REMAIN_REQUIRED_TARGETS_V1' /opt/remask-python/main.py; \
-    grep -q 'Business Suite discovery skipped' /opt/remask-python/main.py; \
+    grep -q 'REMASK_SCOPED_HINT_FASTPATH_ONLY_V1' /opt/remask-python/main.py; \
+    grep -q 'REMASK_HISTORICAL_HINTS_ARE_FALLBACK_ONLY_V1' /opt/remask-python/main.py; \
+    grep -q 'REMASK_STALE_HINT_ROWS_EXCLUDED_V1' /opt/remask-python/main.py; \
+    grep -q 'REMASK_FULL_PROFILE_DISCOVERY_BUDGET_V1' /opt/remask-python/main.py; \
+    grep -q 'business_inventory_confirmed_empty' /opt/remask-python/main.py; \
+    ! grep -q 'REMASK_EXACT_HINTS_REMAIN_REQUIRED_TARGETS_V1' /opt/remask-python/main.py; \
     grep -q 'ads_manager_live_act_matches_confirmed_snapshot' /opt/remask-python/app/facebook_business_browser.py; \
     grep -q 'hierarchy_live_snapshot_get($profile)' /var/www/html/ajax/metaHierarchy.php; \
     grep -q 'graph_preflight_available' /var/www/html/ajax/metaHierarchy.php; \
