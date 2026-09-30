@@ -1945,8 +1945,39 @@ class FacebookBusinessBrowser:
         if self.page is not None:
             return
 
+        # REMASK_BROWSER_QUEUE_DEADLINE_V1
+        # Sync HTTP requests have a finite transport budget. Waiting forever for
+        # the single Chromium slot used to consume that budget before Meta was
+        # even opened. Queue time is therefore bounded independently of active
+        # browser lease time.
+        queue_timeout_raw = _clean(
+            os.getenv("REMASK_BROWSER_QUEUE_TIMEOUT_SECONDS") or "12"
+        )
+        try:
+            queue_timeout_seconds = float(queue_timeout_raw)
+        except (TypeError, ValueError):
+            queue_timeout_seconds = 12.0
+        queue_timeout_seconds = max(2.0, min(queue_timeout_seconds, 20.0))
+
         browser_slot_wait_started = time.monotonic()
-        await _BROWSER_SEMAPHORE.acquire()
+        try:
+            await asyncio.wait_for(
+                _BROWSER_SEMAPHORE.acquire(),
+                timeout=queue_timeout_seconds,
+            )
+        except asyncio.TimeoutError as exc:
+            raise BrowserBusinessError(
+                "BROWSER_SLOT_TIMEOUT",
+                (
+                    "No Chromium slot became available within "
+                    f"{queue_timeout_seconds:.1f}s."
+                ),
+                retryable=True,
+                diagnostic={
+                    "phase": "browser_slot_wait",
+                    "timeout_seconds": queue_timeout_seconds,
+                },
+            ) from exc
         self._semaphore_acquired = True
         self._browser_slot_acquired_at = time.monotonic()
         browser_slot_wait_ms = int(
@@ -2009,15 +2040,16 @@ class FacebookBusinessBrowser:
         try:
             await asyncio.wait_for(
                 self._profile_lock.acquire(),
-                timeout=30.0,
+                timeout=queue_timeout_seconds,
             )
         except asyncio.TimeoutError as exc:
             await self.close()
             raise BrowserBusinessError(
                 "PROFILE_BROWSER_LOCK_TIMEOUT",
                 (
-                    "Profile browser lock did not become available within 30s. "
-                    "A previous browser task may be stuck; no Meta action was sent."
+                    "Profile browser lock did not become available within "
+                    f"{queue_timeout_seconds:.1f}s. A previous browser task may "
+                    "be stuck; no Meta action was sent."
                 ),
                 retryable=True,
             ) from exc
@@ -4662,6 +4694,8 @@ class FacebookBusinessBrowser:
                     "name": name[:240],
                     "category": "",
                     "source": "browser_dom_link",
+                    "_source": "browser_dom_link",
+                    "business_ownership": "unknown",
                 })
 
             if link_pages:
@@ -4675,6 +4709,15 @@ class FacebookBusinessBrowser:
             for row in pages:
                 if not isinstance(row, dict):
                     continue
+                row.setdefault(
+                    "business_ownership",
+                    (
+                        "owned_by_business"
+                        if _digits(row.get("business_id"))
+                        else "unknown"
+                    ),
+                )
+                row.setdefault("_source", "facebook_browser_pages_surface")
                 page_id = _digits(row.get("id"))
                 if not page_id:
                     continue
@@ -5024,6 +5067,10 @@ class FacebookBusinessBrowser:
         network_rows: dict[str, str] = {}
         query_diagnostics: list[dict[str, Any]] = []
         response_tasks: set[asyncio.Task[Any]] = set()
+        # REMASK_BUSINESS_INVENTORY_READINESS_V1
+        # A zero-length result is meaningful only when Meta's read-only
+        # Business selector inventory response was actually observed.
+        inventory_observed = False
 
         def inspect_request(request: Any) -> None:
             try:
@@ -5052,6 +5099,7 @@ class FacebookBusinessBrowser:
                 )
 
         async def inspect_response(response: Any) -> None:
+            nonlocal inventory_observed
             try:
                 url = _clean(getattr(response, "url", ""))
                 if "graphql" not in url.casefold():
@@ -5069,6 +5117,19 @@ class FacebookBusinessBrowser:
                 raw = await response.text()
                 payload = _decode_graphql_text(raw)
                 rows = _extract_business_inventory_rows(payload)
+
+                # The NorthStar unified scoping selector is Meta's own
+                # read-only Business inventory surface. A successful data
+                # payload proves the collection was observed even when it is
+                # empty. Generic GraphQL responses never prove an empty list.
+                selector_inventory_response = bool(
+                    "northstarbusinessunifiedscopingselector"
+                    in folded_friendly
+                    and isinstance(payload, dict)
+                    and isinstance(payload.get("data"), dict)
+                )
+                if selector_inventory_response or rows:
+                    inventory_observed = True
 
                 # Diagnostic inventory evidence from the same private selector
                 # payloads. Keep this structural and bounded: no raw GraphQL
@@ -5670,6 +5731,10 @@ class FacebookBusinessBrowser:
                 ),
                 "network_businesses": len(network_rows),
                 "dom_businesses": len(dom_output),
+                "inventory_observed": bool(inventory_observed or network_rows),
+                "confirmed_empty": bool(
+                    inventory_observed and not network_rows and not dom_output
+                ),
                 "queries": query_diagnostics[-24:],
                 "selector_probe": selector_probe,
                 "ads_manager_attempt": ads_manager_attempt,
@@ -5717,6 +5782,36 @@ class FacebookBusinessBrowser:
                     )
                 except BaseException:
                     pass
+
+    async def snapshot_business_inventory(self) -> dict[str, Any]:
+        """Return Business rows together with explicit inventory readiness."""
+        rows = await self.snapshot_businesses()
+        diagnostic = dict(self._last_business_inventory_diagnostic or {})
+        ready = bool(
+            rows
+            or diagnostic.get("inventory_observed")
+        )
+        return {
+            "ready": ready,
+            "confirmed_empty": bool(ready and not rows),
+            "businesses": [
+                {
+                    "id": str(business_id),
+                    "name": _clean(business_name),
+                    "_source": str(
+                        diagnostic.get("source")
+                        or "business_suite_private_inventory"
+                    ),
+                }
+                for business_id, business_name in sorted(rows.items())
+            ],
+            "businesses_count": len(rows),
+            "source": str(
+                diagnostic.get("source")
+                or "business_suite_private_inventory"
+            ),
+            "diagnostic": diagnostic,
+        }
 
     @staticmethod
     def _request_matches_ad_account_create(
