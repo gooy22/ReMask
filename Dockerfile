@@ -317,6 +317,8 @@ RUN set -eux; \
     grep -q 'hierarchy_worker_live_inventory' /var/www/html/ajax/metaHierarchy.php; \
     grep -q 'REMASK_PRIVATE_BUSINESS_INVENTORY_V1' /opt/remask-python/app/facebook_business_browser.py; \
     grep -q 'REMASK_BUSINESS_SELECTOR_HARD_DEADLINE_V1' /opt/remask-python/app/facebook_business_browser.py; \
+    grep -q 'REMASK_ADS_REQUEST_SCOPE_EXPECTED_CONFIRM_V1' /opt/remask-python/app/facebook_business_browser.py; \
+    grep -q 'REMASK_BROWSER_CLOSE_HARD_DEADLINE_V1' /opt/remask-python/app/facebook_business_browser.py; \
     grep -q 'business_suite_private_inventory' /opt/remask-python/main.py; \
     grep -q 'REMASK_SYNC_SINGLE_SOURCE_PAGES_V1' /opt/remask-python/main.py; \
     grep -q "'pages':pages" /opt/remask-python/main.py; \
@@ -325,6 +327,9 @@ RUN set -eux; \
     grep -q 'ad_account_hints' /opt/remask-python/main.py; \
     grep -q 'REMASK_CONFIRMED_HINT_FAST_REVALIDATION_V1' /opt/remask-python/main.py; \
     grep -q 'REMASK_REQUESTED_BUSINESS_WORKER_SCOPE_V1' /opt/remask-python/main.py; \
+    grep -q 'REMASK_HARD_DEADLINE_TASK_V1' /opt/remask-python/main.py; \
+    grep -q 'ads_manager_hint_revalidation_unconfirmed' /opt/remask-python/main.py; \
+    grep -q 'skipped_for_business_scoped_sync' /opt/remask-python/main.py; \
     grep -q 'REMASK_DURABLE_BINDING_ACCOUNT_HINTS_V1' /opt/remask-python/main.py; \
     grep -q 'REMASK_EXACT_HINTS_SKIP_FULL_BM_DISCOVERY_V1' /opt/remask-python/main.py; \
     grep -q 'Business Suite discovery skipped' /opt/remask-python/main.py; \
