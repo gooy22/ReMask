@@ -5386,116 +5386,29 @@ class FacebookBusinessBrowser:
                 "network_businesses": len(network_rows),
                 "dom_businesses": len(dom_output),
             })
-            try:
-                selector_probe = await self.page.evaluate(
-                    """() => {
-                        const visible = (el) => {
-                            if (!el || el === document.body || el === document.documentElement) return false;
-                            const r = el.getBoundingClientRect();
-                            const s = getComputedStyle(el);
-                            return r.width > 0 && r.height > 0
-                                && s.display !== 'none'
-                                && s.visibility !== 'hidden'
-                                && s.pointerEvents !== 'none';
-                        };
-                        const label = (el) => [
-                            (el.getAttribute && el.getAttribute('aria-label')) || '',
-                            (el.getAttribute && el.getAttribute('title')) || '',
-                            el.innerText || el.textContent || ''
-                        ].join(' ').replace(/\\s+/g, ' ').trim();
-
-                        const xs = [20, 52, 88, 124, 160, 196, 228];
-                        const ys = [58,72,86,100,114,128,142,156,170,184,198,212,226,240,254,268];
-                        const seen = new Set();
-                        const rows = [];
-
-                        for (const y of ys) {
-                            for (const x of xs) {
-                                const stack = document.elementsFromPoint(x, y) || [];
-                                for (const el of stack.slice(0, 10)) {
-                                    if (seen.has(el) || !visible(el)) continue;
-                                    seen.add(el);
-                                    const r = el.getBoundingClientRect();
-                                    const text = label(el);
-                                    const role = (el.getAttribute && el.getAttribute('role')) || '';
-                                    const tabindex = (el.getAttribute && el.getAttribute('tabindex')) || '';
-                                    const tag = el.tagName || '';
-                                    if (r.x > 300 || r.y < 48 || r.y > 285) continue;
-                                    if (r.width < 70 || r.width > 300) continue;
-                                    if (r.height < 22 || r.height > 100) continue;
-                                    if (!text) continue;
-                                    rows.push({el,r,text,role,tabindex,tag});
-                                }
-                            }
-                        }
-
-                        const homeRows = rows.filter(row =>
-                            /^(Home|Startseite|Start|Главная|Головна)$/i.test(row.text)
-                        );
-                        const homeY = homeRows.length
-                            ? Math.min(...homeRows.map(row => row.r.y))
-                            : 285;
-                        const candidates = rows.filter(row =>
-                            row.r.y < homeY - 2
-                            && !/^Meta Business Suite$/i.test(row.text)
-                            && !/^(Home|Startseite|Start|Главная|Головна)$/i.test(row.text)
-                            && !/^(Create|Создать|Створити|Erstellen)$/i.test(row.text)
-                        );
-                        candidates.sort((a,b) => {
-                            const ai = (a.role === 'button' || a.tag === 'BUTTON' || a.tabindex === '0') ? 1 : 0;
-                            const bi = (b.role === 'button' || b.tag === 'BUTTON' || b.tabindex === '0') ? 1 : 0;
-                            if (ai !== bi) return bi - ai;
-                            if (a.r.y !== b.r.y) return b.r.y - a.r.y;
-                            return (b.r.width*b.r.height) - (a.r.width*a.r.height);
-                        });
-
-                        const summary = candidates.slice(0, 12).map(row => ({
-                            text: row.text.slice(0, 180),
-                            role: row.role,
-                            tag: row.tag,
-                            x: Math.round(row.r.x),
-                            y: Math.round(row.r.y),
-                            w: Math.round(row.r.width),
-                            h: Math.round(row.r.height)
-                        }));
-                        const best = candidates[0];
-                        if (!best) return {clicked:false,candidates:summary};
-                        best.el.click();
-                        return {
-                            clicked:true,
-                            best_text:best.text.slice(0,180),
-                            candidates:summary
-                        };
-                    }"""
-                )
-                selector_opened = bool(
-                    isinstance(selector_probe, dict)
-                    and selector_probe.get("clicked")
-                )
-                if selector_opened:
-                    self._last_business_inventory_diagnostic.update({
-                        "stage": "selector_hydration",
-                        "selector_probe": selector_probe,
-                    })
-                    # Meta often hydrates the portfolio list after the menu
-                    # becomes visible. Keep the response listener alive long
-                    # enough for late Relay payloads instead of declaring an
-                    # empty inventory after one animation frame.
-                    hydrate_deadline = time.monotonic() + 4.5
-                    while time.monotonic() < hydrate_deadline:
-                        if network_rows:
-                            break
-                        await self.page.wait_for_timeout(300)
-                    # Capture the open selector DOM before navigating away.
-                    # Some Meta builds render BM links in the menu but do not
-                    # issue a dedicated portfolio GraphQL request.
-                    await collect_dom_businesses_bounded()
-            except Exception as exc:
-                selector_opened = False
-                selector_probe = {
-                    "clicked": False,
-                    "error": f"{exc.__class__.__name__}: {_clean(exc)}"[:500],
-                }
+            # REMASK_BUSINESS_DISCOVERY_NO_UNBOUNDED_SELECTOR_V1
+            # Production showed this direct page.evaluate() could remain stuck
+            # inside Playwright long after the endpoint's 28s deadline, turning
+            # a bounded discovery into a ~75s PHP transport failure. Do not make
+            # sync correctness depend on an interactive selector probe. The
+            # response/request listeners plus bounded DOM/Ads Manager/overview
+            # fallbacks below are sufficient live discovery sources.
+            selector_probe: dict[str, Any] = {
+                "clicked": False,
+                "skipped": True,
+                "reason": "unbounded_selector_probe_disabled",
+            }
+            selector_opened = False
+            self._last_business_inventory_diagnostic.update({
+                "stage": "selector_probe_skipped",
+                "selector_probe": selector_probe,
+                "network_businesses": len(network_rows),
+                "dom_businesses": len(dom_output),
+            })
+            # Sample the current HOME document only through the already-bounded
+            # DOM helper. This cannot extend the outer discovery deadline by an
+            # unbounded Playwright evaluate.
+            await collect_dom_businesses_bounded()
 
             # HOME is not deterministic for Page-pinned sessions. If it
             # emits no live Business selector traffic, open Ads Manager with no
