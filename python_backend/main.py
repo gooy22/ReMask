@@ -885,6 +885,27 @@ async def profile_live_inventory(
 
     warnings: list[str] = []
 
+    # REMASK_HARD_DEADLINE_TASK_V1
+    # asyncio.wait_for() may wait for cancellation cleanup from a wedged
+    # Playwright renderer. This returns on the wall-clock deadline instead.
+    async def hard_deadline(awaitable, timeout_seconds: float):
+        task=asyncio.create_task(awaitable)
+        done,_pending=await asyncio.wait(
+            {task},
+            timeout=max(0.05,float(timeout_seconds)),
+        )
+        if task not in done:
+            task.cancel()
+            task.add_done_callback(
+                lambda finished: (
+                    None
+                    if finished.cancelled()
+                    else finished.exception()
+                )
+            )
+            raise asyncio.TimeoutError()
+        return task.result()
+
     # REMASK_REQUESTED_BUSINESS_WORKER_SCOPE_V1
     # An explicit business_ids query is a target scope, not just another hint.
     # This keeps a one-BM Workspace sync from expanding back to every durable
@@ -1034,15 +1055,31 @@ async def profile_live_inventory(
                     known_accounts_by_business.items()
                 )[:25]:
                     try:
-                        ads_probe=await asyncio.wait_for(
+                        ads_probe=await hard_deadline(
                             browser.probe_ads_manager_inventory_context(
                                 business_id=str(hinted_business_id),
                                 timeout_seconds=7.0,
                                 expected_account_ids=sorted(expected_ids),
                             ),
-                            timeout=10.0,
+                            10.0,
                         )
                     except (asyncio.TimeoutError,BrowserBusinessError) as exc:
+                        business_key=str(hinted_business_id)
+                        prevalidated_inventory[business_key]={
+                            'business_id':business_key,
+                            'ready':False,
+                            'confirmed_empty':False,
+                            'accounts':[],
+                            'accounts_count':0,
+                            'source':'ads_manager_hint_revalidation_timeout',
+                            'attempts':[],
+                            'diagnostics':[{
+                                'phase':'fast_live_revalidation',
+                                'error':f'{exc.__class__.__name__}: {exc}',
+                            }],
+                            'section_diagnostic':{},
+                            'ads_manager_diagnostic':{},
+                        }
                         log.warning(
                             'live inventory profile=%s business=%s fast live revalidation failed=%s',
                             clean_profile,
@@ -1052,6 +1089,47 @@ async def profile_live_inventory(
                         continue
 
                     if not ads_probe.get('confirmed'):
+                        business_key=str(hinted_business_id)
+                        prevalidated_inventory[business_key]={
+                            'business_id':business_key,
+                            'ready':False,
+                            'confirmed_empty':False,
+                            'accounts':[],
+                            'accounts_count':0,
+                            'source':'ads_manager_hint_revalidation_unconfirmed',
+                            'attempts':[{
+                                'requested_url':str(
+                                    ads_probe.get('requested_url') or ''
+                                ),
+                                'landed_url':str(
+                                    ads_probe.get('final_url') or ''
+                                ),
+                                'result':'hint_live_revalidation_unconfirmed',
+                            }],
+                            'diagnostics':ads_probe.get('diagnostics') or [],
+                            'section_diagnostic':{},
+                            'ads_manager_diagnostic':ads_probe,
+                        }
+                        log.warning(
+                            'live inventory profile=%s business=%s fast live '
+                            'revalidation unconfirmed final_url=%s final_act_ids=%s '
+                            'request_scope_ids=%s generic=%s',
+                            clean_profile,
+                            hinted_business_id,
+                            str(ads_probe.get('final_url') or '')[:500],
+                            json.dumps(
+                                ads_probe.get('final_act_ids') or [],
+                                separators=(',', ':'),
+                            ),
+                            json.dumps(
+                                ads_probe.get('request_scope_account_ids') or [],
+                                separators=(',', ':'),
+                            ),
+                            json.dumps(
+                                ads_probe.get('generic_bootstrap') or {},
+                                separators=(',', ':'),
+                            )[:1200],
+                        )
                         continue
                     confirmed_accounts=[
                         account
@@ -1544,9 +1622,12 @@ async def profile_live_inventory(
             pages_ready=False
             pages_started=time.monotonic()
             try:
-                discovered_pages=await asyncio.wait_for(
+                if requested_business_ids:
+                    pages_source='skipped_for_business_scoped_sync'
+                    raise StopAsyncIteration()
+                discovered_pages=await hard_deadline(
                     browser.discover_managed_pages(fast=True),
-                    timeout=14.0,
+                    14.0,
                 )
                 pages=[
                     {
@@ -1570,6 +1651,8 @@ async def profile_live_inventory(
                 )
                 pages_source='facebook_business_browser'
                 pages_ready=True
+            except StopAsyncIteration:
+                pass
             except asyncio.TimeoutError:
                 pages_source='facebook_business_browser_timeout'
                 warnings.append('Fan Page inventory timed out')
