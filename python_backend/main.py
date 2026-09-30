@@ -20,6 +20,7 @@ from app.live_inventory_contract import (
     BUSINESS_SCOPED,
     PROFILE_FULL,
     compute_inventory_readiness,
+    page_auto_selectable,
 )
 from app.facebook_docids import (
     list_candidates,
@@ -206,9 +207,10 @@ async def run_bm_browser_canary() -> None:
                         continue
                     saved_pages.append(row)
                     known_page_ids.add(page_id)
+                # REMASK_CANARY_CONFIRMED_FREE_PAGE_V1
                 free_pages=[
                     row for row in saved_pages
-                    if not str(row.get('business_id') or '').strip()
+                    if page_auto_selectable(row)
                 ]
                 free_page=free_pages[0] if free_pages else None
                 existing_business_id=next(iter(sorted(business_snapshot)), '')
