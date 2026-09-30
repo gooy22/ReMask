@@ -689,6 +689,12 @@ def _normalize_ad_account_id(value: Any) -> str:
     return "act_" + raw
 
 
+# REMASK_AD_ACCOUNT_COMPARE_DIGITS_V1
+def _ad_account_compare_digits(value: Any) -> str:
+    normalized = _normalize_ad_account_id(value)
+    return normalized[4:] if normalized.startswith("act_") else ""
+
+
 def _compact_semantic(value: Any) -> str:
     return re.sub(r"[^a-z0-9]+", "", _clean(value).casefold())
 
@@ -10645,9 +10651,9 @@ class FacebookBusinessBrowser:
         request_scope_accounts: set[str] = set()
         exact_business_evidence = False
         expected_accounts = {
-            _normalize_ad_account_id(value)
+            _ad_account_compare_digits(value)
             for value in (expected_account_ids or [])
-            if _normalize_ad_account_id(value)
+            if _ad_account_compare_digits(value)
         }
 
         def collect_numeric_paths(
