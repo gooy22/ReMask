@@ -1528,6 +1528,8 @@ async def profile_live_inventory(
             result={
                 'ok':True,
                 'profile_id':clean_profile,
+                # REMASK_SYNC_SESSION_READY_V1
+                'session_ready':True,
                 'live_ready':live_ready,
                 'businesses':businesses,
                 'businesses_count':len(businesses),
