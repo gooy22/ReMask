@@ -356,6 +356,7 @@ class BusinessInventoryProbeTests(unittest.IsolatedAsyncioTestCase):
 
         async def immediate_timeout(tasks, timeout=None):
             task_set = set(tasks)
+            await asyncio.sleep(0)
             return set(), task_set
 
         browser = FacebookBusinessBrowser(
