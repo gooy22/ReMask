@@ -1043,11 +1043,15 @@ async function pythonWorkerRefreshProfile(profileId) {
     return false;
   }
 
+  // REMASK_POST_JOB_LOCAL_REFRESH_V1
+  // Successful FP/BM/RK jobs already persist the exact confirmed IDs in ReMask.
+  // Refresh Workspace from local state; never hit Facebook again just to render
+  // the object that the worker itself has just confirmed.
   try {
     const data = await apiJson(
       'ajax/metaHierarchy.php',
       post({
-        action: 'sync_profile',
+        action: 'snapshot_profile',
         profile: profileId
       })
     );
@@ -1056,7 +1060,7 @@ async function pythonWorkerRefreshProfile(profileId) {
     if (typeof render === 'function') render();
     return true;
   } catch (error) {
-    console.error('[ReMask Worker UI] sync_profile failed for ' + profileId + ':', error);
+    console.error('[ReMask Worker UI] snapshot_profile failed for ' + profileId + ':', error);
     return false;
   }
 }
