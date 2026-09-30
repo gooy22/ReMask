@@ -4,6 +4,7 @@ import inspect
 import unittest
 
 import main as api
+from app.facebook_business_browser import FacebookBusinessBrowser
 
 
 class LiveSyncContractTests(unittest.TestCase):
@@ -30,6 +31,15 @@ class LiveSyncContractTests(unittest.TestCase):
         self.assertIn("REMASK_LIVE_INVENTORY_TOTAL_BUDGET_V1", source)
         self.assertIn("REMASK_LIVE_PAYLOAD_EXCLUDES_DURABLE_FALLBACK_V1", source)
         self.assertIn("invalidating browser session", source)
+
+    def test_browser_open_cancellation_releases_owned_resources(self) -> None:
+        source=inspect.getsource(FacebookBusinessBrowser.open)
+        cancel_index=source.index("except asyncio.CancelledError:")
+        generic_index=source.index("except Exception as exc:")
+        cleanup_index=source.index("await self.close()", cancel_index)
+        self.assertLess(cancel_index, generic_index)
+        self.assertLess(cancel_index, cleanup_index)
+        self.assertIn("REMASK_BROWSER_OPEN_CANCEL_CLEANUP_V1", source)
 
 
 if __name__ == "__main__":

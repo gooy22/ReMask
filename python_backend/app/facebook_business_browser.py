@@ -2179,6 +2179,15 @@ class FacebookBusinessBrowser:
             self.page.on("requestfailed", on_request_failed)
             self.page.on("pageerror", on_page_error)
 
+        # REMASK_BROWSER_OPEN_CANCEL_CLEANUP_V1
+        # asyncio.wait_for() cancels open() with CancelledError, which is a
+        # BaseException on modern Python and therefore bypasses except Exception.
+        # If cancellation happens after acquiring the global browser semaphore
+        # or profile lock, close explicitly before re-raising so the next Sync
+        # cannot inherit a permanently occupied browser slot.
+        except asyncio.CancelledError:
+            await self.close()
+            raise
         except BrowserBusinessError:
             await self.close()
             raise
