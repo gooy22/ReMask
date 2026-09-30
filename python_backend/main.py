@@ -1083,6 +1083,7 @@ async def profile_live_inventory(
             )
 
             business_map: dict[str,str] = {}
+            business_details: dict[str,dict] = {}
             discovery_source=''
             prevalidated_inventory: dict[str,dict] = {}
             business_inventory_ready=False
@@ -1298,14 +1299,20 @@ async def profile_live_inventory(
                     business_inventory_confirmed_empty=bool(
                         business_inventory.get('confirmed_empty')
                     )
-                    business_map={
-                        str(row.get('id') or '').strip():
-                            str(row.get('name') or row.get('id') or '').strip()
+                    business_details={
+                        str(row.get('id') or '').strip():dict(row)
                         for row in (
                             business_inventory.get('businesses') or []
                         )
                         if isinstance(row,dict)
                         and str(row.get('id') or '').strip().isdigit()
+                    }
+                    business_map={
+                        business_id:(
+                            str(detail.get('name') or business_id).strip()
+                            or business_id
+                        )
+                        for business_id,detail in business_details.items()
                     }
                     business_diag=business_inventory.get('diagnostic') or {}
                     discovery_source=str(
@@ -1603,9 +1610,33 @@ async def profile_live_inventory(
                 business_map.items(),
                 key=lambda item: str(item[0]),
             )[:25]:
+                business_detail=dict(
+                    business_details.get(str(business_id)) or {}
+                )
                 row={
                     'id':str(business_id or '').strip(),
-                    'name':str(business_name or business_id or '').strip(),
+                    'name':str(
+                        business_detail.get('name')
+                        or business_name
+                        or business_id
+                        or ''
+                    ).strip(),
+                    'verification_status':str(
+                        business_detail.get('verification_status') or ''
+                    ).strip(),
+                    'primary_page':(
+                        business_detail.get('primary_page')
+                        if isinstance(
+                            business_detail.get('primary_page'),
+                            dict,
+                        )
+                        else None
+                    ),
+                    '_source':str(
+                        business_detail.get('_source')
+                        or discovery_source
+                        or 'business_suite_private_inventory'
+                    ),
                     'ad_accounts':[],
                     'ad_accounts_count':0,
                     'ad_accounts_ready':False,
