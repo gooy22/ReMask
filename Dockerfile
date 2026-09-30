@@ -228,6 +228,7 @@ RUN set -eux; \
     grep -q 'REMASK_PRIVATE_BROWSER_SYNC_V1' /var/www/html/ajax/metaHierarchy.php; \
     grep -q 'hierarchy_worker_live_inventory' /var/www/html/ajax/metaHierarchy.php; \
     grep -q 'REMASK_REQUESTED_BUSINESS_SYNC_SCOPE_V1' /var/www/html/ajax/metaHierarchy.php; \
+    grep -q 'REMASK_SCOPED_SYNC_MERGE_LIVE_SIBLINGS_V1' /var/www/html/ajax/metaHierarchy.php; \
     grep -q 'private_business_suite_browser' /var/www/html/ajax/metaHierarchy.php; \
     grep -q 'REMASK_FBTOOL_ADS_TOKEN_REFRESH_V1' /var/www/html/classes/FbRequests.php; \
 
