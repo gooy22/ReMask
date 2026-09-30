@@ -1205,12 +1205,19 @@ $syncProfileReplacement = <<<'PHP'
 
         $profile = trim((string)($input['profile'] ?? ''));
         $requestId = trim((string)($input['request_id'] ?? ''));
+        $requestedBusinessId = trim((string)($input['business_id'] ?? ''));
         if ($profile === '') throw new InvalidArgumentException('profile is required');
         if (
             $requestId !== ''
             && !preg_match('/^[A-Za-z0-9_-]{8,96}$/', $requestId)
         ) {
             throw new InvalidArgumentException('invalid request_id');
+        }
+        if (
+            $requestedBusinessId !== ''
+            && !preg_match('/^\d{5,30}$/', $requestedBusinessId)
+        ) {
+            throw new InvalidArgumentException('invalid business_id');
         }
 
         // REMASK_PRIVATE_BROWSER_SYNC_V1
@@ -1265,6 +1272,18 @@ $syncProfileReplacement = <<<'PHP'
             ) continue;
             $knownBusinessIds[$businessId] = true;
             $knownAdAccountHints[$businessId][$accountId] = true;
+        }
+
+        // REMASK_REQUESTED_BUSINESS_SYNC_SCOPE_V1
+        // Workspace sends business_id when the user synchronizes one BM row.
+        // Honor that scope instead of silently turning one-BM sync into a
+        // full-profile scan across unrelated historical bindings.
+        if ($requestedBusinessId !== '') {
+            $requestedAccounts = (array)($knownAdAccountHints[$requestedBusinessId] ?? []);
+            $knownBusinessIds = [$requestedBusinessId => true];
+            $knownAdAccountHints = $requestedAccounts !== []
+                ? [$requestedBusinessId => $requestedAccounts]
+                : [];
         }
 
         // If we know exact BM->RK pairs, probe only those BMs. Unhinted stale
