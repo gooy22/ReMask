@@ -67,6 +67,8 @@ class LiveSyncContractTests(unittest.TestCase):
         self.assertIn("REMASK_STALE_HINT_ROWS_EXCLUDED_V1", source)
         self.assertIn("REMASK_FULL_PROFILE_DISCOVERY_BUDGET_V1", source)
         self.assertIn("business_inventory_confirmed_empty", source)
+        self.assertIn("REMASK_DISCOVERY_TIMEOUT_HINT_FALLBACK_V1", source)
+        self.assertIn("REMASK_RK_TIMEOUT_IS_ROW_FAILURE_V1", source)
         self.assertIn("invalidating browser session", source)
 
     def test_browser_open_cancellation_releases_owned_resources(self) -> None:
