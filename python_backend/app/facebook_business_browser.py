@@ -1208,7 +1208,7 @@ def _business_ids_from_private_selector_request(meta: Any) -> set[str]:
 
 
 # REMASK_PRIVATE_BUSINESS_INVENTORY_V1
-def _extract_business_inventory_rows(payload: Any) -> list[dict[str, str]]:
+def _extract_business_inventory_rows(payload: Any) -> list[dict[str, Any]]:
     """Extract Business portfolio rows from Meta Business Suite Relay payloads.
 
     Only structurally business-scoped nodes are accepted. Generic numeric IDs
@@ -1274,6 +1274,27 @@ def _extract_business_inventory_rows(payload: Any) -> list[dict[str, str]]:
                 }
                 if name and not row.get("name"):
                     row["name"] = name[:240]
+
+                verification_status = _clean(
+                    value.get("verification_status")
+                    or value.get("verificationStatus")
+                    or value.get("business_verification_status")
+                    or value.get("businessVerificationStatus")
+                )
+                if verification_status and not row.get("verification_status"):
+                    row["verification_status"] = verification_status[:120]
+
+                primary_page = (
+                    value.get("primary_page")
+                    or value.get("primaryPage")
+                )
+                if isinstance(primary_page, dict):
+                    page_id = _digits(primary_page.get("id"))
+                    if page_id:
+                        row["primary_page"] = {
+                            "id": page_id,
+                            "name": _clean(primary_page.get("name"))[:240],
+                        }
                 found[business_id] = row
 
             for key, child in value.items():
@@ -5065,6 +5086,7 @@ class FacebookBusinessBrowser:
             await self.open()
 
         network_rows: dict[str, str] = {}
+        network_details: dict[str, dict[str, Any]] = {}
         query_diagnostics: list[dict[str, Any]] = []
         response_tasks: set[asyncio.Task[Any]] = set()
         # REMASK_BUSINESS_INVENTORY_READINESS_V1
@@ -5321,6 +5343,19 @@ class FacebookBusinessBrowser:
                         or (business_name and not network_rows[business_id])
                     ):
                         network_rows[business_id] = business_name
+                    detail = network_details.get(business_id) or {
+                        "id": business_id,
+                        "name": business_name,
+                    }
+                    for key in (
+                        "name",
+                        "verification_status",
+                        "primary_page",
+                    ):
+                        value = row.get(key)
+                        if value not in ("", None, [], {}):
+                            detail[key] = value
+                    network_details[business_id] = detail
 
                 # Meta frequently moves the Business node deeper into a generic
                 # viewer payload while keeping the exact target business_id in
@@ -5735,6 +5770,10 @@ class FacebookBusinessBrowser:
                 "confirmed_empty": bool(
                     inventory_observed and not network_rows and not dom_output
                 ),
+                "business_rows": [
+                    network_details[key]
+                    for key in sorted(network_details)
+                ][:64],
                 "queries": query_diagnostics[-24:],
                 "selector_probe": selector_probe,
                 "ads_manager_attempt": ads_manager_attempt,
@@ -5791,20 +5830,29 @@ class FacebookBusinessBrowser:
             rows
             or diagnostic.get("inventory_observed")
         )
+        rich_rows = {
+            _digits(row.get("id")): dict(row)
+            for row in (diagnostic.get("business_rows") or [])
+            if isinstance(row, dict) and _digits(row.get("id"))
+        }
+        businesses = []
+        for business_id, business_name in sorted(rows.items()):
+            detail = dict(rich_rows.get(str(business_id)) or {})
+            detail["id"] = str(business_id)
+            detail["name"] = (
+                _clean(detail.get("name"))
+                or _clean(business_name)
+            )
+            detail["_source"] = str(
+                diagnostic.get("source")
+                or "business_suite_private_inventory"
+            )
+            businesses.append(detail)
+
         return {
             "ready": ready,
             "confirmed_empty": bool(ready and not rows),
-            "businesses": [
-                {
-                    "id": str(business_id),
-                    "name": _clean(business_name),
-                    "_source": str(
-                        diagnostic.get("source")
-                        or "business_suite_private_inventory"
-                    ),
-                }
-                for business_id, business_name in sorted(rows.items())
-            ],
+            "businesses": businesses,
             "businesses_count": len(rows),
             "source": str(
                 diagnostic.get("source")
