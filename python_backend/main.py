@@ -885,6 +885,16 @@ async def profile_live_inventory(
 
     warnings: list[str] = []
 
+    # REMASK_REQUESTED_BUSINESS_WORKER_SCOPE_V1
+    # An explicit business_ids query is a target scope, not just another hint.
+    # This keeps a one-BM Workspace sync from expanding back to every durable
+    # BM/RK pair already stored for the profile.
+    requested_business_ids={
+        value.strip()
+        for value in str(business_ids or '').split(',')
+        if value.strip().isdigit()
+    }
+
     # Prefer already-confirmed durable BM identities. For a profile that ReMask
     # itself provisioned, forcing a fresh Business Suite HOME discovery first
     # is both redundant and fragile: Meta HOME can take >18s to settle while
@@ -901,12 +911,23 @@ async def profile_live_inventory(
         for row in confirmed_bindings
         if isinstance(row,dict)
         and str(row.get('business_id') or '').strip().isdigit()
+        and (
+            not requested_business_ids
+            or str(row.get('business_id') or '').strip()
+                in requested_business_ids
+        )
     }
     latest_business_id=str(
         (latest_entities or {}).get('business_id') or ''
     ).strip()
     known_business_ids=set(binding_by_business)
-    if latest_business_id.isdigit():
+    if (
+        latest_business_id.isdigit()
+        and (
+            not requested_business_ids
+            or latest_business_id in requested_business_ids
+        )
+    ):
         known_business_ids.add(latest_business_id)
 
     # REMASK_DURABLE_BINDING_ACCOUNT_HINTS_V1
@@ -921,7 +942,14 @@ async def profile_live_inventory(
         hinted_account_id=str(row.get('ad_account_id') or '').strip()
         if hinted_account_id.startswith('act_'):
             hinted_account_id=hinted_account_id[4:]
-        if hinted_business_id.isdigit() and hinted_account_id.isdigit():
+        if (
+            hinted_business_id.isdigit()
+            and hinted_account_id.isdigit()
+            and (
+                not requested_business_ids
+                or hinted_business_id in requested_business_ids
+            )
+        ):
             known_business_ids.add(hinted_business_id)
             known_accounts_by_business.setdefault(
                 hinted_business_id,set()
@@ -931,10 +959,8 @@ async def profile_live_inventory(
     # Workspace may already know BM IDs even when Business Suite HOME fails to
     # render the portfolio selector. Treat them as navigation hints only; the
     # browser still has to prove each BM/RK through the live settings surface.
-    for hinted_business_id in str(business_ids or '').split(','):
-        hinted_business_id=hinted_business_id.strip()
-        if hinted_business_id.isdigit():
-            known_business_ids.add(hinted_business_id)
+    for hinted_business_id in requested_business_ids:
+        known_business_ids.add(hinted_business_id)
 
     # BM:RK pairs below come only from the last live-confirmed Workspace
     # snapshot. They are hints for surviving Meta selector/UI drift; they are
@@ -949,6 +975,10 @@ async def profile_live_inventory(
         if (
             hinted_business_id.isdigit()
             and hinted_account_id.isdigit()
+            and (
+                not requested_business_ids
+                or hinted_business_id in requested_business_ids
+            )
         ):
             known_business_ids.add(hinted_business_id)
             known_accounts_by_business.setdefault(
@@ -981,10 +1011,11 @@ async def profile_live_inventory(
                 int((time.monotonic()-browser_open_started)*1000),
             )
             log.info(
-                'live inventory profile=%s durable_targets businesses=%d exact_pairs=%d',
+                'live inventory profile=%s durable_targets businesses=%d exact_pairs=%d requested_businesses=%s',
                 clean_profile,
                 len(known_business_ids),
                 sum(len(ids) for ids in known_accounts_by_business.values()),
+                ','.join(sorted(requested_business_ids)) or '-',
             )
 
             business_map: dict[str,str] = {}
