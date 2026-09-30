@@ -1246,35 +1246,29 @@ async def profile_live_inventory(
                         prevalidated_inventory[business_key]['source'],
                     )
 
-                if business_map:
-                    discovery_source='confirmed_snapshot_ads_manager_revalidation'
-                    log.info(
-                        'live inventory profile=%s fast revalidation ms=%d businesses=%d; Business Suite discovery skipped',
-                        clean_profile,
-                        int((time.monotonic()-fast_started)*1000),
-                        len(business_map),
-                    )
-
             discovery_revalidation=False
-            if not business_map and known_accounts_by_business:
-                # REMASK_EXACT_HINTS_SKIP_FULL_BM_DISCOVERY_V1
-                # We already know exact BM->RK candidates. Full Business Suite
-                # HOME/selector discovery can hang during Playwright cancellation
-                # for >60s, so do not put it in front of targeted live proof.
+            if known_accounts_by_business:
+                # REMASK_EXACT_HINTS_REMAIN_REQUIRED_TARGETS_V1
+                # Exact BM->RK bindings are only navigation hints, but once a
+                # full Sync elects to validate them none may silently disappear
+                # merely because another hinted BM passed fast revalidation.
+                # Keep every exact hinted Business in the required target set.
+                fast_confirmed_businesses=set(business_map)
                 business_map={
-                    business_id: business_id
+                    business_id: business_map.get(business_id,business_id)
                     for business_id in sorted(known_accounts_by_business)
                     if str(business_id).isdigit()
                 }
-                if business_map:
-                    discovery_revalidation=True
-                    discovery_source='confirmed_account_hint_targeted_revalidation'
-                    log.info(
-                        'live inventory profile=%s exact BM/RK hints present; '
-                        'full Business Suite discovery skipped targets=%s',
-                        clean_profile,
-                        ','.join(sorted(business_map)),
-                    )
+                discovery_revalidation=True
+                discovery_source='confirmed_account_hint_targeted_revalidation'
+                log.info(
+                    'live inventory profile=%s exact BM/RK hints targeted=%d '
+                    'fast_confirmed=%d; Business Suite discovery skipped targets=%s',
+                    clean_profile,
+                    len(business_map),
+                    len(fast_confirmed_businesses),
+                    ','.join(sorted(business_map)),
+                )
 
             if not business_map:
                 stage='business_discovery'

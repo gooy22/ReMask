@@ -30,6 +30,8 @@ class LiveSyncContractTests(unittest.TestCase):
         self.assertNotIn("worker_confirmed_fallback", source)
         self.assertIn("REMASK_LIVE_INVENTORY_TOTAL_BUDGET_V1", source)
         self.assertIn("REMASK_LIVE_PAYLOAD_EXCLUDES_DURABLE_FALLBACK_V1", source)
+        self.assertIn("REMASK_EXACT_HINTS_REMAIN_REQUIRED_TARGETS_V1", source)
+        self.assertIn("for business_id in sorted(known_accounts_by_business)", source)
         self.assertIn("invalidating browser session", source)
 
     def test_browser_open_cancellation_releases_owned_resources(self) -> None:
