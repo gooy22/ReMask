@@ -1801,7 +1801,11 @@ async def profile_live_inventory(
                 return normalized
 
             try:
-                private_pages_timeout=budget(7.0)
+                # LIST_PAGES may need to rediscover Meta's current persisted
+                # query when the durable registry is empty/stale. Keep this
+                # bounded, but give the self-heal path enough time to finish
+                # before falling back to the much heavier browser surface.
+                private_pages_timeout=budget(10.0)
                 facebook_web=await profile_session.facebook_web()
                 private_page_result=await hard_deadline(
                     list_pages_via_private_graphql(facebook_web),
