@@ -1455,6 +1455,7 @@ async def profile_live_inventory(
                                 },
                             }
 
+                        ads_confirmed_inventory=None
                         if ads_probe.get('confirmed'):
                             confirmed_accounts=[
                                 account
@@ -1464,12 +1465,15 @@ async def profile_live_inventory(
                                 if isinstance(account,dict)
                             ]
                             if confirmed_accounts:
-                                return {
+                                ads_confirmed_inventory={
                                     'business_id':str(business_id),
                                     'ready':True,
                                     'confirmed_empty':False,
                                     'accounts':confirmed_accounts,
                                     'accounts_count':len(confirmed_accounts),
+                                    'metadata_ready':bool(
+                                        ads_probe.get('metadata_ready')
+                                    ),
                                     'source':str(
                                         ads_probe.get('confirmation_source')
                                         or 'ads_manager_business_scope_inventory'
@@ -1489,6 +1493,11 @@ async def profile_live_inventory(
                                     'section_diagnostic':{},
                                     'ads_manager_diagnostic':ads_probe,
                                 }
+                                if (
+                                    ads_confirmed_inventory['metadata_ready']
+                                    or remaining_budget() < 3.0
+                                ):
+                                    return ads_confirmed_inventory
 
                         try:
                             settings_inventory=await hard_deadline(
@@ -1503,12 +1512,19 @@ async def profile_live_inventory(
                             )
                         except asyncio.TimeoutError:
                             browser_tainted=True
+                            if ads_confirmed_inventory is not None:
+                                ads_confirmed_inventory['metadata_ready']=False
+                                ads_confirmed_inventory['metadata_warning']=(
+                                    'Business Settings metadata enrichment timed out'
+                                )
+                                return ads_confirmed_inventory
                             return {
                                 'business_id':str(business_id),
                                 'ready':False,
                                 'confirmed_empty':False,
                                 'accounts':[],
                                 'accounts_count':0,
+                                'metadata_ready':False,
                                 'source':'business_settings_hard_timeout',
                                 'attempts':[],
                                 'diagnostics':[{
@@ -1519,6 +1535,32 @@ async def profile_live_inventory(
                                 'ads_manager_diagnostic':ads_probe,
                             }
                         settings_inventory['ads_manager_diagnostic']=ads_probe
+                        settings_accounts=[
+                            row
+                            for row in (settings_inventory.get('accounts') or [])
+                            if isinstance(row,dict)
+                        ]
+                        settings_inventory['metadata_ready']=bool(
+                            settings_inventory.get('ready')
+                            and (
+                                not settings_accounts
+                                or any(
+                                    row.get('name')
+                                    or row.get('account_status') not in (None,'')
+                                    or row.get('currency')
+                                    or row.get('timezone_name')
+                                    for row in settings_accounts
+                                )
+                            )
+                        )
+                        if settings_inventory.get('ready'):
+                            return settings_inventory
+                        if ads_confirmed_inventory is not None:
+                            ads_confirmed_inventory['metadata_ready']=False
+                            ads_confirmed_inventory['metadata_warning']=(
+                                'Business Settings metadata enrichment was inconclusive'
+                            )
+                            return ads_confirmed_inventory
                         return settings_inventory
                     except BrowserBusinessError as exc:
                         last_error=exc
@@ -1565,6 +1607,7 @@ async def profile_live_inventory(
                     'ad_accounts':[],
                     'ad_accounts_count':0,
                     'ad_accounts_ready':False,
+                    'ad_accounts_metadata_ready':False,
                 }
                 inventory_started=time.monotonic()
                 try:
@@ -1578,6 +1621,17 @@ async def profile_live_inventory(
                     ]
                     row['ad_accounts_count']=len(row['ad_accounts'])
                     row['ad_accounts_ready']=bool(inventory.get('ready'))
+                    row['ad_accounts_metadata_ready']=bool(
+                        inventory.get('metadata_ready')
+                    )
+                    if inventory.get('metadata_warning'):
+                        row['ad_accounts_metadata_warning']=str(
+                            inventory.get('metadata_warning')
+                        )
+                        warnings.append(
+                            f'BM {business_id}: '
+                            + str(inventory.get('metadata_warning'))
+                        )
                     row['ad_accounts_source']=str(
                         inventory.get('source') or ''
                     )
@@ -1845,6 +1899,16 @@ async def profile_live_inventory(
                 )
                 business_inventory_confirmed_empty=False
 
+            rk_metadata_ready=all(
+                bool(row.get('ad_accounts_metadata_ready'))
+                or (
+                    bool(row.get('ad_accounts_ready'))
+                    and not (row.get('ad_accounts') or [])
+                )
+                for row in businesses
+                if isinstance(row,dict)
+            )
+
             readiness=compute_inventory_readiness(
                 scope=sync_scope,
                 session_ready=True,
@@ -1881,6 +1945,7 @@ async def profile_live_inventory(
                 'rk_inventory_ready':bool(
                     readiness.get('rk_inventory_ready')
                 ),
+                'rk_metadata_ready':rk_metadata_ready,
                 'rk_unconfirmed_business_ids':(
                     readiness.get('rk_unconfirmed_business_ids') or []
                 ),
