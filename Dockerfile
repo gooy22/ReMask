@@ -229,6 +229,9 @@ RUN set -eux; \
     grep -q 'hierarchy_worker_live_inventory' /var/www/html/ajax/metaHierarchy.php; \
     grep -q 'REMASK_REQUESTED_BUSINESS_SYNC_SCOPE_V1' /var/www/html/ajax/metaHierarchy.php; \
     grep -q 'REMASK_SCOPED_SYNC_MERGE_LIVE_SIBLINGS_V1' /var/www/html/ajax/metaHierarchy.php; \
+    grep -q 'REMASK_FULL_SYNC_REQUIRES_PAGES_V1' /var/www/html/ajax/metaHierarchy.php; \
+    grep -q 'REMASK_PERSIST_ONLY_COMPLETE_META_SNAPSHOT_V1' /var/www/html/ajax/metaHierarchy.php; \
+    grep -q 'REMASK_PRESERVE_CONFIRMED_PAGES_ON_PARTIAL_V1' /var/www/html/ajax/metaHierarchy.php; \
     grep -q 'private_business_suite_browser' /var/www/html/ajax/metaHierarchy.php; \
     grep -q 'REMASK_FBTOOL_ADS_TOKEN_REFRESH_V1' /var/www/html/classes/FbRequests.php; \
 
@@ -329,6 +332,9 @@ RUN set -eux; \
     grep -q 'REMASK_CONFIRMED_HINT_FAST_REVALIDATION_V1' /opt/remask-python/main.py; \
     grep -q 'REMASK_REQUESTED_BUSINESS_WORKER_SCOPE_V1' /opt/remask-python/main.py; \
     grep -q 'REMASK_HARD_DEADLINE_TASK_V1' /opt/remask-python/main.py; \
+    grep -q 'REMASK_FULL_PROFILE_SYNC_PAGES_V2' /opt/remask-python/main.py; \
+    grep -q 'discover_managed_pages(fast=False)' /opt/remask-python/main.py; \
+    ! grep -q 'skipped_for_business_scoped_sync' /opt/remask-python/main.py; \
     grep -q 'ads_manager_hint_revalidation_unconfirmed' /opt/remask-python/main.py; \
     grep -q 'skipped_for_business_scoped_sync' /opt/remask-python/main.py; \
     grep -q 'REMASK_DURABLE_BINDING_ACCOUNT_HINTS_V1' /opt/remask-python/main.py; \
