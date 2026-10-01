@@ -17626,7 +17626,6 @@ timeout_seconds=4.0,
     ) -> bool:
         if self.page is None or not value:
             return False
-
         for label in labels:
             pattern = re.compile(re.escape(label), re.IGNORECASE)
             try:
@@ -17825,10 +17824,16 @@ timeout_seconds=4.0,
         """Fill only the Page-add identifier field, never a global settings input."""
         if self.page is None or not value:
             return False
+        linked = None
         # The current Find Page wizard accepts Page name or URL. A numeric
         # string is treated as a name and can yield no result for a real Page.
         if str(value).isdigit():
-            value = f"https://www.facebook.com/{value}"
+            linked = next((row for row in (getattr(self.context, "pages", None) or [])
+                if isinstance(row, dict) and row.get("ownership_verified") is True
+                and _clean(row.get("id")) == str(value) and _clean(row.get("profile_id")).isdigit()), None)
+            # Search with the exact link displayed by Your Pages. The delegate
+            # ID still identifies the Business asset for submit/verification.
+            value = f"https://www.facebook.com/profile.php?id={linked['profile_id']}" if linked else f"https://www.facebook.com/{value}"
 
         # Meta's current autocomplete reacts to keyboard events. fill() alone
         # changes the visible value but did not trigger a search in production.
@@ -17836,8 +17841,9 @@ timeout_seconds=4.0,
             try:
                 field = self.page.get_by_placeholder(re.compile(re.escape(label), re.I)).first
                 if await field.is_visible() and await field.is_editable():
+                    lookup_value = _clean(linked.get("name")) if linked and label == "Facebook Page name or URL" and _clean(linked.get("name")) else value
                     await field.fill('', timeout=2000)
-                    await field.press_sequentially(value, delay=15, timeout=4000)
+                    await field.press_sequentially(lookup_value, delay=15, timeout=4000)
                     await field.press('Tab', timeout=1000)
                     return True
             except Exception:
@@ -18101,10 +18107,13 @@ timeout_seconds=4.0,
             return False
 
         marker = "data-remask-page-result"
+        known = next((row for row in (getattr(self.context, "pages", None) or [])
+            if isinstance(row, dict) and row.get("ownership_verified") is True
+            and page in {_clean(row.get("id")), _clean(row.get("profile_id"))}), {})
         try:
             meta = await self.page.evaluate(
                 """(args) => {
-                    const [marker, pageId] = args;
+                    const [marker, pageId, pageName, profileId] = args;
                     const visible = el => {
                         if (!el) return false;
                         const r = el.getBoundingClientRect();
@@ -18200,9 +18209,11 @@ timeout_seconds=4.0,
                         if (!text || blockedSet.has(text)) return;
                         const role = clean(el.getAttribute?.('role'));
                         const structural = [
-                            'option','radio','listitem','gridcell'
+                            'option','radio'
                         ].includes(role);
-                        const exactId = text.includes(pageId);
+                        const exactId = text.includes(pageId) || (profileId && text.includes(profileId));
+                        const exactName = pageName && text.includes(clean(pageName));
+                        if (!exactId && !exactName) return;
                         const clickable = (
                             structural
                             || el.tagName === 'BUTTON'
@@ -18264,7 +18275,7 @@ timeout_seconds=4.0,
                         }
                     };
                 }""",
-                [marker, page],
+                [marker, page, _clean(known.get("name")), _clean(known.get("profile_id"))],
             )
         except Exception:
             meta = {"selected": False}

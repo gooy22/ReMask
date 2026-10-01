@@ -168,6 +168,7 @@ async def business_handler(
             discover = getattr(await get_browser(), "discover_managed_pages", None)
             if callable(discover):
                 candidates = await discover(fast=True)
+                context.pages = candidates
                 release = getattr(session, "close_business_browser", None)
                 if callable(release):
                     await release()

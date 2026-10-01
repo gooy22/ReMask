@@ -384,6 +384,7 @@ async def run_targeted_pages_readonly_canary(profile_id: str) -> None:
             try:
                 pages = await asyncio.wait_for(browser.discover_managed_pages(
                     fast=True, navigation_timeout_ms=9000), timeout=45)
+                context.pages = pages
                 log.warning('targeted Pages readonly canary profile=%s pages=%s', profile_id,
                     json.dumps([{k: row.get(k) for k in ('id','profile_id','ownership_verified','ownership_source')} for row in pages], separators=(',', ':')))
                 target_profile = str(os.getenv('REMASK_PAGE_ATTACH_CANARY_PAGE') or '').strip()
@@ -409,8 +410,9 @@ async def run_targeted_pages_readonly_canary(profile_id: str) -> None:
                 async def readonly_route(route, request):
                     summary = FacebookBusinessBrowser._safe_graphql_request_summary(request)
                     friendly = str(summary.get('friendly_name') or '').lower()
-                    if 'graphql' in str(summary.get('url') or '') and 'mutation' not in friendly and len(page_queries)<25:
+                    if 'graphql' in str(summary.get('url') or '') and 'mutation' not in friendly:
                         page_queries.append({key:summary.get(key) for key in ('friendly_name','doc_id','variable_keys')})
+                        del page_queries[:-12]
                     harmless_session = friendly in {'useusersessiondatamutation', 'pagecontenttabupdatebizkitwaitliststatusmutation'}
                     asset_submit = FacebookBusinessBrowser._request_matches_page_add(request, business_id=target_business, page_id=target_page)
                     if str(request.method).upper() == 'POST' and (asset_submit or ('mutation' in friendly and not harmless_session)):
