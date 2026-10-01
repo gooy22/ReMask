@@ -510,6 +510,20 @@ async def run_existing_business_repair_once(profile_id: str) -> None:
     if steps not in (['BUSINESS'], ['PROXY_CHECK','BUSINESS']):
         log.warning('existing BM repair skipped: saved task contains other creation steps')
         return
+    if selected['error_code'] == 'BUSINESS_CHECKPOINT_MISMATCH':
+        business_params = (unfinished[0].get('payload', {}).get('parameters') or {}).get('BUSINESS') or {}
+        if business_params.get('attach_page') is True:
+            log.warning('existing BM repair skipped: explicit Page attach still requires matching identity')
+            return
+        # This exact saved item has a confirmed BM and no Page submission.
+        # Its old alias mismatch is recoverable after the independent-CREATE
+        # fix; changing retryability here does not authorize a new CREATE.
+        await store.set_task_failed(
+            unfinished[0]['id'], selected['error_code'],
+            str(unfinished[0].get('error_message') or 'Legacy Page alias mismatch'),
+            retryable=True,
+        )
+        await store.finalize_item(selected['item_id'])
     count = await store.retry_failed(selected['job_id'])
     if count == 1:
         await pool.enqueue_job(selected['job_id'])
