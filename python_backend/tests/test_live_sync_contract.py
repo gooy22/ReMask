@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import unittest
+from pathlib import Path
 
 import main as api
 from app.facebook_business_browser import FacebookBusinessBrowser
