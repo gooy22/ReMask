@@ -2063,7 +2063,7 @@ async def profile_live_inventory(
                         len(live_pages),
                         pages_source,
                     )
-                except (PageDiscoveryError,asyncio.TimeoutError,Exception) as exc:
+                except Exception as exc:
                     # Keep diagnostics, but never surface this as a normal Sync
                     # warning when usable durable/last-confirmed Page state exists.
                     detail=(
