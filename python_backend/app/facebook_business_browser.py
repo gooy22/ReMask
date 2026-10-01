@@ -5644,78 +5644,173 @@ class FacebookBusinessBrowser:
         *,
         fast: bool = True,
     ) -> list[dict[str, Any]]:
-        """Run account-level Page discovery in a disposable Facebook tab.
+        """Run account-level Page discovery after BM/RK work is complete.
 
         REMASK_ISOLATED_PAGE_INVENTORY_V1
-        The primary tab is often a heavy Ads Manager/Business Suite SPA.
-        Production showed that navigating that same document cross-domain to
-        www.facebook.com can remain stuck until the outer Sync deadline. A new
-        tab shares the authenticated browser context/cookies but starts with a
-        clean top-level document. The BM/RK tab is never navigated or closed.
+        REMASK_LOW_MEMORY_PAGE_HANDOFF_V1
+
+        Production proved that keeping Ads Manager alive while opening a second
+        Facebook SPA tab can crash Chromium on Railway. By the time this method
+        runs, BM/RK live state is already resolved, so preserve the authenticated
+        browser context/cookies but unload the heavy Ads Manager document first.
+        Reuse the single remaining page for a cold -> warm Your-Pages sequence.
         """
         if self.page is None or self._browser_context is None:
             await self.open()
         if self.page is None or self._browser_context is None:
             raise BrowserBusinessError(
                 "BROWSER_NOT_READY",
-                "Isolated Page inventory requires an open browser context.",
+                "Page inventory requires an open browser context.",
                 retryable=True,
             )
 
-        primary_page=self.page
-        probe_page=None
+        page=self.page
+        previous_url=_clean(getattr(page,"url",""))
+        pass_diagnostics: list[dict[str,Any]]=[]
+
+        # REMASK_PAGE_HANDOFF_UNLOAD_ADS_V1
+        # Release the heavy Ads Manager/Business Suite document before loading
+        # facebook.com. Keep the same browser context so cookies/session survive.
         try:
-            probe_page=await self._browser_context.new_page()
-            probe_page.set_default_timeout(min(self.timeout_ms,8000))
-            self.page=probe_page
-            rows=await self.discover_managed_pages(
-                fast=fast,
-                navigation_timeout_ms=6000 if fast else None,
+            await page.goto(
+                "about:blank",
+                wait_until="commit",
+                timeout=1800,
             )
-            diagnostic=dict(
-                self._last_page_inventory_diagnostic
-                if isinstance(self._last_page_inventory_diagnostic,dict)
-                else {}
-            )
-            diagnostic["isolated_tab"]=True
-            diagnostic["probe_url"]=_clean(
-                getattr(probe_page,"url","")
-            )
-            diagnostic["primary_url"]=_clean(
-                getattr(primary_page,"url","")
-            )
-            self._last_page_inventory_diagnostic=diagnostic
-            return rows
+            await page.wait_for_timeout(120)
         except BaseException as exc:
-            # REMASK_ISOLATED_PAGE_FAILURE_DIAGNOSTIC_V1
-            # Preserve the probe's final URL/evidence before the disposable tab
-            # is closed. This makes timeout/navigation failures distinguishable
-            # from the old primary-tab cross-domain regression.
-            diagnostic=dict(
-                self._last_page_inventory_diagnostic
-                if isinstance(self._last_page_inventory_diagnostic,dict)
-                else {}
-            )
-            diagnostic["isolated_tab"]=True
-            diagnostic["probe_created"]=probe_page is not None
-            diagnostic["probe_url"]=_clean(
-                getattr(probe_page,"url","") if probe_page is not None else ""
-            )
-            diagnostic["primary_url"]=_clean(
-                getattr(primary_page,"url","")
-            )
-            diagnostic["isolated_error"]=(
-                f"{exc.__class__.__name__}: {_clean(exc)}"[:700]
-            )
-            self._last_page_inventory_diagnostic=diagnostic
-            raise
-        finally:
-            self.page=primary_page
-            if probe_page is not None:
-                try:
-                    await asyncio.wait_for(probe_page.close(),timeout=1.2)
-                except BaseException:
-                    pass
+            pass_diagnostics.append({
+                "phase":"park_primary",
+                "error":f"{exc.__class__.__name__}: {_clean(exc)}"[:500],
+            })
+
+        last_error: BaseException | None=None
+        attempts=2 if fast else 1
+
+        for pass_no in range(1,attempts+1):
+            try:
+                rows=await self.discover_managed_pages(
+                    fast=True if fast else False,
+                    navigation_timeout_ms=7800 if fast else 9000,
+                )
+                diagnostic=dict(
+                    self._last_page_inventory_diagnostic
+                    if isinstance(self._last_page_inventory_diagnostic,dict)
+                    else {}
+                )
+                pass_diagnostics.append({
+                    "pass":pass_no,
+                    "result":"success",
+                    "pages":len(rows),
+                    "url":_clean(getattr(self.page,"url","")),
+                })
+                diagnostic.update({
+                    "isolated_tab":False,
+                    "low_memory_handoff":True,
+                    "handoff_from_url":previous_url,
+                    "handoff_pass":pass_no,
+                    "handoff_attempts":attempts,
+                    "handoff_history":pass_diagnostics[-6:],
+                    "current_url":_clean(getattr(self.page,"url","")),
+                })
+                self._last_page_inventory_diagnostic=diagnostic
+                return rows
+            except BrowserBusinessError as exc:
+                last_error=exc
+                diagnostic=dict(
+                    self._last_page_inventory_diagnostic
+                    if isinstance(self._last_page_inventory_diagnostic,dict)
+                    else {}
+                )
+                pass_diagnostics.append({
+                    "pass":pass_no,
+                    "result":"browser_error",
+                    "code":exc.code,
+                    "error":_clean(exc)[:500],
+                    "url":_clean(getattr(self.page,"url","")),
+                    "stage":_clean(diagnostic.get("stage")),
+                })
+
+                # A cold Your-Pages document can time out or render an empty
+                # shell while Facebook hydrates service-worker/Relay state.
+                # This exact first-pass -> second-pass pattern succeeded in
+                # production on profile 7. Retry only read-only discovery.
+                if (
+                    pass_no < attempts
+                    and exc.code in {
+                        "FACEBOOK_NAVIGATION_FAILED",
+                        "FAN_PAGES_NOT_DISCOVERED",
+                    }
+                ):
+                    try:
+                        await self.page.wait_for_timeout(750)
+                    except BaseException:
+                        pass
+                    continue
+                break
+            except BaseException as exc:
+                last_error=exc
+                pass_diagnostics.append({
+                    "pass":pass_no,
+                    "result":"error",
+                    "error":f"{exc.__class__.__name__}: {_clean(exc)}"[:600],
+                    "url":_clean(getattr(self.page,"url","")),
+                })
+                if pass_no < attempts:
+                    lower=_clean(exc).casefold()
+                    if (
+                        "timeout" in lower
+                        and self.page is not None
+                        and not self.page.is_closed()
+                    ):
+                        try:
+                            await self.page.wait_for_timeout(750)
+                        except BaseException:
+                            pass
+                        continue
+                break
+
+        diagnostic=dict(
+            self._last_page_inventory_diagnostic
+            if isinstance(self._last_page_inventory_diagnostic,dict)
+            else {}
+        )
+        diagnostic.update({
+            "isolated_tab":False,
+            "low_memory_handoff":True,
+            "handoff_from_url":previous_url,
+            "handoff_attempts":attempts,
+            "handoff_history":pass_diagnostics[-6:],
+            "current_url":_clean(
+                getattr(self.page,"url","") if self.page is not None else ""
+            ),
+            "isolated_error":(
+                f"{last_error.__class__.__name__}: {_clean(last_error)}"[:700]
+                if last_error is not None
+                else "unknown"
+            ),
+        })
+        self._last_page_inventory_diagnostic=diagnostic
+
+        if isinstance(last_error,BrowserBusinessError):
+            raise last_error
+        if last_error is not None:
+            raise BrowserBusinessError(
+                "FAN_PAGES_NOT_DISCOVERED",
+                (
+                    "Low-memory Your-Pages handoff did not return a live "
+                    f"Page inventory: {last_error.__class__.__name__}: "
+                    f"{_clean(last_error)}"
+                ),
+                retryable=True,
+                diagnostic=diagnostic,
+            ) from last_error
+        raise BrowserBusinessError(
+            "FAN_PAGES_NOT_DISCOVERED",
+            "Low-memory Your-Pages handoff returned no live Page inventory.",
+            retryable=True,
+            diagnostic=diagnostic,
+        )
 
 
     async def preflight(self) -> BrowserPreflightResult:
