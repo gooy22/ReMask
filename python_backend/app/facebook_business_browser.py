@@ -2387,9 +2387,14 @@ class FacebookBusinessBrowser:
                     or "target page, context or browser has been closed" in lower
                 )
 
-                if page_crashed and attempt == 0:
-                    # Safe at navigation boundaries: release the crashed
-                    # Chromium process and open a fresh low-memory context.
+                if (
+                    page_crashed
+                    and attempt + 1 < navigation_attempts
+                ):
+                    # Safe only when this navigation call actually has another
+                    # attempt available. With attempts=1 (isolated read-only
+                    # probes), do not tear down the whole browser context just
+                    # because the disposable sibling tab crashed.
                     await self.close()
                     await asyncio.sleep(0.25)
                     await self.open()
@@ -5603,15 +5608,18 @@ class FacebookBusinessBrowser:
         self,
         *,
         fast: bool = True,
+        attempts: int = 2,
     ) -> list[dict[str, Any]]:
         """Run account-level Page discovery in a disposable Facebook tab.
 
-        REMASK_ISOLATED_PAGE_INVENTORY_V1
+        REMASK_ISOLATED_PAGE_INVENTORY_V2
         The primary tab is often a heavy Ads Manager/Business Suite SPA.
         Production showed that navigating that same document cross-domain to
         www.facebook.com can remain stuck until the outer Sync deadline. A new
         tab shares the authenticated browser context/cookies but starts with a
-        clean top-level document. The BM/RK tab is never navigated or closed.
+        clean top-level document. Reuse that SAME sibling tab for one bounded
+        warm retry: profile 7's only confirmed 4-Page live recovery followed
+        exactly this cold-pass -> warm-pass sequence.
         """
         if self.page is None or self._browser_context is None:
             await self.open()
@@ -5623,28 +5631,123 @@ class FacebookBusinessBrowser:
             )
 
         primary_page=self.page
+        primary_context=self._browser_context
         probe_page=None
+        diagnostics: list[dict[str, Any]]=[]
+        bounded_attempts=max(1,min(int(attempts or 1),2))
+
         try:
-            probe_page=await self._browser_context.new_page()
+            probe_page=await primary_context.new_page()
             probe_page.set_default_timeout(min(self.timeout_ms,8000))
             self.page=probe_page
-            rows=await self.discover_managed_pages(fast=fast)
-            diagnostic=dict(
-                self._last_page_inventory_diagnostic
-                if isinstance(self._last_page_inventory_diagnostic,dict)
-                else {}
+
+            for attempt in range(1,bounded_attempts+1):
+                try:
+                    rows=await self.discover_managed_pages(fast=fast)
+                    diagnostic=dict(
+                        self._last_page_inventory_diagnostic
+                        if isinstance(self._last_page_inventory_diagnostic,dict)
+                        else {}
+                    )
+                    diagnostics.append({
+                        "attempt":attempt,
+                        "result":"ok",
+                        "pages":len(rows),
+                        "diagnostic":diagnostic,
+                    })
+                    self._last_page_inventory_diagnostic={
+                        "stage":"isolated_complete",
+                        "isolated_tab":True,
+                        "attempts":diagnostics,
+                        "pages":len(rows),
+                        "primary_url":_clean(
+                            getattr(primary_page,"url","")
+                        ),
+                        "probe_url":_clean(
+                            getattr(probe_page,"url","")
+                        ),
+                    }
+                    return rows
+                except BrowserBusinessError as exc:
+                    diagnostic=(
+                        exc.diagnostic
+                        if isinstance(getattr(exc,"diagnostic",None),dict)
+                        else dict(
+                            self._last_page_inventory_diagnostic
+                            if isinstance(
+                                self._last_page_inventory_diagnostic,dict
+                            )
+                            else {}
+                        )
+                    )
+                    diagnostics.append({
+                        "attempt":attempt,
+                        "result":"unavailable",
+                        "code":exc.code,
+                        "message":str(exc)[:500],
+                        "diagnostic":diagnostic,
+                    })
+                    if exc.code in {
+                        "SESSION_EXPIRED",
+                        "CHECKPOINT_REQUIRED",
+                        "TWO_FACTOR_REQUIRED",
+                        "FACEBOOK_TEMPORARILY_BLOCKED",
+                    }:
+                        raise
+                    if attempt >= bounded_attempts:
+                        break
+                    # Keep the SAME sibling tab/context warm. The production
+                    # success at 12:33 recovered on the second pass.
+                    await probe_page.wait_for_timeout(700)
+                except Exception as exc:
+                    diagnostics.append({
+                        "attempt":attempt,
+                        "result":"unavailable",
+                        "code":exc.__class__.__name__,
+                        "message":_clean(exc)[:500],
+                    })
+                    if attempt >= bounded_attempts:
+                        break
+                    await probe_page.wait_for_timeout(700)
+
+            self._last_page_inventory_diagnostic={
+                "stage":"isolated_inconclusive",
+                "isolated_tab":True,
+                "attempts":diagnostics,
+                "primary_url":_clean(
+                    getattr(primary_page,"url","")
+                ),
+                "probe_url":_clean(
+                    getattr(probe_page,"url","")
+                ),
+            }
+            raise BrowserBusinessError(
+                "FAN_PAGES_NOT_DISCOVERED_ISOLATED",
+                (
+                    "The isolated authenticated Facebook tab did not return "
+                    "a parseable live Fan Page inventory after its warm retry."
+                ),
+                retryable=True,
+                diagnostic=self._last_page_inventory_diagnostic,
             )
-            diagnostic["isolated_tab"]=True
-            diagnostic["primary_url"]=_clean(
-                getattr(primary_page,"url","")
-            )
-            self._last_page_inventory_diagnostic=diagnostic
-            return rows
         finally:
-            self.page=primary_page
+            # Restore the primary tab only if this exact browser context is
+            # still the active one. Never resurrect a Page object from a
+            # context that a crash/relaunch already closed.
+            if self._browser_context is primary_context:
+                try:
+                    if not primary_page.is_closed():
+                        self.page=primary_page
+                except Exception:
+                    self.page=primary_page
+
             if probe_page is not None:
                 try:
-                    await asyncio.wait_for(probe_page.close(),timeout=1.2)
+                    if not probe_page.is_closed():
+                        await asyncio.wait_for(
+                            probe_page.close(),
+                            timeout=1.2,
+                        )
                 except BaseException:
                     pass
 
