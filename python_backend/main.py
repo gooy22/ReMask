@@ -440,6 +440,35 @@ async def run_live_inventory_readonly_canary() -> None:
                     ad_account_id=candidate_account
                     break
 
+    # REMASK_CANARY_LAST_LIVE_HINT_V1
+    # Workspace may have a last-live-confirmed BM->RK relation that predates
+    # worker provisioning history or the V2 binding file. Use that persisted
+    # snapshot only to scope this read-only proof; Meta must still revalidate it.
+    if not business_id or not ad_account_id:
+        path=os.path.join(DATA_ROOT,'workspace-live-meta-snapshots.json')
+        try:
+            raw=json.loads(open(path,'r',encoding='utf-8').read())
+        except Exception:
+            raw={}
+        profile_row=raw.get(profile_id) if isinstance(raw,dict) else None
+        if isinstance(profile_row,dict):
+            candidates=profile_row.get('ad_accounts')
+            if not isinstance(candidates,list):
+                candidates=[]
+            for row in candidates:
+                if not isinstance(row,dict):
+                    continue
+                candidate_business=str(row.get('business_id') or '').strip()
+                candidate_account=str(
+                    row.get('id') or row.get('account_id') or ''
+                ).strip()
+                if candidate_account.startswith('act_'):
+                    candidate_account=candidate_account[4:]
+                if candidate_business.isdigit() and candidate_account.isdigit():
+                    business_id=candidate_business
+                    ad_account_id=candidate_account
+                    break
+
     try:
         result=await profile_live_inventory(
             profile_id=profile_id,
