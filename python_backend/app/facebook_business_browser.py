@@ -5596,6 +5596,139 @@ class FacebookBusinessBrowser:
                     cancel_pending=True,
                 )
 
+
+    async def discover_managed_pages_isolated(
+        self,
+        *,
+        attempts: int = 2,
+    ) -> list[dict[str, Any]]:
+        """Discover profile Pages in a sibling tab without disturbing Ads Manager.
+
+        REMASK_ISOLATED_PAGE_DISCOVERY_V1
+        Production showed that navigating the already-mounted Ads Manager tab
+        across to www.facebook.com/pages can wedge at the navigation boundary.
+        A sibling Page in the SAME browser context shares cookies, proxy,
+        fingerprint/user-agent and authenticated storage, while leaving the
+        working Ads Manager document untouched. The same sibling tab is reused
+        for a bounded warm retry because that exact pattern previously recovered
+        the live 4-Page inventory for profile 7.
+        """
+        if self.page is None:
+            await self.open()
+        if self._browser_context is None or self.page is None:
+            raise BrowserBusinessError(
+                "BROWSER_NOT_READY",
+                "Isolated Page discovery requires an open browser context.",
+                retryable=True,
+            )
+
+        original_page = self.page
+        original_context = self._browser_context
+        sibling = None
+        diagnostics: list[dict[str, Any]] = []
+        bounded_attempts = max(1, min(int(attempts or 1), 3))
+
+        try:
+            sibling = await original_context.new_page()
+            sibling.set_default_timeout(self.timeout_ms)
+            self.page = sibling
+
+            for attempt in range(1, bounded_attempts + 1):
+                try:
+                    rows = await self.discover_managed_pages(fast=True)
+                    diag = dict(
+                        getattr(self, "_last_page_inventory_diagnostic", {}) or {}
+                    )
+                    diagnostics.append({
+                        "attempt": attempt,
+                        "result": "ok",
+                        "pages": len(rows),
+                        "diagnostic": diag,
+                    })
+                    self._last_page_inventory_diagnostic = {
+                        "stage": "isolated_complete",
+                        "attempts": diagnostics,
+                        "pages": len(rows),
+                        "sibling_url": _clean(getattr(sibling, "url", "")),
+                        "primary_url": _clean(getattr(original_page, "url", "")),
+                    }
+                    return rows
+                except BrowserBusinessError as exc:
+                    diag = (
+                        exc.diagnostic
+                        if isinstance(getattr(exc, "diagnostic", None), dict)
+                        else dict(
+                            getattr(
+                                self,
+                                "_last_page_inventory_diagnostic",
+                                {},
+                            )
+                            or {}
+                        )
+                    )
+                    diagnostics.append({
+                        "attempt": attempt,
+                        "result": "unavailable",
+                        "code": exc.code,
+                        "message": str(exc)[:500],
+                        "diagnostic": diag,
+                    })
+                    if exc.code in {
+                        "SESSION_EXPIRED",
+                        "CHECKPOINT_REQUIRED",
+                        "TWO_FACTOR_REQUIRED",
+                        "FACEBOOK_TEMPORARILY_BLOCKED",
+                    }:
+                        raise
+                    if attempt >= bounded_attempts:
+                        break
+                    # Keep the SAME sibling document/context warm. The known
+                    # working production case recovered on this second pass.
+                    await sibling.wait_for_timeout(700)
+                except Exception as exc:
+                    diagnostics.append({
+                        "attempt": attempt,
+                        "result": "unavailable",
+                        "code": exc.__class__.__name__,
+                        "message": _clean(exc)[:500],
+                    })
+                    if attempt >= bounded_attempts:
+                        break
+                    await sibling.wait_for_timeout(700)
+
+            self._last_page_inventory_diagnostic = {
+                "stage": "isolated_inconclusive",
+                "attempts": diagnostics,
+                "sibling_url": _clean(getattr(sibling, "url", "")),
+                "primary_url": _clean(getattr(original_page, "url", "")),
+            }
+            raise BrowserBusinessError(
+                "FAN_PAGES_NOT_DISCOVERED_ISOLATED",
+                (
+                    "A separate authenticated Facebook Page tab did not return "
+                    "a parseable live Fan Page inventory."
+                ),
+                retryable=True,
+                diagnostic=self._last_page_inventory_diagnostic,
+            )
+        finally:
+            # discover_managed_pages() only owns self.page. Restore the primary
+            # Ads Manager tab if the original browser context is still alive.
+            if self._browser_context is original_context:
+                try:
+                    if original_page is not None and not original_page.is_closed():
+                        self.page = original_page
+                except Exception:
+                    self.page = original_page
+
+            if sibling is not None:
+                try:
+                    if not sibling.is_closed():
+                        await sibling.close()
+                except Exception:
+                    pass
+
+
     async def preflight(self) -> BrowserPreflightResult:
         diagnostics: list[str] = []
 
