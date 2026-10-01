@@ -2329,7 +2329,13 @@ class FacebookBusinessBrowser:
                 )
                 if navigation_settle_ms:
                     await self.page.wait_for_timeout(navigation_settle_ms)
-                await self._assert_authenticated()
+                await self._assert_authenticated(
+                    body_timeout_ms=(
+                        500
+                        if navigation_wait_until == "commit"
+                        else 1500
+                    )
+                )
                 return _clean(self.page.url)
 
             except BrowserBusinessError:
@@ -2355,9 +2361,11 @@ class FacebookBusinessBrowser:
                     # ready yet.
                     try:
                         await asyncio.sleep(0.45)
-                        await self._assert_authenticated()
+                        await self._assert_authenticated(
+                            body_timeout_ms=500
+                        )
                         current_url = _clean(self.page.url)
-                        current_body = await self._body_text()
+                        current_body = await self._body_text(timeout_ms=500)
                         form_ready = await self._form_ready()
                         create_surface = await self._has_create_surface()
                         facebook_surface = (
@@ -2411,15 +2419,24 @@ class FacebookBusinessBrowser:
             retryable=True,
         )
 
-    async def _body_text(self) -> str:
+    async def _body_text(self, *, timeout_ms: int = 1500) -> str:
         if self.page is None:
             return ""
         try:
-            return str(await self.page.locator("body").inner_text(timeout=1500) or "")
+            return str(
+                await self.page.locator("body").inner_text(
+                    timeout=max(100,min(int(timeout_ms or 1500),5000))
+                )
+                or ""
+            )
         except Exception:
             return ""
 
-    async def _assert_authenticated(self) -> None:
+    async def _assert_authenticated(
+        self,
+        *,
+        body_timeout_ms: int = 1500,
+    ) -> None:
         if self.page is None:
             raise BrowserBusinessError(
                 "BROWSER_NOT_OPEN",
@@ -2429,8 +2446,11 @@ class FacebookBusinessBrowser:
 
         url = _clean(self.page.url)
         lower_url = url.lower()
-        body = (await self._body_text()).lower()
 
+        # REMASK_AUTH_URL_BEFORE_BODY_V1
+        # URL-level auth evidence is immediate and authoritative. Do not block
+        # a commit-level read-only navigation on body hydration before checking
+        # login/checkpoint redirects.
         if "/login" in lower_url or "login.php" in lower_url:
             diagnostic = await self._diagnostic("login")
             diagnostic["auth_evidence"] = "login_url"
@@ -2470,6 +2490,10 @@ class FacebookBusinessBrowser:
                 retryable=False,
                 diagnostic=diagnostic,
             )
+
+        body = (
+            await self._body_text(timeout_ms=body_timeout_ms)
+        ).lower()
 
         if (
             "two-factor authentication" in body
