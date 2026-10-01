@@ -211,6 +211,24 @@ class LiveSyncContractTests(unittest.TestCase):
         self.assertIn("attempts=1", discovery_source)
         self.assertIn("navigation_attempts=", goto_source)
 
+    def test_optional_page_enrichment_cannot_exhaust_whole_sync(self) -> None:
+        source=inspect.getsource(api.profile_live_inventory)
+        start=source.index("REMASK_FULL_PROFILE_SYNC_PAGES_V2")
+        end=source.index("REMASK_LIVE_TARGET_SET_REQUIRED_V1",start)
+        page_phase=source[start:end]
+
+        self.assertIn("REMASK_OPTIONAL_PAGE_BUDGET_V1", page_phase)
+        self.assertIn("def optional_page_budget(", page_phase)
+        self.assertIn("fast_pages_timeout=optional_page_budget(5.5)", page_phase)
+        self.assertIn("ads_pages_timeout=optional_page_budget(4.0)", page_phase)
+        self.assertIn("private_pages_timeout=optional_page_budget(3.5)", page_phase)
+        self.assertIn("isolated_pages_timeout=optional_page_budget(6.5)", page_phase)
+        self.assertNotIn("=budget(5.5)", page_phase)
+        self.assertNotIn("=budget(4.0)", page_phase)
+        self.assertNotIn("=budget(3.5)", page_phase)
+        self.assertNotIn("=budget(6.5)", page_phase)
+        self.assertNotIn("except HTTPException:\n                    raise", page_phase)
+
     def test_browser_open_cancellation_releases_owned_resources(self) -> None:
         source=inspect.getsource(FacebookBusinessBrowser.open)
         cancel_index=source.index("except asyncio.CancelledError:")

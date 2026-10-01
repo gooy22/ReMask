@@ -1929,6 +1929,26 @@ async def profile_live_inventory(
             pages_started=time.monotonic()
             page_primary_error=''
 
+            # REMASK_OPTIONAL_PAGE_BUDGET_V1
+            # Page enrichment happens only after BM/RK live state has been
+            # resolved. It must never call the endpoint-level budget() helper,
+            # because budget() intentionally raises HTTP 504 at exhaustion.
+            # Optional Page probes consume only spare wall-clock time and skip
+            # themselves when the BM/RK phase used the available budget.
+            def optional_page_budget(
+                cap_seconds: float,
+                *,
+                reserve_seconds: float = 0.8,
+            ) -> float:
+                remaining=(
+                    deadline_at
+                    - time.monotonic()
+                    - max(0.2,float(reserve_seconds))
+                )
+                if remaining <= 0.25:
+                    return 0.0
+                return max(0.0,min(float(cap_seconds),remaining))
+
             def normalize_page_rows(rows: Any) -> list[dict[str, Any]]:
                 normalized=[]
                 seen=set()
@@ -2050,7 +2070,9 @@ async def profile_live_inventory(
                 confirmed_page_rows=[]
                 fast_page_diagnostics=[]
                 try:
-                    fast_pages_timeout=budget(5.5)
+                    fast_pages_timeout=optional_page_budget(5.5)
+                    if fast_pages_timeout <= 0.25:
+                        raise asyncio.TimeoutError()
                     fast_pages_deadline=time.monotonic()+fast_pages_timeout
                     for hinted_business_id,rows_by_id in sorted(
                         known_pages_by_business.items()
@@ -2105,8 +2127,6 @@ async def profile_live_inventory(
                             separators=(',', ':'),
                         )[:5000],
                     )
-                except HTTPException:
-                    raise
                 except Exception as exc:
                     log.info(
                         'live inventory profile=%s known Page hint enrichment '
@@ -2119,7 +2139,9 @@ async def profile_live_inventory(
             # Account-level live Page enumeration is enrichment only. Keep the
             # attempt deliberately short; it must not dominate a BM/RK sync.
             try:
-                ads_pages_timeout=budget(4.0)
+                ads_pages_timeout=optional_page_budget(4.0)
+                if ads_pages_timeout <= 0.25:
+                    raise asyncio.TimeoutError()
                 discovered_pages=await hard_deadline(
                     browser.discover_promotable_pages_from_ads_manager(
                         timeout_seconds=min(3.5,ads_pages_timeout),
@@ -2141,11 +2163,15 @@ async def profile_live_inventory(
                     clean_profile,
                     len(live_pages),
                 )
-            except (asyncio.TimeoutError,BrowserBusinessError) as exc:
+            except Exception as exc:
                 page_primary_error=(
                     'ADS_MANAGER_PAGES_TIMEOUT'
                     if isinstance(exc,asyncio.TimeoutError)
-                    else f'{exc.code}: {exc}'
+                    else (
+                        f'{exc.code}: {exc}'
+                        if isinstance(exc,BrowserBusinessError)
+                        else f'{exc.__class__.__name__}: {exc}'
+                    )
                 )
                 log.info(
                     'live inventory profile=%s Ads Manager Page enrichment '
@@ -2160,7 +2186,9 @@ async def profile_live_inventory(
             # live account-level list.
             if not pages_live_verified:
                 try:
-                    private_pages_timeout=budget(3.5)
+                    private_pages_timeout=optional_page_budget(3.5)
+                    if private_pages_timeout <= 0.25:
+                        raise asyncio.TimeoutError()
                     facebook_web=await profile_session.facebook_web()
                     private_page_result=await hard_deadline(
                         list_pages_via_private_graphql(facebook_web),
@@ -2207,7 +2235,9 @@ async def profile_live_inventory(
             # context so cookies/session are shared and BM/RK state is untouched.
             if not pages_live_verified:
                 try:
-                    isolated_pages_timeout=budget(6.5)
+                    isolated_pages_timeout=optional_page_budget(6.5)
+                    if isolated_pages_timeout <= 0.25:
+                        raise asyncio.TimeoutError()
                     discovered_pages=await hard_deadline(
                         browser.discover_managed_pages_isolated(fast=True),
                         isolated_pages_timeout,
@@ -2236,11 +2266,15 @@ async def profile_live_inventory(
                             separators=(',', ':'),
                         )[:3500],
                     )
-                except (asyncio.TimeoutError,BrowserBusinessError) as exc:
+                except Exception as exc:
                     detail=(
                         'ISOLATED_YOUR_PAGES_TIMEOUT'
                         if isinstance(exc,asyncio.TimeoutError)
-                        else f'{exc.code}: {exc}'
+                        else (
+                            f'{exc.code}: {exc}'
+                            if isinstance(exc,BrowserBusinessError)
+                            else f'{exc.__class__.__name__}: {exc}'
+                        )
                     )
                     page_primary_error=(
                         page_primary_error + ' | '
