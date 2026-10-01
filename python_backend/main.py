@@ -2027,68 +2027,68 @@ async def profile_live_inventory(
             # 1) Ads Manager read-only Page inventory.
             if not pages_ready:
                 try:
-                  ads_pages_timeout=budget(8.0)
-                  discovered_pages=await hard_deadline(
-                      browser.discover_promotable_pages_from_ads_manager(
-                          timeout_seconds=min(7.0,ads_pages_timeout),
-                      ),
-                      ads_pages_timeout,
-                  )
-                  pages=normalize_page_rows(discovered_pages)
-                  pages_source='ads_manager_promotable_pages'
-                  pages_ready=True
-                  log.info(
-                      'live inventory profile=%s Ads Manager Page inventory '
-                      'ready=True pages=%d diagnostic=%s',
-                      clean_profile,
-                      len(pages),
-                      json.dumps(
-                          getattr(
-                              browser,
-                              '_last_ads_manager_page_diagnostic',
-                              {},
-                          ),
-                          ensure_ascii=False,
-                          separators=(',', ':'),
-                      )[:3000],
-                  )
-              except asyncio.TimeoutError:
-                  page_primary_error='ADS_MANAGER_PAGES_TIMEOUT'
-                  log.warning(
-                      'live inventory profile=%s Ads Manager Page inventory '
-                      'timed out diagnostic=%s',
-                      clean_profile,
-                      json.dumps(
-                          getattr(
-                              browser,
-                              '_last_ads_manager_page_diagnostic',
-                              {},
-                          ),
-                          ensure_ascii=False,
-                          separators=(',', ':'),
-                      )[:4000],
-                  )
-              except BrowserBusinessError as exc:
-                  page_primary_error=f'{exc.code}: {exc}'
-                  log.info(
-                      'live inventory profile=%s Ads Manager Page inventory '
-                      'unavailable=%s diagnostic=%s',
-                      clean_profile,
-                      page_primary_error[:700],
-                      json.dumps(
-                          (
-                              exc.diagnostic
-                              if isinstance(getattr(exc,'diagnostic',None),dict)
-                              else getattr(
-                                  browser,
-                                  '_last_ads_manager_page_diagnostic',
-                                  {},
-                              )
-                          ),
-                          ensure_ascii=False,
-                          separators=(',', ':'),
-                      )[:4000],
-                  )
+                    ads_pages_timeout=budget(8.0)
+                    discovered_pages=await hard_deadline(
+                        browser.discover_promotable_pages_from_ads_manager(
+                            timeout_seconds=min(7.0,ads_pages_timeout),
+                        ),
+                        ads_pages_timeout,
+                    )
+                    pages=normalize_page_rows(discovered_pages)
+                    pages_source='ads_manager_promotable_pages'
+                    pages_ready=True
+                    log.info(
+                        'live inventory profile=%s Ads Manager Page inventory '
+                        'ready=True pages=%d diagnostic=%s',
+                        clean_profile,
+                        len(pages),
+                        json.dumps(
+                            getattr(
+                                browser,
+                                '_last_ads_manager_page_diagnostic',
+                                {},
+                            ),
+                            ensure_ascii=False,
+                            separators=(',', ':'),
+                        )[:3000],
+                    )
+                except asyncio.TimeoutError:
+                    page_primary_error='ADS_MANAGER_PAGES_TIMEOUT'
+                    log.warning(
+                        'live inventory profile=%s Ads Manager Page inventory '
+                        'timed out diagnostic=%s',
+                        clean_profile,
+                        json.dumps(
+                            getattr(
+                                browser,
+                                '_last_ads_manager_page_diagnostic',
+                                {},
+                            ),
+                            ensure_ascii=False,
+                            separators=(',', ':'),
+                        )[:4000],
+                    )
+                except BrowserBusinessError as exc:
+                    page_primary_error=f'{exc.code}: {exc}'
+                    log.info(
+                        'live inventory profile=%s Ads Manager Page inventory '
+                        'unavailable=%s diagnostic=%s',
+                        clean_profile,
+                        page_primary_error[:700],
+                        json.dumps(
+                            (
+                                exc.diagnostic
+                                if isinstance(getattr(exc,'diagnostic',None),dict)
+                                else getattr(
+                                    browser,
+                                    '_last_ads_manager_page_diagnostic',
+                                    {},
+                                )
+                            ),
+                            ensure_ascii=False,
+                            separators=(',', ':'),
+                        )[:4000],
+                    )
 
             # 2) Private Facebook Web persisted query fallback.
             if not pages_ready:
