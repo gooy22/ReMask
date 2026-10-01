@@ -673,9 +673,22 @@ class BrowserNetworkGateTests(unittest.TestCase):
             "REMASK_PAGE_ADD_DIRECT_SELECTION_VERIFY_V1",
             source,
         )
+        self.assertIn("REMASK_PAGE_ADD_UNIQUE_RESULT_V2", source)
+        self.assertIn("_click_unique_page_add_result", source)
+        self.assertIn("_page_add_surface_state", source)
         self.assertIn("result_selected", source)
         self.assertIn("verify_page_attached", source)
         self.assertIn("post_selection_idle_loops", source)
+
+    def test_page_attach_verify_uses_live_business_pages_traffic(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser.verify_page_attached
+        )
+        self.assertIn("REMASK_PAGE_ATTACH_LIVE_VERIFY_V2", source)
+        self.assertIn('self.page.on("response"', source)
+        self.assertIn("response.text()", source)
+        self.assertIn("SETTINGS_PAGES_URLS", source)
+        self.assertIn("exact_business_context", source)
 
 
 class BrowserAdsManagerPageInventoryContractTests(unittest.TestCase):
