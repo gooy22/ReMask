@@ -116,6 +116,14 @@ class LiveSyncContractTests(unittest.TestCase):
         self.assertIn("latest_profile_fan_pages", source)
         self.assertIn("latest_profile_fan_page_batch", source)
         self.assertIn("REMASK_CURRENT_FAN_PAGE_BASELINE_V2", source)
+        self.assertIn("REMASK_PROFILE_CONTEXT_PAGE_BASELINE_V1", source)
+        self.assertIn("profile_context_pages=[", source)
+        self.assertIn("REMASK_PROFILE_CONTEXT_PAGE_HINTS_V1", source)
+        self.assertIn("context_baseline_pages=normalize_page_rows(", source)
+        self.assertIn(
+            "durable_pages=merge_page_rows(",
+            source,
+        )
         self.assertIn("REMASK_LATEST_PAGE_BINDING_PER_BUSINESS_V1", source)
         self.assertIn("current_binding_pages=[", source)
         self.assertIn("workspace_last_live_page_hint", source)
@@ -124,6 +132,14 @@ class LiveSyncContractTests(unittest.TestCase):
         self.assertIn("REMASK_PAGE_HINT_PRECEDENCE_V1", source)
         self.assertIn("workspace_page_hint_businesses:set[str]=set()", source)
         self.assertIn("hinted_business_id in known_pages_by_business", source)
+        self.assertIn(
+            "if hinted_business_id in seen_page_businesses:",
+            source,
+        )
+        self.assertNotIn(
+            "known_business_ids == {hinted_business_id}",
+            source,
+        )
         self.assertIn("pages_live_verified=False", source)
         self.assertIn("'pages_live_verified':pages_live_verified", source)
 
