@@ -2201,32 +2201,44 @@ async def profile_live_inventory(
                     )
 
             # REMASK_PAGE_LIVE_RELAY_DISCOVERY_V1
-            # The cross-domain Your-Pages SPA is intentionally disabled in the
-            # default Sync. Production proved it can spend 20+ seconds timing
-            # out while Chromium remains on Ads Manager. Keep it only behind an
-            # explicit diagnostic flag.
-            enable_global_page_discovery=str(
-                os.getenv('REMASK_ENABLE_GLOBAL_PAGE_DISCOVERY','')
-            ).strip().lower() in {'1','true','yes'}
-            if enable_global_page_discovery and not pages_live_verified:
+            # REMASK_ISOLATED_PAGE_INVENTORY_SYNC_V1
+            # Do not navigate the primary Ads Manager/Business Suite tab across
+            # domains. Use a disposable facebook.com tab in the same browser
+            # context so cookies/session are shared and BM/RK state is untouched.
+            if not pages_live_verified:
                 try:
-                    page_inventory_timeout=budget(5.5)
+                    isolated_pages_timeout=budget(6.5)
                     discovered_pages=await hard_deadline(
-                        browser.discover_managed_pages(fast=True),
-                        page_inventory_timeout,
+                        browser.discover_managed_pages_isolated(fast=True),
+                        isolated_pages_timeout,
                     )
                     live_pages=normalize_page_rows(discovered_pages)
                     pages=merge_page_rows(pages,live_pages)
                     pages_ready=True
                     pages_live_verified=True
                     pages_source=(
-                        'facebook_business_browser_relay+durable'
+                        'facebook_isolated_page_inventory+durable'
                         if durable_pages
-                        else 'facebook_business_browser_relay'
+                        else 'facebook_isolated_page_inventory'
+                    )
+                    log.info(
+                        'live inventory profile=%s isolated Page enrichment '
+                        'ready=True pages=%d diagnostic=%s',
+                        clean_profile,
+                        len(live_pages),
+                        json.dumps(
+                            getattr(
+                                browser,
+                                '_last_page_inventory_diagnostic',
+                                {},
+                            ),
+                            ensure_ascii=False,
+                            separators=(',', ':'),
+                        )[:3500],
                     )
                 except (asyncio.TimeoutError,BrowserBusinessError) as exc:
                     detail=(
-                        'YOUR_PAGES_TIMEOUT'
+                        'ISOLATED_YOUR_PAGES_TIMEOUT'
                         if isinstance(exc,asyncio.TimeoutError)
                         else f'{exc.code}: {exc}'
                     )
@@ -2235,10 +2247,19 @@ async def profile_live_inventory(
                         if page_primary_error else ''
                     ) + detail
                     log.info(
-                        'live inventory profile=%s optional Your-Pages '
-                        'enrichment unavailable=%s',
+                        'live inventory profile=%s isolated Page enrichment '
+                        'unavailable=%s diagnostic=%s',
                         clean_profile,
                         detail[:700],
+                        json.dumps(
+                            getattr(
+                                browser,
+                                '_last_page_inventory_diagnostic',
+                                {},
+                            ),
+                            ensure_ascii=False,
+                            separators=(',', ':'),
+                        )[:3500],
                     )
 
             log.info(
