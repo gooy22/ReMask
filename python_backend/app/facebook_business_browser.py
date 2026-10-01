@@ -20,6 +20,14 @@ def _exact_business_request_context(business: str, request_business_ids: set[str
     return request_business_ids == {business} if request_business_ids else bool(page_targets_business)
 
 
+BROWSER_TERMINAL_ACCESS_CODES = frozenset({
+    "CHECKPOINT_REQUIRED",
+    "SESSION_EXPIRED",
+    "TWO_FACTOR_REQUIRED",
+    "FACEBOOK_TEMPORARILY_BLOCKED",
+})
+
+
 class BrowserBusinessError(RuntimeError):
     def __init__(
         self,
@@ -11002,6 +11010,11 @@ class FacebookBusinessBrowser:
                     except asyncio.TimeoutError:
                         pass
                 except Exception as exc:
+                    if (
+                        isinstance(exc, BrowserBusinessError)
+                        and exc.code in BROWSER_TERMINAL_ACCESS_CODES
+                    ):
+                        raise
                     attempts.append(
                         {
                             "url": target[:700],
@@ -12725,6 +12738,11 @@ class FacebookBusinessBrowser:
                         "attempts": attempts,
                     }
             except Exception as exc:
+                if (
+                    isinstance(exc, BrowserBusinessError)
+                    and exc.code in BROWSER_TERMINAL_ACCESS_CODES
+                ):
+                    raise
                 attempts.append(
                     {
                         "url": target[:700],

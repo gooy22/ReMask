@@ -2804,10 +2804,12 @@ async function pythonWorkerStartAutoRkFanPages() {
         const pages = await pythonWorkerLoadPages(profileId);
         pageCache.set(profileId, Array.isArray(pages) ? pages : []);
       } catch (error) {
-        // Fast path must not force manual work when the cache endpoint is
-        // temporarily unavailable. No trustworthy candidate means create one.
-        pageCache.set(profileId, []);
-        console.warn('[ReMask Worker UI] FP auto page cache fallback:', profileId, error);
+        // A failed read is not proof that no Page exists. Stop before any
+        // FP Job so a temporary cache/CSRF error cannot create unwanted Pages.
+        throw new Error(
+          'FP авто остановлено: не удалось прочитать существующие Pages профиля ' +
+          profileId + '. ' + String((error && error.message) || error)
+        );
       }
     });
 
@@ -3434,7 +3436,7 @@ async function pythonWorkerOpenSelectedBusinessAdAccountModal() {
   const note = document.createElement('div');
   note.className = 'pwbm-note';
   note.textContent =
-    'Каждый выбранный BM идёт напрямую в Python/browser Add RK. Старый Graph create с end_advertiser здесь не используется.';
+    'Будет создано по одному РК в каждом выбранном BM. Валюта и часовой пояс после создания обычно не меняются.';
   body.appendChild(note);
 
   const rows = {};

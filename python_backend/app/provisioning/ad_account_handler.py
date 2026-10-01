@@ -15,6 +15,7 @@ from ..facebook_ad_account_create import (
     create_ad_account_with_docids,
 )
 from ..facebook_business_browser import (
+    BROWSER_TERMINAL_ACCESS_CODES,
     BrowserBusinessError,
     FacebookBusinessBrowser,
 )
@@ -398,6 +399,15 @@ async def _reconcile_existing(
                  "source": "official_graph_disabled", "business_id": business_id}]
 
 
+def _raise_terminal_inventory_error(exc: Exception) -> None:
+    """Preserve access blockers instead of retrying other Meta routes."""
+    if (
+        isinstance(exc, BrowserBusinessError)
+        and exc.code in BROWSER_TERMINAL_ACCESS_CODES
+    ):
+        raise ProvisioningError(exc.code, str(exc), retryable=False) from exc
+
+
 async def _reconcile_existing_browser_inventory(
     session: Any,
     *,
@@ -452,6 +462,7 @@ async def _reconcile_existing_browser_inventory(
                     )
                 )
             except Exception as ui_exc:
+                _raise_terminal_inventory_error(ui_exc)
                 ui_inventory = {
                     "confirmed_empty": False,
                     "source": "business_settings_ui",
@@ -483,7 +494,10 @@ async def _reconcile_existing_browser_inventory(
                 }
             )
             return "", result
+    except ProvisioningError:
+        raise
     except Exception as exc:
+        _raise_terminal_inventory_error(exc)
         return "", {
             "confirmed": False,
             "confirmed_empty": False,
@@ -676,6 +690,7 @@ async def _prove_empty_after_uncertainty(
                     )
                 )
         except Exception as exc:
+            _raise_terminal_inventory_error(exc)
             ui_inventory = {
                 "confirmed_empty": False,
                 "error": (
@@ -1322,14 +1337,35 @@ async def ad_account_handler(
     browser_candidate_id = ""
     browser_candidate_confirmations = 0
     for browser_inventory_attempt in range(2):
-        (
-            browser_found_id,
-            browser_inventory_before,
-        ) = await _reconcile_existing_browser_inventory(
-            session,
-            business_id=business_id,
-            account_name=rk_name,
-        )
+        try:
+            (
+                browser_found_id,
+                browser_inventory_before,
+            ) = await _reconcile_existing_browser_inventory(
+                session,
+                business_id=business_id,
+                account_name=rk_name,
+            )
+        except ProvisioningError as exc:
+            if exc.code in BROWSER_TERMINAL_ACCESS_CODES:
+                await provisioning_state.checkpoint(
+                    item_id,
+                    profile_id,
+                    scope_key,
+                    ProvisioningStep.AD_ACCOUNT,
+                    {
+                        "phase": "CREATE_NOT_SUBMITTED",
+                        "resume_from": "CREATE",
+                        "business_id": business_id,
+                        "account_name": rk_name,
+                        "currency": currency,
+                        "timezone_id": timezone_id,
+                        "last_error_code": exc.code,
+                        "last_error": str(exc),
+                        "auth_blocked": True,
+                    },
+                )
+            raise
         browser_inventory_attempts.append(
             {
                 "attempt": browser_inventory_attempt + 1,
@@ -1395,6 +1431,7 @@ async def ad_account_handler(
                     )
                 )
         except Exception as exc:
+            _raise_terminal_inventory_error(exc)
             ui_inventory_before = {
                 "confirmed_empty": False,
                 "error": (
