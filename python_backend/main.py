@@ -1142,9 +1142,14 @@ async def profile_live_inventory(
                 ),
             }
 
-    # Workspace's last live-confirmed Page rows are passed as business:page
-    # hints. This repairs cases where the worker database predates the current
-    # Page relation but Workspace still has a strong previously-live identity.
+    # REMASK_PAGE_HINT_PRECEDENCE_V1
+    # Workspace snapshots can predate Page-state cleanup and may contain
+    # several historical Pages for the same BM. A current durable worker
+    # BM->Page relation is stronger than those old snapshot hints, so never
+    # append snapshot Pages to a Business already covered by worker history.
+    # When worker history has no relation for that BM, accept at most one
+    # Workspace Page hint and use it only as a target for fresh live proof.
+    workspace_page_hint_businesses:set[str]=set()
     for raw_pair in str(page_hints or '').split(','):
         raw_pair=raw_pair.strip()
         if not raw_pair or ':' not in raw_pair:
@@ -1152,7 +1157,7 @@ async def profile_live_inventory(
         hinted_business_id,hinted_page_id=raw_pair.split(':',1)
         hinted_business_id=hinted_business_id.strip()
         hinted_page_id=hinted_page_id.strip()
-        if (
+        if not (
             hinted_business_id.isdigit()
             and hinted_page_id.isdigit()
             and (
@@ -1160,18 +1165,26 @@ async def profile_live_inventory(
                 or hinted_business_id in requested_business_ids
             )
         ):
-            known_pages_by_business.setdefault(
-                hinted_business_id,{}
-            ).setdefault(
-                hinted_page_id,
-                {
-                    'id':hinted_page_id,
-                    'page_id':hinted_page_id,
-                    'name':fan_page_names.get(hinted_page_id,hinted_page_id),
-                    'business_id':hinted_business_id,
-                    'source':'workspace_last_live_page_hint',
-                },
-            )
+            continue
+
+        if (
+            hinted_business_id in known_pages_by_business
+            and known_pages_by_business[hinted_business_id]
+        ):
+            continue
+        if hinted_business_id in workspace_page_hint_businesses:
+            continue
+
+        workspace_page_hint_businesses.add(hinted_business_id)
+        known_pages_by_business[hinted_business_id]={
+            hinted_page_id:{
+                'id':hinted_page_id,
+                'page_id':hinted_page_id,
+                'name':fan_page_names.get(hinted_page_id,hinted_page_id),
+                'business_id':hinted_business_id,
+                'source':'workspace_last_live_page_hint',
+            }
+        }
 
     # BM:RK pairs below come only from the last live-confirmed Workspace
     # snapshot. They are hints for surviving Meta selector/UI drift; they are
