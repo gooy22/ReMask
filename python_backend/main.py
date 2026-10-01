@@ -374,6 +374,60 @@ async def run_startup_smoke() -> None:
     except Exception as exc:
         log.exception('e2e smoke failed: %s',exc)
 
+async def run_live_inventory_readonly_canary() -> None:
+    """Optional one-shot startup proof for the live inventory path.
+
+    REMASK_LIVE_INVENTORY_READONLY_CANARY_V1
+    Disabled unless REMASK_LIVE_INVENTORY_CANARY_PROFILE is explicitly set.
+    This invokes the same read-only inventory function as Workspace Sync and
+    never creates/submits BM, Page, RK or ad mutations.
+    """
+    await asyncio.sleep(4.0)
+    profile_id=str(
+        os.getenv('REMASK_LIVE_INVENTORY_CANARY_PROFILE') or ''
+    ).strip()
+    if not profile_id:
+        return
+
+    try:
+        result=await profile_live_inventory(
+            profile_id=profile_id,
+            business_ids=None,
+            ad_account_hints=None,
+            page_hints=None,
+        )
+        log.warning(
+            'live inventory canary profile=%s ok=%s live_ready=%s '
+            'pages_ready=%s pages_live_verified=%s pages=%s source=%s '
+            'diagnostic=%s warnings=%s',
+            profile_id,
+            bool(result.get('ok')),
+            bool(result.get('live_ready')),
+            bool(result.get('pages_ready')),
+            bool(result.get('pages_live_verified')),
+            int(result.get('pages_count') or 0),
+            str(result.get('pages_source') or ''),
+            str(result.get('pages_diagnostic') or '')[:1800],
+            json.dumps(
+                result.get('warnings') or [],
+                ensure_ascii=False,
+                separators=(',', ':'),
+            )[:2200],
+        )
+    except HTTPException as exc:
+        log.error(
+            'live inventory canary profile=%s HTTP status=%s detail=%s',
+            profile_id,
+            exc.status_code,
+            str(exc.detail)[:2200],
+        )
+    except Exception as exc:
+        log.exception(
+            'live inventory canary profile=%s failed=%s',
+            profile_id,
+            f'{exc.__class__.__name__}: {exc}'[:2200],
+        )
+
 async def require_key(x_remask_worker_key: str | None = Header(default=None)) -> None:
     if API_KEY and x_remask_worker_key != API_KEY:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,detail='invalid worker key')
@@ -401,12 +455,18 @@ async def lifespan(app: FastAPI):
         run_bm_browser_canary(),
         name='remask-bm-browser-canary',
     )
+    live_inventory_canary_task=asyncio.create_task(
+        run_live_inventory_readonly_canary(),
+        name='remask-live-inventory-readonly-canary',
+    )
     yield
     smoke_task.cancel()
     bm_canary_task.cancel()
+    live_inventory_canary_task.cancel()
     await asyncio.gather(
         smoke_task,
         bm_canary_task,
+        live_inventory_canary_task,
         return_exceptions=True,
     )
     await pool.stop()
