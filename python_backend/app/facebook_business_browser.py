@@ -18218,29 +18218,33 @@ timeout_seconds=4.0,
         evidence = decoded + "\n" + variables_text
         ids_match = business in evidence and page in evidence
 
+        folded_decoded = decoded.casefold()
+        # REMASK_PAGE_ADD_MUTATION_MATCH_V2
+        # Meta has rotated Page-attach friendly names several times. During
+        # the Add-Page flow the strongest invariant is still: POST GraphQL,
+        # both the exact Business ID and Page ID are present, and the operation
+        # is a mutation whose name/body is Page/asset/assignment related.
+        page_mutation_markers = (
+            "addpage",
+            "pageadd",
+            "claimpage",
+            "pageclaim",
+            "businesspage",
+            "page",
+            "asset",
+            "assign",
+            "attach",
+            "claim",
+            "connect",
+        )
         operation_match = (
             "mutation" in friendly
-            and any(
-                marker in friendly
-                for marker in (
-                    "addpage",
-                    "pageadd",
-                    "claimpage",
-                    "pageclaim",
-                    "businesspage",
-                    "asset",
-                )
-            )
+            and any(marker in friendly for marker in page_mutation_markers)
         ) or (
-            "mutation" in decoded.casefold()
+            "mutation" in folded_decoded
             and any(
-                marker in decoded.casefold()
-                for marker in (
-                    "addpage",
-                    "pageadd",
-                    "claimpage",
-                    "pageclaim",
-                )
+                marker in folded_decoded
+                for marker in page_mutation_markers
             )
         )
 
