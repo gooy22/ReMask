@@ -384,20 +384,29 @@ async def run_targeted_pages_readonly_canary(profile_id: str) -> None:
                 pages = await asyncio.wait_for(browser.discover_managed_pages(
                     fast=True, navigation_timeout_ms=9000), timeout=45)
                 log.warning('targeted Pages readonly canary profile=%s pages=%s', profile_id,
-                    json.dumps([{k: row.get(k) for k in ('id','ownership_verified','ownership_source')} for row in pages], separators=(',', ':')))
+                    json.dumps([{k: row.get(k) for k in ('id','profile_id','ownership_verified','ownership_source')} for row in pages], separators=(',', ':')))
+                target_profile = str(os.getenv('REMASK_PAGE_ATTACH_CANARY_PAGE') or '').strip()
+                delegate = next((row for row in pages if str(row.get('profile_id') or '') == target_profile), None)
+                if delegate:
+                    target_page_override = str(delegate['id'])
+                else:
+                    target_page_override = ''
             except Exception as exc:
+                target_page_override = ''
                 diagnostic = getattr(browser, '_last_page_inventory_diagnostic', {})
                 log.warning('targeted Pages readonly canary profile=%s error=%s shapes=%s diagnostic=%s', profile_id, str(exc)[:500],
                     json.dumps(diagnostic.get('unsupported_page_shapes', []), separators=(',', ':'))[:12000],
                     json.dumps({key: diagnostic.get(key) for key in ('stage','page_discovery','current_url','rendered_pages_surface')}, separators=(',', ':'))[:6500])
             target_business = str(os.getenv('REMASK_PAGE_ATTACH_CANARY_BUSINESS') or '').strip()
-            target_page = str(os.getenv('REMASK_PAGE_ATTACH_CANARY_PAGE') or '').strip()
+            target_page = target_page_override or str(os.getenv('REMASK_PAGE_ATTACH_CANARY_PAGE') or '').strip()
             if target_business.isdigit() and target_page.isdigit():
                 blocked_requests = []
                 async def readonly_route(route, request):
                     summary = FacebookBusinessBrowser._safe_graphql_request_summary(request)
                     friendly = str(summary.get('friendly_name') or '').lower()
-                    if str(request.method).upper() == 'POST' and not ('query' in friendly and 'mutation' not in friendly):
+                    harmless_session = friendly in {'useusersessiondatamutation', 'pagecontenttabupdatebizkitwaitliststatusmutation'}
+                    asset_submit = FacebookBusinessBrowser._request_matches_page_add(request, business_id=target_business, page_id=target_page)
+                    if str(request.method).upper() == 'POST' and (asset_submit or ('mutation' in friendly and not harmless_session)):
                         if 'mutation' in friendly or FacebookBusinessBrowser._request_matches_page_add(request, business_id=target_business, page_id=target_page):
                             blocked_requests.append(summary)
                         await route.abort()

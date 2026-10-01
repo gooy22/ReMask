@@ -99,7 +99,7 @@ def _normalize_page(row: Any) -> dict[str, Any] | None:
     if isinstance(row.get("is_owned"), bool):
         output["is_owned"] = bool(row.get("is_owned"))
 
-    for key in ("ownership_verified", "ownership_source"):
+    for key in ("ownership_verified", "ownership_source", "profile_id"):
         if key in row:
             output[key] = row[key]
     return output
@@ -222,11 +222,30 @@ def _extract_known_page_lists(payload: dict[str, Any]) -> list[dict[str, Any]]:
             if _page_like(value) and _page_management_proven(value):
                 add(value, "explicit_page_management")
             for key, child in value.items():
-                if str(key).lower() in MANAGED_PAGE_KEYS:
+                if key == "additional_profiles_with_biz_tools":
+                    # New Pages Experience returns a User/profile wrapper.
+                    # Business assets use its explicit delegate Page, not the
+                    # wrapper ID or the Promote link's ID.
+                    for profile in _iter_connection_rows(child):
+                        delegate = profile.get("delegate_page")
+                        delegate = delegate if isinstance(delegate, dict) else {}
+                        delegate_id = _clean(delegate.get("id") or profile.get("delegate_page_id"))
+                        if not delegate_id.isdigit():
+                            continue
+                        page = dict(delegate)
+                        page.update(id=delegate_id, name=delegate.get("name") or profile.get("name"),
+                                    profile_id=_clean(profile.get("id")))
+                        add(page, "additional_profiles_with_biz_tools.delegate_page")
+                elif str(key).lower() in MANAGED_PAGE_KEYS:
                     for row in _iter_connection_rows(child):
                         add(row, str(key).lower())
                 else:
                     walk(child)
+        elif isinstance(value, str) and value.startswith(("{", "[")):
+            try:
+                walk(json.loads(value))
+            except ValueError:
+                pass
 
     walk(payload)
     return _dedupe_pages(output)
@@ -688,7 +707,7 @@ def _extract_pages_from_browser_document(source: str) -> list[dict[str, Any]]:
     """
     rows: list[dict[str, Any]] = []
     decoder = json.JSONDecoder()
-    managed_pattern = re.compile(r'["\'](' + '|'.join(sorted(MANAGED_PAGE_KEYS)) + r')["\']\s*:\s*', re.I)
+    managed_pattern = re.compile(r'["\'](' + '|'.join(sorted(MANAGED_PAGE_KEYS | {"additional_profiles_with_biz_tools"})) + r')["\']\s*:\s*', re.I)
     for text in _browser_source_variants(source):
         for match in managed_pattern.finditer(text):
             try:
@@ -724,6 +743,8 @@ def _browser_page_candidate_diagnostic(source: str) -> list[dict[str, Any]]:
                         "id": page_id, "typename": _clean(value.get("__typename")), "path": ".".join(path[-6:]),
                         "keys": sorted(value.keys())[:55], "parent_keys": list(parent_keys)[:30],
                         "flags": {key: val for key, val in value.items() if isinstance(val, bool)},
+                        "delegate_page_id": _clean(value.get("delegate_page_id")),
+                        "delegate_page": {key: value["delegate_page"].get(key) for key in ("id", "__typename")} if isinstance(value.get("delegate_page"), dict) else None,
                     }
             for key, child in value.items():
                 walk(child, (*path, str(key)), tuple(sorted(value.keys())))

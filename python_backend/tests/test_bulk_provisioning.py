@@ -26,6 +26,22 @@ def request(count=2, **payload):
 
 
 class PageIdentityTests(unittest.TestCase):
+    def test_profile_plus_uses_delegate_page_identity(self):
+        payload={'viewer':{'actor':{'additional_profiles_with_biz_tools':{'edges':[
+            {'node':{'__typename':'User','id':'61594993341059','name':'Media Shopsw',
+                     'delegate_page_id':'1289628847574478','delegate_page':{'id':'1289628847574478','__typename':'Page'}}},
+            {'node':{'__typename':'User','id':'61595071734540','name':'ReMask Page',
+                     'delegate_page_id':'1372205759306015'}}]}}}}
+        pages=_extract_pages_from_browser_document('<script>'+json.dumps(payload)+'</script>')
+        self.assertEqual([p['id'] for p in pages],['1289628847574478','1372205759306015'])
+        self.assertEqual(pages[0]['profile_id'],'61594993341059')
+        self.assertTrue(all(p['ownership_verified'] for p in pages))
+
+    def test_profile_switcher_and_missing_delegate_do_not_prove_page(self):
+        self.assertEqual(_extract_known_page_lists({'profile_switcher_eligible_profiles':{'nodes':[
+            {'profile':{'id':'61594993341059','name':'Profile'}}]},
+            'additional_profiles_with_biz_tools':{'edges':[{'node':{'id':'61594993341059','name':'Profile'}}]}}),[])
+
     def test_neighbor_entities_and_recommendations_do_not_inflate_count(self):
         payload={'viewer':{'id':'111111111','name':'Profile','pages_can_administer':{'nodes':[
             {'__typename':'Page','id':'222222222','name':'My Page','picture':{'id':'333333333','name':'Picture'}}]},
