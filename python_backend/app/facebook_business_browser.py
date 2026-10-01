@@ -5610,6 +5610,8 @@ class FacebookBusinessBrowser:
                     break
 
             if not merged:
+                from .facebook_page_discovery import _browser_page_candidate_diagnostic
+                self._last_page_inventory_diagnostic["unsupported_page_shapes"] = _browser_page_candidate_diagnostic(document)
                 self._last_page_inventory_diagnostic.update({
                     "stage": "empty",
                     "current_url": _clean(getattr(self.page, "url", "") if self.page else ""),
@@ -19674,9 +19676,18 @@ timeout_seconds=4.0,
 
         await self.page.wait_for_timeout(1200)
 
+        # Reuse the production picker selector; preflight stops before submit.
+        picker_selected = False
+        for _ in range(4):
+            if await self._click_unique_page_add_result(page_id=page):
+                picker_selected = True
+                await self.page.wait_for_timeout(450)
+                break
+            await self.page.wait_for_timeout(650)
+
         # Selecting a search result is non-mutating. Stop before any
         # Add/Confirm/Request approval button is clicked.
-        selected = False
+        selected = picker_selected
         try:
             exact = self.page.get_by_text(
                 re.compile(rf"^\s*{re.escape(page)}\s*$")
@@ -19737,10 +19748,12 @@ timeout_seconds=4.0,
                 continue
 
         return {
-            "ready": True,
+            "ready": bool(selected and final_actions),
+            "form_ready": True,
             "already_attached": False,
             "business_id": business,
             "page_id": page,
+            "page_surface": await self._page_add_surface_state(page_id=page),
             "page_filled": True,
             "result_selected": selected,
             "final_actions": final_actions,

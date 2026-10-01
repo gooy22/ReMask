@@ -709,6 +709,38 @@ def _extract_pages_from_browser_document(source: str) -> list[dict[str, Any]]:
     return _dedupe_pages(rows)
 
 
+def _browser_page_candidate_diagnostic(source: str) -> list[dict[str, Any]]:
+    """Non-secret shape evidence for unsupported live Page connections."""
+    output = {}
+    def walk(value: Any, path: tuple[str, ...] = (), parent_keys: tuple[str, ...] = ()) -> None:
+        if isinstance(value, list):
+            for child in value:
+                walk(child, (*path, "[]"), parent_keys)
+        elif isinstance(value, dict):
+            if _clean(value.get("__typename")) == "Page":
+                page_id = _clean(value.get("id"))
+                if page_id.isdigit() and len(output) < 20:
+                    output[(page_id, path[-6:])] = {
+                        "id": page_id, "path": ".".join(path[-6:]),
+                        "keys": sorted(value.keys())[:55], "parent_keys": list(parent_keys)[:30],
+                        "flags": {key: val for key, val in value.items() if isinstance(val, bool)},
+                    }
+            for key, child in value.items():
+                walk(child, (*path, str(key)), tuple(sorted(value.keys())))
+        elif isinstance(value, str) and value.startswith(("{", "[")) and "__typename" in value:
+            try:
+                walk(json.loads(value), (*path, "json_string"), parent_keys)
+            except ValueError:
+                pass
+    for text in _browser_source_variants(source):
+        for match in re.finditer(r'<script\b[^>]*>(.*?)</script\s*>', text, re.I | re.S):
+            try:
+                walk(json.loads(match.group(1).strip()))
+            except ValueError:
+                pass
+    return list(output.values())
+
+
 async def discover_pages_from_browser_html(
     session: Any,
 ) -> PageDiscoveryResult:

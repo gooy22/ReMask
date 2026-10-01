@@ -1761,6 +1761,18 @@ async function pythonWorkerPoll() {
     pythonWorkerRenderJob(job);
 
     const items = Array.isArray(job.items) ? job.items : [];
+    const plannedEntities = new Set();
+    items.forEach(function(item) {
+      (Array.isArray(item.tasks) ? item.tasks : []).forEach(function(task) {
+        const steps = task && task.payload && task.payload.steps;
+        (Array.isArray(steps) ? steps : []).forEach(function(step) {
+          const label = {FAN_PAGES:'FP',BUSINESS:'BM',AD_ACCOUNT:'РК'}[String(step).toUpperCase()];
+          if (label) plannedEntities.add(label);
+        });
+      });
+    });
+    const compositeLabel = ['FP','BM','РК'].filter(function(label) { return plannedEntities.has(label); }).join(' → ');
+    const isCompositeJob = plannedEntities.size > 1;
     const runningSteps = [];
 
     for (const item of items) {
@@ -1817,7 +1829,9 @@ async function pythonWorkerPoll() {
       const unconfirmed = await pythonWorkerRefreshSuccessfulProfiles(items);
       pythonWorkerSetText(
         'pythonPwStatus',
-        isFanPageJob
+        isCompositeJob
+          ? 'Создание ' + compositeLabel + ' завершено. ID сохранены в Job.' + (unconfirmed.length ? ' Workspace sync не подтвердил: ' + unconfirmed.join(', ') + '.' : ' Workspace sync завершён.')
+          : isFanPageJob
           ? (
               unconfirmed.length
                 ? 'FP созданы. Page ID сохранены в Job. Workspace sync не подтвердил: ' + unconfirmed.join(', ') + '.'
@@ -1859,8 +1873,10 @@ async function pythonWorkerPoll() {
             return step && String(step.step || '').toUpperCase() === 'AD_ACCOUNT';
           });
       });
-      const entityLabel = isFanPageJob ? 'FP' : (isAdAccountJob ? 'RK' : 'BM');
-      const entityFailureLabel = isFanPageJob
+      const entityLabel = isCompositeJob ? compositeLabel : (isFanPageJob ? 'FP' : (isAdAccountJob ? 'RK' : 'BM'));
+      const entityFailureLabel = isCompositeJob
+        ? 'Создание ' + compositeLabel + ' завершилось ошибкой: '
+        : isFanPageJob
         ? 'Создание Fan Page завершилось ошибкой: '
         : isAdAccountJob
         ? 'Создание рекламного кабинета завершилось ошибкой: '
@@ -3885,9 +3901,10 @@ async function pythonWorkerOpenAutoModal() {
   cancel.addEventListener('click', pythonWorkerCloseOwnBmModal);
   const create = document.createElement('button'); create.type = 'button'; create.className = 'btn btn-primary'; create.textContent = 'Запустить';
   actions.append(cancel, create); footer.append(status, actions); card.append(head, body, footer); modal.appendChild(card); document.body.appendChild(modal);
+  let acceptedRequest = null;
   function refresh() {
     const n = Number(count.value); const total = profiles.length * n; const rk = mode.value === '4';
-    currency.disabled = timezone.disabled = !rk;
+    currency.disabled = timezone.disabled = !rk || !!acceptedRequest;
     const valid = Number.isInteger(n) && n >= 1 && n <= 20 && total <= 500 && category.value.trim()
       && (!rk || (/^[A-Z]{3}$/.test(currency.value.trim().toUpperCase()) && Number.isInteger(Number(timezone.value)) && Number(timezone.value) >= 0 && timezone.value.trim()));
     create.disabled = pythonWorkerUiState.busy || !valid;
@@ -3895,20 +3912,22 @@ async function pythonWorkerOpenAutoModal() {
       : 'Нужны категория, число комплектов 1–20 и параметры РК. Всего не больше 500 комплектов.';
   }
   [mode, count, category, currency, timezone].forEach(function(input) { input.addEventListener('input', refresh); input.addEventListener('change', refresh); });
+  const random = new Uint32Array(4); crypto.getRandomValues(random);
+  const nonce = Array.from(random, function(x) { return x.toString(16); }).join('-');
   create.addEventListener('click', async function() {
     if (create.disabled) return;
     const steps = ['PROXY_CHECK','FAN_PAGES','BUSINESS','AD_ACCOUNT'].slice(0, Number(mode.value));
     const n = Number(count.value);
     pythonWorkerUiState.busy = true; refresh(); pythonWorkerSelectionRefresh();
     try {
-      const random = new Uint32Array(4); crypto.getRandomValues(random);
-      const nonce = Array.from(random, function(x) { return x.toString(16); }).join('-');
-      const data = await pythonWorkerBridge({action:'create', idempotency_key:'workspace-auto-' + nonce,
+      if (!acceptedRequest) acceptedRequest = {action:'create', idempotency_key:'workspace-auto-' + nonce,
         profiles:profiles.map(function(profileId) { return {profile_id:String(profileId), tasks:[{action:'provisioning', payload:{
           steps:steps, auto_generate:true, batch_count:n, parameters:{
             FAN_PAGES:{category:category.value.trim()}, AD_ACCOUNT:{currency:currency.value.trim().toUpperCase(), timezone_id:Number(timezone.value)}
           }
-        }}]}; })});
+        }}]}; })};
+      [mode, count, category, currency, timezone].forEach(function(input) { input.disabled = true; });
+      const data = await pythonWorkerBridge(acceptedRequest);
       const jobId = String((data && data.job && data.job.job_id) || '').trim();
       if (!jobId) throw new Error('Worker did not return job_id.');
       pythonWorkerClearBatchState();
@@ -3920,7 +3939,8 @@ async function pythonWorkerOpenAutoModal() {
       pythonWorkerPoll().catch(function(error) { pythonWorkerSetText('pythonPwStatus', 'Ошибка polling: ' + String(error.message || error)); });
     } catch (error) {
       pythonWorkerUiState.busy = false; refresh(); pythonWorkerSelectionRefresh();
-      status.textContent = 'Ошибка: ' + String(error.message || error);
+      create.textContent = 'Повторить отправку';
+      status.textContent = 'Ошибка: ' + String(error.message || error) + '. Повторная отправка использует тот же ключ Job.';
     }
   });
   refresh();
