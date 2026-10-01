@@ -65,6 +65,15 @@ class LiveSyncContractTests(unittest.TestCase):
         self.assertIn("REMASK_PAGE_VERIFICATION_TIMESTAMP_V3", source)
         self.assertIn("'pages_live_verified_at' => $pagesLiveVerified", source)
         self.assertIn("$pagesReady = true;", source)
+        self.assertIn("REMASK_PAGE_LIVE_VERIFICATION_WARNING_V1", source)
+        self.assertIn(
+            "Fan Page state loaded, but live Fan Page verification was not completed in this sync",
+            source,
+        )
+        self.assertIn(
+            "Live Fan Page inventory was not confirmed in this sync",
+            source,
+        )
         self.assertNotIn(
             "$syncWarnings[] = 'Page inventory inconclusive; previous confirmed Pages preserved';",
             source,

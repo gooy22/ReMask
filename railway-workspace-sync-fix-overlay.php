@@ -1625,6 +1625,14 @@ $syncProfileReplacement = <<<'PHP'
         if (!$syncComplete) {
             $snapshot['sync_error_kind'] = 'PRIVATE_INCONCLUSIVE';
             $snapshot['sync_error'] = 'Live private BM/RK inventory was not confirmed.';
+        } elseif (!$pagesLiveVerified) {
+            // REMASK_PAGE_LIVE_VERIFICATION_WARNING_V1
+            // A usable Page baseline is not the same thing as fresh live Page
+            // enumeration. Keep BM/RK sync successful, but never present stale
+            // or durable Page state as if this Sync had just proved it live.
+            $syncWarnings[] = $pagesReady
+                ? 'Fan Page state loaded, but live Fan Page verification was not completed in this sync'
+                : 'Live Fan Page inventory was not confirmed in this sync';
         }
 
         $responseProfile = null;
