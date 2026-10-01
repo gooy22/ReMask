@@ -220,6 +220,10 @@ class LiveSyncContractTests(unittest.TestCase):
         self.assertIn("diagnostic[\"probe_created\"]", browser_source)
         self.assertIn("self.page=primary_page", browser_source)
         self.assertIn("await asyncio.wait_for(probe_page.close()", browser_source)
+        self.assertIn("navigation_timeout_ms=6000 if fast else None", browser_source)
+        self.assertIn("navigation_timeout_ms: int | None = None", discovery_source)
+        self.assertIn("2.0 if fast else 2.4", discovery_source)
+        self.assertIn("0.35 if fast else 0.5", discovery_source)
 
         self.assertIn("attempts=1", discovery_source)
         self.assertIn("navigation_attempts=", goto_source)
@@ -239,7 +243,7 @@ class LiveSyncContractTests(unittest.TestCase):
         self.assertLess(isolated,ads)
         self.assertLess(isolated,private)
         self.assertIn("isolated_pages_timeout=optional_page_budget(10.0)",page_phase)
-        self.assertIn("if isolated_pages_timeout < 8.25:",page_phase)
+        self.assertIn("if isolated_pages_timeout < 9.25:",page_phase)
         self.assertEqual(
             page_phase.count("discover_managed_pages_isolated(fast=True)"),
             1,
