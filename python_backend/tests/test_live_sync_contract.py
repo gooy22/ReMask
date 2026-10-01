@@ -62,6 +62,8 @@ class LiveSyncContractTests(unittest.TestCase):
         self.assertIn("REMASK_USABLE_PAGE_STATE_V3", source)
         self.assertIn("$syncComplete = $liveReady;", source)
         self.assertIn("$snapshot['pages_live_verified'] = $pagesLiveVerified;", source)
+        self.assertIn("REMASK_PAGE_VERIFICATION_TIMESTAMP_V3", source)
+        self.assertIn("'pages_live_verified_at' => $pagesLiveVerified", source)
         self.assertIn("$pagesReady = true;", source)
         self.assertNotIn(
             "$syncWarnings[] = 'Page inventory inconclusive; previous confirmed Pages preserved';",
