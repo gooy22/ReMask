@@ -5635,11 +5635,37 @@ class FacebookBusinessBrowser:
                 else {}
             )
             diagnostic["isolated_tab"]=True
+            diagnostic["probe_url"]=_clean(
+                getattr(probe_page,"url","")
+            )
             diagnostic["primary_url"]=_clean(
                 getattr(primary_page,"url","")
             )
             self._last_page_inventory_diagnostic=diagnostic
             return rows
+        except BaseException as exc:
+            # REMASK_ISOLATED_PAGE_FAILURE_DIAGNOSTIC_V1
+            # Preserve the probe's final URL/evidence before the disposable tab
+            # is closed. This makes timeout/navigation failures distinguishable
+            # from the old primary-tab cross-domain regression.
+            diagnostic=dict(
+                self._last_page_inventory_diagnostic
+                if isinstance(self._last_page_inventory_diagnostic,dict)
+                else {}
+            )
+            diagnostic["isolated_tab"]=True
+            diagnostic["probe_created"]=probe_page is not None
+            diagnostic["probe_url"]=_clean(
+                getattr(probe_page,"url","") if probe_page is not None else ""
+            )
+            diagnostic["primary_url"]=_clean(
+                getattr(primary_page,"url","")
+            )
+            diagnostic["isolated_error"]=(
+                f"{exc.__class__.__name__}: {_clean(exc)}"[:700]
+            )
+            self._last_page_inventory_diagnostic=diagnostic
+            raise
         finally:
             self.page=primary_page
             if probe_page is not None:

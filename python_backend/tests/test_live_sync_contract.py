@@ -212,8 +212,12 @@ class LiveSyncContractTests(unittest.TestCase):
         self.assertNotIn("REMASK_ENABLE_GLOBAL_PAGE_DISCOVERY", source)
 
         self.assertIn("REMASK_ISOLATED_PAGE_INVENTORY_V1", browser_source)
+        self.assertIn("REMASK_ISOLATED_PAGE_FAILURE_DIAGNOSTIC_V1", browser_source)
         self.assertIn("self._browser_context.new_page()", browser_source)
         self.assertIn("primary_page=self.page", browser_source)
+        self.assertIn("diagnostic[\"probe_url\"]", browser_source)
+        self.assertIn("diagnostic[\"primary_url\"]", browser_source)
+        self.assertIn("diagnostic[\"probe_created\"]", browser_source)
         self.assertIn("self.page=primary_page", browser_source)
         self.assertIn("await asyncio.wait_for(probe_page.close()", browser_source)
 
