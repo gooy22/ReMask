@@ -379,6 +379,49 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(tasks[0]["error_code"])
 
 
+    async def test_confirmed_business_page_binding_is_restored_for_live_revalidation(self):
+        now = int(time.time())
+        with self.provisioning_state._connect() as con:
+            con.execute(
+                """INSERT INTO provisioning_steps(
+                    item_id,profile_id,scope_key,step,status,attempt,result_json,
+                    error_code,error_message,created_at,updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    "item-page-binding",
+                    "7",
+                    "bm-page-scope",
+                    "BUSINESS",
+                    "SUCCESS",
+                    1,
+                    json.dumps(
+                        {
+                            "phase": "PAGE_CONFIRMED",
+                            "business_id": "61594753560938",
+                            "business_name": "Test BM",
+                            "primary_page_id": "61594993341059",
+                        }
+                    ),
+                    "",
+                    "",
+                    now,
+                    now,
+                ),
+            )
+
+        rows = await self.provisioning_state.confirmed_business_page_bindings_for_profile(
+            "7"
+        )
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["business_id"], "61594753560938")
+        self.assertEqual(rows[0]["page_id"], "61594993341059")
+        self.assertEqual(
+            rows[0]["source"],
+            "python_worker_business_page_history",
+        )
+
+
 
 
 class ProfileResolverRecoveryTests(unittest.IsolatedAsyncioTestCase):
