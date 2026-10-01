@@ -19375,6 +19375,21 @@ timeout_seconds=4.0,
                 except Exception:
                     pass
 
+            if not result_selected:
+                # REMASK_PAGE_ADD_UNIQUE_RESULT_V2
+                # Current Meta can render the search hit as a generic card
+                # instead of role=option/radio. Retry the non-mutating result
+                # selection inside the Page-specific surface while hydration
+                # settles; never click Add/Confirm/Continue here.
+                for _ in range(6):
+                    if await self._click_unique_page_add_result(
+                        page_id=page,
+                    ):
+                        result_selected = True
+                        await self.page.wait_for_timeout(350)
+                        break
+                    await self.page.wait_for_timeout(350)
+
             sent = False
             clicked_any = False
             page_click_intent_written = False
@@ -19541,6 +19556,14 @@ timeout_seconds=4.0,
                     )
                     diag["result_selected"] = True
                     diag["selection_idle_loops"] = post_selection_idle_loops
+                    diag["page_surface"] = await self._page_add_surface_state(
+                        page_id=page,
+                    )
+                    diag["live_verify"] = getattr(
+                        self,
+                        "_last_page_inventory_diagnostic",
+                        {},
+                    )
                     raise BrowserBusinessError(
                         "PAGE_ADD_UI_CHANGED",
                         (
@@ -19663,6 +19686,15 @@ timeout_seconds=4.0,
 
                 if not clicked_any:
                     diag = await self._diagnostic("page_add_submit_missing")
+                    diag["result_selected"] = result_selected
+                    diag["page_surface"] = await self._page_add_surface_state(
+                        page_id=page,
+                    )
+                    diag["live_verify"] = getattr(
+                        self,
+                        "_last_page_inventory_diagnostic",
+                        {},
+                    )
                     raise BrowserBusinessError(
                         "PAGE_ADD_UI_CHANGED",
                         "Meta Page-add review/submit action was not found.",
@@ -19697,6 +19729,14 @@ timeout_seconds=4.0,
 
         if not await self.verify_page_attached(business_id=business, page_id=page):
             diag = await self._diagnostic("page_attach_unconfirmed")
+            diag["page_surface"] = await self._page_add_surface_state(
+                page_id=page,
+            )
+            diag["live_verify"] = getattr(
+                self,
+                "_last_page_inventory_diagnostic",
+                {},
+            )
             raise BrowserBusinessError(
                 "PAGE_ATTACH_RESULT_UNKNOWN",
                 (
