@@ -4857,20 +4857,47 @@ class FacebookBusinessBrowser:
             })
 
             while time.monotonic() < deadline and set(confirmed) != set(expected):
-                try:
-                    content = await self.page.content()
-                except Exception:
-                    content = ""
+                # REMASK_KNOWN_PAGE_VISIBLE_DOM_PROOF_V2
+                # Never use full page.content() as Page proof: Business Suite
+                # embeds IDs in scripts/caches that may describe stale or
+                # unrelated assets. Accept only visible body text or visible
+                # Page-surface links/controls carrying the exact Page ID.
                 try:
                     body = await self._body_text()
                 except Exception:
                     body = ""
-                combined = content + "\n" + body
+                visible_evidence: list[str] = []
+                try:
+                    visible_evidence = await self.page.locator(
+                        'a[href],button,[role="button"],[role="row"],'
+                        '[role="listitem"],[role="option"],[aria-label]'
+                    ).evaluate_all(
+                        """els => els.slice(0,700).map(el => {
+                            const r=el.getBoundingClientRect();
+                            const st=getComputedStyle(el);
+                            if (!(r.width>0&&r.height>0)
+                                || st.display==='none'
+                                || st.visibility==='hidden') return '';
+                            return [
+                                el.getAttribute('href')||'',
+                                el.getAttribute('aria-label')||'',
+                                el.getAttribute('title')||'',
+                                el.innerText||el.textContent||''
+                            ].join(' ').replace(/\\s+/g,' ').trim().slice(0,900);
+                        }).filter(Boolean)"""
+                    )
+                except Exception:
+                    visible_evidence = []
+
+                visible_blob = body + "\n" + "\n".join(
+                    str(value or "")
+                    for value in visible_evidence
+                )
                 for page_id in expected:
-                    if page_id in combined:
+                    if page_id in visible_blob:
                         confirm(
                             page_id,
-                            source="business_settings_dom_exact_id",
+                            source="business_settings_visible_dom_exact_id",
                         )
                 if set(confirmed) == set(expected):
                     break
