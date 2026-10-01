@@ -18237,16 +18237,35 @@ timeout_seconds=4.0,
             "claim",
             "connect",
         )
-        operation_match = (
-            "mutation" in friendly
-            and any(marker in friendly for marker in page_mutation_markers)
-        ) or (
-            "mutation" in folded_decoded
-            and any(
-                marker in folded_decoded
-                for marker in page_mutation_markers
+        if friendly:
+            operation_match = (
+                "mutation" in friendly
+                and any(
+                    marker in friendly
+                    for marker in page_mutation_markers
+                )
             )
-        )
+        else:
+            # Raw-body fallback is only for requests where Meta omitted a
+            # friendly name. Do not let generic variable keys such as page_id
+            # turn an unrelated mutation into a Page-add match.
+            raw_markers = (
+                "addpage",
+                "pageadd",
+                "claimpage",
+                "pageclaim",
+                "businesspage",
+                "assignasset",
+                "attachpage",
+                "connectpage",
+            )
+            operation_match = (
+                "mutation" in folded_decoded
+                and any(
+                    marker in folded_decoded
+                    for marker in raw_markers
+                )
+            )
 
         return ids_match and operation_match
 
