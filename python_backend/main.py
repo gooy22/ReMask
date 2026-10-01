@@ -1743,12 +1743,15 @@ async def profile_live_inventory(
             )
 
             # REMASK_FULL_PROFILE_SYNC_PAGES_V2
+            # REMASK_ADS_MANAGER_PAGES_FIRST_V1
             # REMASK_SYNC_PRIVATE_LIST_PAGES_FIRST_V1
-            # Page inventory is part of the same profile Sync contract. Try the
-            # private Facebook Web persisted query first (cookies + proxy +
-            # fb_dtsg/doc_id; never official Graph API). If that route is stale
-            # or unavailable, fall back to one bounded live browser Your-Pages
-            # surface with Relay-response capture.
+            # Legacy build marker retained: private LIST_PAGES is still part
+            # of the contract, but Ads Manager is now the primary live source.
+            # Page inventory is part of the same profile Sync contract.
+            # Prefer Ads Manager's own read-only promotable Page Relay query:
+            # this frontend is already live-confirmed during RK revalidation
+            # and is materially more reliable than the Your-Pages SPA shell.
+            # Private LIST_PAGES and Your-Pages remain bounded fallbacks.
             stage='page_inventory'
             pages=[]
             pages_source=''
@@ -1789,7 +1792,11 @@ async def profile_live_inventory(
                             or ''
                         ).strip(),
                         'is_owned':row.get('is_owned'),
-                        '_source':str(row.get('source') or '').strip(),
+                        '_source':str(
+                            row.get('source')
+                            or row.get('_source')
+                            or ''
+                        ).strip(),
                     })
                 normalized.sort(
                     key=lambda page:(
@@ -1800,66 +1807,135 @@ async def profile_live_inventory(
                 )
                 return normalized
 
+            # 1) Ads Manager read-only Page inventory.
             try:
-                # LIST_PAGES may need to rediscover Meta's current persisted
-                # query when the durable registry is empty/stale. Keep this
-                # bounded, but give the self-heal path enough time to finish
-                # before falling back to the much heavier browser surface.
-                private_pages_timeout=budget(14.0)
-                facebook_web=await profile_session.facebook_web()
-                private_page_result=await hard_deadline(
-                    list_pages_via_private_graphql(facebook_web),
-                    private_pages_timeout,
+                ads_pages_timeout=budget(8.0)
+                discovered_pages=await hard_deadline(
+                    browser.discover_promotable_pages_from_ads_manager(
+                        timeout_seconds=min(7.0,ads_pages_timeout),
+                    ),
+                    ads_pages_timeout,
                 )
-                pages=normalize_page_rows(private_page_result.pages)
-                pages_source=str(
-                    private_page_result.source
-                    or 'facebook_web_graphql'
-                )
+                pages=normalize_page_rows(discovered_pages)
+                pages_source='ads_manager_promotable_pages'
                 pages_ready=True
                 log.info(
-                    'live inventory profile=%s private LIST_PAGES ready=True '
-                    'pages=%d source=%s',
+                    'live inventory profile=%s Ads Manager Page inventory '
+                    'ready=True pages=%d diagnostic=%s',
                     clean_profile,
                     len(pages),
-                    pages_source,
-                )
-            except PageDiscoveryError as exc:
-                page_primary_error=f'{exc.__class__.__name__}: {exc}'
-                log.info(
-                    'live inventory profile=%s private LIST_PAGES unavailable=%s; '
-                    'using browser Relay fallback',
-                    clean_profile,
-                    str(exc)[:500],
+                    json.dumps(
+                        getattr(
+                            browser,
+                            '_last_ads_manager_page_diagnostic',
+                            {},
+                        ),
+                        ensure_ascii=False,
+                        separators=(',', ':'),
+                    )[:3000],
                 )
             except asyncio.TimeoutError:
-                page_primary_error='PRIVATE_LIST_PAGES_TIMEOUT'
+                page_primary_error='ADS_MANAGER_PAGES_TIMEOUT'
                 log.warning(
-                    'live inventory profile=%s private LIST_PAGES timed out; '
-                    'using browser Relay fallback',
+                    'live inventory profile=%s Ads Manager Page inventory '
+                    'timed out diagnostic=%s',
                     clean_profile,
+                    json.dumps(
+                        getattr(
+                            browser,
+                            '_last_ads_manager_page_diagnostic',
+                            {},
+                        ),
+                        ensure_ascii=False,
+                        separators=(',', ':'),
+                    )[:4000],
                 )
-            except Exception as exc:
-                page_primary_error=f'{exc.__class__.__name__}: {exc}'
-                log.warning(
-                    'live inventory profile=%s private LIST_PAGES failed=%s; '
-                    'using browser Relay fallback',
+            except BrowserBusinessError as exc:
+                page_primary_error=f'{exc.code}: {exc}'
+                log.info(
+                    'live inventory profile=%s Ads Manager Page inventory '
+                    'unavailable=%s diagnostic=%s',
                     clean_profile,
-                    page_primary_error[:500],
+                    page_primary_error[:700],
+                    json.dumps(
+                        (
+                            exc.diagnostic
+                            if isinstance(getattr(exc,'diagnostic',None),dict)
+                            else getattr(
+                                browser,
+                                '_last_ads_manager_page_diagnostic',
+                                {},
+                            )
+                        ),
+                        ensure_ascii=False,
+                        separators=(',', ':'),
+                    )[:4000],
                 )
 
+            # 2) Private Facebook Web persisted query fallback.
             if not pages_ready:
-                # REMASK_PAGE_INVENTORY_TWO_PASS_V1
-                # Meta's Your-Pages SPA can legitimately return an empty shell
-                # on the first cold navigation and emit the real Relay Page
-                # inventory only on a subsequent browser pass. Treat one empty
-                # read as inconclusive, not final. Run a second independent
-                # read-only pass on a fresh browser context before surfacing
-                # PRIVATE_INCONCLUSIVE.
+                try:
+                    private_pages_timeout=budget(7.0)
+                    facebook_web=await profile_session.facebook_web()
+                    private_page_result=await hard_deadline(
+                        list_pages_via_private_graphql(facebook_web),
+                        private_pages_timeout,
+                    )
+                    pages=normalize_page_rows(private_page_result.pages)
+                    pages_source=str(
+                        private_page_result.source
+                        or 'facebook_web_graphql'
+                    )
+                    pages_ready=True
+                    log.info(
+                        'live inventory profile=%s private LIST_PAGES ready=True '
+                        'pages=%d source=%s',
+                        clean_profile,
+                        len(pages),
+                        pages_source,
+                    )
+                except PageDiscoveryError as exc:
+                    page_primary_error=(
+                        page_primary_error + ' | '
+                        if page_primary_error else ''
+                    ) + f'{exc.__class__.__name__}: {exc}'
+                    log.info(
+                        'live inventory profile=%s private LIST_PAGES unavailable=%s; '
+                        'using Your-Pages fallback',
+                        clean_profile,
+                        str(exc)[:500],
+                    )
+                except asyncio.TimeoutError:
+                    page_primary_error=(
+                        page_primary_error + ' | '
+                        if page_primary_error else ''
+                    ) + 'PRIVATE_LIST_PAGES_TIMEOUT'
+                    log.warning(
+                        'live inventory profile=%s private LIST_PAGES timed out; '
+                        'using Your-Pages fallback',
+                        clean_profile,
+                    )
+                except Exception as exc:
+                    page_primary_error=(
+                        page_primary_error + ' | '
+                        if page_primary_error else ''
+                    ) + f'{exc.__class__.__name__}: {exc}'
+                    log.warning(
+                        'live inventory profile=%s private LIST_PAGES failed=%s; '
+                        'using Your-Pages fallback',
+                        clean_profile,
+                        f'{exc.__class__.__name__}: {exc}'[:500],
+                    )
+
+            # 3) Last-resort Your-Pages SPA. Two passes intentionally reuse
+            # the SAME browser context: production logs proved that throwing
+            # away the first context also throws away the hydration/warm state
+            # needed by the second pass.
+            if not pages_ready:
                 first_page_error=''
                 first_page_diag={}
                 try:
-                    page_inventory_timeout=budget(9.0)
+                    page_inventory_timeout=budget(8.0)
                     discovered_pages=await hard_deadline(
                         browser.discover_managed_pages(fast=True),
                         page_inventory_timeout,
@@ -1899,35 +1975,25 @@ async def profile_live_inventory(
                         )[:5000],
                     )
 
-                    # Fresh browser context makes the second read independent
-                    # from a half-hydrated/aborted first SPA navigation.
-                    try:
-                        await hard_deadline(browser.close(), 2.0)
-                    except BaseException:
-                        pass
-                    try:
-                        profile_session._business_browser=None
-                    except Exception:
-                        pass
-
                     second_page_error=''
                     second_page_diag={}
                     try:
-                        browser=await hard_deadline(
-                            profile_session.facebook_business_browser(),
-                            budget(6.0),
-                        )
-                        page_inventory_timeout=budget(11.0)
+                        # REMASK_PAGE_INVENTORY_WARM_RETRY_V2
+                        # Keep the already-authenticated Chromium context alive
+                        # and revisit the fuller Page surfaces after the first
+                        # cold shell has hydrated caches/service-worker state.
+                        await browser.page.wait_for_timeout(900)
+                        page_inventory_timeout=budget(10.0)
                         discovered_pages=await hard_deadline(
-                            browser.discover_managed_pages(fast=True),
+                            browser.discover_managed_pages(fast=False),
                             page_inventory_timeout,
                         )
                         pages=normalize_page_rows(discovered_pages)
-                        pages_source='facebook_business_browser_relay_retry'
+                        pages_source='facebook_business_browser_relay_warm_retry'
                         pages_ready=True
                         log.info(
-                            'live inventory profile=%s Page inventory '
-                            'pass=2 recovered pages=%d',
+                            'live inventory profile=%s Page inventory warm '
+                            'retry recovered pages=%d',
                             clean_profile,
                             len(pages),
                         )
@@ -1951,18 +2017,21 @@ async def profile_live_inventory(
                         )
 
                     if not pages_ready:
-                        pages_source='facebook_business_browser_two_pass_failed'
-                        warnings.append('Fan Page inventory was not confirmed after two live passes')
+                        pages_source='all_live_page_inventory_routes_failed'
+                        warnings.append(
+                            'Fan Page inventory was not confirmed by Ads Manager, '
+                            'private LIST_PAGES, or warm Your-Pages fallback'
+                        )
                         page_primary_error=(
                             page_primary_error + ' | '
                             if page_primary_error else ''
                         ) + (
-                            f'pass1={first_page_error or "unknown"}; '
-                            f'pass2={second_page_error or "unknown"}'
+                            f'your_pages_pass1={first_page_error or "unknown"}; '
+                            f'your_pages_pass2={second_page_error or "unknown"}'
                         )
                         log.warning(
-                            'live inventory profile=%s Page inventory pass=2 '
-                            'inconclusive error=%s diagnostic=%s',
+                            'live inventory profile=%s Page inventory warm '
+                            'retry inconclusive error=%s diagnostic=%s',
                             clean_profile,
                             second_page_error[:700],
                             json.dumps(
@@ -1980,7 +2049,7 @@ async def profile_live_inventory(
                 pages_ready,
                 len(pages),
                 pages_source,
-                page_primary_error[:700],
+                page_primary_error[:1000],
             )
 
             # REMASK_LIVE_TARGET_SET_REQUIRED_V1

@@ -1921,6 +1921,7 @@ class FacebookBusinessBrowser:
         self._last_business_inventory_diagnostic: dict[str, Any] = {}
         self._last_ad_account_section_diagnostic: dict[str, Any] = {}
         self._last_page_inventory_diagnostic: dict[str, Any] = {}
+        self._last_ads_manager_page_diagnostic: dict[str, Any] = {}
         self._browser_events: list[dict[str, Any]] = []
         self._ad_account_runtime_phase = "IDLE"
         self._ad_account_phase_started_at = time.monotonic()
@@ -4602,6 +4603,273 @@ class FacebookBusinessBrowser:
                 ),
             },
         )
+
+    async def discover_promotable_pages_from_ads_manager(
+        self,
+        *,
+        timeout_seconds: float = 7.0,
+    ) -> list[dict[str, Any]]:
+        """Discover live Fan Pages from Ads Manager's read-only Page list.
+
+        REMASK_ADS_MANAGER_PAGE_INVENTORY_V1
+        Ads Manager regularly emits AdsPromotablePageList* Relay queries for
+        the authenticated actor. This surface is already reliable enough for
+        RK revalidation and avoids the flaky facebook.com/Your-Pages SPA shell.
+        The response body is consumed before any further navigation so CDP does
+        not lose it with "response navigated away".
+        """
+        from .facebook_page_discovery import _extract_known_page_lists
+
+        if self.page is None:
+            await self.open()
+        if self.page is None:
+            raise BrowserBusinessError(
+                "BROWSER_NOT_READY",
+                "Ads Manager Page inventory requires an open browser.",
+                retryable=True,
+            )
+
+        deadline = time.monotonic() + max(1.5, float(timeout_seconds))
+        pages: dict[str, dict[str, Any]] = {}
+        diagnostics: list[dict[str, Any]] = []
+        response_tasks: set[asyncio.Task[Any]] = set()
+        matching_request_seen = asyncio.Event()
+
+        self._last_ads_manager_page_diagnostic = {
+            "stage": "start",
+            "url": _clean(getattr(self.page, "url", "")),
+            "queries": [],
+        }
+
+        def merge_page(row: Any, *, source: str) -> None:
+            if not isinstance(row, dict):
+                return
+            page_id = _digits(row.get("id") or row.get("page_id"))
+            name = _clean(row.get("name") or row.get("page_name"))
+            if not page_id or not name:
+                return
+            current = pages.get(page_id) or {}
+            current.update({
+                key: value
+                for key, value in row.items()
+                if value not in ("", None, [], {})
+            })
+            current["id"] = page_id
+            current["name"] = name[:240]
+            current["source"] = source
+            pages[page_id] = current
+
+        def request_is_page_inventory(meta: dict[str, Any]) -> bool:
+            friendly = _clean(meta.get("friendly_name")).casefold()
+            if any(
+                marker in friendly
+                for marker in ("mutation", "create", "update", "delete")
+            ):
+                return False
+            return (
+                "promotablepage" in friendly
+                or (
+                    "page" in friendly
+                    and any(
+                        marker in friendly
+                        for marker in (
+                            "list",
+                            "store",
+                            "admin",
+                            "manage",
+                            "owned",
+                            "switch",
+                            "profile",
+                        )
+                    )
+                )
+            )
+
+        def on_request(request: Any) -> None:
+            try:
+                meta = _request_graphql_meta(request)
+                if not request_is_page_inventory(meta):
+                    return
+                matching_request_seen.set()
+                variables = (
+                    meta.get("variables")
+                    if isinstance(meta.get("variables"), dict)
+                    else {}
+                )
+                diagnostics.append({
+                    "phase": "request",
+                    "friendly_name": _clean(meta.get("friendly_name"))[:180],
+                    "doc_id": _clean(meta.get("doc_id"))[:80],
+                    "variable_keys": sorted(str(k) for k in variables.keys())[:32],
+                    "user_id": _digits(
+                        variables.get("userId")
+                        or variables.get("user_id")
+                        or variables.get("actorID")
+                        or variables.get("actor_id")
+                    ),
+                })
+                if len(diagnostics) > 24:
+                    del diagnostics[:-24]
+            except Exception:
+                return
+
+        async def inspect_response(response: Any) -> None:
+            try:
+                url = _clean(getattr(response, "url", ""))
+                if "graphql" not in url.casefold():
+                    return
+                request = getattr(response, "request", None)
+                meta = (
+                    _request_graphql_meta(request)
+                    if request is not None
+                    else {}
+                )
+                if not request_is_page_inventory(meta):
+                    return
+                matching_request_seen.set()
+
+                # Read immediately while this Ads Manager document still owns
+                # the network resource.
+                raw = await response.text()
+                payload = _decode_graphql_text(raw)
+                chunks = payload if isinstance(payload, list) else [payload]
+                before = len(pages)
+                for chunk in chunks:
+                    if not isinstance(chunk, dict):
+                        continue
+                    for row in _extract_known_page_lists(chunk):
+                        merge_page(row, source="ads_manager_promotable_pages")
+                diagnostics.append({
+                    "phase": "response",
+                    "friendly_name": _clean(meta.get("friendly_name"))[:180],
+                    "doc_id": _clean(meta.get("doc_id"))[:80],
+                    "pages_added": max(0, len(pages) - before),
+                    "pages_total": len(pages),
+                    "payload_type": type(payload).__name__,
+                })
+                if len(diagnostics) > 24:
+                    del diagnostics[:-24]
+            except Exception as exc:
+                diagnostics.append({
+                    "phase": "response_error",
+                    "error": f"{exc.__class__.__name__}: {_clean(exc)}"[:500],
+                })
+                if len(diagnostics) > 24:
+                    del diagnostics[:-24]
+
+        def on_response(response: Any) -> None:
+            try:
+                task = asyncio.create_task(inspect_response(response))
+                response_tasks.add(task)
+                task.add_done_callback(response_tasks.discard)
+            except Exception:
+                return
+
+        try:
+            try:
+                self.page.on("request", on_request)
+            except Exception:
+                pass
+            try:
+                self.page.on("response", on_response)
+            except Exception:
+                pass
+
+            # Force a fresh Ads Manager frontend bootstrap without dropping the
+            # authenticated browser context/cookies.
+            try:
+                await self.page.goto(
+                    "about:blank",
+                    wait_until="commit",
+                    timeout=1000,
+                )
+            except Exception:
+                pass
+
+            self._last_ads_manager_page_diagnostic.update({
+                "stage": "navigate",
+                "target_url": self.ADS_MANAGER_URL,
+            })
+            try:
+                remaining = max(0.5, deadline - time.monotonic())
+                await self.page.goto(
+                    self.ADS_MANAGER_URL,
+                    wait_until="commit",
+                    timeout=min(4500, int(remaining * 1000)),
+                )
+            except Exception as exc:
+                diagnostics.append({
+                    "phase": "navigation",
+                    "error": f"{exc.__class__.__name__}: {_clean(exc)}"[:500],
+                    "url": _clean(getattr(self.page, "url", ""))[:700],
+                })
+
+            await self._assert_authenticated()
+            self._last_ads_manager_page_diagnostic.update({
+                "stage": "relay_wait",
+                "url": _clean(getattr(self.page, "url", "")),
+            })
+
+            while time.monotonic() < deadline:
+                if pages:
+                    break
+                await self.page.wait_for_timeout(180)
+
+            if response_tasks:
+                await _settle_tasks_bounded(
+                    response_tasks,
+                    timeout_seconds=min(
+                        1.0,
+                        max(0.1, deadline - time.monotonic()),
+                    ),
+                    cancel_pending=False,
+                )
+
+            if pages:
+                result = sorted(
+                    pages.values(),
+                    key=lambda row: _clean(row.get("name")).casefold(),
+                )
+                self._last_ads_manager_page_diagnostic.update({
+                    "stage": "complete",
+                    "pages": len(result),
+                    "query_seen": matching_request_seen.is_set(),
+                    "queries": diagnostics[-16:],
+                    "url": _clean(getattr(self.page, "url", "")),
+                })
+                return result
+
+            self._last_ads_manager_page_diagnostic.update({
+                "stage": "empty",
+                "pages": 0,
+                "query_seen": matching_request_seen.is_set(),
+                "queries": diagnostics[-16:],
+                "url": _clean(getattr(self.page, "url", "")),
+            })
+            raise BrowserBusinessError(
+                "FAN_PAGES_NOT_DISCOVERED_ADS_MANAGER",
+                (
+                    "Ads Manager did not return a parseable live Page inventory "
+                    "within the bounded read-only probe."
+                ),
+                retryable=True,
+                diagnostic=self._last_ads_manager_page_diagnostic,
+            )
+        finally:
+            try:
+                self.page.remove_listener("request", on_request)
+            except Exception:
+                pass
+            try:
+                self.page.remove_listener("response", on_response)
+            except Exception:
+                pass
+            if response_tasks:
+                await _settle_tasks_bounded(
+                    response_tasks,
+                    timeout_seconds=0.5,
+                    cancel_pending=True,
+                )
 
     async def discover_managed_pages(
         self,
