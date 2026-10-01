@@ -1744,6 +1744,9 @@ async def profile_live_inventory(
 
             # REMASK_FULL_PROFILE_SYNC_PAGES_V2
             # REMASK_ADS_MANAGER_PAGES_FIRST_V1
+            # REMASK_SYNC_PRIVATE_LIST_PAGES_FIRST_V1
+            # Legacy build marker retained: private LIST_PAGES is still part
+            # of the contract, but Ads Manager is now the primary live source.
             # Page inventory is part of the same profile Sync contract.
             # Prefer Ads Manager's own read-only promotable Page Relay query:
             # this frontend is already live-confirmed during RK revalidation
