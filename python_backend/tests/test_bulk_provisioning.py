@@ -267,6 +267,16 @@ class BulkPersistenceTests(unittest.IsolatedAsyncioTestCase):
 
 
 class PageHydrationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_dom_marked_page_field_receives_keyboard_events(self):
+        browser=FacebookBusinessBrowser(SimpleNamespace(profile_id='7',pages=[{'id':'1289628847574478','profile_id':'61594993341059','name':'Media Shopsw','ownership_verified':True}]))
+        field=SimpleNamespace(is_visible=AsyncMock(return_value=True),is_editable=AsyncMock(return_value=True),
+            fill=AsyncMock(),press_sequentially=AsyncMock(),press=AsyncMock(),get_attribute=AsyncMock(return_value='Facebook\u00a0Page name or URL'))
+        browser.page=SimpleNamespace(get_by_placeholder=lambda p:SimpleNamespace(count=AsyncMock(return_value=0)),evaluate=AsyncMock(return_value=True),locator=lambda p:SimpleNamespace(first=field))
+        browser._fill_first=AsyncMock(return_value=True)
+        self.assertTrue(await browser._fill_page_add_identifier(labels=('Facebook Page name or URL',),value='1289628847574478'))
+        field.press_sequentially.assert_awaited_once_with('Media Shopsw',delay=15)
+        browser._fill_first.assert_not_awaited()
+
     async def test_name_autocomplete_uses_the_verified_managed_page_name(self):
         browser=FacebookBusinessBrowser(SimpleNamespace(profile_id='7',pages=[{'id':'1289628847574478',
             'profile_id':'61594993341059','name':'Media Shopsw','ownership_verified':True}]))

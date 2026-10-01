@@ -17860,13 +17860,6 @@ timeout_seconds=4.0,
         marker = "data-remask-page-add-input"
 
         while True:
-            if await self._fill_first(
-                labels=labels,
-                value=value,
-                fill_timeout_ms=2000,
-            ):
-                return True
-
             try:
                 marked = await self.page.evaluate(
                     """(marker) => {
@@ -17975,7 +17968,15 @@ timeout_seconds=4.0,
                         await candidate.is_visible()
                         and await candidate.is_editable()
                     ):
-                        await candidate.fill(value, timeout=2000)
+                        placeholder = ' '.join(str(await candidate.get_attribute('placeholder') or '').split()).casefold()
+                        lookup_value = _clean(linked.get("name")) if linked and 'name' in placeholder and 'url' in placeholder and _clean(linked.get("name")) else value
+                        await candidate.fill('', timeout=2000)
+                        await asyncio.wait_for(candidate.press_sequentially(lookup_value, delay=15), timeout=4.0)
+                        try:
+                            await candidate.press('Tab', timeout=1000)
+                        except Exception:
+                            pass
+                        self._last_page_input_diagnostic = {"method":"marker_keyboard","lookup":"verified_name" if lookup_value != value else "url", "placeholder":placeholder[:120]}
                         try:
                             await self.page.evaluate(
                                 "(marker) => document.querySelectorAll('[' + marker + ']').forEach(el => el.removeAttribute(marker))",
@@ -17984,8 +17985,11 @@ timeout_seconds=4.0,
                         except Exception:
                             pass
                         return True
-                except Exception:
-                    pass
+                except Exception as exc:
+                    self._last_page_input_diagnostic = {"method":"marker_keyboard","error":f"{exc.__class__.__name__}: {_clean(exc)}"[:500]}
+
+            if await self._fill_first(labels=labels, value=value, fill_timeout_ms=2000):
+                return True
 
             if time.monotonic() >= deadline:
                 break
