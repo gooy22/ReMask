@@ -974,7 +974,11 @@ function hierarchy_live_snapshot_put(
                 : $previousPageLiveAt,
             'source' => $pagesLiveVerified
                 ? 'live_meta_inventory'
-                : 'live_bm_rk_with_confirmed_page_state',
+                : (
+                    $cleanPages !== []
+                    ? 'live_bm_rk_with_confirmed_page_state'
+                    : 'live_bm_rk_without_page_state'
+                ),
         ];
 
         $encoded = json_encode(
