@@ -2306,6 +2306,7 @@ class FacebookBusinessBrowser:
         timeout_ms: int | None = None,
         wait_until: str = "domcontentloaded",
         settle_ms: int = 900,
+        attempts: int = 2,
     ) -> str:
         if self.page is None:
             await self.open()
@@ -2318,7 +2319,8 @@ class FacebookBusinessBrowser:
         navigation_wait_until = _clean(wait_until) or "domcontentloaded"
         navigation_settle_ms = max(0, int(settle_ms))
 
-        for attempt in range(2):
+        navigation_attempts=max(1,min(int(attempts or 1),2))
+        for attempt in range(navigation_attempts):
             try:
                 await self.page.goto(
                     url,
@@ -2375,7 +2377,7 @@ class FacebookBusinessBrowser:
                     except Exception:
                         pass
 
-                    if attempt == 0:
+                    if attempt + 1 < navigation_attempts:
                         await asyncio.sleep(0.25)
                         continue
 
@@ -5434,9 +5436,10 @@ class FacebookBusinessBrowser:
                     # inherit that 45s timeout.
                     await self._goto(
                         url,
-                        timeout_ms=6500,
+                        timeout_ms=4500 if fast else 6500,
                         wait_until="commit",
-                        settle_ms=650,
+                        settle_ms=500 if fast else 650,
+                        attempts=1,
                     )
                     self._last_page_inventory_diagnostic.update({
                         "stage": "relay_wait",
@@ -5595,6 +5598,57 @@ class FacebookBusinessBrowser:
                     timeout_seconds=0.5,
                     cancel_pending=True,
                 )
+
+    async def discover_managed_pages_isolated(
+        self,
+        *,
+        fast: bool = True,
+    ) -> list[dict[str, Any]]:
+        """Run account-level Page discovery in a disposable Facebook tab.
+
+        REMASK_ISOLATED_PAGE_INVENTORY_V1
+        Ads Manager and Business Settings keep the primary tab in a heavy Meta
+        SPA. Production showed cross-domain navigation from that tab can remain
+        stuck on adsmanager.facebook.com until the outer Sync watchdog fires.
+        A new tab shares the same authenticated browser context/cookies while
+        giving facebook.com a clean top-level document. The primary BM/RK tab
+        is never navigated or closed.
+        """
+        if self.page is None or self._browser_context is None:
+            await self.open()
+        if self.page is None or self._browser_context is None:
+            raise BrowserBusinessError(
+                "BROWSER_NOT_READY",
+                "Isolated Page inventory requires an open browser context.",
+                retryable=True,
+            )
+
+        primary_page=self.page
+        probe_page=None
+        try:
+            probe_page=await self._browser_context.new_page()
+            probe_page.set_default_timeout(min(self.timeout_ms,8000))
+            self.page=probe_page
+            rows=await self.discover_managed_pages(fast=fast)
+            diagnostic=dict(
+                self._last_page_inventory_diagnostic
+                if isinstance(self._last_page_inventory_diagnostic,dict)
+                else {}
+            )
+            diagnostic["isolated_tab"]=True
+            diagnostic["primary_url"]=_clean(
+                getattr(primary_page,"url","")
+            )
+            self._last_page_inventory_diagnostic=diagnostic
+            return rows
+        finally:
+            self.page=primary_page
+            if probe_page is not None:
+                try:
+                    await asyncio.wait_for(probe_page.close(),timeout=1.2)
+                except BaseException:
+                    pass
+
 
     async def preflight(self) -> BrowserPreflightResult:
         diagnostics: list[str] = []
