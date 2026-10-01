@@ -213,6 +213,71 @@ class FanPageProvisioningRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(pages[0]["id"], "9999999999")
         self.assertEqual(pages[0]["source"], "python_worker_confirmed")
 
+    async def test_latest_fan_page_batch_excludes_older_success_history(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = ProvisioningStateStore(tmp + "/state.sqlite3")
+            await store.init()
+
+            await store.set_running(
+                "fp-old",
+                "7",
+                "fp-old-scope",
+                ProvisioningStep.FAN_PAGES,
+            )
+            await store.complete(
+                "fp-old",
+                "7",
+                "fp-old-scope",
+                ProvisioningStep.FAN_PAGES,
+                {
+                    "phase": "DONE",
+                    "pages": [
+                        {"id": "1111111111", "name": "Old Page"},
+                    ],
+                },
+            )
+
+            await store.set_running(
+                "fp-new",
+                "7",
+                "fp-new-scope",
+                ProvisioningStep.FAN_PAGES,
+            )
+            await store.complete(
+                "fp-new",
+                "7",
+                "fp-new-scope",
+                ProvisioningStep.FAN_PAGES,
+                {
+                    "phase": "DONE",
+                    "pages": [
+                        {"id": "2222222222", "name": "Current Page"},
+                    ],
+                },
+            )
+
+            with store._connect() as con:
+                con.execute(
+                    "UPDATE provisioning_steps SET updated_at=100 WHERE item_id='fp-old' AND step=?",
+                    (ProvisioningStep.FAN_PAGES.value,),
+                )
+                con.execute(
+                    "UPDATE provisioning_steps SET updated_at=200 WHERE item_id='fp-new' AND step=?",
+                    (ProvisioningStep.FAN_PAGES.value,),
+                )
+
+            history = await store.latest_profile_fan_pages("7")
+            current = await store.latest_profile_fan_page_batch("7")
+
+        self.assertEqual(
+            {row["id"] for row in history},
+            {"1111111111", "2222222222"},
+        )
+        self.assertEqual(len(current), 1)
+        self.assertEqual(current[0]["id"], "2222222222")
+        self.assertEqual(current[0]["source"], "python_worker_latest_batch")
+        self.assertEqual(current[0]["item_id"], "fp-new")
+
     async def test_uncertain_create_can_prove_brand_new_account_still_empty(self) -> None:
         with patch(
             "app.provisioning.fan_pages_handler._fresh_page_inventory",
