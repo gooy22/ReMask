@@ -161,7 +161,9 @@ async def business_handler(
     candidates = [row for row in (getattr(context, "pages", None) or [])
                   if isinstance(row, dict) and row.get("ownership_verified") is True]
     legacy_confirmed_bm = _clean(checkpoint.get("business_id") or checkpoint.get("create_response_business_id")).isdigit()
-    if legacy_confirmed_bm and not any(page_id in {_clean(row.get("profile_id")), _clean(row.get("id"))} for row in candidates):
+    saved_selection = any(isinstance(row, dict) and _clean(row.get("id")) == page_id
+                          for row in (getattr(context, "pages", None) or []))
+    if (legacy_confirmed_bm or saved_selection) and not any(page_id in {_clean(row.get("profile_id")), _clean(row.get("id"))} for row in candidates):
         try:
             discover = getattr(await get_browser(), "discover_managed_pages", None)
             if callable(discover):
@@ -294,6 +296,9 @@ async def business_handler(
             page_id,
             exclude_item_id=item_id,
         )
+        if not previous_resume and original_page_id != page_id:
+            previous_resume = await provisioning_state.latest_business_resume_for_page(
+                profile_id, original_page_id, exclude_item_id=item_id)
         previous_result = (
             previous_resume.get("result")
             if isinstance(previous_resume, dict)
@@ -534,6 +539,13 @@ async def business_handler(
             # click Meta's Business Suite create form first; live profile-4
             # failures proved that this could stop at CREATE_FORM_OPENING
             # without ever sending a CREATE request to Meta.
+            if browser is not None:
+                # Page identity discovery may own the only Chromium lease.
+                # Native CREATE needs that lease itself.
+                release = getattr(session, "close_business_browser", None)
+                if callable(release):
+                    await release()
+                    browser = None
             checkpoint = await provisioning_state.checkpoint(
                 item_id,
                 profile_id,

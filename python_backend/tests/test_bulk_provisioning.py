@@ -75,6 +75,17 @@ class PageIdentityTests(unittest.TestCase):
 
 
 class AutoPlanTests(unittest.TestCase):
+    def test_template_asset_ids_cannot_redirect_an_automatic_unit(self):
+        params=expand_auto_profiles(request(1,parameters={
+            'FAN_PAGES':{'mode':'attach_existing','page_id':'123456789','existing_page_id':'123456789','business_id':'987654321','ad_account_id':'555555555'},
+            'BUSINESS':{'primary_page_id':'123456789'},
+            'AD_ACCOUNT':{'business_id':'987654321','bm_id':'987654321','ad_account_id':'555555555','currency':'USD','timezone_id':1}}).profiles,'job')[0].tasks[0].payload['parameters']
+        self.assertEqual(params['FAN_PAGES']['mode'],'create')
+        self.assertNotIn('existing_page_id',params['FAN_PAGES'])
+        self.assertNotIn('business_id',params['FAN_PAGES'])
+        self.assertNotIn('primary_page_id',params['BUSINESS'])
+        self.assertNotIn('business_id',params['AD_ACCOUNT']); self.assertNotIn('bm_id',params['AD_ACCOUNT'])
+
     def test_units_have_independent_scopes_and_single_random_page(self):
         rows=expand_auto_profiles(request(3).profiles,'job'); self.assertEqual(len(rows),3)
         scopes=set(); names=set(); emails=set()
@@ -221,6 +232,18 @@ class BulkPersistenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(saved['business_id'],'111111111'); self.assertEqual(saved['selected_page_profile_id'],'61594993341059')
         create.assert_not_awaited()
 
+    async def test_new_job_recovers_legacy_profile_checkpoint_after_identity_resolution(self):
+        session,browser,kwargs=await self.prepare_resume()
+        await self.state.checkpoint('item','7','scope',ProvisioningStep.BUSINESS,{'primary_page_id':'61594993341059'})
+        session.context.pages=[{'id':'1289628847574478','profile_id':'61594993341059','name':'Media Shopsw',
+            'ownership_verified':True,'ownership_source':'additional_profiles_with_biz_tools.delegate_page'}]
+        kwargs.update(item_id='next-item',scope_key='next-scope')
+        await self.state.set_running('next-item','7','next-scope',ProvisioningStep.BUSINESS)
+        with patch('app.provisioning.business_handler.set_business_primary_page',new=AsyncMock()),patch('app.provisioning.business_handler.create_business_resilient',new=AsyncMock()) as create:
+            result=await business_handler(session,{'name':'Existing','user_email':'owner@example.com','page_id':'61594993341059'},{},**kwargs)
+        self.assertEqual(result['business_id'],'111111111'); self.assertEqual(result['primary_page_id'],'1289628847574478')
+        create.assert_not_awaited()
+
     async def test_lost_attach_response_blocks_duplicate_on_retry(self):
         session,browser,kwargs=await self.prepare_resume()
         async def lost(*args,**kw): await kw['before_submit'](); raise TimeoutError('lost response')
@@ -232,6 +255,16 @@ class BulkPersistenceTests(unittest.IsolatedAsyncioTestCase):
 
 
 class PageHydrationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_current_autocomplete_receives_keyboard_and_blur_events(self):
+        browser=FacebookBusinessBrowser(SimpleNamespace(profile_id='7'))
+        field=SimpleNamespace(is_visible=AsyncMock(return_value=True),is_editable=AsyncMock(return_value=True),
+            fill=AsyncMock(),press_sequentially=AsyncMock(),press=AsyncMock())
+        browser.page=SimpleNamespace(get_by_placeholder=lambda pattern:SimpleNamespace(first=field))
+        self.assertTrue(await browser._fill_page_add_identifier(labels=('Facebook Page name or URL',),value='222222222'))
+        field.fill.assert_awaited_once_with('',timeout=2000)
+        field.press_sequentially.assert_awaited_once_with('https://www.facebook.com/222222222',delay=15,timeout=4000)
+        field.press.assert_awaited_once_with('Tab',timeout=1000)
+
     async def test_current_name_url_picker_receives_page_url(self):
         browser=FacebookBusinessBrowser(SimpleNamespace(profile_id='7'))
         browser.page=SimpleNamespace()

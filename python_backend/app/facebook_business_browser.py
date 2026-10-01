@@ -17827,6 +17827,19 @@ timeout_seconds=4.0,
         if str(value).isdigit():
             value = f"https://www.facebook.com/{value}"
 
+        # Meta's current autocomplete reacts to keyboard events. fill() alone
+        # changes the visible value but did not trigger a search in production.
+        for label in labels:
+            try:
+                field = self.page.get_by_placeholder(re.compile(re.escape(label), re.I)).first
+                if await field.is_visible() and await field.is_editable():
+                    await field.fill('', timeout=2000)
+                    await field.press_sequentially(value, delay=15, timeout=4000)
+                    await field.press('Tab', timeout=1000)
+                    return True
+            except Exception:
+                continue
+
         deadline = time.monotonic() + max(0.5, float(wait_seconds))
         marker = "data-remask-page-add-input"
 
@@ -19752,6 +19765,10 @@ timeout_seconds=4.0,
             except Exception:
                 pass
 
+        if advance_review and selected and not review_advanced:
+            review_advanced = await self._click_named(("Next",))
+            if review_advanced:
+                await self.page.wait_for_timeout(1200)
         body = await self._body_text()
         final_actions = []
         for label in (

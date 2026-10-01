@@ -48,12 +48,18 @@ def expand_auto_profiles(profiles: list[Any], job_id: str) -> list[Any]:
             params["FAN_PAGES"].pop("base_name", None)
             params["FAN_PAGES"]["names"] = [title]
             params["FAN_PAGES"]["count"] = 1
+            params["FAN_PAGES"]["mode"] = "create"
+            for key in ("page_id", "existing_page_id", "business_id", "bm_id", "ad_account_id"):
+                params["FAN_PAGES"].pop(key, None)
             if "BUSINESS" in steps:
                 params["BUSINESS"] = {**params.get("BUSINESS", {}), "name": title,
                     "user_email": secrets.token_hex(12) + "@gmail.com", "use_created_page": True}
                 params["BUSINESS"].pop("page_id", None)
+                params["BUSINESS"].pop("primary_page_id", None)
             if "AD_ACCOUNT" in steps:
                 rk = params.setdefault("AD_ACCOUNT", {})
+                for key in ("business_id", "bm_id", "ad_account_id"):
+                    rk.pop(key, None)
                 currency = str(rk.get("currency") or "").upper()
                 timezone = rk.get("timezone_id")
                 if not re.fullmatch(r"[A-Z]{3}", currency) or isinstance(timezone, bool) or not isinstance(timezone, int) or timezone < 0:

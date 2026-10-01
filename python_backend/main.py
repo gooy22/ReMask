@@ -16,6 +16,7 @@ from app.session import ProfileContextError, ProfileSession, ProxyCheckError
 from app.store import JobStore
 from app.facebook_business_browser import BrowserBusinessError, FacebookBusinessBrowser
 from app.facebook_page_discovery import PageDiscoveryError, list_pages_via_private_graphql
+from app.provisioning.models import ProvisioningStep
 from app.facebook_docids import (
     list_candidates,
     registry_view,
@@ -405,7 +406,7 @@ async def run_targeted_pages_readonly_canary(profile_id: str) -> None:
                 async def readonly_route(route, request):
                     summary = FacebookBusinessBrowser._safe_graphql_request_summary(request)
                     friendly = str(summary.get('friendly_name') or '').lower()
-                    if 'graphql' in str(summary.get('url') or '') and 'page' in friendly and 'mutation' not in friendly and len(page_queries)<25:
+                    if 'graphql' in str(summary.get('url') or '') and 'mutation' not in friendly and len(page_queries)<25:
                         page_queries.append({key:summary.get(key) for key in ('friendly_name','doc_id','variable_keys')})
                     harmless_session = friendly in {'useusersessiondatamutation', 'pagecontenttabupdatebizkitwaitliststatusmutation'}
                     asset_submit = FacebookBusinessBrowser._request_matches_page_add(request, business_id=target_business, page_id=target_page)
@@ -482,6 +483,15 @@ async def run_existing_business_repair_once(profile_id: str) -> None:
         log.warning('existing BM repair queued exact saved item=%s business=%s; no new Job/CREATE', selected['item_id'],target)
         if mirror.enabled:
             await mirror.save_job(await store.job_view(selected['job_id']))
+        for _ in range(120):
+            await asyncio.sleep(1)
+            item_state = await store.item(selected['item_id'])
+            if (item_state or {}).get('status') in {'SUCCESS','FAILED'}:
+                step = await pool.provisioning_state.step(selected['item_id'], ProvisioningStep.BUSINESS)
+                result = (step or {}).get('result') or {}
+                log.warning('existing BM repair terminal item=%s status=%s error=%s result=%s', selected['item_id'],item_state['status'],item_state.get('error_code'),
+                    json.dumps({key:result.get(key) for key in ('phase','business_id','primary_page_id','page_already_attached','page_confirmed_by_private_attach','last_browser_error_code')},separators=(',',':')))
+                break
 
 
 async def run_live_inventory_readonly_canary() -> None:
