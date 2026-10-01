@@ -5216,6 +5216,7 @@ class FacebookBusinessBrowser:
         self,
         *,
         fast: bool = False,
+        navigation_timeout_ms: int | None = None,
     ) -> list[dict[str, Any]]:
         """
         Discover Pages from the authenticated browser session.
@@ -5436,7 +5437,11 @@ class FacebookBusinessBrowser:
                     # inherit that 45s timeout.
                     await self._goto(
                         url,
-                        timeout_ms=4500 if fast else 6500,
+                        timeout_ms=(
+                            max(2500,min(int(navigation_timeout_ms),9000))
+                            if navigation_timeout_ms is not None
+                            else (4500 if fast else 6500)
+                        ),
                         wait_until="commit",
                         settle_ms=500 if fast else 650,
                         attempts=1,
@@ -5448,7 +5453,9 @@ class FacebookBusinessBrowser:
                     })
 
                     if response_listener_installed:
-                        relay_deadline = time.monotonic() + 2.4
+                        relay_deadline = time.monotonic() + (
+                            2.0 if fast else 2.4
+                        )
                         while time.monotonic() < relay_deadline:
                             if relay_pages:
                                 break
@@ -5457,7 +5464,7 @@ class FacebookBusinessBrowser:
                         if response_tasks:
                             await _settle_tasks_bounded(
                                 response_tasks,
-                                timeout_seconds=0.5,
+                                timeout_seconds=0.35 if fast else 0.5,
                                 cancel_pending=False,
                             )
 
@@ -5628,7 +5635,10 @@ class FacebookBusinessBrowser:
             probe_page=await self._browser_context.new_page()
             probe_page.set_default_timeout(min(self.timeout_ms,8000))
             self.page=probe_page
-            rows=await self.discover_managed_pages(fast=fast)
+            rows=await self.discover_managed_pages(
+                fast=fast,
+                navigation_timeout_ms=6000 if fast else None,
+            )
             diagnostic=dict(
                 self._last_page_inventory_diagnostic
                 if isinstance(self._last_page_inventory_diagnostic,dict)
