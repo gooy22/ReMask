@@ -2076,7 +2076,7 @@ async def profile_live_inventory(
                     # discover_managed_pages(fast=True) can legitimately spend
                     # ~8s across navigation, settle, Relay wait and response
                     # task draining. Do not start a probe that cannot finish.
-                    if isolated_pages_timeout < 8.25:
+                    if isolated_pages_timeout < 9.25:
                         raise asyncio.TimeoutError()
                     discovered_pages=await hard_deadline(
                         browser.discover_managed_pages_isolated(fast=True),
