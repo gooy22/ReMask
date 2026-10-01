@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import unittest
+from pathlib import Path
 
 import main as api
 from app.facebook_business_browser import FacebookBusinessBrowser
@@ -20,6 +21,19 @@ class LiveSyncContractTests(unittest.TestCase):
                 {"10001": "A", "10002": "B"},
                 {"10001"},
             )
+        )
+
+    def test_page_inventory_does_not_block_live_bm_rk_sync(self):
+        root = Path(__file__).resolve().parents[2]
+        source = (root / "railway-workspace-sync-fix-overlay.php").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("REMASK_STABLE_SYNC_BOUNDARY_V2", source)
+        self.assertIn("$syncComplete = $liveReady;", source)
+        self.assertIn("$snapshot['sync_partial'] = ($syncComplete && !$pagesReady);", source)
+        self.assertIn(
+            "Fan Page inventory inconclusive; previous confirmed Pages preserved",
+            source,
         )
 
     def test_empty_target_set_requires_explicit_empty_inventory_proof(self) -> None:

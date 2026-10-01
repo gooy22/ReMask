@@ -321,6 +321,64 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tasks[0]["status"], "QUEUED")
         self.assertIsNone(tasks[0]["error_code"])
 
+    async def test_manual_retry_requeues_page_add_ui_changed(self):
+        now = int(time.time())
+        job_id = "job-page-ui-changed"
+        item_id = "item-page-ui-changed"
+        task_id = "task-page-ui-changed"
+        with self.store._connect() as con:
+            con.execute(
+                "INSERT INTO jobs(id,status,idempotency_key,created_at,updated_at) VALUES(?,?,?,?,?)",
+                (job_id, "FAILED", "idem-page-ui-changed", now, now),
+            )
+            con.execute(
+                """INSERT INTO job_items(
+                    id,job_id,profile_id,status,error_code,error_message,retryable,
+                    created_at,updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?)""",
+                (
+                    item_id,
+                    job_id,
+                    "7",
+                    "FAILED",
+                    "PAGE_ADD_UI_CHANGED",
+                    "Meta Page-add review/submit action was not found.",
+                    0,
+                    now,
+                    now,
+                ),
+            )
+            con.execute(
+                """INSERT INTO job_tasks(
+                    id,item_id,position,action,payload_json,idempotency_key,status,
+                    error_code,error_message,retryable,created_at,updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    task_id,
+                    item_id,
+                    0,
+                    "provisioning",
+                    "{}",
+                    "task-page-ui-changed",
+                    "FAILED",
+                    "PAGE_ADD_UI_CHANGED",
+                    "Meta Page-add review/submit action was not found.",
+                    0,
+                    now,
+                    now,
+                ),
+            )
+
+        requeued = await self.store.retry_failed(job_id)
+        item = await self.store.item(item_id)
+        tasks = await self.store.tasks(item_id)
+
+        self.assertEqual(requeued, 1)
+        self.assertEqual(item["status"], "QUEUED")
+        self.assertEqual(tasks[0]["status"], "QUEUED")
+        self.assertIsNone(tasks[0]["error_code"])
+
+
 
 
 class ProfileResolverRecoveryTests(unittest.IsolatedAsyncioTestCase):

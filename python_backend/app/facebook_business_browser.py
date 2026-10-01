@@ -1722,7 +1722,15 @@ class FacebookBusinessBrowser:
     DIRECT_CREATE_URL = "https://business.facebook.com/create"
     ADS_MANAGER_URL = "https://adsmanager.facebook.com/adsmanager/manage/campaigns"
     SETTINGS_PAGES_URL = (
-        "https://business.facebook.com/settings/pages/?business_id={business_id}"
+        "https://business.facebook.com/latest/settings/pages/"
+        "?nav_ref=bm_settings_redirect_migration"
+        "&bm_redirect_migration=true"
+        "&business_id={business_id}"
+    )
+    SETTINGS_PAGES_URLS = (
+        SETTINGS_PAGES_URL,
+        "https://business.facebook.com/latest/settings/pages/?business_id={business_id}",
+        "https://business.facebook.com/settings/pages/?business_id={business_id}",
     )
     FAN_PAGE_CREATE_URLS = (
         "https://www.facebook.com/pages/create",
@@ -17379,6 +17387,305 @@ timeout_seconds=4.0,
             pass
         return False
 
+    async def _page_add_surface_state(
+        self,
+        *,
+        page_id: str = "",
+    ) -> dict[str, Any]:
+        """Return a bounded, non-secret snapshot of the active Page-add UI."""
+        if self.page is None:
+            return {"ready": False, "reason": "page_missing"}
+
+        page = _digits(page_id)
+        try:
+            state = await self.page.evaluate(
+                """(pageId) => {
+                    const visible = el => {
+                        if (!el) return false;
+                        const r = el.getBoundingClientRect();
+                        const st = getComputedStyle(el);
+                        return r.width > 0 && r.height > 0
+                            && st.display !== 'none'
+                            && st.visibility !== 'hidden';
+                    };
+                    const clean = text => (text || '')
+                        .normalize('NFKC')
+                        .replace(/[\u200b\u200c\u200d\ufeff]/g, '')
+                        .replace(/\u00a0/g, ' ')
+                        .replace(/\s+/g, ' ')
+                        .trim();
+                    const lower = text => clean(text).toLowerCase();
+                    const inputs = [...document.querySelectorAll(
+                        'input:not([type]),input[type="text"],input[type="search"]'
+                    )].filter(visible).slice(0, 12).map(el => {
+                        const r = el.getBoundingClientRect();
+                        return {
+                            value: clean(el.value).slice(0, 120),
+                            aria: clean(el.getAttribute('aria-label')).slice(0, 160),
+                            placeholder: clean(el.getAttribute('placeholder')).slice(0, 160),
+                            name: clean(el.getAttribute('name')).slice(0, 120),
+                            id: clean(el.id).slice(0, 120),
+                            x: Math.round(r.x),
+                            y: Math.round(r.y),
+                            w: Math.round(r.width),
+                            h: Math.round(r.height),
+                        };
+                    });
+                    const dialogs = [...document.querySelectorAll(
+                        '[role="dialog"],[aria-modal="true"]'
+                    )].filter(visible).slice(0, 6).map(el => ({
+                        text: clean(el.innerText || el.textContent || '').slice(0, 1200),
+                        aria: clean(el.getAttribute('aria-label')).slice(0, 180),
+                    }));
+                    const controls = [...document.querySelectorAll(
+                        'button,[role="button"],[role="option"],[role="radio"],'
+                        + '[role="listitem"],[role="gridcell"],a,[tabindex="0"]'
+                    )].filter(visible).slice(0, 120).map(el => {
+                        const r = el.getBoundingClientRect();
+                        return {
+                            tag: String(el.tagName || '').toLowerCase(),
+                            role: clean(el.getAttribute('role')).slice(0, 40),
+                            text: clean(
+                                (el.getAttribute('aria-label') || '') + ' ' +
+                                (el.getAttribute('title') || '') + ' ' +
+                                (el.innerText || el.textContent || '')
+                            ).slice(0, 300),
+                            disabled: Boolean(
+                                el.disabled
+                                || el.getAttribute('aria-disabled') === 'true'
+                            ),
+                            x: Math.round(r.x),
+                            y: Math.round(r.y),
+                            w: Math.round(r.width),
+                            h: Math.round(r.height),
+                        };
+                    });
+                    const body = clean(
+                        document.body ? document.body.innerText || '' : ''
+                    );
+                    return {
+                        ready_state: document.readyState || '',
+                        page_id_in_body: Boolean(pageId && body.includes(pageId)),
+                        body_length: body.length,
+                        inputs,
+                        dialogs,
+                        controls,
+                        url: String(location.href || '').slice(0, 700),
+                    };
+                }""",
+                page,
+            )
+            return state if isinstance(state, dict) else {"ready": False}
+        except Exception as exc:
+            return {
+                "ready": False,
+                "error": f"{exc.__class__.__name__}: {_clean(exc)}"[:500],
+            }
+
+    async def _click_unique_page_add_result(
+        self,
+        *,
+        page_id: str,
+    ) -> bool:
+        """Select one non-mutating Page search result inside the Page dialog.
+
+        This never clicks final Add/Confirm/Continue actions. It is only used
+        after the exact Page ID has already been filled into the Page picker.
+        """
+        if self.page is None:
+            return False
+        page = _digits(page_id)
+        if not page:
+            return False
+
+        marker = "data-remask-page-result"
+        try:
+            meta = await self.page.evaluate(
+                """(args) => {
+                    const [marker, pageId] = args;
+                    const visible = el => {
+                        if (!el) return false;
+                        const r = el.getBoundingClientRect();
+                        const st = getComputedStyle(el);
+                        return r.width > 0 && r.height > 0
+                            && st.display !== 'none'
+                            && st.visibility !== 'hidden'
+                            && st.pointerEvents !== 'none';
+                    };
+                    const clean = text => (text || '')
+                        .normalize('NFKC')
+                        .replace(/[\u200b\u200c\u200d\ufeff]/g, '')
+                        .replace(/\u00a0/g, ' ')
+                        .replace(/\s+/g, ' ')
+                        .trim()
+                        .toLowerCase();
+                    const pageWords = [
+                        'facebook page','page url','page id','existing page',
+                        'страниц','сторін','seite','facebook-seite',
+                        'page facebook','facebook-pagina'
+                    ];
+                    const blocked = [
+                        'add','add page','add facebook page','add a page',
+                        'confirm','continue','next','review','select',
+                        'request approval','cancel','close','done',
+                        'добавить','добавить страницу','подтвердить',
+                        'продолжить','далее','выбрать','отмена',
+                        'додати','додати сторінку','підтвердити',
+                        'продовжити','далі','вибрати','скасувати',
+                        'hinzufügen','seite hinzufügen','bestätigen',
+                        'weiter','fortfahren','auswählen','abbrechen',
+                        'ajouter','confirmer','continuer','suivant','annuler'
+                    ];
+                    const blockedSet = new Set(blocked.map(clean));
+                    const identity = el => clean(
+                        (el.getAttribute?.('aria-label') || '') + ' ' +
+                        (el.getAttribute?.('title') || '') + ' ' +
+                        (el.innerText || el.textContent || '')
+                    );
+                    const pageish = el => {
+                        const text = identity(el);
+                        return pageWords.some(word => text.includes(word))
+                            || text.includes(pageId);
+                    };
+
+                    document.querySelectorAll('[' + marker + ']')
+                        .forEach(el => el.removeAttribute(marker));
+
+                    const roots = [];
+                    const addRoot = root => {
+                        if (!root || !visible(root) || roots.includes(root)) return;
+                        if (pageish(root)) roots.push(root);
+                    };
+                    document.querySelectorAll(
+                        '[role="dialog"],[aria-modal="true"]'
+                    ).forEach(addRoot);
+
+                    const inputs = [...document.querySelectorAll(
+                        'input:not([type]),input[type="text"],input[type="search"]'
+                    )].filter(visible);
+                    for (const input of inputs) {
+                        const inputIdentity = clean(
+                            (input.getAttribute('aria-label') || '') + ' ' +
+                            (input.getAttribute('placeholder') || '') + ' ' +
+                            (input.getAttribute('name') || '') + ' ' +
+                            (input.getAttribute('id') || '')
+                        );
+                        if (
+                            clean(input.value) === pageId
+                            || pageWords.some(word => inputIdentity.includes(word))
+                        ) {
+                            let cur = input;
+                            for (
+                                let depth = 0;
+                                cur && depth < 10;
+                                depth++, cur = cur.parentElement
+                            ) addRoot(cur);
+                        }
+                    }
+
+                    const candidates = [];
+                    const seen = new Set();
+                    const push = el => {
+                        if (!el || seen.has(el) || !visible(el)) return;
+                        seen.add(el);
+                        if (
+                            el.disabled
+                            || el.getAttribute?.('aria-disabled') === 'true'
+                        ) return;
+                        if (el.closest('input,textarea,select')) return;
+                        const text = identity(el);
+                        if (!text || blockedSet.has(text)) return;
+                        const role = clean(el.getAttribute?.('role'));
+                        const structural = [
+                            'option','radio','listitem','gridcell'
+                        ].includes(role);
+                        const exactId = text.includes(pageId);
+                        const clickable = (
+                            structural
+                            || el.tagName === 'BUTTON'
+                            || role === 'button'
+                            || el.getAttribute?.('tabindex') === '0'
+                        );
+                        if (!clickable) return;
+                        const r = el.getBoundingClientRect();
+                        if (r.width < 80 || r.height < 24) return;
+                        candidates.push({
+                            el, text, role, exactId,
+                            x:r.x, y:r.y, w:r.width, h:r.height
+                        });
+                    };
+
+                    for (const root of roots) {
+                        root.querySelectorAll(
+                            '[role="option"],[role="radio"],[role="listitem"],'
+                            + '[role="gridcell"],button,[role="button"],[tabindex="0"]'
+                        ).forEach(push);
+                    }
+
+                    const exact = candidates.filter(row => row.exactId);
+                    const structural = candidates.filter(row =>
+                        ['option','radio','listitem','gridcell'].includes(row.role)
+                    );
+                    const chosen = (
+                        exact.length === 1
+                            ? exact[0]
+                            : structural.length === 1
+                                ? structural[0]
+                                : candidates.length === 1
+                                    ? candidates[0]
+                                    : null
+                    );
+                    if (!chosen) {
+                        return {
+                            selected:false,
+                            roots:roots.length,
+                            candidates:candidates.slice(0,12).map(row => ({
+                                text:row.text.slice(0,240),
+                                role:row.role,
+                                exact_id:row.exactId,
+                                x:Math.round(row.x),
+                                y:Math.round(row.y),
+                                w:Math.round(row.w),
+                                h:Math.round(row.h),
+                            }))
+                        };
+                    }
+                    chosen.el.setAttribute(marker, '1');
+                    return {
+                        selected:true,
+                        roots:roots.length,
+                        chosen:{
+                            text:chosen.text.slice(0,240),
+                            role:chosen.role,
+                            exact_id:chosen.exactId,
+                        }
+                    };
+                }""",
+                [marker, page],
+            )
+        except Exception:
+            meta = {"selected": False}
+
+        if not isinstance(meta, dict) or not meta.get("selected"):
+            return False
+
+        try:
+            item = self.page.locator(f'[{marker}="1"]').first
+            if await item.is_visible() and await item.is_enabled():
+                await item.click(timeout=2500)
+                return True
+        except Exception:
+            return False
+        finally:
+            try:
+                await self.page.evaluate(
+                    "(marker) => document.querySelectorAll('[' + marker + ']').forEach(el => el.removeAttribute(marker))",
+                    marker,
+                )
+            except Exception:
+                pass
+        return False
+
     async def _click_page_add_surface_action(
         self,
         names: tuple[str, ...],
@@ -18322,26 +18629,172 @@ timeout_seconds=4.0,
         )
 
     async def verify_page_attached(self, *, business_id: str, page_id: str) -> bool:
+        """Live-confirm that one exact Page is attached to one exact Business.
+
+        REMASK_PAGE_ATTACH_LIVE_VERIFY_V2
+        DOM text is not sufficient on current Business Suite because Page IDs
+        are often omitted from rendered text. Observe read-only Page/asset
+        GraphQL traffic on the exact Business Pages route and use DOM as a
+        second independent proof.
+        """
         business = _digits(business_id)
         page = _digits(page_id)
         if not business or not page:
             return False
+        if self.page is None:
+            await self.open()
+        if self.page is None:
+            return False
 
-        await self._goto(self.SETTINGS_PAGES_URL.format(business_id=business))
-        await self.page.wait_for_timeout(1200)
+        observed = asyncio.Event()
+        response_tasks: set[asyncio.Task[Any]] = set()
+        diagnostics: list[dict[str, Any]] = []
+
+        async def inspect_response(response: Any) -> None:
+            try:
+                url = _clean(getattr(response, "url", ""))
+                if "graphql" not in url.casefold():
+                    return
+                request = getattr(response, "request", None)
+                meta = (
+                    _request_graphql_meta(request)
+                    if request is not None
+                    else {}
+                )
+                friendly = _clean(meta.get("friendly_name"))
+                folded = friendly.casefold()
+                if any(
+                    marker in folded
+                    for marker in ("mutation", "create", "update", "delete")
+                ):
+                    return
+                page_url = _clean(getattr(self.page, "url", ""))
+                exact_business_route = bool(
+                    business in _business_ids_from_text(page_url)
+                    and "/settings/pages" in page_url.casefold()
+                )
+                request_business_ids = {
+                    value
+                    for value, _path in _walk_business_ids(
+                        meta.get("variables") or {}
+                    )
+                    if value
+                }
+                exact_business_context = bool(
+                    exact_business_route
+                    or business in request_business_ids
+                )
+                if not exact_business_context:
+                    return
+                if not (
+                    "page" in folded
+                    or "asset" in folded
+                    or "business" in folded
+                ):
+                    return
+
+                raw = await response.text()
+                decoded = unquote_plus(raw)
+                page_present = page in decoded
+                diagnostics.append({
+                    "friendly_name": friendly[:180],
+                    "doc_id": _clean(meta.get("doc_id"))[:80],
+                    "exact_business_context": exact_business_context,
+                    "page_present": page_present,
+                    "url": page_url[:700],
+                })
+                if len(diagnostics) > 16:
+                    del diagnostics[:-16]
+                if page_present:
+                    observed.set()
+            except Exception as exc:
+                diagnostics.append({
+                    "error": f"{exc.__class__.__name__}: {_clean(exc)}"[:500],
+                })
+                if len(diagnostics) > 16:
+                    del diagnostics[:-16]
+
+        def on_response(response: Any) -> None:
+            try:
+                task = asyncio.create_task(inspect_response(response))
+                response_tasks.add(task)
+                task.add_done_callback(response_tasks.discard)
+            except Exception:
+                return
 
         try:
-            content = await self.page.content()
-        except Exception:
-            content = ""
+            try:
+                self.page.on("response", on_response)
+            except Exception:
+                pass
 
-        # The selected business ID is in the URL, while a Page ID appearing in
-        # the rendered settings document indicates that asset is present.
-        if page in content:
-            return True
+            targets = [
+                template.format(business_id=business)
+                for template in self.SETTINGS_PAGES_URLS
+            ]
+            seen: set[str] = set()
+            for target in targets:
+                if target in seen:
+                    continue
+                seen.add(target)
+                try:
+                    await self._goto(
+                        target,
+                        timeout_ms=6500,
+                        wait_until="commit",
+                        settle_ms=650,
+                    )
+                    await self._assert_authenticated()
+                except BrowserBusinessError:
+                    raise
+                except Exception:
+                    continue
 
-        body = await self._body_text()
-        return page in body
+                try:
+                    content = await self.page.content()
+                except Exception:
+                    content = ""
+                if page in content:
+                    return True
+
+                body = await self._body_text()
+                if page in body:
+                    return True
+
+                try:
+                    await asyncio.wait_for(observed.wait(), timeout=1.8)
+                    return True
+                except asyncio.TimeoutError:
+                    pass
+
+                if response_tasks:
+                    await _settle_tasks_bounded(
+                        set(response_tasks),
+                        timeout_seconds=0.6,
+                        cancel_pending=False,
+                    )
+                    if observed.is_set():
+                        return True
+
+            self._last_page_inventory_diagnostic = {
+                "stage": "page_attach_verify_unconfirmed",
+                "business_id": business,
+                "page_id": page,
+                "url": _clean(getattr(self.page, "url", "")),
+                "queries": diagnostics[-16:],
+            }
+            return False
+        finally:
+            try:
+                self.page.remove_listener("response", on_response)
+            except Exception:
+                pass
+            if response_tasks:
+                await _settle_tasks_bounded(
+                    set(response_tasks),
+                    timeout_seconds=0.5,
+                    cancel_pending=True,
+                )
 
     @staticmethod
     def _safe_meta_network_request_summary(request: Any) -> dict[str, Any]:
@@ -18928,6 +19381,21 @@ timeout_seconds=4.0,
                 except Exception:
                     pass
 
+            if not result_selected:
+                # REMASK_PAGE_ADD_UNIQUE_RESULT_V2
+                # Current Meta can render the search hit as a generic card
+                # instead of role=option/radio. Retry the non-mutating result
+                # selection inside the Page-specific surface while hydration
+                # settles; never click Add/Confirm/Continue here.
+                for _ in range(6):
+                    if await self._click_unique_page_add_result(
+                        page_id=page,
+                    ):
+                        result_selected = True
+                        await self.page.wait_for_timeout(350)
+                        break
+                    await self.page.wait_for_timeout(350)
+
             sent = False
             clicked_any = False
             page_click_intent_written = False
@@ -19094,6 +19562,14 @@ timeout_seconds=4.0,
                     )
                     diag["result_selected"] = True
                     diag["selection_idle_loops"] = post_selection_idle_loops
+                    diag["page_surface"] = await self._page_add_surface_state(
+                        page_id=page,
+                    )
+                    diag["live_verify"] = getattr(
+                        self,
+                        "_last_page_inventory_diagnostic",
+                        {},
+                    )
                     raise BrowserBusinessError(
                         "PAGE_ADD_UI_CHANGED",
                         (
@@ -19216,6 +19692,15 @@ timeout_seconds=4.0,
 
                 if not clicked_any:
                     diag = await self._diagnostic("page_add_submit_missing")
+                    diag["result_selected"] = result_selected
+                    diag["page_surface"] = await self._page_add_surface_state(
+                        page_id=page,
+                    )
+                    diag["live_verify"] = getattr(
+                        self,
+                        "_last_page_inventory_diagnostic",
+                        {},
+                    )
                     raise BrowserBusinessError(
                         "PAGE_ADD_UI_CHANGED",
                         "Meta Page-add review/submit action was not found.",
@@ -19250,6 +19735,14 @@ timeout_seconds=4.0,
 
         if not await self.verify_page_attached(business_id=business, page_id=page):
             diag = await self._diagnostic("page_attach_unconfirmed")
+            diag["page_surface"] = await self._page_add_surface_state(
+                page_id=page,
+            )
+            diag["live_verify"] = getattr(
+                self,
+                "_last_page_inventory_diagnostic",
+                {},
+            )
             raise BrowserBusinessError(
                 "PAGE_ATTACH_RESULT_UNKNOWN",
                 (
