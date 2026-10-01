@@ -48,6 +48,26 @@ class BusinessWorkspaceDisplayTests(unittest.IsolatedAsyncioTestCase):
                                   {"business_id": "2478360152656679", "phase": "CREATE_CONFIRMED"})
         self.assertEqual(await self.state.confirmed_business_binding_groups(), {})
 
+    async def test_legacy_native_create_then_attach_failure_is_creation_proof(self):
+        await self.checkpoint(create_response_business_id="", create_response_path="",
+            private_create_error_code="BUSINESS_CREATED_PAGE_ATTACH_FAILED",
+            private_create_diagnostics=[{"stage":"set_primary_page",
+                "result":"failed_after_business_created","business_id":"2478360152656679"}])
+        groups = await self.state.confirmed_business_binding_groups()
+        self.assertIn("2478360152656679", groups["7"]["businesses"])
+        await self.checkpoint(private_create_diagnostics=[{"stage":"set_primary_page",
+            "result":"failed_after_business_created","business_id":"999999999"}],
+            create_response_business_id="", create_response_path="",
+            private_create_error_code="BUSINESS_CREATED_PAGE_ATTACH_FAILED")
+        self.assertEqual(await self.state.confirmed_business_binding_groups(), {})
+
+    async def test_legacy_nested_exact_create_response_is_preserved(self):
+        await self.checkpoint(create_response_business_id="", create_response_path="",
+            create={"response_business_id":"2478360152656679",
+                    "response_path":"data.bizkit_create_business.id"})
+        groups = await self.state.confirmed_business_binding_groups()
+        self.assertIn("2478360152656679", groups["7"]["businesses"])
+
     async def test_multiple_jobs_deduplicate_one_business(self):
         await self.checkpoint(item="old")
         await self.checkpoint(item="new", business_name="Current name")

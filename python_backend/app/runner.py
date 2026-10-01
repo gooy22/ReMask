@@ -122,7 +122,9 @@ class WorkerPool:
             temp = path.with_suffix(path.suffix + '.worker.tmp')
             temp.write_text(json.dumps(groups, separators=(',', ':'), ensure_ascii=False), encoding='utf-8')
             os.replace(temp, path)
-            log.info('workspace confirmed CREATE mirror refreshed profiles=%d', len(groups))
+            log.info('workspace confirmed CREATE mirror refreshed profiles=%d businesses=%s',
+                     len(groups), json.dumps({profile: list(group.get('businesses', {}))
+                                              for profile, group in groups.items()}, separators=(',', ':')))
 
     async def _restore_workspace_bindings(self) -> None:
         """Rebuild multi-Business Workspace BM->RK bindings from durable history."""

@@ -215,10 +215,21 @@ class ProvisioningStateStore:
                 continue
             profile = str(row["profile_id"] or "").strip()
             business = str(result.get("business_id") or "").strip()
-            response = str(result.get("create_response_business_id") or result.get("response_business_id") or "").strip()
-            response_path = str(result.get("create_response_path") or result.get("response_path") or "").strip()
+            create = result.get("create") if isinstance(result.get("create"), dict) else {}
+            response = str(result.get("create_response_business_id") or result.get("response_business_id") or create.get("response_business_id") or "").strip()
+            response_path = str(result.get("create_response_path") or result.get("response_path") or create.get("response_path") or "").strip()
             phase = str(result.get("phase") or "").upper()
             exact_create = response == business and response_path in exact_paths
+            legacy_created_before_attach = (
+                result.get("private_create_error_code") == "BUSINESS_CREATED_PAGE_ATTACH_FAILED"
+                and any(
+                    isinstance(diag, dict)
+                    and diag.get("stage") == "set_primary_page"
+                    and diag.get("result") == "failed_after_business_created"
+                    and str(diag.get("business_id") or "") == business
+                    for diag in (result.get("private_create_diagnostics") or [])
+                )
+            )
             inventory_recovered = (
                 row["status"] == "SUCCESS"
                 and result.get("recovered_after_create_uncertainty") is True
@@ -226,7 +237,7 @@ class ProvisioningStateStore:
             )
             if not profile or not business.isdigit() or not 5 <= len(business) <= 30:
                 continue
-            if not (exact_create or inventory_recovered or phase == "PAGE_CONFIRMED"):
+            if not (exact_create or legacy_created_before_attach or inventory_recovered or phase == "PAGE_CONFIRMED"):
                 continue
             businesses = groups.setdefault(profile, {"businesses": {}})["businesses"]
             if business in businesses:
