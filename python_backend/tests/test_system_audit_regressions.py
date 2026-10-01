@@ -1,5 +1,6 @@
 import asyncio
 import tempfile
+import sqlite3
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -58,6 +59,19 @@ class SystemAuditTests(unittest.IsolatedAsyncioTestCase):
         await self.state.set_running(item, "audit-profile", scope, ProvisioningStep.BUSINESS)
         return await business_handler(self.session, PARAMS, {}, provisioning_state=self.state,
                                       item_id=item, profile_id="audit-profile", scope_key=scope)
+
+    async def test_database_connections_close_and_rollback_on_error(self):
+        for store in [self.jobs, self.state]:
+            with store._connect() as connection:
+                connection.execute("SELECT 1")
+            with self.assertRaises(sqlite3.ProgrammingError):
+                connection.execute("SELECT 1")
+        with self.assertRaises(RuntimeError):
+            with self.jobs._connect() as connection:
+                connection.execute("INSERT INTO jobs(id,status,created_at,updated_at) VALUES('rolled-back','QUEUED',1,1)")
+                raise RuntimeError("abort transaction")
+        with self.jobs._connect() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM jobs WHERE id='rolled-back'").fetchone()[0], 0)
 
     async def test_cancel_after_private_send_blocks_create_in_new_job(self):
         async def lost_response(**kwargs):

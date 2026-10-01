@@ -5,6 +5,8 @@ import json
 import sqlite3
 import time
 import uuid
+from contextlib import contextmanager
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -16,12 +18,17 @@ class JobStore:
         self.path = Path(db_path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
         con = sqlite3.connect(self.path, timeout=30)
-        con.row_factory = sqlite3.Row
-        con.execute('PRAGMA journal_mode=WAL')
-        con.execute('PRAGMA foreign_keys=ON')
-        return con
+        try:
+            con.row_factory = sqlite3.Row
+            con.execute("PRAGMA journal_mode=WAL")
+            con.execute("PRAGMA foreign_keys=ON")
+            with con:
+                yield con
+        finally:
+            con.close()
 
     async def init(self) -> None:
         await asyncio.to_thread(self._init_sync)
