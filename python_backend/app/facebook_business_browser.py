@@ -2307,6 +2307,7 @@ class FacebookBusinessBrowser:
         wait_until: str = "domcontentloaded",
         settle_ms: int = 900,
         attempts: int = 2,
+        auth_body_timeout_ms: int = 1500,
     ) -> str:
         if self.page is None:
             await self.open()
@@ -2330,10 +2331,9 @@ class FacebookBusinessBrowser:
                 if navigation_settle_ms:
                     await self.page.wait_for_timeout(navigation_settle_ms)
                 await self._assert_authenticated(
-                    body_timeout_ms=(
-                        500
-                        if navigation_wait_until == "commit"
-                        else 1500
+                    body_timeout_ms=max(
+                        100,
+                        min(int(auth_body_timeout_ms or 1500),5000),
                     )
                 )
                 return _clean(self.page.url)
@@ -2362,10 +2362,18 @@ class FacebookBusinessBrowser:
                     try:
                         await asyncio.sleep(0.45)
                         await self._assert_authenticated(
-                            body_timeout_ms=500
+                            body_timeout_ms=max(
+                                100,
+                                min(int(auth_body_timeout_ms or 1500),5000),
+                            )
                         )
                         current_url = _clean(self.page.url)
-                        current_body = await self._body_text(timeout_ms=500)
+                        current_body = await self._body_text(
+                            timeout_ms=max(
+                                100,
+                                min(int(auth_body_timeout_ms or 1500),5000),
+                            )
+                        )
                         form_ready = await self._form_ready()
                         create_surface = await self._has_create_surface()
                         facebook_surface = (
@@ -5469,6 +5477,7 @@ class FacebookBusinessBrowser:
                         wait_until="commit",
                         settle_ms=500 if fast else 650,
                         attempts=1,
+                        auth_body_timeout_ms=500 if fast else 1500,
                     )
                     self._last_page_inventory_diagnostic.update({
                         "stage": "relay_wait",
