@@ -3543,7 +3543,7 @@ class FacebookBusinessBrowser:
                 "direct_create_route": {
                     "requested_url": requested_url,
                     "timeout": 10,
-                    "url": _clean(self.page.url if self.page else ""),
+                    "url": _clean(getattr(self.page, "url", "") if self.page else ""),
                 },
             }
             return False
@@ -3556,7 +3556,7 @@ class FacebookBusinessBrowser:
                     "requested_url": requested_url,
                     "navigation_error": exc.code,
                     "message": str(exc)[:500],
-                    "url": _clean(self.page.url if self.page else ""),
+                    "url": _clean(getattr(self.page, "url", "") if self.page else ""),
                 },
             }
             return False
@@ -3634,7 +3634,7 @@ class FacebookBusinessBrowser:
                 "overview_route": {
                     "requested_url": requested_url,
                     "timeout": 10,
-                    "url": _clean(self.page.url if self.page else ""),
+                    "url": _clean(getattr(self.page, "url", "") if self.page else ""),
                 },
             }
             return False
@@ -3647,7 +3647,7 @@ class FacebookBusinessBrowser:
                     "requested_url": requested_url,
                     "navigation_error": exc.code,
                     "message": str(exc)[:500],
-                    "url": _clean(self.page.url if self.page else ""),
+                    "url": _clean(getattr(self.page, "url", "") if self.page else ""),
                 },
             }
             return False
@@ -3736,7 +3736,7 @@ class FacebookBusinessBrowser:
                 **self._last_selector_diagnostic,
                 "ads_manager_probe": {
                     "navigation_timeout": 30,
-                    "url": _clean(self.page.url if self.page else ""),
+                    "url": _clean(getattr(self.page, "url", "") if self.page else ""),
                 },
             }
             return False
@@ -3746,7 +3746,7 @@ class FacebookBusinessBrowser:
                 "ads_manager_probe": {
                     "navigation_error": exc.code,
                     "message": str(exc)[:500],
-                    "url": _clean(self.page.url if self.page else ""),
+                    "url": _clean(getattr(self.page, "url", "") if self.page else ""),
                 },
             }
             return False
@@ -3902,7 +3902,7 @@ class FacebookBusinessBrowser:
             **self._last_selector_diagnostic,
             "ads_manager_probe": {
                 "selector_opened": False,
-                "url": _clean(self.page.url if self.page else ""),
+                "url": _clean(getattr(self.page, "url", "") if self.page else ""),
                 "candidates": probe_rows[:30],
             },
         }
@@ -4104,7 +4104,7 @@ class FacebookBusinessBrowser:
             self._last_selector_diagnostic = {
                 **self._last_selector_diagnostic,
                 "generic_portfolio_menu_timeout": 5,
-                "url": _clean(self.page.url if self.page else ""),
+                "url": _clean(getattr(self.page, "url", "") if self.page else ""),
             }
 
         if menu_open:
@@ -4639,7 +4639,7 @@ class FacebookBusinessBrowser:
             "stage": "start",
             "fast": bool(fast),
             "surfaces": list(surfaces),
-            "current_url": _clean(self.page.url if self.page else ""),
+            "current_url": _clean(getattr(self.page, "url", "") if self.page else ""),
             "relay_candidates": [],
         }
         response_tasks: set[asyncio.Task[Any]] = set()
@@ -4819,7 +4819,7 @@ class FacebookBusinessBrowser:
                     self._last_page_inventory_diagnostic.update({
                         "stage": "navigate",
                         "target_url": url,
-                        "current_url": _clean(self.page.url if self.page else ""),
+                        "current_url": _clean(getattr(self.page, "url", "") if self.page else ""),
                         "page_discovery": diagnostics[-10:],
                     })
                     # The generic _goto default is intentionally generous for
@@ -4833,7 +4833,7 @@ class FacebookBusinessBrowser:
                     )
                     self._last_page_inventory_diagnostic.update({
                         "stage": "relay_wait",
-                        "current_url": _clean(self.page.url if self.page else ""),
+                        "current_url": _clean(getattr(self.page, "url", "") if self.page else ""),
                         "page_discovery": diagnostics[-10:],
                     })
 
@@ -4950,7 +4950,7 @@ class FacebookBusinessBrowser:
             if not merged:
                 self._last_page_inventory_diagnostic.update({
                     "stage": "empty",
-                    "current_url": _clean(self.page.url if self.page else ""),
+                    "current_url": _clean(getattr(self.page, "url", "") if self.page else ""),
                     "page_discovery": diagnostics[-10:],
                 })
                 diag = await self._diagnostic("browser_pages_empty")
@@ -4964,7 +4964,7 @@ class FacebookBusinessBrowser:
 
             self._last_page_inventory_diagnostic.update({
                 "stage": "complete",
-                "current_url": _clean(self.page.url if self.page else ""),
+                "current_url": _clean(getattr(self.page, "url", "") if self.page else ""),
                 "pages": len(merged),
                 "page_discovery": diagnostics[-10:],
             })
@@ -17377,7 +17377,7 @@ timeout_seconds=4.0,
                     **diag,
                 }
 
-            current_url = _clean(self.page.url if self.page else "")
+            current_url = _clean(getattr(self.page, "url", "") if self.page else "")
             try:
                 current_query = parse_qs(urlsplit(current_url).query)
             except Exception:
@@ -18291,7 +18291,7 @@ timeout_seconds=4.0,
                 "already_attached": True,
                 "business_id": business,
                 "page_id": page,
-                "current_url": _clean(self.page.url if self.page else ""),
+                "current_url": _clean(getattr(self.page, "url", "") if self.page else ""),
             }
 
         await self._goto(self.SETTINGS_PAGES_URL.format(business_id=business))
