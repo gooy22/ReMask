@@ -1698,6 +1698,19 @@ async def profile_live_inventory(
             async def load_business_inventory(business_id: str):
                 nonlocal browser
                 business_key=str(business_id)
+
+                # REMASK_RK_BROWSER_REACQUIRE_V2
+                # A previous BM row may have timed out and deliberately closed
+                # Chromium. Reacquire only through ProfileSession so ownership
+                # and final cleanup remain correct.
+                if browser is None:
+                    reopen_remaining=deadline_at-time.monotonic()
+                    if reopen_remaining <= 2.0:
+                        raise asyncio.TimeoutError()
+                    browser=await hard_deadline(
+                        profile_session.facebook_business_browser(),
+                        min(4.0,max(0.5,reopen_remaining-1.0)),
+                    )
                 if business_key in prevalidated_inventory:
                     return dict(prevalidated_inventory[business_key])
                 last_error=None
@@ -1871,34 +1884,50 @@ async def profile_live_inventory(
                                 separators=(',', ':'),
                             )[:9000],
                         )
-                except asyncio.TimeoutError as exc:
+                except asyncio.TimeoutError:
+                    # REMASK_RK_TIMEOUT_CONTINUE_V2
+                    # One BM/RK timeout is row-level uncertainty, not a fatal
+                    # profile transport failure. Preserve the failed row, free
+                    # the wedged Chromium lease, and continue so independent
+                    # profile-level Fan Page inventory still gets a live chance.
+                    rk_timeout_diag=getattr(
+                        browser,
+                        '_last_ad_account_section_diagnostic',
+                        {},
+                    ) if browser is not None else {}
                     log.warning(
                         'live inventory profile=%s business=%s RK inventory timed '
-                        'out; invalidating browser session diagnostic=%s',
+                        'out; marking row inconclusive and releasing browser '
+                        'diagnostic=%s',
                         clean_profile,
                         business_id,
                         json.dumps(
-                            getattr(
-                                browser,
-                                '_last_ad_account_section_diagnostic',
-                                {},
-                            ),
+                            rk_timeout_diag,
                             ensure_ascii=False,
                             separators=(',', ':'),
                         )[:6000],
                     )
-                    try:
-                        await browser.close()
-                    except Exception:
-                        pass
+                    row['ad_accounts_source']='rk_inventory_timeout'
+                    row['browser_error_code']='RK_INVENTORY_TIMEOUT'
+                    row['browser_error']='Live RK inventory timed out for this Business'
+                    row['browser_error_diagnostic']=(
+                        rk_timeout_diag
+                        if isinstance(rk_timeout_diag,dict)
+                        else {}
+                    )
+                    warnings.append(
+                        f'BM {business_id}: RK_INVENTORY_TIMEOUT'
+                    )
+                    if browser is not None:
+                        try:
+                            await browser.close()
+                        except Exception:
+                            pass
                     try:
                         profile_session._business_browser=None
                     except Exception:
                         pass
-                    raise HTTPException(
-                        status_code=504,
-                        detail='LIVE_INVENTORY_TIMEOUT:rk_inventory',
-                    ) from exc
+                    browser=None
                 except BrowserBusinessError as exc:
                     row['ad_accounts_source']=(
                         'business_auth_blocked'
@@ -1972,6 +2001,49 @@ async def profile_live_inventory(
                     str(row.get('id') or ''),
                 )
             )
+
+            # REMASK_PAGE_BROWSER_AFTER_RK_TIMEOUT_V1
+            # Page inventory is independent from one BM's RK result. If the RK
+            # watchdog closed Chromium, reopen a managed profile browser before
+            # the Page phase when enough endpoint budget remains.
+            page_browser_reopen_error=''
+            if browser is None:
+                reopen_remaining=deadline_at-time.monotonic()
+                if reopen_remaining > 10.25:
+                    try:
+                        page_reopen_timeout=min(
+                            4.0,
+                            max(0.75,reopen_remaining-9.75),
+                        )
+                        browser=await hard_deadline(
+                            profile_session.facebook_business_browser(),
+                            page_reopen_timeout,
+                        )
+                        log.info(
+                            'live inventory profile=%s reopened browser for '
+                            'independent Page phase ms_remaining=%d',
+                            clean_profile,
+                            int((deadline_at-time.monotonic())*1000),
+                        )
+                    except Exception as exc:
+                        page_browser_reopen_error=(
+                            f'{exc.__class__.__name__}: {exc}'
+                        )[:700]
+                        browser=None
+                        log.info(
+                            'live inventory profile=%s Page browser reopen '
+                            'unavailable=%s',
+                            clean_profile,
+                            page_browser_reopen_error,
+                        )
+                else:
+                    page_browser_reopen_error='PAGE_BROWSER_REOPEN_BUDGET_EXHAUSTED'
+                    log.info(
+                        'live inventory profile=%s Page browser reopen skipped '
+                        'remaining_ms=%d',
+                        clean_profile,
+                        max(0,int(reopen_remaining*1000)),
+                    )
 
             # REMASK_FULL_PROFILE_SYNC_PAGES_V2
             # REMASK_STABLE_PAGE_STATE_V3
@@ -2129,7 +2201,7 @@ async def profile_live_inventory(
             # optional Page phase still has enough wall-clock budget for its
             # own navigation + Relay hydration.
             isolated_page_probe_attempted=False
-            if not pages_live_verified:
+            if not pages_live_verified and browser is not None:
                 isolated_page_probe_attempted=True
                 try:
                     isolated_pages_timeout=optional_page_budget(10.0)
@@ -2197,7 +2269,11 @@ async def profile_live_inventory(
             # Exact BM->Page history is useful only for Pages that really are
             # attached to that BM. Treat it as optional positive enrichment,
             # never as proof of the complete account-level Page list.
-            if not pages_live_verified and known_pages_by_business:
+            if (
+                not pages_live_verified
+                and browser is not None
+                and known_pages_by_business
+            ):
                 confirmed_page_rows=[]
                 fast_page_diagnostics=[]
                 try:
@@ -2269,7 +2345,7 @@ async def profile_live_inventory(
             # REMASK_ADS_MANAGER_PAGES_FIRST_V1
             # Account-level live Page enumeration is enrichment only. Keep the
             # attempt deliberately short; it must not dominate a BM/RK sync.
-            if not pages_live_verified:
+            if not pages_live_verified and browser is not None:
                 try:
                     ads_pages_timeout=optional_page_budget(4.0)
                     if ads_pages_timeout <= 0.25:
@@ -2359,6 +2435,12 @@ async def profile_live_inventory(
                         clean_profile,
                         detail[:700],
                     )
+
+            if page_browser_reopen_error and not pages_live_verified:
+                page_primary_error=(
+                    page_primary_error + ' | '
+                    if page_primary_error else ''
+                ) + page_browser_reopen_error
 
             log.info(
                 'live inventory profile=%s pages_ms=%d ready=%s '
