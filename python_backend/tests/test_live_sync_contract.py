@@ -118,7 +118,7 @@ class LiveSyncContractTests(unittest.TestCase):
         self.assertIn("REMASK_CURRENT_FAN_PAGE_BATCH_V1", source)
         self.assertIn("REMASK_LATEST_PAGE_BINDING_PER_BUSINESS_V1", source)
         self.assertIn("durable_pages=normalize_page_rows(current_fan_page_batch)", source)
-        self.assertIn("durable_pages=normalize_page_rows(confirmed_fan_pages)", source)
+        self.assertIn("durable_pages=normalize_page_rows(current_fan_page_batch)", source)
         self.assertIn("pages_live_verified=False", source)
         self.assertIn("'pages_live_verified':pages_live_verified", source)
 
