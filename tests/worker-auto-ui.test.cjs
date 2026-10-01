@@ -49,7 +49,7 @@ vm.createContext(sandbox); vm.runInContext(source.slice(start,end), sandbox);
   // Independent BM: an empty optional Page must not block submission or
   // turn different explicit CREATE requests into the same empty-Page scope.
   const bmStart=source.indexOf('async function pythonWorkerStartBusiness(');
-  const bmEnd=source.indexOf('\\nfunction pythonWorkerVisible(',bmStart);
+  const bmEnd=source.indexOf('\nfunction pythonWorkerVisible(',bmStart);
   vm.runInContext(source.slice(bmStart,bmEnd),sandbox);
   const bmRequests=[];
   sandbox.pythonWorkerBridge=async payload=>{bmRequests.push(JSON.parse(JSON.stringify(payload)));return {job:{job_id:'bm-job'}};};
