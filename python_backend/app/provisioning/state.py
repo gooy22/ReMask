@@ -189,6 +189,57 @@ class ProvisioningStateStore:
             data.pop("result_json", None)
             return data
 
+    async def confirmed_business_binding_groups(self) -> dict[str, dict[str, Any]]:
+        """Confirmed CREATE evidence for BM-only Workspace display, independent of RK/Page."""
+        return await asyncio.to_thread(self._confirmed_business_binding_groups_sync)
+
+    def _confirmed_business_binding_groups_sync(self) -> dict[str, dict[str, Any]]:
+        exact_paths = {
+            "data.business_create.business.id", "data.business_create.id",
+            "data.bizkit_create_business.business.id", "data.bizkit_create_business.id",
+            "data.business_manager_create.business.id", "data.business_manager_create.id",
+        }
+        groups: dict[str, dict[str, Any]] = {}
+        with self._connect() as con:
+            rows = con.execute(
+                "SELECT profile_id,status,result_json,updated_at FROM provisioning_steps "
+                "WHERE step=? AND result_json IS NOT NULL ORDER BY updated_at DESC",
+                (ProvisioningStep.BUSINESS.value,),
+            ).fetchall()
+        for row in rows:
+            try:
+                result = json.loads(str(row["result_json"] or "{}"))
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(result, dict):
+                continue
+            profile = str(row["profile_id"] or "").strip()
+            business = str(result.get("business_id") or "").strip()
+            response = str(result.get("create_response_business_id") or result.get("response_business_id") or "").strip()
+            response_path = str(result.get("create_response_path") or result.get("response_path") or "").strip()
+            phase = str(result.get("phase") or "").upper()
+            exact_create = response == business and response_path in exact_paths
+            inventory_recovered = (
+                row["status"] == "SUCCESS"
+                and result.get("recovered_after_create_uncertainty") is True
+                and phase == "CREATE_CONFIRMED"
+            )
+            if not profile or not business.isdigit() or not 5 <= len(business) <= 30:
+                continue
+            if not (exact_create or inventory_recovered or phase == "PAGE_CONFIRMED"):
+                continue
+            businesses = groups.setdefault(profile, {"businesses": {}})["businesses"]
+            if business in businesses:
+                continue
+            businesses[business] = {
+                "business_id": business,
+                "business_name": str(result.get("business_name") or business).strip(),
+                "source": "python_worker_confirmed_create",
+                "create_confirmed": True,
+                "updated_at": int(row["updated_at"] or 0),
+            }
+        return groups
+
     async def latest_business_resume_for_page(
         self,
         profile_id: str,

@@ -98,6 +98,7 @@ class WorkerPool:
         self.registry.register('transparent_post',self.router.execute)
         self.resolver=ProfileResolver(os.getenv('REMASK_PROFILE_RESOLVER_URL'),os.getenv('REMASK_INTERNAL_KEY'))
         self._workers: list[asyncio.Task[None]]=[]
+        self._created_businesses_lock = asyncio.Lock()
 
     async def start(self) -> None:
         await self.provisioning_state.init()
@@ -111,8 +112,21 @@ class WorkerPool:
         ]
         log.info('worker pool started concurrency=%d recovered=%d',self.concurrency,len(recovered))
 
+    async def _persist_created_businesses(self) -> None:
+        # Local display mirror; never contacts Meta and never marks live inventory.
+        async with self._created_businesses_lock:
+            groups = await self.provisioning_state.confirmed_business_binding_groups()
+            root = os.getenv('REMASK_DATA_DIR') or os.getenv('RAILWAY_VOLUME_MOUNT_PATH') or '/var/lib/remask'
+            path = Path(root) / 'workspace-created-businesses.json'
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temp = path.with_suffix(path.suffix + '.worker.tmp')
+            temp.write_text(json.dumps(groups, separators=(',', ':'), ensure_ascii=False), encoding='utf-8')
+            os.replace(temp, path)
+            log.info('workspace confirmed CREATE mirror refreshed profiles=%d', len(groups))
+
     async def _restore_workspace_bindings(self) -> None:
         """Rebuild multi-Business Workspace BM->RK bindings from durable history."""
+        await self._persist_created_businesses()
         bindings=(
             await self.provisioning_state.confirmed_ad_account_binding_groups()
         )
@@ -387,6 +401,12 @@ class WorkerPool:
                     )
             finally:
                 await self.store.finalize_item(item_id)
+                try:
+                    await self._restore_workspace_bindings()
+                except Exception as exc:
+                    # Remote CREATE/SQLite proof must not be turned into a
+                    # failed operation by a local display-mirror write failure.
+                    log.error('workspace display mirror refresh failed: %s', exc)
                 if self.mirror and self.mirror.enabled:
                     current = await self.store.item(item_id)
                     if current:

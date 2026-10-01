@@ -793,6 +793,39 @@ function hierarchy_sync_result_get(
     return $row;
 }
 
+function hierarchy_created_businesses_apply_display(string $profile, array $snapshot): array
+{
+    // Exact worker CREATE proof is local historical state, not a live Meta inventory check.
+    $raw = @file_get_contents('/var/lib/remask/workspace-created-businesses.json');
+    $all = is_string($raw) ? json_decode($raw, true) : null;
+    $incoming = is_array($all[$profile]['businesses'] ?? null) ? $all[$profile]['businesses'] : [];
+    $rows = is_array($snapshot['businesses'] ?? null) ? $snapshot['businesses'] : [];
+    $known = [];
+    foreach ($rows as $row) {
+        if (is_array($row)) $known[(string)($row['id'] ?? '')] = true;
+    }
+    foreach ($incoming as $binding) {
+        if (!is_array($binding) || ($binding['create_confirmed'] ?? null) !== true) continue;
+        $id = trim((string)($binding['business_id'] ?? ''));
+        if (!preg_match('/^\\d{5,30}$/', $id) || isset($known[$id])) continue;
+        $accounts = array_values(array_filter(
+            is_array($snapshot['ad_accounts'] ?? null) ? $snapshot['ad_accounts'] : [],
+            static fn($row): bool => is_array($row) && (string)($row['business_id'] ?? '') === $id
+        ));
+        $rows[] = [
+            'id' => $id, 'name' => trim((string)($binding['business_name'] ?? $id)),
+            'profile' => $profile, 'primary_page' => null,
+            'ad_account_count' => count($accounts), 'accounts' => $accounts,
+            '_provisioned_only' => true, '_source' => 'python_worker_confirmed_create',
+            'create_confirmed' => true,
+        ];
+        $known[$id] = true;
+    }
+    $snapshot['businesses'] = $rows;
+    if (is_array($snapshot['profile'] ?? null)) $snapshot['profile']['bm_count'] = count($rows);
+    return $snapshot;
+}
+
 function hierarchy_binding_file(): string
 {
     return '/var/lib/remask/workspace-provisioning-bindings.json';
@@ -1156,7 +1189,8 @@ $hierarchySnapshotWrapper = <<<'PHP_WRAPPER'
 function hierarchy_profile_snapshot(string $profile, ?array $workspaceMeta = null): array
 {
     $snapshot = hierarchy_profile_snapshot_base($profile, $workspaceMeta);
-    return hierarchy_live_snapshot_apply_display($profile, $snapshot);
+    $snapshot = hierarchy_live_snapshot_apply_display($profile, $snapshot);
+    return hierarchy_created_businesses_apply_display($profile, $snapshot);
 }
 PHP_WRAPPER;
 
