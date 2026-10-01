@@ -2062,6 +2062,77 @@ async def profile_live_inventory(
                     len(current_binding_pages),
                 )
 
+            # REMASK_ISOLATED_PAGE_PRIMARY_V2
+            # The isolated authenticated facebook.com tab is the only current
+            # account-level Page surface that does not disturb the primary
+            # Ads Manager/Business Suite document. Run it FIRST while the
+            # optional Page phase still has enough wall-clock budget for its
+            # own navigation + Relay hydration.
+            isolated_page_probe_attempted=False
+            if not pages_live_verified:
+                isolated_page_probe_attempted=True
+                try:
+                    isolated_pages_timeout=optional_page_budget(10.0)
+                    # discover_managed_pages(fast=True) can legitimately spend
+                    # ~8s across navigation, settle, Relay wait and response
+                    # task draining. Do not start a probe that cannot finish.
+                    if isolated_pages_timeout < 8.25:
+                        raise asyncio.TimeoutError()
+                    discovered_pages=await hard_deadline(
+                        browser.discover_managed_pages_isolated(fast=True),
+                        isolated_pages_timeout,
+                    )
+                    live_pages=normalize_page_rows(discovered_pages)
+                    pages=merge_page_rows(pages,live_pages)
+                    pages_ready=True
+                    pages_live_verified=True
+                    pages_source=(
+                        'facebook_isolated_page_inventory+durable'
+                        if durable_pages
+                        else 'facebook_isolated_page_inventory'
+                    )
+                    log.info(
+                        'live inventory profile=%s isolated Page primary '
+                        'ready=True pages=%d diagnostic=%s',
+                        clean_profile,
+                        len(live_pages),
+                        json.dumps(
+                            getattr(
+                                browser,
+                                '_last_page_inventory_diagnostic',
+                                {},
+                            ),
+                            ensure_ascii=False,
+                            separators=(',', ':'),
+                        )[:5000],
+                    )
+                except Exception as exc:
+                    detail=(
+                        'ISOLATED_YOUR_PAGES_TIMEOUT'
+                        if isinstance(exc,asyncio.TimeoutError)
+                        else (
+                            f'{exc.code}: {exc}'
+                            if isinstance(exc,BrowserBusinessError)
+                            else f'{exc.__class__.__name__}: {exc}'
+                        )
+                    )
+                    page_primary_error=detail
+                    log.info(
+                        'live inventory profile=%s isolated Page primary '
+                        'unavailable=%s diagnostic=%s',
+                        clean_profile,
+                        detail[:700],
+                        json.dumps(
+                            getattr(
+                                browser,
+                                '_last_page_inventory_diagnostic',
+                                {},
+                            ),
+                            ensure_ascii=False,
+                            separators=(',', ':'),
+                        )[:5000],
+                    )
+
             # REMASK_KNOWN_PAGE_FAST_REVALIDATION_V1
             # Exact BM->Page history is useful only for Pages that really are
             # attached to that BM. Treat it as optional positive enrichment,
@@ -2233,10 +2304,10 @@ async def profile_live_inventory(
             # Do not navigate the primary Ads Manager/Business Suite tab across
             # domains. Use a disposable facebook.com tab in the same browser
             # context so cookies/session are shared and BM/RK state is untouched.
-            if not pages_live_verified:
+            if not pages_live_verified and not isolated_page_probe_attempted:
                 try:
-                    isolated_pages_timeout=optional_page_budget(6.5)
-                    if isolated_pages_timeout <= 0.25:
+                    isolated_pages_timeout=optional_page_budget(10.0)
+                    if isolated_pages_timeout < 8.25:
                         raise asyncio.TimeoutError()
                     discovered_pages=await hard_deadline(
                         browser.discover_managed_pages_isolated(fast=True),
