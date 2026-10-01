@@ -34,6 +34,7 @@ class _HtmlOnlySession:
 class _ListPagesRecoverySession:
     def __init__(self):
         self.used_doc_ids = []
+        self.calls = []
         self.body = (
             '{"pages_can_administer":[],"assetOwnerId":"123456789",'
             '"fb_api_req_friendly_name":"AccountQualityUserPagesWrapper_UserPageQuery",'
@@ -41,12 +42,15 @@ class _ListPagesRecoverySession:
         )
 
     async def bootstrap(self):
+        self.calls.append("bootstrap")
         return SimpleNamespace(actor_id="123456789")
 
     async def fetch_text_with_headers(self, url, **kwargs):
+        self.calls.append(f"fetch:{url}")
         return 200, self.body, url, {}
 
     async def graphql(self, doc_id, variables, **kwargs):
+        self.calls.append(f"graphql:{doc_id}")
         self.used_doc_ids.append(doc_id)
         return {
             "data": {
@@ -83,6 +87,33 @@ class ListPagesMarkerParserTests(unittest.TestCase):
             '{"id":"9988112277665544"}}'
         )
         self.assertEqual(doc_id, "")
+    def test_fast_marker_discovery_stops_after_bounded_entries(self):
+        class Session:
+            def __init__(self):
+                self.calls = []
+
+            async def fetch_text_with_headers(self, url, **kwargs):
+                self.calls.append(url)
+                return 200, "<html></html>", url, {}
+
+        async def run():
+            session = Session()
+            from app.facebook_page_discovery import (
+                discover_current_list_pages_docid_by_marker,
+            )
+            result = await discover_current_list_pages_docid_by_marker(
+                session,
+                max_entries=2,
+                per_entry_timeout=1.0,
+            )
+            return session, result
+
+        session, result = __import__("asyncio").run(run())
+        self.assertIsNone(result)
+        self.assertEqual(len(session.calls), 2)
+        self.assertIn("/pages/?category=your_pages", session.calls[0])
+
+
 
 
 class ListPagesSelfHealTests(unittest.IsolatedAsyncioTestCase):
@@ -106,6 +137,15 @@ class ListPagesSelfHealTests(unittest.IsolatedAsyncioTestCase):
         result = await list_pages_via_private_graphql(session)
 
         self.assertEqual(session.used_doc_ids, ["9988112277665544"])
+        self.assertTrue(session.calls[0].startswith("fetch:"))
+        self.assertLess(
+            next(i for i, value in enumerate(session.calls) if value == "bootstrap"),
+            next(i for i, value in enumerate(session.calls) if value.startswith("graphql:")),
+        )
+        self.assertGreater(
+            next(i for i, value in enumerate(session.calls) if value == "bootstrap"),
+            next(i for i, value in enumerate(session.calls) if value.startswith("fetch:")),
+        )
         self.assertEqual([row["id"] for row in result.pages], ["61594993341059"])
         self.assertEqual(result.candidate.doc_id, "9988112277665544")
         self.assertIn(

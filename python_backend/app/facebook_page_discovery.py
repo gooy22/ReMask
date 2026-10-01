@@ -332,28 +332,27 @@ def _variables_for(
 async def list_pages_via_private_graphql(
     session: Any,
 ) -> PageDiscoveryResult:
-    bootstrap = await session.bootstrap()
-    actor_id = _clean(getattr(bootstrap, "actor_id", ""))
-
-    if not actor_id:
-        raise PageDiscoveryError("Facebook actor_id is missing")
-
     diagnostics: list[str] = []
     candidates = list_candidates("LIST_PAGES")
 
     if not candidates:
-        # REMASK_LIST_PAGES_SELF_HEAL_V1
-        # A missing/invalidated persisted doc_id must not force the entire
-        # profile Sync into browser-only Page discovery. The current Meta
-        # frontend often exposes the read-only LIST_PAGES operation in its
-        # initial HTML/response headers; rediscover it and persist it before
-        # falling back to the heavier browser surface.
-        discovered = await discover_current_list_pages_docid_by_marker(session)
-        if discovered is None:
-            discovered = await discover_current_list_pages_docid(
-                session,
-                max_scripts=6,
+        # REMASK_LIST_PAGES_SELF_HEAL_V2
+        # Recover the current read-only Page query BEFORE paying the relatively
+        # expensive fb_dtsg bootstrap cost. On slower profile proxies bootstrap
+        # can consume most of the Sync budget by itself.
+        try:
+            discovered = await asyncio.wait_for(
+                discover_current_list_pages_docid_by_marker(
+                    session,
+                    max_entries=2,
+                    per_entry_timeout=2.2,
+                ),
+                timeout=5.0,
             )
+        except asyncio.TimeoutError:
+            discovered = None
+            diagnostics.append("runtime LIST_PAGES marker discovery timed out")
+
         if discovered is not None:
             candidates = [discovered]
             diagnostics.append(
@@ -363,8 +362,15 @@ async def list_pages_via_private_graphql(
 
     if not candidates:
         raise PageDiscoveryError(
-            "No LIST_PAGES doc_id candidates configured after runtime discovery"
+            "No LIST_PAGES doc_id candidates configured after fast runtime discovery"
         )
+
+    # Bootstrap only once we actually have a query worth sending.
+    bootstrap = await session.bootstrap()
+    actor_id = _clean(getattr(bootstrap, "actor_id", ""))
+
+    if not actor_id:
+        raise PageDiscoveryError("Facebook actor_id is missing")
 
     for candidate in candidates:
         try:
@@ -525,6 +531,8 @@ async def discover_current_list_pages_docid_by_marker(
     session: Any,
     *,
     max_scripts: int = 0,
+    max_entries: int | None = None,
+    per_entry_timeout: float | None = None,
 ) -> DocIdCandidate | None:
     """
     Lightweight v14 LIST_PAGES marker discovery.
@@ -535,29 +543,43 @@ async def discover_current_list_pages_docid_by_marker(
     del max_scripts
 
     entry_urls = (
-        "https://www.facebook.com/",
-        "https://business.facebook.com/latest/home",
-        "https://www.facebook.com/accountquality/?landing_page=insights",
+        # Page-specific surfaces first: they are the most likely to contain the
+        # current Page inventory Relay operation and avoid wasting Sync budget
+        # on unrelated Facebook home documents.
         "https://www.facebook.com/pages/?category=your_pages",
         "https://www.facebook.com/pages/?category=your_pages&ref=bookmarks",
+        "https://www.facebook.com/accountquality/?landing_page=insights",
+        "https://business.facebook.com/latest/home",
+        "https://www.facebook.com/",
+    )
+    bounded_urls = (
+        entry_urls[:max(1, int(max_entries))]
+        if max_entries is not None
+        else entry_urls
     )
 
-    for entry_url in entry_urls:
+    for entry_url in bounded_urls:
         try:
-            if hasattr(session, "fetch_text_with_headers"):
-                status, document, final_url, headers = (
-                    await session.fetch_text_with_headers(
+            async def fetch_entry():
+                if hasattr(session, "fetch_text_with_headers"):
+                    return await session.fetch_text_with_headers(
                         entry_url,
                         max_bytes=3_000_000,
                     )
-                )
-            else:
                 status, document, final_url = await session.fetch_text(
                     entry_url,
                     max_bytes=3_000_000,
                 )
-                headers = {}
-        except Exception:
+                return status, document, final_url, {}
+
+            if per_entry_timeout is not None:
+                status, document, final_url, headers = await asyncio.wait_for(
+                    fetch_entry(),
+                    timeout=max(0.5, float(per_entry_timeout)),
+                )
+            else:
+                status, document, final_url, headers = await fetch_entry()
+        except (asyncio.TimeoutError, Exception):
             continue
 
         if status >= 400:
