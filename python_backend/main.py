@@ -377,6 +377,20 @@ async def run_startup_smoke() -> None:
 
 async def run_targeted_pages_readonly_canary(profile_id: str) -> None:
     """Read the exact Your-Pages surface with its own diagnostic budget."""
+    def page_history():
+        output=[]
+        with store._connect() as con:
+            rows=con.execute("SELECT item_id,status,created_at,updated_at,result_json FROM provisioning_steps WHERE profile_id=? AND step='FAN_PAGES' ORDER BY created_at LIMIT 100",(profile_id,)).fetchall()
+            for row in rows:
+                try:
+                    result=json.loads(row['result_json'] or '{}')
+                except ValueError:
+                    continue
+                output.append({'item_id':row['item_id'],'status':row['status'],'created_at':row['created_at'],
+                    'updated_at':row['updated_at'],'phase':result.get('phase'),'target_names':result.get('target_names'),
+                    'created_pages':[{key:p.get(key) for key in ('id','page_id','name','reused')} for p in result.get('created_pages',[]) if isinstance(p,dict)]})
+        return output
+    log.warning('targeted Page history profile=%s rows=%s',profile_id,json.dumps(await asyncio.to_thread(page_history),ensure_ascii=False,separators=(',', ':'))[:7000])
     async with pool.profile_locks[profile_id]:
         context = await pool.resolver.resolve(profile_id)
         async with ProfileSession(context) as session:
@@ -432,7 +446,14 @@ async def run_targeted_pages_readonly_canary(profile_id: str) -> None:
                     result['controls'] = [{key: control.get(key) for key in ('text','disabled')} for control in surface.get('controls', []) if control.get('role') == 'button' or control.get('tag') == 'button'][-25:]
                     log.warning('targeted Page attach readonly canary profile=%s result=%s', profile_id, json.dumps(result, ensure_ascii=False, separators=(',', ':'))[:11000])
                 except Exception as exc:
-                    log.warning('targeted Page attach readonly canary profile=%s error=%s blocked_mutations=%s', profile_id, str(exc)[:1200], json.dumps(blocked_requests[:8], separators=(',', ':')))
+                    diagnostic = getattr(exc, 'diagnostic', {})
+                    surface = await browser._page_add_surface_state(page_id=target_page)
+                    safe = {'code':getattr(exc, 'code', ''), 'stage':diagnostic.get('stage'),
+                        'events':getattr(browser, '_browser_events', [])[-12:],
+                        'input':getattr(browser, '_last_page_input_diagnostic', {}),
+                        'surface':{key:surface.get(key) for key in ('ready_state','inputs','dialogs')},
+                        'queries':page_queries[-5:]}
+                    log.warning('targeted Page attach readonly canary profile=%s error=%s blocked_mutations=%s failure=%s', profile_id, str(exc)[:1200], json.dumps(blocked_requests[:8], separators=(',', ':')), json.dumps(safe,ensure_ascii=False,separators=(',', ':'))[:8000])
                 finally:
                     await browser.page.unroute('**/*', readonly_route)
 

@@ -759,7 +759,8 @@ async def discover_current_set_primary_page_candidate(
             SET_PRIMARY_PAGE_FRIENDLY_NAME
         ),
         entry_urls=[
-            "https://www.facebook.com/",
+            f"https://business.facebook.com/latest/settings/business_info?business_id={clean_business_id}",
+            f"https://business.facebook.com/settings/info?business_id={clean_business_id}",
             "https://business.facebook.com/latest/home",
         ],
         max_scripts_per_entry=24,

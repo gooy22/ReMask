@@ -1,4 +1,8 @@
 import asyncio
+import ast
+import inspect
+import subprocess
+import textwrap
 import json
 import sqlite3
 import tempfile
@@ -11,7 +15,7 @@ from app.store import JobStore
 from app.session import MetaSession
 from app.facebook_page_discovery import _extract_known_page_lists, _extract_pages_from_browser_document, business_page_relation_proven, browser_business_page_relation_proven
 from app.facebook_business_create import _attach_response_confirms_page
-from app.facebook_business_browser import FacebookBusinessBrowser, BrowserBusinessError
+from app.facebook_business_browser import FacebookBusinessBrowser, BrowserBusinessError, _exact_business_request_context
 from app.provisioning.auto_plan import expand_auto_profiles
 from app.provisioning.business_handler import business_handler
 from app.provisioning.models import ProvisioningStep, ProvisioningError
@@ -26,6 +30,41 @@ def request(count=2, **payload):
 
 
 class PageIdentityTests(unittest.TestCase):
+    def test_document_route_cannot_override_explicit_other_business_scope(self):
+        self.assertFalse(_exact_business_request_context('111111111', {'999999999'}, True))
+        self.assertFalse(_exact_business_request_context('111111111', {'111111111','999999999'}, True))
+        self.assertTrue(_exact_business_request_context('111111111', {'111111111'}, False))
+        self.assertTrue(_exact_business_request_context('111111111', set(), True))
+        self.assertFalse(_exact_business_request_context('111111111', set(), False))
+
+    def test_page_submit_selector_ignores_wizard_header_and_global_add(self):
+        source=ast.parse(textwrap.dedent(inspect.getsource(FacebookBusinessBrowser._click_page_add_surface_action)))
+        script=next(node.args[0].value for node in ast.walk(source) if isinstance(node,ast.Call)
+            and isinstance(node.func,ast.Attribute) and node.func.attr=='evaluate' and node.args
+            and isinstance(node.args[0],ast.Constant) and '(args)' in str(node.args[0].value))
+        harness=r"""
+const fs=require('fs'); const fn=eval('('+JSON.parse(fs.readFileSync(0,'utf8'))+')');
+function run(hasFooter) {
+ const all=[];
+ function el(text,y,h=20){const attrs={}; const e={innerText:text,textContent:text,disabled:false,
+   getAttribute:k=>attrs[k]||null,setAttribute:(k,v)=>attrs[k]=v,removeAttribute:k=>delete attrs[k],
+   getBoundingClientRect:()=>({x:100,y,width:300,height:h,bottom:y+h})};all.push(e);return e;}
+ const header=el('Request approval',100), cancel=el('Cancel',500), footer=el('Request approval',500), globalAdd=el('Add',750);
+ const field=el('',300);field.setAttribute('placeholder','Facebook Page name or URL');
+ const dialog=el('Add an existing Page Facebook Page name or URL',50,550);
+ dialog.querySelectorAll=q=>q.startsWith('input')?[field]:(hasFooter?[header,cancel,footer]:[header,cancel]);
+ global.document={querySelectorAll:q=>q.includes('[role="dialog"]')?[dialog]:q.startsWith('input')?[field]:all.filter(e=>e.getAttribute('data-remask-page-add-action'))};
+ global.getComputedStyle=()=>({display:'block',visibility:'visible',pointerEvents:'auto'});
+ const clicked=fn(['data-remask-page-add-action',['Request approval','Add']]);
+ return {clicked,header:!!header.getAttribute('data-remask-page-add-action'),footer:!!footer.getAttribute('data-remask-page-add-action'),global:!!globalAdd.getAttribute('data-remask-page-add-action')};
+}
+process.stdout.write(JSON.stringify([run(true),run(false)]));
+"""
+        result=subprocess.run(['node','-e',harness],input=json.dumps(script),text=True,capture_output=True,check=True,timeout=5)
+        self.assertEqual(json.loads(result.stdout),[
+            {'clicked':True,'header':False,'footer':True,'global':False},
+            {'clicked':False,'header':False,'footer':False,'global':False}])
+
     def test_attach_verification_rejects_global_page_and_other_business(self):
         page={'__typename':'Page','id':'222222222','name':'Mine'}
         global_payload={'viewer':{'pages_you_manage':{'nodes':[page]}}, 'business':{'id':'999999999','owned_pages':{'nodes':[page]}}}
@@ -289,6 +328,27 @@ class PageHydrationTests(unittest.IsolatedAsyncioTestCase):
         browser.discover_managed_pages=AsyncMock(return_value=[row])
         result=await browser.create_fan_page(page_name='Requested Page',category='Digital creator')
         self.assertEqual(result['page_id'],row['id']); self.assertEqual(context.pages,[row])
+
+    async def test_rk_lookup_rejects_response_for_other_business_on_current_route(self):
+        from urllib.parse import urlencode
+        for rows in ([{'node':{'id':'222222222','name':'Requested Ads'}}], []):
+            browser=FacebookBusinessBrowser(SimpleNamespace(profile_id='7'))
+            listeners={}
+            request=SimpleNamespace(method='POST',url='https://business.facebook.com/api/graphql/',
+                post_data=urlencode({'fb_api_req_friendly_name':'BusinessAdAccountsQuery','doc_id':'123456789',
+                                     'variables':json.dumps({'businessID':'999999999'})}))
+            response=SimpleNamespace(url=request.url,request=request,
+                text=AsyncMock(return_value=json.dumps({'data':{'business':{'id':'999999999','ad_accounts':{'edges':rows}}}})))
+            browser.page=SimpleNamespace(url='https://business.facebook.com/latest/settings/ad_accounts?business_id=111111111',
+                on=lambda event,callback:listeners.update({event:callback}),remove_listener=lambda event,callback:None)
+            async def goto(target):
+                browser.page.url=target
+                listeners['response'](response)
+                await asyncio.sleep(0)
+            browser._goto=AsyncMock(side_effect=goto)
+            result=await browser.find_ad_account_in_inventory(business_id='111111111',account_name='Requested Ads',timeout_seconds=2)
+            self.assertFalse(result['confirmed'])
+            self.assertFalse(result['confirmed_empty'])
 
     async def test_dom_marked_page_field_receives_keyboard_events(self):
         browser=FacebookBusinessBrowser(SimpleNamespace(profile_id='7',pages=[{'id':'1289628847574478','profile_id':'61594993341059','name':'Media Shopsw','ownership_verified':True}]))

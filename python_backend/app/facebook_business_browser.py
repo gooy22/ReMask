@@ -15,6 +15,11 @@ from urllib.parse import parse_qs, unquote, unquote_plus, urlencode, urlsplit
 CheckpointCallback = Callable[[dict[str, Any]], Awaitable[None]]
 
 
+def _exact_business_request_context(business: str, request_business_ids: set[str], page_targets_business: bool) -> bool:
+    """The document route cannot override an explicitly different request scope."""
+    return request_business_ids == {business} if request_business_ids else bool(page_targets_business)
+
+
 class BrowserBusinessError(RuntimeError):
     def __init__(
         self,
@@ -10806,7 +10811,7 @@ class FacebookBusinessBrowser:
                     )
                 )
                 exact_business_context = bool(
-                    targets_business or page_targets_business
+                    _exact_business_request_context(business, target_business_ids, page_targets_business)
                 )
 
                 friendly = _clean(
@@ -11120,8 +11125,7 @@ class FacebookBusinessBrowser:
                     )
                 )
                 exact_request_context = bool(
-                    business in set(variable_business_ids)
-                    or page_targets_business
+                    _exact_business_request_context(business, set(variable_business_ids), page_targets_business)
                 )
                 diagnostics.append(
                     {
@@ -11205,9 +11209,9 @@ class FacebookBusinessBrowser:
                 }
                 payload_targets_business = business in row_business_ids
                 exact_business_context = bool(
-                    business in target_business_ids
-                    or page_targets_business
-                    or payload_targets_business
+                    not (target_business_ids and target_business_ids != {business})
+                    and (_exact_business_request_context(business, target_business_ids, page_targets_business)
+                         or payload_targets_business)
                 )
                 inventory_scope = bool(
                     preliminary_scope or payload_targets_business
@@ -11266,6 +11270,9 @@ class FacebookBusinessBrowser:
 
                 inventory_observed = True
                 for row in rows:
+                    explicit_business = _digits(row.get("business_id"))
+                    if explicit_business and explicit_business != business:
+                        continue
                     account_id = _normalize_ad_account_id(row.get("id"))
                     if not account_id:
                         continue
@@ -11333,8 +11340,7 @@ class FacebookBusinessBrowser:
                     )
                 )
                 exact_response_context = bool(
-                    business in response_target_business_ids
-                    or response_page_targets_business
+                    _exact_business_request_context(business, response_target_business_ids, response_page_targets_business)
                 )
 
                 task = asyncio.create_task(inspect_response(response))
