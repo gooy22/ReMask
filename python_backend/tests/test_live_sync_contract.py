@@ -95,6 +95,8 @@ class LiveSyncContractTests(unittest.TestCase):
         self.assertIn("REMASK_LIVE_INVENTORY_CANARY_PROFILE", source)
         self.assertIn("confirmed_ad_account_bindings_for_profile", source)
         self.assertIn("workspace-provisioning-bindings.json", source)
+        self.assertIn("REMASK_CANARY_LAST_LIVE_HINT_V1", source)
+        self.assertIn("workspace-live-meta-snapshots.json", source)
         self.assertIn("business_ids=business_id or None", source)
         self.assertIn("ad_account_hints=", source)
         self.assertIn("profile_live_inventory(", source)
