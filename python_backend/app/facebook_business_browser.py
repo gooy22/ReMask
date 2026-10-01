@@ -1722,7 +1722,15 @@ class FacebookBusinessBrowser:
     DIRECT_CREATE_URL = "https://business.facebook.com/create"
     ADS_MANAGER_URL = "https://adsmanager.facebook.com/adsmanager/manage/campaigns"
     SETTINGS_PAGES_URL = (
-        "https://business.facebook.com/settings/pages/?business_id={business_id}"
+        "https://business.facebook.com/latest/settings/pages/"
+        "?nav_ref=bm_settings_redirect_migration"
+        "&bm_redirect_migration=true"
+        "&business_id={business_id}"
+    )
+    SETTINGS_PAGES_URLS = (
+        SETTINGS_PAGES_URL,
+        "https://business.facebook.com/latest/settings/pages/?business_id={business_id}",
+        "https://business.facebook.com/settings/pages/?business_id={business_id}",
     )
     FAN_PAGE_CREATE_URLS = (
         "https://www.facebook.com/pages/create",
@@ -18615,26 +18623,172 @@ timeout_seconds=4.0,
         )
 
     async def verify_page_attached(self, *, business_id: str, page_id: str) -> bool:
+        """Live-confirm that one exact Page is attached to one exact Business.
+
+        REMASK_PAGE_ATTACH_LIVE_VERIFY_V2
+        DOM text is not sufficient on current Business Suite because Page IDs
+        are often omitted from rendered text. Observe read-only Page/asset
+        GraphQL traffic on the exact Business Pages route and use DOM as a
+        second independent proof.
+        """
         business = _digits(business_id)
         page = _digits(page_id)
         if not business or not page:
             return False
+        if self.page is None:
+            await self.open()
+        if self.page is None:
+            return False
 
-        await self._goto(self.SETTINGS_PAGES_URL.format(business_id=business))
-        await self.page.wait_for_timeout(1200)
+        observed = asyncio.Event()
+        response_tasks: set[asyncio.Task[Any]] = set()
+        diagnostics: list[dict[str, Any]] = []
+
+        async def inspect_response(response: Any) -> None:
+            try:
+                url = _clean(getattr(response, "url", ""))
+                if "graphql" not in url.casefold():
+                    return
+                request = getattr(response, "request", None)
+                meta = (
+                    _request_graphql_meta(request)
+                    if request is not None
+                    else {}
+                )
+                friendly = _clean(meta.get("friendly_name"))
+                folded = friendly.casefold()
+                if any(
+                    marker in folded
+                    for marker in ("mutation", "create", "update", "delete")
+                ):
+                    return
+                page_url = _clean(getattr(self.page, "url", ""))
+                exact_business_route = bool(
+                    business in _business_ids_from_text(page_url)
+                    and "/settings/pages" in page_url.casefold()
+                )
+                request_business_ids = {
+                    value
+                    for value, _path in _walk_business_ids(
+                        meta.get("variables") or {}
+                    )
+                    if value
+                }
+                exact_business_context = bool(
+                    exact_business_route
+                    or business in request_business_ids
+                )
+                if not exact_business_context:
+                    return
+                if not (
+                    "page" in folded
+                    or "asset" in folded
+                    or "business" in folded
+                ):
+                    return
+
+                raw = await response.text()
+                decoded = unquote_plus(raw)
+                page_present = page in decoded
+                diagnostics.append({
+                    "friendly_name": friendly[:180],
+                    "doc_id": _clean(meta.get("doc_id"))[:80],
+                    "exact_business_context": exact_business_context,
+                    "page_present": page_present,
+                    "url": page_url[:700],
+                })
+                if len(diagnostics) > 16:
+                    del diagnostics[:-16]
+                if page_present:
+                    observed.set()
+            except Exception as exc:
+                diagnostics.append({
+                    "error": f"{exc.__class__.__name__}: {_clean(exc)}"[:500],
+                })
+                if len(diagnostics) > 16:
+                    del diagnostics[:-16]
+
+        def on_response(response: Any) -> None:
+            try:
+                task = asyncio.create_task(inspect_response(response))
+                response_tasks.add(task)
+                task.add_done_callback(response_tasks.discard)
+            except Exception:
+                return
 
         try:
-            content = await self.page.content()
-        except Exception:
-            content = ""
+            try:
+                self.page.on("response", on_response)
+            except Exception:
+                pass
 
-        # The selected business ID is in the URL, while a Page ID appearing in
-        # the rendered settings document indicates that asset is present.
-        if page in content:
-            return True
+            targets = [
+                template.format(business_id=business)
+                for template in self.SETTINGS_PAGES_URLS
+            ]
+            seen: set[str] = set()
+            for target in targets:
+                if target in seen:
+                    continue
+                seen.add(target)
+                try:
+                    await self._goto(
+                        target,
+                        timeout_ms=6500,
+                        wait_until="commit",
+                        settle_ms=650,
+                    )
+                    await self._assert_authenticated()
+                except BrowserBusinessError:
+                    raise
+                except Exception:
+                    continue
 
-        body = await self._body_text()
-        return page in body
+                try:
+                    content = await self.page.content()
+                except Exception:
+                    content = ""
+                if page in content:
+                    return True
+
+                body = await self._body_text()
+                if page in body:
+                    return True
+
+                try:
+                    await asyncio.wait_for(observed.wait(), timeout=1.8)
+                    return True
+                except asyncio.TimeoutError:
+                    pass
+
+                if response_tasks:
+                    await _settle_tasks_bounded(
+                        set(response_tasks),
+                        timeout_seconds=0.6,
+                        cancel_pending=False,
+                    )
+                    if observed.is_set():
+                        return True
+
+            self._last_page_inventory_diagnostic = {
+                "stage": "page_attach_verify_unconfirmed",
+                "business_id": business,
+                "page_id": page,
+                "url": _clean(getattr(self.page, "url", "")),
+                "queries": diagnostics[-16:],
+            }
+            return False
+        finally:
+            try:
+                self.page.remove_listener("response", on_response)
+            except Exception:
+                pass
+            if response_tasks:
+                await _settle_tasks_bounded(
+                    set(response_tasks),
+                    timeout_seconds=0.5,
+                    cancel_pending=True,
+                )
 
     @staticmethod
     def _safe_meta_network_request_summary(request: Any) -> dict[str, Any]:
