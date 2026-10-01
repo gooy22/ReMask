@@ -186,7 +186,7 @@ class LiveSyncContractTests(unittest.TestCase):
         self.assertIn("'source' => 'profile_cache'", source)
         self.assertIn("'pages' => rmx_py_profile_pages($account, $profile)", source)
 
-    def test_page_sync_uses_isolated_authenticated_tab(self) -> None:
+    def test_page_sync_uses_warm_isolated_authenticated_tab_first(self) -> None:
         source=inspect.getsource(api.profile_live_inventory)
         browser_source=inspect.getsource(
             FacebookBusinessBrowser.discover_managed_pages_isolated
@@ -196,18 +196,29 @@ class LiveSyncContractTests(unittest.TestCase):
         )
         goto_source=inspect.getsource(FacebookBusinessBrowser._goto)
 
-        self.assertIn("REMASK_ISOLATED_PAGE_INVENTORY_SYNC_V1", source)
-        self.assertIn("discover_managed_pages_isolated(fast=True)", source)
-        self.assertNotIn("REMASK_ENABLE_GLOBAL_PAGE_DISCOVERY", source)
+        self.assertIn("REMASK_ISOLATED_PAGE_INVENTORY_SYNC_V2", source)
+        self.assertIn("discover_managed_pages_isolated(", source)
+        self.assertIn("attempts=2", source)
+        isolated_index=source.index("REMASK_ISOLATED_PAGE_INVENTORY_SYNC_V2")
+        ads_index=source.index("REMASK_ADS_MANAGER_PAGES_FIRST_V1")
+        private_index=source.index("REMASK_SYNC_PRIVATE_LIST_PAGES_FIRST_V1")
+        self.assertLess(isolated_index,ads_index)
+        self.assertLess(ads_index,private_index)
 
-        self.assertIn("REMASK_ISOLATED_PAGE_INVENTORY_V1", browser_source)
-        self.assertIn("self._browser_context.new_page()", browser_source)
-        self.assertIn("primary_page=self.page", browser_source)
+        self.assertIn("REMASK_ISOLATED_PAGE_INVENTORY_V2", browser_source)
+        self.assertIn("primary_context.new_page()", browser_source)
+        self.assertIn("bounded_attempts=", browser_source)
+        self.assertIn("await probe_page.wait_for_timeout(700)", browser_source)
+        self.assertIn("self._browser_context is primary_context", browser_source)
         self.assertIn("self.page=primary_page", browser_source)
-        self.assertIn("await asyncio.wait_for(probe_page.close()", browser_source)
+        self.assertIn("await asyncio.wait_for(", browser_source)
 
         self.assertIn("attempts=1", discovery_source)
         self.assertIn("navigation_attempts=", goto_source)
+        self.assertIn(
+            "attempt + 1 < navigation_attempts",
+            goto_source,
+        )
 
     def test_browser_open_cancellation_releases_owned_resources(self) -> None:
         source=inspect.getsource(FacebookBusinessBrowser.open)
