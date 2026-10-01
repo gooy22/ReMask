@@ -607,7 +607,8 @@ function hierarchy_worker_state(string $profile): array
 function hierarchy_worker_live_inventory(
     string $profile,
     array $knownBusinessIds = [],
-    array $knownAdAccountHints = []
+    array $knownAdAccountHints = [],
+    array $knownPageHints = []
 ): array
 {
     $profile = trim($profile);
@@ -637,6 +638,20 @@ function hierarchy_worker_live_inventory(
     }
     if ($hintPairs !== []) {
         $query['ad_account_hints'] = implode(',', array_keys($hintPairs));
+    }
+
+    $pageHintPairs = [];
+    foreach ($knownPageHints as $businessId => $pageIds) {
+        $businessId = trim((string)$businessId);
+        if (!preg_match('/^\d{5,30}$/', $businessId)) continue;
+        foreach ((array)$pageIds as $pageId) {
+            $pageId = trim((string)$pageId);
+            if (!preg_match('/^\d{5,30}$/', $pageId)) continue;
+            $pageHintPairs[$businessId . ':' . $pageId] = true;
+        }
+    }
+    if ($pageHintPairs !== []) {
+        $query['page_hints'] = implode(',', array_keys($pageHintPairs));
     }
     if ($query !== []) {
         $url .= '?' . http_build_query($query, '', '&', PHP_QUERY_RFC3986);
@@ -1250,6 +1265,8 @@ $syncProfileReplacement = <<<'PHP'
         $confirmedLive = hierarchy_live_snapshot_get($profile);
         $knownBusinessIds = [];
         $knownAdAccountHints = [];
+        $knownPageHints = [];
+        $unscopedPageHints = [];
 
         foreach ((array)($confirmedLive['businesses'] ?? []) as $row) {
             if (!is_array($row)) continue;
@@ -1272,6 +1289,22 @@ $syncProfileReplacement = <<<'PHP'
             }
         }
 
+        // REMASK_WORKSPACE_PAGE_HINTS_V1
+        // Last-live Page rows are navigation hints only. Current Python
+        // Business Settings must revalidate them before pages_ready=true.
+        foreach ((array)($confirmedLive['pages'] ?? []) as $row) {
+            if (!is_array($row)) continue;
+            $pageId = trim((string)($row['id'] ?? $row['page_id'] ?? ''));
+            $businessId = trim((string)($row['business_id'] ?? ''));
+            if (!preg_match('/^\d{5,30}$/', $pageId)) continue;
+            if (preg_match('/^\d{5,30}$/', $businessId)) {
+                $knownPageHints[$businessId][$pageId] = true;
+                $knownBusinessIds[$businessId] = true;
+            } else {
+                $unscopedPageHints[$pageId] = true;
+            }
+        }
+
         // REMASK_SYNC_HINTED_BM_ONLY_V1
         // The durable worker binding is never accepted as current inventory.
         // It only restores the last worker-confirmed BM->RK navigation hint
@@ -1289,15 +1322,29 @@ $syncProfileReplacement = <<<'PHP'
             $knownAdAccountHints[$businessId][$accountId] = true;
         }
 
+        // If the previous Page row predates business_id tagging and the
+        // profile has exactly one known BM, use that BM only as a navigation
+        // hint. The worker still has to prove the Page live.
+        if ($unscopedPageHints !== [] && count($knownBusinessIds) === 1) {
+            $onlyBusinessId = (string)array_key_first($knownBusinessIds);
+            foreach (array_keys($unscopedPageHints) as $pageId) {
+                $knownPageHints[$onlyBusinessId][$pageId] = true;
+            }
+        }
+
         // REMASK_REQUESTED_BUSINESS_SYNC_SCOPE_V1
         // Workspace sends business_id when the user synchronizes one BM row.
         // Honor that scope instead of silently turning one-BM sync into a
         // full-profile scan across unrelated historical bindings.
         if ($requestedBusinessId !== '') {
             $requestedAccounts = (array)($knownAdAccountHints[$requestedBusinessId] ?? []);
+            $requestedPages = (array)($knownPageHints[$requestedBusinessId] ?? []);
             $knownBusinessIds = [$requestedBusinessId => true];
             $knownAdAccountHints = $requestedAccounts !== []
                 ? [$requestedBusinessId => $requestedAccounts]
+                : [];
+            $knownPageHints = $requestedPages !== []
+                ? [$requestedBusinessId => $requestedPages]
                 : [];
         }
 
@@ -1314,6 +1361,10 @@ $syncProfileReplacement = <<<'PHP'
                 array_map(
                     static fn($ids) => array_keys((array)$ids),
                     $knownAdAccountHints
+                ),
+                array_map(
+                    static fn($ids) => array_keys((array)$ids),
+                    $knownPageHints
                 )
             );
         } catch (Throwable $liveInventoryError) {
