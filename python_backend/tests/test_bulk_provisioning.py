@@ -350,6 +350,52 @@ class PageHydrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(result['confirmed'])
             self.assertFalse(result['confirmed_empty'])
 
+    async def test_page_navigation_timeout_keeps_exact_managed_document_proof(self):
+        browser=FacebookBusinessBrowser(SimpleNamespace(profile_id='7'))
+        payload={'viewer':{'actor':{'additional_profiles_with_biz_tools':{'edges':[{'node':{
+            'id':'61594993341059','name':'Media Shopsw','delegate_page_id':'1289628847574478'}}]}}}}
+        browser.page=SimpleNamespace(url='https://www.facebook.com/pages/?category=your_pages',
+            content=AsyncMock(return_value='<script>'+json.dumps(payload)+'</script>'))
+        browser._goto=AsyncMock(side_effect=BrowserBusinessError('FACEBOOK_NAVIGATION_FAILED','DOMContentLoaded timed out'))
+        browser._assert_authenticated=AsyncMock()
+        rows=await browser.discover_managed_pages(fast=True)
+        self.assertEqual([r['id'] for r in rows],['1289628847574478'])
+        self.assertTrue(rows[0]['ownership_verified'])
+        self.assertEqual(browser._goto.await_count,1)
+
+    async def test_page_navigation_timeout_without_managed_proof_remains_failure(self):
+        browser=FacebookBusinessBrowser(SimpleNamespace(profile_id='7'))
+        browser.page=SimpleNamespace(url='https://www.facebook.com/pages/?category=your_pages',
+            content=AsyncMock(return_value='<script>'+json.dumps({'recommendations':{'id':'1289628847574478','name':'Media Shopsw'}})+'</script>'))
+        browser._goto=AsyncMock(side_effect=BrowserBusinessError('FACEBOOK_NAVIGATION_FAILED','DOMContentLoaded timed out'))
+        browser._assert_authenticated=AsyncMock()
+        with self.assertRaises(BrowserBusinessError) as error:
+            await browser.discover_managed_pages(fast=True)
+        self.assertEqual(error.exception.code,'FACEBOOK_NAVIGATION_FAILED')
+
+    async def test_current_add_existing_page_menu_opens_before_field_lookup(self):
+        browser=FacebookBusinessBrowser(SimpleNamespace(profile_id='7'))
+        browser.page=SimpleNamespace(url='https://business.facebook.com/latest/settings/pages?business_id=111111111',
+            wait_for_timeout=AsyncMock(),get_by_role=lambda *args,**kwargs:SimpleNamespace(count=AsyncMock(return_value=0)))
+        opened=False
+        async def click(names):
+            nonlocal opened
+            opened='Add an existing Page' in names
+            return opened
+        async def fill(**kwargs):
+            if not opened:
+                raise AssertionError('Cannot fill the Page field before opening the real menu action')
+            return True
+        browser.verify_page_attached=AsyncMock(return_value=False)
+        browser._open_pages_add_action=AsyncMock(return_value=True)
+        browser._click_named=AsyncMock(side_effect=click)
+        browser._fill_page_add_identifier=AsyncMock(side_effect=fill)
+        browser._click_unique_page_add_result=AsyncMock(return_value=True)
+        browser._page_add_surface_state=AsyncMock(return_value={})
+        browser._body_text=AsyncMock(return_value='')
+        result=await browser.preflight_page_add_form(business_id='111111111',page_id='222222222')
+        self.assertTrue(result['result_selected'])
+
     async def test_dom_marked_page_field_receives_keyboard_events(self):
         browser=FacebookBusinessBrowser(SimpleNamespace(profile_id='7',pages=[{'id':'1289628847574478','profile_id':'61594993341059','name':'Media Shopsw','ownership_verified':True}]))
         field=SimpleNamespace(is_visible=AsyncMock(return_value=True),is_editable=AsyncMock(return_value=True),

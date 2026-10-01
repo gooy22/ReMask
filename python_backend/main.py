@@ -388,6 +388,8 @@ async def run_targeted_pages_readonly_canary(profile_id: str) -> None:
                     continue
                 output.append({'item_id':row['item_id'],'status':row['status'],'created_at':row['created_at'],
                     'updated_at':row['updated_at'],'phase':result.get('phase'),'target_names':result.get('target_names'),
+                    'active_before_ids':result.get('active_before_ids'),'active_page_name':result.get('active_page_name'),
+                    'business_id':result.get('business_id'),'ad_account_id':result.get('ad_account_id'),
                     'created_pages':[{key:p.get(key) for key in ('id','page_id','name','reused')} for p in result.get('created_pages',[]) if isinstance(p,dict)]})
         return output
     log.warning('targeted Page history profile=%s rows=%s',profile_id,json.dumps(await asyncio.to_thread(page_history),ensure_ascii=False,separators=(',', ':'))[:7000])
@@ -517,7 +519,7 @@ async def run_existing_business_repair_once(profile_id: str) -> None:
                 step = await pool.provisioning_state.step(selected['item_id'], ProvisioningStep.BUSINESS)
                 result = (step or {}).get('result') or {}
                 log.warning('existing BM repair terminal item=%s status=%s error=%s result=%s reason=%s', selected['item_id'],item_state['status'],item_state.get('error_code'),
-                    json.dumps({key:result.get(key) for key in ('phase','business_id','primary_page_id','page_already_attached','page_confirmed_by_private_attach','last_browser_error_code')},separators=(',',':')),
+                    json.dumps({key:result.get(key) for key in ('phase','business_id','primary_page_id','page_already_attached','page_confirmed_by_private_attach','last_browser_error_code','private_page_attach_error_code')},separators=(',',':')),
                     str(item_state.get('error_message') or '').split(' diagnostic=')[0][:700])
                 break
 

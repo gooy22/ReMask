@@ -1069,7 +1069,7 @@ async def business_handler(
                                     raise ProvisioningError("PAGE_ATTACH_RESULT_UNKNOWN", str(exc), retryable=True) from exc
                                 private_attach_confirmed = True
                             elif exc.code == "SET_PRIMARY_PAGE_MUTATION_NOT_DISCOVERED" or (exc.code == "SET_PRIMARY_PAGE_META_ERROR" and not exc.retryable and not (exc.payload or {}).get("data")):
-                                await before_page_submit({"phase": "CREATE_CONFIRMED", "activity": "PRIVATE_PAGE_ADD_REJECTED"})
+                                await before_page_submit({"phase": "CREATE_CONFIRMED", "activity": "PRIVATE_PAGE_ADD_REJECTED", "private_page_attach_error_code": exc.code})
                             else:
                                 raise
                         except Exception as exc:

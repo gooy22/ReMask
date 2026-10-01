@@ -1905,6 +1905,7 @@ class FacebookBusinessBrowser:
     )
 
     ADD_EXISTING_PAGE_NAMES = (
+        "Add an existing Page",
         "Add an existing Facebook Page",
         "Add a Page",
         "Add existing Page",
@@ -5276,6 +5277,7 @@ class FacebookBusinessBrowser:
         merged: dict[str, dict[str, Any]] = {}
         relay_pages: dict[str, dict[str, Any]] = {}
         diagnostics: list[str] = []
+        document = ""
         self._last_page_inventory_diagnostic = {
             "stage": "start",
             "fast": bool(fast),
@@ -5509,7 +5511,27 @@ class FacebookBusinessBrowser:
                         break
 
                     document = await self.page.content()
-                except BrowserBusinessError:
+                except BrowserBusinessError as exc:
+                    # DOMContentLoaded can time out after Meta has already
+                    # returned the exact managed-Page data. Preserve that live
+                    # proof instead of discarding it and reloading the SPA.
+                    landed = urlsplit(_clean(getattr(self.page, 'url', '')))
+                    if exc.code == 'FACEBOOK_NAVIGATION_FAILED' and landed.hostname in {'www.facebook.com','facebook.com'} and landed.path.rstrip('/') == '/pages':
+                        await self._assert_authenticated(body_timeout_ms=500)
+                        if response_tasks:
+                            await _settle_tasks_bounded(response_tasks,timeout_seconds=0.5,cancel_pending=False)
+                        recovered = list(relay_pages.values())
+                        if not recovered:
+                            try:
+                                document = await self.page.content()
+                                recovered = _extract_pages_from_browser_document(document)
+                            except Exception:
+                                recovered = []
+                        if recovered:
+                            for row in recovered:
+                                merge_page(merged,row)
+                            diagnostics.append(f'{url}: navigation deadline recovered with exact managed Page proof rows={len(recovered)}')
+                            break
                     raise
                 except Exception as exc:
                     diagnostics.append(
@@ -5722,7 +5744,7 @@ class FacebookBusinessBrowser:
             try:
                 rows=await self.discover_managed_pages(
                     fast=True if fast else False,
-                    navigation_timeout_ms=7800 if fast else 9000,
+                    navigation_timeout_ms=9000,
                 )
                 diagnostic=dict(
                     self._last_page_inventory_diagnostic
@@ -19305,9 +19327,8 @@ timeout_seconds=4.0,
                     )
                     if value
                 }
-                exact_business_context = bool(
-                    exact_business_route
-                    or business in request_business_ids
+                exact_business_context = _exact_business_request_context(
+                    business, request_business_ids, exact_business_route
                 )
                 if not exact_business_context:
                     return
@@ -19641,10 +19662,10 @@ timeout_seconds=4.0,
         # Redirects abort the old document before the replacement UI hydrates.
         current = _clean(getattr(self.page, "url", ""))
         if "/settings/pages" in current and business_id in _business_ids_from_text(current):
-            for attempt in range(8):
+            for attempt in range(16):
                 if await self._click_named(self.ADD_NAMES):
                     return True
-                if attempt < 7:
+                if attempt < 15:
                     await self.page.wait_for_timeout(400)
         for template in self.SETTINGS_PAGES_URLS[:2]:
             try:
@@ -19655,10 +19676,10 @@ timeout_seconds=4.0,
                 # A migration redirect can abort the old document. Probe the
                 # replacement document, then the next compatible URL.
                 await self._assert_authenticated()
-            for attempt in range(8):
+            for attempt in range(16):
                 if await self._click_named(self.ADD_NAMES):
                     return True
-                if attempt < 7:
+                if attempt < 15:
                     await self.page.wait_for_timeout(400)
         return False
 
