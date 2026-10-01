@@ -17379,6 +17379,299 @@ timeout_seconds=4.0,
             pass
         return False
 
+    async def _page_add_surface_state(
+        self,
+        *,
+        page_id: str = "",
+    ) -> dict[str, Any]:
+        """Return a bounded, non-secret snapshot of the active Page-add UI."""
+        if self.page is None:
+            return {"ready": False, "reason": "page_missing"}
+
+        page = _digits(page_id)
+        try:
+            state = await self.page.evaluate(
+                """(pageId) => {
+                    const visible = el => {
+                        if (!el) return false;
+                        const r = el.getBoundingClientRect();
+                        const st = getComputedStyle(el);
+                        return r.width > 0 && r.height > 0
+                            && st.display !== 'none'
+                            && st.visibility !== 'hidden';
+                    };
+                    const clean = text => (text || '')
+                        .normalize('NFKC')
+                        .replace(/[\u200b\u200c\u200d\ufeff]/g, '')
+                        .replace(/\u00a0/g, ' ')
+                        .replace(/\s+/g, ' ')
+                        .trim();
+                    const lower = text => clean(text).toLowerCase();
+                    const inputs = [...document.querySelectorAll(
+                        'input:not([type]),input[type="text"],input[type="search"]'
+                    )].filter(visible).slice(0, 12).map(el => {
+                        const r = el.getBoundingClientRect();
+                        return {
+                            value: clean(el.value).slice(0, 120),
+                            aria: clean(el.getAttribute('aria-label')).slice(0, 160),
+                            placeholder: clean(el.getAttribute('placeholder')).slice(0, 160),
+                            name: clean(el.getAttribute('name')).slice(0, 120),
+                            id: clean(el.id).slice(0, 120),
+                            x: Math.round(r.x),
+                            y: Math.round(r.y),
+                            w: Math.round(r.width),
+                            h: Math.round(r.height),
+                        };
+                    });
+                    const dialogs = [...document.querySelectorAll(
+                        '[role="dialog"],[aria-modal="true"]'
+                    )].filter(visible).slice(0, 6).map(el => ({
+                        text: clean(el.innerText || el.textContent || '').slice(0, 1200),
+                        aria: clean(el.getAttribute('aria-label')).slice(0, 180),
+                    }));
+                    const controls = [...document.querySelectorAll(
+                        'button,[role="button"],[role="option"],[role="radio"],'
+                        + '[role="listitem"],[role="gridcell"],a,[tabindex="0"]'
+                    )].filter(visible).slice(0, 120).map(el => {
+                        const r = el.getBoundingClientRect();
+                        return {
+                            tag: String(el.tagName || '').toLowerCase(),
+                            role: clean(el.getAttribute('role')).slice(0, 40),
+                            text: clean(
+                                (el.getAttribute('aria-label') || '') + ' ' +
+                                (el.getAttribute('title') || '') + ' ' +
+                                (el.innerText || el.textContent || '')
+                            ).slice(0, 300),
+                            disabled: Boolean(
+                                el.disabled
+                                || el.getAttribute('aria-disabled') === 'true'
+                            ),
+                            x: Math.round(r.x),
+                            y: Math.round(r.y),
+                            w: Math.round(r.width),
+                            h: Math.round(r.height),
+                        };
+                    });
+                    const body = clean(
+                        document.body ? document.body.innerText || '' : ''
+                    );
+                    return {
+                        ready_state: document.readyState || '',
+                        page_id_in_body: Boolean(pageId && body.includes(pageId)),
+                        body_length: body.length,
+                        inputs,
+                        dialogs,
+                        controls,
+                        url: String(location.href || '').slice(0, 700),
+                    };
+                }""",
+                page,
+            )
+            return state if isinstance(state, dict) else {"ready": False}
+        except Exception as exc:
+            return {
+                "ready": False,
+                "error": f"{exc.__class__.__name__}: {_clean(exc)}"[:500],
+            }
+
+    async def _click_unique_page_add_result(
+        self,
+        *,
+        page_id: str,
+    ) -> bool:
+        """Select one non-mutating Page search result inside the Page dialog.
+
+        This never clicks final Add/Confirm/Continue actions. It is only used
+        after the exact Page ID has already been filled into the Page picker.
+        """
+        if self.page is None:
+            return False
+        page = _digits(page_id)
+        if not page:
+            return False
+
+        marker = "data-remask-page-result"
+        try:
+            meta = await self.page.evaluate(
+                """(args) => {
+                    const [marker, pageId] = args;
+                    const visible = el => {
+                        if (!el) return false;
+                        const r = el.getBoundingClientRect();
+                        const st = getComputedStyle(el);
+                        return r.width > 0 && r.height > 0
+                            && st.display !== 'none'
+                            && st.visibility !== 'hidden'
+                            && st.pointerEvents !== 'none';
+                    };
+                    const clean = text => (text || '')
+                        .normalize('NFKC')
+                        .replace(/[\u200b\u200c\u200d\ufeff]/g, '')
+                        .replace(/\u00a0/g, ' ')
+                        .replace(/\s+/g, ' ')
+                        .trim()
+                        .toLowerCase();
+                    const pageWords = [
+                        'facebook page','page url','page id','existing page',
+                        'страниц','сторін','seite','facebook-seite',
+                        'page facebook','facebook-pagina'
+                    ];
+                    const blocked = [
+                        'add','add page','add facebook page','add a page',
+                        'confirm','continue','next','review','select',
+                        'request approval','cancel','close','done',
+                        'добавить','добавить страницу','подтвердить',
+                        'продолжить','далее','выбрать','отмена',
+                        'додати','додати сторінку','підтвердити',
+                        'продовжити','далі','вибрати','скасувати',
+                        'hinzufügen','seite hinzufügen','bestätigen',
+                        'weiter','fortfahren','auswählen','abbrechen',
+                        'ajouter','confirmer','continuer','suivant','annuler'
+                    ];
+                    const blockedSet = new Set(blocked.map(clean));
+                    const identity = el => clean(
+                        (el.getAttribute?.('aria-label') || '') + ' ' +
+                        (el.getAttribute?.('title') || '') + ' ' +
+                        (el.innerText || el.textContent || '')
+                    );
+                    const pageish = el => {
+                        const text = identity(el);
+                        return pageWords.some(word => text.includes(word))
+                            || text.includes(pageId);
+                    };
+
+                    document.querySelectorAll('[' + marker + ']')
+                        .forEach(el => el.removeAttribute(marker));
+
+                    const roots = [];
+                    const addRoot = root => {
+                        if (!root || !visible(root) || roots.includes(root)) return;
+                        if (pageish(root)) roots.push(root);
+                    };
+                    document.querySelectorAll(
+                        '[role="dialog"],[aria-modal="true"]'
+                    ).forEach(addRoot);
+
+                    const inputs = [...document.querySelectorAll(
+                        'input:not([type]),input[type="text"],input[type="search"]'
+                    )].filter(visible);
+                    for (const input of inputs) {
+                        const inputIdentity = clean(
+                            (input.getAttribute('aria-label') || '') + ' ' +
+                            (input.getAttribute('placeholder') || '') + ' ' +
+                            (input.getAttribute('name') || '') + ' ' +
+                            (input.getAttribute('id') || '')
+                        );
+                        if (
+                            clean(input.value) === pageId
+                            || pageWords.some(word => inputIdentity.includes(word))
+                        ) {
+                            let cur = input;
+                            for (
+                                let depth = 0;
+                                cur && depth < 10;
+                                depth++, cur = cur.parentElement
+                            ) addRoot(cur);
+                        }
+                    }
+
+                    const candidates = [];
+                    const seen = new Set();
+                    const push = el => {
+                        if (!el || seen.has(el) || !visible(el)) return;
+                        seen.add(el);
+                        if (
+                            el.disabled
+                            || el.getAttribute?.('aria-disabled') === 'true'
+                        ) return;
+                        if (el.closest('input,textarea,select')) return;
+                        const text = identity(el);
+                        if (!text || blockedSet.has(text)) return;
+                        const role = clean(el.getAttribute?.('role'));
+                        const structural = [
+                            'option','radio','listitem','gridcell'
+                        ].includes(role);
+                        const exactId = text.includes(pageId);
+                        const clickable = (
+                            structural
+                            || el.tagName === 'BUTTON'
+                            || role === 'button'
+                            || el.getAttribute?.('tabindex') === '0'
+                        );
+                        if (!clickable) return;
+                        const r = el.getBoundingClientRect();
+                        if (r.width < 80 || r.height < 24) return;
+                        candidates.push({
+                            el, text, role, exactId,
+                            x:r.x, y:r.y, w:r.width, h:r.height
+                        });
+                    };
+
+                    for (const root of roots) {
+                        root.querySelectorAll(
+                            '[role="option"],[role="radio"],[role="listitem"],'
+                            + '[role="gridcell"],button,[role="button"],[tabindex="0"]'
+                        ).forEach(push);
+                    }
+
+                    const exact = candidates.filter(row => row.exactId);
+                    const pool = exact.length === 1
+                        ? exact
+                        : candidates.filter(row =>
+                            ['option','radio','listitem','gridcell'].includes(row.role)
+                        );
+                    const chosen = pool.length === 1 ? pool[0] : null;
+                    if (!chosen) {
+                        return {
+                            selected:false,
+                            roots:roots.length,
+                            candidates:candidates.slice(0,12).map(row => ({
+                                text:row.text.slice(0,240),
+                                role:row.role,
+                                exact_id:row.exactId,
+                                x:Math.round(row.x),
+                                y:Math.round(row.y),
+                                w:Math.round(row.w),
+                                h:Math.round(row.h),
+                            }))
+                        };
+                    }
+                    chosen.el.setAttribute(marker, '1');
+                    return {
+                        selected:true,
+                        roots:roots.length,
+                        chosen:{
+                            text:chosen.text.slice(0,240),
+                            role:chosen.role,
+                            exact_id:chosen.exactId,
+                        }
+                    };
+                }""",
+                [marker, page],
+            )
+        except Exception:
+            meta = {"selected": False}
+
+        if not isinstance(meta, dict) or not meta.get("selected"):
+            return False
+
+        try:
+            item = self.page.locator(f'[{marker}="1"]').first
+            if await item.is_visible() and await item.is_enabled():
+                await item.click(timeout=2500)
+                return True
+        except Exception:
+            return False
+        finally:
+            try:
+                await self.page.evaluate(
+                    "(marker) => document.querySelectorAll('[' + marker + ']').forEach(el => el.removeAttribute(marker))",
+                    marker,
+                )
+            except Exception:
+                pass
+        return False
+
     async def _click_page_add_surface_action(
         self,
         names: tuple[str, ...],
