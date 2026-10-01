@@ -1029,6 +1029,24 @@ async def profile_live_inventory(
     current_fan_page_batch=await pool.provisioning_state.latest_profile_fan_page_batch(
         clean_profile
     )
+    # REMASK_PROFILE_CONTEXT_PAGE_BASELINE_V1
+    # The internal resolver already returns the profile's saved/current Page
+    # state (account fields + current MetaEndpoint cache). Keep it separate
+    # from old Workspace snapshots: it is profile-context state, not a previous
+    # sync result, and is a valid baseline until live enrichment supersedes it.
+    profile_context_pages=[
+        {
+            **row,
+            'source':str(
+                row.get('source')
+                or row.get('_source')
+                or 'profile_context_saved'
+            ).strip(),
+        }
+        for row in (context.pages or [])
+        if isinstance(row,dict)
+        and str(row.get('id') or row.get('page_id') or '').strip().isdigit()
+    ]
     latest_entities=await pool.provisioning_state.latest_profile_entities(
         clean_profile
     )
@@ -1101,7 +1119,7 @@ async def profile_live_inventory(
             or row.get('page_id')
             or ''
         ).strip()
-        for row in confirmed_fan_pages
+        for row in [*profile_context_pages,*confirmed_fan_pages]
         if isinstance(row,dict)
         and str(row.get('id') or row.get('page_id') or '').strip().isdigit()
     }
@@ -1141,6 +1159,51 @@ async def profile_live_inventory(
                     or 'python_worker_business_page_history'
                 ),
             }
+
+    # REMASK_PROFILE_CONTEXT_PAGE_HINTS_V1
+    # Resolver Page rows with an explicit business_id are stronger navigation
+    # hints than an old Workspace snapshot but weaker than current worker
+    # BUSINESS history. Never invent a BM relation for unscoped Page rows.
+    for row in profile_context_pages:
+        if not isinstance(row,dict):
+            continue
+        hinted_page_id=str(row.get('id') or row.get('page_id') or '').strip()
+        hinted_business_id=str(
+            row.get('business_id')
+            or (
+                row.get('business',{}).get('id')
+                if isinstance(row.get('business'),dict)
+                else ''
+            )
+            or ''
+        ).strip()
+        if not (
+            hinted_page_id.isdigit()
+            and hinted_business_id.isdigit()
+            and (
+                not requested_business_ids
+                or hinted_business_id in requested_business_ids
+            )
+        ):
+            continue
+
+        known_business_ids.add(hinted_business_id)
+        if hinted_business_id in seen_page_businesses:
+            continue
+
+        known_pages_by_business.setdefault(
+            hinted_business_id,{}
+        )[hinted_page_id]={
+            'id':hinted_page_id,
+            'page_id':hinted_page_id,
+            'name':str(
+                row.get('name')
+                or row.get('page_name')
+                or hinted_page_id
+            ).strip(),
+            'business_id':hinted_business_id,
+            'source':'profile_context_page_hint',
+        }
 
     # REMASK_PAGE_HINT_PRECEDENCE_V1
     # Workspace snapshots can predate Page-state cleanup and may contain
@@ -1949,18 +2012,32 @@ async def profile_live_inventory(
                 and str(row.get('source') or '')
                     != 'workspace_last_live_page_hint'
             ]
-            durable_pages=normalize_page_rows([
-                *(current_fan_page_batch or []),
-                *current_binding_pages,
-            ])
+            # Resolver Page state fills the exact gap seen on profile 7:
+            # those Pages can exist in the saved FB-profile context even when
+            # the worker has no historical FAN_PAGES SUCCESS row. Merge worker
+            # state on top so current explicit creation/BM bindings always win.
+            context_baseline_pages=normalize_page_rows(
+                profile_context_pages
+            )
+            durable_pages=merge_page_rows(
+                context_baseline_pages,
+                [
+                    *(current_fan_page_batch or []),
+                    *current_binding_pages,
+                ],
+            )
             if durable_pages:
                 pages=durable_pages
                 pages_ready=True
                 pages_source='python_worker_confirmed'
                 log.info(
-                    'live inventory profile=%s durable Fan Pages ready=True pages=%d',
+                    'live inventory profile=%s Page baseline ready=True pages=%d '
+                    'context_pages=%d worker_batch=%d bindings=%d',
                     clean_profile,
                     len(pages),
+                    len(context_baseline_pages),
+                    len(current_fan_page_batch or []),
+                    len(current_binding_pages),
                 )
 
             # REMASK_KNOWN_PAGE_FAST_REVALIDATION_V1
