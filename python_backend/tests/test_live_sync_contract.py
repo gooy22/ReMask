@@ -24,10 +24,15 @@ class LiveSyncContractTests(unittest.TestCase):
         )
 
     def test_page_inventory_does_not_block_live_bm_rk_sync(self):
+        # The Railway runtime image copies python_backend to /opt/remask-python
+        # but applies the PHP overlay separately during the Docker build. Check
+        # this source-level contract when running from the repository checkout;
+        # Docker itself separately executes/lints the overlay before this suite.
         root = Path(__file__).resolve().parents[2]
-        source = (root / "railway-workspace-sync-fix-overlay.php").read_text(
-            encoding="utf-8"
-        )
+        overlay = root / "railway-workspace-sync-fix-overlay.php"
+        if not overlay.exists():
+            self.skipTest("workspace sync overlay is not copied into python runtime image")
+        source = overlay.read_text(encoding="utf-8")
         self.assertIn("REMASK_STABLE_SYNC_BOUNDARY_V2", source)
         self.assertIn("$syncComplete = $liveReady;", source)
         self.assertIn("$snapshot['sync_partial'] = ($syncComplete && !$pagesReady);", source)
