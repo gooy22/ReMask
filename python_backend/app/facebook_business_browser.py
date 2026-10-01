@@ -4710,18 +4710,50 @@ class FacebookBusinessBrowser:
                 ):
                     return
 
+                # REMASK_KNOWN_PAGE_RESPONSE_SCOPE_V2
+                # Do not treat an arbitrary read-only GraphQL response as Page
+                # inventory merely because it happens to contain the numeric
+                # Page ID. Require a Page/asset/business-settings operation
+                # shape before exact-ID fallback is allowed.
+                page_inventory_operation = (
+                    (
+                        "page" in folded_friendly
+                        and any(
+                            marker in folded_friendly
+                            for marker in (
+                                "list",
+                                "manage",
+                                "admin",
+                                "owned",
+                                "assigned",
+                                "asset",
+                                "settings",
+                                "business",
+                                "scope",
+                            )
+                        )
+                    )
+                    or (
+                        "asset" in folded_friendly
+                        and any(
+                            marker in folded_friendly
+                            for marker in (
+                                "list",
+                                "business",
+                                "assigned",
+                                "owned",
+                                "settings",
+                            )
+                        )
+                    )
+                )
+
                 raw = await response.text()
                 if not raw:
                     return
 
                 before = set(confirmed)
-                for page_id in expected:
-                    if page_id in raw:
-                        confirm(
-                            page_id,
-                            source="business_settings_graphql_exact_id",
-                        )
-
+                parsed_page_ids: set[str] = set()
                 try:
                     payload = _decode_graphql_text(raw)
                     chunks = payload if isinstance(payload, list) else [payload]
@@ -4732,6 +4764,9 @@ class FacebookBusinessBrowser:
                             page_id = _digits(
                                 row.get("id") or row.get("page_id")
                             )
+                            if not page_id:
+                                continue
+                            parsed_page_ids.add(page_id)
                             if page_id in expected:
                                 confirm(
                                     page_id,
@@ -4744,9 +4779,19 @@ class FacebookBusinessBrowser:
                 except Exception:
                     pass
 
+                if page_inventory_operation:
+                    for page_id in expected:
+                        if page_id in raw and page_id not in parsed_page_ids:
+                            confirm(
+                                page_id,
+                                source="business_settings_graphql_exact_id",
+                            )
+
                 diagnostics.append({
                     "friendly_name": friendly[:180],
                     "doc_id": _clean(meta.get("doc_id"))[:80],
+                    "page_inventory_operation": page_inventory_operation,
+                    "parsed_page_ids": sorted(parsed_page_ids)[:24],
                     "new_page_ids": sorted(set(confirmed) - before),
                     "confirmed_page_ids": sorted(confirmed),
                 })
@@ -4812,20 +4857,47 @@ class FacebookBusinessBrowser:
             })
 
             while time.monotonic() < deadline and set(confirmed) != set(expected):
-                try:
-                    content = await self.page.content()
-                except Exception:
-                    content = ""
+                # REMASK_KNOWN_PAGE_VISIBLE_DOM_PROOF_V2
+                # Never use full page.content() as Page proof: Business Suite
+                # embeds IDs in scripts/caches that may describe stale or
+                # unrelated assets. Accept only visible body text or visible
+                # Page-surface links/controls carrying the exact Page ID.
                 try:
                     body = await self._body_text()
                 except Exception:
                     body = ""
-                combined = content + "\n" + body
+                visible_evidence: list[str] = []
+                try:
+                    visible_evidence = await self.page.locator(
+                        'a[href],button,[role="button"],[role="row"],'
+                        '[role="listitem"],[role="option"],[aria-label]'
+                    ).evaluate_all(
+                        """els => els.slice(0,700).map(el => {
+                            const r=el.getBoundingClientRect();
+                            const st=getComputedStyle(el);
+                            if (!(r.width>0&&r.height>0)
+                                || st.display==='none'
+                                || st.visibility==='hidden') return '';
+                            return [
+                                el.getAttribute('href')||'',
+                                el.getAttribute('aria-label')||'',
+                                el.getAttribute('title')||'',
+                                el.innerText||el.textContent||''
+                            ].join(' ').replace(/\\s+/g,' ').trim().slice(0,900);
+                        }).filter(Boolean)"""
+                    )
+                except Exception:
+                    visible_evidence = []
+
+                visible_blob = body + "\n" + "\n".join(
+                    str(value or "")
+                    for value in visible_evidence
+                )
                 for page_id in expected:
-                    if page_id in combined:
+                    if page_id in visible_blob:
                         confirm(
                             page_id,
-                            source="business_settings_dom_exact_id",
+                            source="business_settings_visible_dom_exact_id",
                         )
                 if set(confirmed) == set(expected):
                     break
