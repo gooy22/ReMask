@@ -124,6 +124,11 @@ class LiveSyncContractTests(unittest.TestCase):
             "durable_pages=merge_page_rows(",
             source,
         )
+        self.assertIn("'profile_context_page_hint',", source)
+        self.assertIn(
+            "str(row.get('source') or '') not in {",
+            source,
+        )
         self.assertIn("REMASK_LATEST_PAGE_BINDING_PER_BUSINESS_V1", source)
         self.assertIn("current_binding_pages=[", source)
         self.assertIn("workspace_last_live_page_hint", source)
@@ -170,6 +175,16 @@ class LiveSyncContractTests(unittest.TestCase):
         self.assertIn("REMASK_RK_TIMEOUT_IS_ROW_FAILURE_V1", source)
         self.assertIn("invalidating browser session", source)
 
+
+    def test_profile_context_page_sources_are_distinguished(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        bridge = root / "railway-python-worker-bridge-overlay.php"
+        if not bridge.exists():
+            self.skipTest("profile resolver overlay is not copied into python runtime image")
+        source = bridge.read_text(encoding="utf-8")
+        self.assertIn("'profile_saved'", source)
+        self.assertIn("'source' => 'profile_cache'", source)
+        self.assertIn("'pages' => rmx_py_profile_pages($account, $profile)", source)
 
     def test_browser_open_cancellation_releases_owned_resources(self) -> None:
         source=inspect.getsource(FacebookBusinessBrowser.open)
