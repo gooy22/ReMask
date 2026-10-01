@@ -1805,7 +1805,7 @@ async def profile_live_inventory(
                 # query when the durable registry is empty/stale. Keep this
                 # bounded, but give the self-heal path enough time to finish
                 # before falling back to the much heavier browser surface.
-                private_pages_timeout=budget(10.0)
+                private_pages_timeout=budget(14.0)
                 facebook_web=await profile_session.facebook_web()
                 private_page_result=await hard_deadline(
                     list_pages_via_private_graphql(facebook_web),
@@ -1850,7 +1850,7 @@ async def profile_live_inventory(
 
             if not pages_ready:
                 try:
-                    page_inventory_timeout=budget(11.0)
+                    page_inventory_timeout=budget(14.0)
                     discovered_pages=await hard_deadline(
                         browser.discover_managed_pages(fast=True),
                         page_inventory_timeout,
@@ -1861,6 +1861,20 @@ async def profile_live_inventory(
                 except asyncio.TimeoutError:
                     pages_source='facebook_business_browser_timeout'
                     warnings.append('Fan Page inventory timed out')
+                    log.warning(
+                        'live inventory profile=%s browser Page inventory timed '
+                        'out diagnostic=%s',
+                        clean_profile,
+                        json.dumps(
+                            getattr(
+                                browser,
+                                '_last_page_inventory_diagnostic',
+                                {},
+                            ),
+                            ensure_ascii=False,
+                            separators=(',', ':'),
+                        )[:7000],
+                    )
                     try:
                         await browser.close()
                     except Exception:
