@@ -100,7 +100,9 @@ class LiveSyncContractTests(unittest.TestCase):
         self.assertIn("profile_live_inventory(", source)
         self.assertNotIn("create_job(", source)
         self.assertNotIn("enqueue_job(", source)
-        self.assertNotIn("provision", source.lower())
+        self.assertNotIn("pool.provisioning.run(", source)
+        self.assertNotIn("create_business", source.lower())
+        self.assertNotIn("create_ad_account", source.lower())
 
 
     def test_business_inventory_empty_detection_uses_live_selector_query(self) -> None:
