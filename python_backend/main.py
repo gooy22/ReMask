@@ -2009,8 +2009,10 @@ async def profile_live_inventory(
                 for rows_by_id in known_pages_by_business.values()
                 for row in rows_by_id.values()
                 if isinstance(row,dict)
-                and str(row.get('source') or '')
-                    != 'workspace_last_live_page_hint'
+                and str(row.get('source') or '') not in {
+                    'workspace_last_live_page_hint',
+                    'profile_context_page_hint',
+                }
             ]
             # Resolver Page state fills the exact gap seen on profile 7:
             # those Pages can exist in the saved FB-profile context even when
