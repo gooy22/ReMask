@@ -263,6 +263,50 @@ def _errors(payload: dict[str, Any]) -> list[Any]:
     return []
 
 
+def business_page_relation_proven(payload: Any, business_id: str, page_id: str, *, request_scoped: bool = False) -> bool:
+    """Confirm an exact asset relationship; unrelated Page occurrences fail."""
+    business, page = str(business_id), str(page_id)
+    connections = {"owned_pages", "client_pages", "business_assets", "page_assets", "bizkit_business_assets"}
+    def walk(value: Any, business_scoped: bool = False) -> bool:
+        if isinstance(value, list):
+            return any(walk(child, business_scoped) for child in value)
+        if not isinstance(value, dict):
+            return False
+        object_id = str(value.get("id") or "")
+        if object_id and object_id != business and (
+            "business" in str(value.get("__typename") or "").lower()
+            or any(key in value for key in connections | {"primary_page"})):
+            return False
+        local = business_scoped or (str(value.get("id") or "") == business and (
+            "business" in str(value.get("__typename") or "").lower()
+            or any(key in value for key in connections | {"primary_page"})))
+        if local and isinstance(value.get("primary_page"), dict) and str(value["primary_page"].get("id")) == page:
+            return True
+        for key, child in value.items():
+            if key in connections and (local or request_scoped):
+                for row in _iter_connection_rows(child):
+                    asset = row.get("asset") if isinstance(row.get("asset"), dict) else row
+                    typename = str(asset.get("__typename") or asset.get("asset_type") or asset.get("type") or "").lower()
+                    if str(asset.get("id") or asset.get("page_id") or "") == page and (key in {"owned_pages", "client_pages", "page_assets"} or "page" in typename):
+                        return True
+            if walk(child, local):
+                return True
+        return False
+    return walk(payload)
+
+
+def browser_business_page_relation_proven(document: str, business_id: str, page_id: str) -> bool:
+    for text in _browser_source_variants(document):
+        for match in re.finditer(r'<script\b[^>]*>(.*?)</script\s*>', text, re.I | re.S):
+            try:
+                payload = json.loads(match.group(1).strip())
+            except ValueError:
+                continue
+            if business_page_relation_proven(payload, business_id, page_id):
+                return True
+    return False
+
+
 def _diagnostic_text(payload: dict[str, Any]) -> str:
     values: list[str] = []
 

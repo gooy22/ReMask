@@ -17825,7 +17825,7 @@ timeout_seconds=4.0,
         # The current Find Page wizard accepts Page name or URL. A numeric
         # string is treated as a name and can yield no result for a real Page.
         if str(value).isdigit():
-            value = f"https://www.facebook.com/profile.php?id={value}"
+            value = f"https://www.facebook.com/{value}"
 
         deadline = time.monotonic() + max(0.5, float(wait_seconds))
         marker = "data-remask-page-add-input"
@@ -19223,6 +19223,7 @@ timeout_seconds=4.0,
         GraphQL traffic on the exact Business Pages route and use DOM as a
         second independent proof.
         """
+        from .facebook_page_discovery import business_page_relation_proven, browser_business_page_relation_proven
         business = _digits(business_id)
         page = _digits(page_id)
         if not business or not page:
@@ -19280,8 +19281,8 @@ timeout_seconds=4.0,
                     return
 
                 raw = await response.text()
-                decoded = unquote_plus(raw)
-                page_present = page in decoded
+                page_present = business_page_relation_proven(_decode_graphql_text(raw), business, page,
+                    request_scoped=business in request_business_ids)
                 diagnostics.append({
                     "friendly_name": friendly[:180],
                     "doc_id": _clean(meta.get("doc_id"))[:80],
@@ -19340,11 +19341,7 @@ timeout_seconds=4.0,
                     content = await self.page.content()
                 except Exception:
                     content = ""
-                if page in content:
-                    return True
-
-                body = await self._body_text()
-                if page in body:
+                if browser_business_page_relation_proven(content, business, page):
                     return True
 
                 try:

@@ -146,6 +146,39 @@ async def business_handler(
             ProvisioningStep.BUSINESS,
         )
     checkpoint = _checkpoint_result(step_state)
+    browser = None
+
+    async def get_browser():
+        nonlocal browser
+        if browser is None:
+            browser = await session.facebook_business_browser()
+        return browser
+
+    # Legacy Your-Pages parsing stored the profile-plus wrapper as Page ID.
+    # Resolve only an explicit live delegate relation; preserve the existing
+    # BM and phase, including an uncertain attach that must not be resubmitted.
+    original_page_id = page_id
+    candidates = [row for row in (getattr(context, "pages", None) or [])
+                  if isinstance(row, dict) and row.get("ownership_verified") is True]
+    legacy_confirmed_bm = _clean(checkpoint.get("business_id") or checkpoint.get("create_response_business_id")).isdigit()
+    if legacy_confirmed_bm and not any(page_id in {_clean(row.get("profile_id")), _clean(row.get("id"))} for row in candidates):
+        try:
+            discover = getattr(await get_browser(), "discover_managed_pages", None)
+            if callable(discover):
+                candidates = await discover(fast=True)
+        except BrowserBusinessError:
+            pass
+    delegate = next((row for row in candidates if isinstance(row, dict)
+                     and row.get("ownership_verified") is True
+                     and _clean(row.get("profile_id")) == original_page_id
+                     and _clean(row.get("id")).isdigit()), None)
+    if delegate:
+        page_id = _clean(delegate["id"])
+        saved_page = _clean(checkpoint.get("primary_page_id") or checkpoint.get("page_id"))
+        if saved_page == original_page_id:
+            checkpoint = await provisioning_state.checkpoint(item_id, profile_id, scope_key, ProvisioningStep.BUSINESS,
+                {"primary_page_id": page_id, "selected_page_profile_id": original_page_id,
+                 "page_identity_source": delegate.get("ownership_source")})
     prior_error_code = _clean(
         step_state.get("error_code")
         if isinstance(step_state, dict)
@@ -390,14 +423,6 @@ async def business_handler(
         phase = "CREATE_NOT_SUBMITTED"
     if page_known_not_sent:
         phase = "CREATE_CONFIRMED"
-
-    browser = None
-
-    async def get_browser():
-        nonlocal browser
-        if browser is None:
-            browser = await session.facebook_business_browser()
-        return browser
 
     try:
         # If Meta already returned an exact CREATE response ID before a worker

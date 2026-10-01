@@ -401,9 +401,12 @@ async def run_targeted_pages_readonly_canary(profile_id: str) -> None:
             target_page = target_page_override or str(os.getenv('REMASK_PAGE_ATTACH_CANARY_PAGE') or '').strip()
             if target_business.isdigit() and target_page.isdigit():
                 blocked_requests = []
+                page_queries = []
                 async def readonly_route(route, request):
                     summary = FacebookBusinessBrowser._safe_graphql_request_summary(request)
                     friendly = str(summary.get('friendly_name') or '').lower()
+                    if 'graphql' in str(summary.get('url') or '') and 'page' in friendly and 'mutation' not in friendly and len(page_queries)<25:
+                        page_queries.append({key:summary.get(key) for key in ('friendly_name','doc_id','variable_keys')})
                     harmless_session = friendly in {'useusersessiondatamutation', 'pagecontenttabupdatebizkitwaitliststatusmutation'}
                     asset_submit = FacebookBusinessBrowser._request_matches_page_add(request, business_id=target_business, page_id=target_page)
                     if str(request.method).upper() == 'POST' and (asset_submit or ('mutation' in friendly and not harmless_session)):
@@ -416,6 +419,7 @@ async def run_targeted_pages_readonly_canary(profile_id: str) -> None:
                 try:
                     result = await asyncio.wait_for(browser.preflight_page_add_form(business_id=target_business, page_id=target_page, advance_review=True), timeout=70)
                     result['blocked_mutations'] = blocked_requests[:8]
+                    result['page_query_requests'] = page_queries
                     surface = result.pop('page_surface', {})
                     result['page_surface'] = {key: surface.get(key) for key in ('ready_state','page_id_in_body','inputs','dialogs')}
                     result['controls'] = [{key: control.get(key) for key in ('text','disabled')} for control in surface.get('controls', []) if control.get('role') == 'button' or control.get('tag') == 'button'][-25:]
@@ -424,6 +428,60 @@ async def run_targeted_pages_readonly_canary(profile_id: str) -> None:
                     log.warning('targeted Page attach readonly canary profile=%s error=%s blocked_mutations=%s', profile_id, str(exc)[:1200], json.dumps(blocked_requests[:8], separators=(',', ':')))
                 finally:
                     await browser.page.unroute('**/*', readonly_route)
+
+
+async def run_existing_business_repair_once(profile_id: str) -> None:
+    """Opt-in Retry of one saved Add-BM failure, through the existing queue."""
+    target = str(os.getenv('REMASK_PAGE_ATTACH_CANARY_BUSINESS') or '').strip()
+    if not target.isdigit():
+        return
+    def read_candidates():
+        output = []
+        with store._connect() as con:
+            rows = con.execute("""SELECT p.item_id,p.result_json,p.error_code,i.job_id,i.status
+                FROM provisioning_steps p JOIN job_items i ON i.id=p.item_id
+                WHERE p.profile_id=? AND p.step='BUSINESS'
+                ORDER BY p.updated_at DESC LIMIT 100""", (profile_id,)).fetchall()
+            for row in rows:
+                try:
+                    result = json.loads(row['result_json'] or '{}')
+                except ValueError:
+                    continue
+                if str(result.get('business_id') or result.get('create_response_business_id') or '') == target:
+                    output.append({'item_id':row['item_id'],'job_id':row['job_id'],'status':row['status'],
+                        'error_code':row['error_code'],'phase':result.get('phase'),
+                        'primary_page_id':result.get('primary_page_id'),'business_id':target})
+        return output
+    candidates = await asyncio.to_thread(read_candidates)
+    log.warning('existing BM repair saved candidates profile=%s rows=%s', profile_id, json.dumps(candidates[:8],separators=(',',':')))
+    if os.getenv('REMASK_EXISTING_BM_REPAIR') != '1':
+        return
+    selected = next((row for row in candidates if row['status']=='FAILED'
+        and row['error_code']=='PAGE_ADD_UI_CHANGED'
+        and row['phase'] in {'CREATE_CONFIRMED','PAGE_ADD','PAGE_ADD_NOT_SUBMITTED'}), None)
+    if not selected:
+        log.warning('existing BM repair skipped: no confirmed BM with an unsent Page-add failure')
+        return
+    view = await store.job_view(selected['job_id'])
+    items = (view or {}).get('items') or []
+    if any(row['id'] != selected['item_id'] and row['status'] != 'SUCCESS' for row in items):
+        log.warning('existing BM repair skipped: Job contains other unfinished items')
+        return
+    item = next((row for row in items if row['id']==selected['item_id']), {})
+    unfinished = [task for task in item.get('tasks',[]) if task['status']!='SUCCESS']
+    if len(unfinished)!=1 or unfinished[0].get('action')!='provisioning':
+        log.warning('existing BM repair skipped: task layout does not match one saved BUSINESS failure')
+        return
+    steps = unfinished[0].get('payload',{}).get('steps',[])
+    if steps not in (['BUSINESS'], ['PROXY_CHECK','BUSINESS']):
+        log.warning('existing BM repair skipped: saved task contains other creation steps')
+        return
+    count = await store.retry_failed(selected['job_id'])
+    if count == 1:
+        await pool.enqueue_job(selected['job_id'])
+        log.warning('existing BM repair queued exact saved item=%s business=%s; no new Job/CREATE', selected['item_id'],target)
+        if mirror.enabled:
+            await mirror.save_job(await store.job_view(selected['job_id']))
 
 
 async def run_live_inventory_readonly_canary() -> None:
@@ -444,6 +502,7 @@ async def run_live_inventory_readonly_canary() -> None:
     if os.getenv('REMASK_PAGE_ONLY_CANARY') == '1':
         try:
             await run_targeted_pages_readonly_canary(profile_id)
+            await run_existing_business_repair_once(profile_id)
         except Exception as exc:
             log.warning('targeted Pages readonly canary profile=%s failure=%s', profile_id, str(exc)[:1200])
         return
@@ -898,6 +957,7 @@ async def profile_preflight(profile_id: str):
                             'is_owned':row.get('is_owned'),
                         'ownership_verified':row.get('ownership_verified'),
                         'ownership_source':row.get('ownership_source'),
+                        'profile_id':row.get('profile_id'),
                         }
                         for row in discovered_pages
                         if isinstance(row,dict)

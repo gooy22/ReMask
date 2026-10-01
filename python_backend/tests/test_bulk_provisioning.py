@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, patch
 from app.models import CreateJobRequest
 from app.store import JobStore
 from app.session import MetaSession
-from app.facebook_page_discovery import _extract_known_page_lists, _extract_pages_from_browser_document
+from app.facebook_page_discovery import _extract_known_page_lists, _extract_pages_from_browser_document, business_page_relation_proven, browser_business_page_relation_proven
 from app.facebook_business_create import _attach_response_confirms_page
 from app.facebook_business_browser import FacebookBusinessBrowser, BrowserBusinessError
 from app.provisioning.auto_plan import expand_auto_profiles
@@ -26,6 +26,16 @@ def request(count=2, **payload):
 
 
 class PageIdentityTests(unittest.TestCase):
+    def test_attach_verification_rejects_global_page_and_other_business(self):
+        page={'__typename':'Page','id':'222222222','name':'Mine'}
+        global_payload={'viewer':{'pages_you_manage':{'nodes':[page]}}, 'business':{'id':'999999999','owned_pages':{'nodes':[page]}}}
+        self.assertFalse(business_page_relation_proven(global_payload,'111111111','222222222'))
+        self.assertFalse(business_page_relation_proven(global_payload,'111111111','222222222',request_scoped=True))
+        self.assertFalse(browser_business_page_relation_proven('<script>'+json.dumps(global_payload)+'</script>','111111111','222222222'))
+        self.assertFalse(browser_business_page_relation_proven('<div>222222222</div>','111111111','222222222'))
+        self.assertTrue(business_page_relation_proven({'business':{'id':'111111111','owned_pages':{'nodes':[page]}}},'111111111','222222222'))
+        self.assertTrue(business_page_relation_proven({'business_assets':{'nodes':[{'asset':page}]}},'111111111','222222222',request_scoped=True))
+
     def test_profile_plus_uses_delegate_page_identity(self):
         payload={'viewer':{'actor':{'additional_profiles_with_biz_tools':{'edges':[
             {'node':{'__typename':'User','id':'61594993341059','name':'Media Shopsw',
@@ -198,6 +208,19 @@ class BulkPersistenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['business_id'],'111111111'); self.assertEqual(result['phase'],'PAGE_CONFIRMED')
         create.assert_not_awaited(); browser.add_existing_page.assert_not_awaited(); submit.assert_awaited_once()
 
+    async def test_existing_business_legacy_profile_id_resolves_without_recreate(self):
+        session,browser,kwargs=await self.prepare_resume()
+        await self.state.checkpoint('item','7','scope',ProvisioningStep.BUSINESS,{'primary_page_id':'61594993341059'})
+        session.context.pages=[{'id':'1289628847574478','profile_id':'61594993341059',
+            'name':'Media Shopsw','ownership_verified':True,'ownership_source':'additional_profiles_with_biz_tools.delegate_page'}]
+        with patch('app.provisioning.business_handler.set_business_primary_page',new=AsyncMock()) as submit,patch('app.provisioning.business_handler.create_business_resilient',new=AsyncMock()) as create:
+            result=await business_handler(session,{'name':'Existing','user_email':'owner@example.com','page_id':'61594993341059'},{},**kwargs)
+        self.assertEqual(result['primary_page_id'],'1289628847574478')
+        self.assertEqual(submit.call_args.kwargs['page_id'],'1289628847574478')
+        saved=(await self.state.step('item',ProvisioningStep.BUSINESS))['result']
+        self.assertEqual(saved['business_id'],'111111111'); self.assertEqual(saved['selected_page_profile_id'],'61594993341059')
+        create.assert_not_awaited()
+
     async def test_lost_attach_response_blocks_duplicate_on_retry(self):
         session,browser,kwargs=await self.prepare_resume()
         async def lost(*args,**kw): await kw['before_submit'](); raise TimeoutError('lost response')
@@ -214,7 +237,7 @@ class PageHydrationTests(unittest.IsolatedAsyncioTestCase):
         browser.page=SimpleNamespace()
         browser._fill_first=AsyncMock(return_value=True)
         self.assertTrue(await browser._fill_page_add_identifier(labels=('Facebook Page name or URL',),value='222222222'))
-        self.assertEqual(browser._fill_first.call_args.kwargs['value'],'https://www.facebook.com/profile.php?id=222222222')
+        self.assertEqual(browser._fill_first.call_args.kwargs['value'],'https://www.facebook.com/222222222')
 
     async def test_late_add_action_uses_one_navigation(self):
         browser=FacebookBusinessBrowser(SimpleNamespace(profile_id='7')); browser.page=SimpleNamespace(wait_for_timeout=AsyncMock()); browser._goto=AsyncMock(); browser._click_named=AsyncMock(side_effect=[False,False,True])
