@@ -166,8 +166,7 @@ class LiveSyncContractTests(unittest.TestCase):
         # Account-level Your-Pages discovery is bounded and runs in an
         # isolated authenticated tab so the primary Ads Manager tab is never
         # navigated cross-domain.
-        self.assertIn("REMASK_ISOLATED_PAGE_INVENTORY_SYNC_V1", source)
-        self.assertIn("REMASK_PAGE_LIVE_RELAY_DISCOVERY_V1", source)
+        self.assertIn("REMASK_ISOLATED_PAGE_PRIMARY_V2", source)
         self.assertIn("discover_managed_pages_isolated(fast=True)", source)
         self.assertNotIn("REMASK_ENABLE_GLOBAL_PAGE_DISCOVERY", source)
         self.assertNotIn("discover_managed_pages(fast=False)", source)
@@ -207,7 +206,7 @@ class LiveSyncContractTests(unittest.TestCase):
         )
         goto_source=inspect.getsource(FacebookBusinessBrowser._goto)
 
-        self.assertIn("REMASK_ISOLATED_PAGE_INVENTORY_SYNC_V1", source)
+        self.assertIn("REMASK_ISOLATED_PAGE_PRIMARY_V2", source)
         self.assertIn("discover_managed_pages_isolated(fast=True)", source)
         self.assertNotIn("REMASK_ENABLE_GLOBAL_PAGE_DISCOVERY", source)
 
@@ -261,11 +260,12 @@ class LiveSyncContractTests(unittest.TestCase):
         self.assertIn("fast_pages_timeout=optional_page_budget(5.5)", page_phase)
         self.assertIn("ads_pages_timeout=optional_page_budget(4.0)", page_phase)
         self.assertIn("private_pages_timeout=optional_page_budget(3.5)", page_phase)
-        self.assertIn("isolated_pages_timeout=optional_page_budget(6.5)", page_phase)
+        self.assertIn("isolated_pages_timeout=optional_page_budget(10.0)", page_phase)
+        self.assertIn("if isolated_pages_timeout < 9.25:", page_phase)
         self.assertNotIn("=budget(5.5)", page_phase)
         self.assertNotIn("=budget(4.0)", page_phase)
         self.assertNotIn("=budget(3.5)", page_phase)
-        self.assertNotIn("=budget(6.5)", page_phase)
+        self.assertNotIn("=budget(10.0)", page_phase)
         self.assertNotIn("except HTTPException:\n                    raise", page_phase)
 
     def test_browser_open_cancellation_releases_owned_resources(self) -> None:
