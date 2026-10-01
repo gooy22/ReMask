@@ -399,7 +399,8 @@ class JobStore:
                        OR error_code IN (
                          'CHECKPOINT_REQUIRED',
                          'SESSION_EXPIRED',
-                         'TWO_FACTOR_REQUIRED'
+                         'TWO_FACTOR_REQUIRED',
+                         'PAGE_ADD_UI_CHANGED'
                        )
                      )""",
                 (job_id,),
@@ -419,7 +420,8 @@ class JobStore:
                            OR error_code IN (
                              'CHECKPOINT_REQUIRED',
                              'SESSION_EXPIRED',
-                             'TWO_FACTOR_REQUIRED'
+                             'TWO_FACTOR_REQUIRED',
+                             'PAGE_ADD_UI_CHANGED'
                            )
                          )""",
                     (now,item_id),
