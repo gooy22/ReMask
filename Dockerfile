@@ -349,7 +349,8 @@ RUN set -eux; \
     grep -q 'REMASK_SYNC_PRIVATE_LIST_PAGES_FIRST_V1' /opt/remask-python/main.py; \
     grep -q 'list_pages_via_private_graphql' /opt/remask-python/main.py; \
     grep -q 'discover_managed_pages_isolated(fast=True)' /opt/remask-python/main.py; \
-    grep -q 'REMASK_ISOLATED_PAGE_INVENTORY_SYNC_V1' /opt/remask-python/main.py; \
+    grep -q 'REMASK_ISOLATED_PAGE_PRIMARY_V2' /opt/remask-python/main.py; \
+    /opt/remask-venv/bin/python -c "from pathlib import Path; s=Path('/opt/remask-python/main.py').read_text(encoding='utf-8'); assert s.count('discover_managed_pages_isolated(fast=True)') == 1, 'isolated Page probe must appear exactly once in live sync'; assert s.index('REMASK_ISOLATED_PAGE_PRIMARY_V2') < s.index('REMASK_KNOWN_PAGE_FAST_REVALIDATION_V1'), 'isolated Page probe must run before lower-confidence fallbacks'"; \
     grep -q 'REMASK_ISOLATED_PAGE_INVENTORY_V1' /opt/remask-python/app/facebook_business_browser.py; \
     grep -q 'REMASK_PAGE_LIVE_RELAY_DISCOVERY_V1' /opt/remask-python/app/facebook_business_browser.py; \
     ! grep -q 'skipped_for_business_scoped_sync' /opt/remask-python/main.py; \
