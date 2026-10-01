@@ -1350,15 +1350,11 @@ $syncProfileReplacement = <<<'PHP'
             $knownAdAccountHints[$businessId][$accountId] = true;
         }
 
-        // If the previous Page row predates business_id tagging and the
-        // profile has exactly one known BM, use that BM only as a navigation
-        // hint. The worker still has to prove the Page live.
-        if ($unscopedPageHints !== [] && count($knownBusinessIds) === 1) {
-            $onlyBusinessId = (string)array_key_first($knownBusinessIds);
-            foreach (array_keys($unscopedPageHints) as $pageId) {
-                $knownPageHints[$onlyBusinessId][$pageId] = true;
-            }
-        }
+        // REMASK_NO_UNSCOPED_PAGE_TO_BM_INFERENCE_V1
+        // Never assign every unscoped preserved Page to the only known BM.
+        // Old profile snapshots may contain historical standalone Pages; doing
+        // so manufactured multiple fake BM->Page hints (profile 7 reached four).
+        // Only rows with an explicit business_id become live revalidation hints.
 
         // REMASK_REQUESTED_BUSINESS_SYNC_SCOPE_V1
         // Workspace sends business_id when the user synchronizes one BM row.

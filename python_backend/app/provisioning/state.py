@@ -675,6 +675,103 @@ class ProvisioningStateStore:
 
         return pages
 
+    async def latest_profile_fan_page_batch(
+        self,
+        profile_id: str,
+    ) -> list[dict[str, Any]]:
+        """Return only the newest successful FAN_PAGES result batch.
+
+        REMASK_CURRENT_FAN_PAGE_BATCH_V1
+        Full FAN_PAGES history is useful for duplicate-create protection, but
+        it is not current profile inventory. Workspace fallback must never
+        render every Page ever created by old jobs as if all were current.
+        """
+        return await asyncio.to_thread(
+            self._latest_profile_fan_page_batch_sync,
+            profile_id,
+        )
+
+    def _latest_profile_fan_page_batch_sync(
+        self,
+        profile_id: str,
+    ) -> list[dict[str, Any]]:
+        profile = str(profile_id or "").strip()
+        if not profile:
+            return []
+
+        with self._connect() as con:
+            rows = con.execute(
+                """
+                SELECT item_id,scope_key,result_json,updated_at
+                FROM provisioning_steps
+                WHERE profile_id=?
+                  AND step=?
+                  AND status='SUCCESS'
+                  AND result_json IS NOT NULL
+                ORDER BY updated_at DESC
+                LIMIT 250
+                """,
+                (profile, ProvisioningStep.FAN_PAGES.value),
+            ).fetchall()
+
+        for row in rows:
+            try:
+                result = json.loads(str(row["result_json"] or "{}"))
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if not isinstance(result, dict):
+                continue
+            result_pages = result.get("pages")
+            if not isinstance(result_pages, list) or not result_pages:
+                continue
+
+            pages: list[dict[str, Any]] = []
+            seen: set[str] = set()
+            for page in result_pages:
+                if not isinstance(page, dict):
+                    continue
+                page_id = str(
+                    page.get("id") or page.get("page_id") or ""
+                ).strip()
+                if not page_id.isdigit() or page_id in seen:
+                    continue
+                seen.add(page_id)
+                pages.append(
+                    {
+                        "id": page_id,
+                        "page_id": page_id,
+                        "name": str(page.get("name") or page_id).strip(),
+                        "category": str(
+                            page.get("category")
+                            or result.get("category")
+                            or ""
+                        ).strip(),
+                        "reused": bool(page.get("reused")),
+                        "business_id": str(
+                            page.get("business_id")
+                            or result.get("business_id")
+                            or ""
+                        ).strip(),
+                        "ad_account_id": str(
+                            page.get("ad_account_id")
+                            or result.get("ad_account_id")
+                            or ""
+                        ).strip(),
+                        "attached": bool(
+                            page.get("attached")
+                            or result.get("attached")
+                        ),
+                        "source": "python_worker_latest_batch",
+                        "item_id": str(row["item_id"] or ""),
+                        "scope_key": str(row["scope_key"] or ""),
+                        "updated_at": int(row["updated_at"] or 0),
+                    }
+                )
+            if pages:
+                return pages
+
+        return []
+
     async def confirmed_business_page_bindings_for_profile(
         self,
         profile_id: str,

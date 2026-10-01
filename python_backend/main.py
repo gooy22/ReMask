@@ -1026,6 +1026,9 @@ async def profile_live_inventory(
     confirmed_fan_pages=await pool.provisioning_state.latest_profile_fan_pages(
         clean_profile
     )
+    current_fan_page_batch=await pool.provisioning_state.latest_profile_fan_page_batch(
+        clean_profile
+    )
     latest_entities=await pool.provisioning_state.latest_profile_entities(
         clean_profile
     )
@@ -1103,6 +1106,11 @@ async def profile_live_inventory(
         and str(row.get('id') or row.get('page_id') or '').strip().isdigit()
     }
 
+    # REMASK_LATEST_PAGE_BINDING_PER_BUSINESS_V1
+    # BUSINESS history can contain several old primary_page_id values for the
+    # same BM after retries/migrations. Rows are newest-first, so keep only the
+    # newest confirmed Page relation per Business for live revalidation.
+    seen_page_businesses:set[str]=set()
     for row in confirmed_page_bindings:
         if not isinstance(row,dict):
             continue
@@ -1111,11 +1119,13 @@ async def profile_live_inventory(
         if (
             hinted_business_id.isdigit()
             and hinted_page_id.isdigit()
+            and hinted_business_id not in seen_page_businesses
             and (
                 not requested_business_ids
                 or hinted_business_id in requested_business_ids
             )
         ):
+            seen_page_businesses.add(hinted_business_id)
             known_pages_by_business.setdefault(
                 hinted_business_id,{}
             )[hinted_page_id]={
@@ -1911,9 +1921,11 @@ async def profile_live_inventory(
                     merged[page_id]=current
                 return normalize_page_rows(merged.values())
 
-            # Durable Page creation results are immediately usable and do not
-            # depend on account-level Page list propagation.
-            durable_pages=normalize_page_rows(confirmed_fan_pages)
+            # REMASK_CURRENT_FAN_PAGE_BATCH_V1
+            # Full worker history is duplicate-create evidence, not current
+            # inventory. Only the newest successful FAN_PAGES batch is a
+            # durable profile-state fallback; live Page enrichment may add to it.
+            durable_pages=normalize_page_rows(current_fan_page_batch)
             if durable_pages:
                 pages=durable_pages
                 pages_ready=True
