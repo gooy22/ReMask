@@ -18793,17 +18793,9 @@ timeout_seconds=4.0,
                         business_id=business,
                         page_id=page,
                     ):
-                        if before_submit is not None:
-                            await before_submit(
-                                {
-                                    "phase": "PAGE_ADD_SUBMITTED",
-                                    "activity": "PAGE_ADD_VERIFIED_AFTER_SELECTION",
-                                    "activity_at": int(time.time()),
-                                    "business_id": business,
-                                    "primary_page_id": page,
-                                    "selection_direct_submit": True,
-                                }
-                            )
+                        # Live verification is stronger than an inferred
+                        # submit checkpoint. The caller will persist
+                        # PAGE_CONFIRMED immediately after this return.
                         return BrowserPageResult(
                             business_id=business,
                             page_id=page,
