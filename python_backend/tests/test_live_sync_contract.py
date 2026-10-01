@@ -186,6 +186,29 @@ class LiveSyncContractTests(unittest.TestCase):
         self.assertIn("'source' => 'profile_cache'", source)
         self.assertIn("'pages' => rmx_py_profile_pages($account, $profile)", source)
 
+    def test_page_sync_uses_isolated_authenticated_tab(self) -> None:
+        source=inspect.getsource(api.profile_live_inventory)
+        browser_source=inspect.getsource(
+            FacebookBusinessBrowser.discover_managed_pages_isolated
+        )
+        discovery_source=inspect.getsource(
+            FacebookBusinessBrowser.discover_managed_pages
+        )
+        goto_source=inspect.getsource(FacebookBusinessBrowser._goto)
+
+        self.assertIn("REMASK_ISOLATED_PAGE_INVENTORY_SYNC_V1", source)
+        self.assertIn("discover_managed_pages_isolated(fast=True)", source)
+        self.assertNotIn("REMASK_ENABLE_GLOBAL_PAGE_DISCOVERY", source)
+
+        self.assertIn("REMASK_ISOLATED_PAGE_INVENTORY_V1", browser_source)
+        self.assertIn("self._browser_context.new_page()", browser_source)
+        self.assertIn("primary_page=self.page", browser_source)
+        self.assertIn("self.page=primary_page", browser_source)
+        self.assertIn("await asyncio.wait_for(probe_page.close()", browser_source)
+
+        self.assertIn("attempts=1", discovery_source)
+        self.assertIn("navigation_attempts=", goto_source)
+
     def test_browser_open_cancellation_releases_owned_resources(self) -> None:
         source=inspect.getsource(FacebookBusinessBrowser.open)
         cancel_index=source.index("except asyncio.CancelledError:")
