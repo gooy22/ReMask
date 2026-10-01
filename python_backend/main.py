@@ -1934,11 +1934,25 @@ async def profile_live_inventory(
                     merged[page_id]=current
                 return normalize_page_rows(merged.values())
 
-            # REMASK_CURRENT_FAN_PAGE_BATCH_V1
+            # REMASK_CURRENT_FAN_PAGE_BASELINE_V2
             # Full worker history is duplicate-create evidence, not current
-            # inventory. Only the newest successful FAN_PAGES batch is a
-            # durable profile-state fallback; live Page enrichment may add to it.
-            durable_pages=normalize_page_rows(current_fan_page_batch)
+            # inventory. Build durable current Page state only from:
+            #   1) the newest successful FAN_PAGES batch; and
+            #   2) the newest confirmed BM->Page relation per Business.
+            # Workspace snapshot hints are deliberately excluded here: they are
+            # navigation hints only and must never become current inventory.
+            current_binding_pages=[
+                row
+                for rows_by_id in known_pages_by_business.values()
+                for row in rows_by_id.values()
+                if isinstance(row,dict)
+                and str(row.get('source') or '')
+                    != 'workspace_last_live_page_hint'
+            ]
+            durable_pages=normalize_page_rows([
+                *(current_fan_page_batch or []),
+                *current_binding_pages,
+            ])
             if durable_pages:
                 pages=durable_pages
                 pages_ready=True
