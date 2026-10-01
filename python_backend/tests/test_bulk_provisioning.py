@@ -267,6 +267,29 @@ class BulkPersistenceTests(unittest.IsolatedAsyncioTestCase):
 
 
 class PageHydrationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_unrelated_new_page_is_not_reported_as_the_requested_creation(self):
+        browser=FacebookBusinessBrowser(SimpleNamespace(profile_id='7',pages=[]))
+        browser.page=SimpleNamespace(url='https://www.facebook.com/pages/create',wait_for_timeout=AsyncMock())
+        browser._fan_page_snapshot=AsyncMock(return_value=[]); browser._goto=AsyncMock()
+        browser._fill_first=AsyncMock(return_value=True); browser._fill_fan_page_category=AsyncMock(return_value=True)
+        browser._click_named_single_attempt=AsyncMock(return_value={'found':True}); browser._body_text=AsyncMock(return_value='')
+        browser.discover_managed_pages=AsyncMock(return_value=[{'id':'222222222','name':'Other Page','ownership_verified':True}])
+        with patch('app.facebook_business_browser.asyncio.sleep',new=AsyncMock()):
+            with self.assertRaises(BrowserBusinessError) as error:
+                await browser.create_fan_page(page_name='Requested Page',category='Digital creator')
+        self.assertEqual(error.exception.code,'FAN_PAGE_CREATE_RESULT_UNKNOWN')
+
+    async def test_new_page_keeps_profile_link_for_the_next_business_step(self):
+        context=SimpleNamespace(profile_id='7',pages=[]); browser=FacebookBusinessBrowser(context)
+        browser.page=SimpleNamespace(url='https://www.facebook.com/pages/create',wait_for_timeout=AsyncMock())
+        browser._fan_page_snapshot=AsyncMock(return_value=[]); browser._goto=AsyncMock()
+        browser._fill_first=AsyncMock(return_value=True); browser._fill_fan_page_category=AsyncMock(return_value=True)
+        browser._click_named_single_attempt=AsyncMock(return_value={'found':True}); browser._body_text=AsyncMock(return_value='')
+        row={'id':'1289628847574478','name':'Requested Page','profile_id':'61594993341059','ownership_verified':True}
+        browser.discover_managed_pages=AsyncMock(return_value=[row])
+        result=await browser.create_fan_page(page_name='Requested Page',category='Digital creator')
+        self.assertEqual(result['page_id'],row['id']); self.assertEqual(context.pages,[row])
+
     async def test_dom_marked_page_field_receives_keyboard_events(self):
         browser=FacebookBusinessBrowser(SimpleNamespace(profile_id='7',pages=[{'id':'1289628847574478','profile_id':'61594993341059','name':'Media Shopsw','ownership_verified':True}]))
         field=SimpleNamespace(is_visible=AsyncMock(return_value=True),is_editable=AsyncMock(return_value=True),
@@ -319,7 +342,7 @@ class PageHydrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await browser._open_pages_add_action('111111111'))
         browser._goto.assert_not_awaited()
 
-    async def test_current_autocomplete_receives_keyboard_and_blur_events(self):
+    async def test_current_autocomplete_keeps_focus_until_a_result_is_selected(self):
         browser=FacebookBusinessBrowser(SimpleNamespace(profile_id='7'))
         field=SimpleNamespace(is_visible=AsyncMock(return_value=True),is_editable=AsyncMock(return_value=True),
             fill=AsyncMock(),press_sequentially=AsyncMock(),press=AsyncMock())
@@ -327,7 +350,7 @@ class PageHydrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await browser._fill_page_add_identifier(labels=('Facebook Page name or URL',),value='222222222'))
         field.fill.assert_awaited_once_with('',timeout=2000)
         field.press_sequentially.assert_awaited_once_with('https://www.facebook.com/222222222',delay=15)
-        field.press.assert_awaited_once_with('Tab',timeout=1000)
+        field.press.assert_not_awaited()
 
     async def test_current_name_url_picker_receives_page_url(self):
         browser=FacebookBusinessBrowser(SimpleNamespace(profile_id='7'))

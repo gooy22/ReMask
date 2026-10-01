@@ -4404,6 +4404,7 @@ class FacebookBusinessBrowser:
             and _digits(row.get("id"))
         ]
         if len(existing) == 1:
+            self.context.pages = before_pages
             page_id = _digits(existing[0].get("id"))
             return {
                 "page_id": page_id,
@@ -4603,6 +4604,7 @@ class FacebookBusinessBrowser:
             ]
 
             if len(exact_new) == 1:
+                self.context.pages = after_pages
                 page_id = _digits(exact_new[0].get("id"))
                 return {
                     "page_id": page_id,
@@ -4612,17 +4614,6 @@ class FacebookBusinessBrowser:
                     "before_ids": sorted(before_ids),
                     "after_ids": sorted(after_ids),
                     "transport": "facebook_pages_ui_inventory_diff",
-                }
-
-            if len(new_ids) == 1:
-                return {
-                    "page_id": new_ids[0],
-                    "name": name,
-                    "category": category_name,
-                    "reused": False,
-                    "before_ids": sorted(before_ids),
-                    "after_ids": sorted(after_ids),
-                    "transport": "facebook_pages_ui_inventory_unique_diff",
                 }
 
             if attempt < 3:
@@ -17820,6 +17811,7 @@ timeout_seconds=4.0,
         labels: tuple[str, ...],
         value: str,
         wait_seconds: float = 4.0,
+        lookup_override: str = "",
     ) -> bool:
         """Fill only the Page-add identifier field, never a global settings input."""
         if self.page is None or not value:
@@ -17844,13 +17836,10 @@ timeout_seconds=4.0,
                     field = fields.nth(index)
                     if not await field.is_visible() or not await field.is_editable():
                         continue
-                    lookup_value = _clean(linked.get("name")) if linked and label == "Facebook Page name or URL" and _clean(linked.get("name")) else value
+                    lookup_value = lookup_override or (_clean(linked.get("name")) if linked and label == "Facebook Page name or URL" and _clean(linked.get("name")) else value)
                     await field.fill('', timeout=2000)
                     await asyncio.wait_for(field.press_sequentially(lookup_value, delay=15), timeout=4.0)
-                    try:
-                        await field.press('Tab', timeout=1000)
-                    except Exception:
-                        pass
+                    self._last_page_input_diagnostic = {"method":"placeholder_keyboard","lookup":"override" if lookup_override else "default"}
                     return True
             except Exception as exc:
                 self._last_page_input_diagnostic = {"label": label, "error": f"{exc.__class__.__name__}: {_clean(exc)}"[:500]}
@@ -17969,13 +17958,9 @@ timeout_seconds=4.0,
                         and await candidate.is_editable()
                     ):
                         placeholder = ' '.join(str(await candidate.get_attribute('placeholder') or '').split()).casefold()
-                        lookup_value = _clean(linked.get("name")) if linked and 'name' in placeholder and 'url' in placeholder and _clean(linked.get("name")) else value
+                        lookup_value = lookup_override or (_clean(linked.get("name")) if linked and 'name' in placeholder and 'url' in placeholder and _clean(linked.get("name")) else value)
                         await candidate.fill('', timeout=2000)
                         await asyncio.wait_for(candidate.press_sequentially(lookup_value, delay=15), timeout=4.0)
-                        try:
-                            await candidate.press('Tab', timeout=1000)
-                        except Exception:
-                            pass
                         self._last_page_input_diagnostic = {"method":"marker_keyboard","lookup":"verified_name" if lookup_value != value else "url", "placeholder":placeholder[:120]}
                         try:
                             await self.page.evaluate(
@@ -17988,7 +17973,7 @@ timeout_seconds=4.0,
                 except Exception as exc:
                     self._last_page_input_diagnostic = {"method":"marker_keyboard","error":f"{exc.__class__.__name__}: {_clean(exc)}"[:500]}
 
-            if await self._fill_first(labels=labels, value=value, fill_timeout_ms=2000):
+            if await self._fill_first(labels=labels, value=lookup_override or value, fill_timeout_ms=2000):
                 return True
 
             if time.monotonic() >= deadline:
@@ -18371,6 +18356,7 @@ timeout_seconds=4.0,
                         '[role="dialog"],[aria-modal="true"]'
                     ).forEach(addRoot);
 
+                    const hasPageDialog = roots.length > 0;
                     const pageInputs = [...document.querySelectorAll(
                         'input:not([type]),input[type="text"],input[type="search"]'
                     )].filter(input => {
@@ -18383,7 +18369,7 @@ timeout_seconds=4.0,
                         );
                         return pageWords.some(word => identity.includes(word));
                     });
-                    for (const input of pageInputs) {
+                    for (const input of hasPageDialog ? [] : pageInputs) {
                         let cur = input;
                         for (let depth = 0; cur && depth < 8; depth++, cur = cur.parentElement) {
                             addRoot(cur);
@@ -18392,6 +18378,12 @@ timeout_seconds=4.0,
 
                     const candidates = [];
                     for (const root of roots) {
+                        const controls = [...root.querySelectorAll('button,[role="button"],a,[role="menuitem"]')].filter(visible);
+                        const cancelNames = new Set(['cancel','отмена','скасувати','abbrechen','annuler']);
+                        const cancels = controls.filter(el => cancelNames.has(clean(el.innerText || el.textContent || '')));
+                        const fields = [...root.querySelectorAll('input:not([type]),input[type="text"],input[type="search"]')].filter(visible);
+                        const footerY = cancels.length ? Math.max(...cancels.map(el => el.getBoundingClientRect().y)) - 16
+                            : fields.length ? Math.max(...fields.map(el => el.getBoundingClientRect().bottom)) : 0;
                         for (const el of root.querySelectorAll(
                             'button,[role="button"],a,[role="menuitem"]'
                         )) {
@@ -18406,6 +18398,7 @@ timeout_seconds=4.0,
                             );
                             if (!allowed.has(text)) continue;
                             const r = el.getBoundingClientRect();
+                            if (r.y < footerY) continue;
                             candidates.push({el, x:r.x, y:r.y});
                         }
                     }
@@ -19770,6 +19763,26 @@ timeout_seconds=4.0,
                 break
             await self.page.wait_for_timeout(650)
 
+        lookup_attempts = [{"kind":"default", "selected":picker_selected,
+            "input":getattr(self, '_last_page_input_diagnostic', {})}]
+        if advance_review and not picker_selected:
+            known = next((row for row in (getattr(self.context, 'pages', None) or [])
+                if isinstance(row, dict) and row.get('ownership_verified') is True
+                and _clean(row.get('id')) == page), {})
+            alternatives = []
+            if _clean(known.get('profile_id')).isdigit():
+                alternatives.append(('profile_url', 'https://www.facebook.com/profile.php?id=' + str(known['profile_id'])))
+            alternatives.append(('delegate_url', 'https://www.facebook.com/' + page))
+            for kind, value in alternatives:
+                filled = await self._fill_page_add_identifier(labels=('Facebook Page name or URL',), value=page, lookup_override=value)
+                await self.page.wait_for_timeout(1600)
+                picker_selected = await self._click_unique_page_add_result(page_id=page)
+                state = await self._page_add_surface_state(page_id=page)
+                lookup_attempts.append({'kind':kind, 'filled':filled, 'selected':picker_selected,
+                    'input':getattr(self, '_last_page_input_diagnostic', {}), 'dialogs':state.get('dialogs', [])})
+                if picker_selected:
+                    break
+
         selected = picker_selected
 
         if advance_review and selected and not review_advanced:
@@ -19810,6 +19823,8 @@ timeout_seconds=4.0,
             "page_surface": await self._page_add_surface_state(page_id=page),
             "page_filled": True,
             "result_selected": selected,
+            "lookup_attempts": lookup_attempts,
+            "browser_events": self._browser_events[-12:],
             "final_actions": final_actions,
             "page_id_visible": page in body,
             "current_url": _clean(self.page.url),
@@ -20073,7 +20088,7 @@ timeout_seconds=4.0,
                 except Exception:
                     pass
 
-                final_clicked = await self._click_named(
+                final_clicked = await self._click_page_add_surface_action(
                     (
                         "Add Page",
                         "Add Facebook Page",

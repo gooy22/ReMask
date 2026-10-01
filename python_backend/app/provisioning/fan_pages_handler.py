@@ -167,6 +167,7 @@ async def _fresh_page_inventory(session: Any) -> list[dict[str, Any]]:
         # of an empty account. Preserve the error so uncertain CREATE recovery
         # can keep duplicate protection enabled.
         rows = await browser.discover_managed_pages(fast=True)
+        session.context.pages = rows
         return _normalize_pages(rows)
 
 

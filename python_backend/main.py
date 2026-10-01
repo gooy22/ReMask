@@ -430,7 +430,7 @@ async def run_targeted_pages_readonly_canary(profile_id: str) -> None:
                     surface = result.pop('page_surface', {})
                     result['page_surface'] = {key: surface.get(key) for key in ('ready_state','page_id_in_body','inputs','dialogs')}
                     result['controls'] = [{key: control.get(key) for key in ('text','disabled')} for control in surface.get('controls', []) if control.get('role') == 'button' or control.get('tag') == 'button'][-25:]
-                    log.warning('targeted Page attach readonly canary profile=%s result=%s', profile_id, json.dumps(result, ensure_ascii=False, separators=(',', ':'))[:7000])
+                    log.warning('targeted Page attach readonly canary profile=%s result=%s', profile_id, json.dumps(result, ensure_ascii=False, separators=(',', ':'))[:11000])
                 except Exception as exc:
                     log.warning('targeted Page attach readonly canary profile=%s error=%s blocked_mutations=%s', profile_id, str(exc)[:1200], json.dumps(blocked_requests[:8], separators=(',', ':')))
                 finally:
@@ -516,13 +516,14 @@ async def run_live_inventory_readonly_canary() -> None:
     ).strip()
     if not profile_id:
         return
-    if os.getenv('REMASK_PAGE_ONLY_CANARY') == '1':
+    if os.getenv('REMASK_PAGE_ONLY_CANARY') in {'1','2'}:
         try:
             await run_targeted_pages_readonly_canary(profile_id)
             await run_existing_business_repair_once(profile_id)
         except Exception as exc:
             log.warning('targeted Pages readonly canary profile=%s failure=%s', profile_id, str(exc)[:1200])
-        return
+        if os.getenv('REMASK_PAGE_ONLY_CANARY') == '1':
+            return
 
     business_id=''
     ad_account_id=''
