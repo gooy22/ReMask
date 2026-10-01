@@ -183,6 +183,13 @@ class BulkPersistenceTests(unittest.IsolatedAsyncioTestCase):
 
 
 class PageHydrationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_current_name_url_picker_receives_page_url(self):
+        browser=FacebookBusinessBrowser(SimpleNamespace(profile_id='7'))
+        browser.page=SimpleNamespace()
+        browser._fill_first=AsyncMock(return_value=True)
+        self.assertTrue(await browser._fill_page_add_identifier(labels=('Facebook Page name or URL',),value='222222222'))
+        self.assertEqual(browser._fill_first.call_args.kwargs['value'],'https://www.facebook.com/profile.php?id=222222222')
+
     async def test_late_add_action_uses_one_navigation(self):
         browser=FacebookBusinessBrowser(SimpleNamespace(profile_id='7')); browser.page=SimpleNamespace(wait_for_timeout=AsyncMock()); browser._goto=AsyncMock(); browser._click_named=AsyncMock(side_effect=[False,False,True])
         self.assertTrue(await browser._open_pages_add_action('111111111')); self.assertEqual(browser._goto.await_count,1); self.assertEqual(browser._click_named.await_count,3)

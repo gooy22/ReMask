@@ -5528,6 +5528,9 @@ class FacebookBusinessBrowser:
                         merge_page(merged, row)
                     pages = _extract_pages_from_browser_document(document)
                     json_page_count = len(pages)
+                    if not pages and "unsupported_page_shapes" not in self._last_page_inventory_diagnostic:
+                        from .facebook_page_discovery import _browser_page_candidate_diagnostic
+                        self._last_page_inventory_diagnostic["unsupported_page_shapes"] = _browser_page_candidate_diagnostic(document)
 
                     # Only run the broader anchor scan when embedded/Relay state did
                     # not already identify a Page.
@@ -17805,6 +17808,10 @@ timeout_seconds=4.0,
         """Fill only the Page-add identifier field, never a global settings input."""
         if self.page is None or not value:
             return False
+        # The current Find Page wizard accepts Page name or URL. A numeric
+        # string is treated as a name and can yield no result for a real Page.
+        if str(value).isdigit():
+            value = f"https://www.facebook.com/profile.php?id={value}"
 
         deadline = time.monotonic() + max(0.5, float(wait_seconds))
         marker = "data-remask-page-add-input"
@@ -19650,6 +19657,7 @@ timeout_seconds=4.0,
         page_filled = await self._fill_page_add_identifier(
             labels=(
                 "Facebook Page URL or ID",
+                "Facebook Page name or URL",
                 "Page URL or ID",
                 "Page ID",
                 "Facebook Page",
@@ -19810,6 +19818,7 @@ timeout_seconds=4.0,
         page_filled = await self._fill_page_add_identifier(
             labels=(
                 "Facebook Page URL or ID",
+                "Facebook Page name or URL",
                 "Page URL or ID",
                 "Page ID",
                 "Facebook Page",

@@ -374,6 +374,35 @@ async def run_startup_smoke() -> None:
     except Exception as exc:
         log.exception('e2e smoke failed: %s',exc)
 
+async def run_targeted_pages_readonly_canary(profile_id: str) -> None:
+    """Read the exact Your-Pages surface with its own diagnostic budget."""
+    async with pool.profile_locks[profile_id]:
+        context = await pool.resolver.resolve(profile_id)
+        async with ProfileSession(context) as session:
+            browser = await session.facebook_business_browser()
+            try:
+                pages = await asyncio.wait_for(browser.discover_managed_pages(
+                    fast=True, navigation_timeout_ms=9000), timeout=45)
+                log.warning('targeted Pages readonly canary profile=%s pages=%s', profile_id,
+                    json.dumps([{k: row.get(k) for k in ('id','ownership_verified','ownership_source')} for row in pages], separators=(',', ':')))
+            except Exception as exc:
+                diagnostic = getattr(browser, '_last_page_inventory_diagnostic', {})
+                log.warning('targeted Pages readonly canary profile=%s error=%s shapes=%s diagnostic=%s', profile_id, str(exc)[:500],
+                    json.dumps(diagnostic.get('unsupported_page_shapes', []), separators=(',', ':'))[:12000],
+                    json.dumps({key: diagnostic.get(key) for key in ('stage','page_discovery','current_url')}, separators=(',', ':'))[:2200])
+            target_business = str(os.getenv('REMASK_PAGE_ATTACH_CANARY_BUSINESS') or '').strip()
+            target_page = str(os.getenv('REMASK_PAGE_ATTACH_CANARY_PAGE') or '').strip()
+            if target_business.isdigit() and target_page.isdigit():
+                try:
+                    result = await asyncio.wait_for(browser.preflight_page_add_form(business_id=target_business, page_id=target_page), timeout=70)
+                    surface = result.pop('page_surface', {})
+                    result['page_surface'] = {key: surface.get(key) for key in ('ready_state','page_id_in_body','inputs','dialogs')}
+                    result['controls'] = [{key: control.get(key) for key in ('text','disabled')} for control in surface.get('controls', []) if control.get('role') == 'button' or control.get('tag') == 'button'][-25:]
+                    log.warning('targeted Page attach readonly canary profile=%s result=%s', profile_id, json.dumps(result, ensure_ascii=False, separators=(',', ':'))[:7000])
+                except Exception as exc:
+                    log.warning('targeted Page attach readonly canary profile=%s error=%s', profile_id, str(exc)[:1200])
+
+
 async def run_live_inventory_readonly_canary() -> None:
     """Optional one-shot startup proof for the live inventory path.
 
@@ -388,6 +417,12 @@ async def run_live_inventory_readonly_canary() -> None:
         os.getenv('REMASK_LIVE_INVENTORY_CANARY_PROFILE') or ''
     ).strip()
     if not profile_id:
+        return
+    if os.getenv('REMASK_PAGE_ONLY_CANARY') == '1':
+        try:
+            await run_targeted_pages_readonly_canary(profile_id)
+        except Exception as exc:
+            log.warning('targeted Pages readonly canary profile=%s failure=%s', profile_id, str(exc)[:1200])
         return
 
     business_id=''
