@@ -2083,14 +2083,14 @@ async def profile_live_inventory(
                         isolated_pages_timeout,
                     )
                     live_pages=normalize_page_rows(discovered_pages)
-                    pages=merge_page_rows(pages,live_pages)
+                    # REMASK_LIVE_PAGE_LIST_REPLACES_BASELINE_V1
+                    # Your-Pages is an account-level live inventory. Once it
+                    # succeeds, replace durable/context baseline rows instead
+                    # of retaining Pages that no longer exist live.
+                    pages=live_pages
                     pages_ready=True
                     pages_live_verified=True
-                    pages_source=(
-                        'facebook_isolated_page_inventory+durable'
-                        if durable_pages
-                        else 'facebook_isolated_page_inventory'
-                    )
+                    pages_source='facebook_isolated_page_inventory'
                     log.info(
                         'live inventory profile=%s isolated Page primary '
                         'ready=True pages=%d diagnostic=%s',
@@ -2137,7 +2137,7 @@ async def profile_live_inventory(
             # Exact BM->Page history is useful only for Pages that really are
             # attached to that BM. Treat it as optional positive enrichment,
             # never as proof of the complete account-level Page list.
-            if known_pages_by_business:
+            if not pages_live_verified and known_pages_by_business:
                 confirmed_page_rows=[]
                 fast_page_diagnostics=[]
                 try:
@@ -2209,47 +2209,48 @@ async def profile_live_inventory(
             # REMASK_ADS_MANAGER_PAGES_FIRST_V1
             # Account-level live Page enumeration is enrichment only. Keep the
             # attempt deliberately short; it must not dominate a BM/RK sync.
-            try:
-                ads_pages_timeout=optional_page_budget(4.0)
-                if ads_pages_timeout <= 0.25:
-                    raise asyncio.TimeoutError()
-                discovered_pages=await hard_deadline(
-                    browser.discover_promotable_pages_from_ads_manager(
-                        timeout_seconds=min(3.5,ads_pages_timeout),
-                    ),
-                    ads_pages_timeout,
-                )
-                live_pages=normalize_page_rows(discovered_pages)
-                pages=merge_page_rows(pages,live_pages)
-                pages_ready=True
-                pages_live_verified=True
-                pages_source=(
-                    'ads_manager_promotable_pages+durable'
-                    if durable_pages
-                    else 'ads_manager_promotable_pages'
-                )
-                log.info(
-                    'live inventory profile=%s Ads Manager Page enrichment '
-                    'ready=True pages=%d',
-                    clean_profile,
-                    len(live_pages),
-                )
-            except Exception as exc:
-                page_primary_error=(
-                    'ADS_MANAGER_PAGES_TIMEOUT'
-                    if isinstance(exc,asyncio.TimeoutError)
-                    else (
-                        f'{exc.code}: {exc}'
-                        if isinstance(exc,BrowserBusinessError)
-                        else f'{exc.__class__.__name__}: {exc}'
+            if not pages_live_verified:
+                try:
+                    ads_pages_timeout=optional_page_budget(4.0)
+                    if ads_pages_timeout <= 0.25:
+                        raise asyncio.TimeoutError()
+                    discovered_pages=await hard_deadline(
+                        browser.discover_promotable_pages_from_ads_manager(
+                            timeout_seconds=min(3.5,ads_pages_timeout),
+                        ),
+                        ads_pages_timeout,
                     )
-                )
-                log.info(
-                    'live inventory profile=%s Ads Manager Page enrichment '
-                    'unavailable=%s',
-                    clean_profile,
-                    page_primary_error[:700],
-                )
+                    live_pages=normalize_page_rows(discovered_pages)
+                    pages=merge_page_rows(pages,live_pages)
+                    pages_ready=True
+                    pages_live_verified=True
+                    pages_source=(
+                        'ads_manager_promotable_pages+durable'
+                        if durable_pages
+                        else 'ads_manager_promotable_pages'
+                    )
+                    log.info(
+                        'live inventory profile=%s Ads Manager Page enrichment '
+                        'ready=True pages=%d',
+                        clean_profile,
+                        len(live_pages),
+                    )
+                except Exception as exc:
+                    page_primary_error=(
+                        'ADS_MANAGER_PAGES_TIMEOUT'
+                        if isinstance(exc,asyncio.TimeoutError)
+                        else (
+                            f'{exc.code}: {exc}'
+                            if isinstance(exc,BrowserBusinessError)
+                            else f'{exc.__class__.__name__}: {exc}'
+                        )
+                    )
+                    log.info(
+                        'live inventory profile=%s Ads Manager Page enrichment '
+                        'unavailable=%s',
+                        clean_profile,
+                        page_primary_error[:700],
+                    )
 
             # REMASK_SYNC_PRIVATE_LIST_PAGES_FIRST_V1
             # A persisted private LIST_PAGES query is also a short enrichment

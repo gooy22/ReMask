@@ -221,11 +221,23 @@ class LiveSyncContractTests(unittest.TestCase):
         self.assertIn("await asyncio.wait_for(probe_page.close()", browser_source)
         self.assertIn("navigation_timeout_ms=6000 if fast else None", browser_source)
         self.assertIn("navigation_timeout_ms: int | None = None", discovery_source)
+        self.assertIn("auth_body_timeout_ms=500 if fast else 1500", discovery_source)
         self.assertIn("2.0 if fast else 2.4", discovery_source)
         self.assertIn("0.35 if fast else 0.5", discovery_source)
 
+        self.assertIn("auth_body_timeout_ms: int = 1500", goto_source)
+        self.assertIn("body_timeout_ms=max(", goto_source)
         self.assertIn("attempts=1", discovery_source)
         self.assertIn("navigation_attempts=", goto_source)
+
+        auth_source=inspect.getsource(
+            FacebookBusinessBrowser._assert_authenticated
+        )
+        self.assertIn("REMASK_AUTH_URL_BEFORE_BODY_V1", auth_source)
+        self.assertLess(
+            auth_source.index('if "/login" in lower_url'),
+            auth_source.index("body = ("),
+        )
 
     def test_isolated_page_probe_runs_before_lower_confidence_fallbacks(self) -> None:
         source=inspect.getsource(api.profile_live_inventory)
@@ -246,6 +258,19 @@ class LiveSyncContractTests(unittest.TestCase):
         self.assertEqual(
             page_phase.count("discover_managed_pages_isolated(fast=True)"),
             1,
+        )
+        self.assertIn(
+            "REMASK_LIVE_PAGE_LIST_REPLACES_BASELINE_V1",
+            page_phase,
+        )
+        self.assertIn("pages=live_pages",page_phase)
+        self.assertIn(
+            "if not pages_live_verified and known_pages_by_business:",
+            page_phase,
+        )
+        self.assertIn(
+            "if not pages_live_verified:\n                try:\n                    ads_pages_timeout",
+            page_phase,
         )
 
 
