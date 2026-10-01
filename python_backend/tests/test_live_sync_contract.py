@@ -149,13 +149,20 @@ class LiveSyncContractTests(unittest.TestCase):
         self.assertIn("'pages_live_verified':pages_live_verified", source)
 
         self.assertIn("REMASK_KNOWN_PAGE_FAST_REVALIDATION_V1", source)
+        self.assertIn("REMASK_ISOLATED_PAGE_DISCOVERY_PRIMARY_V1", source)
+        self.assertIn("discover_managed_pages_isolated(attempts=2)", source)
+        isolated_index = source.index("REMASK_ISOLATED_PAGE_DISCOVERY_PRIMARY_V1")
+        ads_index = source.index("REMASK_ADS_MANAGER_PAGES_FIRST_V1")
+        private_index = source.index("REMASK_SYNC_PRIVATE_LIST_PAGES_FIRST_V1")
+        self.assertLess(isolated_index, ads_index)
+        self.assertLess(ads_index, private_index)
         self.assertIn("REMASK_ADS_MANAGER_PAGES_FIRST_V1", source)
         self.assertIn("discover_promotable_pages_from_ads_manager", source)
         self.assertIn("REMASK_SYNC_PRIVATE_LIST_PAGES_FIRST_V1", source)
         self.assertIn("list_pages_via_private_graphql", source)
 
-        # The cross-domain Your-Pages SPA is diagnostic-only and cannot consume
-        # the normal Sync budget unless explicitly enabled.
+        # Legacy same-tab cross-domain discovery remains diagnostic-only. The
+        # normal Sync now uses a sibling tab in the same authenticated context.
         self.assertIn("REMASK_ENABLE_GLOBAL_PAGE_DISCOVERY", source)
         self.assertIn("REMASK_PAGE_LIVE_RELAY_DISCOVERY_V1", source)
         self.assertIn("discover_managed_pages(fast=True)", source)
