@@ -17839,14 +17839,21 @@ timeout_seconds=4.0,
         # changes the visible value but did not trigger a search in production.
         for label in labels:
             try:
-                field = self.page.get_by_placeholder(re.compile(re.escape(label), re.I)).first
-                if await field.is_visible() and await field.is_editable():
+                fields = self.page.get_by_placeholder(re.compile(re.escape(label), re.I))
+                for index in range(min(await fields.count(), 8)):
+                    field = fields.nth(index)
+                    if not await field.is_visible() or not await field.is_editable():
+                        continue
                     lookup_value = _clean(linked.get("name")) if linked and label == "Facebook Page name or URL" and _clean(linked.get("name")) else value
                     await field.fill('', timeout=2000)
-                    await field.press_sequentially(lookup_value, delay=15, timeout=4000)
-                    await field.press('Tab', timeout=1000)
+                    await asyncio.wait_for(field.press_sequentially(lookup_value, delay=15), timeout=4.0)
+                    try:
+                        await field.press('Tab', timeout=1000)
+                    except Exception:
+                        pass
                     return True
-            except Exception:
+            except Exception as exc:
+                self._last_page_input_diagnostic = {"label": label, "error": f"{exc.__class__.__name__}: {_clean(exc)}"[:500]}
                 continue
 
         deadline = time.monotonic() + max(0.5, float(wait_seconds))
@@ -19759,43 +19766,7 @@ timeout_seconds=4.0,
                 break
             await self.page.wait_for_timeout(650)
 
-        # Selecting a search result is non-mutating. Stop before any
-        # Add/Confirm/Request approval button is clicked.
         selected = picker_selected
-        try:
-            exact = self.page.get_by_text(
-                re.compile(rf"^\s*{re.escape(page)}\s*$")
-            )
-            for index in range(min(await exact.count(), 5)):
-                candidate = exact.nth(index)
-                if not await candidate.is_visible():
-                    continue
-                target = candidate.locator(
-                    'xpath=ancestor-or-self::*[@role="option" or @role="button" or self::button][1]'
-                )
-                if await target.count() and await target.first.is_visible():
-                    await target.first.click()
-                    selected = True
-                    await self.page.wait_for_timeout(450)
-                    break
-        except Exception:
-            pass
-
-        if not selected:
-            try:
-                radios = self.page.get_by_role("radio")
-                visible = []
-                for index in range(min(await radios.count(), 8)):
-                    item = radios.nth(index)
-                    if await item.is_visible() and await item.is_enabled():
-                        visible.append(item)
-                if len(visible) == 1:
-                    if not await visible[0].is_checked():
-                        await visible[0].check()
-                    selected = True
-                    await self.page.wait_for_timeout(250)
-            except Exception:
-                pass
 
         if advance_review and selected and not review_advanced:
             review_advanced = await self._click_named(("Next",))
@@ -20017,37 +19988,6 @@ timeout_seconds=4.0,
                         break
             except Exception:
                 pass
-
-            if not result_selected:
-                try:
-                    radios = self.page.get_by_role("radio")
-                    visible_radios = []
-                    for index in range(min(await radios.count(), 8)):
-                        item = radios.nth(index)
-                        if await item.is_visible() and await item.is_enabled():
-                            visible_radios.append(item)
-                    if len(visible_radios) == 1:
-                        if not await visible_radios[0].is_checked():
-                            await visible_radios[0].check()
-                        result_selected = True
-                        await self.page.wait_for_timeout(250)
-                except Exception:
-                    pass
-
-            if not result_selected:
-                try:
-                    options = self.page.get_by_role("option")
-                    visible_options = []
-                    for index in range(min(await options.count(), 8)):
-                        item = options.nth(index)
-                        if await item.is_visible() and await item.is_enabled():
-                            visible_options.append(item)
-                    if len(visible_options) == 1:
-                        await visible_options[0].click()
-                        result_selected = True
-                        await self.page.wait_for_timeout(350)
-                except Exception:
-                    pass
 
             if not result_selected:
                 # REMASK_PAGE_ADD_UNIQUE_RESULT_V2

@@ -425,6 +425,7 @@ async def run_targeted_pages_readonly_canary(profile_id: str) -> None:
                 try:
                     result = await asyncio.wait_for(browser.preflight_page_add_form(business_id=target_business, page_id=target_page, advance_review=True), timeout=70)
                     result['blocked_mutations'] = blocked_requests[:8]
+                    result['input_diagnostic'] = getattr(browser, '_last_page_input_diagnostic', {})
                     result['page_query_requests'] = page_queries
                     surface = result.pop('page_surface', {})
                     result['page_surface'] = {key: surface.get(key) for key in ('ready_state','page_id_in_body','inputs','dialogs')}

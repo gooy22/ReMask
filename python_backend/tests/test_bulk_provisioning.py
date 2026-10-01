@@ -272,9 +272,9 @@ class PageHydrationTests(unittest.IsolatedAsyncioTestCase):
             'profile_id':'61594993341059','name':'Media Shopsw','ownership_verified':True}]))
         field=SimpleNamespace(is_visible=AsyncMock(return_value=True),is_editable=AsyncMock(return_value=True),
             fill=AsyncMock(),press_sequentially=AsyncMock(),press=AsyncMock())
-        browser.page=SimpleNamespace(get_by_placeholder=lambda pattern:SimpleNamespace(first=field))
+        browser.page=SimpleNamespace(get_by_placeholder=lambda pattern:SimpleNamespace(count=AsyncMock(return_value=1),nth=lambda i:field))
         self.assertTrue(await browser._fill_page_add_identifier(labels=('Facebook Page name or URL',),value='1289628847574478'))
-        field.press_sequentially.assert_awaited_once_with('Media Shopsw',delay=15,timeout=4000)
+        field.press_sequentially.assert_awaited_once_with('Media Shopsw',delay=15)
 
     async def test_delegate_page_search_uses_its_confirmed_profile_link(self):
         browser=FacebookBusinessBrowser(SimpleNamespace(profile_id='7',pages=[{'id':'1289628847574478','profile_id':'61594993341059','ownership_verified':True}]))
@@ -313,10 +313,10 @@ class PageHydrationTests(unittest.IsolatedAsyncioTestCase):
         browser=FacebookBusinessBrowser(SimpleNamespace(profile_id='7'))
         field=SimpleNamespace(is_visible=AsyncMock(return_value=True),is_editable=AsyncMock(return_value=True),
             fill=AsyncMock(),press_sequentially=AsyncMock(),press=AsyncMock())
-        browser.page=SimpleNamespace(get_by_placeholder=lambda pattern:SimpleNamespace(first=field))
+        browser.page=SimpleNamespace(get_by_placeholder=lambda pattern:SimpleNamespace(count=AsyncMock(return_value=1),nth=lambda i:field))
         self.assertTrue(await browser._fill_page_add_identifier(labels=('Facebook Page name or URL',),value='222222222'))
         field.fill.assert_awaited_once_with('',timeout=2000)
-        field.press_sequentially.assert_awaited_once_with('https://www.facebook.com/222222222',delay=15,timeout=4000)
+        field.press_sequentially.assert_awaited_once_with('https://www.facebook.com/222222222',delay=15)
         field.press.assert_awaited_once_with('Tab',timeout=1000)
 
     async def test_current_name_url_picker_receives_page_url(self):
