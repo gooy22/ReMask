@@ -91,8 +91,12 @@ class LiveSyncContractTests(unittest.TestCase):
 
     def test_live_inventory_startup_canary_is_opt_in_and_read_only(self) -> None:
         source=inspect.getsource(api.run_live_inventory_readonly_canary)
-        self.assertIn("REMASK_LIVE_INVENTORY_READONLY_CANARY_V1", source)
+        self.assertIn("REMASK_LIVE_INVENTORY_READONLY_CANARY_V2", source)
         self.assertIn("REMASK_LIVE_INVENTORY_CANARY_PROFILE", source)
+        self.assertIn("confirmed_ad_account_bindings_for_profile", source)
+        self.assertIn("workspace-provisioning-bindings.json", source)
+        self.assertIn("business_ids=business_id or None", source)
+        self.assertIn("ad_account_hints=", source)
         self.assertIn("profile_live_inventory(", source)
         self.assertNotIn("create_job(", source)
         self.assertNotIn("enqueue_job(", source)
