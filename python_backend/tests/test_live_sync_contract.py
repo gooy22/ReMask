@@ -114,6 +114,10 @@ class LiveSyncContractTests(unittest.TestCase):
         # while fresh Meta enumeration is a separate enrichment dimension.
         self.assertIn("REMASK_STABLE_PAGE_STATE_V3", source)
         self.assertIn("latest_profile_fan_pages", source)
+        self.assertIn("latest_profile_fan_page_batch", source)
+        self.assertIn("REMASK_CURRENT_FAN_PAGE_BATCH_V1", source)
+        self.assertIn("REMASK_LATEST_PAGE_BINDING_PER_BUSINESS_V1", source)
+        self.assertIn("durable_pages=normalize_page_rows(current_fan_page_batch)", source)
         self.assertIn("durable_pages=normalize_page_rows(confirmed_fan_pages)", source)
         self.assertIn("pages_live_verified=False", source)
         self.assertIn("'pages_live_verified':pages_live_verified", source)
