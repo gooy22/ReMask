@@ -224,6 +224,28 @@ class LiveSyncContractTests(unittest.TestCase):
         self.assertIn("attempts=1", discovery_source)
         self.assertIn("navigation_attempts=", goto_source)
 
+    def test_isolated_page_probe_runs_before_lower_confidence_fallbacks(self) -> None:
+        source=inspect.getsource(api.profile_live_inventory)
+        start=source.index("REMASK_FULL_PROFILE_SYNC_PAGES_V2")
+        end=source.index("REMASK_LIVE_TARGET_SET_REQUIRED_V1",start)
+        page_phase=source[start:end]
+
+        isolated=page_phase.index("REMASK_ISOLATED_PAGE_PRIMARY_V2")
+        known=page_phase.index("REMASK_KNOWN_PAGE_FAST_REVALIDATION_V1")
+        ads=page_phase.index("REMASK_ADS_MANAGER_PAGES_FIRST_V1")
+        private=page_phase.index("REMASK_SYNC_PRIVATE_LIST_PAGES_FIRST_V1")
+
+        self.assertLess(isolated,known)
+        self.assertLess(isolated,ads)
+        self.assertLess(isolated,private)
+        self.assertIn("isolated_pages_timeout=optional_page_budget(10.0)",page_phase)
+        self.assertIn("if isolated_pages_timeout < 8.25:",page_phase)
+        self.assertEqual(
+            page_phase.count("discover_managed_pages_isolated(fast=True)"),
+            1,
+        )
+
+
     def test_optional_page_enrichment_cannot_exhaust_whole_sync(self) -> None:
         source=inspect.getsource(api.profile_live_inventory)
         start=source.index("REMASK_FULL_PROFILE_SYNC_PAGES_V2")
