@@ -18124,6 +18124,7 @@ timeout_seconds=4.0,
                         'page facebook','facebook-pagina'
                     ];
                     const blocked = [
+                        'find page','review people',
                         'add','add page','add facebook page','add a page',
                         'confirm','continue','next','review','select',
                         'request approval','cancel','close','done',
@@ -18158,11 +18159,11 @@ timeout_seconds=4.0,
                     document.querySelectorAll(
                         '[role="dialog"],[aria-modal="true"]'
                     ).forEach(addRoot);
-
+                    const hasPageDialog = roots.length > 0;
                     const inputs = [...document.querySelectorAll(
                         'input:not([type]),input[type="text"],input[type="search"]'
                     )].filter(visible);
-                    for (const input of inputs) {
+                    for (const input of hasPageDialog ? [] : inputs) {
                         const inputIdentity = clean(
                             (input.getAttribute('aria-label') || '') + ' ' +
                             (input.getAttribute('placeholder') || '') + ' ' +
@@ -19604,6 +19605,13 @@ timeout_seconds=4.0,
 
     async def _open_pages_add_action(self, business_id: str) -> bool:
         # Redirects abort the old document before the replacement UI hydrates.
+        current = _clean(getattr(self.page, "url", ""))
+        if "/settings/pages" in current and business_id in _business_ids_from_text(current):
+            for attempt in range(8):
+                if await self._click_named(self.ADD_NAMES):
+                    return True
+                if attempt < 7:
+                    await self.page.wait_for_timeout(400)
         for template in self.SETTINGS_PAGES_URLS[:2]:
             try:
                 await self._goto(template.format(business_id=business_id), timeout_ms=9000, attempts=1)

@@ -401,6 +401,9 @@ async def run_targeted_pages_readonly_canary(profile_id: str) -> None:
             target_business = str(os.getenv('REMASK_PAGE_ATTACH_CANARY_BUSINESS') or '').strip()
             target_page = target_page_override or str(os.getenv('REMASK_PAGE_ATTACH_CANARY_PAGE') or '').strip()
             if target_business.isdigit() and target_page.isdigit():
+                # Do not carry the heavy facebook.com renderer into Settings.
+                await session.close_business_browser()
+                browser = await session.facebook_business_browser()
                 blocked_requests = []
                 page_queries = []
                 async def readonly_route(route, request):
@@ -2294,6 +2297,9 @@ async def profile_live_inventory(
                             or row.get('_source')
                             or ''
                         ).strip(),
+                        'ownership_verified':row.get('ownership_verified'),
+                        'ownership_source':row.get('ownership_source'),
+                        'profile_id':row.get('profile_id'),
                     })
                 normalized.sort(
                     key=lambda page:(

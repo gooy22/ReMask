@@ -253,8 +253,27 @@ class BulkPersistenceTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(error.exception.code,'PAGE_ATTACH_RESULT_UNKNOWN')
         self.assertEqual(submit.await_count,1); browser.add_existing_page.assert_not_awaited()
 
+    async def test_new_job_preserves_another_items_uncertain_page_submit(self):
+        session,browser,kwargs=await self.prepare_resume()
+        await self.state.checkpoint('item','7','scope',ProvisioningStep.BUSINESS,{'phase':'PAGE_ADD_SUBMITTED'})
+        await self.state.set_running('next-item','7','next-scope',ProvisioningStep.BUSINESS)
+        kwargs.update(item_id='next-item',scope_key='next-scope')
+        with patch('app.provisioning.business_handler.set_business_primary_page',new=AsyncMock()) as submit,patch('app.provisioning.business_handler.create_business_resilient',new=AsyncMock()) as create:
+            with self.assertRaises(ProvisioningError) as error:
+                await business_handler(session,{'name':'Existing','user_email':'owner@example.com','page_id':'222222222'},{},**kwargs)
+        self.assertEqual(error.exception.code,'PAGE_ATTACH_RESULT_UNKNOWN')
+        submit.assert_not_awaited(); create.assert_not_awaited(); browser.add_existing_page.assert_not_awaited()
+        self.assertEqual((await self.state.step('next-item',ProvisioningStep.BUSINESS))['result']['phase'],'PAGE_ADD_SUBMITTED')
+
 
 class PageHydrationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_ready_business_pages_document_is_reused(self):
+        browser=FacebookBusinessBrowser(SimpleNamespace(profile_id='7'))
+        browser.page=SimpleNamespace(url='https://business.facebook.com/latest/settings/pages/?business_id=111111111',wait_for_timeout=AsyncMock())
+        browser._goto=AsyncMock(); browser._click_named=AsyncMock(return_value=True)
+        self.assertTrue(await browser._open_pages_add_action('111111111'))
+        browser._goto.assert_not_awaited()
+
     async def test_current_autocomplete_receives_keyboard_and_blur_events(self):
         browser=FacebookBusinessBrowser(SimpleNamespace(profile_id='7'))
         field=SimpleNamespace(is_visible=AsyncMock(return_value=True),is_editable=AsyncMock(return_value=True),

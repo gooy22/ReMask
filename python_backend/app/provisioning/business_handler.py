@@ -168,6 +168,10 @@ async def business_handler(
             discover = getattr(await get_browser(), "discover_managed_pages", None)
             if callable(discover):
                 candidates = await discover(fast=True)
+                release = getattr(session, "close_business_browser", None)
+                if callable(release):
+                    await release()
+                    browser = None
         except BrowserBusinessError:
             pass
     delegate = next((row for row in candidates if isinstance(row, dict)
@@ -346,7 +350,7 @@ async def business_handler(
                 else confirmed_cross_job_id
             )
             checkpoint_response_path = previous_response_path
-            phase = "CREATE_CONFIRMED"
+            phase = previous_phase if previous_phase in {"PAGE_ADD_SUBMITTED", "PAGE_ADD_CLICK_INTENT"} else "CREATE_CONFIRMED"
             recovered = True
             if previous_name:
                 bm_name = previous_name
@@ -356,7 +360,7 @@ async def business_handler(
                 scope_key,
                 ProvisioningStep.BUSINESS,
                 {
-                    "phase": "CREATE_CONFIRMED",
+                    "phase": phase,
                     "resume_from": "PAGE_ADD",
                     "business_id": business_id,
                     "business_name": bm_name,
@@ -936,6 +940,18 @@ async def business_handler(
 
         # If a prior Page-add submit was interrupted, verify before doing
         # anything else. We do not blindly click Add again.
+        if _clean(checkpoint.get("phase")).upper() not in {"PAGE_CONFIRMED", "PAGE_ADD_SUBMITTED", "PAGE_ADD_CLICK_INTENT"}:
+            related = []
+            for identity in {page_id, original_page_id}:
+                other = await provisioning_state.latest_business_resume_for_page(profile_id, identity, exclude_item_id=item_id)
+                other_result = (other or {}).get("result") or {}
+                if _clean(other_result.get("business_id")) == business_id:
+                    related.append(other)
+            latest = max(related, key=lambda row: row.get("updated_at", 0), default={})
+            latest_phase = _clean((latest.get("result") or {}).get("phase")).upper()
+            if latest_phase in {"PAGE_ADD_SUBMITTED", "PAGE_ADD_CLICK_INTENT"}:
+                checkpoint = await provisioning_state.checkpoint(item_id, profile_id, scope_key, ProvisioningStep.BUSINESS,
+                    {"phase": latest_phase, "recovered_page_submit_from_item_id": latest.get("item_id")})
         phase = _clean(checkpoint.get("phase")).upper()
         if phase in {"PAGE_ADD_SUBMITTED", "PAGE_ADD_CLICK_INTENT"}:
             browser = await get_browser()
