@@ -31,8 +31,8 @@ class LiveSyncContractTests(unittest.TestCase):
         self.assertIn("confirmed_business_page_bindings_for_profile", source)
         self.assertIn("revalidate_known_business_pages", source)
         self.assertLess(
-            source.index("REMASK_KNOWN_PAGE_FAST_REVALIDATION_V1"),
-            source.index("REMASK_ADS_MANAGER_PAGES_FIRST_V1"),
+            source.index("revalidate_known_business_pages"),
+            source.index("discover_promotable_pages_from_ads_manager"),
         )
 
         browser_source = inspect.getsource(
