@@ -17623,12 +17623,18 @@ timeout_seconds=4.0,
                     }
 
                     const exact = candidates.filter(row => row.exactId);
-                    const pool = exact.length === 1
-                        ? exact
-                        : candidates.filter(row =>
-                            ['option','radio','listitem','gridcell'].includes(row.role)
-                        );
-                    const chosen = pool.length === 1 ? pool[0] : null;
+                    const structural = candidates.filter(row =>
+                        ['option','radio','listitem','gridcell'].includes(row.role)
+                    );
+                    const chosen = (
+                        exact.length === 1
+                            ? exact[0]
+                            : structural.length === 1
+                                ? structural[0]
+                                : candidates.length === 1
+                                    ? candidates[0]
+                                    : null
+                    );
                     if (!chosen) {
                         return {
                             selected:false,
