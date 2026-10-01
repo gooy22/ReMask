@@ -486,6 +486,10 @@ async def run_existing_business_repair_once(profile_id: str) -> None:
     log.warning('existing BM repair saved candidates profile=%s rows=%s', profile_id, json.dumps(candidates[:8],separators=(',',':')))
     if os.getenv('REMASK_EXISTING_BM_REPAIR') != '1':
         return
+    # A completed latest item must never cause an older failed item to be retried.
+    if candidates and candidates[0]['status'] == 'SUCCESS':
+        log.warning('existing BM repair skipped: latest saved item already succeeded')
+        return
     selected = next((row for row in candidates if row['status']=='FAILED'
         and row['error_code'] in {'PAGE_ADD_UI_CHANGED','BUSINESS_BROWSER_FAILED','FACEBOOK_NAVIGATION_FAILED'}
         and row['phase'] in {'CREATE_CONFIRMED','PAGE_ADD','PAGE_ADD_NOT_SUBMITTED'}), None)
@@ -519,7 +523,7 @@ async def run_existing_business_repair_once(profile_id: str) -> None:
                 step = await pool.provisioning_state.step(selected['item_id'], ProvisioningStep.BUSINESS)
                 result = (step or {}).get('result') or {}
                 log.warning('existing BM repair terminal item=%s status=%s error=%s result=%s reason=%s', selected['item_id'],item_state['status'],item_state.get('error_code'),
-                    json.dumps({key:result.get(key) for key in ('phase','business_id','primary_page_id','page_already_attached','page_confirmed_by_private_attach','last_browser_error_code','private_page_attach_error_code')},separators=(',',':')),
+                    json.dumps({key:result.get(key) for key in ('phase','business_id','primary_page_id','selected_page_id','page_attach_requested','page_already_attached','page_confirmed_by_private_attach','last_browser_error_code','private_page_attach_error_code')},separators=(',',':')),
                     str(item_state.get('error_message') or '').split(' diagnostic=')[0][:700])
                 break
 

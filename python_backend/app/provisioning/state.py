@@ -250,7 +250,8 @@ class ProvisioningStateStore:
                 continue
 
             candidate_page = str(
-                result.get("primary_page_id")
+                result.get("selected_page_id")
+                or result.get("primary_page_id")
                 or result.get("page_id")
                 or ""
             ).strip()
@@ -863,7 +864,8 @@ class ProvisioningStateStore:
 
             business_id = str(result.get("business_id") or "").strip()
             page_id = str(
-                result.get("primary_page_id")
+                result.get("selected_page_id")
+                or result.get("primary_page_id")
                 or result.get("page_id")
                 or ""
             ).strip()

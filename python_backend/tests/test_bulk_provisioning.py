@@ -271,12 +271,88 @@ class BulkPersistenceTests(unittest.IsolatedAsyncioTestCase):
         kwargs=dict(provisioning_state=self.state,item_id='item',profile_id='7',scope_key='scope')
         return session,browser,kwargs
 
+    async def test_confirmed_bm_succeeds_without_page_attach_or_recreate(self):
+        session,browser,kwargs=await self.prepare_resume()
+        await self.state.checkpoint('item','7','scope',ProvisioningStep.BUSINESS,
+            {'phase':'PAGE_ADD_NOT_SUBMITTED','create_response_business_id':'111111111',
+             'create_response_path':'data.business_create.business.id'})
+        with patch('app.provisioning.business_handler.set_business_primary_page',new=AsyncMock()) as attach,patch('app.provisioning.business_handler.create_business_resilient',new=AsyncMock()) as create:
+            result=await business_handler(session,{'name':'Existing','user_email':'owner@example.com','page_id':'222222222'},{},**kwargs)
+        self.assertEqual(result['business_id'],'111111111')
+        self.assertEqual(result['phase'],'CREATE_CONFIRMED'); self.assertEqual(result['resume_from'],'DONE')
+        self.assertIsNone(result['primary_page_id']); self.assertEqual(result['selected_page_id'],'222222222')
+        self.assertFalse(result['page']['attach_requested']); self.assertFalse(result['page']['attachment_verified'])
+        self.assertEqual(result['create_response_business_id'],'111111111')
+        attach.assert_not_awaited(); create.assert_not_awaited(); session.facebook_business_browser.assert_not_awaited()
+
+    async def test_no_page_is_required_for_independent_bm_create(self):
+        session,browser,kwargs=await self.prepare_resume()
+        # A fresh item has no saved CREATE.
+        kwargs.update(item_id='fresh',scope_key='fresh')
+        await self.state.set_running('fresh','7','fresh',ProvisioningStep.BUSINESS)
+        async def created(*args,**kw):
+            self.assertEqual(kw['page_id'],''); self.assertIs(kw['require_page_backed'],False)
+            await kw['before_submit']()
+            self.assertEqual((await self.state.step('fresh',ProvisioningStep.BUSINESS))['result']['phase'],'CREATE_SUBMITTED')
+            await kw['after_created'](SimpleNamespace(business_id='444444444',response_path='data.business_create.business.id'))
+            return SimpleNamespace(business_id='444444444',transport='facebook_web_graphql_scope_selector',primary_page_id='',diagnostics=[])
+        with patch('app.provisioning.business_handler.create_business_resilient',new=AsyncMock(side_effect=created)) as create,patch('app.provisioning.business_handler.set_business_primary_page',new=AsyncMock()) as attach:
+            result=await business_handler(session,{'name':'Fresh','user_email':'owner@example.com'},{},**kwargs)
+        self.assertEqual(result['business_id'],'444444444'); self.assertEqual(result['phase'],'CREATE_CONFIRMED')
+        self.assertIsNone(result['primary_page_id']); self.assertIsNone(result['selected_page_id'])
+        create.assert_awaited_once(); attach.assert_not_awaited(); session.facebook_business_browser.assert_not_awaited()
+
+    async def test_selected_page_is_reference_and_not_sent_to_native_create(self):
+        session,browser,kwargs=await self.prepare_resume()
+        kwargs.update(item_id='fresh',scope_key='fresh')
+        await self.state.set_running('fresh','7','fresh',ProvisioningStep.BUSINESS)
+        async def created(*args,**kw):
+            self.assertEqual(kw['page_id'],''); self.assertIs(kw['require_page_backed'],False)
+            await kw['after_created'](SimpleNamespace(business_id='444444444',response_path='data.business_create.business.id'))
+            return SimpleNamespace(business_id='444444444',transport='facebook_web_graphql_scope_selector',primary_page_id='',diagnostics=[])
+        with patch('app.provisioning.business_handler.create_business_resilient',new=AsyncMock(side_effect=created)),patch('app.provisioning.business_handler.set_business_primary_page',new=AsyncMock()) as attach:
+            result=await business_handler(session,{'name':'Fresh','user_email':'owner@example.com','page_id':'555555555'},{},**kwargs)
+        self.assertEqual(result['selected_page_id'],'555555555'); self.assertIsNone(result['primary_page_id'])
+        attach.assert_not_awaited(); session.facebook_business_browser.assert_not_awaited()
+
+    async def test_uncertain_create_still_cannot_be_resubmitted_without_page_attach(self):
+        session,browser,kwargs=await self.prepare_resume()
+        kwargs.update(item_id='unknown',scope_key='unknown')
+        await self.state.set_running('unknown','7','unknown',ProvisioningStep.BUSINESS)
+        await self.state.checkpoint('unknown','7','unknown',ProvisioningStep.BUSINESS,{'phase':'CREATE_SUBMITTED'})
+        with patch('app.provisioning.business_handler.create_business_resilient',new=AsyncMock()) as create:
+            with self.assertRaises(ProvisioningError) as error:
+                await business_handler(session,{'name':'Unknown','user_email':'owner@example.com'},{},**kwargs)
+        self.assertEqual(error.exception.code,'CREATE_RESULT_UNKNOWN')
+        create.assert_not_awaited(); session.facebook_business_browser.assert_not_awaited()
+
+    async def test_unbound_bm_does_not_erase_uncertain_prior_attach_history(self):
+        session,browser,kwargs=await self.prepare_resume()
+        await self.state.checkpoint('item','7','scope',ProvisioningStep.BUSINESS,{'phase':'PAGE_ADD_SUBMITTED'})
+        result=await business_handler(session,{'name':'Existing','user_email':'owner@example.com','page_id':'222222222'},{},**kwargs)
+        self.assertTrue(result['page']['result_unknown']); self.assertEqual(result['page_attach_previous_phase'],'PAGE_ADD_SUBMITTED')
+        self.assertIsNone(result['primary_page_id']); session.facebook_business_browser.assert_not_awaited()
+
+    async def test_attach_flag_rejects_truthy_string(self):
+        session,browser,kwargs=await self.prepare_resume()
+        with self.assertRaises(ProvisioningError) as error:
+            await business_handler(session,{'name':'Existing','user_email':'owner@example.com','attach_page':'false'},{},**kwargs)
+        self.assertEqual(error.exception.code,'INVALID_INPUT')
+
+    async def test_completed_unbound_bm_retains_cross_job_duplicate_protection(self):
+        session,browser,kwargs=await self.prepare_resume()
+        await business_handler(session,{'name':'Existing','user_email':'owner@example.com','page_id':'222222222'},{},**kwargs)
+        resume=await self.state.latest_business_resume_for_page('7','222222222',exclude_item_id='next-item')
+        self.assertEqual(resume['result']['business_id'],'111111111')
+        self.assertIsNone(resume['result']['primary_page_id'])
+        self.assertEqual(resume['result']['selected_page_id'],'222222222')
+
     async def test_existing_business_private_attach_never_creates_or_ui_submits(self):
         session,browser,kwargs=await self.prepare_resume()
         async def attach(*args,**kw):
             await kw['before_submit'](); self.assertEqual((await self.state.step('item',ProvisioningStep.BUSINESS))['result']['phase'],'PAGE_ADD_SUBMITTED')
         with patch('app.provisioning.business_handler.set_business_primary_page',new=AsyncMock(side_effect=attach)) as submit,patch('app.provisioning.business_handler.create_business_resilient',new=AsyncMock()) as create:
-            result=await business_handler(session,{'name':'Existing','user_email':'owner@example.com','page_id':'222222222'},{},**kwargs)
+            result=await business_handler(session,{'name':'Existing','attach_page':True,'user_email':'owner@example.com','page_id':'222222222'},{},**kwargs)
         self.assertEqual(result['business_id'],'111111111'); self.assertEqual(result['phase'],'PAGE_CONFIRMED')
         create.assert_not_awaited(); browser.add_existing_page.assert_not_awaited(); submit.assert_awaited_once()
 
@@ -286,7 +362,7 @@ class BulkPersistenceTests(unittest.IsolatedAsyncioTestCase):
         session.context.pages=[{'id':'1289628847574478','profile_id':'61594993341059',
             'name':'Media Shopsw','ownership_verified':True,'ownership_source':'additional_profiles_with_biz_tools.delegate_page'}]
         with patch('app.provisioning.business_handler.set_business_primary_page',new=AsyncMock()) as submit,patch('app.provisioning.business_handler.create_business_resilient',new=AsyncMock()) as create:
-            result=await business_handler(session,{'name':'Existing','user_email':'owner@example.com','page_id':'61594993341059'},{},**kwargs)
+            result=await business_handler(session,{'name':'Existing','attach_page':True,'user_email':'owner@example.com','page_id':'61594993341059'},{},**kwargs)
         self.assertEqual(result['primary_page_id'],'1289628847574478')
         self.assertEqual(submit.call_args.kwargs['page_id'],'1289628847574478')
         saved=(await self.state.step('item',ProvisioningStep.BUSINESS))['result']
@@ -301,7 +377,7 @@ class BulkPersistenceTests(unittest.IsolatedAsyncioTestCase):
         kwargs.update(item_id='next-item',scope_key='next-scope')
         await self.state.set_running('next-item','7','next-scope',ProvisioningStep.BUSINESS)
         with patch('app.provisioning.business_handler.set_business_primary_page',new=AsyncMock()),patch('app.provisioning.business_handler.create_business_resilient',new=AsyncMock()) as create:
-            result=await business_handler(session,{'name':'Existing','user_email':'owner@example.com','page_id':'61594993341059'},{},**kwargs)
+            result=await business_handler(session,{'name':'Existing','attach_page':True,'user_email':'owner@example.com','page_id':'61594993341059'},{},**kwargs)
         self.assertEqual(result['business_id'],'111111111'); self.assertEqual(result['primary_page_id'],'1289628847574478')
         create.assert_not_awaited()
 
@@ -310,7 +386,7 @@ class BulkPersistenceTests(unittest.IsolatedAsyncioTestCase):
         async def lost(*args,**kw): await kw['before_submit'](); raise TimeoutError('lost response')
         with patch('app.provisioning.business_handler.set_business_primary_page',new=AsyncMock(side_effect=lost)) as submit:
             for _ in range(2):
-                with self.assertRaises(ProvisioningError) as error: await business_handler(session,{'name':'Existing','user_email':'owner@example.com','page_id':'222222222'},{},**kwargs)
+                with self.assertRaises(ProvisioningError) as error: await business_handler(session,{'name':'Existing','attach_page':True,'user_email':'owner@example.com','page_id':'222222222'},{},**kwargs)
                 self.assertEqual(error.exception.code,'PAGE_ATTACH_RESULT_UNKNOWN')
         self.assertEqual(submit.await_count,1); browser.add_existing_page.assert_not_awaited()
 
@@ -321,7 +397,7 @@ class BulkPersistenceTests(unittest.IsolatedAsyncioTestCase):
         kwargs.update(item_id='next-item',scope_key='next-scope')
         with patch('app.provisioning.business_handler.set_business_primary_page',new=AsyncMock()) as submit,patch('app.provisioning.business_handler.create_business_resilient',new=AsyncMock()) as create:
             with self.assertRaises(ProvisioningError) as error:
-                await business_handler(session,{'name':'Existing','user_email':'owner@example.com','page_id':'222222222'},{},**kwargs)
+                await business_handler(session,{'name':'Existing','attach_page':True,'user_email':'owner@example.com','page_id':'222222222'},{},**kwargs)
         self.assertEqual(error.exception.code,'PAGE_ATTACH_RESULT_UNKNOWN')
         submit.assert_not_awaited(); create.assert_not_awaited(); browser.add_existing_page.assert_not_awaited()
         self.assertEqual((await self.state.step('next-item',ProvisioningStep.BUSINESS))['result']['phase'],'PAGE_ADD_SUBMITTED')

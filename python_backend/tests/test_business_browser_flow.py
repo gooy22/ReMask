@@ -4563,6 +4563,7 @@ class BusinessBrowserFlowTests(unittest.IsolatedAsyncioTestCase):
             {
                 "name": "Test Business",
                 "page_id": "123456789",
+                "attach_page": True,
                 "user_email": "owner@example.com",
             },
             {
@@ -4632,6 +4633,7 @@ class BusinessBrowserFlowTests(unittest.IsolatedAsyncioTestCase):
             {
                 "name": "Test Business",
                 "page_id": "123456789",
+                "attach_page": True,
                 "user_email": "owner@example.com",
             },
             snapshot.as_dict(),
@@ -4678,6 +4680,7 @@ class BusinessBrowserFlowTests(unittest.IsolatedAsyncioTestCase):
                         "BUSINESS": {
                             "name": "Test Business",
                             "page_id": "123456789",
+                "attach_page": True,
                         }
                     },
                 },
@@ -4727,6 +4730,7 @@ class BusinessBrowserFlowTests(unittest.IsolatedAsyncioTestCase):
             {
                 "name": "Test Business",
                 "page_id": "123456789",
+                "attach_page": True,
                 "user_email": "owner@example.com",
             },
             {
@@ -4793,6 +4797,7 @@ class BusinessBrowserFlowTests(unittest.IsolatedAsyncioTestCase):
             {
                 "name": "Test Business",
                 "page_id": "123456789",
+                "attach_page": True,
                 "user_email": "owner@example.com",
             },
             {

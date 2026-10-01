@@ -44,8 +44,9 @@ async def business_handler(
     - CREATE is checkpointed before the final click.
     - If a previous attempt reached CREATE_SUBMITTED, retry reconciles first and
       never blindly submits another CREATE.
-    - The selected Page is attached and verified in the same profile-bound
-      Chromium session.
+    - Fan Pages remain account-level assets by default.
+    - Page attach runs only when attach_page=True is explicitly requested;
+      a confirmed CREATE is independently successful.
     """
     del args
 
@@ -98,8 +99,12 @@ async def business_handler(
             retryable=False,
         )
 
+    attach_page = params.get("attach_page", False)
+    if not isinstance(attach_page, bool):
+        raise ProvisioningError("INVALID_INPUT", "BUSINESS.attach_page must be boolean", retryable=False)
+
     page_id = _clean(params.get("page_id") or params.get("primary_page_id"))
-    if not re.fullmatch(r"\d{5,30}", page_id):
+    if (attach_page or page_id) and not re.fullmatch(r"\d{5,30}", page_id):
         raise ProvisioningError(
             "INVALID_PRIMARY_PAGE",
             "BUSINESS.page_id must be a numeric Facebook Page ID",
@@ -163,7 +168,7 @@ async def business_handler(
     legacy_confirmed_bm = _clean(checkpoint.get("business_id") or checkpoint.get("create_response_business_id")).isdigit()
     saved_selection = any(isinstance(row, dict) and _clean(row.get("id")) == page_id
                           for row in (getattr(context, "pages", None) or []))
-    if (legacy_confirmed_bm or saved_selection) and not any(page_id in {_clean(row.get("profile_id")), _clean(row.get("id"))} for row in candidates):
+    if attach_page and (legacy_confirmed_bm or saved_selection) and not any(page_id in {_clean(row.get("profile_id")), _clean(row.get("id"))} for row in candidates):
         try:
             discover = getattr(await get_browser(), "discover_managed_pages", None)
             if callable(discover):
@@ -184,7 +189,9 @@ async def business_handler(
         saved_page = _clean(checkpoint.get("primary_page_id") or checkpoint.get("page_id"))
         if saved_page == original_page_id:
             checkpoint = await provisioning_state.checkpoint(item_id, profile_id, scope_key, ProvisioningStep.BUSINESS,
-                {"primary_page_id": page_id, "selected_page_profile_id": original_page_id,
+                {"primary_page_id": page_id if attach_page else None,
+                    "selected_page_id": page_id or None,
+                    "page_attach_requested": attach_page, "selected_page_profile_id": original_page_id,
                  "page_identity_source": delegate.get("ownership_source")})
     prior_error_code = _clean(
         step_state.get("error_code")
@@ -193,7 +200,8 @@ async def business_handler(
     ).upper()
 
     checkpoint_page = _clean(
-        checkpoint.get("primary_page_id")
+        checkpoint.get("selected_page_id")
+        or checkpoint.get("primary_page_id")
         or checkpoint.get("page_id")
     )
     if checkpoint_page and checkpoint_page != page_id:
@@ -365,7 +373,9 @@ async def business_handler(
                     "resume_from": "PAGE_ADD",
                     "business_id": business_id,
                     "business_name": bm_name,
-                    "primary_page_id": page_id,
+                    "primary_page_id": page_id if attach_page else None,
+                    "selected_page_id": page_id or None,
+                    "page_attach_requested": attach_page,
                     "create_response_business_id": checkpoint_response_id,
                     "create_response_path": (
                         checkpoint_response_path
@@ -403,7 +413,9 @@ async def business_handler(
                 {
                     "phase": previous_phase,
                     "business_name": bm_name,
-                    "primary_page_id": page_id,
+                    "primary_page_id": page_id if attach_page else None,
+                    "selected_page_id": page_id or None,
+                    "page_attach_requested": attach_page,
                     "business_ids_before": (previous_before_ids if isinstance(previous_result.get("business_ids_before"), list) else None),
                     "recovered_cross_job": True,
                     "recovered_from_item_id": _clean(
@@ -456,7 +468,9 @@ async def business_handler(
                     "resume_from": "PAGE_ADD",
                     "business_id": business_id,
                     "business_name": bm_name,
-                    "primary_page_id": page_id,
+                    "primary_page_id": page_id if attach_page else None,
+                    "selected_page_id": page_id or None,
+                    "page_attach_requested": attach_page,
                     "create_response_business_id": checkpoint_response_id,
                     "create_response_path": checkpoint_response_path,
                     "recovered_from_exact_create_response": True,
@@ -533,7 +547,9 @@ async def business_handler(
                     "resume_from": "PAGE_ADD",
                     "business_id": business_id,
                     "business_name": bm_name,
-                    "primary_page_id": page_id,
+                    "primary_page_id": page_id if attach_page else None,
+                    "selected_page_id": page_id or None,
+                    "page_attach_requested": attach_page,
                     "recovered_after_create_uncertainty": True,
                 },
             )
@@ -560,7 +576,9 @@ async def business_handler(
                     "phase": "CREATE_NOT_SUBMITTED",
                     "resume_from": "CREATE",
                     "business_name": bm_name,
-                    "primary_page_id": page_id,
+                    "primary_page_id": page_id if attach_page else None,
+                    "selected_page_id": page_id or None,
+                    "page_attach_requested": attach_page,
                     "activity": "PRIVATE_CREATE_PREPARING",
                     "activity_at": int(time.time()),
                 },
@@ -583,7 +601,9 @@ async def business_handler(
                     item_id, profile_id, scope_key, ProvisioningStep.BUSINESS,
                     {"phase": "CREATE_CONFIRMED", "resume_from": "PAGE_ADD",
                      "business_id": exact_id, "business_name": bm_name,
-                     "primary_page_id": page_id,
+                     "primary_page_id": page_id if attach_page else None,
+                    "selected_page_id": page_id or None,
+                    "page_attach_requested": attach_page,
                      "create_response_business_id": exact_id,
                      "create_response_path": _clean(result.response_path),
                      "activity": "PRIVATE_CREATE_CONFIRMED", "activity_at": int(time.time())},
@@ -623,12 +643,12 @@ async def business_handler(
                     private_result = await create_business_resilient(
                         session,
                         business_name=bm_name,
-                        page_id=page_id,
+                        page_id=page_id if attach_page else "",
                         user_email=user_email,
                         user_first_name=first_name,
                         user_last_name=last_name,
                         profile_display_name=display_name,
-                        require_page_backed=True,
+                        require_page_backed=attach_page,
                         before_submit=private_before_submit,
                         after_created=private_after_created,
                         before_page_submit=private_before_page_submit,
@@ -651,7 +671,7 @@ async def business_handler(
                     "facebook_web_graphql"
                 )
                 private_page_confirmed = (
-                    _clean(private_result.primary_page_id) == page_id
+                    attach_page and _clean(private_result.primary_page_id) == page_id
                 )
 
                 checkpoint = await provisioning_state.checkpoint(
@@ -672,7 +692,9 @@ async def business_handler(
                         ),
                         "business_id": business_id,
                         "business_name": bm_name,
-                        "primary_page_id": page_id,
+                        "primary_page_id": page_id if attach_page else None,
+                    "selected_page_id": page_id or None,
+                    "page_attach_requested": attach_page,
                         "transport": create_transport,
                         "private_create_primary": True,
                         "private_create_diagnostics": (
@@ -727,7 +749,9 @@ async def business_handler(
                                 "resume_from": "PAGE_ADD",
                                 "business_id": business_id,
                                 "business_name": bm_name,
-                                "primary_page_id": page_id,
+                                "primary_page_id": page_id if attach_page else None,
+                    "selected_page_id": page_id or None,
+                    "page_attach_requested": attach_page,
                                 "transport": "facebook_web_graphql_create_then_browser_page_attach",
                                 "private_create_error_code": private_error.code,
                                 "private_create_error": str(private_error)[:4000],
@@ -752,7 +776,9 @@ async def business_handler(
                             "phase": "CREATE_RESULT_UNKNOWN",
                             "resume_from": "RECONCILE_CREATE",
                             "business_name": bm_name,
-                            "primary_page_id": page_id,
+                            "primary_page_id": page_id if attach_page else None,
+                    "selected_page_id": page_id or None,
+                    "page_attach_requested": attach_page,
                             "private_create_error_code": private_error.code,
                             "private_create_error": str(private_error)[:4000],
                             "private_create_diagnostics": private_error_diagnostics,
@@ -815,7 +841,9 @@ async def business_handler(
                             "phase": "CREATE_NOT_SUBMITTED",
                             "resume_from": "CREATE",
                             "business_name": bm_name,
-                            "primary_page_id": page_id,
+                            "primary_page_id": page_id if attach_page else None,
+                    "selected_page_id": page_id or None,
+                    "page_attach_requested": attach_page,
                             "private_create_error_code": private_error.code,
                             "private_create_error": str(private_error)[:4000],
                             "private_create_diagnostics": (
@@ -838,7 +866,9 @@ async def business_handler(
                         {
                             "phase": "BUSINESS_SNAPSHOT",
                             "business_name": bm_name,
-                            "primary_page_id": page_id,
+                            "primary_page_id": page_id if attach_page else None,
+                    "selected_page_id": page_id or None,
+                    "page_attach_requested": attach_page,
                             "business_ids_before": sorted(before_map),
                             "activity": "CREATE_FORM_OPENING",
                             "activity_at": int(time.time()),
@@ -854,7 +884,9 @@ async def business_handler(
                             {
                                 **patch,
                                 "business_name": bm_name,
-                                "primary_page_id": page_id,
+                                "primary_page_id": page_id if attach_page else None,
+                    "selected_page_id": page_id or None,
+                    "page_attach_requested": attach_page,
                             },
                         )
 
@@ -885,7 +917,9 @@ async def business_handler(
                             "resume_from": "PAGE_ADD",
                             "business_id": business_id,
                             "business_name": bm_name,
-                            "primary_page_id": page_id,
+                            "primary_page_id": page_id if attach_page else None,
+                    "selected_page_id": page_id or None,
+                    "page_attach_requested": attach_page,
                             "business_ids_before": create_result.before_ids,
                             "business_ids_after": create_result.after_ids,
                             "create_response_business_id": (
@@ -923,6 +957,41 @@ async def business_handler(
             {"business_id": business_id},
         )
 
+        if not attach_page:
+            previous_page_phase = _clean(checkpoint.get("phase")).upper()
+            verified_page = (
+                _clean(checkpoint.get("primary_page_id"))
+                if previous_page_phase == "PAGE_CONFIRMED" else ""
+            )
+            checkpoint = await provisioning_state.checkpoint(
+                item_id, profile_id, scope_key, ProvisioningStep.BUSINESS,
+                {
+                    "phase": "CREATE_CONFIRMED",
+                    "resume_from": "DONE",
+                    "business_id": business_id,
+                    "business_name": bm_name,
+                    "primary_page_id": verified_page or None,
+                    "selected_page_id": page_id or None,
+                    "page_attach_requested": False,
+                    "page_attach_previous_phase": previous_page_phase,
+                    "page_attach_result_unknown": previous_page_phase in {
+                        "PAGE_ADD_SUBMITTED", "PAGE_ADD_CLICK_INTENT"
+                    },
+                    "activity": "DONE",
+                    "activity_at": int(time.time()),
+                },
+            )
+            return {
+                **checkpoint,
+                "resumed": bool(recovered),
+                "transport": _clean(checkpoint.get("transport")) or "facebook_business_suite_ui",
+                "page": {
+                    "attach_requested": False,
+                    "attachment_verified": bool(verified_page),
+                    "result_unknown": bool(checkpoint.get("page_attach_result_unknown")),
+                },
+            }
+
         if page_known_not_sent:
             checkpoint = await provisioning_state.checkpoint(
                 item_id,
@@ -934,7 +1003,9 @@ async def business_handler(
                     "resume_from": "PAGE_ADD",
                     "business_id": business_id,
                     "business_name": bm_name,
-                    "primary_page_id": page_id,
+                    "primary_page_id": page_id if attach_page else None,
+                    "selected_page_id": page_id or None,
+                    "page_attach_requested": attach_page,
                     "page_gate_aborted_before_meta": True,
                 },
             )
@@ -1043,7 +1114,9 @@ async def business_handler(
                             **patch,
                             "business_id": business_id,
                             "business_name": bm_name,
-                            "primary_page_id": page_id,
+                            "primary_page_id": page_id if attach_page else None,
+                    "selected_page_id": page_id or None,
+                    "page_attach_requested": attach_page,
                         },
                     )
 
@@ -1079,7 +1152,9 @@ async def business_handler(
 
                 if private_attach_confirmed:
                     await before_page_submit({"phase": "PAGE_CONFIRMED", "resume_from": "DONE", "activity": "PRIVATE_PAGE_CONFIRMED"})
-                    return {"business_id": business_id, "primary_page_id": page_id,
+                    return {"business_id": business_id, "primary_page_id": page_id if attach_page else None,
+                    "selected_page_id": page_id or None,
+                    "page_attach_requested": attach_page,
                             "phase": "PAGE_CONFIRMED", "resume_from": "DONE",
                             "resumed": recovered, "transport": "facebook_web_graphql_primary_page"}
 
@@ -1119,7 +1194,9 @@ async def business_handler(
                             "activity_at": int(time.time()),
                             "business_id": business_id,
                             "business_name": bm_name,
-                            "primary_page_id": page_id,
+                            "primary_page_id": page_id if attach_page else None,
+                    "selected_page_id": page_id or None,
+                    "page_attach_requested": attach_page,
                             "page_attach_timeout_seconds": 90,
                             "page_attach_timeout_phase": phase,
                             "page_attach_timeout_previous_activity": activity,
@@ -1160,7 +1237,9 @@ async def business_handler(
                         "resume_from": "DONE",
                         "business_id": business_id,
                         "business_name": bm_name,
-                        "primary_page_id": page_id,
+                        "primary_page_id": page_id if attach_page else None,
+                    "selected_page_id": page_id or None,
+                    "page_attach_requested": attach_page,
                         "page_already_attached": bool(
                             page_result.already_attached
                         ),
@@ -1240,7 +1319,9 @@ async def business_handler(
 
     return {
         "business_id": business_id,
-        "primary_page_id": page_id,
+        "primary_page_id": page_id if attach_page else None,
+                    "selected_page_id": page_id or None,
+                    "page_attach_requested": attach_page,
         "phase": "PAGE_CONFIRMED",
         "resume_from": "DONE",
         "resumed": bool(

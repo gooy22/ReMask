@@ -17,6 +17,9 @@ jobs:
   regression:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      REMASK_DATA_DIR: /tmp/remask-regression-state
+      REMASK_DOC_ID_STORE: /tmp/remask-regression-state/facebook-web/docids.json
     steps:
       - uses: actions/checkout@v4
       - name: Install backend dependencies
