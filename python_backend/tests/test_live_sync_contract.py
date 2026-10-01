@@ -60,14 +60,17 @@ class LiveSyncContractTests(unittest.TestCase):
         self.assertIn("browser_open_timeout=budget(24.0)", source)
         self.assertIn("REMASK_LIVE_PAYLOAD_EXCLUDES_DURABLE_FALLBACK_V1", source)
         self.assertIn("REMASK_SYNC_PRIVATE_LIST_PAGES_FIRST_V1", source)
-        self.assertIn("list_pages_via_private_graphql", source)
-        self.assertIn("REMASK_PAGE_INVENTORY_TWO_PASS_V1", source)
-        self.assertGreaterEqual(
-            source.count("discover_managed_pages(fast=True)"),
-            2,
-        )
+        self.assertIn("REMASK_ADS_MANAGER_PAGES_FIRST_V1", source)
         self.assertIn(
-            "facebook_business_browser_relay_retry",
+            "discover_promotable_pages_from_ads_manager",
+            source,
+        )
+        self.assertIn("list_pages_via_private_graphql", source)
+        self.assertIn("REMASK_PAGE_INVENTORY_WARM_RETRY_V2", source)
+        self.assertIn("discover_managed_pages(fast=True)", source)
+        self.assertIn("discover_managed_pages(fast=False)", source)
+        self.assertIn(
+            "facebook_business_browser_relay_warm_retry",
             source,
         )
         self.assertIn("REMASK_SCOPED_HINT_FASTPATH_ONLY_V1", source)
