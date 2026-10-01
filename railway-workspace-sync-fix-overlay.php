@@ -516,9 +516,12 @@ async function syncSelection(){
     const failures=results
       .filter(x=>x&&x.error)
       .map(x=>[x.profile,x.business_id,`[${x.error_kind||'META_API'}]`,x.error].filter(Boolean).join(': '));
-    const warnings=results
-      .flatMap(x=>Array.isArray(x?.sync_warnings)?x.sync_warnings:[])
-      .filter(Boolean);
+    const warnings=[...new Set(
+      results
+        .flatMap(x=>Array.isArray(x?.sync_warnings)?x.sync_warnings:[])
+        .map(x=>String(x||'').trim())
+        .filter(Boolean)
+    )];
 
     if(failures.length){
       $('workspaceStatus').textContent=`Синхронизация Meta частично/полностью не выполнена: ${failures.join(' · ')}`;
@@ -881,7 +884,8 @@ function hierarchy_live_snapshot_put(
     array $businesses,
     array $adAccounts,
     array $pages,
-    array $profileRow
+    array $profileRow,
+    bool $pagesLiveVerified = false
 ): void
 {
     $profile = trim($profile);
@@ -948,13 +952,29 @@ function hierarchy_live_snapshot_put(
             if (is_array($decoded)) $all = $decoded;
         }
 
+        $previous = is_array($all[$profile] ?? null)
+            ? $all[$profile]
+            : [];
+        $now = time();
+        $previousPageLiveAt = (int)($previous['pages_live_verified_at'] ?? 0);
+
+        // REMASK_PAGE_VERIFICATION_TIMESTAMP_V3
+        // BM/RK live truth is refreshed on every successful Sync. Page state
+        // may be durable/preserved without being re-enumerated from Meta, so
+        // advance the Page verification timestamp only on fresh live proof.
         $all[$profile] = [
             'profile' => $persistedProfile,
             'businesses' => array_values($cleanBusinesses),
             'ad_accounts' => array_values($cleanAccounts),
             'pages' => array_values($cleanPages),
-            'updated_at' => time(),
-            'source' => 'last_confirmed_live_meta_inventory',
+            'updated_at' => $now,
+            'pages_live_verified' => $pagesLiveVerified,
+            'pages_live_verified_at' => $pagesLiveVerified
+                ? $now
+                : $previousPageLiveAt,
+            'source' => $pagesLiveVerified
+                ? 'live_meta_inventory'
+                : 'live_bm_rk_with_confirmed_page_state',
         ];
 
         $encoded = json_encode(
@@ -1051,7 +1071,11 @@ function hierarchy_live_snapshot_apply_display(
 
     $snapshot['profile'] = $freshProfile;
     $snapshot['last_confirmed_live_meta_at'] = (int)($saved['updated_at'] ?? 0);
-    $snapshot['display_source'] = 'last_confirmed_live_meta_inventory';
+    $snapshot['pages_live_verified'] = ($saved['pages_live_verified'] ?? false) === true;
+    $snapshot['pages_live_verified_at'] = (int)($saved['pages_live_verified_at'] ?? 0);
+    $snapshot['display_source'] = (string)(
+        $saved['source'] ?? 'last_confirmed_workspace_meta_state'
+    );
     return $snapshot;
 }
 
@@ -1475,6 +1499,7 @@ $syncProfileReplacement = <<<'PHP'
 
         $sessionReady = (($liveInventory['session_ready'] ?? false) === true);
         $pagesReady = (($liveInventory['pages_ready'] ?? false) === true);
+        $pagesLiveVerified = (($liveInventory['pages_live_verified'] ?? false) === true);
 
         // REMASK_PRESERVE_CONFIRMED_PAGES_ON_PARTIAL_V1
         // A failed Page probe must never erase a previously confirmed FP list.
@@ -1499,7 +1524,14 @@ $syncProfileReplacement = <<<'PHP'
                 }
                 unset($preservedPage);
                 $pageRows = $preservedPages;
-                $syncWarnings[] = 'Page inventory inconclusive; previous confirmed Pages preserved';
+                // REMASK_USABLE_PAGE_STATE_V3
+                // Last-confirmed Pages remain usable inventory even when this
+                // particular Sync did not re-enumerate account-level Pages.
+                // Keep live verification as a separate truth dimension.
+                $pagesReady = true;
+                if (trim((string)($liveInventory['pages_source'] ?? '')) === '') {
+                    $liveInventory['pages_source'] = 'last_confirmed_page_state';
+                }
             }
         }
 
@@ -1566,7 +1598,9 @@ $syncProfileReplacement = <<<'PHP'
         $snapshot['pages'] = array_values($pageRows);
         $snapshot['pages_count'] = count($pageRows);
         $snapshot['pages_ready'] = $pagesReady;
+        $snapshot['pages_live_verified'] = $pagesLiveVerified;
         $snapshot['pages_source'] = (string)($liveInventory['pages_source'] ?? '');
+        $snapshot['pages_diagnostic'] = trim((string)($liveInventory['pages_diagnostic'] ?? ''));
 
         // REMASK_FULL_SYNC_REQUIRES_PAGES_V1
         // LEGACY CONTRACT DISABLED by REMASK_STABLE_SYNC_BOUNDARY_V2.
@@ -1588,13 +1622,7 @@ $syncProfileReplacement = <<<'PHP'
         $snapshot['sync_partial'] = ($syncComplete && !$pagesReady);
         unset($snapshot['sync_error_kind'], $snapshot['sync_error']);
 
-        if ($syncComplete && !$pagesReady) {
-            $syncWarnings[] = (
-                count($pageRows) > 0
-                ? 'Fan Page inventory inconclusive; previous confirmed Pages preserved'
-                : 'Fan Page inventory inconclusive; BM/RK refreshed successfully'
-            );
-        } elseif (!$syncComplete) {
+        if (!$syncComplete) {
             $snapshot['sync_error_kind'] = 'PRIVATE_INCONCLUSIVE';
             $snapshot['sync_error'] = 'Live private BM/RK inventory was not confirmed.';
         }
@@ -1684,12 +1712,17 @@ $syncProfileReplacement = <<<'PHP'
                 $businessRows,
                 $adAccountRows,
                 $pageRows,
-                $responseProfile
+                $responseProfile,
+                $pagesLiveVerified
             );
             $snapshot['last_confirmed_live_meta_at'] = time();
-            $snapshot['display_source'] = $pagesReady
+            $snapshot['display_source'] = $pagesLiveVerified
                 ? 'live_meta_inventory'
-                : 'live_bm_rk_with_preserved_pages';
+                : (
+                    $pagesReady
+                    ? 'live_bm_rk_with_confirmed_page_state'
+                    : 'live_bm_rk_without_page_state'
+                );
         }
 
         hierarchy_activity([
@@ -1707,7 +1740,9 @@ $syncProfileReplacement = <<<'PHP'
                 'ad_accounts' => count($adAccountRows),
                 'pages' => count($pageRows),
                 'pages_ready' => $pagesReady,
-                'warnings' => $syncWarnings,
+                'pages_live_verified' => $pagesLiveVerified,
+                'pages_source' => (string)($snapshot['pages_source'] ?? ''),
+                'warnings' => array_values(array_unique($syncWarnings)),
             ],
         ]);
 
