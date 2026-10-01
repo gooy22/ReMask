@@ -4275,7 +4275,7 @@ function pythonWorkerInstallBusinessAddRkInterceptor() {
         ''
       ).replace(/\s+/g, ' ').trim();
 
-      if (!/^(?:Добавить\s+рекламн(?:ый\s+кабинет|ые\s+кабинеты)|Add\s+(?:RK|ad\s+accounts?))$/i.test(label)) {
+      if (!/^(?:Добавить\s+(?:RK|РК|рекламн(?:ый\s+кабинет|ые\s+кабинеты))|Add\s+(?:RK|ad\s+accounts?))$/i.test(label)) {
         return;
       }
 

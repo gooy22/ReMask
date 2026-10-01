@@ -65,5 +65,40 @@ vm.createContext(sandbox); vm.runInContext(source.slice(start,end), sandbox);
   assert.equal(withPage.parameters.BUSINESS.attach_page,false);
   assert.equal(withPage.parameters.BUSINESS.page_id,'222222222');
   assert.equal(withPage.scope_key,'add-bm-page-222222222');
+  // Exercise the actual capture-phase interceptor with the production menu
+  // caption. "Добавить RK" previously fell through to legacy Graph create.
+  const interceptStart=source.indexOf('function pythonWorkerInstallBusinessAddRkInterceptor()');
+  const interceptEnd=source.indexOf('\nfunction pythonWorkerInitUi()',interceptStart);
+  let intercept, opened=0;
+  sandbox.document.addEventListener=(kind,cb,capture)=>{
+    assert.equal(kind,'click'); assert.equal(capture,true); intercept=cb;
+  };
+  sandbox.state={activeTab:'businesses'};
+  let bmTargets=[{profile_id:'7',business_id:'2478360152656679'}];
+  sandbox.pythonWorkerSelectedBusinessTargets=()=>bmTargets;
+  sandbox.pythonWorkerOpenSelectedBusinessAdAccountModal=async()=>{opened++;};
+  vm.runInContext(source.slice(interceptStart,interceptEnd),sandbox);
+  sandbox.pythonWorkerInstallBusinessAddRkInterceptor();
+  function menuClick(label) {
+    const flags=[];
+    const event={target:{closest:()=>({textContent:label})},
+      preventDefault(){flags.push('prevent');},
+      stopPropagation(){flags.push('stop');},
+      stopImmediatePropagation(){flags.push('immediate');}};
+    intercept(event);
+    return flags;
+  }
+  for (const label of ['Добавить RK','Добавить РК','Добавить рекламный кабинет','Добавить рекламные кабинеты','Add RK','Add ad account']) {
+    const n=opened;
+    assert.deepEqual(menuClick(label),['prevent','stop','immediate'],label);
+    assert.equal(opened,n+1,label+' must open the worker modal');
+  }
+  const n=opened;
+  assert.deepEqual(menuClick('Создать RK'),[]);
+  sandbox.state.activeTab='profiles';
+  assert.deepEqual(menuClick('Добавить RK'),[]);
+  sandbox.state.activeTab='businesses'; bmTargets=[];
+  assert.deepEqual(menuClick('Добавить RK'),[]);
+  assert.equal(opened,n,'unrelated clicks must not open Add RK');
   console.log('Auto modal: counts, validation, POST payload and lost-response idempotency passed. BM: optional Page, no attach and independent scope passed.');
 })().catch(error=>{console.error(error);process.exitCode=1;});
