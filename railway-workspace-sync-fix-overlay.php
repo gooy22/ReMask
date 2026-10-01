@@ -1518,28 +1518,34 @@ $syncProfileReplacement = <<<'PHP'
         $snapshot['pages_source'] = (string)($liveInventory['pages_source'] ?? '');
 
         // REMASK_FULL_SYNC_REQUIRES_PAGES_V1
-        // "Sync complete" means the profile inventory needed by Workspace is
-        // actually refreshed: BM/RK plus Fan Pages. A BM-only success with
-        // pages_ready=false is partial and must not advertise a complete sync.
-        $syncComplete = ($liveReady && $pagesReady);
+        // LEGACY CONTRACT DISABLED by REMASK_STABLE_SYNC_BOUNDARY_V2.
+        //
+        // BM/RK and Fan Pages are independent Meta inventory surfaces. A live
+        // BM/RK confirmation must not be turned into a whole-profile failure
+        // merely because Facebook's separate Page SPA/Relay surface is cold,
+        // delayed or temporarily inconclusive. Keep BM/RK strict/live, preserve
+        // the last confirmed Page snapshot, and report Page uncertainty as a
+        // warning/partial dimension instead of PRIVATE_INCONCLUSIVE.
+        // REMASK_STABLE_SYNC_BOUNDARY_V2
+        $syncComplete = $liveReady;
 
         $snapshot['sync_source'] = 'private_business_suite_browser';
         $snapshot['live_inventory_available'] = $liveReady;
         $snapshot['confirmed_worker_bindings'] = $workerConfirmedCount;
         $snapshot['graph_preflight_available'] = false;
         $snapshot['sync_complete'] = $syncComplete;
-        $snapshot['sync_partial'] = (!$syncComplete && ($liveReady || $pagesReady));
+        $snapshot['sync_partial'] = ($syncComplete && !$pagesReady);
         unset($snapshot['sync_error_kind'], $snapshot['sync_error']);
 
-        if (!$syncComplete) {
+        if ($syncComplete && !$pagesReady) {
+            $syncWarnings[] = (
+                count($pageRows) > 0
+                ? 'Fan Page inventory inconclusive; previous confirmed Pages preserved'
+                : 'Fan Page inventory inconclusive; BM/RK refreshed successfully'
+            );
+        } elseif (!$syncComplete) {
             $snapshot['sync_error_kind'] = 'PRIVATE_INCONCLUSIVE';
-            if (!$liveReady) {
-                $snapshot['sync_error'] = 'Live private BM/RK inventory was not confirmed.';
-            } elseif (!$pagesReady) {
-                $snapshot['sync_error'] = 'Live Fan Page inventory was not confirmed.';
-            } else {
-                $snapshot['sync_error'] = 'Live Meta inventory was not fully confirmed.';
-            }
+            $snapshot['sync_error'] = 'Live private BM/RK inventory was not confirmed.';
         }
 
         $responseProfile = null;
@@ -1617,8 +1623,10 @@ $syncProfileReplacement = <<<'PHP'
         $snapshot['profile_name'] = $profile;
 
         // REMASK_PERSIST_ONLY_COMPLETE_META_SNAPSHOT_V1
-        // Never replace the durable last-confirmed snapshot with a BM-only or
-        // Page-only partial result. This is what previously erased FP rows.
+        // LEGACY "all surfaces or nothing" persistence is intentionally
+        // relaxed by REMASK_STABLE_SYNC_BOUNDARY_V2. When BM/RK are live
+        // confirmed we persist them immediately; Page rows are either freshly
+        // confirmed or the preserved last-confirmed rows assembled above.
         if ($syncComplete) {
             hierarchy_live_snapshot_put(
                 $profile,
@@ -1628,7 +1636,9 @@ $syncProfileReplacement = <<<'PHP'
                 $responseProfile
             );
             $snapshot['last_confirmed_live_meta_at'] = time();
-            $snapshot['display_source'] = 'live_meta_inventory';
+            $snapshot['display_source'] = $pagesReady
+                ? 'live_meta_inventory'
+                : 'live_bm_rk_with_preserved_pages';
         }
 
         hierarchy_activity([
