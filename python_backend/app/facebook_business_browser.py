@@ -4612,6 +4612,265 @@ class FacebookBusinessBrowser:
             },
         )
 
+    async def revalidate_known_business_pages(
+        self,
+        *,
+        business_id: str,
+        pages: list[dict[str, Any]],
+        timeout_seconds: float = 7.0,
+    ) -> list[dict[str, Any]]:
+        """Live-revalidate exact known BM -> Page relations.
+
+        REMASK_KNOWN_PAGE_FAST_REVALIDATION_V1
+        This is the Page equivalent of RK hint revalidation: durable Page IDs
+        are navigation targets only. Current Business Settings traffic/DOM must
+        prove each Page live before it is returned.
+        """
+        from .facebook_page_discovery import _extract_known_page_lists
+
+        business = _digits(business_id)
+        expected: dict[str, dict[str, Any]] = {}
+        for row in pages or []:
+            if not isinstance(row, dict):
+                continue
+            page_id = _digits(row.get("id") or row.get("page_id"))
+            if not page_id:
+                continue
+            expected[page_id] = {
+                "id": page_id,
+                "name": _clean(
+                    row.get("name")
+                    or row.get("page_name")
+                    or page_id
+                )[:240],
+                "business_id": business,
+                "category": _clean(row.get("category")),
+                "source": "business_settings_known_page_revalidated",
+            }
+
+        if not business or not expected:
+            return []
+
+        if self.page is None:
+            await self.open()
+        if self.page is None:
+            raise BrowserBusinessError(
+                "BROWSER_NOT_READY",
+                "Known Page revalidation requires an open browser.",
+                retryable=True,
+            )
+
+        deadline = time.monotonic() + max(1.5, float(timeout_seconds))
+        confirmed: dict[str, dict[str, Any]] = {}
+        diagnostics: list[dict[str, Any]] = []
+        response_tasks: set[asyncio.Task[Any]] = set()
+        target_url = self.SETTINGS_PAGES_URL.format(business_id=business)
+
+        self._last_page_inventory_diagnostic = {
+            "stage": "known_page_start",
+            "business_id": business,
+            "expected_page_ids": sorted(expected),
+            "target_url": target_url,
+            "current_url": _clean(getattr(self.page, "url", "")),
+        }
+
+        def confirm(page_id: str, *, source: str, name: str = "") -> None:
+            page = expected.get(page_id)
+            if page is None:
+                return
+            row = dict(page)
+            if name:
+                row["name"] = _clean(name)[:240]
+            row["source"] = source
+            confirmed[page_id] = row
+
+        async def inspect_response(response: Any) -> None:
+            try:
+                url = _clean(getattr(response, "url", ""))
+                if "graphql" not in url.casefold():
+                    return
+                request = getattr(response, "request", None)
+                meta = (
+                    _request_graphql_meta(request)
+                    if request is not None
+                    else {}
+                )
+                friendly = _clean(meta.get("friendly_name"))
+                folded_friendly = friendly.casefold()
+                if any(
+                    marker in folded_friendly
+                    for marker in ("mutation", "create", "update", "delete")
+                ):
+                    return
+
+                current_url = _clean(getattr(self.page, "url", ""))
+                if (
+                    business not in _business_ids_from_text(current_url)
+                    or "/settings/pages" not in current_url.casefold()
+                ):
+                    return
+
+                raw = await response.text()
+                if not raw:
+                    return
+
+                before = set(confirmed)
+                for page_id in expected:
+                    if page_id in raw:
+                        confirm(
+                            page_id,
+                            source="business_settings_graphql_exact_id",
+                        )
+
+                try:
+                    payload = _decode_graphql_text(raw)
+                    chunks = payload if isinstance(payload, list) else [payload]
+                    for chunk in chunks:
+                        if not isinstance(chunk, dict):
+                            continue
+                        for row in _extract_known_page_lists(chunk):
+                            page_id = _digits(
+                                row.get("id") or row.get("page_id")
+                            )
+                            if page_id in expected:
+                                confirm(
+                                    page_id,
+                                    source="business_settings_graphql_page_list",
+                                    name=_clean(
+                                        row.get("name")
+                                        or row.get("page_name")
+                                    ),
+                                )
+                except Exception:
+                    pass
+
+                diagnostics.append({
+                    "friendly_name": friendly[:180],
+                    "doc_id": _clean(meta.get("doc_id"))[:80],
+                    "new_page_ids": sorted(set(confirmed) - before),
+                    "confirmed_page_ids": sorted(confirmed),
+                })
+                if len(diagnostics) > 20:
+                    del diagnostics[:-20]
+            except Exception as exc:
+                diagnostics.append({
+                    "error": f"{exc.__class__.__name__}: {_clean(exc)}"[:500],
+                })
+                if len(diagnostics) > 20:
+                    del diagnostics[:-20]
+
+        def on_response(response: Any) -> None:
+            try:
+                task = asyncio.create_task(inspect_response(response))
+                response_tasks.add(task)
+                task.add_done_callback(response_tasks.discard)
+            except Exception:
+                return
+
+        try:
+            try:
+                self.page.on("response", on_response)
+            except Exception:
+                pass
+
+            # Leave Ads Manager's SPA/document completely before entering
+            # Business Settings. Reusing the Ads Manager document was the exact
+            # failure observed in production: Page navigation timed out while
+            # current_url remained adsmanager.facebook.com.
+            try:
+                await self.page.goto(
+                    "about:blank",
+                    wait_until="commit",
+                    timeout=1000,
+                )
+            except Exception:
+                pass
+
+            self._last_page_inventory_diagnostic.update({
+                "stage": "known_page_navigate",
+                "current_url": _clean(getattr(self.page, "url", "")),
+            })
+
+            remaining = max(0.5, deadline - time.monotonic())
+            try:
+                await self.page.goto(
+                    target_url,
+                    wait_until="commit",
+                    timeout=min(4500, int(remaining * 1000)),
+                )
+            except Exception as exc:
+                diagnostics.append({
+                    "phase": "navigation",
+                    "error": f"{exc.__class__.__name__}: {_clean(exc)}"[:500],
+                    "url": _clean(getattr(self.page, "url", ""))[:700],
+                })
+
+            await self._assert_authenticated()
+            self._last_page_inventory_diagnostic.update({
+                "stage": "known_page_verify",
+                "current_url": _clean(getattr(self.page, "url", "")),
+            })
+
+            while time.monotonic() < deadline and set(confirmed) != set(expected):
+                try:
+                    content = await self.page.content()
+                except Exception:
+                    content = ""
+                try:
+                    body = await self._body_text()
+                except Exception:
+                    body = ""
+                combined = content + "\n" + body
+                for page_id in expected:
+                    if page_id in combined:
+                        confirm(
+                            page_id,
+                            source="business_settings_dom_exact_id",
+                        )
+                if set(confirmed) == set(expected):
+                    break
+                await self.page.wait_for_timeout(180)
+
+            if response_tasks:
+                await _settle_tasks_bounded(
+                    response_tasks,
+                    timeout_seconds=min(
+                        0.8,
+                        max(0.1, deadline - time.monotonic()),
+                    ),
+                    cancel_pending=False,
+                )
+
+            self._last_page_inventory_diagnostic.update({
+                "stage": (
+                    "known_page_complete"
+                    if set(confirmed) == set(expected)
+                    else "known_page_partial"
+                ),
+                "business_id": business,
+                "expected_page_ids": sorted(expected),
+                "confirmed_page_ids": sorted(confirmed),
+                "queries": diagnostics[-16:],
+                "current_url": _clean(getattr(self.page, "url", "")),
+            })
+
+            return [
+                confirmed[page_id]
+                for page_id in sorted(confirmed)
+            ]
+        finally:
+            try:
+                self.page.remove_listener("response", on_response)
+            except Exception:
+                pass
+            if response_tasks:
+                await _settle_tasks_bounded(
+                    response_tasks,
+                    timeout_seconds=0.5,
+                    cancel_pending=True,
+                )
+
+
     async def discover_promotable_pages_from_ads_manager(
         self,
         *,

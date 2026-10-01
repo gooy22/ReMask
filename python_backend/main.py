@@ -930,6 +930,7 @@ async def profile_live_inventory(
     profile_id: str,
     business_ids: str | None = None,
     ad_account_hints: str | None = None,
+    page_hints: str | None = None,
 ):
     clean_profile=str(profile_id or '').strip()
     if not clean_profile:
@@ -1019,6 +1020,12 @@ async def profile_live_inventory(
     confirmed_bindings=await pool.provisioning_state.confirmed_ad_account_bindings_for_profile(
         clean_profile
     )
+    confirmed_page_bindings=await pool.provisioning_state.confirmed_business_page_bindings_for_profile(
+        clean_profile
+    )
+    confirmed_fan_pages=await pool.provisioning_state.latest_profile_fan_pages(
+        clean_profile
+    )
     latest_entities=await pool.provisioning_state.latest_profile_entities(
         clean_profile
     )
@@ -1079,6 +1086,83 @@ async def profile_live_inventory(
     for hinted_business_id in requested_business_ids:
         known_business_ids.add(hinted_business_id)
 
+    # REMASK_DURABLE_PAGE_HINTS_V1
+    # Known BM->Page relations are handled exactly like BM->RK hints: they are
+    # navigation targets only and must be freshly proven by Business Settings.
+    known_pages_by_business: dict[str,dict[str,dict]] = {}
+    fan_page_names={
+        str(row.get('id') or row.get('page_id') or '').strip():str(
+            row.get('name')
+            or row.get('page_name')
+            or row.get('id')
+            or row.get('page_id')
+            or ''
+        ).strip()
+        for row in confirmed_fan_pages
+        if isinstance(row,dict)
+        and str(row.get('id') or row.get('page_id') or '').strip().isdigit()
+    }
+
+    for row in confirmed_page_bindings:
+        if not isinstance(row,dict):
+            continue
+        hinted_business_id=str(row.get('business_id') or '').strip()
+        hinted_page_id=str(row.get('page_id') or row.get('id') or '').strip()
+        if (
+            hinted_business_id.isdigit()
+            and hinted_page_id.isdigit()
+            and (
+                not requested_business_ids
+                or hinted_business_id in requested_business_ids
+            )
+        ):
+            known_pages_by_business.setdefault(
+                hinted_business_id,{}
+            )[hinted_page_id]={
+                'id':hinted_page_id,
+                'page_id':hinted_page_id,
+                'name':fan_page_names.get(
+                    hinted_page_id,
+                    str(row.get('name') or hinted_page_id).strip(),
+                ),
+                'business_id':hinted_business_id,
+                'source':str(
+                    row.get('source')
+                    or 'python_worker_business_page_history'
+                ),
+            }
+
+    # Workspace's last live-confirmed Page rows are passed as business:page
+    # hints. This repairs cases where the worker database predates the current
+    # Page relation but Workspace still has a strong previously-live identity.
+    for raw_pair in str(page_hints or '').split(','):
+        raw_pair=raw_pair.strip()
+        if not raw_pair or ':' not in raw_pair:
+            continue
+        hinted_business_id,hinted_page_id=raw_pair.split(':',1)
+        hinted_business_id=hinted_business_id.strip()
+        hinted_page_id=hinted_page_id.strip()
+        if (
+            hinted_business_id.isdigit()
+            and hinted_page_id.isdigit()
+            and (
+                not requested_business_ids
+                or hinted_business_id in requested_business_ids
+            )
+        ):
+            known_pages_by_business.setdefault(
+                hinted_business_id,{}
+            ).setdefault(
+                hinted_page_id,
+                {
+                    'id':hinted_page_id,
+                    'page_id':hinted_page_id,
+                    'name':fan_page_names.get(hinted_page_id,hinted_page_id),
+                    'business_id':hinted_business_id,
+                    'source':'workspace_last_live_page_hint',
+                },
+            )
+
     # BM:RK pairs below come only from the last live-confirmed Workspace
     # snapshot. They are hints for surviving Meta selector/UI drift; they are
     # never accepted without a fresh live Ads Manager observation.
@@ -1129,10 +1213,11 @@ async def profile_live_inventory(
                 int((time.monotonic()-browser_open_started)*1000),
             )
             log.info(
-                'live inventory profile=%s durable_targets businesses=%d exact_pairs=%d requested_businesses=%s',
+                'live inventory profile=%s durable_targets businesses=%d exact_pairs=%d page_pairs=%d requested_businesses=%s',
                 clean_profile,
                 len(known_business_ids),
                 sum(len(ids) for ids in known_accounts_by_business.values()),
+                sum(len(ids) for ids in known_pages_by_business.values()),
                 ','.join(sorted(requested_business_ids)) or '-',
             )
 
@@ -1807,70 +1892,203 @@ async def profile_live_inventory(
                 )
                 return normalized
 
+            # 0) REMASK_KNOWN_PAGE_FAST_REVALIDATION_V1
+            # Revalidate exact last-confirmed BM->Page relations before global
+            # discovery. This is the Page equivalent of RK hint revalidation
+            # and avoids the flaky www.facebook.com/Your-Pages navigation.
+            if known_pages_by_business:
+                expected_page_ids={
+                    page_id
+                    for rows in known_pages_by_business.values()
+                    for page_id in rows
+                    if str(page_id).isdigit()
+                }
+                confirmed_page_rows=[]
+                confirmed_page_ids=set()
+                fast_page_diagnostics=[]
+                try:
+                    fast_pages_timeout=budget(8.0)
+                    fast_pages_deadline=time.monotonic()+fast_pages_timeout
+
+                    for hinted_business_id,rows_by_id in sorted(
+                        known_pages_by_business.items()
+                    )[:8]:
+                        remaining=fast_pages_deadline-time.monotonic()
+                        if remaining <= 0.25:
+                            break
+                        try:
+                            live_rows=await hard_deadline(
+                                browser.revalidate_known_business_pages(
+                                    business_id=hinted_business_id,
+                                    pages=list(rows_by_id.values()),
+                                    timeout_seconds=min(5.5,remaining),
+                                ),
+                                remaining,
+                            )
+                        except asyncio.TimeoutError:
+                            fast_page_diagnostics.append({
+                                'business_id':hinted_business_id,
+                                'error':'KNOWN_PAGE_REVALIDATION_TIMEOUT',
+                                'diagnostic':getattr(
+                                    browser,
+                                    '_last_page_inventory_diagnostic',
+                                    {},
+                                ),
+                            })
+                            continue
+                        except BrowserBusinessError as exc:
+                            fast_page_diagnostics.append({
+                                'business_id':hinted_business_id,
+                                'error':f'{exc.code}: {exc}',
+                                'diagnostic':(
+                                    exc.diagnostic
+                                    if isinstance(
+                                        getattr(exc,'diagnostic',None),dict
+                                    )
+                                    else getattr(
+                                        browser,
+                                        '_last_page_inventory_diagnostic',
+                                        {},
+                                    )
+                                ),
+                            })
+                            continue
+
+                        for row in live_rows or []:
+                            if not isinstance(row,dict):
+                                continue
+                            page_id=str(
+                                row.get('id')
+                                or row.get('page_id')
+                                or ''
+                            ).strip()
+                            if not page_id.isdigit():
+                                continue
+                            confirmed_page_ids.add(page_id)
+                            confirmed_page_rows.append(row)
+
+                        fast_page_diagnostics.append({
+                            'business_id':hinted_business_id,
+                            'expected':sorted(rows_by_id),
+                            'confirmed':sorted(
+                                str(
+                                    row.get('id')
+                                    or row.get('page_id')
+                                    or ''
+                                ).strip()
+                                for row in live_rows or []
+                                if isinstance(row,dict)
+                            ),
+                            'diagnostic':getattr(
+                                browser,
+                                '_last_page_inventory_diagnostic',
+                                {},
+                            ),
+                        })
+
+                    if (
+                        expected_page_ids
+                        and expected_page_ids.issubset(confirmed_page_ids)
+                    ):
+                        pages=normalize_page_rows(confirmed_page_rows)
+                        pages_source='business_settings_known_page_revalidated'
+                        pages_ready=True
+                        log.info(
+                            'live inventory profile=%s known Page revalidation '
+                            'ready=True pages=%d expected=%s confirmed=%s',
+                            clean_profile,
+                            len(pages),
+                            ','.join(sorted(expected_page_ids)),
+                            ','.join(sorted(confirmed_page_ids)),
+                        )
+                    else:
+                        log.info(
+                            'live inventory profile=%s known Page revalidation '
+                            'incomplete expected=%s confirmed=%s diagnostic=%s',
+                            clean_profile,
+                            ','.join(sorted(expected_page_ids)) or '-',
+                            ','.join(sorted(confirmed_page_ids)) or '-',
+                            json.dumps(
+                                fast_page_diagnostics,
+                                ensure_ascii=False,
+                                separators=(',', ':'),
+                            )[:7000],
+                        )
+                except HTTPException:
+                    raise
+                except Exception as exc:
+                    log.warning(
+                        'live inventory profile=%s known Page revalidation '
+                        'failed=%s',
+                        clean_profile,
+                        f'{exc.__class__.__name__}: {exc}'[:700],
+                    )
+
             # 1) Ads Manager read-only Page inventory.
-            try:
-                ads_pages_timeout=budget(8.0)
-                discovered_pages=await hard_deadline(
-                    browser.discover_promotable_pages_from_ads_manager(
-                        timeout_seconds=min(7.0,ads_pages_timeout),
-                    ),
-                    ads_pages_timeout,
-                )
-                pages=normalize_page_rows(discovered_pages)
-                pages_source='ads_manager_promotable_pages'
-                pages_ready=True
-                log.info(
-                    'live inventory profile=%s Ads Manager Page inventory '
-                    'ready=True pages=%d diagnostic=%s',
-                    clean_profile,
-                    len(pages),
-                    json.dumps(
-                        getattr(
-                            browser,
-                            '_last_ads_manager_page_diagnostic',
-                            {},
+            if not pages_ready:
+                try:
+                    ads_pages_timeout=budget(8.0)
+                    discovered_pages=await hard_deadline(
+                        browser.discover_promotable_pages_from_ads_manager(
+                            timeout_seconds=min(7.0,ads_pages_timeout),
                         ),
-                        ensure_ascii=False,
-                        separators=(',', ':'),
-                    )[:3000],
-                )
-            except asyncio.TimeoutError:
-                page_primary_error='ADS_MANAGER_PAGES_TIMEOUT'
-                log.warning(
-                    'live inventory profile=%s Ads Manager Page inventory '
-                    'timed out diagnostic=%s',
-                    clean_profile,
-                    json.dumps(
-                        getattr(
-                            browser,
-                            '_last_ads_manager_page_diagnostic',
-                            {},
-                        ),
-                        ensure_ascii=False,
-                        separators=(',', ':'),
-                    )[:4000],
-                )
-            except BrowserBusinessError as exc:
-                page_primary_error=f'{exc.code}: {exc}'
-                log.info(
-                    'live inventory profile=%s Ads Manager Page inventory '
-                    'unavailable=%s diagnostic=%s',
-                    clean_profile,
-                    page_primary_error[:700],
-                    json.dumps(
-                        (
-                            exc.diagnostic
-                            if isinstance(getattr(exc,'diagnostic',None),dict)
-                            else getattr(
+                        ads_pages_timeout,
+                    )
+                    pages=normalize_page_rows(discovered_pages)
+                    pages_source='ads_manager_promotable_pages'
+                    pages_ready=True
+                    log.info(
+                        'live inventory profile=%s Ads Manager Page inventory '
+                        'ready=True pages=%d diagnostic=%s',
+                        clean_profile,
+                        len(pages),
+                        json.dumps(
+                            getattr(
                                 browser,
                                 '_last_ads_manager_page_diagnostic',
                                 {},
-                            )
-                        ),
-                        ensure_ascii=False,
-                        separators=(',', ':'),
-                    )[:4000],
-                )
+                            ),
+                            ensure_ascii=False,
+                            separators=(',', ':'),
+                        )[:3000],
+                    )
+                except asyncio.TimeoutError:
+                    page_primary_error='ADS_MANAGER_PAGES_TIMEOUT'
+                    log.warning(
+                        'live inventory profile=%s Ads Manager Page inventory '
+                        'timed out diagnostic=%s',
+                        clean_profile,
+                        json.dumps(
+                            getattr(
+                                browser,
+                                '_last_ads_manager_page_diagnostic',
+                                {},
+                            ),
+                            ensure_ascii=False,
+                            separators=(',', ':'),
+                        )[:4000],
+                    )
+                except BrowserBusinessError as exc:
+                    page_primary_error=f'{exc.code}: {exc}'
+                    log.info(
+                        'live inventory profile=%s Ads Manager Page inventory '
+                        'unavailable=%s diagnostic=%s',
+                        clean_profile,
+                        page_primary_error[:700],
+                        json.dumps(
+                            (
+                                exc.diagnostic
+                                if isinstance(getattr(exc,'diagnostic',None),dict)
+                                else getattr(
+                                    browser,
+                                    '_last_ads_manager_page_diagnostic',
+                                    {},
+                                )
+                            ),
+                            ensure_ascii=False,
+                            separators=(',', ':'),
+                        )[:4000],
+                    )
 
             # 2) Private Facebook Web persisted query fallback.
             if not pages_ready:

@@ -675,6 +675,110 @@ class ProvisioningStateStore:
 
         return pages
 
+    async def confirmed_business_page_bindings_for_profile(
+        self,
+        profile_id: str,
+        *,
+        limit: int = 250,
+    ) -> list[dict[str, Any]]:
+        """Return durable BM -> Page relations confirmed by BUSINESS steps.
+
+        These bindings are hints for fresh live revalidation only. They never
+        make Page inventory current by themselves.
+        """
+        return await asyncio.to_thread(
+            self._confirmed_business_page_bindings_for_profile_sync,
+            profile_id,
+            limit,
+        )
+
+    def _confirmed_business_page_bindings_for_profile_sync(
+        self,
+        profile_id: str,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        profile = str(profile_id or "").strip()
+        bounded_limit = max(1, min(int(limit or 250), 1000))
+        if not profile:
+            return []
+
+        with self._connect() as con:
+            rows = con.execute(
+                """
+                SELECT scope_key,status,result_json,updated_at
+                FROM provisioning_steps
+                WHERE profile_id=?
+                  AND step=?
+                  AND result_json IS NOT NULL
+                ORDER BY updated_at DESC
+                LIMIT ?
+                """,
+                (
+                    profile,
+                    ProvisioningStep.BUSINESS.value,
+                    bounded_limit,
+                ),
+            ).fetchall()
+
+        bindings: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+
+        for row in rows:
+            try:
+                result = json.loads(str(row["result_json"] or "{}"))
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if not isinstance(result, dict):
+                continue
+
+            business_id = str(result.get("business_id") or "").strip()
+            page_id = str(
+                result.get("primary_page_id")
+                or result.get("page_id")
+                or ""
+            ).strip()
+            if not business_id.isdigit() or not page_id.isdigit():
+                continue
+
+            status = str(row["status"] or "").strip().upper()
+            phase = str(
+                result.get("phase")
+                or result.get("resume_from")
+                or ""
+            ).strip().upper()
+            confirmed = (
+                status == "SUCCESS"
+                or phase == "PAGE_CONFIRMED"
+                or phase == "DONE"
+            )
+            if not confirmed:
+                continue
+
+            identity = (business_id, page_id)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            bindings.append(
+                {
+                    "business_id": business_id,
+                    "page_id": page_id,
+                    "name": str(
+                        result.get("page_name")
+                        or result.get("primary_page_name")
+                        or page_id
+                    ).strip(),
+                    "business_name": str(
+                        result.get("business_name")
+                        or business_id
+                    ).strip(),
+                    "scope_key": str(row["scope_key"] or ""),
+                    "updated_at": int(row["updated_at"] or 0),
+                    "source": "python_worker_business_page_history",
+                }
+            )
+
+        return bindings
+
     async def confirmed_ad_account_bindings_for_profile(
         self,
         profile_id: str,

@@ -22,6 +22,27 @@ class LiveSyncContractTests(unittest.TestCase):
                 {"10001"},
             )
         )
+    def test_known_page_hints_are_revalidated_before_global_discovery(self):
+        signature = inspect.signature(api.profile_live_inventory)
+        self.assertIn("page_hints", signature.parameters)
+
+        source = inspect.getsource(api.profile_live_inventory)
+        self.assertIn("REMASK_KNOWN_PAGE_FAST_REVALIDATION_V1", source)
+        self.assertIn("confirmed_business_page_bindings_for_profile", source)
+        self.assertIn("revalidate_known_business_pages", source)
+        self.assertLess(
+            source.index("revalidate_known_business_pages"),
+            source.index("discover_promotable_pages_from_ads_manager"),
+        )
+
+        browser_source = inspect.getsource(
+            FacebookBusinessBrowser.revalidate_known_business_pages
+        )
+        self.assertIn("REMASK_KNOWN_PAGE_FAST_REVALIDATION_V1", browser_source)
+        self.assertIn("SETTINGS_PAGES_URL", browser_source)
+        self.assertIn('self.page.on("response"', browser_source)
+        self.assertIn('"about:blank"', browser_source)
+
 
     def test_page_inventory_does_not_block_live_bm_rk_sync(self):
         # The Railway runtime image copies python_backend to /opt/remask-python
