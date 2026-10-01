@@ -154,11 +154,13 @@ class LiveSyncContractTests(unittest.TestCase):
         self.assertIn("REMASK_SYNC_PRIVATE_LIST_PAGES_FIRST_V1", source)
         self.assertIn("list_pages_via_private_graphql", source)
 
-        # The cross-domain Your-Pages SPA is diagnostic-only and cannot consume
-        # the normal Sync budget unless explicitly enabled.
-        self.assertIn("REMASK_ENABLE_GLOBAL_PAGE_DISCOVERY", source)
+        # Account-level Your-Pages discovery is bounded and runs in an
+        # isolated authenticated tab so the primary Ads Manager tab is never
+        # navigated cross-domain.
+        self.assertIn("REMASK_ISOLATED_PAGE_INVENTORY_SYNC_V1", source)
         self.assertIn("REMASK_PAGE_LIVE_RELAY_DISCOVERY_V1", source)
-        self.assertIn("discover_managed_pages(fast=True)", source)
+        self.assertIn("discover_managed_pages_isolated(fast=True)", source)
+        self.assertNotIn("REMASK_ENABLE_GLOBAL_PAGE_DISCOVERY", source)
         self.assertNotIn("discover_managed_pages(fast=False)", source)
         self.assertNotIn("REMASK_PAGE_INVENTORY_WARM_RETRY_V2", source)
         self.assertNotIn(
