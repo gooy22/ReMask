@@ -2115,44 +2115,112 @@ async def profile_live_inventory(
                         f'{exc.__class__.__name__}: {exc}'[:600],
                     )
 
+            # REMASK_ISOLATED_PAGE_DISCOVERY_PRIMARY_V1
+            # Use a sibling tab in the existing authenticated Chromium context
+            # before any Ads/private fallbacks. This preserves the working
+            # Ads Manager document and repeats the exact warm-tab pattern that
+            # previously recovered four live Pages for profile 7.
+            if not pages_live_verified:
+                try:
+                    isolated_pages_timeout=budget(10.5)
+                    discovered_pages=await hard_deadline(
+                        browser.discover_managed_pages_isolated(attempts=2),
+                        isolated_pages_timeout,
+                    )
+                    live_pages=normalize_page_rows(discovered_pages)
+                    pages=merge_page_rows(pages,live_pages)
+                    pages_ready=True
+                    pages_live_verified=True
+                    pages_source=(
+                        'facebook_isolated_page_tab+durable'
+                        if durable_pages
+                        else 'facebook_isolated_page_tab'
+                    )
+                    log.info(
+                        'live inventory profile=%s isolated Page enrichment '
+                        'ready=True pages=%d diagnostic=%s',
+                        clean_profile,
+                        len(live_pages),
+                        json.dumps(
+                            getattr(
+                                browser,
+                                '_last_page_inventory_diagnostic',
+                                {},
+                            ),
+                            ensure_ascii=False,
+                            separators=(',', ':'),
+                        )[:5000],
+                    )
+                except (asyncio.TimeoutError,BrowserBusinessError) as exc:
+                    detail=(
+                        'ISOLATED_PAGE_DISCOVERY_TIMEOUT'
+                        if isinstance(exc,asyncio.TimeoutError)
+                        else f'{exc.code}: {exc}'
+                    )
+                    page_primary_error=(
+                        page_primary_error + ' | '
+                        if page_primary_error else ''
+                    ) + detail
+                    log.info(
+                        'live inventory profile=%s isolated Page enrichment '
+                        'unavailable=%s diagnostic=%s',
+                        clean_profile,
+                        detail[:700],
+                        json.dumps(
+                            getattr(
+                                browser,
+                                '_last_page_inventory_diagnostic',
+                                {},
+                            ),
+                            ensure_ascii=False,
+                            separators=(',', ':'),
+                        )[:5000],
+                    )
+
             # REMASK_ADS_MANAGER_PAGES_FIRST_V1
-            # Account-level live Page enumeration is enrichment only. Keep the
-            # attempt deliberately short; it must not dominate a BM/RK sync.
-            try:
-                ads_pages_timeout=budget(4.0)
-                discovered_pages=await hard_deadline(
-                    browser.discover_promotable_pages_from_ads_manager(
-                        timeout_seconds=min(3.5,ads_pages_timeout),
-                    ),
-                    ads_pages_timeout,
-                )
-                live_pages=normalize_page_rows(discovered_pages)
-                pages=merge_page_rows(pages,live_pages)
-                pages_ready=True
-                pages_live_verified=True
-                pages_source=(
-                    'ads_manager_promotable_pages+durable'
-                    if durable_pages
-                    else 'ads_manager_promotable_pages'
-                )
-                log.info(
-                    'live inventory profile=%s Ads Manager Page enrichment '
-                    'ready=True pages=%d',
-                    clean_profile,
-                    len(live_pages),
-                )
-            except (asyncio.TimeoutError,BrowserBusinessError) as exc:
-                page_primary_error=(
-                    'ADS_MANAGER_PAGES_TIMEOUT'
-                    if isinstance(exc,asyncio.TimeoutError)
-                    else f'{exc.code}: {exc}'
-                )
-                log.info(
-                    'live inventory profile=%s Ads Manager Page enrichment '
-                    'unavailable=%s',
-                    clean_profile,
-                    page_primary_error[:700],
-                )
+            # Fallback only: the isolated Facebook tab is the primary
+            # account-level live list. Do not spend another Ads Manager probe
+            # after a complete Page list was already verified.
+            if not pages_live_verified:
+                try:
+                    ads_pages_timeout=budget(4.0)
+                    discovered_pages=await hard_deadline(
+                        browser.discover_promotable_pages_from_ads_manager(
+                            timeout_seconds=min(3.5,ads_pages_timeout),
+                        ),
+                        ads_pages_timeout,
+                    )
+                    live_pages=normalize_page_rows(discovered_pages)
+                    pages=merge_page_rows(pages,live_pages)
+                    pages_ready=True
+                    pages_live_verified=True
+                    pages_source=(
+                        'ads_manager_promotable_pages+durable'
+                        if durable_pages
+                        else 'ads_manager_promotable_pages'
+                    )
+                    log.info(
+                        'live inventory profile=%s Ads Manager Page enrichment '
+                        'ready=True pages=%d',
+                        clean_profile,
+                        len(live_pages),
+                    )
+                except (asyncio.TimeoutError,BrowserBusinessError) as exc:
+                    detail=(
+                        'ADS_MANAGER_PAGES_TIMEOUT'
+                        if isinstance(exc,asyncio.TimeoutError)
+                        else f'{exc.code}: {exc}'
+                    )
+                    page_primary_error=(
+                        page_primary_error + ' | '
+                        if page_primary_error else ''
+                    ) + detail
+                    log.info(
+                        'live inventory profile=%s Ads Manager Page enrichment '
+                        'unavailable=%s',
+                        clean_profile,
+                        detail[:700],
+                    )
 
             # REMASK_SYNC_PRIVATE_LIST_PAGES_FIRST_V1
             # A persisted private LIST_PAGES query is also a short enrichment
