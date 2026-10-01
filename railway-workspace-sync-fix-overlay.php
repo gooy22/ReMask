@@ -884,7 +884,8 @@ function hierarchy_live_snapshot_put(
     array $businesses,
     array $adAccounts,
     array $pages,
-    array $profileRow
+    array $profileRow,
+    bool $pagesLiveVerified = false
 ): void
 {
     $profile = trim($profile);
@@ -951,13 +952,29 @@ function hierarchy_live_snapshot_put(
             if (is_array($decoded)) $all = $decoded;
         }
 
+        $previous = is_array($all[$profile] ?? null)
+            ? $all[$profile]
+            : [];
+        $now = time();
+        $previousPageLiveAt = (int)($previous['pages_live_verified_at'] ?? 0);
+
+        // REMASK_PAGE_VERIFICATION_TIMESTAMP_V3
+        // BM/RK live truth is refreshed on every successful Sync. Page state
+        // may be durable/preserved without being re-enumerated from Meta, so
+        // advance the Page verification timestamp only on fresh live proof.
         $all[$profile] = [
             'profile' => $persistedProfile,
             'businesses' => array_values($cleanBusinesses),
             'ad_accounts' => array_values($cleanAccounts),
             'pages' => array_values($cleanPages),
-            'updated_at' => time(),
-            'source' => 'last_confirmed_live_meta_inventory',
+            'updated_at' => $now,
+            'pages_live_verified' => $pagesLiveVerified,
+            'pages_live_verified_at' => $pagesLiveVerified
+                ? $now
+                : $previousPageLiveAt,
+            'source' => $pagesLiveVerified
+                ? 'live_meta_inventory'
+                : 'live_bm_rk_with_confirmed_page_state',
         ];
 
         $encoded = json_encode(
@@ -1054,7 +1071,11 @@ function hierarchy_live_snapshot_apply_display(
 
     $snapshot['profile'] = $freshProfile;
     $snapshot['last_confirmed_live_meta_at'] = (int)($saved['updated_at'] ?? 0);
-    $snapshot['display_source'] = 'last_confirmed_live_meta_inventory';
+    $snapshot['pages_live_verified'] = ($saved['pages_live_verified'] ?? false) === true;
+    $snapshot['pages_live_verified_at'] = (int)($saved['pages_live_verified_at'] ?? 0);
+    $snapshot['display_source'] = (string)(
+        $saved['source'] ?? 'last_confirmed_workspace_meta_state'
+    );
     return $snapshot;
 }
 
@@ -1691,7 +1712,8 @@ $syncProfileReplacement = <<<'PHP'
                 $businessRows,
                 $adAccountRows,
                 $pageRows,
-                $responseProfile
+                $responseProfile,
+                $pagesLiveVerified
             );
             $snapshot['last_confirmed_live_meta_at'] = time();
             $snapshot['display_source'] = $pagesLiveVerified
