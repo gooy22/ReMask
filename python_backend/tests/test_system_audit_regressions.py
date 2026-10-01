@@ -57,7 +57,7 @@ class SystemAuditTests(unittest.IsolatedAsyncioTestCase):
 
     async def run_business(self, item="audit-item", scope="audit-scope"):
         await self.state.set_running(item, "audit-profile", scope, ProvisioningStep.BUSINESS)
-        return await business_handler(self.session, PARAMS, {}, provisioning_state=self.state,
+        return await business_handler(self.session, {**PARAMS, "attach_page": True}, {}, provisioning_state=self.state,
                                       item_id=item, profile_id="audit-profile", scope_key=scope)
 
     async def test_database_connections_close_and_rollback_on_error(self):

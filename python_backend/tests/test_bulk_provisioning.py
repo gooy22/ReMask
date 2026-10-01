@@ -139,12 +139,13 @@ class AutoPlanTests(unittest.TestCase):
     def test_template_asset_ids_cannot_redirect_an_automatic_unit(self):
         params=expand_auto_profiles(request(1,parameters={
             'FAN_PAGES':{'mode':'attach_existing','page_id':'123456789','existing_page_id':'123456789','business_id':'987654321','ad_account_id':'555555555'},
-            'BUSINESS':{'primary_page_id':'123456789'},
+            'BUSINESS':{'primary_page_id':'123456789','attach_page':True},
             'AD_ACCOUNT':{'business_id':'987654321','bm_id':'987654321','ad_account_id':'555555555','currency':'USD','timezone_id':1}}).profiles,'job')[0].tasks[0].payload['parameters']
         self.assertEqual(params['FAN_PAGES']['mode'],'create')
         self.assertNotIn('existing_page_id',params['FAN_PAGES'])
         self.assertNotIn('business_id',params['FAN_PAGES'])
         self.assertNotIn('primary_page_id',params['BUSINESS'])
+        self.assertIs(params['BUSINESS']['attach_page'],False)
         self.assertNotIn('business_id',params['AD_ACCOUNT']); self.assertNotIn('bm_id',params['AD_ACCOUNT'])
 
     def test_units_have_independent_scopes_and_single_random_page(self):
@@ -155,6 +156,7 @@ class AutoPlanTests(unittest.TestCase):
             scopes.add(payload['scope_key']); names.add(params['FAN_PAGES']['names'][0]); emails.add(params['BUSINESS']['user_email'])
             self.assertEqual(task.idempotency_key,payload['scope_key']); self.assertEqual(params['FAN_PAGES']['count'],1)
             self.assertTrue(params['BUSINESS']['use_created_page']); self.assertNotIn('page_id',params['BUSINESS'])
+            self.assertIs(params['BUSINESS']['attach_page'],False)
             self.assertEqual(params['AD_ACCOUNT']['currency'],'USD'); self.assertFalse(payload['generated']['contact_email_registered'])
             self.assertRegex(params['BUSINESS']['user_email'],r'^[a-f0-9]{24}@gmail\.com$')
         self.assertEqual(len(scopes),3); self.assertEqual(len(names),3); self.assertEqual(len(emails),3)

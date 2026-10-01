@@ -546,11 +546,16 @@ async def run_live_inventory_readonly_canary() -> None:
     if os.getenv('REMASK_PAGE_ONLY_CANARY') in {'1','2'}:
         try:
             await run_targeted_pages_readonly_canary(profile_id)
-            await run_existing_business_repair_once(profile_id)
         except Exception as exc:
             log.warning('targeted Pages readonly canary profile=%s failure=%s', profile_id, str(exc)[:1200])
         if os.getenv('REMASK_PAGE_ONLY_CANARY') == '1':
             return
+
+    if os.getenv('REMASK_EXISTING_BM_REPAIR') == '1':
+        try:
+            await run_existing_business_repair_once(profile_id)
+        except Exception as exc:
+            log.warning('existing BM repair failure profile=%s error=%s', profile_id, str(exc)[:1200])
 
     business_id=''
     ad_account_id=''

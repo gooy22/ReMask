@@ -53,7 +53,8 @@ def expand_auto_profiles(profiles: list[Any], job_id: str) -> list[Any]:
                 params["FAN_PAGES"].pop(key, None)
             if "BUSINESS" in steps:
                 params["BUSINESS"] = {**params.get("BUSINESS", {}), "name": title,
-                    "user_email": secrets.token_hex(12) + "@gmail.com", "use_created_page": True}
+                    "user_email": secrets.token_hex(12) + "@gmail.com", "use_created_page": True,
+                    "attach_page": False}
                 params["BUSINESS"].pop("page_id", None)
                 params["BUSINESS"].pop("primary_page_id", None)
             if "AD_ACCOUNT" in steps:

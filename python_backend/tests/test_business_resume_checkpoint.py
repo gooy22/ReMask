@@ -120,6 +120,7 @@ class BusinessResumeCheckpointTests(unittest.IsolatedAsyncioTestCase):
                 {
                     "name": "Test Business",
                     "page_id": "123456789",
+                    "attach_page": True,
                     "user_email": "owner@example.com",
                 },
                 snapshot.as_dict(),
@@ -178,6 +179,7 @@ class BusinessResumeCheckpointTests(unittest.IsolatedAsyncioTestCase):
             {
                 "name": "Test Business",
                 "page_id": "123456789",
+                    "attach_page": True,
                 "user_email": "owner@example.com",
             },
             retry_snapshot.as_dict(),

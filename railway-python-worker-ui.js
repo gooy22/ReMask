@@ -1108,12 +1108,12 @@ async function pythonWorkerStartBusiness(bmName, options) {
 
   const invalid = profiles.filter(function(profileId) {
     const cfg = rowConfig[String(profileId)] || {};
-    return !String(cfg.name || cleanName || '').trim() || !String(cfg.page_id || '').trim();
+    return !String(cfg.name || cleanName || '').trim();
   });
 
   if (invalid.length) {
     throw new Error(
-      'Add BM request not sent: для каждого профиля нужны название BM и Primary Page. Проблема: ' +
+      'Add BM request not sent: для каждого профиля нужно название BM. Проблема: ' +
       invalid.join(', ')
     );
   }
@@ -1132,7 +1132,8 @@ async function pythonWorkerStartBusiness(bmName, options) {
       const profileKey = String(profileId);
       const config = rowConfig[profileKey] || {};
       const businessParams = {
-        name: String(config.name || cleanName).trim()
+        name: String(config.name || cleanName).trim(),
+        attach_page: false
       };
 
       const pageId = String(config.page_id || '').trim();
@@ -1317,7 +1318,7 @@ function pythonWorkerApplyPages(cfg, pages, sourceLabel) {
     cfg.error = 'Pages не найдены';
     cfg.pageHint.className = 'error';
     cfg.pageHint.textContent =
-      'Pages не найдены. Введи Primary Page ID вручную.';
+      'Pages не найдены. BM можно создать без выбора FP.';
     cfg.page.disabled = false;
     cfg.loaded = true;
     return;
@@ -1491,7 +1492,7 @@ async function pythonWorkerOpenOwnBmModal() {
 
   const note = document.createElement('div');
   note.className = 'pwbm-note';
-  note.textContent = 'Pages загружаются из сохранённого состояния ReMask или текущей приватной FB-сессии. Для каждого профиля укажи отдельное название BM и Primary Page.';
+  note.textContent = 'Pages загружаются из сохранённого состояния ReMask или текущей приватной FB-сессии. Для каждого профиля укажи отдельное название BM. FP необязательна и остаётся на FB-аккаунте; создание BM её не привязывает.';
   body.appendChild(note);
 
   const rows = {};
@@ -1621,14 +1622,7 @@ async function pythonWorkerOpenOwnBmModal() {
       const cfg = rows[profileId];
       if (!cfg) return true;
 
-      const effectivePage = String(
-        cfg.page.value || cfg.manualPage.value || ''
-      ).trim();
-
-      return (
-        !String(cfg.name.value || '').trim() ||
-        !effectivePage
-      );
+      return !String(cfg.name.value || '').trim();
     });
 
     create.disabled =
@@ -1694,11 +1688,11 @@ async function pythonWorkerOpenOwnBmModal() {
 
       cfg.sessionHint.className = 'pwbm-session error';
       cfg.sessionHint.textContent =
-        'Pages не были получены последней синхронизацией · синхронизируй профиль или введи Primary Page ID вручную';
+        'FP нет в сохранённом результате синхронизации · создание BM доступно без FP';
       cfg.pageHint.className = 'error';
       cfg.pageHint.textContent =
         'Нет Pages в сохранённом результате синхронизации: ' + cfg.error +
-        '. Введи Primary Page ID вручную.';
+        '. BM можно создать без выбора FP.';
 
       refreshReadyState();
     }
@@ -2149,20 +2143,6 @@ function pythonWorkerEnhanceBmDialog() {
     }
 
     const rowConfig = pythonWorkerBmRowConfig(dialog, profiles, bmName);
-    const missing = profiles.filter(function(profileId) {
-      const cfg = rowConfig[String(profileId)] || {};
-      return !String(cfg.page_id || '').trim();
-    });
-
-    if (missing.length) {
-      pythonWorkerSetBmDialogStatus(
-        dialog,
-        'Для выбранного профиля не определён Primary Page.',
-        true
-      );
-      return;
-    }
-
     cleanButton.disabled = true;
     pythonWorkerSetBmDialogStatus(dialog, 'Создаю Business Manager через Python worker…', false);
 
@@ -3886,7 +3866,7 @@ async function pythonWorkerOpenAutoModal() {
   head.append(title, close);
   const body = document.createElement('div'); body.className = 'pwbm-body';
   const note = document.createElement('div'); note.className = 'pwbm-note';
-  note.textContent = 'Каждый комплект: новая FP → новый BM с этой FP → новый РК. Названия и случайный адрес @gmail.com сохраняются при запуске и не меняются при Retry. Адрес — значение для формы; Gmail-ящик не регистрируется. Лимиты и проверки Meta действуют.';
+  note.textContent = 'Каждый комплект: новая FP на FB-аккаунте → отдельный BM → РК в этом BM. FP к BM не привязывается. Названия и случайный адрес @gmail.com сохраняются при запуске и не меняются при Retry. Адрес — значение для формы; Gmail-ящик не регистрируется. Лимиты и проверки Meta действуют.';
   body.appendChild(note);
   function field(label, input) {
     const holder = document.createElement('label'); holder.className = 'pwbm-field';
