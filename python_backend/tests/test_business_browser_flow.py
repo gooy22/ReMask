@@ -637,6 +637,46 @@ class BrowserNetworkGateTests(unittest.TestCase):
             )
         )
 
+    def test_page_gate_matches_rotated_asset_assignment_mutation(self):
+        request = _FakeRequest(
+            "fb_api_req_friendly_name=BizKitSettingsAssignAssetMutation"
+            "&variables=%7B%22business_id%22%3A%22555666777888999%22%2C"
+            "%22page_id%22%3A%22123456789%22%7D"
+        )
+        self.assertTrue(
+            FacebookBusinessBrowser._request_matches_page_add(
+                request,
+                business_id="555666777888999",
+                page_id="123456789",
+            )
+        )
+
+    def test_page_gate_rejects_unrelated_mutation_even_with_both_ids(self):
+        request = _FakeRequest(
+            "fb_api_req_friendly_name=CometNotificationsMutation"
+            "&variables=%7B%22business_id%22%3A%22555666777888999%22%2C"
+            "%22page_id%22%3A%22123456789%22%7D"
+        )
+        self.assertFalse(
+            FacebookBusinessBrowser._request_matches_page_add(
+                request,
+                business_id="555666777888999",
+                page_id="123456789",
+            )
+        )
+
+    def test_page_add_flow_verifies_after_result_selection_without_final_cta(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser.add_existing_page
+        )
+        self.assertIn(
+            "REMASK_PAGE_ADD_DIRECT_SELECTION_VERIFY_V1",
+            source,
+        )
+        self.assertIn("result_selected", source)
+        self.assertIn("verify_page_attached", source)
+        self.assertIn("post_selection_idle_loops", source)
+
 
 class BrowserAdAccountAdditionalLocaleTests(unittest.TestCase):
     def test_bangla_vietnamese_hindi_ad_account_labels_are_supported(self):

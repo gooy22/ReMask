@@ -61,7 +61,15 @@ class LiveSyncContractTests(unittest.TestCase):
         self.assertIn("REMASK_LIVE_PAYLOAD_EXCLUDES_DURABLE_FALLBACK_V1", source)
         self.assertIn("REMASK_SYNC_PRIVATE_LIST_PAGES_FIRST_V1", source)
         self.assertIn("list_pages_via_private_graphql", source)
-        self.assertIn("discover_managed_pages(fast=True)", source)
+        self.assertIn("REMASK_PAGE_INVENTORY_TWO_PASS_V1", source)
+        self.assertGreaterEqual(
+            source.count("discover_managed_pages(fast=True)"),
+            2,
+        )
+        self.assertIn(
+            "facebook_business_browser_relay_retry",
+            source,
+        )
         self.assertIn("REMASK_SCOPED_HINT_FASTPATH_ONLY_V1", source)
         self.assertIn("REMASK_HISTORICAL_HINTS_ARE_FALLBACK_ONLY_V1", source)
         self.assertIn("REMASK_STALE_HINT_ROWS_EXCLUDED_V1", source)

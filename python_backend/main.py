@@ -1849,8 +1849,17 @@ async def profile_live_inventory(
                 )
 
             if not pages_ready:
+                # REMASK_PAGE_INVENTORY_TWO_PASS_V1
+                # Meta's Your-Pages SPA can legitimately return an empty shell
+                # on the first cold navigation and emit the real Relay Page
+                # inventory only on a subsequent browser pass. Treat one empty
+                # read as inconclusive, not final. Run a second independent
+                # read-only pass on a fresh browser context before surfacing
+                # PRIVATE_INCONCLUSIVE.
+                first_page_error=''
+                first_page_diag={}
                 try:
-                    page_inventory_timeout=budget(14.0)
+                    page_inventory_timeout=budget(9.0)
                     discovered_pages=await hard_deadline(
                         browser.discover_managed_pages(fast=True),
                         page_inventory_timeout,
@@ -1859,36 +1868,109 @@ async def profile_live_inventory(
                     pages_source='facebook_business_browser_relay'
                     pages_ready=True
                 except asyncio.TimeoutError:
-                    pages_source='facebook_business_browser_timeout'
-                    warnings.append('Fan Page inventory timed out')
+                    first_page_error='PAGE_PASS_1_TIMEOUT'
+                    first_page_diag=getattr(
+                        browser,
+                        '_last_page_inventory_diagnostic',
+                        {},
+                    )
+                except BrowserBusinessError as exc:
+                    first_page_error=f'{exc.code}: {exc}'
+                    first_page_diag=(
+                        exc.diagnostic
+                        if isinstance(getattr(exc,'diagnostic',None),dict)
+                        else getattr(
+                            browser,
+                            '_last_page_inventory_diagnostic',
+                            {},
+                        )
+                    )
+
+                if not pages_ready:
                     log.warning(
-                        'live inventory profile=%s browser Page inventory timed '
-                        'out diagnostic=%s',
+                        'live inventory profile=%s Page inventory pass=1 '
+                        'inconclusive error=%s diagnostic=%s',
                         clean_profile,
+                        first_page_error[:700],
                         json.dumps(
-                            getattr(
-                                browser,
-                                '_last_page_inventory_diagnostic',
-                                {},
-                            ),
+                            first_page_diag,
                             ensure_ascii=False,
                             separators=(',', ':'),
-                        )[:7000],
+                        )[:5000],
                     )
+
+                    # Fresh browser context makes the second read independent
+                    # from a half-hydrated/aborted first SPA navigation.
                     try:
-                        await browser.close()
-                    except Exception:
+                        await hard_deadline(browser.close(), 2.0)
+                    except BaseException:
                         pass
                     try:
                         profile_session._business_browser=None
                     except Exception:
                         pass
-                except BrowserBusinessError as exc:
-                    pages_source='facebook_business_browser_error'
-                    warnings.append(f'Fan Page inventory: {exc.code}')
-                    page_primary_error=(
-                        page_primary_error + ' | ' if page_primary_error else ''
-                    ) + f'{exc.code}: {exc}'
+
+                    second_page_error=''
+                    second_page_diag={}
+                    try:
+                        browser=await hard_deadline(
+                            profile_session.facebook_business_browser(),
+                            budget(6.0),
+                        )
+                        page_inventory_timeout=budget(11.0)
+                        discovered_pages=await hard_deadline(
+                            browser.discover_managed_pages(fast=True),
+                            page_inventory_timeout,
+                        )
+                        pages=normalize_page_rows(discovered_pages)
+                        pages_source='facebook_business_browser_relay_retry'
+                        pages_ready=True
+                        log.info(
+                            'live inventory profile=%s Page inventory '
+                            'pass=2 recovered pages=%d',
+                            clean_profile,
+                            len(pages),
+                        )
+                    except asyncio.TimeoutError:
+                        second_page_error='PAGE_PASS_2_TIMEOUT'
+                        second_page_diag=getattr(
+                            browser,
+                            '_last_page_inventory_diagnostic',
+                            {},
+                        )
+                    except BrowserBusinessError as exc:
+                        second_page_error=f'{exc.code}: {exc}'
+                        second_page_diag=(
+                            exc.diagnostic
+                            if isinstance(getattr(exc,'diagnostic',None),dict)
+                            else getattr(
+                                browser,
+                                '_last_page_inventory_diagnostic',
+                                {},
+                            )
+                        )
+
+                    if not pages_ready:
+                        pages_source='facebook_business_browser_two_pass_failed'
+                        warnings.append('Fan Page inventory was not confirmed after two live passes')
+                        page_primary_error=(
+                            page_primary_error + ' | '
+                            if page_primary_error else ''
+                        ) + (
+                            f'pass1={first_page_error or "unknown"}; '
+                            f'pass2={second_page_error or "unknown"}'
+                        )
+                        log.warning(
+                            'live inventory profile=%s Page inventory pass=2 '
+                            'inconclusive error=%s diagnostic=%s',
+                            clean_profile,
+                            second_page_error[:700],
+                            json.dumps(
+                                second_page_diag,
+                                ensure_ascii=False,
+                                separators=(',', ':'),
+                            )[:5000],
+                        )
 
             log.info(
                 'live inventory profile=%s pages_ms=%d ready=%s pages=%d '

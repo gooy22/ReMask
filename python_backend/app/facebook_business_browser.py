@@ -18218,29 +18218,33 @@ timeout_seconds=4.0,
         evidence = decoded + "\n" + variables_text
         ids_match = business in evidence and page in evidence
 
+        folded_decoded = decoded.casefold()
+        # REMASK_PAGE_ADD_MUTATION_MATCH_V2
+        # Meta has rotated Page-attach friendly names several times. During
+        # the Add-Page flow the strongest invariant is still: POST GraphQL,
+        # both the exact Business ID and Page ID are present, and the operation
+        # is a mutation whose name/body is Page/asset/assignment related.
+        page_mutation_markers = (
+            "addpage",
+            "pageadd",
+            "claimpage",
+            "pageclaim",
+            "businesspage",
+            "page",
+            "asset",
+            "assign",
+            "attach",
+            "claim",
+            "connect",
+        )
         operation_match = (
             "mutation" in friendly
-            and any(
-                marker in friendly
-                for marker in (
-                    "addpage",
-                    "pageadd",
-                    "claimpage",
-                    "pageclaim",
-                    "businesspage",
-                    "asset",
-                )
-            )
+            and any(marker in friendly for marker in page_mutation_markers)
         ) or (
-            "mutation" in decoded.casefold()
+            "mutation" in folded_decoded
             and any(
-                marker in decoded.casefold()
-                for marker in (
-                    "addpage",
-                    "pageadd",
-                    "claimpage",
-                    "pageclaim",
-                )
+                marker in folded_decoded
+                for marker in page_mutation_markers
             )
         )
 
@@ -18582,7 +18586,10 @@ timeout_seconds=4.0,
         try:
             # Search results are often a selectable list before the review
             # step. Prefer an exact Page-ID result; otherwise select the only
-            # visible option/radio if Meta rendered one.
+            # visible option/radio. Some current Meta variants return a single
+            # result card with no visible numeric Page ID, so one unique
+            # Page-specific option is also safe after an exact ID search.
+            result_selected = False
             try:
                 exact = self.page.get_by_text(
                     re.compile(rf"^\\s*{re.escape(page)}\\s*$")
@@ -18597,27 +18604,47 @@ timeout_seconds=4.0,
                     )
                     if await target.count() and await target.first.is_visible():
                         await target.first.click()
+                        result_selected = True
                         await self.page.wait_for_timeout(450)
                         break
             except Exception:
                 pass
 
-            try:
-                radios = self.page.get_by_role("radio")
-                visible_radios = []
-                for index in range(min(await radios.count(), 8)):
-                    item = radios.nth(index)
-                    if await item.is_visible() and await item.is_enabled():
-                        visible_radios.append(item)
-                if len(visible_radios) == 1 and not await visible_radios[0].is_checked():
-                    await visible_radios[0].check()
-                    await self.page.wait_for_timeout(250)
-            except Exception:
-                pass
+            if not result_selected:
+                try:
+                    radios = self.page.get_by_role("radio")
+                    visible_radios = []
+                    for index in range(min(await radios.count(), 8)):
+                        item = radios.nth(index)
+                        if await item.is_visible() and await item.is_enabled():
+                            visible_radios.append(item)
+                    if len(visible_radios) == 1:
+                        if not await visible_radios[0].is_checked():
+                            await visible_radios[0].check()
+                        result_selected = True
+                        await self.page.wait_for_timeout(250)
+                except Exception:
+                    pass
+
+            if not result_selected:
+                try:
+                    options = self.page.get_by_role("option")
+                    visible_options = []
+                    for index in range(min(await options.count(), 8)):
+                        item = options.nth(index)
+                        if await item.is_visible() and await item.is_enabled():
+                            visible_options.append(item)
+                    if len(visible_options) == 1:
+                        await visible_options[0].click()
+                        result_selected = True
+                        await self.page.wait_for_timeout(350)
+                except Exception:
+                    pass
 
             sent = False
             clicked_any = False
             page_click_intent_written = False
+            post_selection_idle_loops = 0
 
             async def checkpoint_page_click_intent() -> None:
                 nonlocal page_click_intent_written
@@ -18744,8 +18771,52 @@ timeout_seconds=4.0,
                 )
                 if next_clicked:
                     clicked_any = True
+                    post_selection_idle_loops = 0
                     await self.page.wait_for_timeout(700)
                     continue
+
+                if result_selected:
+                    # REMASK_PAGE_ADD_DIRECT_SELECTION_VERIFY_V1
+                    # Meta can collapse the Page picker after selecting the
+                    # only result and either hydrate the final CTA late or
+                    # submit through the selection interaction itself. Give
+                    # the review surface a short bounded chance to hydrate.
+                    post_selection_idle_loops += 1
+                    if post_selection_idle_loops < 4:
+                        await self.page.wait_for_timeout(650)
+                        continue
+
+                    # If the picker disappeared without exposing a separate
+                    # final CTA, never call this a UI failure until live
+                    # Business Settings proves the Page is still absent.
+                    if await self.verify_page_attached(
+                        business_id=business,
+                        page_id=page,
+                    ):
+                        # Live verification is stronger than an inferred
+                        # submit checkpoint. The caller will persist
+                        # PAGE_CONFIRMED immediately after this return.
+                        return BrowserPageResult(
+                            business_id=business,
+                            page_id=page,
+                            already_attached=False,
+                        )
+
+                    diag = await self._diagnostic(
+                        "page_add_after_result_unconfirmed"
+                    )
+                    diag["result_selected"] = True
+                    diag["selection_idle_loops"] = post_selection_idle_loops
+                    raise BrowserBusinessError(
+                        "PAGE_ADD_UI_CHANGED",
+                        (
+                            "Meta Page result was selected, but no final "
+                            "review/submit control appeared and live Business "
+                            "Settings still does not show the Page."
+                        ),
+                        retryable=True,
+                        diagnostic=diag,
+                    )
 
                 break
 
