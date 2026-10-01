@@ -5353,6 +5353,7 @@ class FacebookBusinessBrowser:
                             "owned_pages",
                             "managed_pages",
                             "pages_you_manage",
+                            "additional_profiles_with_biz_tools",
                         )
                     )
                 )
@@ -18049,8 +18050,13 @@ timeout_seconds=4.0,
                         'input:not([type]),input[type="text"],input[type="search"]'
                     )].filter(visible).slice(0, 12).map(el => {
                         const r = el.getBoundingClientRect();
+                        const key = Object.keys(el).find(key => key.startsWith('__reactProps'));
+                        const props = key ? el[key] || {} : {};
                         return {
                             value: clean(el.value).slice(0, 120),
+                            active: document.activeElement === el,
+                            react_value: typeof props.value === 'string' ? clean(props.value).slice(0,120) : null,
+                            handlers: ['onChange','onInput','onKeyDown','onBlur','onPaste'].filter(key => typeof props[key] === 'function'),
                             aria: clean(el.getAttribute('aria-label')).slice(0, 160),
                             placeholder: clean(el.getAttribute('placeholder')).slice(0, 160),
                             name: clean(el.getAttribute('name')).slice(0, 120),
@@ -18235,8 +18241,11 @@ timeout_seconds=4.0,
                         const structural = [
                             'option','radio'
                         ].includes(role);
-                        const exactId = text.includes(pageId) || (profileId && text.includes(profileId));
-                        const exactName = pageName && text.includes(clean(pageName));
+                        const idMatches = id => /^[0-9]+$/.test(String(id || '')) && new RegExp('(^|[^0-9])' + id + '([^0-9]|$)').test(text);
+                        const exactId = idMatches(pageId) || idMatches(profileId);
+                        const expectedName = clean(pageName);
+                        const exactName = expectedName && (text === expectedName || [...el.querySelectorAll('*')].some(child =>
+                            child.children.length === 0 && clean(child.innerText || child.textContent || '') === expectedName));
                         if (!exactId && !exactName) return;
                         const clickable = (
                             structural
@@ -19802,10 +19811,22 @@ timeout_seconds=4.0,
             alternatives.append(('delegate_url', 'https://www.facebook.com/' + page))
             for kind, value in alternatives:
                 filled = await self._fill_page_add_identifier(labels=('Facebook Page name or URL',), value=page, lookup_override=value)
+                enter_sent = False
+                try:
+                    fields = self.page.get_by_placeholder(re.compile(r'facebook.*page.*url',re.I))
+                    if await fields.count() and await fields.first.is_visible():
+                        await fields.first.press('Enter',timeout=1500)
+                        enter_sent = True
+                except Exception:
+                    pass
                 await self.page.wait_for_timeout(1600)
                 picker_selected = await self._click_unique_page_add_result(page_id=page)
+                if not review_advanced:
+                    review_advanced = await self._click_named(('Next',))
+                    if review_advanced:
+                        await self.page.wait_for_timeout(800)
                 state = await self._page_add_surface_state(page_id=page)
-                lookup_attempts.append({'kind':kind, 'filled':filled, 'selected':picker_selected,
+                lookup_attempts.append({'kind':kind, 'filled':filled, 'enter_sent':enter_sent, 'selected':picker_selected,
                     'input':getattr(self, '_last_page_input_diagnostic', {}), 'dialogs':state.get('dialogs', [])})
                 if picker_selected:
                     break

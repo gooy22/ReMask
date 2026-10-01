@@ -1,0 +1,31 @@
+name: Meta provisioning regressions
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'python_backend/**'
+      - 'railway-python-worker-ui.js'
+      - 'tests/worker-auto-ui.test.cjs'
+      - '.github/workflows/meta-provisioning-regression.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: meta-regression-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install backend dependencies
+        run: |
+          python3 -m venv /tmp/remask-regression
+          /tmp/remask-regression/bin/pip install -r python_backend/requirements.txt
+          node --version
+      - name: Backend regression suite
+        working-directory: python_backend
+        run: /tmp/remask-regression/bin/python -m unittest discover -s tests
+      - name: Automatic batch interface
+        run: node tests/worker-auto-ui.test.cjs

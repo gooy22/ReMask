@@ -75,6 +75,28 @@ process.stdout.write(JSON.stringify([run(true),run(false)]));
         self.assertTrue(business_page_relation_proven({'business':{'id':'111111111','owned_pages':{'nodes':[page]}}},'111111111','222222222'))
         self.assertTrue(business_page_relation_proven({'business_assets':{'nodes':[{'asset':page}]}},'111111111','222222222',request_scoped=True))
 
+    def test_page_result_rejects_name_prefix_and_embedded_numeric_id(self):
+        source=ast.parse(textwrap.dedent(inspect.getsource(FacebookBusinessBrowser._click_unique_page_add_result)))
+        script=next(n.args[0].value for n in ast.walk(source) if isinstance(n,ast.Call)
+            and isinstance(n.func,ast.Attribute) and n.func.attr=='evaluate' and n.args and isinstance(n.args[0],ast.Constant))
+        harness=r"""
+const fs=require('fs');const fn=eval('('+JSON.parse(fs.readFileSync(0,'utf8'))+')');
+function run(text){
+ const attrs={role:'option'};const leaf={children:[],innerText:text};
+ const card={tagName:'DIV',disabled:false,children:[leaf],innerText:text,textContent:text,
+  getAttribute:k=>attrs[k]||null,setAttribute:(k,v)=>attrs[k]=v,removeAttribute:k=>delete attrs[k],closest:()=>null,
+  querySelectorAll:()=>[leaf],getBoundingClientRect:()=>({x:100,y:300,width:500,height:50})};
+ const root={innerText:'Add an existing Page',getAttribute:()=>null,querySelectorAll:()=>[card],
+  getBoundingClientRect:()=>({x:50,y:50,width:700,height:600})};
+ global.document={querySelectorAll:q=>q.includes('[role="dialog"]')?[root]:[]};
+ global.getComputedStyle=()=>({display:'block',visibility:'visible'});
+ return !!fn(['data-remask-page-result','1289628847574478','Media Shopsw','61594993341059']).selected;
+}
+process.stdout.write(JSON.stringify([run('Media Shopsw suffix'),run('9'+'1289628847574478'+'9'),run('Media Shopsw'),run('1289628847574478')]));
+"""
+        result=subprocess.run(['node','-e',harness],input=json.dumps(script),text=True,capture_output=True,check=True,timeout=5)
+        self.assertEqual(json.loads(result.stdout),[False,False,True,True])
+
     def test_profile_plus_uses_delegate_page_identity(self):
         payload={'viewer':{'actor':{'additional_profiles_with_biz_tools':{'edges':[
             {'node':{'__typename':'User','id':'61594993341059','name':'Media Shopsw',
@@ -349,6 +371,27 @@ class PageHydrationTests(unittest.IsolatedAsyncioTestCase):
             result=await browser.find_ad_account_in_inventory(business_id='111111111',account_name='Requested Ads',timeout_seconds=2)
             self.assertFalse(result['confirmed'])
             self.assertFalse(result['confirmed_empty'])
+
+    async def test_profile_connection_relay_survives_navigation_timeout_without_html(self):
+        from urllib.parse import urlencode
+        browser=FacebookBusinessBrowser(SimpleNamespace(profile_id='7'))
+        listeners={}
+        request=SimpleNamespace(method='POST',url='https://www.facebook.com/api/graphql/',post_data=urlencode({
+            'fb_api_req_friendly_name':'CometProfileSwitcherQuery','doc_id':'123456789','variables':'{}'}))
+        response=SimpleNamespace(url=request.url,request=request,text=AsyncMock(return_value=json.dumps({
+            'data':{'viewer':{'actor':{'additional_profiles_with_biz_tools':{'edges':[{'node':{
+                'id':'61594993341059','name':'Media Shopsw','delegate_page_id':'1289628847574478'}}]}}}}})))
+        browser.page=SimpleNamespace(url='https://www.facebook.com/pages/?category=your_pages',
+            on=lambda event,cb:listeners.update({event:cb}),remove_listener=lambda *args:None,
+            content=AsyncMock(side_effect=RuntimeError('HTML is not ready')))
+        async def goto(*args,**kwargs):
+            listeners['response'](response)
+            await asyncio.sleep(0)
+            raise BrowserBusinessError('FACEBOOK_NAVIGATION_FAILED','DOMContentLoaded timed out')
+        browser._goto=AsyncMock(side_effect=goto); browser._assert_authenticated=AsyncMock()
+        rows=await browser.discover_managed_pages(fast=True)
+        self.assertEqual(rows[0]['id'],'1289628847574478')
+        browser.page.content.assert_not_awaited()
 
     async def test_page_navigation_timeout_keeps_exact_managed_document_proof(self):
         browser=FacebookBusinessBrowser(SimpleNamespace(profile_id='7'))
