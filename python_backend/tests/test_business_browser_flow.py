@@ -665,6 +665,18 @@ class BrowserNetworkGateTests(unittest.TestCase):
             )
         )
 
+    def test_page_add_flow_verifies_after_result_selection_without_final_cta(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser.add_existing_page
+        )
+        self.assertIn(
+            "REMASK_PAGE_ADD_DIRECT_SELECTION_VERIFY_V1",
+            source,
+        )
+        self.assertIn("result_selected", source)
+        self.assertIn("verify_page_attached", source)
+        self.assertIn("post_selection_idle_loops", source)
+
 
 class BrowserAdAccountAdditionalLocaleTests(unittest.TestCase):
     def test_bangla_vietnamese_hindi_ad_account_labels_are_supported(self):
