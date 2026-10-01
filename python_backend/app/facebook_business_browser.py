@@ -1920,6 +1920,7 @@ class FacebookBusinessBrowser:
         self._last_selector_diagnostic: dict[str, Any] = {}
         self._last_business_inventory_diagnostic: dict[str, Any] = {}
         self._last_ad_account_section_diagnostic: dict[str, Any] = {}
+        self._last_page_inventory_diagnostic: dict[str, Any] = {}
         self._browser_events: list[dict[str, Any]] = []
         self._ad_account_runtime_phase = "IDLE"
         self._ad_account_phase_started_at = time.monotonic()
@@ -4634,6 +4635,13 @@ class FacebookBusinessBrowser:
         merged: dict[str, dict[str, Any]] = {}
         relay_pages: dict[str, dict[str, Any]] = {}
         diagnostics: list[str] = []
+        self._last_page_inventory_diagnostic = {
+            "stage": "start",
+            "fast": bool(fast),
+            "surfaces": list(surfaces),
+            "current_url": _clean(self.page.url if self.page else ""),
+            "relay_candidates": [],
+        }
         response_tasks: set[asyncio.Task[Any]] = set()
         response_listener_installed = False
 
@@ -4708,6 +4716,61 @@ class FacebookBusinessBrowser:
                 if not page_inventory_shape:
                     return
 
+                # REMASK_LIST_PAGES_BROWSER_LEARNING_V1
+                # When Facebook itself emits the current read-only Page query,
+                # persist that exact document for the faster private Sync path.
+                # Only promote requests whose variable/response shape matches
+                # the known Page-admin inventory contract.
+                doc_id = _clean(meta.get("doc_id"))
+                variables = (
+                    meta.get("variables")
+                    if isinstance(meta.get("variables"), dict)
+                    else {}
+                )
+                asset_owner = _digits(
+                    variables.get("assetOwnerId")
+                    or variables.get("asset_owner_id")
+                )
+                if doc_id.isdigit() and asset_owner and (
+                    "pages_can_administer" in folded_raw
+                    or "pagescanadminister" in folded_raw
+                ):
+                    try:
+                        from .facebook_docids import upsert_candidate
+                        parsed_url = urlsplit(url)
+                        host = _clean(parsed_url.hostname).lower()
+                        endpoint = (
+                            f"https://{host}/api/graphql/"
+                            if host.endswith("facebook.com")
+                            else "https://www.facebook.com/api/graphql/"
+                        )
+                        learned = upsert_candidate(
+                            "LIST_PAGES",
+                            doc_id=doc_id,
+                            friendly_name=friendly,
+                            endpoint_url=endpoint,
+                            variables_mode="account_quality_user_pages_v1",
+                            source="browser_relay_observed",
+                            priority=8_700,
+                            observed_at=str(int(time.time())),
+                        )
+                        diagnostics.append(
+                            "learned LIST_PAGES "
+                            f"doc={learned.doc_id[:48]} "
+                            f"friendly={friendly[:120] or '-'}"
+                        )
+                        self._last_page_inventory_diagnostic[
+                            "learned_doc_id"
+                        ] = learned.doc_id
+                        self._last_page_inventory_diagnostic[
+                            "learned_friendly_name"
+                        ] = friendly[:180]
+                    except Exception as exc:
+                        diagnostics.append(
+                            "LIST_PAGES learn "
+                            f"{exc.__class__.__name__}: {_clean(exc)[:180]}"
+                        )
+
                 payload = _decode_graphql_text(raw)
                 chunks = payload if isinstance(payload, list) else [payload]
                 found = 0
@@ -4753,6 +4816,12 @@ class FacebookBusinessBrowser:
         try:
             for url in surfaces:
                 try:
+                    self._last_page_inventory_diagnostic.update({
+                        "stage": "navigate",
+                        "target_url": url,
+                        "current_url": _clean(self.page.url if self.page else ""),
+                        "page_discovery": diagnostics[-10:],
+                    })
                     # The generic _goto default is intentionally generous for
                     # mutation wizards. Page inventory is read-only and must not
                     # inherit that 45s timeout.
@@ -4762,6 +4831,11 @@ class FacebookBusinessBrowser:
                         wait_until="commit",
                         settle_ms=650,
                     )
+                    self._last_page_inventory_diagnostic.update({
+                        "stage": "relay_wait",
+                        "current_url": _clean(self.page.url if self.page else ""),
+                        "page_discovery": diagnostics[-10:],
+                    })
 
                     if response_listener_installed:
                         relay_deadline = time.monotonic() + 2.4
@@ -4874,6 +4948,11 @@ class FacebookBusinessBrowser:
                     break
 
             if not merged:
+                self._last_page_inventory_diagnostic.update({
+                    "stage": "empty",
+                    "current_url": _clean(self.page.url if self.page else ""),
+                    "page_discovery": diagnostics[-10:],
+                })
                 diag = await self._diagnostic("browser_pages_empty")
                 diag["page_discovery"] = diagnostics[-10:]
                 raise BrowserBusinessError(
@@ -4883,6 +4962,12 @@ class FacebookBusinessBrowser:
                     diagnostic=diag,
                 )
 
+            self._last_page_inventory_diagnostic.update({
+                "stage": "complete",
+                "current_url": _clean(self.page.url if self.page else ""),
+                "pages": len(merged),
+                "page_discovery": diagnostics[-10:],
+            })
             return sorted(
                 merged.values(),
                 key=lambda row: _clean(row.get("name")).casefold(),
