@@ -678,6 +678,26 @@ class BrowserNetworkGateTests(unittest.TestCase):
         self.assertIn("post_selection_idle_loops", source)
 
 
+class BrowserAdsManagerPageInventoryContractTests(unittest.TestCase):
+    def test_ads_manager_page_inventory_uses_live_promotable_page_query(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser.discover_promotable_pages_from_ads_manager
+        )
+        self.assertIn("REMASK_ADS_MANAGER_PAGE_INVENTORY_V1", source)
+        self.assertIn("promotablepage", source)
+        self.assertIn("_extract_known_page_lists", source)
+        self.assertIn("response.text()", source)
+        self.assertIn("about:blank", source)
+        self.assertIn("ADS_MANAGER_URL", source)
+
+    def test_your_pages_warm_retry_does_not_require_new_browser_context(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser.discover_managed_pages
+        )
+        self.assertIn("REMASK_PAGE_LIVE_RELAY_DISCOVERY_V1", source)
+        self.assertIn("response.text()", source)
+
+
 class BrowserAdAccountAdditionalLocaleTests(unittest.TestCase):
     def test_bangla_vietnamese_hindi_ad_account_labels_are_supported(self):
         section_names = FacebookBusinessBrowser.AD_ACCOUNT_SECTION_NAMES
