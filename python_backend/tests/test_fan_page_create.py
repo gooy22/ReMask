@@ -10,6 +10,7 @@ from app.facebook_business_browser import BrowserBusinessError, FacebookBusiness
 from app.provisioning.fan_pages_handler import (
     _browser_retryable,
     _checkpoint_auth_block,
+    _fresh_page_inventory,
     _reconcile_uncertain_page,
     _target_names,
     fan_pages_handler,
@@ -277,6 +278,116 @@ class FanPageProvisioningRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(current[0]["id"], "2222222222")
         self.assertEqual(current[0]["source"], "python_worker_latest_batch")
         self.assertEqual(current[0]["item_id"], "fp-new")
+
+    async def test_fresh_inventory_does_not_turn_unavailable_into_empty(self) -> None:
+        browser = AsyncMock()
+        browser.__aenter__.return_value = browser
+        browser.__aexit__.return_value = False
+        browser.discover_managed_pages.side_effect = BrowserBusinessError(
+            "FAN_PAGES_NOT_DISCOVERED",
+            "Your Pages did not hydrate",
+            retryable=False,
+        )
+
+        with patch(
+            "app.provisioning.fan_pages_handler.FacebookBusinessBrowser",
+            return_value=browser,
+        ):
+            with self.assertRaises(BrowserBusinessError) as caught:
+                await _fresh_page_inventory(
+                    SimpleNamespace(
+                        context=SimpleNamespace(profile_id="4")
+                    )
+                )
+
+        self.assertEqual(caught.exception.code, "FAN_PAGES_NOT_DISCOVERED")
+        browser.discover_managed_pages.assert_awaited_once_with(fast=True)
+
+    async def test_uncertain_create_keeps_duplicate_guard_when_inventory_unavailable(self) -> None:
+        unavailable = BrowserBusinessError(
+            "FAN_PAGES_NOT_DISCOVERED",
+            "Your Pages did not hydrate",
+            retryable=False,
+        )
+        with patch(
+            "app.provisioning.fan_pages_handler._fresh_page_inventory",
+            new=AsyncMock(side_effect=unavailable),
+        ) as inventory:
+            found, proven_absent, diagnostics = await _reconcile_uncertain_page(
+                SimpleNamespace(context=SimpleNamespace(profile_id="4")),
+                page_name="Brand Page 1",
+                before_ids=set(),
+                checks=3,
+            )
+
+        self.assertIsNone(found)
+        self.assertFalse(proven_absent)
+        self.assertEqual(inventory.await_count, 3)
+        self.assertEqual(len(diagnostics), 3)
+        self.assertTrue(
+            all(row.get("result") == "unavailable" for row in diagnostics)
+        )
+        self.assertTrue(
+            all(
+                row.get("code") == "FAN_PAGES_NOT_DISCOVERED"
+                for row in diagnostics
+            )
+        )
+
+    async def test_standalone_create_reuses_profile_context_when_live_inventory_unavailable(self) -> None:
+        state = SimpleNamespace(
+            checkpoint=AsyncMock(return_value={}),
+            step=AsyncMock(return_value=None),
+            latest_profile_fan_pages=AsyncMock(return_value=[]),
+        )
+        browser = AsyncMock()
+        browser.__aenter__.return_value = browser
+        browser.__aexit__.return_value = False
+
+        context = SimpleNamespace(
+            profile_id="4",
+            pages=[
+                {
+                    "id": "9999999999",
+                    "name": "Brand Page",
+                    "category": "Digital creator",
+                    "business_id": "",
+                }
+            ],
+        )
+
+        with patch(
+            "app.provisioning.fan_pages_handler._fresh_page_inventory",
+            new=AsyncMock(
+                side_effect=BrowserBusinessError(
+                    "FAN_PAGES_NOT_DISCOVERED",
+                    "Your Pages did not hydrate",
+                    retryable=False,
+                )
+            ),
+        ), patch(
+            "app.provisioning.fan_pages_handler.FacebookBusinessBrowser",
+            return_value=browser,
+        ):
+            result = await fan_pages_handler(
+                SimpleNamespace(context=context),
+                {
+                    "base_name": "Brand Page",
+                    "count": 1,
+                    "category": "Digital creator",
+                },
+                {},
+                item_id="item-context-reuse",
+                profile_id="4",
+                scope_key="fan-pages-context-reuse",
+                provisioning_state=state,
+                step_state={"result": {}},
+            )
+
+        self.assertEqual(result["page_ids"], ["9999999999"])
+        self.assertEqual(result["created_count"], 1)
+        self.assertTrue(result["pages"][0]["reused"])
+        browser.create_fan_page.assert_not_awaited()
 
     async def test_uncertain_create_can_prove_brand_new_account_still_empty(self) -> None:
         with patch(

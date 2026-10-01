@@ -160,16 +160,13 @@ async def _fresh_page_inventory(session: Any) -> list[dict[str, Any]]:
         session.context,
         timeout_seconds=60,
     ) as browser:
-        try:
-            rows = await browser.discover_managed_pages(fast=True)
-        except BrowserBusinessError as exc:
-            # A freshly authenticated Your Pages surface with no parseable
-            # Pages is the expected state for a brand-new FB account. Treat it
-            # as an empty inventory; uncertain CREATE recovery still requires
-            # several independent fresh reads before another CREATE is allowed.
-            if exc.code == "FAN_PAGES_NOT_DISCOVERED":
-                return []
-            raise
+        # REMASK_FP_INVENTORY_UNAVAILABLE_IS_NOT_EMPTY_V1
+        # discover_managed_pages() raises FAN_PAGES_NOT_DISCOVERED both when
+        # the authenticated surface rendered no parseable rows and when the
+        # flaky Your-Pages SPA never hydrated. That is NOT authoritative proof
+        # of an empty account. Preserve the error so uncertain CREATE recovery
+        # can keep duplicate protection enabled.
+        rows = await browser.discover_managed_pages(fast=True)
         return _normalize_pages(rows)
 
 
@@ -201,9 +198,9 @@ async def _reconcile_uncertain_page(
             )
             if found:
                 return found, False, diagnostics
-            # Reaching this line means a fresh authenticated inventory read
-            # completed. An empty list is meaningful for accounts that started
-            # with zero Pages, so it counts toward the multi-read absence proof.
+            # Reaching this line means discover_managed_pages() actually
+            # returned a parseable inventory. Only such a successful read may
+            # count toward an absence proof after an ambiguous CREATE.
             conclusive_absent += 1
         except BrowserBusinessError as exc:
             diagnostics.append(
@@ -735,7 +732,15 @@ async def fan_pages_handler(
                     str(exc),
                     retryable=True,
                 ) from exc
-            current_pages = []
+
+            # REMASK_FP_PRECREATE_CONTEXT_BASELINE_V1
+            # Browser Page enumeration can be unavailable while the resolver
+            # still has saved/current profile Page state. Use that baseline for
+            # same-name duplicate avoidance instead of pretending inventory is
+            # empty. It is never used as proof after an irreversible submit.
+            current_pages = _normalize_pages(
+                getattr(session.context, "pages", None) or []
+            )
 
         # For RK-targeted creation, a same-named Page elsewhere on the FB
         # profile is not proof that this RK already owns its intended Page.
