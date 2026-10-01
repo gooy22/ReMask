@@ -348,7 +348,9 @@ RUN set -eux; \
     grep -q 'REMASK_FULL_PROFILE_SYNC_PAGES_V2' /opt/remask-python/main.py; \
     grep -q 'REMASK_SYNC_PRIVATE_LIST_PAGES_FIRST_V1' /opt/remask-python/main.py; \
     grep -q 'list_pages_via_private_graphql' /opt/remask-python/main.py; \
-    grep -q 'discover_managed_pages(fast=True)' /opt/remask-python/main.py; \
+    grep -q 'discover_managed_pages_isolated(fast=True)' /opt/remask-python/main.py; \
+    grep -q 'REMASK_ISOLATED_PAGE_INVENTORY_SYNC_V1' /opt/remask-python/main.py; \
+    grep -q 'REMASK_ISOLATED_PAGE_INVENTORY_V1' /opt/remask-python/app/facebook_business_browser.py; \
     grep -q 'REMASK_PAGE_LIVE_RELAY_DISCOVERY_V1' /opt/remask-python/app/facebook_business_browser.py; \
     ! grep -q 'skipped_for_business_scoped_sync' /opt/remask-python/main.py; \
     grep -q 'ads_manager_hint_revalidation_unconfirmed' /opt/remask-python/main.py; \
