@@ -9,6 +9,7 @@ from typing import Any
 
 from ..business_create_service import BusinessCreateError, create_business_resilient
 from ..facebook_business_browser import BrowserBusinessError
+from ..facebook_business_create import set_business_primary_page, BusinessMutationError
 from .models import ProvisioningError, ProvisioningStep
 from .state import ProvisioningStateStore
 
@@ -524,17 +525,19 @@ async def business_handler(
             )
 
             async def private_before_submit():
-                await provisioning_state.checkpoint(
+                nonlocal checkpoint
+                checkpoint = await provisioning_state.checkpoint(
                     item_id, profile_id, scope_key, ProvisioningStep.BUSINESS,
                     {"phase": "CREATE_SUBMITTED", "activity": "PRIVATE_CREATE_SUBMITTED",
                      "activity_at": int(time.time())},
                 )
 
             async def private_after_created(result):
+                nonlocal checkpoint
                 exact_id = _clean(result.business_id)
                 if not exact_id.isdigit():
                     raise ProvisioningError("INVALID_RESULT", "Invalid private CREATE ID", retryable=False)
-                await provisioning_state.checkpoint(
+                checkpoint = await provisioning_state.checkpoint(
                     item_id, profile_id, scope_key, ProvisioningStep.BUSINESS,
                     {"phase": "CREATE_CONFIRMED", "resume_from": "PAGE_ADD",
                      "business_id": exact_id, "business_name": bm_name,
@@ -542,6 +545,13 @@ async def business_handler(
                      "create_response_business_id": exact_id,
                      "create_response_path": _clean(result.response_path),
                      "activity": "PRIVATE_CREATE_CONFIRMED", "activity_at": int(time.time())},
+                )
+
+            async def private_before_page_submit():
+                nonlocal checkpoint
+                checkpoint = await provisioning_state.checkpoint(
+                    item_id, profile_id, scope_key, ProvisioningStep.BUSINESS,
+                    {"phase": "PAGE_ADD_SUBMITTED", "activity": "PRIVATE_PAGE_ADD_SUBMITTED"},
                 )
 
             private_result = None
@@ -579,8 +589,11 @@ async def business_handler(
                         require_page_backed=True,
                         before_submit=private_before_submit,
                         after_created=private_after_created,
+                        before_page_submit=private_before_page_submit,
                     )
                 except BusinessCreateError as exc:
+                    if _clean(checkpoint.get("phase")).upper() == "PAGE_ADD_SUBMITTED" and exc.code == "CREATE_RESULT_UNKNOWN":
+                        raise ProvisioningError("PAGE_ATTACH_RESULT_UNKNOWN", str(exc), retryable=True) from exc
                     private_error = exc
 
             if private_result is not None:
@@ -668,7 +681,7 @@ async def business_handler(
                             scope_key,
                             ProvisioningStep.BUSINESS,
                             {
-                                "phase": "CREATE_CONFIRMED",
+                                "phase": ("PAGE_ADD_SUBMITTED" if any(row.get("code") == "SET_PRIMARY_PAGE_RESULT_UNKNOWN" for row in private_error_diagnostics if isinstance(row, dict)) else "CREATE_CONFIRMED"),
                                 "resume_from": "PAGE_ADD",
                                 "business_id": business_id,
                                 "business_name": bm_name,
@@ -979,6 +992,42 @@ async def business_handler(
                             "primary_page_id": page_id,
                         },
                     )
+
+                # Resume the same private Page-attach route used by CREATE.
+                private_attach_confirmed = False
+                controller_factory = getattr(session, "facebook_controller", None)
+                if callable(controller_factory):
+                    controller = await controller_factory()
+                    web_session = getattr(controller, "session", None)
+                    if callable(getattr(web_session, "bootstrap", None)):
+                        async def private_page_gate():
+                            await before_page_submit({"phase": "PAGE_ADD_SUBMITTED", "activity": "PRIVATE_PAGE_ADD_SUBMITTED"})
+                        try:
+                            await set_business_primary_page(
+                                web_session, business_id=business_id,
+                                business_name=bm_name, page_id=page_id,
+                                before_submit=private_page_gate,
+                            )
+                            private_attach_confirmed = True
+                        except BusinessMutationError as exc:
+                            if exc.code == "SET_PRIMARY_PAGE_RESULT_UNKNOWN":
+                                if not await browser.verify_page_attached(business_id=business_id, page_id=page_id):
+                                    raise ProvisioningError("PAGE_ATTACH_RESULT_UNKNOWN", str(exc), retryable=True) from exc
+                                private_attach_confirmed = True
+                            elif exc.code == "SET_PRIMARY_PAGE_MUTATION_NOT_DISCOVERED" or (exc.code == "SET_PRIMARY_PAGE_META_ERROR" and not exc.retryable and not (exc.payload or {}).get("data")):
+                                await before_page_submit({"phase": "CREATE_CONFIRMED", "activity": "PRIVATE_PAGE_ADD_REJECTED"})
+                            else:
+                                raise
+                        except Exception as exc:
+                            if _clean(checkpoint.get("phase")).upper() == "PAGE_ADD_SUBMITTED":
+                                raise ProvisioningError("PAGE_ATTACH_RESULT_UNKNOWN", str(exc), retryable=True) from exc
+                            raise
+
+                if private_attach_confirmed:
+                    await before_page_submit({"phase": "PAGE_CONFIRMED", "resume_from": "DONE", "activity": "PRIVATE_PAGE_CONFIRMED"})
+                    return {"business_id": business_id, "primary_page_id": page_id,
+                            "phase": "PAGE_CONFIRMED", "resume_from": "DONE",
+                            "resumed": recovered, "transport": "facebook_web_graphql_primary_page"}
 
                 # REMASK_PAGE_ATTACH_DEADLINE_V1
                 # Meta's Add-Page UI contains several Playwright waits. Without

@@ -5593,7 +5593,9 @@ class FacebookBusinessBrowser:
                                 "source": "browser_dom_link",
                             })
 
-                    for row in [*pages, *link_pages]:
+                    # Links alone do not prove management rights; recommendations
+                    # and sidebar navigation must never inflate managed FP count.
+                    for row in pages:
                         merge_page(merged, row)
 
                     diagnostics.append(
@@ -5626,6 +5628,7 @@ class FacebookBusinessBrowser:
                 "stage": "complete",
                 "current_url": _clean(getattr(self.page, "url", "") if self.page else ""),
                 "pages": len(merged),
+                "managed_page_ids": sorted(merged),
                 "page_discovery": diagnostics[-10:],
             })
             return sorted(
@@ -19564,6 +19567,24 @@ timeout_seconds=4.0,
         except Exception:
             return False
 
+    async def _open_pages_add_action(self, business_id: str) -> bool:
+        # Redirects abort the old document before the replacement UI hydrates.
+        for template in self.SETTINGS_PAGES_URLS[:2]:
+            try:
+                await self._goto(template.format(business_id=business_id), timeout_ms=9000, attempts=1)
+            except BrowserBusinessError as exc:
+                if exc.code != "FACEBOOK_NAVIGATION_FAILED":
+                    raise
+                # A migration redirect can abort the old document. Probe the
+                # replacement document, then the next compatible URL.
+                await self._assert_authenticated()
+            for attempt in range(8):
+                if await self._click_named(self.ADD_NAMES):
+                    return True
+                if attempt < 7:
+                    await self.page.wait_for_timeout(400)
+        return False
+
     async def preflight_page_add_form(
         self,
         *,
@@ -19596,14 +19617,12 @@ timeout_seconds=4.0,
                 "current_url": _clean(getattr(self.page, "url", "") if self.page else ""),
             }
 
-        await self._goto(self.SETTINGS_PAGES_URL.format(business_id=business))
-
-        if not await self._click_named(self.ADD_NAMES):
+        if not await self._open_pages_add_action(business):
             diag = await self._diagnostic("page_preflight_add_button_missing")
             raise BrowserBusinessError(
                 "PAGE_ADD_UI_CHANGED",
-                "Meta Business Settings did not expose the Add Page action.",
-                retryable=False,
+                "Meta Business Settings did not expose the Add Page action after hydration. No Page submit was sent.",
+                retryable=True,
                 diagnostic=diag,
             )
 
@@ -19752,14 +19771,12 @@ timeout_seconds=4.0,
                 already_attached=True,
             )
 
-        await self._goto(self.SETTINGS_PAGES_URL.format(business_id=business))
-
-        if not await self._click_named(self.ADD_NAMES):
+        if not await self._open_pages_add_action(business):
             diag = await self._diagnostic("page_add_button_missing")
             raise BrowserBusinessError(
                 "PAGE_ADD_UI_CHANGED",
-                "Meta Business Settings did not expose the Add Page action.",
-                retryable=False,
+                "Meta Business Settings did not expose the Add Page action after hydration. No Page submit was sent.",
+                retryable=True,
                 diagnostic=diag,
             )
 

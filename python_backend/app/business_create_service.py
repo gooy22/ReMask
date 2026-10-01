@@ -276,6 +276,7 @@ async def _create_business_via_web(
     diagnostics: list[dict[str, Any]],
     before_submit: Any = None,
     after_created: Any = None,
+    before_page_submit: Any = None,
 ) -> BusinessCreateResult:
     """
     Create a Business through the authenticated Facebook browser session.
@@ -326,6 +327,7 @@ async def _create_business_via_web(
                     business_id=web_result.business_id,
                     business_name=business_name,
                     page_id=clean_page,
+                    **({"before_submit": before_page_submit} if before_page_submit is not None else {}),
                 )
                 primary_page_attached_after_create = True
                 diagnostics.append(
@@ -563,6 +565,7 @@ async def create_business_resilient(
     require_page_backed: bool = False,
     before_submit: Any = None,
     after_created: Any = None,
+    before_page_submit: Any = None,
 ) -> BusinessCreateResult:
     diagnostics: list[dict[str, Any]] = []
     clean_page = str(page_id or "").strip()
@@ -602,6 +605,7 @@ async def create_business_resilient(
             diagnostics=diagnostics,
             before_submit=before_submit,
             after_created=after_created,
+            before_page_submit=before_page_submit,
         )
 
     # Final legacy fallback is the scope-selector private mutation. This is not
@@ -620,6 +624,7 @@ async def create_business_resilient(
         diagnostics=diagnostics,
         before_submit=before_submit,
         after_created=after_created,
+        before_page_submit=before_page_submit,
     )
 
 

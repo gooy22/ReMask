@@ -1459,6 +1459,20 @@ async def create_business_manager_v2(
     )
 
 
+def _attach_response_confirms_page(value: Any, business_id: str, page_id: str) -> bool:
+    if isinstance(value, list):
+        return any(_attach_response_confirms_page(child, business_id, page_id) for child in value)
+    if not isinstance(value, dict):
+        return False
+    primary = value.get("primary_page")
+    if _clean(value.get("id") or value.get("business_id")) == _clean(business_id):
+        if isinstance(primary, dict) and _clean(primary.get("id")) == _clean(page_id):
+            return True
+        if _clean(value.get("primary_page_id")) == _clean(page_id):
+            return True
+    return any(_attach_response_confirms_page(child, business_id, page_id) for child in value.values())
+
+
 async def attach_page_to_business(
     session: Any,
     *,
@@ -1466,6 +1480,7 @@ async def attach_page_to_business(
     business_name: str,
     page_id: str,
     profile_id: str = "",
+    before_submit: Any = None,
 ) -> AttachPageResult:
     clean_profile_id = _profile_id(
         session,
@@ -1543,7 +1558,13 @@ async def attach_page_to_business(
 
     for candidate in candidates:
         try:
-            response = await session.graphql(
+            # Reuse the authenticated web session; opening another Chromium
+            # while the verification browser owns the only slot would deadlock.
+            transport = session.graphql
+            extra = {}
+            if before_submit is not None:
+                await before_submit()
+            response = await transport(
                 candidate.doc_id,
                 variables,
                 friendly_name=(
@@ -1552,6 +1573,7 @@ async def attach_page_to_business(
                 endpoint_url=(
                     candidate.endpoint_url
                 ),
+                **extra,
             )
 
         except Exception as exc:
@@ -1665,7 +1687,7 @@ async def attach_page_to_business(
             )
 
         data = response.get("data")
-        if not isinstance(data, dict) or not data:
+        if not isinstance(data, dict) or not _attach_response_confirms_page(data, business_id, page_id):
             diagnostic = _diagnostic(
                 candidate,
                 response,
@@ -1767,12 +1789,14 @@ async def set_business_primary_page(
     business_id: str,
     business_name: str,
     page_id: str,
+    before_submit: Any = None,
 ) -> DocIdCandidate:
     result = await attach_page_to_business(
         session,
         business_id=business_id,
         business_name=business_name,
         page_id=page_id,
+        before_submit=before_submit,
     )
 
     return result.candidate

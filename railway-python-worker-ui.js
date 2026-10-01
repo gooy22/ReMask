@@ -287,6 +287,11 @@ function pythonWorkerSelectionRefresh() {
   const profiles = pythonWorkerSelectedProfiles();
   const start = pythonWorkerEl('pythonProvisionStart');
   const addRk = pythonWorkerEl('pythonProvisionAdAccount');
+  const auto = pythonWorkerEl('pythonProvisionAuto');
+  if (auto) {
+    auto.disabled = pythonWorkerUiState.busy || profiles.length === 0 || pythonWorkerUiState.workerOnline !== true;
+    auto.textContent = profiles.length ? 'Auto FP → BM → RK (' + profiles.length + ')' : 'Auto FP → BM → RK';
+  }
 
   if (start) {
     start.disabled =
@@ -3839,6 +3844,88 @@ window.pythonWorkerStartAdAccounts = pythonWorkerStartAdAccounts;
 
 
 
+async function pythonWorkerOpenAutoModal() {
+  const profiles = pythonWorkerSelectedProfiles();
+  if (!profiles.length || pythonWorkerUiState.busy) return;
+  if (pythonWorkerUiState.workerOnline !== true) throw new Error('Worker ещё не READY.');
+  pythonWorkerEnsureBmModalStyle();
+  pythonWorkerCloseOwnBmModal();
+  const modal = document.createElement('div');
+  modal.id = 'pythonWorkerBmModal';
+  const card = document.createElement('div'); card.className = 'pwbm-card';
+  const head = document.createElement('div'); head.className = 'pwbm-head';
+  const title = document.createElement('div'); title.className = 'pwbm-title';
+  title.textContent = 'Автоматическое создание · ' + profiles.length + ' проф.';
+  const close = document.createElement('button'); close.type = 'button'; close.className = 'pwbm-close'; close.textContent = '×';
+  close.addEventListener('click', pythonWorkerCloseOwnBmModal);
+  head.append(title, close);
+  const body = document.createElement('div'); body.className = 'pwbm-body';
+  const note = document.createElement('div'); note.className = 'pwbm-note';
+  note.textContent = 'Каждый комплект: новая FP → новый BM с этой FP → новый РК. Названия и случайный адрес @gmail.com сохраняются при запуске и не меняются при Retry. Адрес — значение для формы; Gmail-ящик не регистрируется. Лимиты и проверки Meta действуют.';
+  body.appendChild(note);
+  function field(label, input) {
+    const holder = document.createElement('label'); holder.className = 'pwbm-field';
+    const text = document.createElement('span'); text.textContent = label;
+    holder.append(text, input); body.appendChild(holder); return input;
+  }
+  const mode = document.createElement('select');
+  [['2','Только FP'],['3','FP → BM'],['4','FP → BM → РК']].forEach(function(pair) {
+    const option = document.createElement('option'); option.value = pair[0]; option.textContent = pair[1]; mode.appendChild(option);
+  });
+  mode.value = '4'; field('Что создать', mode);
+  const count = document.createElement('input'); count.type = 'number'; count.min = '1'; count.max = '20'; count.value = '1';
+  field('Комплектов на каждый профиль (1–20)', count);
+  const category = document.createElement('input'); category.value = 'Digital creator'; field('Категория FP', category);
+  const currency = document.createElement('input'); currency.value = 'USD'; currency.maxLength = 3; field('Валюта РК', currency);
+  const timezone = document.createElement('input'); timezone.type = 'number'; timezone.min = '0'; timezone.value = '1'; field('Meta timezone_id РК', timezone);
+  const footer = document.createElement('div'); footer.className = 'pwbm-footer';
+  const status = document.createElement('div'); status.className = 'pwbm-status';
+  const actions = document.createElement('div'); actions.className = 'pwbm-actions';
+  const cancel = document.createElement('button'); cancel.type = 'button'; cancel.className = 'btn btn-secondary'; cancel.textContent = 'Отмена';
+  cancel.addEventListener('click', pythonWorkerCloseOwnBmModal);
+  const create = document.createElement('button'); create.type = 'button'; create.className = 'btn btn-primary'; create.textContent = 'Запустить';
+  actions.append(cancel, create); footer.append(status, actions); card.append(head, body, footer); modal.appendChild(card); document.body.appendChild(modal);
+  function refresh() {
+    const n = Number(count.value); const total = profiles.length * n; const rk = mode.value === '4';
+    currency.disabled = timezone.disabled = !rk;
+    const valid = Number.isInteger(n) && n >= 1 && n <= 20 && total <= 500 && category.value.trim()
+      && (!rk || (/^[A-Z]{3}$/.test(currency.value.trim().toUpperCase()) && Number.isInteger(Number(timezone.value)) && Number(timezone.value) >= 0 && timezone.value.trim()));
+    create.disabled = pythonWorkerUiState.busy || !valid;
+    status.textContent = valid ? 'Будет создано: FP ' + total + ', BM ' + (Number(mode.value) >= 3 ? total : 0) + ', РК ' + (rk ? total : 0) + '.'
+      : 'Нужны категория, число комплектов 1–20 и параметры РК. Всего не больше 500 комплектов.';
+  }
+  [mode, count, category, currency, timezone].forEach(function(input) { input.addEventListener('input', refresh); input.addEventListener('change', refresh); });
+  create.addEventListener('click', async function() {
+    if (create.disabled) return;
+    const steps = ['PROXY_CHECK','FAN_PAGES','BUSINESS','AD_ACCOUNT'].slice(0, Number(mode.value));
+    const n = Number(count.value);
+    pythonWorkerUiState.busy = true; refresh(); pythonWorkerSelectionRefresh();
+    try {
+      const random = new Uint32Array(4); crypto.getRandomValues(random);
+      const nonce = Array.from(random, function(x) { return x.toString(16); }).join('-');
+      const data = await pythonWorkerBridge({action:'create', idempotency_key:'workspace-auto-' + nonce,
+        profiles:profiles.map(function(profileId) { return {profile_id:String(profileId), tasks:[{action:'provisioning', payload:{
+          steps:steps, auto_generate:true, batch_count:n, parameters:{
+            FAN_PAGES:{category:category.value.trim()}, AD_ACCOUNT:{currency:currency.value.trim().toUpperCase(), timezone_id:Number(timezone.value)}
+          }
+        }}]}; })});
+      const jobId = String((data && data.job && data.job.job_id) || '').trim();
+      if (!jobId) throw new Error('Worker did not return job_id.');
+      pythonWorkerClearBatchState();
+      pythonWorkerUiState.jobId = jobId; pythonWorkerUiState.job = null;
+      localStorage.setItem('remask_python_worker_job_v1', jobId);
+      pythonWorkerSetText('pythonPwJob', 'Job: ' + jobId);
+      pythonWorkerSetText('pythonPwStatus', 'Автоматическое создание: ' + (profiles.length * n) + ' комплектов.');
+      pythonWorkerCloseOwnBmModal();
+      pythonWorkerPoll().catch(function(error) { pythonWorkerSetText('pythonPwStatus', 'Ошибка polling: ' + String(error.message || error)); });
+    } catch (error) {
+      pythonWorkerUiState.busy = false; refresh(); pythonWorkerSelectionRefresh();
+      status.textContent = 'Ошибка: ' + String(error.message || error);
+    }
+  });
+  refresh();
+}
+
 async function pythonWorkerStartFanPages(options) {
   const profiles = options && Array.isArray(options.profiles)
     ? options.profiles.map(function(v){ return String(v || '').trim(); }).filter(Boolean)
@@ -4191,6 +4278,15 @@ function pythonWorkerInstallBusinessAddRkInterceptor() {
 
 function pythonWorkerInitUi() {
   const start = pythonWorkerEl('pythonProvisionStart');
+  if (start && !pythonWorkerEl('pythonProvisionAuto')) {
+    const auto = document.createElement('button');
+    auto.id = 'pythonProvisionAuto'; auto.type = 'button'; auto.className = start.className;
+    auto.addEventListener('click', function(event) {
+      event.preventDefault();
+      pythonWorkerOpenAutoModal().catch(function(error) { pythonWorkerSetText('pythonPwStatus', String(error.message || error)); });
+    });
+    start.insertAdjacentElement('afterend', auto);
+  }
   const addRk = pythonWorkerEl('pythonProvisionAdAccount');
   const retry = pythonWorkerEl('pythonProvisionRetry');
 

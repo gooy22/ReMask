@@ -479,11 +479,15 @@ class MetaSession:
                 self._graph_api = current
             return current
 
-    async def close(self) -> None:
+    async def close_business_browser(self) -> None:
+        """Release Chromium between provisioning phases, retaining HTTP state."""
         async with self._business_browser_lock:
             if self._business_browser is not None:
                 await self._business_browser.close()
                 self._business_browser = None
+
+    async def close(self) -> None:
+        await self.close_business_browser()
 
         async with self._graph_lock:
             if self._graph_api is not None:

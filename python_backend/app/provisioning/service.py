@@ -146,6 +146,13 @@ class ProvisioningService:
                             f"parameters.{step.value} must be an object",
                         )
 
+                    if step is ProvisioningStep.BUSINESS and step_params.get("use_created_page") is True:
+                        page_step = await self.state.step(item_id, ProvisioningStep.FAN_PAGES)
+                        page_ids = (page_step or {}).get("result", {}).get("page_ids") or []
+                        if (page_step or {}).get("status") != "SUCCESS" or len(page_ids) != 1 or not str(page_ids[0]).isdigit():
+                            raise ProvisioningError("CREATED_PAGE_REQUIRED", "Automatic BM requires exactly one confirmed Page from this work item")
+                        step_params = {**step_params, "page_id": str(page_ids[0])}
+
                     state = snapshot.as_dict()
                     step_key = (
                         f"{task_idempotency_key}:{step.value}"
@@ -227,6 +234,10 @@ class ProvisioningService:
                 await self.state.complete(
                     item_id, profile_id, scope_key, step, result
                 )
+                if step in _MUTATING_BROWSER_STEPS:
+                    release_browser = getattr(session, "close_business_browser", None)
+                    if callable(release_browser):
+                        await release_browser()
                 completed.append(
                     {
                         "step": step.value,

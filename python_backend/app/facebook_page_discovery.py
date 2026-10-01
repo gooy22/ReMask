@@ -99,6 +99,9 @@ def _normalize_page(row: Any) -> dict[str, Any] | None:
     if isinstance(row.get("is_owned"), bool):
         output["is_owned"] = bool(row.get("is_owned"))
 
+    for key in ("ownership_verified", "ownership_source"):
+        if key in row:
+            output[key] = row[key]
     return output
 
 
@@ -183,74 +186,50 @@ def _dedupe_pages(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return output
 
 
+MANAGED_PAGE_KEYS = frozenset({
+    "pages_can_administer", "pages_you_manage", "managed_pages", "owned_pages",
+    "client_pages", "pages_can_manage", "your_pages",
+})
+
+
+def _page_management_proven(row: dict[str, Any]) -> bool:
+    return any(row.get(key) is True for key in (
+        "is_owned", "is_admin", "viewer_can_manage", "can_manage", "can_post",
+    )) or any(str(task).upper() in {"MANAGE", "ADMINISTER", "CREATE_CONTENT"}
+              for task in (row.get("tasks") if isinstance(row.get("tasks"), list) else []))
+
+
 def _extract_known_page_lists(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    """
-    Parse both the historical Account Quality response and newer Relay
-    connection shapes (nodes / edges -> node) without treating unrelated
-    numeric-id objects as Pages.
-    """
+    """Return exact Page objects with management evidence, never nearby IDs."""
     output: list[dict[str, Any]] = []
-    seen: set[str] = set()
 
-    def add(row: Any) -> None:
+    def add(row: Any, source: str) -> None:
+        if not isinstance(row, dict):
+            return
+        typename = _clean(row.get("__typename") or row.get("type")).lower()
+        if typename and "page" not in typename:
+            return
         page = _normalize_page(row)
-        if not page:
-            return
-        if page["id"] in seen:
-            return
-        seen.add(page["id"])
-        output.append(page)
+        if page:
+            page.update(ownership_verified=True, ownership_source=source)
+            output.append(page)
 
-    def walk(value: Any, *, in_page_branch: bool = False) -> None:
+    def walk(value: Any) -> None:
         if isinstance(value, list):
             for child in value:
-                walk(child, in_page_branch=in_page_branch)
-            return
+                walk(child)
+        elif isinstance(value, dict):
+            if _page_like(value) and _page_management_proven(value):
+                add(value, "explicit_page_management")
+            for key, child in value.items():
+                if str(key).lower() in MANAGED_PAGE_KEYS:
+                    for row in _iter_connection_rows(child):
+                        add(row, str(key).lower())
+                else:
+                    walk(child)
 
-        if not isinstance(value, dict):
-            return
-
-        if in_page_branch:
-            add(value)
-
-        for raw_key, child in value.items():
-            key = str(raw_key or "").lower()
-            next_page_branch = (
-                in_page_branch
-                or "page" in key
-                or key in {"owned_pages", "client_pages"}
-            )
-
-            if key == "node" and in_page_branch:
-                walk(child, in_page_branch=True)
-                continue
-
-            if key in {"nodes", "edges", "data"}:
-                walk(child, in_page_branch=next_page_branch)
-                continue
-
-            walk(child, in_page_branch=next_page_branch)
-
-    # Fast path for the long-lived Account Quality contract.
-    for path in (
-        ("data", "userData", "pages_can_administer"),
-        ("data", "user", "pages_can_administer"),
-        ("data", "viewer", "pages_can_administer"),
-        ("data", "pages_can_administer"),
-    ):
-        node: Any = payload
-        for key in path:
-            if not isinstance(node, dict):
-                node = None
-                break
-            node = node.get(key)
-        if isinstance(node, list):
-            for row in node:
-                add(row)
-
-    # Compatibility path for current/future Relay connection wrappers.
-    walk(payload.get("data"), in_page_branch=False)
-    return output
+    walk(payload)
+    return _dedupe_pages(output)
 
 
 def _errors(payload: dict[str, Any]) -> list[Any]:
@@ -659,6 +638,17 @@ async def discover_current_list_pages_docid(
 def _browser_source_variants(source: str) -> list[str]:
     raw = str(source or "")
     variants = [raw]
+    decoded = raw
+    for _ in range(2):
+        try:
+            value = json.loads(decoded)
+        except ValueError:
+            break
+        if not isinstance(value, str):
+            break
+        decoded = value
+        if decoded not in variants:
+            variants.append(decoded)
 
     entity_decoded = html_lib.unescape(raw)
     if entity_decoded not in variants:
@@ -691,83 +681,31 @@ def _browser_source_variants(source: str) -> list[str]:
 
 
 def _extract_pages_from_browser_document(source: str) -> list[dict[str, Any]]:
+    """Parse JSON object boundaries and explicit managed-page connections.
+
+    Regex proximity is not identity or ownership evidence: a Page marker can
+    sit beside User, Business, recommendation and picture IDs in Relay state.
+    """
     rows: list[dict[str, Any]] = []
-
-    id_patterns = (
-        r"""["']page_id["']\s*:\s*["']?(\d{5,25})["']?""",
-        r"""["']pageID["']\s*:\s*["']?(\d{5,25})["']?""",
-        r"""["']pageId["']\s*:\s*["']?(\d{5,25})["']?""",
-    )
-    generic_id_pattern = r"""["']id["']\s*:\s*["'](\d{5,25})["']"""
-    name_patterns = (
-        r"""["']name["']\s*:\s*["']([^"']{1,240})["']""",
-        r"""["']page_name["']\s*:\s*["']([^"']{1,240})["']""",
-        r"""["']pageName["']\s*:\s*["']([^"']{1,240})["']""",
-    )
-    category_pattern = r"""["']category["']\s*:\s*["']([^"']{1,160})["']"""
-
+    decoder = json.JSONDecoder()
+    managed_pattern = re.compile(r'["\'](' + '|'.join(sorted(MANAGED_PAGE_KEYS)) + r')["\']\s*:\s*', re.I)
     for text in _browser_source_variants(source):
-        marker_matches = list(
-            re.finditer(
-                r"""page_id|pageID|pageId|__typename["']?\s*:\s*["']Page["']""",
-                text,
-                flags=re.IGNORECASE,
-            )
-        )
-
-        for marker in marker_matches:
-            left = max(0, marker.start() - 1800)
-            right = min(len(text), marker.end() + 2600)
-            window = text[left:right]
-
-            page_id = ""
-            for pattern in id_patterns:
-                match = re.search(pattern, window, flags=re.IGNORECASE)
-                if match:
-                    page_id = _clean(match.group(1))
-                    break
-
-            if not page_id and re.search(
-                r"""__typename["']?\s*:\s*["']Page["']""",
-                window,
-                flags=re.IGNORECASE,
-            ):
-                match = re.search(
-                    generic_id_pattern,
-                    window,
-                    flags=re.IGNORECASE,
-                )
-                if match:
-                    page_id = _clean(match.group(1))
-
-            if not page_id:
+        for match in managed_pattern.finditer(text):
+            try:
+                value, _ = decoder.raw_decode(text, match.end())
+            except ValueError:
                 continue
-
-            page_name = ""
-            for pattern in name_patterns:
-                match = re.search(pattern, window, flags=re.IGNORECASE)
-                if match:
-                    page_name = html_lib.unescape(_clean(match.group(1)))
-                    break
-
-            if not page_name:
+            rows.extend(_extract_known_page_lists({match.group(1).lower(): value}))
+        # Standalone JSON scripts may contain explicit ownership flags instead
+        # of a named connection. Decode the complete object, not a text window.
+        for match in re.finditer(r'<script\b[^>]*>(.*?)</script\s*>', text, re.I | re.S):
+            body = match.group(1).strip()
+            try:
+                value = json.loads(body)
+            except ValueError:
                 continue
-
-            category = ""
-            category_match = re.search(
-                category_pattern,
-                window,
-                flags=re.IGNORECASE,
-            )
-            if category_match:
-                category = html_lib.unescape(_clean(category_match.group(1)))
-
-            rows.append({
-                "id": page_id,
-                "name": page_name,
-                "category": category,
-            })
-
+            if isinstance(value, (dict, list)):
+                rows.extend(_extract_known_page_lists(value))
     return _dedupe_pages(rows)
 
 

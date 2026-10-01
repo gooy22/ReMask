@@ -234,7 +234,7 @@ class SystemAuditTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_delayed_page_hydration_uses_one_navigation(self):
         page = SimpleNamespace(content=AsyncMock(side_effect=["<html>shell</html>", "<html>shell</html>",
-            '<script type="application/json">{"__typename":"Page","id":"123456789","name":"Delayed Page"}</script>']),
+            '<script type="application/json">{"__typename":"Page","id":"123456789","name":"Delayed Page","is_owned":true}</script>']),
             wait_for_timeout=AsyncMock(), locator=lambda selector: SimpleNamespace(evaluate_all=AsyncMock(return_value=[])))
         browser = FacebookBusinessBrowser(SimpleNamespace(profile_id="audit-profile"))
         browser.page = page

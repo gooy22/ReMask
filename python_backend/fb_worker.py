@@ -1252,6 +1252,8 @@ class FacebookWebSession:
         context = None
         request_may_have_been_sent = False
         transport_stage = "browser_launch"
+        from app.facebook_business_browser import _BROWSER_SEMAPHORE
+        await _BROWSER_SEMAPHORE.acquire()
         try:
             async with async_playwright() as playwright:
                 executable_path = str(
@@ -1548,16 +1550,19 @@ class FacebookWebSession:
                 transport_stage=transport_stage,
             ) from exc
         finally:
-            if context is not None:
-                try:
-                    await context.close()
-                except Exception:
-                    pass
-            if browser is not None:
-                try:
-                    await browser.close()
-                except Exception:
-                    pass
+            try:
+                if context is not None:
+                    try:
+                        await asyncio.wait_for(context.close(), timeout=2.0)
+                    except Exception:
+                        pass
+                if browser is not None:
+                    try:
+                        await asyncio.wait_for(browser.close(), timeout=2.0)
+                    except Exception:
+                        pass
+            finally:
+                _BROWSER_SEMAPHORE.release()
 
     async def send_post_request(
         self,

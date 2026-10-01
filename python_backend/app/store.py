@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import sqlite3
 import time
 import uuid
@@ -53,8 +54,7 @@ class JobStore:
                 error_message TEXT,
                 retryable INTEGER NOT NULL DEFAULT 0,
                 created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL,
-                UNIQUE(job_id, profile_id)
+                updated_at INTEGER NOT NULL
             );
             CREATE TABLE IF NOT EXISTS job_tasks (
                 id TEXT PRIMARY KEY,
@@ -90,6 +90,38 @@ class JobStore:
                         "ADD COLUMN retryable INTEGER NOT NULL DEFAULT 0"
                     )
 
+            # Older jobs allowed only one item per profile. Bulk units have
+            # independent checkpoints but keep the real profile identity.
+            unique_profile_index = any(
+                row["unique"] and [col["name"] for col in con.execute(
+                    "SELECT * FROM pragma_index_info(?)", (row["name"],)
+                )] == ["job_id", "profile_id"]
+                for row in con.execute("PRAGMA index_list(job_items)").fetchall()
+            )
+            if unique_profile_index:
+                schema = con.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='job_items'").fetchone()["sql"]
+                new_schema = re.sub(r",\s*UNIQUE\s*\(\s*job_id\s*,\s*profile_id\s*\)", "", schema, flags=re.I)
+                new_schema = re.sub(r"^(CREATE TABLE(?: IF NOT EXISTS)?)\s+(?:\"job_items\"|job_items)", r"\1 job_items_bulk", new_schema, count=1, flags=re.I)
+                if new_schema == schema or "UNIQUE(job_id, profile_id)" in new_schema:
+                    raise RuntimeError("Could not migrate bulk job items schema")
+                con.commit()
+                con.execute("PRAGMA foreign_keys=OFF")
+                try:
+                    con.execute("BEGIN IMMEDIATE")
+                    con.execute(new_schema)
+                    con.execute("INSERT INTO job_items_bulk SELECT * FROM job_items")
+                    con.execute("DROP TABLE job_items")
+                    con.execute("ALTER TABLE job_items_bulk RENAME TO job_items")
+                    con.execute("CREATE INDEX idx_items_status ON job_items(status)")
+                    if con.execute("PRAGMA foreign_key_check").fetchall():
+                        raise RuntimeError("Bulk job migration broke a foreign key")
+                    con.commit()
+                except BaseException:
+                    con.rollback()
+                    raise
+                finally:
+                    con.execute("PRAGMA foreign_keys=ON")
+
     async def create_job(self, request: Any) -> tuple[str, bool]:
         return await asyncio.to_thread(self._create_job_sync, request)
 
@@ -102,9 +134,11 @@ class JobStore:
                 if row:
                     return str(row['id']), False
             job_id = uuid.uuid4().hex
+            from .provisioning.auto_plan import expand_auto_profiles
+            profiles = expand_auto_profiles(request.profiles, job_id)
             con.execute('INSERT INTO jobs(id,status,idempotency_key,created_at,updated_at) VALUES(?,?,?,?,?)',
                         (job_id,'QUEUED',request.idempotency_key,now,now))
-            for profile in request.profiles:
+            for profile in profiles:
                 item_id = uuid.uuid4().hex
                 con.execute('INSERT INTO job_items(id,job_id,profile_id,status,created_at,updated_at) VALUES(?,?,?,?,?,?)',
                             (item_id,job_id,profile.profile_id,'QUEUED',now,now))

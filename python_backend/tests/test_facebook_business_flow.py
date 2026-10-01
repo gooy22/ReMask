@@ -93,6 +93,7 @@ class FanPageDiscoveryTests(unittest.TestCase):
                     "__typename": "Page",
                     "id": "444444444444444",
                     "name": "Fan Page From HTML",
+                    "is_owned": true,
                     "category": "Brand"
                   }
                 ]

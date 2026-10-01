@@ -4305,7 +4305,7 @@ class BrowserPageDiscoveryTests(unittest.IsolatedAsyncioTestCase):
                 return (
                     '<script type="application/json">'
                     '{"__typename":"Page","id":"123456789",'
-                    '"name":"Demo Fan Page","category":"Local business"}'
+                    '"name":"Demo Fan Page","category":"Local business","is_owned":true}'
                     '</script>'
                 )
 
@@ -4322,7 +4322,7 @@ class BrowserPageDiscoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(pages[0]["name"], "Demo Fan Page")
         browser._goto.assert_awaited()
 
-    async def test_discovers_pages_from_visible_page_links(self):
+    async def test_visible_page_links_do_not_prove_management(self):
         class _AnchorLocator:
             async def evaluate_all(self, script):
                 return [
@@ -4350,12 +4350,10 @@ class BrowserPageDiscoveryTests(unittest.IsolatedAsyncioTestCase):
             return_value="https://www.facebook.com/pages/?category=your_pages"
         )
 
-        pages = await browser.discover_managed_pages()
-
-        self.assertEqual(len(pages), 1)
-        self.assertEqual(pages[0]["id"], "123456789")
-        self.assertEqual(pages[0]["name"], "Demo Fan Page")
-        self.assertEqual(pages[0]["source"], "browser_dom_link")
+        browser._diagnostic = AsyncMock(return_value={})
+        with self.assertRaises(BrowserBusinessError) as error:
+            await browser.discover_managed_pages()
+        self.assertEqual(error.exception.code, "FAN_PAGES_NOT_DISCOVERED")
 
 
     async def test_discovers_pages_from_live_relay_response(self):

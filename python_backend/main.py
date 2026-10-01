@@ -488,7 +488,7 @@ async def run_live_inventory_readonly_canary() -> None:
             log.warning(
                 'live inventory canary run=%s profile=%s scoped_business=%s scoped_account=%s '
                 'ok=%s live_ready=%s pages_ready=%s pages_live_verified=%s '
-                'pages=%s source=%s diagnostic=%s warnings=%s',
+                'pages=%s source=%s diagnostic=%s warnings=%s page_evidence=%s',
                 canary_run,
                 profile_id,
                 business_id or '-',
@@ -505,6 +505,7 @@ async def run_live_inventory_readonly_canary() -> None:
                     ensure_ascii=False,
                     separators=(',', ':'),
                 )[:2200],
+                json.dumps([{key: row.get(key) for key in ('id', 'ownership_verified', 'ownership_source', '_source')} for row in result.get('pages', []) if isinstance(row, dict)], separators=(',', ':'))[:2500],
             )
         except HTTPException as exc:
             log.error(
@@ -524,6 +525,25 @@ async def run_live_inventory_readonly_canary() -> None:
                 profile_id,
                 f'{exc.__class__.__name__}: {exc}'[:2200],
             )
+
+
+    target_business = str(os.getenv('REMASK_PAGE_ATTACH_CANARY_BUSINESS') or '').strip()
+    target_page = str(os.getenv('REMASK_PAGE_ATTACH_CANARY_PAGE') or '').strip()
+    if target_business.isdigit() and target_page.isdigit():
+        try:
+            async with pool.profile_locks[profile_id]:
+                context = await pool.resolver.resolve(profile_id)
+                async with ProfileSession(context) as session:
+                    browser = await session.facebook_business_browser()
+                    result = await asyncio.wait_for(browser.preflight_page_add_form(
+                        business_id=target_business, page_id=target_page), timeout=70)
+                    log.warning('page attach readonly canary profile=%s business=%s page=%s result=%s',
+                        profile_id, target_business, target_page, json.dumps(result, ensure_ascii=False, separators=(',', ':'))[:4500])
+        except BrowserBusinessError as exc:
+            log.warning('page attach readonly canary profile=%s business=%s page=%s code=%s detail=%s diagnostic=%s',
+                profile_id, target_business, target_page, exc.code, str(exc)[:700], json.dumps(exc.diagnostic, ensure_ascii=False, separators=(',', ':'))[:6500])
+        except Exception as exc:
+            log.warning('page attach readonly canary profile=%s business=%s page=%s error=%s', profile_id, target_business, target_page, str(exc)[:700])
 
 async def require_key(x_remask_worker_key: str | None = Header(default=None)) -> None:
     if API_KEY and x_remask_worker_key != API_KEY:
@@ -818,6 +838,8 @@ async def profile_preflight(profile_id: str):
                             ],
                             'business_id':str(row.get('business_id') or '').strip(),
                             'is_owned':row.get('is_owned'),
+                        'ownership_verified':row.get('ownership_verified'),
+                        'ownership_source':row.get('ownership_source'),
                         }
                         for row in discovered_pages
                         if isinstance(row,dict)
@@ -2233,7 +2255,7 @@ async def profile_live_inventory(
                     # REMASK_PAGE_HANDOFF_TWO_PASS_BUDGET_V1
                     # The low-memory handoff deliberately allows one cold and
                     # one warm Your-Pages pass. Production profile 7 only
-                    # returned its 4 Pages on the warm pass. Do not start the
+                    # returned Page candidates on the warm pass. Do not start the
                     # proof unless both bounded passes can realistically fit.
                     if isolated_pages_timeout < 17.5:
                         raise asyncio.TimeoutError()
@@ -2593,7 +2615,10 @@ async def create_job(request: CreateJobRequest) -> JobAccepted:
     fp_profiles=_request_fan_page_profile_ids(request)
     if fp_profiles:
         await _require_fp_auth_ready(fp_profiles)
-    job_id,created=await store.create_job(request)
+    try:
+        job_id,created=await store.create_job(request)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     view=await store.job_view(job_id)
     if view and mirror.enabled:
         try:
