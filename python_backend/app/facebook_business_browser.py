@@ -1914,6 +1914,7 @@ class FacebookBusinessBrowser:
     )
 
     def __init__(self, context: Any, *, timeout_seconds: int = 45) -> None:
+        self._close_lock = asyncio.Lock()
         self.context = context
         self.timeout_seconds = max(15, int(timeout_seconds))
         self.timeout_ms = self.timeout_seconds * 1000
@@ -1978,7 +1979,7 @@ class FacebookBusinessBrowser:
         # before the Playwright startup try/except below, so release the lease
         # explicitly if the pre-open stale-process sweep is interrupted.
         try:
-            stale_cleanup = await _reap_stale_chromium_processes()
+            stale_cleanup = await _reap_stale_chromium_processes() if _BROWSER_LIMIT == 1 else {"found": 0}
         except asyncio.CancelledError:
             self._release_semaphore()
             raise
@@ -2229,75 +2230,77 @@ class FacebookBusinessBrowser:
             _BROWSER_SEMAPHORE.release()
 
     async def close(self) -> None:
-        watchdog = self._lease_watchdog_task
-        self._lease_watchdog_task = None
-        current = asyncio.current_task()
-        if watchdog is not None and watchdog is not current:
-            watchdog.cancel()
+        async with self._close_lock:
+            watchdog = self._lease_watchdog_task
+            self._lease_watchdog_task = None
+            current = asyncio.current_task()
+            if watchdog is not None and watchdog is not current:
+                watchdog.cancel()
 
-        # REMASK_BROWSER_CLOSE_HARD_DEADLINE_V1
-        async def bounded_cleanup(awaitable: Any, *, timeout: float) -> None:
-            task: asyncio.Task[Any] | None = None
-            try:
-                task = asyncio.create_task(awaitable)
-                done, _pending = await asyncio.wait(
-                    {task},
-                    timeout=max(0.05, float(timeout)),
-                )
-                if task in done:
-                    task.result()
-                    return
-                task.cancel()
-                task.add_done_callback(
-                    lambda finished: (
-                        None
-                        if finished.cancelled()
-                        else finished.exception()
+            # REMASK_BROWSER_CLOSE_HARD_DEADLINE_V1
+            async def bounded_cleanup(awaitable: Any, *, timeout: float) -> None:
+                task: asyncio.Task[Any] | None = None
+                try:
+                    task = asyncio.create_task(awaitable)
+                    done, _pending = await asyncio.wait(
+                        {task},
+                        timeout=max(0.05, float(timeout)),
                     )
-                )
-            except BaseException:
-                # Cleanup must never wedge the worker. In particular, do not
-                # await Playwright cancellation after the wall-clock deadline.
-                if task is not None and not task.done():
+                    if task in done:
+                        task.result()
+                        return
                     task.cancel()
-                pass
+                    task.add_done_callback(
+                        lambda finished: (
+                            None
+                            if finished.cancelled()
+                            else finished.exception()
+                        )
+                    )
+                except BaseException:
+                    # Cleanup must never wedge the worker. In particular, do not
+                    # await Playwright cancellation after the wall-clock deadline.
+                    if task is not None and not task.done():
+                        task.cancel()
+                    pass
 
-        page = self.page
-        self.page = None
+            page = self.page
+            self.page = None
 
-        browser_context = self._browser_context
-        self._browser_context = None
+            browser_context = self._browser_context
+            self._browser_context = None
 
-        browser = self._browser
-        self._browser = None
+            browser = self._browser
+            self._browser = None
 
-        playwright = self._playwright
-        self._playwright = None
+            playwright = self._playwright
+            self._playwright = None
 
-        if page is not None:
-            await bounded_cleanup(page.close(), timeout=1.5)
+            if page is not None:
+                await bounded_cleanup(page.close(), timeout=1.5)
 
-        if browser_context is not None:
-            await bounded_cleanup(browser_context.close(), timeout=2.0)
+            if browser_context is not None:
+                await bounded_cleanup(browser_context.close(), timeout=2.0)
 
-        if browser is not None:
-            await bounded_cleanup(browser.close(), timeout=4.0)
+            if browser is not None:
+                await bounded_cleanup(browser.close(), timeout=4.0)
 
-        if playwright is not None:
-            await bounded_cleanup(playwright.stop(), timeout=2.0)
+            if playwright is not None:
+                await bounded_cleanup(playwright.stop(), timeout=2.0)
 
-        # Chromium can leave renderer/zygote children behind after a page
-        # crash even when Playwright close() returns. Reap them while the
-        # global browser semaphore is still held so the next lease starts with
-        # a clean memory budget.
-        await _reap_stale_chromium_processes()
+            # Chromium can leave renderer/zygote children behind after a page
+            # crash even when Playwright close() returns. Reap them while the
+            # global browser semaphore is still held so the next lease starts with
+            # a clean memory budget.
+            if self._semaphore_acquired and _BROWSER_LIMIT == 1:
+                await _reap_stale_chromium_processes()
 
-        if self._profile_lock_acquired and self._profile_lock is not None:
-            self._profile_lock.release()
-            self._profile_lock_acquired = False
-        self._profile_lock = None
+            if self._profile_lock_acquired and self._profile_lock is not None:
+                self._profile_lock.release()
+                self._profile_lock_acquired = False
+            self._profile_lock = None
 
-        self._release_semaphore()
+            self._release_semaphore()
 
     async def _goto(
         self,
@@ -19372,6 +19375,16 @@ timeout_seconds=4.0,
                     )
                     if observed.is_set():
                         return True
+
+                # One hydrated Settings document is enough to leave the
+                # relation unconfirmed. Re-loading its aliases multiplies
+                # renderers/queries without adding independent evidence.
+                try:
+                    add = self.page.get_by_role("button", name=re.compile(r"^Add$", re.I))
+                    if "/settings/pages" in _clean(self.page.url) and business in _business_ids_from_text(_clean(self.page.url)) and await add.count() and await add.first.is_visible():
+                        break
+                except Exception:
+                    pass
 
             self._last_page_inventory_diagnostic = {
                 "stage": "page_attach_verify_unconfirmed",

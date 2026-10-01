@@ -267,6 +267,26 @@ class BulkPersistenceTests(unittest.IsolatedAsyncioTestCase):
 
 
 class PageHydrationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_repeated_close_cannot_reap_another_live_browser(self):
+        semaphore=asyncio.Semaphore(1)
+        first=FacebookBusinessBrowser(SimpleNamespace(profile_id='7'))
+        second=FacebookBusinessBrowser(SimpleNamespace(profile_id='8'))
+        with patch('app.facebook_business_browser._BROWSER_SEMAPHORE',semaphore),patch('app.facebook_business_browser._BROWSER_LIMIT',1),patch('app.facebook_business_browser._reap_stale_chromium_processes',new=AsyncMock(return_value={'found':0})) as reap:
+            await semaphore.acquire(); first._semaphore_acquired=True
+            await first.close(); self.assertEqual(reap.await_count,1)
+            await semaphore.acquire(); second._semaphore_acquired=True
+            await first.close(); self.assertEqual(reap.await_count,1)
+            self.assertTrue(second._semaphore_acquired)
+            await second.close(); self.assertEqual(reap.await_count,2)
+
+    async def test_parallel_browser_limit_disables_global_process_reaping(self):
+        browser=FacebookBusinessBrowser(SimpleNamespace(profile_id='7'))
+        semaphore=asyncio.Semaphore(2)
+        await semaphore.acquire(); browser._semaphore_acquired=True
+        with patch('app.facebook_business_browser._BROWSER_SEMAPHORE',semaphore),patch('app.facebook_business_browser._BROWSER_LIMIT',2),patch('app.facebook_business_browser._reap_stale_chromium_processes',new=AsyncMock()) as reap:
+            await browser.close()
+        reap.assert_not_awaited()
+
     async def test_ready_business_pages_document_is_reused(self):
         browser=FacebookBusinessBrowser(SimpleNamespace(profile_id='7'))
         browser.page=SimpleNamespace(url='https://business.facebook.com/latest/settings/pages/?business_id=111111111',wait_for_timeout=AsyncMock())

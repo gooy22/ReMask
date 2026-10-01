@@ -14,10 +14,11 @@ class Element {
 const body = new Element('body'); const elements = [];
 const captured = [];
 const state = {workerOnline:true, busy:false};
+const storage = new Map();
 const sandbox = {document:{body,createElement(tag) { const el = new Element(tag); elements.push(el); return el; }},
   crypto:webcrypto, pythonWorkerUiState:state, pythonWorkerSelectedProfiles:()=>['7','8'],
   pythonWorkerEnsureBmModalStyle(){},pythonWorkerCloseOwnBmModal(){},pythonWorkerSelectionRefresh(){},
-  pythonWorkerClearBatchState(){},pythonWorkerSetText(){},localStorage:{setItem(){}},
+  pythonWorkerClearBatchState(){},pythonWorkerSetText(){},localStorage:{setItem(k,v){storage.set(k,v);},getItem(k){return storage.get(k)||null;},removeItem(k){storage.delete(k);}},
   async pythonWorkerBridge(payload) { captured.push(JSON.parse(JSON.stringify(payload))); if (captured.length === 1) throw Error('lost response'); return {job:{job_id:'saved-job'}}; },
   async pythonWorkerPoll(){}
 };
@@ -32,7 +33,15 @@ vm.createContext(sandbox); vm.runInContext(source.slice(start,end), sandbox);
   inputs[0].value='2'; inputs[0].events.input(); assert.match(summary.textContent,/FP 4, BM 4, РК 4/);
   await create.events.click(); assert.equal(state.busy,false); assert.equal(create.textContent,'Повторить отправку');
   assert.equal(inputs.every(el=>el.disabled),true);
-  await create.events.click(); assert.equal(state.jobId,'saved-job');
+  assert.ok(storage.has('remask_python_worker_auto_pending_v1'));
+  elements.length=0;
+  sandbox.pythonWorkerSelectedProfiles=()=>['99'];
+  await sandbox.pythonWorkerOpenAutoModal();
+  const restored = elements.find(el=>el.textContent==='Повторить отправку');
+  assert.ok(restored); assert.ok(elements.some(el=>/профилей 7, 8/.test(el.textContent||'')));
+  assert.equal(elements.filter(el=>el.tag==='input')[0].value,'2');
+  await restored.events.click(); assert.equal(state.jobId,'saved-job');
+  assert.equal(storage.has('remask_python_worker_auto_pending_v1'),false);
   assert.deepEqual(captured[0],captured[1], 'lost response retry must not change the accepted Job');
   assert.equal(captured[0].profiles.length,2);
   assert.equal(captured[0].profiles[0].tasks[0].payload.batch_count,2);

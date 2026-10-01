@@ -461,7 +461,7 @@ async def run_existing_business_repair_once(profile_id: str) -> None:
     if os.getenv('REMASK_EXISTING_BM_REPAIR') != '1':
         return
     selected = next((row for row in candidates if row['status']=='FAILED'
-        and row['error_code']=='PAGE_ADD_UI_CHANGED'
+        and row['error_code'] in {'PAGE_ADD_UI_CHANGED','BUSINESS_BROWSER_FAILED','FACEBOOK_NAVIGATION_FAILED'}
         and row['phase'] in {'CREATE_CONFIRMED','PAGE_ADD','PAGE_ADD_NOT_SUBMITTED'}), None)
     if not selected:
         log.warning('existing BM repair skipped: no confirmed BM with an unsent Page-add failure')
@@ -492,8 +492,9 @@ async def run_existing_business_repair_once(profile_id: str) -> None:
             if (item_state or {}).get('status') in {'SUCCESS','FAILED'}:
                 step = await pool.provisioning_state.step(selected['item_id'], ProvisioningStep.BUSINESS)
                 result = (step or {}).get('result') or {}
-                log.warning('existing BM repair terminal item=%s status=%s error=%s result=%s', selected['item_id'],item_state['status'],item_state.get('error_code'),
-                    json.dumps({key:result.get(key) for key in ('phase','business_id','primary_page_id','page_already_attached','page_confirmed_by_private_attach','last_browser_error_code')},separators=(',',':')))
+                log.warning('existing BM repair terminal item=%s status=%s error=%s result=%s reason=%s', selected['item_id'],item_state['status'],item_state.get('error_code'),
+                    json.dumps({key:result.get(key) for key in ('phase','business_id','primary_page_id','page_already_attached','page_confirmed_by_private_attach','last_browser_error_code')},separators=(',',':')),
+                    str(item_state.get('error_message') or '').split(' diagnostic=')[0][:700])
                 break
 
 

@@ -3861,7 +3861,16 @@ window.pythonWorkerStartAdAccounts = pythonWorkerStartAdAccounts;
 
 
 async function pythonWorkerOpenAutoModal() {
-  const profiles = pythonWorkerSelectedProfiles();
+  const pendingKey = 'remask_python_worker_auto_pending_v1';
+  let acceptedRequest = null;
+  try {
+    const saved = JSON.parse(localStorage.getItem(pendingKey) || 'null');
+    if (saved && saved.action === 'create' && /^workspace-auto-/.test(saved.idempotency_key)
+      && Array.isArray(saved.profiles) && saved.profiles.length
+      && saved.profiles.every(function(row) { return row && row.profile_id && Array.isArray(row.tasks)
+        && row.tasks.length === 1 && row.tasks[0].payload && row.tasks[0].payload.auto_generate === true; })) acceptedRequest = saved;
+  } catch (_) {}
+  const profiles = acceptedRequest ? acceptedRequest.profiles.map(function(row) { return String(row.profile_id); }) : pythonWorkerSelectedProfiles();
   if (!profiles.length || pythonWorkerUiState.busy) return;
   if (pythonWorkerUiState.workerOnline !== true) throw new Error('Worker ещё не READY.');
   pythonWorkerEnsureBmModalStyle();
@@ -3901,7 +3910,16 @@ async function pythonWorkerOpenAutoModal() {
   cancel.addEventListener('click', pythonWorkerCloseOwnBmModal);
   const create = document.createElement('button'); create.type = 'button'; create.className = 'btn btn-primary'; create.textContent = 'Запустить';
   actions.append(cancel, create); footer.append(status, actions); card.append(head, body, footer); modal.appendChild(card); document.body.appendChild(modal);
-  let acceptedRequest = null;
+  if (acceptedRequest) {
+    const template = acceptedRequest.profiles[0].tasks[0].payload;
+    mode.value = String(template.steps.length); count.value = String(template.batch_count);
+    category.value = template.parameters.FAN_PAGES.category;
+    currency.value = template.parameters.AD_ACCOUNT.currency;
+    timezone.value = String(template.parameters.AD_ACCOUNT.timezone_id);
+    [mode, count, category, currency, timezone].forEach(function(input) { input.disabled = true; });
+    create.textContent = 'Повторить отправку';
+    note.textContent = 'Восстанавливаем отправку прежнего запроса для профилей ' + profiles.join(', ') + '. Ключ Job и параметры сохранены; повтор не создаёт новый пакет.';
+  }
   function refresh() {
     const n = Number(count.value); const total = profiles.length * n; const rk = mode.value === '4';
     currency.disabled = timezone.disabled = !rk || !!acceptedRequest;
@@ -3927,12 +3945,14 @@ async function pythonWorkerOpenAutoModal() {
           }
         }}]}; })};
       [mode, count, category, currency, timezone].forEach(function(input) { input.disabled = true; });
+      localStorage.setItem(pendingKey, JSON.stringify(acceptedRequest));
       const data = await pythonWorkerBridge(acceptedRequest);
       const jobId = String((data && data.job && data.job.job_id) || '').trim();
       if (!jobId) throw new Error('Worker did not return job_id.');
       pythonWorkerClearBatchState();
       pythonWorkerUiState.jobId = jobId; pythonWorkerUiState.job = null;
       localStorage.setItem('remask_python_worker_job_v1', jobId);
+      localStorage.removeItem(pendingKey);
       pythonWorkerSetText('pythonPwJob', 'Job: ' + jobId);
       pythonWorkerSetText('pythonPwStatus', 'Автоматическое создание: ' + (profiles.length * n) + ' комплектов.');
       pythonWorkerCloseOwnBmModal();
