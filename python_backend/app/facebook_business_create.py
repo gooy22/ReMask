@@ -856,6 +856,7 @@ async def create_business_with_docids(
     page_id: str = "",
     vertical: str = "ADVERTISING",
     allow_scope_selector_fallback: bool = True,
+    before_submit: Any = None,
 ) -> CreateBusinessResult:
     del page_id
     del vertical
@@ -1055,6 +1056,7 @@ async def create_business_with_docids(
                 request_envelope=(
                     captured_envelope
                 ),
+                **({"before_submit": before_submit} if before_submit is not None else {}),
             )
 
         except Exception as exc:

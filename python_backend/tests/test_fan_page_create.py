@@ -336,6 +336,7 @@ class FanPageProvisioningRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_standalone_create_reuses_profile_context_when_live_inventory_unavailable(self) -> None:
         state = SimpleNamespace(
+            latest_uncertain_fan_page=AsyncMock(return_value={}),
             checkpoint=AsyncMock(return_value={}),
             step=AsyncMock(return_value=None),
             latest_profile_fan_pages=AsyncMock(return_value=[]),
@@ -389,7 +390,7 @@ class FanPageProvisioningRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["pages"][0]["reused"])
         browser.create_fan_page.assert_not_awaited()
 
-    async def test_uncertain_create_can_prove_brand_new_account_still_empty(self) -> None:
+    async def test_empty_page_lists_do_not_authorize_duplicate_create(self) -> None:
         with patch(
             "app.provisioning.fan_pages_handler._fresh_page_inventory",
             new=AsyncMock(return_value=[]),
@@ -402,12 +403,13 @@ class FanPageProvisioningRuntimeTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertIsNone(found)
-        self.assertTrue(proven_absent)
+        self.assertFalse(proven_absent)
         self.assertEqual(inventory.await_count, 3)
         self.assertEqual(len(diagnostics), 3)
 
     async def test_handler_reuses_worker_confirmed_page_before_browser_create(self) -> None:
         state = SimpleNamespace(
+            latest_uncertain_fan_page=AsyncMock(return_value={}),
             checkpoint=AsyncMock(return_value={}),
             step=AsyncMock(return_value=None),
             latest_profile_fan_pages=AsyncMock(
@@ -452,6 +454,7 @@ class FanPageProvisioningRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_handler_creates_two_pages_and_checkpoints_each(self) -> None:
         state = SimpleNamespace(
+            latest_uncertain_fan_page=AsyncMock(return_value={}),
             checkpoint=AsyncMock(return_value={}),
             step=AsyncMock(return_value=None),
         )
@@ -505,6 +508,7 @@ class FanPageProvisioningRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_targeted_retry_reuses_only_page_scoped_to_same_rk(self) -> None:
         state = SimpleNamespace(
+            latest_uncertain_fan_page=AsyncMock(return_value={}),
             checkpoint=AsyncMock(return_value={}),
             step=AsyncMock(return_value=None),
             latest_profile_fan_pages=AsyncMock(
@@ -555,6 +559,7 @@ class FanPageProvisioningRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_targeted_create_does_not_reuse_same_name_from_other_rk(self) -> None:
         state = SimpleNamespace(
+            latest_uncertain_fan_page=AsyncMock(return_value={}),
             checkpoint=AsyncMock(return_value={}),
             step=AsyncMock(return_value=None),
             latest_profile_fan_pages=AsyncMock(
@@ -620,6 +625,7 @@ class FanPageProvisioningRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_create_page_can_attach_to_selected_rk_business(self) -> None:
         state = SimpleNamespace(
+            latest_uncertain_fan_page=AsyncMock(return_value={}),
             checkpoint=AsyncMock(return_value={}),
             step=AsyncMock(return_value=None),
             latest_profile_fan_pages=AsyncMock(return_value=[]),
@@ -673,6 +679,7 @@ class FanPageProvisioningRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_existing_page_can_attach_without_create(self) -> None:
         state = SimpleNamespace(
+            latest_uncertain_fan_page=AsyncMock(return_value={}),
             checkpoint=AsyncMock(return_value={}),
             step=AsyncMock(return_value=None),
             latest_profile_fan_pages=AsyncMock(return_value=[]),

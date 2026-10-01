@@ -274,6 +274,8 @@ async def _create_business_via_web(
     explicit_doc_id: str | None,
     require_page_backed: bool,
     diagnostics: list[dict[str, Any]],
+    before_submit: Any = None,
+    after_created: Any = None,
 ) -> BusinessCreateResult:
     """
     Create a Business through the authenticated Facebook browser session.
@@ -305,7 +307,10 @@ async def _create_business_via_web(
             profile_display_name=profile_display_name,
             vertical=vertical,
             allow_scope_selector_fallback=True,
+            **({"before_submit": before_submit} if before_submit is not None else {}),
         )
+        if after_created is not None:
+            await after_created(web_result)
 
         page_was_in_mutation = (
             web_result.candidate.variables_mode == "legacy_primary_page_v1"
@@ -459,19 +464,19 @@ async def _create_business_via_web(
         )
 
         text = _text(exc)
-        result_may_be_unknown = (
-            not exc.meta_payload
-            and any(
-                token in text
-                for token in (
-                    "timeout",
-                    "network failure",
-                    "connection",
-                    "non-json",
-                    "empty response",
+        sent = getattr(exc, "request_may_have_been_sent", None)
+        result_may_be_unknown = not exc.meta_payload and (
+            sent is True or (sent is None and any(
+                token in text for token in (
+                    "timeout", "network failure", "connection", "non-json", "empty response"
                 )
-            )
+            ))
         )
+        if sent is False:
+            raise BusinessCreateError(
+                "CREATE_BM_PRE_SUBMIT_TRANSPORT", str(exc),
+                retryable=True, diagnostics=diagnostics,
+            ) from exc
 
         if (
             require_page_backed
@@ -527,41 +532,8 @@ async def _create_business_via_web(
             ) from exc
 
         if result_may_be_unknown:
-            # The private POST may already have reached Meta. Use the official
-            # API only as a read-side verification if it is available; never
-            # issue another CREATE automatically.
-            try:
-                if str(getattr(session.context, "access_token", "") or "").strip():
-                    graph = await session.graph_api()
-                    existing = await graph.list_businesses()
-                    existing_id = _find_existing_business(
-                        existing,
-                        business_name=business_name,
-                        page_id=clean_page,
-                    )
-                    if existing_id:
-                        diagnostics.append(
-                            {
-                                "transport": "facebook_web_graphql",
-                                "stage": "verify_after_unknown",
-                                "result": "created_business_found",
-                                "business_id": existing_id,
-                            }
-                        )
-                        return BusinessCreateResult(
-                            business_id=existing_id,
-                            transport="facebook_web_graphql_verified",
-                            primary_page_id=clean_page,
-                            diagnostics=diagnostics,
-                        )
-            except GraphApiError as verify_exc:
-                diagnostics.append(
-                    {
-                        **_graph_diag(verify_exc),
-                        "stage": "verify_web_after_unknown",
-                    }
-                )
-
+            # Reconcile through the authenticated browser/checkpoint only.
+            # An official token must never influence this private workflow.
             raise BusinessCreateError(
                 "CREATE_RESULT_UNKNOWN",
                 (
@@ -589,6 +561,8 @@ async def create_business_resilient(
     timezone_id: int | None = None,
     explicit_doc_id: str | None = None,
     require_page_backed: bool = False,
+    before_submit: Any = None,
+    after_created: Any = None,
 ) -> BusinessCreateResult:
     diagnostics: list[dict[str, Any]] = []
     clean_page = str(page_id or "").strip()
@@ -626,34 +600,9 @@ async def create_business_resilient(
             explicit_doc_id=explicit_doc_id,
             require_page_backed=require_page_backed,
             diagnostics=diagnostics,
+            before_submit=before_submit,
+            after_created=after_created,
         )
-
-    # No Fan Page was supplied. Keep the official route only for legacy callers
-    # that explicitly opt out of Page-backed Add BM.
-    if str(getattr(session.context, "access_token", "") or "").strip():
-        graph = await session.graph_api()
-        try:
-            official_permissions = await graph.list_permissions()
-        except GraphApiError as exc:
-            diagnostics.append(
-                {
-                    **_graph_diag(exc),
-                    "stage": "permissions",
-                }
-            )
-            official_permissions = {}
-
-        if official_permissions.get("business_management") == "granted":
-            # The official API implementation itself requires a primary Page,
-            # so without one there is nothing safe to submit here.
-            diagnostics.append(
-                {
-                    "transport": "official_graph_api",
-                    "stage": "create",
-                    "result": "skipped",
-                    "reason": "official create requires a primary Page ID",
-                }
-            )
 
     # Final legacy fallback is the scope-selector private mutation. This is not
     # used by normal Add BM because that flow always selects a Fan Page.
@@ -669,6 +618,8 @@ async def create_business_resilient(
         explicit_doc_id=explicit_doc_id,
         require_page_backed=False,
         diagnostics=diagnostics,
+        before_submit=before_submit,
+        after_created=after_created,
     )
 
 

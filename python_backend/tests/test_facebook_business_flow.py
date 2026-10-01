@@ -4,15 +4,14 @@ import unittest
 
 from app.facebook_business_create import (
     _extract_page_backed_create_docid,
-    _prefer_page_backed_candidates,
-    build_create_business_variables,
+    _build_create_variables,
     candidate_requirements,
-    extract_business_id,
+    _extract_create_business_id,
 )
 from app.facebook_docids import DocIdCandidate
 from app.facebook_page_discovery import (
     _extract_known_page_lists,
-    _extract_pages_from_html,
+    _extract_pages_from_browser_document,
 )
 
 
@@ -104,12 +103,12 @@ class FanPageDiscoveryTests(unittest.TestCase):
         </script>
         </body></html>
         """
-        pages = _extract_pages_from_html(html)
+        pages = _extract_pages_from_browser_document(html)
         self.assertEqual(len(pages), 1)
         self.assertEqual(pages[0]["id"], "444444444444444")
 
     def test_business_id_extraction_known_shape(self) -> None:
-        business_id, path = extract_business_id(
+        business_id, path = _extract_create_business_id(
             {
                 "data": {
                     "business_create": {
@@ -126,32 +125,6 @@ class FanPageDiscoveryTests(unittest.TestCase):
 
 
 class BusinessCandidateOrderingTests(unittest.TestCase):
-    def test_selected_page_prefers_page_backed_contract(self) -> None:
-        modern = DocIdCandidate(
-            operation="CREATE_BM",
-            doc_id="10024830640911292",
-            friendly_name="useBusinessCreationMutationMutation",
-            endpoint_url="https://business.facebook.com/api/graphql/",
-            variables_mode="scope_selector_business_creation_v1",
-            source="test",
-            priority=999,
-        )
-        page_backed = DocIdCandidate(
-            operation="CREATE_BM",
-            doc_id="739201948201938",
-            friendly_name="BusinessManagerCreateMutation",
-            endpoint_url="https://business.facebook.com/api/graphql/",
-            variables_mode="legacy_primary_page_v1",
-            source="test",
-            priority=1,
-        )
-
-        ordered = _prefer_page_backed_candidates(
-            [modern, page_backed],
-            page_id="123456789012345",
-        )
-        self.assertEqual(ordered[0].variables_mode, "legacy_primary_page_v1")
-
     def test_live_bundle_marker_can_find_page_backed_doc_id(self) -> None:
         source = """
         relayOperation = {
@@ -177,28 +150,6 @@ class BusinessCandidateOrderingTests(unittest.TestCase):
         self.assertEqual(doc_id, "")
         self.assertEqual(friendly, "")
 
-    def test_page_backed_contract_really_carries_primary_page(self) -> None:
-        candidate = DocIdCandidate(
-            operation="CREATE_BM",
-            doc_id="739201948201938",
-            friendly_name="BusinessManagerCreateMutation",
-            endpoint_url="https://business.facebook.com/api/graphql/",
-            variables_mode="legacy_primary_page_v1",
-            source="test",
-            priority=1,
-        )
-        variables = build_create_business_variables(
-            candidate,
-            actor_id="123456789",
-            business_name="Test BM",
-            page_id="123456789012345",
-        )
-        self.assertEqual(
-            variables["input"]["primary_page_id"],
-            "123456789012345",
-        )
-        self.assertTrue(candidate_requirements(candidate)["page_id"])
-
     def test_scope_selector_contract_is_not_page_backed(self) -> None:
         candidate = DocIdCandidate(
             operation="CREATE_BM",
@@ -209,43 +160,16 @@ class BusinessCandidateOrderingTests(unittest.TestCase):
             source="test",
             priority=1,
         )
-        variables = build_create_business_variables(
-            candidate,
+        variables = _build_create_variables(
             actor_id="123456789",
             business_name="Test BM",
-            page_id="123456789012345",
             user_email="test@example.com",
             profile_display_name="Test User",
+            user_first_name="Test", user_last_name="User", qpl_join_id="",
         )
         self.assertNotIn("primary_page_id", variables["input"])
         self.assertFalse(candidate_requirements(candidate)["page_id"])
 
-    def test_no_page_preserves_registry_order(self) -> None:
-        first = DocIdCandidate(
-            operation="CREATE_BM",
-            doc_id="111111",
-            friendly_name="first",
-            endpoint_url="https://business.facebook.com/api/graphql/",
-            variables_mode="scope_selector_business_creation_v1",
-            source="test",
-            priority=10,
-        )
-        second = DocIdCandidate(
-            operation="CREATE_BM",
-            doc_id="222222",
-            friendly_name="second",
-            endpoint_url="https://business.facebook.com/api/graphql/",
-            variables_mode="legacy_primary_page_v1",
-            source="test",
-            priority=1,
-        )
-        self.assertEqual(
-            _prefer_page_backed_candidates(
-                [first, second],
-                page_id="",
-            ),
-            [first, second],
-        )
 
 
 if __name__ == "__main__":

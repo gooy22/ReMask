@@ -346,7 +346,6 @@ async def business_handler(
                 "CREATE_PENDING_SUBMIT",
                 "CREATE_RESULT_UNKNOWN",
             }
-            and previous_before_ids
         ):
             phase = previous_phase
             recovered = True
@@ -361,7 +360,7 @@ async def business_handler(
                     "phase": previous_phase,
                     "business_name": bm_name,
                     "primary_page_id": page_id,
-                    "business_ids_before": previous_before_ids,
+                    "business_ids_before": (previous_before_ids if isinstance(previous_result.get("business_ids_before"), list) else None),
                     "recovered_cross_job": True,
                     "recovered_from_item_id": _clean(
                         previous_resume.get("item_id")
@@ -433,6 +432,7 @@ async def business_handler(
         # Legacy checkpoints produced by the previous GraphQL flow already
         # contain a created business_id. They are safe to resume at Page attach.
         if business_id.isdigit():
+            recovered = True
             phase = phase or "CREATE_CONFIRMED"
             log.info(
                 "[%s] BUSINESS resume existing business_id=%s phase=%s page=%s",
@@ -453,7 +453,7 @@ async def business_handler(
                 for value in (checkpoint.get("business_ids_before") or [])
                 if str(value).isdigit()
             ]
-            if not before_ids:
+            if not isinstance(checkpoint.get("business_ids_before"), list):
                 raise ProvisioningError(
                     "CREATE_RESULT_UNKNOWN",
                     (
@@ -523,6 +523,27 @@ async def business_handler(
                 },
             )
 
+            async def private_before_submit():
+                await provisioning_state.checkpoint(
+                    item_id, profile_id, scope_key, ProvisioningStep.BUSINESS,
+                    {"phase": "CREATE_SUBMITTED", "activity": "PRIVATE_CREATE_SUBMITTED",
+                     "activity_at": int(time.time())},
+                )
+
+            async def private_after_created(result):
+                exact_id = _clean(result.business_id)
+                if not exact_id.isdigit():
+                    raise ProvisioningError("INVALID_RESULT", "Invalid private CREATE ID", retryable=False)
+                await provisioning_state.checkpoint(
+                    item_id, profile_id, scope_key, ProvisioningStep.BUSINESS,
+                    {"phase": "CREATE_CONFIRMED", "resume_from": "PAGE_ADD",
+                     "business_id": exact_id, "business_name": bm_name,
+                     "primary_page_id": page_id,
+                     "create_response_business_id": exact_id,
+                     "create_response_path": _clean(result.response_path),
+                     "activity": "PRIVATE_CREATE_CONFIRMED", "activity_at": int(time.time())},
+                )
+
             private_result = None
             private_error = None
             private_controller = getattr(session, "facebook_controller", None)
@@ -556,6 +577,8 @@ async def business_handler(
                         user_last_name=last_name,
                         profile_display_name=display_name,
                         require_page_backed=True,
+                        before_submit=private_before_submit,
+                        after_created=private_after_created,
                     )
                 except BusinessCreateError as exc:
                     private_error = exc
@@ -681,6 +704,20 @@ async def business_handler(
                             "activity": "VERIFY_CREATE_INVENTORY",
                             "activity_at": int(time.time()),
                         },
+                    )
+
+                if private_error is not None and private_error.code == "BUSINESS_NAME_NOT_ALLOWED":
+                    await provisioning_state.checkpoint(
+                        item_id, profile_id, scope_key, ProvisioningStep.BUSINESS,
+                        {"phase": "CREATE_REJECTED", "activity": "PRIVATE_CREATE_REJECTED",
+                         "private_create_error_code": private_error.code},
+                    )
+
+                if private_error is not None and private_error.code == "CREATE_BM_PRE_SUBMIT_TRANSPORT":
+                    await provisioning_state.checkpoint(
+                        item_id, profile_id, scope_key, ProvisioningStep.BUSINESS,
+                        {"phase": "CREATE_NOT_SUBMITTED", "activity": "PRIVATE_CREATE_NOT_SENT",
+                         "private_create_error_code": private_error.code},
                     )
 
                 # These errors explicitly mean the private CREATE route did not

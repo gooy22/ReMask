@@ -1037,7 +1037,7 @@ class AdAccountInventoryProofV2RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(proof["proof_path"], "browser_consensus")
         self.assertEqual(proof["browser_empty_confirmations"], 3)
         self.assertFalse(proof["graph_empty_confirmed"])
-        self.assertEqual(graph_check.await_count, 3)
+        graph_check.assert_not_awaited()
         self.assertEqual(browser_check.await_count, 3)
         ui_browser.assert_not_called()
 
@@ -1545,7 +1545,8 @@ class AdAccountGraphInventoryTrustRegressionTests(unittest.TestCase):
     def test_graph_inventory_never_reuses_single_row_by_count(self) -> None:
         source = inspect.getsource(_reconcile_existing)
         self.assertNotIn("if len(normalized) == 1", source)
-        self.assertIn("graph_candidates_untrusted", source)
+        self.assertNotIn("session.graph_api()", source)
+        self.assertIn("official_graph_disabled", source)
 
     def test_preflight_never_returns_raw_graph_candidate(self) -> None:
         source = inspect.getsource(ad_account_handler)
@@ -1564,16 +1565,10 @@ class AdAccountGraphInventoryTrustRegressionTests(unittest.TestCase):
         )
         self.assertIn("_verify_expected_ad_account_in_business(", window)
 
-    def test_uncertainty_graph_candidate_requires_browser_verification(self) -> None:
+    def test_uncertainty_does_not_use_official_inventory(self) -> None:
         source = inspect.getsource(_prove_empty_after_uncertainty)
-        self.assertIn(
-            "graph_then_business_settings_verified",
-            source,
-        )
-        self.assertIn(
-            "not_confirmed_in_business_settings",
-            source,
-        )
+        self.assertNotIn("await _reconcile_existing(", source)
+        self.assertIn("await _reconcile_existing_browser_inventory(", source)
 
 
 class AdAccountInventoryPreflightRegressionTests(unittest.TestCase):

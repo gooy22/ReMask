@@ -224,7 +224,10 @@ async def _reconcile_uncertain_page(
         if attempt < checks - 1:
             await asyncio.sleep(1.5)
 
-    return None, conclusive_absent >= max(1, checks), diagnostics
+    # A parseable list is not a complete inventory: a freshly created Page
+    # may still be missing due to hydration or propagation. It cannot authorize
+    # a second irreversible CREATE. Positive exact-name evidence can recover.
+    return None, False, diagnostics
 
 
 async def _attach_page_to_business(
@@ -779,6 +782,38 @@ async def fan_pages_handler(
                     "activity": "FAN_PAGE_REUSED",
                     "activity_at": int(time.time()),
                 },
+            )
+            continue
+
+        previous_uncertain = await provisioning_state.latest_uncertain_fan_page(
+            profile_id, page_name, exclude_item_id=item_id,
+        )
+        if previous_uncertain:
+            previous_result = previous_uncertain["result"]
+            await provisioning_state.checkpoint(
+                item_id, profile_id, scope_key, ProvisioningStep.FAN_PAGES,
+                {"phase": "PAGE_CREATE_RESULT_UNKNOWN", "target_names": names,
+                 "created_pages": created_pages, "active_page_name": page_name,
+                 "active_before_ids": previous_result.get("active_before_ids") or [],
+                 "recovered_from_item_id": previous_uncertain["item_id"]},
+            )
+            found, _, diagnostics = await _reconcile_uncertain_page(
+                session, page_name=page_name,
+                before_ids={_clean(value) for value in previous_result.get("active_before_ids") or []},
+            )
+            if not found:
+                raise ProvisioningError(
+                    "PAGE_CREATE_RESULT_UNKNOWN",
+                    f"Previous Page CREATE for {page_name!r} remains unconfirmed; another Job must not repeat it.",
+                    retryable=True,
+                )
+            created_pages.append({"id": found["id"], "name": page_name,
+                                  "category": category, "reused": True})
+            completed_names.add(page_name.casefold())
+            await provisioning_state.checkpoint(
+                item_id, profile_id, scope_key, ProvisioningStep.FAN_PAGES,
+                {"phase": "PAGE_CREATED", "created_pages": created_pages,
+                 "active_page_name": "", "reconciliation": diagnostics},
             )
             continue
 

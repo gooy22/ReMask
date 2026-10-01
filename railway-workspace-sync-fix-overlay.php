@@ -526,7 +526,7 @@ async function syncSelection(){
     if(failures.length){
       $('workspaceStatus').textContent=`Синхронизация Meta частично/полностью не выполнена: ${failures.join(' · ')}`;
     }else if(warnings.length){
-      $('workspaceStatus').textContent=`Meta синхронизирована. ${warnings.join(' · ')}`;
+      $('workspaceStatus').textContent=`Синхронизация выполнена частично. ${warnings.join(' · ')}`;
     }else{
       $('workspaceStatus').textContent='Синхронизация Meta завершена.';
     }
@@ -1619,7 +1619,7 @@ $syncProfileReplacement = <<<'PHP'
         $snapshot['confirmed_worker_bindings'] = $workerConfirmedCount;
         $snapshot['graph_preflight_available'] = false;
         $snapshot['sync_complete'] = $syncComplete;
-        $snapshot['sync_partial'] = ($syncComplete && !$pagesReady);
+        $snapshot['sync_partial'] = ($syncComplete && !$pagesLiveVerified);
         unset($snapshot['sync_error_kind'], $snapshot['sync_error']);
 
         if (!$syncComplete) {
@@ -1631,7 +1631,7 @@ $syncProfileReplacement = <<<'PHP'
             // enumeration. Keep BM/RK sync successful, but never present stale
             // or durable Page state as if this Sync had just proved it live.
             $syncWarnings[] = $pagesReady
-                ? 'Fan Page state loaded, but live Fan Page verification was not completed in this sync'
+                ? 'BM/РК проверены. Fan Page показаны из сохранённого состояния; текущая проверка FP в Meta не завершена'
                 : 'Live Fan Page inventory was not confirmed in this sync';
         }
 

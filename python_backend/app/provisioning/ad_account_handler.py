@@ -392,66 +392,10 @@ async def _reconcile_existing(
     business_id: str,
     account_name: str,
 ) -> tuple[str, list[dict[str, Any]]]:
-    diagnostics: list[dict[str, Any]] = []
-    try:
-        graph = await session.graph_api()
-        rows = await graph.list_ad_accounts_for_business(business_id)
-    except Exception as exc:
-        diagnostics.append(
-            {
-                "stage": "inventory",
-                "result": "unavailable",
-                "error": f"{exc.__class__.__name__}: {exc}",
-            }
-        )
-        return "", diagnostics
-
-    normalized: list[dict[str, Any]] = []
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        account_id = _normalize_ad_account_id(
-            row.get("id") or row.get("account_id")
-        )
-        if not account_id:
-            continue
-        normalized.append(
-            {
-                "id": account_id,
-                "name": _clean(row.get("name")),
-            }
-        )
-
-    diagnostics.append(
-        {
-            "stage": "inventory",
-            "result": "ok",
-            "business_id": business_id,
-            "count": len(normalized),
-            "ids": [row["id"] for row in normalized[:20]],
-        }
-    )
-
-    if not normalized:
-        return "", diagnostics
-
-    # Graph inventory is advisory only. Never turn a lone numeric ID into an
-    # existing RK just because it is the only row returned by the token.
-    # At most expose an exact-name candidate; the caller must still verify that
-    # same ID through live Business Settings before it can suppress CREATE.
-    name_matches = [
-        row
-        for row in normalized
-        if _clean(row.get("name")).casefold() == _clean(account_name).casefold()
-    ]
-    if len(name_matches) == 1:
-        return str(name_matches[0]["id"]), diagnostics
-
-    diagnostics[-1]["graph_candidates_untrusted"] = [
-        row["id"] for row in normalized[:20]
-    ]
-    diagnostics[-1]["reason"] = "no_exact_name_match"
-    return "", diagnostics
+    # Retained as a compatibility hook for diagnostics. All authoritative
+    # inventory comes from the selected Business Settings browser session.
+    return "", [{"stage": "inventory", "result": "unavailable",
+                 "source": "official_graph_disabled", "business_id": business_id}]
 
 
 async def _reconcile_existing_browser_inventory(
@@ -664,78 +608,15 @@ async def _prove_empty_after_uncertainty(
     """Resolve an ambiguous CREATE without allowing an endless duplicate lock.
 
     A fresh CREATE is allowed only after strong read-only evidence:
-    - 3 conclusive Graph inventory empties + one exact Business Settings empty; or
     - 3 exact Business Settings GraphQL empties from fresh browser sessions; or
     - 2 exact Business Settings GraphQL empties + an explicit empty UI marker.
 
     Finding any RK wins immediately and returns its ID.
     """
-    graph_evidence: list[dict[str, Any]] = [
-        dict(row)
-        for row in (
-            initial_graph_diagnostics
-            if isinstance(initial_graph_diagnostics, list)
-            else []
-        )
-        if isinstance(row, dict)
-    ]
-
-    def graph_empty_count() -> int:
-        return sum(
-            1
-            for row in graph_evidence
-            if (
-                row.get("stage") == "inventory"
-                and row.get("result") == "ok"
-                and int(row.get("count") or 0) == 0
-            )
-        )
-
-    graph_attempts_needed = max(
-        0,
-        int(graph_required_checks) - graph_empty_count(),
-    )
-    for attempt in range(graph_attempts_needed):
-        found_id, diagnostics = await _reconcile_existing(
-            session,
-            business_id=business_id,
-            account_name=account_name,
-        )
-        graph_evidence.extend(diagnostics)
-        if found_id:
-            graph_verified, graph_verify_evidence = (
-                await _verify_expected_ad_account_in_business(
-                    session,
-                    business_id=business_id,
-                    account_name=account_name,
-                    expected_ad_account_id=found_id,
-                    checks=2,
-                    delay_seconds=delay_seconds,
-                )
-            )
-            if graph_verified:
-                return found_id, False, {
-                    "strategy": "uncertain_inventory_v2",
-                    "found_via": "graph_then_business_settings_verified",
-                    "graph": graph_evidence[-16:],
-                    "graph_candidate_verification": graph_verify_evidence,
-                }
-            graph_evidence.append(
-                {
-                    "stage": "inventory",
-                    "result": "candidate_rejected",
-                    "candidate_ad_account_id": found_id,
-                    "reason": "not_confirmed_in_business_settings",
-                    "browser_verification": graph_verify_evidence,
-                }
-            )
-        if attempt < graph_attempts_needed - 1:
-            await asyncio.sleep(max(0.25, float(delay_seconds)))
-
-    graph_empty_confirmed = _inventory_repeatedly_confirms_empty(
-        graph_evidence,
-        required_checks=max(1, int(graph_required_checks)),
-    )
+    # Ignore legacy token inventory, including restored diagnostics. It must
+    # never shorten the independent browser proof required before another CREATE.
+    graph_evidence: list[dict[str, Any]] = []
+    graph_empty_confirmed = False
 
     browser_checks: list[dict[str, Any]] = []
     browser_empty_confirmations = 0
@@ -2415,6 +2296,22 @@ async def ad_account_handler(
         else ""
     )
     if captured_created_id:
+        verified, evidence = await _verify_expected_ad_account_in_business(
+            session, business_id=business_id, account_name=rk_name,
+            expected_ad_account_id=captured_created_id, checks=4,
+        )
+        if not verified:
+            await provisioning_state.checkpoint(
+                item_id, profile_id, scope_key, ProvisioningStep.AD_ACCOUNT,
+                {"phase": "CREATE_RESULT_UNKNOWN", "business_id": business_id,
+                 "account_name": rk_name, "create_response_ad_account_id": captured_created_id,
+                 "capture_candidate_verification": evidence},
+            )
+            raise ProvisioningError(
+                "CREATE_RESULT_UNKNOWN",
+                "Captured Ad Account ID was not confirmed in the selected Business. Retry must reconcile before CREATE.",
+                retryable=True,
+            )
         await provisioning_state.checkpoint(
             item_id,
             profile_id,

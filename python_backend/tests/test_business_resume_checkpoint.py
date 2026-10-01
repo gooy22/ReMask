@@ -2,6 +2,8 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
+from app.facebook_business_browser import BrowserBusinessError
 
 from app.facebook_business_create import BusinessMutationError
 from app.provisioning.business_handler import business_handler
@@ -16,10 +18,12 @@ class _Controller:
         self.attach_calls = 0
         self.fail_first_attach = True
 
-    async def create_business_manager_v2(self, *, params, profile_id=""):
+    async def create_business_manager_detailed(self, **kwargs):
+        await kwargs["before_submit"]()
         self.create_calls += 1
         return SimpleNamespace(
             business_id="555666777888999",
+            response_path="data.bizkit_create_business.id",
             candidate=SimpleNamespace(
                 doc_id="9988776655443322",
                 friendly_name="useBusinessCreationMutationMutation",
@@ -59,6 +63,13 @@ class _Controller:
 class _Session:
     def __init__(self, controller: _Controller) -> None:
         self.controller = controller
+        controller.session = self
+        self.browser = AsyncMock()
+        self.browser.verify_page_attached.return_value = False
+        self.browser.add_existing_page.side_effect = [
+            BrowserBusinessError("PAGE_ADD_UI_CHANGED", "temporary attach failure", retryable=True),
+            SimpleNamespace(already_attached=False),
+        ]
         self.context = SimpleNamespace(
             profile_id="profile-1",
             email="owner@example.com",
@@ -66,6 +77,9 @@ class _Session:
             last_name="Owner",
             display_name="Test Owner",
         )
+
+    async def facebook_business_browser(self):
+        return self.browser
 
     async def facebook_controller(self):
         return self.controller
@@ -96,6 +110,9 @@ class BusinessResumeCheckpointTests(unittest.IsolatedAsyncioTestCase):
         controller = _Controller()
         session = _Session(controller)
         snapshot = await self.state_store.snapshot(profile_id, scope_key)
+        attach_patch = patch("app.business_create_service.set_business_primary_page", new=AsyncMock(side_effect=BusinessMutationError("SET_PRIMARY_PAGE_META_ERROR", "temporary attach failure", retryable=True)))
+        attach_patch.start()
+        self.addCleanup(attach_patch.stop)
 
         with self.assertRaises(ProvisioningError) as raised:
             await business_handler(
@@ -115,11 +132,11 @@ class BusinessResumeCheckpointTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             raised.exception.code,
-            "BUSINESS_CREATED_PAGE_ATTACH_FAILED",
+            "PAGE_ADD_UI_CHANGED",
         )
         self.assertTrue(raised.exception.retryable)
         self.assertEqual(controller.create_calls, 1)
-        self.assertEqual(controller.attach_calls, 1)
+        self.assertEqual(session.browser.add_existing_page.await_count, 1)
 
         await self.state_store.fail(
             item_id,
@@ -141,7 +158,7 @@ class BusinessResumeCheckpointTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             failed_step["result"]["resume_from"],
-            "ATTACH_PAGE",
+            "PAGE_ADD",
         )
 
         await self.state_store.set_running(
@@ -175,7 +192,7 @@ class BusinessResumeCheckpointTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["resumed"])
         self.assertEqual(result["resume_from"], "DONE")
         self.assertEqual(controller.create_calls, 1)
-        self.assertEqual(controller.attach_calls, 2)
+        self.assertEqual(session.browser.add_existing_page.await_count, 2)
 
         await self.state_store.complete(
             item_id,

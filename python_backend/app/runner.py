@@ -234,6 +234,11 @@ class WorkerPool:
             return
         profile_id=str(item['profile_id'])
         async with self.profile_locks[profile_id]:
+            # Another queue consumer may have completed this item while this
+            # consumer waited for the profile lock.
+            item = await self.store.item(item_id)
+            if not item or item['status'] != 'QUEUED':
+                return
             await self.store.set_item_running(item_id)
             tasks=await self.store.tasks(item_id)
             try:

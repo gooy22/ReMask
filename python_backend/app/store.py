@@ -89,6 +89,7 @@ class JobStore:
     def _create_job_sync(self, request: Any) -> tuple[str, bool]:
         now = _now()
         with self._connect() as con:
+            con.execute("BEGIN IMMEDIATE")
             if request.idempotency_key:
                 row = con.execute('SELECT id FROM jobs WHERE idempotency_key=?', (request.idempotency_key,)).fetchone()
                 if row:
@@ -299,12 +300,12 @@ class JobStore:
                     icreated = int(item.get('created_at') or created_at)
                     iupdated = int(item.get('updated_at') or updated_at)
                     con.execute(
-                        """INSERT INTO job_items(id,job_id,profile_id,status,attempt,error_code,error_message,created_at,updated_at)
-                           VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
+                        """INSERT INTO job_items(id,job_id,profile_id,status,attempt,error_code,error_message,created_at,updated_at,retryable)
+                           VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
                            job_id=excluded.job_id,profile_id=excluded.profile_id,status=excluded.status,attempt=excluded.attempt,
-                           error_code=excluded.error_code,error_message=excluded.error_message,created_at=excluded.created_at,updated_at=excluded.updated_at""",
+                           error_code=excluded.error_code,error_message=excluded.error_message,created_at=excluded.created_at,updated_at=excluded.updated_at,retryable=excluded.retryable""",
                         (item_id, job_id, profile_id, str(item.get('status') or 'QUEUED'), int(item.get('attempt') or 0),
-                         item.get('error_code'), item.get('error_message'), icreated, iupdated),
+                         item.get('error_code'), item.get('error_message'), icreated, iupdated, int(bool(item.get('retryable')))),
                     )
                     for task in item.get('tasks') or []:
                         if not isinstance(task, dict):
@@ -317,15 +318,15 @@ class JobStore:
                         tcreated = int(task.get('created_at') or icreated)
                         tupdated = int(task.get('updated_at') or iupdated)
                         con.execute(
-                            """INSERT INTO job_tasks(id,item_id,position,action,payload_json,idempotency_key,status,attempt,result_json,error_code,error_message,created_at,updated_at)
-                               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
+                            """INSERT INTO job_tasks(id,item_id,position,action,payload_json,idempotency_key,status,attempt,result_json,error_code,error_message,created_at,updated_at,retryable)
+                               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
                                item_id=excluded.item_id,position=excluded.position,action=excluded.action,payload_json=excluded.payload_json,
                                idempotency_key=excluded.idempotency_key,status=excluded.status,attempt=excluded.attempt,result_json=excluded.result_json,
-                               error_code=excluded.error_code,error_message=excluded.error_message,created_at=excluded.created_at,updated_at=excluded.updated_at""",
+                               error_code=excluded.error_code,error_message=excluded.error_message,created_at=excluded.created_at,updated_at=excluded.updated_at,retryable=excluded.retryable""",
                             (task_id, item_id, int(task.get('position') or 0), str(task.get('action') or ''),
                              json.dumps(payload, separators=(',', ':')), task.get('idempotency_key'), str(task.get('status') or 'QUEUED'),
                              int(task.get('attempt') or 0), json.dumps(result, separators=(',', ':')) if result is not None else None,
-                             task.get('error_code'), task.get('error_message'), tcreated, tupdated),
+                             task.get('error_code'), task.get('error_message'), tcreated, tupdated, int(bool(task.get('retryable')))),
                         )
                     for pstep in item.get('provisioning_steps') or []:
                         if not isinstance(pstep, dict):

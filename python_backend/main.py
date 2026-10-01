@@ -470,52 +470,60 @@ async def run_live_inventory_readonly_canary() -> None:
                     break
 
     try:
-        result=await profile_live_inventory(
-            profile_id=profile_id,
-            business_ids=business_id or None,
-            ad_account_hints=(
-                f'{business_id}:{ad_account_id}'
-                if business_id and ad_account_id
-                else None
-            ),
-            page_hints=None,
-        )
-        log.warning(
-            'live inventory canary profile=%s scoped_business=%s scoped_account=%s '
-            'ok=%s live_ready=%s pages_ready=%s pages_live_verified=%s '
-            'pages=%s source=%s diagnostic=%s warnings=%s',
-            profile_id,
-            business_id or '-',
-            ad_account_id or '-',
-            bool(result.get('ok')),
-            bool(result.get('live_ready')),
-            bool(result.get('pages_ready')),
-            bool(result.get('pages_live_verified')),
-            int(result.get('pages_count') or 0),
-            str(result.get('pages_source') or ''),
-            str(result.get('pages_diagnostic') or '')[:1800],
-            json.dumps(
-                result.get('warnings') or [],
-                ensure_ascii=False,
-                separators=(',', ':'),
-            )[:2200],
-        )
-    except HTTPException as exc:
-        log.error(
-            'live inventory canary profile=%s scoped_business=%s scoped_account=%s '
-            'HTTP status=%s detail=%s',
-            profile_id,
-            business_id or '-',
-            ad_account_id or '-',
-            exc.status_code,
-            str(exc.detail)[:2200],
-        )
-    except Exception as exc:
-        log.exception(
-            'live inventory canary profile=%s failed=%s',
-            profile_id,
-            f'{exc.__class__.__name__}: {exc}'[:2200],
-        )
+        canary_runs = max(1, min(3, int(os.getenv('REMASK_LIVE_INVENTORY_CANARY_RUNS', '1'))))
+    except ValueError:
+        canary_runs = 1
+    for canary_run in range(1, canary_runs + 1):
+        try:
+            result=await profile_live_inventory(
+                profile_id=profile_id,
+                business_ids=business_id or None,
+                ad_account_hints=(
+                    f'{business_id}:{ad_account_id}'
+                    if business_id and ad_account_id
+                    else None
+                ),
+                page_hints=None,
+            )
+            log.warning(
+                'live inventory canary run=%s profile=%s scoped_business=%s scoped_account=%s '
+                'ok=%s live_ready=%s pages_ready=%s pages_live_verified=%s '
+                'pages=%s source=%s diagnostic=%s warnings=%s',
+                canary_run,
+                profile_id,
+                business_id or '-',
+                ad_account_id or '-',
+                bool(result.get('ok')),
+                bool(result.get('live_ready')),
+                bool(result.get('pages_ready')),
+                bool(result.get('pages_live_verified')),
+                int(result.get('pages_count') or 0),
+                str(result.get('pages_source') or ''),
+                str(result.get('pages_diagnostic') or '')[:1800],
+                json.dumps(
+                    result.get('warnings') or [],
+                    ensure_ascii=False,
+                    separators=(',', ':'),
+                )[:2200],
+            )
+        except HTTPException as exc:
+            log.error(
+                'live inventory canary run=%s profile=%s scoped_business=%s scoped_account=%s '
+                'HTTP status=%s detail=%s',
+                canary_run,
+                profile_id,
+                business_id or '-',
+                ad_account_id or '-',
+                exc.status_code,
+                str(exc.detail)[:2200],
+            )
+        except Exception as exc:
+            log.exception(
+                'live inventory canary run=%s profile=%s failed=%s',
+                canary_run,
+                profile_id,
+                f'{exc.__class__.__name__}: {exc}'[:2200],
+            )
 
 async def require_key(x_remask_worker_key: str | None = Header(default=None)) -> None:
     if API_KEY and x_remask_worker_key != API_KEY:

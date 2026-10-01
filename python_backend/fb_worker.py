@@ -1759,6 +1759,7 @@ class BusinessLogicController:
         profile_display_name: str = "",
         vertical: str = "ADVERTISING",
         allow_scope_selector_fallback: bool = True,
+        before_submit: Any = None,
     ):
         clean_name = str(name or "").strip()
         clean_page_id = str(page_id or "").strip()
@@ -1787,6 +1788,7 @@ class BusinessLogicController:
                 vertical=str(vertical or "ADVERTISING").strip(),
                 explicit_doc_id=doc_id,
                 allow_scope_selector_fallback=allow_scope_selector_fallback,
+                **({"before_submit": before_submit} if before_submit is not None else {}),
             )
         except DocIdMutationError as exc:
             raise RemoteRequestError(

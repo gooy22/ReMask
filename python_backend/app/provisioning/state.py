@@ -587,6 +587,30 @@ class ProvisioningStateStore:
             "funding_source_id": funding_source_id,
         }
 
+    async def latest_uncertain_fan_page(self, profile_id: str, page_name: str, *, exclude_item_id: str = "") -> dict[str, Any]:
+        return await asyncio.to_thread(self._latest_uncertain_fan_page_sync, profile_id, page_name, exclude_item_id)
+
+    def _latest_uncertain_fan_page_sync(self, profile_id: str, page_name: str, exclude_item_id: str) -> dict[str, Any]:
+        with self._connect() as con:
+            rows = con.execute(
+                "SELECT item_id,result_json FROM provisioning_steps WHERE profile_id=? AND step=? AND result_json IS NOT NULL ORDER BY updated_at DESC LIMIT 250",
+                (profile_id, ProvisioningStep.FAN_PAGES.value),
+            ).fetchall()
+        for row in rows:
+            if str(row["item_id"]) == exclude_item_id:
+                continue
+            try:
+                result = json.loads(row["result_json"])
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(result, dict):
+                continue
+            if str(result.get("active_page_name") or "").strip().casefold() != page_name.strip().casefold():
+                continue
+            if str(result.get("phase") or "").upper() in {"PAGE_CREATE_CLICK_INTENT", "PAGE_CREATE_RESULT_UNKNOWN"}:
+                return {"item_id": str(row["item_id"]), "result": result}
+        return {}
+
     async def latest_profile_fan_pages(
         self,
         profile_id: str,
@@ -594,7 +618,7 @@ class ProvisioningStateStore:
         limit: int = 100,
     ) -> list[dict[str, Any]]:
         """
-        Return Fan Pages confirmed by successful FAN_PAGES steps.
+        Return confirmed Pages, including completed Pages from an interrupted batch.
 
         These results are independent from Graph /me/accounts propagation, so
         a newly created Page can immediately be selected as Primary Page for a
@@ -623,7 +647,6 @@ class ProvisioningStateStore:
                 FROM provisioning_steps
                 WHERE profile_id=?
                   AND step=?
-                  AND status='SUCCESS'
                   AND result_json IS NOT NULL
                 ORDER BY updated_at DESC
                 LIMIT 250
@@ -642,9 +665,8 @@ class ProvisioningStateStore:
             if not isinstance(result, dict):
                 continue
 
-            result_pages = result.get("pages")
-            if not isinstance(result_pages, list):
-                continue
+            result_pages = [*(result.get("pages") if isinstance(result.get("pages"), list) else []),
+                            *(result.get("created_pages") if isinstance(result.get("created_pages"), list) else [])]
 
             for page in result_pages:
                 if not isinstance(page, dict):
@@ -665,6 +687,10 @@ class ProvisioningStateStore:
                             or ""
                         ).strip(),
                         "reused": bool(page.get("reused")),
+                        "business_id": str(page.get("business_id") or ""),
+                        "ad_account_id": str(page.get("ad_account_id") or ""),
+                        "attached": bool(page.get("attached")),
+                        "already_attached": bool(page.get("already_attached")),
                         "source": "python_worker_confirmed",
                         "scope_key": str(row["scope_key"] or ""),
                         "updated_at": int(row["updated_at"] or 0),

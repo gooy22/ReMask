@@ -67,7 +67,7 @@ class LiveSyncContractTests(unittest.TestCase):
         self.assertIn("$pagesReady = true;", source)
         self.assertIn("REMASK_PAGE_LIVE_VERIFICATION_WARNING_V1", source)
         self.assertIn(
-            "Fan Page state loaded, but live Fan Page verification was not completed in this sync",
+            "BM/РК проверены. Fan Page показаны из сохранённого состояния; текущая проверка FP в Meta не завершена",
             source,
         )
         self.assertIn(
