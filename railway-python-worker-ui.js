@@ -1156,7 +1156,7 @@ async function pythonWorkerStartBusiness(bmName, options) {
               // provisioning-state key. If CREATE succeeded but Page attach
               // failed, a later Add BM Job reuses the confirmed BM instead of
               // creating a duplicate Business Portfolio.
-              scope_key: 'add-bm-page-' + pageId,
+              scope_key: pageId ? 'add-bm-page-' + pageId : 'add-bm-' + nonce + '-' + index,
               parameters: {
                 BUSINESS: businessParams
               }

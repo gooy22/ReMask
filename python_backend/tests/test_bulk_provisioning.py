@@ -287,6 +287,17 @@ class BulkPersistenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['create_response_business_id'],'111111111')
         attach.assert_not_awaited(); create.assert_not_awaited(); session.facebook_business_browser.assert_not_awaited()
 
+    async def test_saved_bm_legacy_page_alias_does_not_block_independent_success(self):
+        session,browser,kwargs=await self.prepare_resume()
+        await self.state.checkpoint('item','7','scope',ProvisioningStep.BUSINESS,
+            {'phase':'PAGE_ADD_NOT_SUBMITTED','primary_page_id':'1289628847574478'})
+        with patch('app.provisioning.business_handler.create_business_resilient',new=AsyncMock()) as create:
+            result=await business_handler(session,{'name':'Existing','user_email':'owner@example.com','page_id':'61594993341059'},{},**kwargs)
+        self.assertEqual(result['business_id'],'111111111')
+        self.assertEqual(result['selected_page_id'],'1289628847574478')
+        self.assertIsNone(result['primary_page_id'])
+        create.assert_not_awaited(); session.facebook_business_browser.assert_not_awaited()
+
     async def test_no_page_is_required_for_independent_bm_create(self):
         session,browser,kwargs=await self.prepare_resume()
         # A fresh item has no saved CREATE.
@@ -334,6 +345,9 @@ class BulkPersistenceTests(unittest.IsolatedAsyncioTestCase):
         result=await business_handler(session,{'name':'Existing','user_email':'owner@example.com','page_id':'222222222'},{},**kwargs)
         self.assertTrue(result['page']['result_unknown']); self.assertEqual(result['page_attach_previous_phase'],'PAGE_ADD_SUBMITTED')
         self.assertIsNone(result['primary_page_id']); session.facebook_business_browser.assert_not_awaited()
+        again=await business_handler(session,{'name':'Existing','user_email':'owner@example.com','page_id':'222222222'},{},**kwargs)
+        self.assertTrue(again['page']['result_unknown'])
+        self.assertEqual(again['page_attach_previous_phase'],'PAGE_ADD_SUBMITTED')
 
     async def test_attach_flag_rejects_truthy_string(self):
         session,browser,kwargs=await self.prepare_resume()

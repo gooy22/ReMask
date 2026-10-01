@@ -491,7 +491,7 @@ async def run_existing_business_repair_once(profile_id: str) -> None:
         log.warning('existing BM repair skipped: latest saved item already succeeded')
         return
     selected = next((row for row in candidates if row['status']=='FAILED'
-        and row['error_code'] in {'PAGE_ADD_UI_CHANGED','BUSINESS_BROWSER_FAILED','FACEBOOK_NAVIGATION_FAILED'}
+        and row['error_code'] in {'PAGE_ADD_UI_CHANGED','BUSINESS_BROWSER_FAILED','FACEBOOK_NAVIGATION_FAILED','BUSINESS_CHECKPOINT_MISMATCH'}
         and row['phase'] in {'CREATE_CONFIRMED','PAGE_ADD','PAGE_ADD_NOT_SUBMITTED'}), None)
     if not selected:
         log.warning('existing BM repair skipped: no confirmed BM with an unsent Page-add failure')

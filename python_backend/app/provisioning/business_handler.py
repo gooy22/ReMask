@@ -204,6 +204,13 @@ async def business_handler(
         or checkpoint.get("primary_page_id")
         or checkpoint.get("page_id")
     )
+    if not attach_page and legacy_confirmed_bm and checkpoint_page:
+        # Page selection is only a reference for an independent confirmed BM.
+        # Old Jobs may still carry its profile-plus alias in their payload.
+        # Keep the saved canonical reference without opening Chromium or
+        # treating this as a different CREATE intent.
+        page_id = checkpoint_page
+
     if checkpoint_page and checkpoint_page != page_id:
         raise ProvisioningError(
             "BUSINESS_CHECKPOINT_MISMATCH",
@@ -958,7 +965,11 @@ async def business_handler(
         )
 
         if not attach_page:
-            previous_page_phase = _clean(checkpoint.get("phase")).upper()
+            previous_page_phase = _clean(
+                checkpoint.get("page_attach_previous_phase")
+                if checkpoint.get("page_attach_result_unknown")
+                else checkpoint.get("phase")
+            ).upper()
             verified_page = (
                 _clean(checkpoint.get("primary_page_id"))
                 if previous_page_phase == "PAGE_CONFIRMED" else ""

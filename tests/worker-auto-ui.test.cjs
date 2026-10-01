@@ -46,5 +46,24 @@ vm.createContext(sandbox); vm.runInContext(source.slice(start,end), sandbox);
   assert.equal(captured[0].profiles.length,2);
   assert.equal(captured[0].profiles[0].tasks[0].payload.batch_count,2);
   assert.deepEqual(captured[0].profiles[0].tasks[0].payload.steps,['PROXY_CHECK','FAN_PAGES','BUSINESS','AD_ACCOUNT']);
-  console.log('Auto modal: counts, validation, POST payload and lost-response idempotency passed.');
+  // Independent BM: an empty optional Page must not block submission or
+  // turn different explicit CREATE requests into the same empty-Page scope.
+  const bmStart=source.indexOf('async function pythonWorkerStartBusiness(');
+  const bmEnd=source.indexOf('\\nfunction pythonWorkerVisible(',bmStart);
+  vm.runInContext(source.slice(bmStart,bmEnd),sandbox);
+  const bmRequests=[];
+  sandbox.pythonWorkerBridge=async payload=>{bmRequests.push(JSON.parse(JSON.stringify(payload)));return {job:{job_id:'bm-job'}};};
+  state.busy=false;
+  await sandbox.pythonWorkerStartBusiness('',{profiles:['7'],configs:{'7':{name:'Independent BM',user_email:'owner@example.com'}}});
+  const bm=bmRequests[0].profiles[0].tasks[0].payload;
+  assert.equal(bm.parameters.BUSINESS.attach_page,false);
+  assert.equal(bm.parameters.BUSINESS.page_id,undefined);
+  assert.match(bm.scope_key,/^add-bm-[0-9]+-/);
+  state.busy=false;
+  await sandbox.pythonWorkerStartBusiness('',{profiles:['7'],configs:{'7':{name:'Referenced BM',page_id:'222222222'}}});
+  const withPage=bmRequests[1].profiles[0].tasks[0].payload;
+  assert.equal(withPage.parameters.BUSINESS.attach_page,false);
+  assert.equal(withPage.parameters.BUSINESS.page_id,'222222222');
+  assert.equal(withPage.scope_key,'add-bm-page-222222222');
+  console.log('Auto modal: counts, validation, POST payload and lost-response idempotency passed. BM: optional Page, no attach and independent scope passed.');
 })().catch(error=>{console.error(error);process.exitCode=1;});
