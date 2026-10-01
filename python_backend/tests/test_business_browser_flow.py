@@ -711,6 +711,71 @@ class BrowserAdsManagerPageInventoryContractTests(unittest.TestCase):
         self.assertIn("response.text()", source)
 
 
+    def test_isolated_page_discovery_uses_sibling_tab_same_context(self):
+        source = inspect.getsource(
+            FacebookBusinessBrowser.discover_managed_pages_isolated
+        )
+        self.assertIn("REMASK_ISOLATED_PAGE_DISCOVERY_V1", source)
+        self.assertIn("original_context.new_page()", source)
+        self.assertIn("self.page = sibling", source)
+        self.assertIn("self.page = original_page", source)
+        self.assertIn("await sibling.wait_for_timeout(700)", source)
+        self.assertIn("discover_managed_pages(fast=True)", source)
+
+
+class BrowserIsolatedPageDiscoveryRuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_isolated_page_discovery_warm_retries_and_restores_primary(self):
+        class _Page:
+            def __init__(self, url):
+                self.url = url
+                self.closed = False
+
+            def set_default_timeout(self, value):
+                self.timeout = value
+
+            async def wait_for_timeout(self, value):
+                self.waited = value
+
+            async def close(self):
+                self.closed = True
+
+            def is_closed(self):
+                return self.closed
+
+        primary = _Page(
+            "https://adsmanager.facebook.com/adsmanager/manage/campaigns"
+        )
+        sibling = _Page("about:blank")
+        context = SimpleNamespace(new_page=AsyncMock(return_value=sibling))
+
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-pages-isolated")
+        )
+        browser.page = primary
+        browser._browser_context = context
+        browser.discover_managed_pages = AsyncMock(
+            side_effect=[
+                BrowserBusinessError(
+                    "FAN_PAGES_NOT_DISCOVERED",
+                    "cold shell",
+                    retryable=False,
+                ),
+                [{"id": "1111111111", "name": "Recovered Page"}],
+            ]
+        )
+
+        rows = await browser.discover_managed_pages_isolated(attempts=2)
+
+        self.assertEqual(rows[0]["id"], "1111111111")
+        self.assertEqual(browser.discover_managed_pages.await_count, 2)
+        self.assertIs(browser.page, primary)
+        self.assertTrue(sibling.closed)
+        self.assertEqual(
+            browser._last_page_inventory_diagnostic["stage"],
+            "isolated_complete",
+        )
+
+
 class BrowserAdAccountAdditionalLocaleTests(unittest.TestCase):
     def test_bangla_vietnamese_hindi_ad_account_labels_are_supported(self):
         section_names = FacebookBusinessBrowser.AD_ACCOUNT_SECTION_NAMES
