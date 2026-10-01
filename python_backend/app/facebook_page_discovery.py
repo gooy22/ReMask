@@ -717,11 +717,11 @@ def _browser_page_candidate_diagnostic(source: str) -> list[dict[str, Any]]:
             for child in value:
                 walk(child, (*path, "[]"), parent_keys)
         elif isinstance(value, dict):
-            if _clean(value.get("__typename")) == "Page":
-                page_id = _clean(value.get("id"))
-                if page_id.isdigit() and len(output) < 20:
+            page_id = _clean(value.get("page_id") or value.get("pageId") or value.get("pageID") or value.get("id"))
+            if value.get("name") or any(key in value for key in ("page_id", "pageID", "pageId")):
+                if page_id.isdigit() and len(output) < 35:
                     output[(page_id, path[-6:])] = {
-                        "id": page_id, "path": ".".join(path[-6:]),
+                        "id": page_id, "typename": _clean(value.get("__typename")), "path": ".".join(path[-6:]),
                         "keys": sorted(value.keys())[:55], "parent_keys": list(parent_keys)[:30],
                         "flags": {key: val for key, val in value.items() if isinstance(val, bool)},
                     }

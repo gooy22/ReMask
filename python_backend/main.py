@@ -389,18 +389,32 @@ async def run_targeted_pages_readonly_canary(profile_id: str) -> None:
                 diagnostic = getattr(browser, '_last_page_inventory_diagnostic', {})
                 log.warning('targeted Pages readonly canary profile=%s error=%s shapes=%s diagnostic=%s', profile_id, str(exc)[:500],
                     json.dumps(diagnostic.get('unsupported_page_shapes', []), separators=(',', ':'))[:12000],
-                    json.dumps({key: diagnostic.get(key) for key in ('stage','page_discovery','current_url')}, separators=(',', ':'))[:2200])
+                    json.dumps({key: diagnostic.get(key) for key in ('stage','page_discovery','current_url','rendered_pages_surface')}, separators=(',', ':'))[:6500])
             target_business = str(os.getenv('REMASK_PAGE_ATTACH_CANARY_BUSINESS') or '').strip()
             target_page = str(os.getenv('REMASK_PAGE_ATTACH_CANARY_PAGE') or '').strip()
             if target_business.isdigit() and target_page.isdigit():
+                blocked_requests = []
+                async def readonly_route(route, request):
+                    summary = FacebookBusinessBrowser._safe_graphql_request_summary(request)
+                    friendly = str(summary.get('friendly_name') or '').lower()
+                    if str(request.method).upper() == 'POST' and not ('query' in friendly and 'mutation' not in friendly):
+                        if 'mutation' in friendly or FacebookBusinessBrowser._request_matches_page_add(request, business_id=target_business, page_id=target_page):
+                            blocked_requests.append(summary)
+                        await route.abort()
+                        return
+                    await route.continue_()
+                await browser.page.route('**/*', readonly_route)
                 try:
-                    result = await asyncio.wait_for(browser.preflight_page_add_form(business_id=target_business, page_id=target_page), timeout=70)
+                    result = await asyncio.wait_for(browser.preflight_page_add_form(business_id=target_business, page_id=target_page, advance_review=True), timeout=70)
+                    result['blocked_mutations'] = blocked_requests[:8]
                     surface = result.pop('page_surface', {})
                     result['page_surface'] = {key: surface.get(key) for key in ('ready_state','page_id_in_body','inputs','dialogs')}
                     result['controls'] = [{key: control.get(key) for key in ('text','disabled')} for control in surface.get('controls', []) if control.get('role') == 'button' or control.get('tag') == 'button'][-25:]
                     log.warning('targeted Page attach readonly canary profile=%s result=%s', profile_id, json.dumps(result, ensure_ascii=False, separators=(',', ':'))[:7000])
                 except Exception as exc:
-                    log.warning('targeted Page attach readonly canary profile=%s error=%s', profile_id, str(exc)[:1200])
+                    log.warning('targeted Page attach readonly canary profile=%s error=%s blocked_mutations=%s', profile_id, str(exc)[:1200], json.dumps(blocked_requests[:8], separators=(',', ':')))
+                finally:
+                    await browser.page.unroute('**/*', readonly_route)
 
 
 async def run_live_inventory_readonly_canary() -> None:

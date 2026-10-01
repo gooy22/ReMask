@@ -96,6 +96,16 @@ class BulkPersistenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await restored.retry_failed(job),2)
         self.assertEqual([(await restored.tasks(item))[0]['payload'] for item in items],payloads)
 
+    async def test_bulk_queue_and_recovery_interleave_profiles(self):
+        req=request(3)
+        other=req.profiles[0].model_copy(deep=True); other.profile_id='8'; req.profiles.append(other)
+        job,_=await self.jobs.create_job(req)
+        ids=await self.jobs.queued_item_ids(job)
+        profiles=[(await self.jobs.item(item))['profile_id'] for item in ids]
+        self.assertEqual(profiles,['7','8','7','8','7','8'])
+        recovered=await self.jobs.recover()
+        self.assertEqual([(await self.jobs.item(item))['profile_id'] for item in recovered],profiles)
+
     async def test_invalid_generation_rolls_back(self):
         with self.assertRaises(ValueError): await self.jobs.create_job(request(21))
         with self.jobs._connect() as con: self.assertEqual(con.execute('SELECT COUNT(*) FROM jobs').fetchone()[0],0)

@@ -5615,6 +5615,20 @@ class FacebookBusinessBrowser:
             if not merged:
                 from .facebook_page_discovery import _browser_page_candidate_diagnostic
                 self._last_page_inventory_diagnostic["unsupported_page_shapes"] = _browser_page_candidate_diagnostic(document)
+                try:
+                    self._last_page_inventory_diagnostic["rendered_pages_surface"] = await self.page.evaluate("""() => {
+                        const roots = [...document.querySelectorAll('main,[role="main"]')];
+                        const clean = v => (v || '').replace(/\\s+/g, ' ').trim();
+                        const text = roots.map(el => clean(el.innerText)).join(' ').slice(0,2400);
+                        const links = roots.flatMap(root => [...root.querySelectorAll('a[href]')]).slice(0,80).map(el => {
+                            const url = new URL(el.href);
+                            return {path:url.pathname, id:url.searchParams.get('id') || url.searchParams.get('page_id') || '', label:clean(el.innerText).slice(0,120)};
+                        });
+                        return {text,links,body_length:(document.body?.innerText || '').length,
+                            script_types:[...document.scripts].slice(0,12).map(el => ({type:el.type,bytes:el.textContent.length}))};
+                    }""")
+                except Exception:
+                    pass
                 self._last_page_inventory_diagnostic.update({
                     "stage": "empty",
                     "current_url": _clean(getattr(self.page, "url", "") if self.page else ""),
@@ -18007,10 +18021,12 @@ timeout_seconds=4.0,
                         text: clean(el.innerText || el.textContent || '').slice(0, 1200),
                         aria: clean(el.getAttribute('aria-label')).slice(0, 180),
                     }));
-                    const controls = [...document.querySelectorAll(
-                        'button,[role="button"],[role="option"],[role="radio"],'
-                        + '[role="listitem"],[role="gridcell"],a,[tabindex="0"]'
-                    )].filter(visible).slice(0, 120).map(el => {
+                    const controlSelector = 'button,[role="button"],[role="option"],[role="radio"],'
+                        + '[role="listitem"],[role="gridcell"],a,[tabindex="0"]';
+                    const activeControls = [...document.querySelectorAll('[role="dialog"],[aria-modal="true"]')]
+                        .flatMap(root => [...root.querySelectorAll(controlSelector)]);
+                    const controls = [...new Set([...activeControls, ...document.querySelectorAll(controlSelector)])]
+                        .filter(visible).slice(0, 120).map(el => {
                         const r = el.getBoundingClientRect();
                         return {
                             tag: String(el.tagName || '').toLowerCase(),
@@ -19599,6 +19615,7 @@ timeout_seconds=4.0,
         *,
         business_id: str,
         page_id: str,
+        advance_review: bool = False,
     ) -> dict[str, Any]:
         """
         Open and fill Meta's real Add existing Page dialog, then stop before
@@ -19683,6 +19700,13 @@ timeout_seconds=4.0,
             )
 
         await self.page.wait_for_timeout(1200)
+        review_advanced = False
+        if advance_review:
+            # The caller must install a mutation-blocking route for this
+            # diagnostic. The current Find Page wizard resolves after Next.
+            review_advanced = await self._click_named(("Next",))
+            if review_advanced:
+                await self.page.wait_for_timeout(1200)
 
         # Reuse the production picker selector; preflight stops before submit.
         picker_selected = False
@@ -19758,6 +19782,7 @@ timeout_seconds=4.0,
         return {
             "ready": bool(selected and final_actions),
             "form_ready": True,
+            "review_advanced": review_advanced,
             "already_attached": False,
             "business_id": business,
             "page_id": page,

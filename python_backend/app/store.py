@@ -7,12 +7,26 @@ import sqlite3
 import time
 import uuid
 from contextlib import contextmanager
+from collections import deque
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 def _now() -> int:
     return int(time.time())
+
+def _interleave_profile_items(rows: list[Any]) -> list[str]:
+    """Keep a bulk profile from filling every worker before other profiles."""
+    groups: dict[str, deque[str]] = {}
+    for row in rows:
+        groups.setdefault(str(row['profile_id']), deque()).append(str(row['id']))
+    ordered = []
+    while groups:
+        for profile_id, pending in list(groups.items()):
+            ordered.append(pending.popleft())
+            if not pending:
+                del groups[profile_id]
+    return ordered
 
 class JobStore:
     def __init__(self, db_path: str) -> None:
@@ -158,10 +172,10 @@ class JobStore:
     def _queued_item_ids_sync(self, job_id: str | None) -> list[str]:
         with self._connect() as con:
             if job_id:
-                rows = con.execute("SELECT id FROM job_items WHERE job_id=? AND status='QUEUED' ORDER BY created_at", (job_id,)).fetchall()
+                rows = con.execute("SELECT id,profile_id FROM job_items WHERE job_id=? AND status='QUEUED' ORDER BY created_at", (job_id,)).fetchall()
             else:
-                rows = con.execute("SELECT id FROM job_items WHERE status='QUEUED' ORDER BY created_at").fetchall()
-            return [str(r['id']) for r in rows]
+                rows = con.execute("SELECT id,profile_id FROM job_items WHERE status='QUEUED' ORDER BY created_at").fetchall()
+            return _interleave_profile_items(rows)
 
     async def recover(self) -> list[str]:
         return await asyncio.to_thread(self._recover_sync)
@@ -171,8 +185,8 @@ class JobStore:
         with self._connect() as con:
             con.execute("UPDATE job_items SET status='QUEUED',updated_at=? WHERE status='RUNNING'", (now,))
             con.execute("UPDATE job_tasks SET status='QUEUED',updated_at=? WHERE status='RUNNING'", (now,))
-            rows = con.execute("SELECT id FROM job_items WHERE status='QUEUED' ORDER BY created_at").fetchall()
-            return [str(r['id']) for r in rows]
+            rows = con.execute("SELECT id,profile_id FROM job_items WHERE status='QUEUED' ORDER BY created_at").fetchall()
+            return _interleave_profile_items(rows)
 
     async def item(self, item_id: str) -> dict[str, Any] | None:
         return await asyncio.to_thread(self._item_sync, item_id)
