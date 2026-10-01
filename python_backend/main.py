@@ -377,10 +377,11 @@ async def run_startup_smoke() -> None:
 async def run_live_inventory_readonly_canary() -> None:
     """Optional one-shot startup proof for the live inventory path.
 
-    REMASK_LIVE_INVENTORY_READONLY_CANARY_V1
+    REMASK_LIVE_INVENTORY_READONLY_CANARY_V2
     Disabled unless REMASK_LIVE_INVENTORY_CANARY_PROFILE is explicitly set.
-    This invokes the same read-only inventory function as Workspace Sync and
-    never creates/submits BM, Page, RK or ad mutations.
+    This is strictly read-only. Prefer one exact durable BM->RK pair so the
+    canary reaches the Page phase instead of spending its budget rediscovering
+    Business/RK inventory.
     """
     await asyncio.sleep(4.0)
     profile_id=str(
@@ -389,18 +390,74 @@ async def run_live_inventory_readonly_canary() -> None:
     if not profile_id:
         return
 
+    business_id=''
+    ad_account_id=''
+
+    try:
+        bindings=await pool.provisioning_state.confirmed_ad_account_bindings_for_profile(
+            profile_id
+        )
+    except Exception:
+        bindings=[]
+
+    for row in bindings or []:
+        if not isinstance(row,dict):
+            continue
+        candidate_business=str(row.get('business_id') or '').strip()
+        candidate_account=str(row.get('ad_account_id') or '').strip()
+        if candidate_account.startswith('act_'):
+            candidate_account=candidate_account[4:]
+        if candidate_business.isdigit() and candidate_account.isdigit():
+            business_id=candidate_business
+            ad_account_id=candidate_account
+            break
+
+    # Legacy Workspace binding file predates some provisioning DB history.
+    # Read it only as a navigation target for the canary; live inventory still
+    # has to prove the exact pair.
+    if not business_id or not ad_account_id:
+        path=os.path.join(DATA_ROOT,'workspace-provisioning-bindings.json')
+        try:
+            raw=json.loads(open(path,'r',encoding='utf-8').read())
+        except Exception:
+            raw={}
+        profile_row=raw.get(profile_id) if isinstance(raw,dict) else None
+        if isinstance(profile_row,dict):
+            accounts=profile_row.get('ad_accounts')
+            if isinstance(accounts,dict):
+                candidates=list(accounts.values())
+            else:
+                candidates=[profile_row]
+            for row in candidates:
+                if not isinstance(row,dict):
+                    continue
+                candidate_business=str(row.get('business_id') or '').strip()
+                candidate_account=str(row.get('ad_account_id') or '').strip()
+                if candidate_account.startswith('act_'):
+                    candidate_account=candidate_account[4:]
+                if candidate_business.isdigit() and candidate_account.isdigit():
+                    business_id=candidate_business
+                    ad_account_id=candidate_account
+                    break
+
     try:
         result=await profile_live_inventory(
             profile_id=profile_id,
-            business_ids=None,
-            ad_account_hints=None,
+            business_ids=business_id or None,
+            ad_account_hints=(
+                f'{business_id}:{ad_account_id}'
+                if business_id and ad_account_id
+                else None
+            ),
             page_hints=None,
         )
         log.warning(
-            'live inventory canary profile=%s ok=%s live_ready=%s '
-            'pages_ready=%s pages_live_verified=%s pages=%s source=%s '
-            'diagnostic=%s warnings=%s',
+            'live inventory canary profile=%s scoped_business=%s scoped_account=%s '
+            'ok=%s live_ready=%s pages_ready=%s pages_live_verified=%s '
+            'pages=%s source=%s diagnostic=%s warnings=%s',
             profile_id,
+            business_id or '-',
+            ad_account_id or '-',
             bool(result.get('ok')),
             bool(result.get('live_ready')),
             bool(result.get('pages_ready')),
@@ -416,8 +473,11 @@ async def run_live_inventory_readonly_canary() -> None:
         )
     except HTTPException as exc:
         log.error(
-            'live inventory canary profile=%s HTTP status=%s detail=%s',
+            'live inventory canary profile=%s scoped_business=%s scoped_account=%s '
+            'HTTP status=%s detail=%s',
             profile_id,
+            business_id or '-',
+            ad_account_id or '-',
             exc.status_code,
             str(exc.detail)[:2200],
         )
