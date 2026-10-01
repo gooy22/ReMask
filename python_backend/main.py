@@ -2221,11 +2221,13 @@ async def profile_live_inventory(
             if not pages_live_verified:
                 isolated_page_probe_attempted=True
                 try:
-                    isolated_pages_timeout=optional_page_budget(10.0)
-                    # discover_managed_pages(fast=True) can legitimately spend
-                    # ~8s across navigation, settle, Relay wait and response
-                    # task draining. Do not start a probe that cannot finish.
-                    if isolated_pages_timeout < 9.25:
+                    isolated_pages_timeout=optional_page_budget(20.0)
+                    # REMASK_PAGE_HANDOFF_TWO_PASS_BUDGET_V1
+                    # The low-memory handoff deliberately allows one cold and
+                    # one warm Your-Pages pass. Production profile 7 only
+                    # returned its 4 Pages on the warm pass. Do not start the
+                    # proof unless both bounded passes can realistically fit.
+                    if isolated_pages_timeout < 17.5:
                         raise asyncio.TimeoutError()
                     discovered_pages=await hard_deadline(
                         browser.discover_managed_pages_isolated(fast=True),
