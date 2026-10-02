@@ -1243,7 +1243,7 @@ function hierarchy_profile_snapshot(string $profile, ?array $workspaceMeta = nul
 {
     $snapshot = hierarchy_profile_snapshot_base($profile, $workspaceMeta);
     $snapshot = hierarchy_live_snapshot_apply_display($profile, $snapshot);
-    return hierarchy_asset_types_snapshot(hierarchy_created_businesses_apply_display($profile, $snapshot));
+    return hierarchy_created_businesses_apply_display($profile, $snapshot);
 }
 PHP_WRAPPER;
 

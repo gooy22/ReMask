@@ -36,6 +36,7 @@ function hierarchy_canonical_account_rows(array $rows, string $profile): array {
 }
 
 function hierarchy_canonical_account_snapshot(string $profile, array $snapshot): array {
+    $snapshot = hierarchy_asset_types_snapshot($snapshot);
     $accounts = hierarchy_canonical_account_rows((array)($snapshot['ad_accounts'] ?? []), $profile);
     $snapshot['ad_accounts'] = $accounts;
     $snapshot['ad_accounts_count'] = count($accounts);
