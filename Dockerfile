@@ -123,6 +123,8 @@ RUN set -eux; \
     grep -q 'payment_status' /var/www/html/scripts/workspace.js; \
     ! grep -q 'styles/bootstrap.min.js' /var/www/html/workspace.php /var/www/html/accounts.php || exit 93; \
     php -l /var/www/html/classes/RemaskCookieProfile.php; \
+    php -l /var/www/html/classes/RemaskCookieTxt.php; \
+    grep -q REMASK_COOKIE_TXT_IMPORT_V1 /var/www/html/scripts/cookie-txt-import.js; \
     php -l /var/www/html/ajax/addAccount.php; \
     grep -q 'COOKIE_ONLY_GRAPH_DISABLED' /var/www/html/classes/MetaApiClient.php; \
     grep -q 'REMASK_COOKIE_PROFILE_UI_V1' /var/www/html/scripts/workspace.js; \
@@ -554,3 +556,4 @@ ENV REMASK_META_CACHE_TTL=1800 \
 EXPOSE 80
 CMD ["/var/www/html/docker-start.sh"]
 # railway deploy trigger: private-page-business-loader-v190 2026-09-29
+

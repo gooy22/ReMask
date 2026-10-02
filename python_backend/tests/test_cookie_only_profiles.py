@@ -67,7 +67,7 @@ class CookieOnlyProfileTests(unittest.TestCase):
         (self.root/'checkpassword.php').write_text('<?php // isolated fixture authentication')
         self.env = {**os.environ, 'REMASK_PROFILE_STORE':'json'}
         overlay = (ROOT/'railway-cookie-only-overlay.php').read_text().replace("'/var/www/html'", json.dumps(str(self.root)))
-        for file in ['railway-cookie-profile-ui.js','railway-cookie-accounts.js']:
+        for file in ['railway-cookie-profile-ui.js','railway-cookie-accounts.js','railway-cookie-txt-parser.php','railway-cookie-txt-import.js']:
             overlay = overlay.replace("'/tmp/" + file + "'", json.dumps(str(ROOT/file)))
         installer = self.root/'installer.php'
         installer.write_text(overlay)

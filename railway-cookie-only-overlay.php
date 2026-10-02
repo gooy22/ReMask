@@ -37,6 +37,8 @@ final class RemaskCookieProfile
 }
 COOKIE_PROFILE;
 file_put_contents($root . '/classes/RemaskCookieProfile.php', $helper);
+file_put_contents($root . '/classes/RemaskCookieTxt.php', file_get_contents('/tmp/railway-cookie-txt-parser.php'));
+file_put_contents($root . '/scripts/cookie-txt-import.js', file_get_contents('/tmp/railway-cookie-txt-import.js'));
 
 // Both persistence backends must accept the validated cookie profile.
 foreach (['FbAccountSerializer'=>'acc', 'PostgresProfileStore'=>'account'] as $class => $var) {
@@ -151,6 +153,14 @@ foreach (['workspace.php','launch.php','accounts.php','menu.php'] as $file) {
     $s = preg_replace('#scripts/workspace\.js(?:\?[^"\']*)?#', 'scripts/workspace.js?v=20261002-python-worker-ui-v194-cookie-only-v1-numbered-v1', $s);
     $s = preg_replace('#scripts/accounts\.js(?:\?[^"\']*)?#', 'scripts/accounts.js?v=20261002-cookie-only-v1-numbered-v1', $s);
     file_put_contents($path, $s);
+}
+// Shared import UI on Workspace and Accounts; no browser storage of shop secrets.
+foreach (['workspace.php','accounts.php'] as $file) {
+    $path = $root . '/' . $file;
+    $source = file_get_contents($path);
+    if (substr_count($source, '</body>') !== 1) throw new RuntimeException('TXT UI body boundary missing: ' . $file);
+    $source = str_replace('</body>', '<script src="scripts/cookie-txt-import.js?v=20261002-txt-v1" defer></script></body>', $source);
+    file_put_contents($path, $source);
 }
 // A legacy token input is removed before the Accounts form becomes usable.
 $accountsPath = $root . '/accounts.php';

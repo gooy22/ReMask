@@ -23,6 +23,7 @@ require_once __DIR__ . '/../classes/RemaskProxy.php';
 require_once __DIR__ . '/../classes/FbAccount.php';
 require_once __DIR__ . '/../classes/AccountStoreFactory.php';
 require_once __DIR__ . '/../classes/RemaskCookieProfile.php';
+require_once __DIR__ . '/../classes/RemaskCookieTxt.php';
 while (ob_get_level() > 0) { @ob_end_clean(); }
 
 header('Content-Type: application/json; charset=utf-8');
@@ -168,6 +169,92 @@ function rmx_pm_sequence_last(array $profiles, string $path): int {
     return $last;
 }
 
+
+function rmx_pm_sequence_save(array $profiles, string $path): void {
+    $temporary = $path . '.tmp';
+    $last = rmx_pm_sequence_last($profiles, $path);
+    if (file_put_contents($temporary, json_encode(['last_number'=>$last], JSON_THROW_ON_ERROR)) === false
+        || !rename($temporary, $path)) throw new RuntimeException('PROFILE_NUMBER_SAVE_FAILED');
+}
+
+function rmx_pm_txt_import(array $input, mixed $store, bool $preview): array {
+    $text = $input['text'] ?? null;
+    if (!is_string($text)) throw new InvalidArgumentException('TXT_REQUIRED: выберите TXT файл.');
+    $records = RemaskCookieTxt::parse($text);
+    $selection = $input['selected_lines'] ?? null;
+    if ($selection !== null) {
+        if (!is_array($selection) || count($selection) > RemaskCookieTxt::MAX_RECORDS) throw new InvalidArgumentException('TXT_SELECTION_INVALID');
+        $selected = [];
+        foreach ($selection as $line) {
+            if (!is_int($line) || $line < 1) throw new InvalidArgumentException('TXT_SELECTION_INVALID');
+            $selected[$line] = true;
+        }
+        if (!$preview) $records = array_values(array_filter($records, fn($r)=>isset($selected[$r['line']])));
+    }
+    if (!$preview && !$records) throw new InvalidArgumentException('TXT_SELECTION_EMPTY: нет выбранных записей.');
+    $proxy = null;
+    if (!$preview && count(array_filter($records, fn($r)=>$r['status'] === 'ready'))) {
+        try {
+            $raw = rmx_pm_find_scalar($input, ['proxy']);
+            if ($raw === '') throw new InvalidArgumentException();
+            $proxy = RemaskProxy::fromSemicolonString($raw);
+            if ($proxy === null) throw new InvalidArgumentException();
+        } catch (Throwable $e) { throw new InvalidArgumentException('TXT_PROXY_INVALID: укажите корректный прокси.'); }
+    }
+    // Recheck UID duplicates and allocate names within the same lock as manual create.
+    [$lock, $sequencePath] = rmx_pm_sequence_open($preview ? LOCK_SH : LOCK_EX);
+    try {
+        $profiles = $store->deserialize();
+        $known = [];
+        foreach ($profiles as $profile) {
+            $uid = RemaskCookieTxt::userId((array)$profile->cookies);
+            if ($uid !== '') $known[$uid] = (string)$profile->name;
+        }
+        $next = rmx_pm_sequence_last($profiles, $sequencePath) + 1;
+        $result = []; $imported = 0; $errors = 0; $skipped = 0; $ready = 0;
+        foreach ($records as $record) {
+            if ($record['status'] === 'ready' && isset($known[$record['user_id']])) {
+                $record['status'] = 'already_exists';
+                $record['profile_name'] = $known[$record['user_id']];
+            }
+            if ($record['status'] === 'ready') {
+                if ($preview) {
+                    $record['profile_name'] = (string)$next++;
+                    $ready++;
+                } else {
+                    $name = (string)$next;
+                    try {
+                        $cookies = RemaskCookieProfile::validate($record['cookies'], $proxy);
+                        $account = new FbAccount($name, '', json_encode($cookies, JSON_THROW_ON_ERROR), null, $proxy);
+                        $store->addOrUpdateAccount($account);
+                        $saved = $store->getAccountByName($name);
+                        if (!$saved instanceof FbAccount || RemaskCookieTxt::userId((array)$saved->cookies) !== $record['user_id']) throw new RuntimeException();
+                        $record['status'] = 'imported';
+                        $record['profile_name'] = $name;
+                        $known[$record['user_id']] = $name;
+                        $imported++; $next++;
+                        rmx_pm_sequence_save($store->deserialize(), $sequencePath);
+                    } catch (Throwable $e) {
+                        // Never echo storage/proxy exception text which may contain credentials.
+                        $record['status'] = 'error';
+                        $record['error'] = 'TXT_SAVE_FAILED';
+                        $result[] = RemaskCookieTxt::safe($record);
+                        // Partial result is explicit; do not continue after an uncertain write.
+                        $errors++;
+                        break;
+                    }
+                }
+            } elseif ($record['status'] === 'error') $errors++;
+            else $skipped++;
+            $result[] = RemaskCookieTxt::safe($record);
+        }
+        return ['ok'=>true,'success'=>true,'preview'=>$preview,'records'=>$result,'total'=>count($records),
+            'ready'=>$ready,'imported'=>$imported,'skipped'=>$skipped,'errors'=>$errors,
+            'processed'=>count($result),'session_verified'=>false,'next_number'=>$next,
+            'count'=>count($store->deserialize())];
+    } finally { fclose($lock); }
+}
+
 try {
     $input = rmx_pm_input();
     $action = strtolower(rmx_pm_find_scalar($input, ['action','cmd','op','mode']));
@@ -175,6 +262,10 @@ try {
     $hasSaveFields = rmx_pm_find_scalar($input, ['name','profile_name','label']) !== '';
     if ($action === '') $action = $hasSaveFields ? 'save' : 'list';
     $store = AccountStoreFactory::create(ACCOUNTSFILENAME);
+
+    if (in_array($action, ['import_preview','import_txt'], true)) {
+        rmx_pm_out(rmx_pm_txt_import($input, $store, $action === 'import_preview'));
+    }
 
     if ($action === 'next_number') {
         [$sequenceLock, $sequencePath] = rmx_pm_sequence_open(LOCK_SH);
@@ -188,6 +279,7 @@ try {
         rmx_pm_out(['ok'=>true,'success'=>true,'count'=>count($profiles),'profiles'=>$profiles,'accounts'=>$profiles]);
     }
     if (in_array($action, ['delete','remove'], true)) {
+        [$mutationLock] = rmx_pm_sequence_open(LOCK_EX);
         $name = rmx_pm_find_scalar($input, ['name','profile_name','profile','id','fb_id','account_id']);
         if ($name === '') throw new InvalidArgumentException('Profile name is required.');
         $remaining = $store->deleteAccountByName($name);
@@ -196,6 +288,7 @@ try {
 
     // REMASK_SESSION_ONLY_UPDATE_V1
     if (in_array($action, ['session_update','update_session','refresh_session'], true)) {
+        [$mutationLock] = rmx_pm_sequence_open(LOCK_EX);
         $name = rmx_pm_find_scalar($input, ['name','profile_name','profile','id','fb_id','account_id']);
         if ($name === '') throw new InvalidArgumentException('Profile name is required.');
 
@@ -272,10 +365,10 @@ try {
     $creating = in_array($action, ['create','add'], true);
     $sequenceLock = null;
     $sequencePath = '';
-    if ($creating) {
+    {
         // Serialize allocation and save, including named legacy creates.
         [$sequenceLock, $sequencePath] = rmx_pm_sequence_open(LOCK_EX);
-        if (rmx_pm_find_bool($input, ['auto_number'], false)) {
+        if ($creating && rmx_pm_find_bool($input, ['auto_number'], false)) {
             $name = (string)(rmx_pm_sequence_last($store->deserialize(), $sequencePath) + 1);
         }
     }
