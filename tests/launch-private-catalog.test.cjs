@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
 const source = fs.readFileSync(path.join(__dirname, '..', 'railway-launch-private-catalog.js'), 'utf8');
-const controls = Object.fromEntries(['preflight','syncMeta','loadFunding','fundingStatus','reviewLaunch','launchButton','serverDryRun'].map(id=>[id,{}]));
+const controls = Object.fromEntries(['preflight','syncMeta','loadFunding','fundingStatus','reviewLaunch','launchButton','serverDryRun','dryRunPlan','reviewStatus'].map(id=>[id,{}]));
 const context = {$:id=>controls[id],fundingState(){},fundingReviewLabel(){},loadFunding:async()=>{},validateReady(){}};
 vm.createContext(context); vm.runInContext(source,context);
 const label = data=>context.fundingState({data}).label;
@@ -21,5 +21,7 @@ assert.equal(label({account_status:1,is_prepay_account:true,balance:100}),'PREPA
 assert.equal(label({account_status:1,funding_source_details:{id:'123'}}),'SOURCE SAVED');
 assert.equal(controls.launchButton.disabled,true);
 assert.equal(controls.reviewLaunch.disabled,true);
+assert.equal(controls.dryRunPlan.disabled,true);
+assert.match(controls.reviewStatus.textContent,/проверки/);
 assert.equal(controls.preflight.textContent,'Загрузить сохранённые РК');
 console.log('Private Launch catalog and funding truth checks passed');

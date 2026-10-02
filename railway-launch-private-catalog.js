@@ -41,9 +41,10 @@ const remaskPrivateLaunchNotice='РК и FP загружены из сохран
 const remaskOriginalValidateReady=validateReady;
 validateReady=function() {
     remaskOriginalValidateReady();
-    for (const id of ['reviewLaunch','launchButton','serverDryRun']) {
+    for (const id of ['reviewLaunch','launchButton','serverDryRun','dryRunPlan']) {
         const button=$(id);
         if (button) { button.disabled=true; button.title=remaskPrivateLaunchNotice; }
     }
 };
 validateReady();
+if ($('reviewStatus')) $('reviewStatus').textContent=remaskPrivateLaunchNotice;
