@@ -51,3 +51,18 @@ class SelectedBusinessInventoryTests(unittest.IsolatedAsyncioTestCase):
                 await api.profile_live_inventory('8')
         browser.snapshot_businesses.assert_awaited_once()
         browser.probe_ads_manager_inventory_context.assert_not_awaited()
+
+    async def test_unconfirmed_selected_account_hint_still_reads_exact_settings_inventory(self):
+        pool,browser,factory=self.fixtures([{
+            'business_id':'1632909278268870','ad_account_id':'120251669477430356',
+        }])
+        browser.probe_ads_manager_inventory_context.side_effect=None
+        browser.probe_ads_manager_inventory_context.return_value={'confirmed':False}
+        browser.snapshot_ad_accounts_for_business=AsyncMock(side_effect=InventoryProbeReached())
+        with patch.object(api,'pool',pool),patch.object(api,'ProfileSession',factory):
+            with self.assertRaises(InventoryProbeReached):
+                await api.profile_live_inventory('8',business_ids='1632909278268870')
+        browser.snapshot_businesses.assert_not_awaited()
+        browser.probe_ads_manager_inventory_context.assert_awaited_once()
+        self.assertEqual(browser.snapshot_ad_accounts_for_business.await_args.kwargs['business_id'],
+                         '1632909278268870')

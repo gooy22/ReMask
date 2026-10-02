@@ -2020,7 +2020,18 @@ async def profile_live_inventory(
                 nonlocal browser
                 business_key=str(business_id)
                 if business_key in prevalidated_inventory:
-                    return dict(prevalidated_inventory[business_key])
+                    cached=dict(prevalidated_inventory[business_key])
+                    if cached.get('ready') or not requested_business_ids:
+                        return cached
+                    # A stale asset ID in a selected BM hint must not suppress
+                    # the authoritative settings inventory and canonical ID.
+                    settings=await hard_deadline(
+                        browser.snapshot_ad_accounts_for_business(
+                            business_id=business_key, timeout_seconds=8.0,
+                        ), budget(10.0),
+                    )
+                    settings['ads_manager_diagnostic']=cached.get('ads_manager_diagnostic') or {}
+                    return settings
                 last_error=None
                 for attempt in range(2):
                     try:

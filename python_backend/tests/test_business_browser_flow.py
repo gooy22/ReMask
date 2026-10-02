@@ -1328,7 +1328,7 @@ class BrowserAdAccountUiReconcileTests(unittest.IsolatedAsyncioTestCase):
                         "text": "ReMask Ads 123456789012345",
                         "href": (
                             "https://business.facebook.com/latest/settings/"
-                            "ad_accounts?asset_id=123456789012345"
+                            "ad_accounts?ad_account_id=123456789012345"
                         ),
                         "ids": ["123456789012345"],
                         "x": 700,

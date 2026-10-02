@@ -10419,6 +10419,9 @@ class FacebookBusinessBrowser:
                             ids.push(match[1]);
                         }
                         const uniqueIds = [...new Set(ids)];
+                        if (!accountIds.size
+                            && !/[?&](act|ad_account_id)=\d+/.test(bestHref)
+                            && !/\b(?:ad account |account )?id\s*[:：#]?\s*\d{5,30}/i.test(bestText)) continue;
                         const key = bestText + '|' + bestHref + '|'
                             + uniqueIds.join(',');
                         if (seen.has(key)) continue;
