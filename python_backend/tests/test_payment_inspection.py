@@ -72,7 +72,7 @@ class PaymentSummaryTests(unittest.TestCase):
 class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
     def browser(self, links):
         menu=SimpleNamespace(count=AsyncMock(return_value=0),is_visible=AsyncMock(return_value=False),click=AsyncMock())
-        page=SimpleNamespace(url=URL,evaluate=AsyncMock(return_value=links),
+        page=SimpleNamespace(url=URL,evaluate=AsyncMock(return_value=links),wait_for_function=AsyncMock(),
             get_by_role=lambda role,**kwargs:menu,
             locator=lambda selector:SimpleNamespace(inner_text=AsyncMock(return_value=ID+"\nPayment methods\nVisa •••• 1234")))
         return SimpleNamespace(page=page,profile_id="Fixture",ADS_MANAGER_URL="https://adsmanager.facebook.com/adsmanager/manage/campaigns",_goto=AsyncMock(),_assert_authenticated=AsyncMock())
@@ -126,6 +126,25 @@ class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
         browser.page.get_by_role=lambda role,**kwargs:menu
         browser._assert_authenticated.side_effect=BrowserBusinessError("CHECKPOINT_REQUIRED","Verification required",retryable=False)
         with self.assertRaises(BrowserBusinessError): await inspect_payment_methods(browser,ID)
+        self.assertEqual(browser._goto.await_count,1)
+
+
+    async def test_navigation_hydration_is_awaited_before_missing_link_is_declared(self):
+        browser=self.browser([])
+        async def hydrate(*args, **kwargs):
+            browser.page.evaluate.return_value=[{"href":URL,"label":"Billing & payments"}]
+        browser.page.wait_for_function.side_effect=hydrate
+        result=await inspect_payment_methods(browser,ID)
+        browser.page.wait_for_function.assert_awaited_once()
+        self.assertEqual(browser.page.wait_for_function.await_args.kwargs['timeout'],5000)
+        self.assertEqual(result['verification_status'],'LINKED')
+
+    async def test_hydration_timeout_does_not_invent_billing_destination(self):
+        browser=self.browser([])
+        browser.page.wait_for_function.side_effect=asyncio.TimeoutError()
+        with self.assertRaises(BrowserBusinessError) as exc:
+            await inspect_payment_methods(browser,ID)
+        self.assertEqual(exc.exception.code,'PAYMENT_UI_UNAVAILABLE')
         self.assertEqual(browser._goto.await_count,1)
 
 

@@ -242,6 +242,7 @@ async function checkAssetsSelection(){
 
 READINESS_UI
 , $start, $end-$start);
+$workspace=str_replace('const n=state.selected[state.activeTab].size;', 'const n=selectedRows(state.activeTab).length;', $workspace);
 file_put_contents($workspacePath,$workspace);
 // Review/submit still have only a legacy Graph implementation. Do not silently
 // use that implementation when the user selected private-worker operation.

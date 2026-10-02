@@ -6,6 +6,7 @@ An observed masked method proves linkage only, never charge/verification success
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
@@ -100,6 +101,16 @@ async def inspect_payment_methods(browser: Any, target: str) -> dict[str, Any]:
       .filter(a => a.getClientRects().length)
       .map(a => ({href:a.href,label:(a.innerText||a.getAttribute('aria-label')||'').trim()}))
       .filter(a => /billing|payment|платеж|платіж|оплат/i.test(a.label)).slice(0,20)"""
+    # DOMContentLoaded precedes Meta's SPA navigation hydration. Wait for an
+    # actual rendered navigation control, rather than treating a loading shell
+    # as a permanently missing Billing menu.
+    navigation_ready = """() => Array.from(document.querySelectorAll('a[href],button,[role="button"],[role="link"]'))
+      .some(a => a.getClientRects().length && /billing|payment|платеж|платіж|оплат|^all tools$|^все инструменты$|^усі інструменти$/i.test(
+        (a.innerText||a.getAttribute('aria-label')||'').trim()))"""
+    try:
+        await page.wait_for_function(navigation_ready, timeout=5000)
+    except Exception:
+        pass
     links = await page.evaluate(read_links)
     if not links:
         # Meta may keep Billing inside the rendered All tools drawer.
@@ -110,6 +121,12 @@ async def inspect_payment_methods(browser: Any, target: str) -> dict[str, Any]:
             if await menu.count() == 1 and await menu.is_visible():
                 await menu.click(timeout=4000)
                 await browser._assert_authenticated()
+                try:
+                    await page.wait_for_function("""() => Array.from(document.querySelectorAll('a[href]'))
+                      .some(a => a.getClientRects().length && /billing|payment|платеж|платіж|оплат/i.test(
+                        (a.innerText||a.getAttribute('aria-label')||'').trim()))""", timeout=4000)
+                except Exception:
+                    pass
                 links = await page.evaluate(read_links)
                 break
     billing_url = ""
@@ -123,10 +140,15 @@ async def inspect_payment_methods(browser: Any, target: str) -> dict[str, Any]:
         billing_url = candidate
         break
     if not billing_url:
+        parsed = urlsplit(str(page.url))
+        diagnostic = {'stage':'payment_navigation_missing', 'host':parsed.hostname,
+                      'path':parsed.path, 'target_account_id':target,
+                      'rendered_billing_links':len(links) if isinstance(links,list) else 0}
+        logging.getLogger('remask.payment_inspection').info('payment navigation missing profile=%s diagnostic=%s',browser.profile_id,diagnostic)
         raise BrowserBusinessError(
             "PAYMENT_UI_UNAVAILABLE",
             "Ads Manager did not expose a rendered Billing / Payments navigation link.",
-            retryable=False, diagnostic={"stage": "payment_navigation_missing"},
+            retryable=False, diagnostic=diagnostic,
         )
     await browser._goto(billing_url, timeout_ms=25000, settle_ms=700, attempts=1)
     # Body text remains in memory only. Return explicitly whitelisted masked data.
