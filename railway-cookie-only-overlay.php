@@ -109,6 +109,14 @@ file_put_contents($hierarchyPath, substr($hierarchy, 0, $start) . $forward . sub
 
 $workspacePath = $root . '/scripts/workspace.js';
 $js = file_get_contents($workspacePath);
+// Profile Manager returns top-level fields; hierarchy returns a data envelope.
+// Read both and retain precise backend errors instead of reducing them to HTTP 502.
+$apiJson = <<<'COOKIE_API_JSON'
+async function apiJson(url, options={}) { const r=await fetch(url,options); const t=await r.text(); let j; try{j=JSON.parse(t)}catch{throw new Error(`Invalid JSON (${r.status})`)} if(!r.ok||j.ok===false){const message=typeof j.error==='string'?(j.message||j.error):(j.error?.message||j.message);throw new Error(message||`HTTP ${r.status}`)} return j.data===undefined?j:j.data; }
+COOKIE_API_JSON;
+$js = preg_replace('/async function apiJson\\(url, options=\\{\\}\\) \\{[^\\n]+\\}/', $apiJson, $js, 1, $apiCount);
+if ($apiCount !== 1) throw new RuntimeException('Cookie profile API response boundary missing');
+
 $positions = [strpos($js, 'function prepareAddProfile'), strpos($js, 'function prepareEditProfile')];
 if (in_array(false, $positions, true)) throw new RuntimeException('Workspace profile forms missing');
 $start = min($positions);
@@ -150,8 +158,8 @@ foreach (['workspace.php','launch.php','accounts.php','menu.php'] as $file) {
     if (!is_file($path)) continue;
     $s = file_get_contents($path);
     $s = str_replace(['Official Meta API','доступные по token'], ['Facebook cookies','сохранённые BM'], $s);
-    $s = preg_replace('#scripts/workspace\.js(?:\?[^"\']*)?#', 'scripts/workspace.js?v=20261002-python-worker-ui-v194-cookie-only-v1-numbered-v1', $s);
-    $s = preg_replace('#scripts/accounts\.js(?:\?[^"\']*)?#', 'scripts/accounts.js?v=20261002-cookie-only-v1-numbered-v1', $s);
+    $s = preg_replace('#scripts/workspace\.js(?:\?[^"\']*)?#', 'scripts/workspace.js?v=20261002-python-worker-ui-v194-cookie-only-v1-numbered-v1-txt-v2', $s);
+    $s = preg_replace('#scripts/accounts\.js(?:\?[^"\']*)?#', 'scripts/accounts.js?v=20261002-cookie-only-v1-numbered-v1-txt-v2', $s);
     file_put_contents($path, $s);
 }
 // Shared import UI on Workspace and Accounts; no browser storage of shop secrets.
