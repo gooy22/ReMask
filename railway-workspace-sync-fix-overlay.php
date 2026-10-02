@@ -584,6 +584,42 @@ function hierarchy_profile_snapshot(string $profile, ?array $workspaceMeta = nul
 PHP_SIG;
 $hierarchyHelpers = <<<'PHP_HELPERS'
 // REMASK_HONEST_SYNC_OUTCOME_V1
+function hierarchy_asset_types_snapshot(array $snapshot): array
+{
+    // A generic Relay asset can be a portfolio or Page, not an ad account.
+    // Known object IDs are global; exclude only explicit cross-type collisions.
+    $otherIds = [];
+    foreach (['businesses', 'pages'] as $kind) {
+        foreach ((array)($snapshot[$kind] ?? []) as $row) {
+            if (!is_array($row)) continue;
+            $id = trim((string)($row['id'] ?? ''));
+            if ($id !== '') $otherIds[$id] = true;
+        }
+    }
+    $valid = static function ($row) use ($otherIds): bool {
+        if (!is_array($row)) return false;
+        $id = preg_replace('/^act_/', '', trim((string)($row['id'] ?? $row['account_id'] ?? '')));
+        return $id !== '' && !isset($otherIds[$id]);
+    };
+    $snapshot['ad_accounts'] = array_values(array_filter((array)($snapshot['ad_accounts'] ?? []), $valid));
+    $snapshot['ad_accounts_count'] = count($snapshot['ad_accounts']);
+    foreach ((array)($snapshot['businesses'] ?? []) as $i => $business) {
+        if (!is_array($business)) continue;
+        if (isset($business['accounts'])) $snapshot['businesses'][$i]['accounts'] = array_values(array_filter((array)$business['accounts'], $valid));
+        $snapshot['businesses'][$i]['ad_account_count'] = count(array_filter($snapshot['ad_accounts'], static fn($row) => (string)($row['business_id'] ?? '') === (string)($business['id'] ?? '')));
+    }
+    foreach ((array)($snapshot['profiles'] ?? []) as $i => $row) {
+        if (!is_array($row) || (string)($row['name'] ?? '') !== (string)($snapshot['profile']['name'] ?? '')) continue;
+        $snapshot['profiles'][$i]['rk_count'] = $snapshot['ad_accounts_count'];
+        $snapshot['profiles'][$i]['ad_accounts_count'] = $snapshot['ad_accounts_count'];
+    }
+    if (is_array($snapshot['profile'] ?? null)) {
+        $snapshot['profile']['rk_count'] = $snapshot['ad_accounts_count'];
+        $snapshot['profile']['ad_accounts_count'] = $snapshot['ad_accounts_count'];
+    }
+    return $snapshot;
+}
+
 function hierarchy_private_sync_outcome(array $inventory): array
 {
     foreach ((array)($inventory['businesses'] ?? []) as $business) {
@@ -1147,6 +1183,7 @@ function hierarchy_binding_put(
         $profile === ''
         || !preg_match('/^\d{5,30}$/', $businessId)
         || !preg_match('/^\d{5,30}$/', $adAccountId)
+        || $businessId === $adAccountId
     ) return;
 
     $file = hierarchy_binding_file();
@@ -1206,7 +1243,7 @@ function hierarchy_profile_snapshot(string $profile, ?array $workspaceMeta = nul
 {
     $snapshot = hierarchy_profile_snapshot_base($profile, $workspaceMeta);
     $snapshot = hierarchy_live_snapshot_apply_display($profile, $snapshot);
-    return hierarchy_created_businesses_apply_display($profile, $snapshot);
+    return hierarchy_asset_types_snapshot(hierarchy_created_businesses_apply_display($profile, $snapshot));
 }
 PHP_WRAPPER;
 
@@ -1656,6 +1693,9 @@ $syncProfileReplacement = <<<'PHP'
             }
         }
 
+        $typedInventory = hierarchy_asset_types_snapshot(['businesses' => $businessRows, 'ad_accounts' => $adAccountRows, 'pages' => $pageRows]);
+        $businessRows = $typedInventory['businesses'];
+        $adAccountRows = $typedInventory['ad_accounts'];
         $snapshot = $existingSnapshot;
         $snapshot['businesses'] = array_values($businessRows);
         $snapshot['businesses_count'] = count($businessRows);
