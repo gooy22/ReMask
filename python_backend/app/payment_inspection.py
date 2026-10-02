@@ -39,6 +39,26 @@ def _billing_url_matches(url: str, target: str, *, require_scope: bool) -> bool:
     return (bool(scopes) or not require_scope) and all(values == [target] for values in scopes)
 
 
+def masked_payment_methods(text: str) -> list[dict[str,str]]:
+    methods = []
+    pattern = re.compile(
+        r"\b(Visa|Mastercard|Master\s+Card|American Express|Amex|Discover)\b"
+        r"[^\n\d]{0,35}(?:[*•·●xX]{2,}|ending\s+in|ends\s+in|"
+        r"заканчивается\s+на|останні\s+цифри)\s*(\d{4})(?!\d)", re.I,
+    )
+    seen = set()
+    for match in pattern.finditer(text):
+        brand = re.sub(r"\s+", " ", match[1]).strip()
+        key = (brand.casefold(), match[2])
+        if key in seen:
+            continue
+        seen.add(key)
+        methods.append({"type": brand, "last4": match[2], "linkage_status": "OBSERVED"})
+        if len(methods) >= 20:
+            break
+    return methods
+
+
 def payment_summary(target: str, url: str, text: str) -> dict[str, Any]:
     """Interpret visible billing evidence, returning only safe masked fields."""
     target = account_id(target)
@@ -51,25 +71,9 @@ def payment_summary(target: str, url: str, text: str) -> dict[str, Any]:
         text, re.I,
     ))
     exact = scoped and visible_account and billing
-    methods = []
-    if exact:
-        pattern = re.compile(
-            r"\b(Visa|Mastercard|Master\s+Card|American Express|Amex|Discover)\b"
-            r"[^\n\d]{0,35}(?:[*•·●xX]{2,}|ending\s+in|ends\s+in|"
-            r"заканчивается\s+на|останні\s+цифри)\s*(\d{4})(?!\d)", re.I,
-        )
-        seen = set()
-        for match in pattern.finditer(text):
-            brand = re.sub(r"\s+", " ", match[1]).strip()
-            key = (brand.casefold(), match[2])
-            if key in seen:
-                continue
-            seen.add(key)
-            methods.append({"type": brand, "last4": match[2], "linkage_status": "OBSERVED"})
-            if len(methods) >= 20:
-                break
+    methods = masked_payment_methods(text) if exact else []
     empty = exact and bool(re.search(
-        r"no payment methods|haven.t added (?:any )?payment|"
+        r"no payment methods|haven.t added (?:(?:a|any) )?payment|"
         r"нет (?:добавленных )?способов оплаты|немає (?:доданих )?способів оплати",
         text, re.I,
     ))
@@ -102,12 +106,88 @@ def saved_payment_business(profile_id: str, target: str, *, path: Path = Path('/
         return ''
 
 
-async def inspect_payment_methods(browser: Any, target: str, *, business_id: str = '') -> dict[str, Any]:
+def selected_payment_asset(profile: str, target: str, path: Path = Path('/var/lib/remask/workspace-live-meta-snapshots.json')) -> dict[str, str]:
+    try:
+        rows = json.loads(path.read_text()).get(profile, {}).get('ad_accounts', [])
+        matches = [r for r in rows if isinstance(r, dict) and str(r.get('profile', profile)) == profile
+                   and re.sub(r'^act_', '', str(r.get('id') or r.get('account_id') or '')) == target]
+        if len(matches) == 1 and re.fullmatch(r'\d{5,30}', str(matches[0].get('business_id') or '')):
+            row = matches[0]
+            return {key:str(row.get(key) or '') for key in ('business_id','business_asset_id','name')}
+    except (OSError, ValueError, AttributeError, TypeError):
+        pass
+    return {}
+
+
+async def select_settings_payment_tab(browser: Any) -> bool:
+    """Open the observed Payment methods tab in the selected RK pane."""
+    page=browser.page
+    try:
+        await page.wait_for_function("""() => Array.from(document.querySelectorAll('[role="tab"],button,[role="button"],span'))
+          .some(el=>el.getClientRects().length && /^(Payment methods|Способы оплаты|Способи оплати)$/i.test(
+            (el.getAttribute('aria-label')||el.textContent||'').replace(/[\\u200b-\\u200d\\ufeff]/g,'').trim()))""",timeout=6000)
+        pattern=re.compile(r'^(Payment methods|Способы оплаты|Способи оплати)[\s\u200b-\u200d\ufeff]*$',re.I)
+        tab=None
+        for role in ('tab','button'):
+            match=page.get_by_role(role,name=pattern).filter(visible=True)
+            if await match.count()==1:tab=match;break
+        if tab is None:
+            match=page.get_by_text(pattern).filter(visible=True)
+            if await match.count()==1:tab=match
+        if tab is None:return False
+        await tab.click(timeout=3000)
+        # Meta loads tab content after the account identity is already visible.
+        try:
+            await page.get_by_role('button',name=re.compile(r'^(Add payment method|Добавить способ оплаты|Додати спосіб оплати)$',re.I)).wait_for(state='visible',timeout=7000)
+        except Exception:pass
+        await browser._assert_authenticated()
+        return True
+    except BrowserBusinessError:raise
+    except Exception:return False
+
+
+async def selected_payment_pane_text(browser: Any, name: str) -> str:
+    """Read only the right-hand RK pane, excluding sibling account rows."""
+    return str(await browser.page.evaluate("""expected => {
+      const visible=e=>e.getClientRects().length;
+      const clean=s=>(s||'').replace(/[\\u200b-\\u200d\\ufeff]/g,'').replace(/\\s+/g,' ').trim();
+      const candidates=Array.from(document.querySelectorAll('div,section,[role="dialog"]')).filter(visible)
+        .map(el=>({text:clean(el.innerText),box:el.getBoundingClientRect()}))
+        .filter(r=>r.box.x>=500 && r.box.width<=800 && r.text.includes(expected) && /Payment methods|Способы оплаты|Способи оплати/i.test(r.text))
+        .sort((a,b)=>a.box.width*a.box.height-b.box.width*b.box.height);
+      return candidates[0]?.text||'';
+    }""",name) or '')
+
+
+def settings_payment_summary(target: str, url: str, text: str, *, asset: dict[str,str], identity: dict[str,Any]) -> dict[str,Any]:
+    target=account_id(target);parsed=urlsplit(url);query=parse_qs(parsed.query)
+    aliases={target,asset.get('business_asset_id','')}-{''}
+    exact=(parsed.scheme=='https' and parsed.hostname=='business.facebook.com'
+           and parsed.path.rstrip('/')=='/latest/settings/ad_accounts'
+           and query.get('business_id')==[asset.get('business_id')]
+           and len(query.get('selected_asset_id',[]))==1 and query['selected_asset_id'][0] in aliases
+           and identity.get('confirmed') is True
+           and re.sub(r'^act_','',str(identity.get('ad_account_id') or ''))==target
+           and identity.get('business_id',asset.get('business_id'))==asset.get('business_id')
+           and bool(asset.get('name')) and asset['name'] in text
+           and bool(re.search(r'Payment methods|Способы оплаты|Способи оплати',text,re.I)))
+    # Reuse the proven mask parser; the actual Settings scope above supplies
+    # the identity evidence rather than manufacturing a Billing URL.
+    methods=masked_payment_methods(text) if exact else []
+    empty=exact and bool(re.search(r'no payment methods|haven.t added (?:(?:a|any) )?payment|нет (?:добавленных )?способов оплаты|немає (?:доданих )?способів оплати',text,re.I))
+    return {'account_id':target,'account_scope_verified':exact,'verification_status':'LINKED' if methods else 'NONE' if empty else 'UNVERIFIED',
+            'card_linked':True if methods else False if empty else None,'payment_methods':methods,'funding_verified':False,
+            'checked_live':True,'source':'private_facebook_selected_rk_payment_tab'}
+
+
+async def inspect_payment_methods(browser: Any, target: str, *, business_id: str = '', asset: dict[str,str] | None = None) -> dict[str, Any]:
     """Discover Billing from the authenticated Ads Manager UI; never guess it."""
     target = account_id(target)
     start_url = browser.ADS_MANAGER_URL + '?act=' + target
     if re.fullmatch(r'\d{5,30}', business_id):
         start_url = browser.SETTINGS_AD_ACCOUNTS_URLS[0].format(business_id=business_id)
+        alias=(asset or {}).get('business_asset_id','')
+        if re.fullmatch(r'\d{5,30}',alias):start_url+='&selected_asset_id='+alias+'&selected_asset_type=ad-account'
     await browser._goto(
         start_url,
         timeout_ms=25000, settle_ms=700, attempts=1,
@@ -115,6 +195,15 @@ async def inspect_payment_methods(browser: Any, target: str, *, business_id: str
     page = browser.page
     if page is None:
         raise BrowserBusinessError("BROWSER_NOT_READY", "Payment browser is not open.", retryable=False)
+
+    if asset and asset.get('name') and business_id:
+        identity=await browser._read_selected_ad_account_identity(business_id=business_id,account_name=asset['name'])
+        if identity.get('confirmed') and re.sub(r'^act_','',str(identity.get('ad_account_id') or ''))==target:
+            if await select_settings_payment_tab(browser):
+                text=await selected_payment_pane_text(browser,asset['name'])
+                result=settings_payment_summary(target,str(page.url),text,asset=asset,identity=identity)
+                result['profile_id']=browser.profile_id
+                return result
 
     # Read a rendered navigation link, validate its destination, then navigate.
     # We do not consume internal Relay stores or capture payment network payloads.
@@ -188,8 +277,9 @@ async def inspect_profile_payment_methods(resolver: Any, profile_id: str, target
         browser = await session.facebook_business_browser()
         # Existing browser profile lock/global semaphore limits concurrent load.
         try:
+            asset=selected_payment_asset(profile_id,target)
             return await asyncio.wait_for(inspect_payment_methods(browser, target,
-                business_id=saved_payment_business(profile_id,target)), timeout=65)
+                business_id=asset.get('business_id') or saved_payment_business(profile_id,target),asset=asset), timeout=65)
         except BrowserBusinessError:
             raise
         except Exception as exc:

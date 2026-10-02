@@ -8,12 +8,24 @@ from unittest.mock import AsyncMock, patch
 
 from app.facebook_business_browser import BrowserBusinessError
 from app.payment_card_binding import _open_card_form, _payment_surface, _unique_visible, card_values, field_kind, form_action_guard, missing_card_fields, payment_card_flow, selected_payment_asset
+from app.payment_inspection import settings_payment_summary
 
 ID='123456789'
 CARD={'number':'4111111111111111','month':12,'year':2099,'holder':'Fixture'}
 
 
 class CardFieldTests(unittest.TestCase):
+    def test_selected_payment_pane_proves_only_exact_rk_business_and_masked_card(self):
+        asset={'name':'Fixture RK','business_id':'987654321','business_asset_id':'555555555'}
+        identity={'confirmed':True,'ad_account_id':'act_'+ID,'business_id':asset['business_id']}
+        url='https://business.facebook.com/latest/settings/ad_accounts/?business_id=987654321&selected_asset_id=555555555'
+        text='Fixture RK Payment methods Visa •••• 1111'
+        result=settings_payment_summary(ID,url,text,asset=asset,identity=identity)
+        self.assertEqual(result['verification_status'],'LINKED');self.assertFalse(result['funding_verified'])
+        for bad_url,bad_identity,bad_text in [(url.replace('555555555','999999999'),identity,text),(url.replace('987654321','999999999'),identity,text),(url,{**identity,'ad_account_id':'999999999'},text),(url,identity,text.replace('Fixture RK','Other RK')),(url,identity,'Fixture RK Payment methods Visa 4111111111111111')]:
+            result=settings_payment_summary(ID,bad_url,bad_text,asset=asset,identity=bad_identity)
+            self.assertNotEqual(result['verification_status'],'LINKED');self.assertEqual(result['payment_methods'],[])
+
     def test_implicit_terms_or_temporary_charge_cannot_be_submitted_as_card_save(self):
         self.assertEqual(form_action_guard('By clicking Save you agree to Payments Terms',[]),'PAYMENT_TERMS_CONFIRMATION_REQUIRED')
         self.assertEqual(form_action_guard('A temporary authorization may apply',[]),'PAYMENT_FINANCIAL_ACTION_REQUIRED')

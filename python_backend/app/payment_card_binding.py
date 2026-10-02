@@ -12,7 +12,7 @@ from typing import Any
 from urllib.parse import urlencode, urlsplit, parse_qs
 
 from .facebook_business_browser import BrowserBusinessError
-from .payment_inspection import account_id, payment_summary, inspect_payment_methods
+from .payment_inspection import account_id, payment_summary, inspect_payment_methods, select_settings_payment_tab, selected_payment_pane_text, settings_payment_summary, selected_payment_asset
 
 ALLOWED_HOSTS = {'business.facebook.com', 'www.facebook.com', 'adsmanager.facebook.com', 'secure.facebook.com'}
 FIELD_PATTERNS = {
@@ -38,7 +38,8 @@ TERMS_ACCEPTANCE = re.compile(r'by (?:clicking|continuing|saving|adding)[^\n]{0,
 
 def form_action_guard(text: str, fields: list[dict[str,Any]]) -> str:
     if FINANCIAL_ACTION.search(text):return 'PAYMENT_FINANCIAL_ACTION_REQUIRED'
-    if TERMS_ACCEPTANCE.search(text) or any(f['type']=='checkbox' and not f['checked'] for f in fields):return 'PAYMENT_TERMS_CONFIRMATION_REQUIRED'
+    if TERMS_ACCEPTANCE.search(text) or any(f['type']=='checkbox' and not f['checked'] and
+        (f['required'] or re.search(r'agree|accept|terms|соглас|принима|погодж',f.get('label',''),re.I)) for f in fields):return 'PAYMENT_TERMS_CONFIRMATION_REQUIRED'
     return ''
 
 
@@ -51,17 +52,6 @@ def field_kind(label: str, autocomplete: str = '') -> str:
     return ''
 
 
-def selected_payment_asset(profile: str, target: str, path: Path = Path('/var/lib/remask/workspace-live-meta-snapshots.json')) -> dict[str, str]:
-    try:
-        rows = json.loads(path.read_text()).get(profile, {}).get('ad_accounts', [])
-        matches = [r for r in rows if isinstance(r, dict) and str(r.get('profile', profile)) == profile
-                   and re.sub(r'^act_', '', str(r.get('id') or r.get('account_id') or '')) == target]
-        if len(matches) == 1 and re.fullmatch(r'\d{5,30}', str(matches[0].get('business_id') or '')):
-            row = matches[0]
-            return {key:str(row.get(key) or '') for key in ('business_id','business_asset_id','name')}
-    except (OSError, ValueError, AttributeError, TypeError):
-        pass
-    return {}
 
 
 async def _unique_visible(scope: Any, role: str, name: str) -> Any:
@@ -131,6 +121,7 @@ async def _open_card_form(browser: Any, target: str, asset: dict[str,str]) -> di
     parsed=urlsplit(str(page.url))
     if parsed.hostname not in ALLOWED_HOSTS or parse_qs(parsed.query).get('business_id')!=[business]:
         return {'status':'BLOCKED','code':'PAYMENT_ACCOUNT_SCOPE_UNVERIFIED'}
+    await select_settings_payment_tab(browser)
     add=await _unique_visible(page,'button',r'^(Add payment method|Добавить способ оплаты|Додати спосіб оплати)$')
     if add is None:
         add=await _unique_visible(page,'link',r'^(Add payment method|Добавить способ оплаты|Додати спосіб оплати)$')
@@ -244,6 +235,11 @@ async def payment_card_flow(browser:Any,target:str,asset:dict[str,str],*,operati
         await browser._assert_authenticated()
         body=await page.locator('body').inner_text(timeout=3000)
         funding=payment_summary(target,str(page.url),body)
+        if not funding['account_scope_verified']:
+            identity=await browser._read_selected_ad_account_identity(business_id=asset['business_id'],account_name=asset['name'])
+            await select_settings_payment_tab(browser)
+            pane=await selected_payment_pane_text(browser,asset['name'])
+            funding=settings_payment_summary(target,str(page.url),pane,asset=asset,identity=identity)
         linked=funding['account_scope_verified'] and any(m['last4']==values['number'][-4:] for m in funding['payment_methods'])
         if linked:return {**base,'submitted':True,'status':'LINKED','code':'CARD_LINK_OBSERVED','funding':funding}
         if re.search(r'3d secure|verify (?:your )?card|verification code|one.time|bank.*authentication|подтверд.*банк',body,re.I):
