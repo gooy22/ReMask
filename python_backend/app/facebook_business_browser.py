@@ -10563,7 +10563,12 @@ class FacebookBusinessBrowser:
         details = rows.get_by_role('link', name=re.compile(r'^(Details|Подробнее|Деталі)$', re.I))
         if await details.count() != 1 or not await details.is_visible():
             return result
-        await details.click(timeout=1000)
+        try:
+            await details.click(timeout=3000)
+        except Exception:
+            # A click may have opened Details before its actionability timeout.
+            # Observe this same pane within the deadline; never click again.
+            pass
         # Details mounts asynchronously. Poll this same selected pane without
         # navigation or another mutation; a missing ID is never an asset ID.
         while time.monotonic() < deadline:
