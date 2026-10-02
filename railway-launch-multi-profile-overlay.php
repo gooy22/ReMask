@@ -278,7 +278,7 @@ async function runPreflight(force = false) {
 
     const results = new Array(profiles.length);
     let completed = 0;
-    await runPool(profiles, Math.min(4, profiles.length), async (profile, index) => {
+    await runPool(profiles, 1, async (profile, index) => {
         try {
             const data = await apiJson('ajax/metaPreflight.php', formPost({profile, force: force ? '1' : '0'}));
             results[index] = {profile, data, error: null};
@@ -314,7 +314,7 @@ async function runPreflight(force = false) {
             seen.set(accountId, row.profile);
             const account = {...raw, id: accountId, _profile: row.profile};
             combinedAccounts.push(account);
-            combinedTargets.push({profile: row.profile, business_id: '', account_id: accountId});
+            combinedTargets.push({profile: row.profile, business_id: String(raw.business_id || raw.business?.id || ''), account_id: accountId});
         }
     }
 
@@ -341,11 +341,12 @@ async function runPreflight(force = false) {
     const summary = results.map((row) => {
         if (!row?.data) return `${row?.profile || 'FB'}: ERROR — ${row?.error || 'Preflight failed'}`;
         const accounts = row.data.ad_accounts?.data ?? [];
+        if (row.data.catalog_only) return `${row.profile}: ${accounts.length} сохранённых РК — сессия и рекламный доступ не проверены${row.data._cache?.stale ? ' — сохранённые данные устарели' : ''}`;
         return `${row.profile}: OK — ${accounts.length} RK — ads_management ${row.data.ads_management_granted ? 'YES' : 'NO'} — ${row.data._cache?.hit ? 'CACHE' : 'REFRESH'}`;
     });
     if (duplicateAccounts) summary.push(`Deduplicated RK visible through multiple selected FB profiles: ${duplicateAccounts}. First selected profile is used for each duplicate RK.`);
     summary.push(`Total unique RK: ${combinedAccounts.length}.`);
-    show($('preflightResult'), summary.join('\n'), results.some((row) => row?.error) ? '' : 'ready');
+    show($('preflightResult'), summary.join('\n'), results.some((row) => row?.error || row?.data?.catalog_only) ? '' : 'ready');
 
     const usageRow = successful.find((row) => row.data?.api_usage);
     if (usageRow) renderApiUsage(usageRow.data.api_usage || null);

@@ -111,6 +111,11 @@ RUN set -eux; \
     php /tmp/railway-python-worker-ui-overlay.php; \
     php -l /tmp/railway-meta-auth-state-overlay.php; \
     php /tmp/railway-meta-auth-state-overlay.php; \
+    php -l /tmp/railway-launch-private-catalog-overlay.php; \
+    php /tmp/railway-launch-private-catalog-overlay.php; \
+    php -l /var/www/html/classes/RemaskPrivateLaunchCatalog.php; \
+    php -l /var/www/html/ajax/metaPreflight.php; \
+    php -l /var/www/html/ajax/metaAssets.php; \
     grep -q 'REMASK_PYTHON_WORKER_UI_V179' /var/www/html/scripts/workspace.js; \
     grep -q 'python-worker-ui-v193' /var/www/html/workspace.php;     grep -q 'auth_evidence' /opt/remask-python/app/facebook_business_browser.py;     grep -q 'checkpoint_url' /opt/remask-python/app/facebook_business_browser.py;     ! grep -q '"checkpoint" in body\[:4000\]' /opt/remask-python/app/facebook_business_browser.py;     grep -q 'pythonWorkerFilterFanPageReadyProfiles' /var/www/html/scripts/workspace.js;     grep -q '_request_fan_page_profile_ids' /opt/remask-python/main.py;     grep -q '_require_fp_auth_ready' /opt/remask-python/main.py;     grep -q 'REMASK_PROFILE_MUTATION_COOLDOWN_SECONDS' /opt/remask-python/app/provisioning/service.py;     grep -q '_await_profile_mutation_cooldown' /opt/remask-python/app/provisioning/service.py;     grep -q 'pythonWorkerIsProfileAuthBlockedCode' /var/www/html/scripts/workspace.js;     grep -q 'preflight.auth_blocked = authBlocked' /var/www/html/scripts/workspace.js; \
     grep -q 'REMASK_META_PERMISSION_TRISTATE_FINAL_V2' /var/www/html/scripts/workspace.js; \
@@ -535,3 +540,4 @@ ENV REMASK_META_CACHE_TTL=1800 \
 EXPOSE 80
 CMD ["/var/www/html/docker-start.sh"]
 # railway deploy trigger: private-page-business-loader-v190 2026-09-29
+

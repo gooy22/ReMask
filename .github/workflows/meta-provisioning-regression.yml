@@ -1,10 +1,14 @@
 name: Meta provisioning regressions
 on:
   push:
-    branches: [main]
+    branches: [main, fix/private-launch-catalog]
     paths:
       - 'python_backend/**'
       - 'railway-python-worker-ui.js'
+      - 'railway-launch-private-catalog*'
+      - 'railway-launch-multi-profile-overlay.php'
+      - 'Dockerfile'
+      - 'tests/launch-private-catalog.test.cjs'
       - 'tests/worker-auto-ui.test.cjs'
       - '.github/workflows/meta-provisioning-regression.yml'
   workflow_dispatch:
@@ -27,8 +31,12 @@ jobs:
           python3 -m venv /tmp/remask-regression
           /tmp/remask-regression/bin/pip install -r python_backend/requirements.txt
           node --version
+          php --version
       - name: Backend regression suite
         working-directory: python_backend
         run: /tmp/remask-regression/bin/python -m unittest discover -s tests
       - name: Automatic batch interface
         run: node tests/worker-auto-ui.test.cjs
+      - name: Private Launch catalog and funding interface
+        run: node tests/launch-private-catalog.test.cjs
+

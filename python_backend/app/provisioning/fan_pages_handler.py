@@ -1107,6 +1107,9 @@ async def fan_pages_handler(
         "category": category,
         "business_id": business_id,
         "ad_account_id": ad_account_id,
+        "page_business_attached": bool(business_id) and all(bool(row.get("attached")) for row in ordered),
+        "ad_account_page_access_verified": False,
+        "attachment_scope": "business" if business_id else "profile",
         "transport": (
             "facebook_pages_attach_existing_to_rk"
             if mode == "attach_existing"
@@ -1115,3 +1118,4 @@ async def fan_pages_handler(
             else "facebook_pages_profile_ui"
         ),
     }
+

@@ -9,6 +9,7 @@ import aiohttp
 
 from ..session import MetaSession, ProfileContext, ProxyCheckError
 from .models import ENTITY_RESULT_KEYS, ProvisioningError, ProvisioningStep
+from .funding_handler import validate_funding_result
 from .timeouts import browser_step_timeout
 from .proxy import ProxyChecker
 from .registry import get_handler
@@ -92,6 +93,15 @@ class ProvisioningService:
         for step in steps:
             prior = await self.state.step(item_id, step)
             if prior and prior.get("status") == "SUCCESS":
+                if step is ProvisioningStep.FUNDING:
+                    snapshot = await self.state.snapshot(profile_id, scope_key)
+                    funding_params = parameters.get("FUNDING", parameters.get("funding", {}))
+                    source = str(funding_params.get("funding_source_id") or "").strip() if isinstance(funding_params, dict) else ""
+                    try:
+                        validate_funding_result(prior.get("result") or {}, str(snapshot.ad_account_id or ""), source)
+                    except ProvisioningError as error:
+                        await self.state.fail(item_id, profile_id, scope_key, step, error.code, str(error))
+                        raise
                 completed.append(
                     {
                         "step": step.value,
@@ -112,6 +122,7 @@ class ProvisioningService:
                 not in {
                     ProvisioningStep.BUSINESS,
                     ProvisioningStep.AD_ACCOUNT,
+                    ProvisioningStep.FUNDING,
                 }
             ):
                 result = {entity_key: existing_id, "reused": True}
