@@ -316,7 +316,10 @@ async function syncSelection(){
     const message=errorText(e);
     const s=message.toLowerCase();
     let kind='PRIVATE_SYNC';
-    if(/rate.?limit|too many|code[^0-9]*(4|17|32|613)\\b/.test(s))kind='RATE_LIMIT';
+    if(/checkpoint_required/.test(s))kind='CHECKPOINT_REQUIRED';
+    else if(/two_factor_required/.test(s))kind='TWO_FACTOR_REQUIRED';
+    else if(/session_expired/.test(s))kind='SESSION_EXPIRED';
+    else if(/rate.?limit|too many|code[^0-9]*(4|17|32|613)\\b/.test(s))kind='RATE_LIMIT';
     else if(/\\b407\\b|proxy authentication|proxy auth/.test(s))kind='PROXY_AUTH';
     else if(/live_inventory_browser_open_timeout|browser slot waited|profile_browser_lock_timeout|browser_open timeout/.test(s))kind='BROWSER_BUSY';
     else if(/business discovery timed out|live_inventory_timeout:business_discovery/.test(s))kind='BM_DISCOVERY_TIMEOUT';
@@ -1427,11 +1430,13 @@ $syncProfileReplacement = <<<'PHP'
             );
         } catch (Throwable $liveInventoryError) {
             $message = trim((string)$liveInventoryError->getMessage());
-            $errorKind = (
-                stripos($message, 'SESSION_EXPIRED') !== false
-                || stripos($message, 'CHECKPOINT_REQUIRED') !== false
-                || stripos($message, 'TWO_FACTOR_REQUIRED') !== false
-            ) ? 'FB_SESSION_EXPIRED' : 'PRIVATE_SYNC';
+            $errorKind = 'PRIVATE_SYNC';
+            foreach (['CHECKPOINT_REQUIRED', 'TWO_FACTOR_REQUIRED', 'SESSION_EXPIRED'] as $authCode) {
+                if (stripos($message, $authCode) !== false) {
+                    $errorKind = $authCode;
+                    break;
+                }
+            }
 
             if ($requestId !== '') {
                 hierarchy_sync_result_put(
@@ -1446,8 +1451,8 @@ $syncProfileReplacement = <<<'PHP'
                 );
             }
 
-            if ($errorKind === 'FB_SESSION_EXPIRED') {
-                throw new RuntimeException('FB_SESSION_EXPIRED: ' . $message, 0, $liveInventoryError);
+            if ($errorKind !== 'PRIVATE_SYNC') {
+                throw new RuntimeException($errorKind . ': ' . $message, 0, $liveInventoryError);
             }
             throw new RuntimeException('PRIVATE_SYNC_FAILED: ' . $message, 0, $liveInventoryError);
         }
@@ -1921,10 +1926,9 @@ $tokenOnlyReplacement = <<<'PHP_BINDING'
         $bm = $businessAccountMap[$id] ?? null;
         if (!is_array($bm)) continue; // never render token-only/unmapped RK
         $rk['profile'] = $profile;
-        if ((string)($bm['source'] ?? '') === 'python_worker_binding') {
-            // Worker proved CREATE and the exact BM relation, but Meta's
-            // owned/client edge has not propagated yet. Do not display a
-            // transient token-level account_status=2 as a real disabled RK.
+        if ((string)($bm['source'] ?? '') === 'python_worker_binding' && !isset($rk['account_status'])) {
+            // Worker proved CREATE and the exact BM relation only. Mark an
+            // unknown status as provisional; never hide an observed DISABLED.
             $rk['_provisioned_only'] = true;
             $rk['_raw_account_status'] = $rk['account_status'] ?? null;
             $rk['_raw_disable_reason'] = $rk['disable_reason'] ?? null;
@@ -1946,7 +1950,7 @@ $provisionalReplacement = <<<'PHP_BINDING'
     $existingRkIds = [];
     foreach ($rkRows as $rkRow) {
         if (!is_array($rkRow)) continue;
-        $existingId = trim((string)($rkRow['id'] ?? ''));
+        $existingId = preg_replace('/^act_/', '', trim((string)($rkRow['id'] ?? $rkRow['account_id'] ?? '')));
         if ($existingId !== '') $existingRkIds[$existingId] = true;
     }
 

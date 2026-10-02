@@ -26,11 +26,13 @@ final class RemaskPrivateLaunchCatalog
             if (isset($row['profile']) && (string)$row['profile'] !== $profile) continue;
             $id = self::id($row['id'] ?? $row['account_id'] ?? '');
             if ($id === '') continue;
+            $observedStatus = $row['_raw_account_status'] ?? $row['account_status'] ?? null;
+            if (isset($accounts[$id]) && ($observedStatus === null || $accounts[$id]['account_status'] !== null)) continue;
             $accounts[$id] = [
                 'id' => 'act_' . $id, 'account_id' => $id,
                 'name' => trim((string)($row['name'] ?? $id)),
                 'currency' => trim((string)($row['currency'] ?? '')),
-                'account_status' => isset($row['account_status']) ? (int)$row['account_status'] : null,
+                'account_status' => $observedStatus !== null ? (int)$observedStatus : null,
                 'business_id' => self::id($row['business_id'] ?? ''),
                 'profile' => $profile, 'source' => 'last_confirmed_private_inventory',
                 'advertising_access_verified' => false,

@@ -59,6 +59,15 @@ class PrivateLaunchCatalogTests(unittest.TestCase):
         legacy = self.catalog({'7':{'ad_account_id':'666666666','business_id':'777777777'}})
         self.assertEqual(len(legacy['ad_accounts']['data']), 2)
 
+    def test_create_alias_cannot_overwrite_observed_disabled_status_in_either_order(self):
+        observed={'id':'act_333333333','business_id':'111111111','account_status':2}
+        created={'id':'333333333','business_id':'111111111','_provisioned_only':True}
+        for rows in [[observed,created],[created,observed]]:
+            self.snapshot['7']['ad_accounts']=rows
+            accounts=self.catalog()['ad_accounts']['data']
+            self.assertEqual(len(accounts),1)
+            self.assertEqual(accounts[0]['account_status'],2)
+
     def test_stale_or_missing_snapshot_cannot_be_fresh(self):
         self.assertTrue(self.catalog(now=3000)['_cache']['stale'])
         self.snapshot = {}

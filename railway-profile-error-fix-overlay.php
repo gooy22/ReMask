@@ -146,9 +146,10 @@ function remaskSessionRefreshUpdateButton(){
     button.style.display='none';
     button.addEventListener('click',function(event){
       event.preventDefault();
+      event.stopPropagation();
       remaskSessionRefreshRun().catch(function(){});
     });
-    actions.appendChild(button);
+    actions.insertAdjacentElement('afterend',button);
   }
 
   const profileName=remaskSelectedProfileNameForSessionRefresh();

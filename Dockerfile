@@ -115,6 +115,13 @@ RUN set -eux; \
     php /tmp/railway-launch-private-catalog-overlay.php; \
     php -l /tmp/railway-cookie-only-overlay.php; \
     php /tmp/railway-cookie-only-overlay.php; \
+    php -l /tmp/railway-payment-inspection-overlay.php; \
+    php /tmp/railway-payment-inspection-overlay.php; \
+    php -l /var/www/html/ajax/metaHierarchy.php; \
+    php -l /var/www/html/ajax/pythonWorkerJobs.php; \
+    grep -q 'hierarchy_canonical_account_snapshot' /var/www/html/ajax/metaHierarchy.php; \
+    grep -q 'payment_status' /var/www/html/scripts/workspace.js; \
+    ! grep -q 'styles/bootstrap.min.js' /var/www/html/workspace.php /var/www/html/accounts.php || exit 93; \
     php -l /var/www/html/classes/RemaskCookieProfile.php; \
     php -l /var/www/html/ajax/addAccount.php; \
     grep -q 'COOKIE_ONLY_GRAPH_DISABLED' /var/www/html/classes/MetaApiClient.php; \

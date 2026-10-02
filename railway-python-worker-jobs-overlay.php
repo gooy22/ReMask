@@ -133,6 +133,26 @@ try {
         ]);
     }
 
+    if ($action === 'payment_status' || $action === 'funding_status') {
+        $profileId = trim((string)($input['profile_id'] ?? $input['profile'] ?? ''));
+        $accountId = preg_replace('/^act_/', '', trim((string)($input['account_id'] ?? '')));
+        if ($profileId === '' || strlen($profileId) > 160 || !preg_match('/^\d{5,30}$/', $accountId)) {
+            rmx_pwj_out(['ok'=>false,'error'=>'INVALID_PAYMENT_TARGET'], 400);
+        }
+        require_once __DIR__ . '/../classes/RemaskPrivateLaunchCatalog.php';
+        RemaskPrivateLaunchCatalog::asset(RemaskPrivateLaunchCatalog::load($profileId), 'funding', $accountId);
+        $result = rmx_pwj_worker_request(
+            'GET',
+            '/api/v1/profiles/' . rawurlencode($profileId) . '/payment-methods?account_id=' . rawurlencode($accountId),
+            null,
+            130
+        );
+        if ((string)($result['account_id'] ?? '') !== $accountId || (string)($result['profile_id'] ?? '') !== $profileId) {
+            rmx_pwj_out(['ok'=>false,'error'=>'PAYMENT_RESULT_SCOPE_MISMATCH'], 409);
+        }
+        rmx_pwj_out(['ok'=>true,'profile'=>$profileId,'account_id'=>$accountId,'funding'=>$result]);
+    }
+
     if ($action === 'preflight') {
         $profileId = trim((string)($input['profile_id'] ?? ''));
         if ($profileId === '' || strlen($profileId) > 160) {

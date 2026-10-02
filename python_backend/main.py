@@ -1153,6 +1153,26 @@ async def profile_preflight(profile_id: str):
     _remember_fp_auth_gate(clean_profile, result)
     return result
 
+@app.get('/api/v1/profiles/{profile_id}/payment-methods',dependencies=[Depends(require_key)])
+async def profile_payment_methods(profile_id: str, account_id: str):
+    from app.payment_inspection import inspect_profile_payment_methods
+
+    clean_profile=str(profile_id or '').strip()
+    if not clean_profile:
+        raise HTTPException(status_code=400,detail='profile_id is required')
+    try:
+        return await inspect_profile_payment_methods(pool.resolver,clean_profile,account_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400,detail=str(exc)) from exc
+    except ProfileContextError as exc:
+        raise HTTPException(status_code=422,detail='PROFILE_CONTEXT_ERROR') from exc
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(status_code=504,detail='PAYMENT_INSPECTION_TIMEOUT') from exc
+    except BrowserBusinessError as exc:
+        # No body snippets, payment network payloads or raw browser diagnostics.
+        raise HTTPException(status_code=409,detail=exc.code) from exc
+
+
 @app.get('/api/v1/facebook/docids',dependencies=[Depends(require_key)])
 async def facebook_docids(operation: str | None = None):
     return {
