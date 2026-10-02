@@ -1,11 +1,13 @@
 import asyncio
 import json
 import unittest
+import tempfile
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from app.facebook_business_browser import BrowserBusinessError
-from app.payment_inspection import account_id, inspect_payment_methods, payment_summary
+from app.payment_inspection import account_id, inspect_payment_methods, payment_summary, saved_payment_business
 
 ID = "123456789"
 URL = "https://business.facebook.com/billing_hub/payment_settings?asset_id=" + ID
@@ -75,7 +77,7 @@ class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
         page=SimpleNamespace(url=URL,evaluate=AsyncMock(return_value=links),wait_for_function=AsyncMock(),
             get_by_role=lambda role,**kwargs:menu,
             locator=lambda selector:SimpleNamespace(inner_text=AsyncMock(return_value=ID+"\nPayment methods\nVisa •••• 1234")))
-        return SimpleNamespace(page=page,profile_id="Fixture",ADS_MANAGER_URL="https://adsmanager.facebook.com/adsmanager/manage/campaigns",_goto=AsyncMock(),_assert_authenticated=AsyncMock())
+        return SimpleNamespace(page=page,profile_id="Fixture",ADS_MANAGER_URL="https://adsmanager.facebook.com/adsmanager/manage/campaigns",SETTINGS_AD_ACCOUNTS_URLS=('https://business.facebook.com/latest/settings/ad_accounts?business_id={business_id}',),_goto=AsyncMock(),_assert_authenticated=AsyncMock())
 
     async def test_follows_only_rendered_meta_billing_link_and_returns_masked_data(self):
         browser=self.browser([{"href":URL,"label":"Billing & payments"}])
@@ -147,6 +149,29 @@ class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(exc.exception.code,'PAYMENT_UI_UNAVAILABLE')
         self.assertEqual(browser._goto.await_count,1)
 
+
+    async def test_exact_saved_business_uses_settings_before_billing_without_loading_ads_manager(self):
+        browser=self.browser([{"href":URL,"label":"Billing & payments"}])
+        result=await inspect_payment_methods(browser,ID,business_id="987654321")
+        self.assertIn('/settings/ad_accounts?business_id=987654321',browser._goto.await_args_list[0].args[0])
+        self.assertEqual(browser._goto.await_args_list[1].args[0],URL)
+        self.assertEqual(result['verification_status'],'LINKED')
+
+
+class SavedPaymentBusinessTests(unittest.TestCase):
+    def test_requires_exact_profile_account_and_one_business(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'snapshot.json'
+            rows=[{'id':'act_'+ID,'business_id':'987654321'}]
+            path.write_text(json.dumps({'7':{'ad_accounts':rows}}))
+            self.assertEqual(saved_payment_business('7',ID,path=path),'987654321')
+            self.assertEqual(saved_payment_business('8',ID,path=path),'')
+            self.assertEqual(saved_payment_business('7','111111111',path=path),'')
+            rows.append({'id':ID,'business_id':'555555555'})
+            path.write_text(json.dumps({'7':{'ad_accounts':rows}}))
+            self.assertEqual(saved_payment_business('7',ID,path=path),'')
+            path.write_text('broken')
+            self.assertEqual(saved_payment_business('7',ID,path=path),'')
 
 if __name__ == "__main__":
     unittest.main()

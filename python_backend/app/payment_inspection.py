@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import json
 import re
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
@@ -84,11 +86,30 @@ def payment_summary(target: str, url: str, text: str) -> dict[str, Any]:
     }
 
 
-async def inspect_payment_methods(browser: Any, target: str) -> dict[str, Any]:
+def saved_payment_business(profile_id: str, target: str, *, path: Path = Path('/var/lib/remask/workspace-live-meta-snapshots.json')) -> str:
+    """Use only an exact saved profile/RK pair to choose the lighter Settings UI."""
+    try:
+        snapshot = json.loads(path.read_text()).get(str(profile_id), {})
+        businesses = {
+            str(row.get('business_id') or '')
+            for row in snapshot.get('ad_accounts', []) if isinstance(row,dict)
+            and str(row.get('profile',profile_id)) == str(profile_id)
+            and re.sub(r'^act_', '', str(row.get('id') or row.get('account_id') or '')) == target
+            and re.fullmatch(r'\d{5,30}', str(row.get('business_id') or ''))
+        }
+        return next(iter(businesses)) if len(businesses) == 1 else ''
+    except (OSError, ValueError, AttributeError, TypeError):
+        return ''
+
+
+async def inspect_payment_methods(browser: Any, target: str, *, business_id: str = '') -> dict[str, Any]:
     """Discover Billing from the authenticated Ads Manager UI; never guess it."""
     target = account_id(target)
+    start_url = browser.ADS_MANAGER_URL + '?act=' + target
+    if re.fullmatch(r'\d{5,30}', business_id):
+        start_url = browser.SETTINGS_AD_ACCOUNTS_URLS[0].format(business_id=business_id)
     await browser._goto(
-        browser.ADS_MANAGER_URL + "?act=" + target,
+        start_url,
         timeout_ms=25000, settle_ms=700, attempts=1,
     )
     page = browser.page
@@ -166,4 +187,15 @@ async def inspect_profile_payment_methods(resolver: Any, profile_id: str, target
     async with ProfileSession(context) as session:
         browser = await session.facebook_business_browser()
         # Existing browser profile lock/global semaphore limits concurrent load.
-        return await asyncio.wait_for(inspect_payment_methods(browser, target), timeout=65)
+        try:
+            return await asyncio.wait_for(inspect_payment_methods(browser, target,
+                business_id=saved_payment_business(profile_id,target)), timeout=65)
+        except BrowserBusinessError:
+            raise
+        except Exception as exc:
+            if 'Target crashed' not in str(exc):
+                raise
+            from .facebook_business_browser import _cgroup_memory_snapshot_mb
+            logging.getLogger('remask.payment_inspection').warning('payment browser crashed profile=%s account=%s memory=%s',profile_id,target,_cgroup_memory_snapshot_mb())
+            raise BrowserBusinessError('PAYMENT_BROWSER_CRASHED',
+                'Meta payment browser crashed before payment methods were read.',retryable=False) from exc
