@@ -488,6 +488,7 @@ async function syncSelection(){
         (done,total)=>{$('workspaceStatus').textContent=`Синхронизация FB: ${done}/${total}`;setProgress(done,total)}
       );
     }else if(tab==='businesses'){
+      // REMASK_BUSINESS_TAB_SELECTED_SCOPE_V2
       // Selected BM rows are explicit targets. The server merges live
       // siblings from the confirmed snapshot after checking this exact BM.
       results=await concurrent(
