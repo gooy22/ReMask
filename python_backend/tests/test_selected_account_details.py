@@ -5,6 +5,20 @@ from app.facebook_business_browser import FacebookBusinessBrowser
 
 
 class SelectedAccountDetailsTests(unittest.IsolatedAsyncioTestCase):
+    async def test_live_disabled_details_recovers_rk_from_empty_relay_inventory(self):
+        browser = FacebookBusinessBrowser(SimpleNamespace(profile_id='fixture'))
+        rows = SimpleNamespace(count=AsyncMock(return_value=1),is_visible=AsyncMock(return_value=True),inner_text=AsyncMock(return_value='Fixture RK\nDisabled\nDisabled\n--'))
+        browser.page = SimpleNamespace(url='https://business.facebook.com/latest/settings/ad_accounts/?business_id=1632909278268870&selected_asset_id=120251669477430356',get_by_role=lambda *a,**kw:SimpleNamespace(filter=lambda **kw:rows))
+        browser._read_selected_ad_account_identity = AsyncMock(return_value={'confirmed':True,'business_id':'1632909278268870','ad_account_id':'1758104775449075'})
+        accounts = {}
+        self.assertTrue(await browser._recover_selected_ad_account_inventory('1632909278268870','Fixture RK',accounts))
+        self.assertEqual(accounts['act_1758104775449075']['account_status'],2)
+        self.assertEqual(accounts['act_1758104775449075']['business_asset_id'],'120251669477430356')
+        for url in ['https://business.facebook.com/latest/settings/ad_accounts/?business_id=999999999','https://business.facebook.com/latest/settings/ad_accounts/?business_id=1632909278268870&business_id=']:
+            browser.page.url = url
+            accounts = {}
+            self.assertFalse(await browser._recover_selected_ad_account_inventory('1632909278268870','Fixture RK',accounts));self.assertEqual(accounts,{})
+
     async def read(self, row_count=1, details_count=1, initially_confirmed=False):
         browser = FacebookBusinessBrowser(SimpleNamespace(profile_id='fixture'))
         details = SimpleNamespace(count=AsyncMock(return_value=details_count), is_visible=AsyncMock(return_value=True), click=AsyncMock())

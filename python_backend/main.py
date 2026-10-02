@@ -2046,9 +2046,10 @@ async def profile_live_inventory(
                     settings=await hard_deadline(
                         browser.snapshot_ad_accounts_for_business(
                             business_id=business_key, timeout_seconds=8.0,
+                            expected_account_name=str((binding_by_business.get(business_key) or {}).get('account_name') or ''),
                         ), budget(16.0),
                     )
-                    log.info('selected RK identity profile=%s business=%s evidence=%s',profile_id,business_key,json.dumps([d for d in settings.get('diagnostics',[]) if d.get('source') in {'selected_account_identity_check','business_settings_details_identity'}],ensure_ascii=False,default=str))
+                    log.info('selected RK identity profile=%s business=%s evidence=%s',profile_id,business_key,json.dumps([d for d in settings.get('diagnostics',[]) if d.get('source') in {'selected_account_identity_check','business_settings_details_identity','selected_account_recovery'}],ensure_ascii=False,default=str))
                     settings['ads_manager_diagnostic']=cached.get('ads_manager_diagnostic') or {}
                     return settings
                 last_error=None
@@ -2126,6 +2127,7 @@ async def profile_live_inventory(
                             browser.snapshot_ad_accounts_for_business(
                                 business_id=str(business_id),
                                 timeout_seconds=8.0,
+                                expected_account_name=str((binding_by_business.get(str(business_id)) or {}).get('account_name') or ''),
                             ),
                             rk_settings_timeout,
                         )
@@ -2190,6 +2192,7 @@ async def profile_live_inventory(
                     ]
                     row['ad_accounts_count']=len(row['ad_accounts'])
                     row['ad_accounts_ready']=bool(inventory.get('ready'))
+                    row['ad_accounts_partial']=bool(inventory.get('accounts_partial'))
                     row['ad_accounts_source']=str(
                         inventory.get('source') or ''
                     )

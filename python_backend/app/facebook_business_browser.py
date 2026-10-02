@@ -10552,6 +10552,37 @@ class FacebookBusinessBrowser:
             await self.page.wait_for_timeout(150)
         return result
 
+    async def _recover_selected_ad_account_inventory(self, business: str, name: str, accounts: dict[str, Any]) -> bool:
+        """A visible disabled RK contradicts an empty lazy Relay connection."""
+        if not name or self.page is None:
+            return False
+        identity = await self._read_selected_ad_account_identity(business_id=business, account_name=name)
+        canonical = _normalize_ad_account_id(identity.get('ad_account_id'))
+        parsed = urlsplit(_clean(self.page.url))
+        query = parse_qs(parsed.query, keep_blank_values=True)
+        if (not identity.get('confirmed') or not canonical
+            or parsed.scheme != 'https' or parsed.hostname != 'business.facebook.com'
+            or query.get('business_id') != [business] or identity.get('business_id') != business
+            or not any(path in parsed.path for path in ('/settings/ad_accounts', '/settings/ad-accounts'))):
+            return False
+        rows = self.page.get_by_role('row').filter(has_text=name)
+        if await rows.count() != 1 or not await rows.is_visible():
+            return False
+        text = await rows.inner_text(timeout=1500)
+        selected = _normalize_ad_account_id((query.get('selected_asset_id') or [''])[0])
+        previous = accounts.get(canonical) or {}
+        if selected and _clean((accounts.get(selected) or {}).get('name')) == name:
+            previous = accounts.pop(selected)
+        row = {**previous, 'id':canonical, 'account_id':canonical, 'name':name,
+            'business_id':business, '_source':'business_settings_details_live'}
+        if selected and selected != canonical:
+            row['business_asset_id'] = selected.removeprefix('act_')
+        lines = [line.replace('\u200b','').strip().casefold() for line in text.splitlines()]
+        if any(line in {'disabled','отключен','отключён','вимкнено','вимкнений'} for line in lines if line != name.casefold()):
+            row['account_status'] = 2
+        accounts[canonical] = row
+        return True
+
     async def _ad_account_submit_controls(
         self,
     ) -> list[dict[str, Any]]:
@@ -11195,6 +11226,7 @@ class FacebookBusinessBrowser:
         *,
         business_id: str,
         timeout_seconds: float = 8.0,
+        expected_account_name: str = '',
     ) -> dict[str, Any]:
         """Read the current RK inventory rendered by Meta Business Settings.
 
@@ -11873,6 +11905,25 @@ class FacebookBusinessBrowser:
                         cancel_pending=True,
                     )
 
+            # A generic Relay response can be an empty loading connection while
+            # the exact named RK still exists in Details. Revalidate the known
+            # name live, including Disabled, before replacing stored inventory.
+            recovered_selected = False
+            recovery_is_partial = not bool(accounts)
+            if expected_account_name:
+                try:
+                    recovered_selected = await asyncio.wait_for(
+                        self._recover_selected_ad_account_inventory(business, expected_account_name, accounts), timeout=6.5,
+                    )
+                except Exception as exc:
+                    diagnostics.append({'source':'selected_account_recovery','error':type(exc).__name__})
+                if recovered_selected:
+                    inventory_observed = True
+                    diagnostics.append({'source':'selected_account_recovery','confirmed':True,'account_name':expected_account_name,'partial':recovery_is_partial})
+                elif not accounts:
+                    inventory_observed = False
+                    diagnostics.append({'source':'selected_account_recovery','confirmed':False,'empty_unconfirmed':True})
+
             # Meta's selected_asset_id can be a Business asset identifier,
             # different from the numeric RK ID displayed in Details. Bind the
             # visible identity to this exact selected row before downstream use.
@@ -11880,7 +11931,7 @@ class FacebookBusinessBrowser:
                 query = parse_qs(urlsplit(_clean(self.page.url)).query)
                 selected = _normalize_ad_account_id((query.get("selected_asset_id") or [""])[0])
                 selected_row = accounts.get(selected)
-                if selected_row and (query.get("business_id") or []) == [business]:
+                if not recovered_selected and selected_row and (query.get("business_id") or []) == [business]:
                     identity = await asyncio.wait_for(
                         self._read_selected_ad_account_identity(
                             business_id=business, account_name=_clean(selected_row.get("name")),
@@ -11920,7 +11971,8 @@ class FacebookBusinessBrowser:
                     for key in sorted(accounts)
                 ],
                 "accounts_count": len(accounts),
-                "source": "business_settings_graphql_inventory",
+                "accounts_partial": bool(recovered_selected and recovery_is_partial),
+                "source": "business_settings_details_live_inventory" if recovered_selected else "business_settings_graphql_inventory",
                 "attempts": attempts[-6:],
                 "diagnostics": diagnostics[-24:],
                 "section_diagnostic": dict(

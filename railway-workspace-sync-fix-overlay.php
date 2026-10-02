@@ -1474,6 +1474,7 @@ $syncProfileReplacement = <<<'PHP'
         $adAccountRows = [];
         $seenBusiness = [];
         $seenAccount = [];
+        $rkPartial = false;
 
         foreach ((array)($liveInventory['businesses'] ?? []) as $liveBusiness) {
             if (!is_array($liveBusiness)) continue;
@@ -1483,6 +1484,19 @@ $syncProfileReplacement = <<<'PHP'
             $businessName = trim((string)($liveBusiness['name'] ?? $businessId));
             if ($businessName === '') $businessName = $businessId;
             $accountsForBusiness = [];
+            if (!empty($liveBusiness['ad_accounts_partial'])) {
+                $rkPartial = true;
+                $syncWarnings[] = 'РК проверен через Details. Полный список РК этого BM не подтверждён; остальные сохранённые строки сохранены без новой проверки.';
+                foreach ((array)($existingSnapshot['ad_accounts'] ?? []) as $oldAccount) {
+                    if (!is_array($oldAccount) || (string)($oldAccount['business_id'] ?? '') !== $businessId) continue;
+                    $oldId = preg_replace('/^act_/', '', (string)($oldAccount['id'] ?? $oldAccount['account_id'] ?? ''));
+                    $freshIds = array_map(static fn($row) => preg_replace('/^act_/', '', (string)($row['id'] ?? $row['account_id'] ?? '')), (array)($liveBusiness['ad_accounts'] ?? []));
+                    if ($oldId === '' || in_array($oldId, $freshIds, true)) continue;
+                    $oldAccount['_sync_preserved'] = true;
+                    $adAccountRows[] = $oldAccount;
+                    $seenAccount[$oldId] = true;
+                }
+            }
 
             foreach ((array)($liveBusiness['ad_accounts'] ?? []) as $liveAccount) {
                 if (!is_array($liveAccount)) continue;
@@ -1672,7 +1686,7 @@ $syncProfileReplacement = <<<'PHP'
         $snapshot['confirmed_worker_bindings'] = $workerConfirmedCount;
         $snapshot['graph_preflight_available'] = false;
         $snapshot['sync_complete'] = $syncComplete;
-        $snapshot['sync_partial'] = ($syncComplete && !$pagesLiveVerified);
+        $snapshot['sync_partial'] = ($syncComplete && (!$pagesLiveVerified || $rkPartial));
         unset($snapshot['sync_error_kind'], $snapshot['sync_error']);
 
         if (!$syncComplete) {
