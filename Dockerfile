@@ -324,9 +324,9 @@ RUN set -eux; \
     grep -q 'error_id' /var/www/html/ajax/metaProfileManager.php; \
     ! grep -q 'Добавь Cookies JSON текущей FB-сессии' /var/www/html/scripts/workspace.js; \
     ! grep -Fq "value.trim()||'[]'" /var/www/html/scripts/workspace.js; \
-    grep -q 'bak.hierarchy-safe' /var/www/html/ajax/metaHierarchy.php; \
-    grep -q 'bak.proxy-safe' /var/www/html/ajax/metaHierarchy.php; \
-    grep -q 'existing->cookies' /var/www/html/ajax/metaHierarchy.php; \
+    grep -q 'metaProfileManager.php' /var/www/html/ajax/metaHierarchy.php; \
+    grep -q 'bak.session-safe' /var/www/html/ajax/metaProfileManager.php; \
+    grep -q 'existing->cookies' /var/www/html/ajax/metaProfileManager.php; \
     grep -q 'setSessionCookies' /var/www/html/classes/MetaApiClient.php; \
     grep -q 'setSessionCookies($account->getCurlCookies())' /var/www/html/classes/MetaEndpoint.php; \
     grep -q 'cookie_format_valid' /var/www/html/ajax/checkAccount.php; \

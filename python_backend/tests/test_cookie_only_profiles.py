@@ -201,3 +201,24 @@ echo json_encode(['token'=>$saved->token,'cookies'=>$saved->cookies,'proxy'=>$sa
         self.assertEqual(saved['cookies'],self.cookies)
         self.assertTrue(saved['proxy'])
         self.assertTrue(saved['encrypted'])
+
+    def test_complete_runtime_overlay_order_and_installed_php_build_contracts(self):
+        docker=(ROOT/'Dockerfile').read_text()
+        stage=self.root/'build-sources'
+        stage.mkdir()
+        for source in ROOT.glob('railway-*'):
+            if source.is_file():
+                body=source.read_text().replace('/var/www/html',str(self.root)).replace('/tmp/',str(stage)+'/')
+                (stage/source.name).write_text(body)
+        shutil.copyfile(ROOT/'docker-start.sh',stage/'docker-start.sh')
+        for source,target in re.findall(r'cp /tmp/([^ ;]+) /tmp/([^ ;]+);',docker):
+            shutil.copyfile(stage/source,stage/target)
+        for installer in re.findall(r'^\s+php /tmp/([^ ;]+);',docker,re.M):
+            result=subprocess.run(['php',str(stage/installer)],cwd=self.root,env=self.env,capture_output=True,text=True,timeout=15)
+            self.assertEqual(result.returncode,0,installer+': '+result.stderr[-2000:])
+        for line in docker.splitlines():
+            command=line.strip().removesuffix('\\').strip().removesuffix(';')
+            if re.match(r'!?\s*grep\b',command) and '/var/www/html/' in command:
+                command=command.replace('/var/www/html',str(self.root))
+                result=subprocess.run(['bash','-c',command],cwd=self.root,env=self.env,capture_output=True,text=True,timeout=5)
+                self.assertEqual(result.returncode,0,'Installed runtime contract failed: '+command+' '+result.stderr)
