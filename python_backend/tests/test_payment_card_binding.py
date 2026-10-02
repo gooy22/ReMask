@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, patch
 
 from app.facebook_business_browser import BrowserBusinessError
 from app.payment_card_binding import _open_card_form, _payment_surface, _unique_visible, card_values, field_kind, form_action_guard, missing_card_fields, payment_card_flow, selected_payment_asset
-from app.payment_inspection import settings_payment_summary
+from app.payment_inspection import settings_payment_summary, select_settings_payment_tab
 
 ID='123456789'
 CARD={'number':'4111111111111111','month':12,'year':2099,'holder':'Fixture'}
@@ -22,7 +22,7 @@ class CardFieldTests(unittest.TestCase):
         text='Fixture RK Payment methods Visa •••• 1111'
         result=settings_payment_summary(ID,url,text,asset=asset,identity=identity)
         self.assertEqual(result['verification_status'],'LINKED');self.assertFalse(result['funding_verified'])
-        for bad_url,bad_identity,bad_text in [(url.replace('555555555','999999999'),identity,text),(url.replace('987654321','999999999'),identity,text),(url,{**identity,'ad_account_id':'999999999'},text),(url,identity,text.replace('Fixture RK','Other RK')),(url,identity,'Fixture RK Payment methods Visa 4111111111111111')]:
+        for bad_url,bad_identity,bad_text in [(url.replace('555555555','999999999'),identity,text),(url+'&selected_asset_id=',identity,text),(url+'&act=999999999',identity,text),(url.replace('987654321','999999999'),identity,text),(url,{**identity,'ad_account_id':'999999999'},text),(url,identity,text.replace('Fixture RK','Other RK')),(url,identity,'Fixture RK Payment methods Visa 4111111111111111')]:
             result=settings_payment_summary(ID,bad_url,bad_text,asset=asset,identity=bad_identity)
             self.assertNotEqual(result['verification_status'],'LINKED');self.assertEqual(result['payment_methods'],[])
 
@@ -127,6 +127,21 @@ class CardBrowserTests(unittest.IsolatedAsyncioTestCase):
 
 
 class RealCardSelectorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_payment_tab_waits_for_lazy_add_method_control(self):
+        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
+        if not executable:self.skipTest('No local Chromium installed')
+        from playwright.async_api import async_playwright
+        async with async_playwright() as playwright:
+            chromium=await playwright.chromium.launch(executable_path=executable,headless=True,args=['--no-sandbox'])
+            try:
+                page=await chromium.new_page()
+                await page.set_content('<button role="tab" onclick="setTimeout(()=>document.getElementById(\'add\').style.display=\'block\',250)">Payment methods</button><button id="add" style="display:none">Add payment method</button>')
+                browser=SimpleNamespace(page=page,_assert_authenticated=AsyncMock())
+                self.assertTrue(await select_settings_payment_tab(browser))
+                self.assertTrue(await page.get_by_role('button',name='Add payment method',exact=True).is_visible())
+                browser._assert_authenticated.assert_awaited_once()
+            finally:await chromium.close()
+
     async def test_credit_debit_label_is_resolved_by_real_playwright_selector_parser(self):
         executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
         if not executable:self.skipTest('No local Chromium installed')

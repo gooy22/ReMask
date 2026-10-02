@@ -160,12 +160,13 @@ async def selected_payment_pane_text(browser: Any, name: str) -> str:
 
 
 def settings_payment_summary(target: str, url: str, text: str, *, asset: dict[str,str], identity: dict[str,Any]) -> dict[str,Any]:
-    target=account_id(target);parsed=urlsplit(url);query=parse_qs(parsed.query)
+    target=account_id(target);parsed=urlsplit(url);query=parse_qs(parsed.query,keep_blank_values=True)
     aliases={target,asset.get('business_asset_id','')}-{''}
     exact=(parsed.scheme=='https' and parsed.hostname=='business.facebook.com'
            and parsed.path.rstrip('/')=='/latest/settings/ad_accounts'
            and query.get('business_id')==[asset.get('business_id')]
            and len(query.get('selected_asset_id',[]))==1 and query['selected_asset_id'][0] in aliases
+           and all(query[key]==[target] for key in ('act','ad_account_id','asset_id') if key in query)
            and identity.get('confirmed') is True
            and re.sub(r'^act_','',str(identity.get('ad_account_id') or ''))==target
            and identity.get('business_id',asset.get('business_id'))==asset.get('business_id')
