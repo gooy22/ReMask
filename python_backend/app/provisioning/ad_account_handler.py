@@ -128,13 +128,21 @@ def _capture_success_id_from_checkpoint(
         if not success or (expected and expected not in folded):
             continue
 
-        controls = " ".join(
-            _clean(value)
-            for value in (ui_state.get("controls") or [])
-            if _clean(value)
-        )
         ids = []
-        for raw in re.findall(r"(?<!\d)(\d{8,30})(?!\d)", controls):
+        for control in ui_state.get("controls") or []:
+            text = _clean(control).split(" [tag=", 1)[0].strip()
+            # Names commonly contain dates. Only an ID-only control or an
+            # explicit ID label in Meta's success surface identifies the RK.
+            match = re.fullmatch(r"(?:act_)?(\d{8,30})", text)
+            if match is None:
+                match = re.fullmatch(
+                    r"(?:ad\s+account\s+|account\s+)?ID\s*[:：#]?\s*(?:act_)?(\d{8,30})",
+                    text,
+                    flags=re.IGNORECASE,
+                )
+            if match is None:
+                continue
+            raw = match.group(1)
             normalized = _normalize_ad_account_id(raw)
             if (
                 normalized

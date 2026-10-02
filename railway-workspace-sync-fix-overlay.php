@@ -498,11 +498,12 @@ async function syncSelection(){
         (done,total)=>{$('workspaceStatus').textContent=`Синхронизация BM: ${done}/${total}`;setProgress(done,total)}
       );
     }else if(tab==='ad_accounts'){
-      const profiles=[...new Set(rows.map(r=>r.profile).filter(Boolean))];
+      const businesses=[...new Map(rows.filter(r=>r.profile && r.business_id)
+        .map(r=>[`${r.profile}:${r.business_id}`,{profile:r.profile,id:r.business_id}])).values()];
       results=await concurrent(
-        profiles,
+        businesses,
         syncConcurrency,
-        p=>syncProfileSafe(p),
+        row=>syncBusinessSafe(row),
         (done,total)=>{$('workspaceStatus').textContent=`Синхронизация RK: ${done}/${total}`;setProgress(done,total)}
       );
     }else{

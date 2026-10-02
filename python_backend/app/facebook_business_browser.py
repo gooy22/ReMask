@@ -7413,6 +7413,27 @@ class FacebookBusinessBrowser:
                     )
                 else:
                     try:
+                        current_url = urlsplit(_clean(getattr(self.page, "url", "")))
+                        section_url = urlsplit(href)
+                        current_businesses = parse_qs(current_url.query).get("business_id") or []
+                        section_businesses = parse_qs(section_url.query).get("business_id") or []
+                        already_open = bool(
+                            business
+                            and current_url.scheme == section_url.scheme == "https"
+                            and current_url.hostname == section_url.hostname == "business.facebook.com"
+                            and current_url.path.rstrip("/") == section_url.path.rstrip("/")
+                            and any(part in current_url.path.casefold() for part in (
+                                "/settings/ad_accounts", "/settings/ad-accounts",
+                            ))
+                            and current_businesses == section_businesses == [business]
+                        )
+                        if already_open:
+                            await self._assert_authenticated()
+                            self._last_ad_account_section_diagnostic.update({
+                                "mode": "already_open_exact_section",
+                                "final_url": _clean(self.page.url)[:900],
+                            })
+                            return True
                         final_url = await self._goto(href)
                         await self._assert_authenticated()
                         await self.page.wait_for_timeout(700)
@@ -10350,6 +10371,7 @@ class FacebookBusinessBrowser:
                         let bestText = own;
                         let bestHref = '';
                         let attrs = '';
+                        const accountIds = new Set();
                         for (
                             let depth = 0;
                             root && depth < 7;
@@ -10368,6 +10390,12 @@ class FacebookBusinessBrowser:
                             );
                             if (text && text.toLowerCase().includes(expected)) {
                                 bestText = text;
+                                if (rr.x >= 600 && text.length <= 600) {
+                                    for (const link of root.querySelectorAll('a[href]')) {
+                                        const label = clean(link.innerText || link.textContent || '');
+                                        if (visible(link) && /^\d{8,30}$/.test(label)) accountIds.add(label);
+                                    }
+                                }
                             }
                             const link = root.matches?.('a[href]')
                                 ? root
@@ -10399,6 +10427,7 @@ class FacebookBusinessBrowser:
                         out.push({
                             text: bestText.slice(0, 600),
                             href: bestHref.slice(0, 1000),
+                            account_ids: [...accountIds],
                             ids: uniqueIds.slice(0, 12),
                             x: Math.round(r.x),
                             y: Math.round(r.y)
@@ -10442,8 +10471,9 @@ class FacebookBusinessBrowser:
                 "/settings/ad_accounts", "/settings/ad-accounts", "/adsmanager",
             )):
                 query = parse_qs(parsed_href.query)
-                for key in ("act", "asset_id", "ad_account_id"):
+                for key in ("act", "ad_account_id"):
                     scoped_ids.extend(query.get(key) or [])
+            scoped_ids.extend(row.get("account_ids") or [])
             scoped_ids.extend(re.findall(
                 r"(?:\bad\s+account\s+id|\baccount\s+id|\bid)\s*[:：#]?\s*(\d{5,30})(?!\d)",
                 text_value, flags=re.IGNORECASE,
@@ -10854,6 +10884,34 @@ class FacebookBusinessBrowser:
                     or "delete" in friendly
                 )
 
+                # Use the same current Business Settings asset parser as
+                # live Sync. The older name/ID extractors miss generic assets
+                # and can send an existing RK back into the CREATE wizard.
+                if exact_business_context and not mutation_like:
+                    request_scoped = _graphql_request_ad_account_inventory_scope(meta)
+                    asset_rows = _extract_inventory_ad_account_rows(
+                        payload, request_scoped=request_scoped,
+                    )
+                    scoped_rows = [
+                        asset for asset in asset_rows
+                        if not _digits(asset.get("business_id"))
+                        or _digits(asset.get("business_id")) == business
+                    ]
+                    inventory_ids = sorted({
+                        _normalize_ad_account_id(asset.get("id"))
+                        for asset in scoped_rows
+                        if _normalize_ad_account_id(asset.get("id"))
+                    })
+                    exact_name_ids = sorted({
+                        _normalize_ad_account_id(asset.get("id"))
+                        for asset in scoped_rows
+                        if _clean(asset.get("name")).casefold() == expected.casefold()
+                        and _normalize_ad_account_id(asset.get("id"))
+                    })
+                    inventory_observed = _has_ad_account_inventory_container(
+                        payload, request_scoped=request_scoped,
+                    )
+
                 row = {
                     "exact_name_ids": exact_name_ids[:8],
                     "inventory_ids": inventory_ids[:12],
@@ -10879,6 +10937,7 @@ class FacebookBusinessBrowser:
 
                 if (
                     exact_business_context
+                    and not mutation_like
                     and expected_id
                     and expected_id in set(exact_name_ids)
                     and not found_future.done()
@@ -10900,6 +10959,7 @@ class FacebookBusinessBrowser:
 
                 if (
                     exact_business_context
+                    and not mutation_like
                     and not expected_id
                     and len(exact_name_ids) == 1
                     and not found_future.done()
@@ -10948,6 +11008,28 @@ class FacebookBusinessBrowser:
 
         self.page.on("response", on_response)
         attempts: list[dict[str, Any]] = []
+        async def finish_result(result: dict[str, Any]) -> dict[str, Any]:
+            result["attempts"] = attempts
+            try:
+                identity = await asyncio.wait_for(
+                    self._reconcile_created_ad_account_from_ui(
+                        business_id=business, account_name=expected,
+                    ), timeout=0.8,
+                )
+                canonical = _normalize_ad_account_id(identity.get("ad_account_id"))
+                if identity.get("confirmed") and canonical:
+                    observed = _normalize_ad_account_id(result.get("ad_account_id"))
+                    if observed and canonical != observed:
+                        result["business_asset_id"] = observed.removeprefix("act_")
+                        result["ad_account_id"] = canonical
+                        result["source"] = "business_settings_inventory_and_details_identity"
+                        if expected_id and expected_id != canonical:
+                            result["confirmed"] = False
+                            result["reason"] = "expected_id_is_not_canonical_account_id"
+            except Exception:
+                pass
+            return result
+
         try:
             targets = [
                 template.format(business_id=business)
@@ -10973,7 +11055,12 @@ class FacebookBusinessBrowser:
                     break
                 try:
                     empty_before = empty_observations
-                    await self._goto(target)
+                    remaining_navigation = deadline - time.monotonic()
+                    if remaining_navigation <= 0:
+                        break
+                    await asyncio.wait_for(
+                        self._goto(target), timeout=remaining_navigation,
+                    )
                     attempts.append(
                         {
                             "url": _clean(self.page.url)[:700],
@@ -10987,8 +11074,7 @@ class FacebookBusinessBrowser:
                     await asyncio.sleep(0)
                     if found_future.done():
                         result = found_future.result()
-                        result["attempts"] = attempts
-                        return result
+                        return await finish_result(result)
 
                     if empty_observations > empty_before:
                         # Do not burn the whole timeout on a page that already
@@ -11004,8 +11090,7 @@ class FacebookBusinessBrowser:
                             asyncio.shield(found_future),
                             timeout=remaining,
                         )
-                        result["attempts"] = attempts
-                        return result
+                        return await finish_result(result)
                     except asyncio.TimeoutError:
                         pass
                 except Exception as exc:
@@ -11036,8 +11121,7 @@ class FacebookBusinessBrowser:
                             asyncio.shield(found_future),
                             timeout=remaining,
                         )
-                        result["attempts"] = attempts
-                        return result
+                        return await finish_result(result)
                 except asyncio.TimeoutError:
                     pass
 
@@ -11754,6 +11838,31 @@ class FacebookBusinessBrowser:
                         timeout_seconds=0.5,
                         cancel_pending=True,
                     )
+
+            # Meta's selected_asset_id can be a Business asset identifier,
+            # different from the numeric RK ID displayed in Details. Bind the
+            # visible identity to this exact selected row before downstream use.
+            try:
+                query = parse_qs(urlsplit(_clean(self.page.url)).query)
+                selected = _normalize_ad_account_id((query.get("selected_asset_id") or [""])[0])
+                selected_row = accounts.get(selected)
+                if selected_row and (query.get("business_id") or []) == [business]:
+                    identity = await asyncio.wait_for(
+                        self._reconcile_created_ad_account_from_ui(
+                            business_id=business, account_name=_clean(selected_row.get("name")),
+                        ), timeout=0.8,
+                    )
+                    canonical = _normalize_ad_account_id(identity.get("ad_account_id"))
+                    if identity.get("confirmed") and canonical and canonical != selected:
+                        accounts.pop(selected)
+                        accounts[canonical] = {
+                            **selected_row, "id": canonical, "account_id": canonical,
+                            "business_asset_id": selected.removeprefix("act_"),
+                        }
+                        diagnostics.append({"source":"business_settings_details_identity",
+                            "business_asset_id":selected, "ad_account_id":canonical})
+            except Exception:
+                pass
 
             self._last_ad_account_section_diagnostic = {
                 "stage": "inventory_complete",
@@ -13301,6 +13410,13 @@ class FacebookBusinessBrowser:
                 if _clean(x)
             ][:45],
         }
+        # Disabled CREATE tiles expose Meta's quota in a tooltip rather than
+        # role=alert. Preserve that real refusal instead of retrying UI_CHANGED.
+        target_text = _clean((state.get("create_target") or {}).get("text"))
+        if "maximum number of ad accounts" in target_text.casefold():
+            state["state"] = "BLOCKED"
+            state["create_entry"] = False
+            state["errors"] = [target_text, *state["errors"]][:6]
         return state
 
     def _record_ad_account_ui_state(

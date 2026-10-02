@@ -30,5 +30,13 @@ async function run(activeTab, rows) {
   assert.equal(profiles.length,1);
   assert.equal(profiles[0].profile,'8');
   assert.ok(!('business_id' in profiles[0]));
-  console.log('Selected BM scope and full profile request passed.');
+  const accounts = await run('ad_accounts',[
+    {profile:'8',business_id:'1632909278268870',id:'act_1758104775449075'},
+    {profile:'8',business_id:'1632909278268870',id:'act_1111111111'},
+    {profile:'8',business_id:'1760742031708754',id:'act_2222222222'},
+  ]);
+  assert.equal(accounts.length,2);
+  assert.deepEqual(accounts.map(r=>r.business_id),['1632909278268870','1760742031708754']);
+  assert.ok(accounts.every(r=>r.profile==='8'));
+  console.log('Selected BM/RK scope and full profile request passed.');
 })().catch(error=>{console.error(error);process.exitCode=1;});
