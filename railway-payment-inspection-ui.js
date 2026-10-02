@@ -14,6 +14,7 @@ function paymentCardMessage(result){
     PAYMENT_ACCOUNT_ROW_MISSING:'Meta не показала строку выбранного РК.',
     PAYMENT_ADD_CONTROL_MISSING:'У выбранного РК Meta не показала кнопку добавления способа оплаты.',
     PAYMENT_AD_ACCOUNT_DISABLED:'Meta отключила выбранный РК. Добавление карты остановлено до восстановления РК.',
+    PAYMENT_ACCOUNT_SETUP_REQUIRED:'Meta сначала требует настройки страны, валюты и часового пояса РК. Эти настройки нельзя изменить после подтверждения. Карта не отправлена.',
     PAYMENT_FORM_NOT_EXPOSED:'Meta не открыла форму карты.',
     CARD_BILLING_FIELDS_REQUIRED:'Нужны дополнительные реквизиты владельца или платёжного адреса.',
     CARD_BANK_CONFIRMATION_REQUIRED:'Требуется подтверждение банка. Повторная отправка остановлена.',

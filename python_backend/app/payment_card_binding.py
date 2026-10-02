@@ -140,7 +140,7 @@ async def _open_card_form(browser: Any, target: str, asset: dict[str,str]) -> di
     if add is None:
         await _payment_surface(browser,'selected_settings')
         # Use the existing rendered Billing navigation, with no guessed URL.
-        funding=await inspect_payment_methods(browser,target,business_id=business)
+        funding=await inspect_payment_methods(browser,target,business_id=business,asset=asset)
         await _payment_surface(browser,'billing_navigation')
         if not funding['account_scope_verified']:
             return {'status':'BLOCKED','code':'PAYMENT_ACCOUNT_SCOPE_UNVERIFIED'}
@@ -152,6 +152,9 @@ async def _open_card_form(browser: Any, target: str, asset: dict[str,str]) -> di
     await _payment_surface(browser,'payment_method_dialog')
     for _ in range(4):
         await page.wait_for_timeout(500)
+        text=await page.locator('body').inner_text(timeout=3000)
+        if payment_account_setup_required(text):
+            return {'status':'ACTION_REQUIRED','code':'PAYMENT_ACCOUNT_SETUP_REQUIRED','required_settings':['country','currency','timezone']}
         fields=await _form_fields(page)
         kinds={f['kind'] for f in fields}
         if 'number' in kinds:
@@ -165,13 +168,19 @@ async def _open_card_form(browser: Any, target: str, asset: dict[str,str]) -> di
             await radio.check(timeout=3000)
         next_button=await _unique_visible(page,'button',r'^(Next|Далее|Далі)$')
         if next_button is None or not await next_button.is_enabled():
-            return {'status':'BLOCKED','code':'PAYMENT_FORM_NOT_EXPOSED','fields':_safe_fields(fields)}
+            # The Billing dialog mounts after the Add control has responded.
+            # Continue the bounded observation, without another click.
+            continue
         body=await page.locator('body').inner_text(timeout=3000)
         guard=form_action_guard(body,fields)
         if guard:return {'status':'ACTION_REQUIRED','code':guard}
         await next_button.click(timeout=3000)
         await browser._assert_authenticated()
     return {'status':'BLOCKED','code':'PAYMENT_FORM_NOT_EXPOSED'}
+
+
+def payment_account_setup_required(text: str) -> bool:
+    return bool(re.search(r'select location and currency|your location and currency cannot be changed once set|выберите (?:местоположение|страну) и валюту|оберіть (?:розташування|країну) і валюту', text, re.I))
 
 
 async def _selected_account_disabled(page: Any, name: str) -> bool:

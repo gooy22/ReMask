@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from app.facebook_business_browser import BrowserBusinessError
-from app.payment_card_binding import _open_card_form, _selected_account_disabled, _payment_surface, _unique_visible, card_values, field_kind, form_action_guard, missing_card_fields, payment_card_flow, profile_payment_card, selected_payment_asset
+from app.payment_card_binding import _open_card_form, _selected_account_disabled, _payment_surface, _unique_visible, card_values, field_kind, form_action_guard, missing_card_fields, payment_account_setup_required, payment_card_flow, profile_payment_card, selected_payment_asset
 from app.payment_inspection import settings_payment_summary, select_settings_payment_tab
 
 ID='123456789'
@@ -16,6 +16,9 @@ CARD={'number':'4111111111111111','month':12,'year':2099,'holder':'Fixture'}
 
 
 class CardFieldTests(unittest.TestCase):
+    def test_initial_account_payment_setup_is_detected_before_card_entry(self):
+        self.assertTrue(payment_account_setup_required('Add payment information Select location and currency Set time zone Your location and currency cannot be changed once set.'))
+        self.assertFalse(payment_account_setup_required('Payment methods Add credit or debit card'))
     def test_selected_payment_pane_proves_only_exact_rk_business_and_masked_card(self):
         asset={'name':'Fixture RK','business_id':'987654321','business_asset_id':'555555555'}
         identity={'confirmed':True,'ad_account_id':'act_'+ID,'business_id':asset['business_id']}

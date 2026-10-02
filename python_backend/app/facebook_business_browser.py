@@ -20,6 +20,13 @@ def _exact_business_request_context(business: str, request_business_ids: set[str
     return request_business_ids == {business} if request_business_ids else bool(page_targets_business)
 
 
+def _inventory_response_business_scope(business: str, request_business_ids: set[str], row_business_ids: set[str]) -> bool:
+    """The document URL is not ownership evidence for background Relay data."""
+    if request_business_ids and request_business_ids != {business}:
+        return False
+    return request_business_ids == {business} or row_business_ids == {business}
+
+
 BROWSER_TERMINAL_ACCESS_CODES = frozenset({
     "CHECKPOINT_REQUIRED",
     "SESSION_EXPIRED",
@@ -1449,17 +1456,28 @@ def _extract_inventory_ad_account_rows(
     )
 
     def is_ad_context(path: str, value: dict[str, Any]) -> bool:
-        folded = path.casefold()
-        typename = _clean(value.get("__typename")).casefold()
+        typename = _compact_semantic(value.get("__typename"))
+        if 'connection' in typename:
+            return False
         explicit_asset = _dict_is_explicit_ad_account_asset(value)
-        return (
-            any(marker in folded or marker in typename for marker in ad_markers)
-            or explicit_asset
-            or (
-                request_scoped
-                and _generic_asset_connection_path(path)
-            )
-        )
+        if explicit_asset:
+            return True
+        if typename in {'business', 'businessportfolio', 'page', 'user', 'actor', 'instagramaccount', 'pixel'}:
+            return False
+        # RK collection scope survives only collection wrappers and asset
+        # wrappers. A nested owner/business/Page is a different entity.
+        parts = path.split('.')
+        wrappers = {'edges','node','nodes','items','results','data','asset','object','entity','adaccount','advertisingaccount'}
+        ad_slots = {'adaccount','adaccounts','ownedadaccounts','clientadaccounts','advertisingaccount','advertisingaccounts'}
+        asset_slots = {'assets','businessassets','assignedassets','assetlist','assetconnection','businesssettingsassets'}
+        for i, part in enumerate(parts):
+            key = _compact_semantic(re.sub(r'\[\d+\]', '', part))
+            if key not in ad_slots and not (request_scoped and key in asset_slots):
+                continue
+            tail = [_compact_semantic(re.sub(r'\[\d+\]', '', item)) for item in parts[i+1:]]
+            if all(item in wrappers for item in tail):
+                return True
+        return False
 
     def merge_row(value: dict[str, Any], path: str) -> None:
         if not is_ad_context(path, value):
@@ -1489,6 +1507,9 @@ def _extract_inventory_ad_account_rows(
         account_id = ""
         row_source = value
         for candidate in candidate_values:
+            candidate_type = _compact_semantic(candidate.get('__typename'))
+            if not _dict_is_explicit_ad_account_asset(candidate) and candidate_type in {'business','businessportfolio','page','user','actor','instagramaccount','pixel'}:
+                continue
             id_keys = [
                 "account_id",
                 "ad_account_id",
@@ -1538,6 +1559,8 @@ def _extract_inventory_ad_account_rows(
                 )
                 if business_id:
                     break
+        if business_id and _ad_account_compare_digits(account_id) == business_id:
+            return
 
         def first_value(*keys: str) -> Any:
             for source in (row_source, value):
@@ -11385,7 +11408,7 @@ class FacebookBusinessBrowser:
                 preliminary_scope = bool(request_scoped or page_scoped)
                 rows = _extract_inventory_ad_account_rows(
                     payload,
-                    request_scoped=preliminary_scope,
+                    request_scoped=request_scoped,
                 )
                 row_business_ids = {
                     _digits(row.get("business_id"))
@@ -11393,17 +11416,13 @@ class FacebookBusinessBrowser:
                     if isinstance(row, dict) and _digits(row.get("business_id"))
                 }
                 payload_targets_business = business in row_business_ids
-                exact_business_context = bool(
-                    not (target_business_ids and target_business_ids != {business})
-                    and (_exact_business_request_context(business, target_business_ids, page_targets_business)
-                         or payload_targets_business)
-                )
+                exact_business_context = _inventory_response_business_scope(business, target_business_ids, row_business_ids)
                 inventory_scope = bool(
                     preliminary_scope or payload_targets_business
                 )
                 observed = _has_ad_account_inventory_container(
                     payload,
-                    request_scoped=inventory_scope,
+                    request_scoped=request_scoped,
                 )
 
                 # Diagnostic only: expose numeric context values by JSON path,
