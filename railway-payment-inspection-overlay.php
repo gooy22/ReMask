@@ -2,6 +2,10 @@
 declare(strict_types=1);
 // REMASK_PRIVATE_PAYMENT_INSPECTION_V1
 $root = '/var/www/html';
+foreach (['railway-payment-card-vault.php'=>'classes/RemaskPaymentCardVault.php', 'railway-payment-card-endpoint.php'=>'ajax/paymentCards.php'] as $source=>$target) {
+    if (!copy('/tmp/'.$source, $root.'/'.$target)) throw new RuntimeException('Card module install failed');
+}
+
 $path = $root . '/ajax/metaHierarchy.php';
 $php = file_get_contents($path);
 if (!is_string($php)) throw new RuntimeException('Hierarchy missing');
@@ -85,6 +89,7 @@ $js = preg_replace('/function fundingCell\(f\)\{[^\n]+\}/', <<<'CELL'
 function fundingCell(f){ const status=fundingStatusValue(f); if(status==='LINKED')return pill('ПРИВЯЗАНА · НЕ ПРОВЕРЕНА','warn'); if(status==='NONE')return pill('НЕТ КАРТЫ','warn'); if(status==='READY')return pill('ПОДТВЕРЖДЕНО','ok'); return pill('НЕ ПРОВЕРЕНО','warn'); }
 CELL, $js, 1, $count);
 if ($count !== 1) throw new RuntimeException('Funding cell boundary missing');
+$js = str_replace("function closeModal(){", "function closeModal(){ if(typeof remaskClearPaymentSecrets==='function')remaskClearPaymentSecrets();", $js);
 file_put_contents($path, $js);
 
 foreach (['accounts.php', 'workspace.php'] as $name) {
@@ -92,7 +97,7 @@ foreach (['accounts.php', 'workspace.php'] as $name) {
     $html = file_get_contents($path);
     // These pages use custom modals; Bootstrap JS requires absent jQuery.
     $html = str_replace('<script src="styles/bootstrap.min.js"></script>', '', $html);
-    $html = str_replace('python-worker-ui-v194-cookie-only-v1', 'python-worker-ui-v194-cookie-only-v1-payment-v1', $html);
+    $html = str_replace('python-worker-ui-v194-cookie-only-v1', 'python-worker-ui-v194-cookie-only-v1-payment-cards-v2', $html);
     file_put_contents($path, $html);
 }
 fwrite(STDERR, "[private-payment] profile browser inspection and canonical RK display installed\n");

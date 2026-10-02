@@ -1,0 +1,227 @@
+"""Profile-bound Meta card form, with no secrets in jobs, logs or diagnostics."""
+from __future__ import annotations
+
+import asyncio
+import json
+import re
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlencode, urlsplit, parse_qs
+
+from .facebook_business_browser import BrowserBusinessError
+from .payment_inspection import account_id, payment_summary
+
+ALLOWED_HOSTS = {'business.facebook.com', 'www.facebook.com', 'adsmanager.facebook.com', 'secure.facebook.com'}
+FIELD_PATTERNS = {
+    'number': r'card number|номер карт|номер карти',
+    'holder': r'name on card|cardholder|card holder|имя.*карт|власник карт',
+    'expiry': r'expir|expiry|valid thru|срок действия|термін дії|mm\s*/\s*yy',
+    'month': r'^month$|^месяц$|^місяць$',
+    'year': r'^year$|^год$|^рік$',
+    'cvv': r'cvv|cvc|security code|код безопасности|код безпеки',
+    'country': r'country|страна|країна',
+    'address': r'^address(?: line 1)?$|street address|billing address|адрес|адреса',
+    'city': r'^city$|город|місто',
+    'region': r'^state$|province|region|область',
+    'postal_code': r'postal|zip|индекс|індекс',
+}
+AUTOCOMPLETE = {'cc-number':'number','cc-name':'holder','cc-exp':'expiry','cc-exp-month':'month',
+                'cc-exp-year':'year','cc-csc':'cvv','country':'country','country-name':'country',
+                'address-line1':'address','address-level2':'city','address-level1':'region','postal-code':'postal_code'}
+
+
+def field_kind(label: str, autocomplete: str = '') -> str:
+    if autocomplete in AUTOCOMPLETE:
+        return AUTOCOMPLETE[autocomplete]
+    for kind, pattern in FIELD_PATTERNS.items():
+        if re.search(pattern, label, re.I):
+            return kind
+    return ''
+
+
+def selected_payment_asset(profile: str, target: str, path: Path = Path('/var/lib/remask/workspace-live-meta-snapshots.json')) -> dict[str, str]:
+    try:
+        rows = json.loads(path.read_text()).get(profile, {}).get('ad_accounts', [])
+        matches = [r for r in rows if isinstance(r, dict) and str(r.get('profile', profile)) == profile
+                   and re.sub(r'^act_', '', str(r.get('id') or r.get('account_id') or '')) == target]
+        if len(matches) == 1 and re.fullmatch(r'\d{5,30}', str(matches[0].get('business_id') or '')):
+            row = matches[0]
+            return {key:str(row.get(key) or '') for key in ('business_id','business_asset_id','name')}
+    except (OSError, ValueError, AttributeError, TypeError):
+        pass
+    return {}
+
+
+async def _unique_visible(scope: Any, role: str, name: str) -> Any:
+    candidates = scope.get_by_role(role, name=re.compile(name, re.I)).filter(visible=True)
+    if await candidates.count() == 1:
+        return candidates
+    return None
+
+
+async def _form_fields(page: Any) -> list[dict[str, Any]]:
+    rows = []
+    for frame in page.frames:
+        if urlsplit(str(frame.url)).hostname not in ALLOWED_HOSTS:
+            continue
+        fields = frame.locator('input:visible:not([type="hidden"]),select:visible')
+        for index in range(min(await fields.count(), 30)):
+            control = fields.nth(index)
+            info = await control.evaluate("""el => ({tag:el.tagName.toLowerCase(),type:el.type||'',
+                label:(el.getAttribute('aria-label')||Array.from(el.labels||[]).map(l=>l.innerText).join(' ')||el.placeholder||'').trim(),
+                autocomplete:el.autocomplete||'',required:el.required||el.getAttribute('aria-required')==='true',
+                checked:el.type==='checkbox' ? el.checked : null})""")
+            info['kind'] = field_kind(info['label'], info['autocomplete'])
+            info['control'] = control
+            rows.append(info)
+    return rows
+
+
+def _safe_fields(fields: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    # No control values, HTML, body snippets, payment payloads or frame URLs.
+    return [{**{k:row[k] for k in ('kind','tag','type','required')},
+             'label':re.sub(r'\d{6,}', '[redacted]',row['label'])[:80]} for row in fields]
+
+
+async def _open_card_form(browser: Any, target: str, asset: dict[str,str]) -> dict[str,Any]:
+    page=browser.page
+    business=asset.get('business_id',''); name=asset.get('name','')
+    if not business or not name:
+        return {'status':'BLOCKED','code':'PAYMENT_ACCOUNT_BINDING_MISSING'}
+    url=browser.SETTINGS_AD_ACCOUNTS_URLS[0].format(business_id=business)
+    alias=asset.get('business_asset_id','')
+    if re.fullmatch(r'\d{5,30}',alias):
+        url+='&'+urlencode({'selected_asset_id':alias,'selected_asset_type':'ad-account'})
+    await browser._goto(url,timeout_ms=25000,settle_ms=700,attempts=1)
+    try:
+        await page.get_by_role('row').filter(has_text=name).wait_for(state='visible',timeout=6000)
+    except Exception:
+        return {'status':'BLOCKED','code':'PAYMENT_ACCOUNT_ROW_MISSING'}
+    identity=await browser._read_selected_ad_account_identity(business_id=business,account_name=name)
+    if not identity.get('confirmed') or re.sub(r'^act_','',str(identity.get('ad_account_id') or ''))!=target:
+        return {'status':'BLOCKED','code':'PAYMENT_ACCOUNT_SCOPE_UNVERIFIED'}
+    parsed=urlsplit(str(page.url))
+    if parsed.hostname not in ALLOWED_HOSTS or parse_qs(parsed.query).get('business_id')!=[business]:
+        return {'status':'BLOCKED','code':'PAYMENT_ACCOUNT_SCOPE_UNVERIFIED'}
+    add=await _unique_visible(page,'button',r'^(Add payment method|Добавить способ оплаты|Додати спосіб оплати)$')
+    if add is None:
+        return {'status':'BLOCKED','code':'PAYMENT_ADD_CONTROL_MISSING'}
+    await add.click(timeout=4000)
+    await browser._assert_authenticated()
+    for _ in range(4):
+        await page.wait_for_timeout(500)
+        fields=await _form_fields(page)
+        kinds={f['kind'] for f in fields}
+        if 'number' in kinds:
+            return {'status':'FORM_READY','code':'CARD_FORM_READY','fields':_safe_fields(fields),'_fields':fields}
+        # Only advance a payment-method selection, never a funded/verification action.
+        radio=await _unique_visible(page,'radio',r'^(Credit or debit card|Debit or credit card|Credit/debit card|Кредитная или дебетовая карта)$')
+        if radio is not None:
+            await radio.check(timeout=3000)
+        next_button=await _unique_visible(page,'button',r'^(Next|Далее|Далі)$')
+        if next_button is None or not await next_button.is_enabled():
+            return {'status':'BLOCKED','code':'PAYMENT_FORM_NOT_EXPOSED','fields':_safe_fields(fields)}
+        body=await page.locator('body').inner_text(timeout=3000)
+        if re.search(r'verify card|verification charge|pay now|make payment|top up|add funds|пополн|оплатить|проверочн.*списан',body,re.I):
+            return {'status':'ACTION_REQUIRED','code':'PAYMENT_FINANCIAL_ACTION_REQUIRED'}
+        if any(f['type']=='checkbox' and not f['checked'] for f in fields):
+            return {'status':'ACTION_REQUIRED','code':'PAYMENT_TERMS_CONFIRMATION_REQUIRED'}
+        await next_button.click(timeout=3000)
+        await browser._assert_authenticated()
+    return {'status':'BLOCKED','code':'PAYMENT_FORM_NOT_EXPOSED'}
+
+
+def card_values(card: dict[str,Any],cvv: str) -> dict[str,str]:
+    number=re.sub(r'[\s-]','',str(card.get('number') or ''))
+    if not re.fullmatch(r'\d{12,19}',number) or not re.fullmatch(r'\d{3,4}',cvv):
+        raise ValueError('CARD_DATA_INVALID')
+    month=int(card.get('month') or 0);year=int(card.get('year') or 0)
+    if not 1<=month<=12 or not 2000<=year<=2100:
+        raise ValueError('CARD_DATA_INVALID')
+    values={k:str(card.get(k) or '') for k in ('holder','country','address','city','region','postal_code')}
+    values.update(number=number,month=f'{month:02d}',year=str(year),expiry=f'{month:02d}/{year%100:02d}',cvv=cvv)
+    return values
+
+
+def missing_card_fields(fields: list[dict[str,Any]], values: dict[str,str]) -> list[str]:
+    kinds=[f['kind'] for f in fields]
+    missing=[]
+    for kind in ('number','cvv'):
+        if kinds.count(kind)!=1:missing.append(kind)
+    if kinds.count('expiry')!=1 and not (kinds.count('month')==1 and kinds.count('year')==1):missing.append('expiry')
+    for field in fields:
+        if field['type'] in ('checkbox','radio','submit','button'):continue
+        kind=field['kind']
+        if kind and kinds.count(kind)>1:missing.append(kind)
+        if kind and not values.get(kind) and (field['required'] or kind=='holder'):missing.append(kind)
+        if not kind and field['required']:missing.append('unknown_required_field')
+    return sorted(set(missing))
+
+
+async def payment_card_flow(browser:Any,target:str,asset:dict[str,str],*,operation:str,card:dict[str,Any]|None=None,cvv:str='') -> dict[str,Any]:
+    target=account_id(target); submitted=False
+    base={'profile_id':browser.profile_id,'account_id':target,'submitted':False,'funding_verified':False}
+    try:
+        form=await _open_card_form(browser,target,asset)
+        fields=form.pop('_fields',[])
+        if operation=='prepare' or form['status']!='FORM_READY':return {**base,**form}
+        values=card_values(card or {},cvv)
+        missing=missing_card_fields(fields,values)
+        if missing:return {**base,'status':'BLOCKED','code':'CARD_BILLING_FIELDS_REQUIRED','missing_fields':missing}
+        page=browser.page
+        body=await page.locator('body').inner_text(timeout=3000)
+        if re.search(r'verification charge|pay now|make payment|top up|add funds|пополн|оплатить|проверочн.*списан',body,re.I):
+            return {**base,'status':'ACTION_REQUIRED','code':'PAYMENT_FINANCIAL_ACTION_REQUIRED'}
+        if any(f['type']=='checkbox' and not f['checked'] for f in fields):
+            return {**base,'status':'ACTION_REQUIRED','code':'PAYMENT_TERMS_CONFIRMATION_REQUIRED'}
+        for field in fields:
+            kind=field['kind'];value=values.get(kind,'')
+            if not value:continue
+            control=field['control']
+            if field['tag']=='select':
+                options=await control.locator('option').evaluate_all('(els)=>els.map(e=>({value:e.value,label:e.textContent.trim()}))')
+                aliases={value.casefold()}
+                if kind=='month':aliases.add(str(int(value)))
+                if kind=='year':aliases.add(value[-2:])
+                exact=[o['value'] for o in options if o['value'].casefold() in aliases or o['label'].casefold() in aliases]
+                if len(set(exact))!=1:return {**base,'status':'BLOCKED','code':'CARD_BILLING_OPTION_UNAVAILABLE','missing_fields':[kind]}
+                await control.select_option(exact[0],timeout=3000)
+            else:await control.fill(value,timeout=3000)
+        # Save is the only supported final control. Never click Pay/Verify/Confirm.
+        save=await _unique_visible(page,'button',r'^(Save|Add card|Сохранить|Добавить карту|Зберегти)$')
+        if save is None or not await save.is_enabled():return {**base,'status':'BLOCKED','code':'CARD_SAVE_CONTROL_UNAVAILABLE'}
+        submitted=True
+        await save.click(timeout=4000)
+        await page.wait_for_timeout(1200)
+        await browser._assert_authenticated()
+        body=await page.locator('body').inner_text(timeout=3000)
+        funding=payment_summary(target,str(page.url),body)
+        linked=funding['account_scope_verified'] and any(m['last4']==values['number'][-4:] for m in funding['payment_methods'])
+        if linked:return {**base,'submitted':True,'status':'LINKED','code':'CARD_LINK_OBSERVED','funding':funding}
+        if re.search(r'3d secure|verify (?:your )?card|verification code|one.time|bank.*authentication|подтверд.*банк',body,re.I):
+            return {**base,'submitted':True,'status':'ACTION_REQUIRED','code':'CARD_BANK_CONFIRMATION_REQUIRED'}
+        # A success toast alone is not proof of linkage to this RK. No automatic resubmission.
+        return {**base,'submitted':True,'status':'SUBMITTED_UNVERIFIED','code':'CARD_LINK_NOT_VERIFIED'}
+    except BrowserBusinessError as exc:
+        return {**base,'submitted':submitted,'status':'SUBMITTED_UNVERIFIED' if submitted else 'BLOCKED','code':exc.code}
+    except Exception:
+        # Playwright exception messages can contain filled secrets. Never stringify them.
+        return {**base,'submitted':submitted,'status':'SUBMITTED_UNVERIFIED' if submitted else 'BLOCKED','code':'CARD_BROWSER_INTERRUPTED'}
+
+
+async def profile_payment_card(resolver:Any,profile:str,payload:dict[str,Any]) -> dict[str,Any]:
+    from .session import ProfileSession
+    target=account_id(payload.get('account_id',''));operation=payload.get('operation','')
+    if operation not in {'prepare','bind'}:raise ValueError('CARD_OPERATION_INVALID')
+    asset=selected_payment_asset(profile,target)
+    base={'profile_id':profile,'account_id':target,'submitted':False,'funding_verified':False}
+    if not asset:return {**base,'status':'BLOCKED','code':'PAYMENT_ACCOUNT_BINDING_MISSING'}
+    context=await resolver.resolve(profile)
+    async with ProfileSession(context) as session:
+        browser=await session.facebook_business_browser()
+        try:
+            return await asyncio.wait_for(payment_card_flow(browser,target,asset,operation=operation,
+                card=payload.get('card'),cvv=str(payload.get('cvv') or '')),timeout=95)
+        except asyncio.TimeoutError:
+            # Timeout may happen after Save; never permit blind retry.
+            return {**base,'status':'SUBMITTED_UNVERIFIED' if operation=='bind' else 'BLOCKED','code':'CARD_FLOW_TIMEOUT'}

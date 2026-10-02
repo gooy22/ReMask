@@ -7,6 +7,7 @@ on:
       - 'railway-python-worker-ui.js'
       - 'railway-cookie-*'
       - 'railway-payment-*'
+      - 'tests/payment-card-vault.test.php'
       - 'railway-workspace-sync-fix-overlay.php'
       - 'railway-profile-error-fix-overlay.php'
       - 'railway-python-worker-jobs-overlay.php'
@@ -59,3 +60,5 @@ jobs:
       - name: TXT account import interface
         run: node tests/cookie-txt-import-ui.test.cjs
 
+      - name: Encrypted card storage and submission guard
+        run: php tests/payment-card-vault.test.php

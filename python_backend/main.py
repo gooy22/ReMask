@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 from contextlib import asynccontextmanager
 
@@ -1171,6 +1172,23 @@ async def profile_payment_methods(profile_id: str, account_id: str):
     except BrowserBusinessError as exc:
         # No body snippets, payment network payloads or raw browser diagnostics.
         raise HTTPException(status_code=409,detail=exc.code) from exc
+
+
+@app.post('/api/v1/profiles/{profile_id}/payment-card',dependencies=[Depends(require_key)])
+async def profile_payment_card_action(profile_id: str, payload: dict = Body(...)):
+    from app.payment_card_binding import profile_payment_card
+    profile=str(profile_id or '').strip()
+    if not profile or len(profile)>160:
+        raise HTTPException(status_code=400,detail='INVALID_PAYMENT_TARGET')
+    try:
+        return await profile_payment_card(pool.resolver,profile,payload)
+    except Exception as exc:
+        # Never return/log validation or Playwright messages containing card data.
+        target=re.sub(r'^act_', '', str(payload.get('account_id') or ''))
+        if not re.fullmatch(r'\\d{5,30}',target):
+            raise HTTPException(status_code=400,detail='INVALID_PAYMENT_TARGET') from None
+        code=exc.code if isinstance(exc,BrowserBusinessError) else 'PROFILE_CONTEXT_ERROR' if isinstance(exc,ProfileContextError) else 'CARD_BROWSER_INTERRUPTED'
+        return {'profile_id':profile,'account_id':target,'status':'BLOCKED','submitted':False,'funding_verified':False,'code':code}
 
 
 @app.get('/api/v1/facebook/docids',dependencies=[Depends(require_key)])

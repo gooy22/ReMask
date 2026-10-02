@@ -1,35 +1,39 @@
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const vm = require('node:vm');
-const rows = [{profile:'Fixture',id:'act_123456789',funding:{funding_source:'stale'}}];
-const results = [];
-let requested = null;
-const sandbox = {
-  selectedRows:()=>rows, openModal:()=>{}, $:()=>({appendChild:n=>results.push(n)}),
-  document:{createElement:()=>({className:'',textContent:''})}, post:x=>x,
-  apiJson:async(url,body)=>{requested={url,body};return {funding:{
-    verification_status:'LINKED',card_linked:true,account_scope_verified:true,
-    payment_methods:[{type:'Visa',last4:'1234'}],funding_verified:false}};},
-  concurrent:async(items,limit,fn,done)=>{
-    assert.equal(limit,1);
-    for(let i=0;i<items.length;i++)done(i+1,items.length,await fn(items[i]),i);
-  }, setProgress:()=>{},render:()=>{},
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const vm=require('node:vm');
+const rows=[{profile:'Fixture',id:'act_123456789'},{profile:'Other',id:'act_987654321'}];
+const elements={};
+function element(){return {value:'',innerHTML:'',children:[],handlers:{},disabled:false,
+  appendChild(n){this.children.push(n)},addEventListener(event,fn){this.handlers[event]=fn},querySelectorAll(){return []}};}
+let requests=[];const card={id:'card_fixture',brand:'Visa',last4:'1111',month:12,year:2099,label:'Fixture'};
+const sandbox={
+  selectedRows:()=>rows,esc:x=>x,openModal:()=>{},$:id=>elements[id]||(elements[id]=element()),
+  document:{createElement:()=>element()},post:x=>x,render:()=>{},setProgress:()=>{},
+  concurrent:async(items,limit,fn,done)=>{assert.equal(limit,1);for(let i=0;i<items.length;i++)done(i+1,items.length,await fn(items[i]),i)},
+  apiJson:async(url,body)=>{requests.push({url,body});if(body.action==='list')return {cards:[card],bindings:[]};
+    if(body.action==='add'){assert.equal(body.cvv,undefined);return {card}}
+    if(body.action==='bind')return {result:{status:'SUBMITTED_UNVERIFIED',code:'CARD_LINK_NOT_VERIFIED',submitted:true}};
+    return {funding:{verification_status:'LINKED',account_scope_verified:true,card_linked:true,funding_verified:false,payment_methods:[{type:'Visa',last4:'1111'}]}}}
 };
-vm.createContext(sandbox);
-vm.runInContext(fs.readFileSync('railway-payment-inspection-ui.js','utf8'),sandbox);
+vm.createContext(sandbox);vm.runInContext(fs.readFileSync('railway-payment-inspection-ui.js','utf8'),sandbox);
 (async()=>{
-  await sandbox.showFunding();
-  assert.equal(requested.url,'ajax/pythonWorkerJobs.php');
-  assert.equal(requested.body.action,'payment_status');
-  assert.equal(requested.body.profile,'Fixture');
+  await sandbox.showFunding();assert.equal(requests.length,1);assert.equal(requests[0].body.action,'list');
+  assert.ok(elements.paymentCardSelect.children[0].textContent.includes('•••• 1111'));
+  assert.ok(elements.paymentCardBind.handlers.click);assert.ok(elements.paymentCardSaveBind.handlers.click);
+  sandbox.$('paymentCardNumber').value='4111111111111111';sandbox.$('paymentCardExpiry').value='12/99';
+  for(const key of ['holder','country','address','city','region','postal_code','label'])sandbox.$('paymentCard_'+key).value='';
+  await sandbox.savePaymentCard();assert.equal(elements.paymentCardNumber.value,'');
+  const save=requests.find(r=>r.body.action==='add');assert.equal(save.body.cvv,undefined);
+  const container=element();requests=[];
+  await sandbox.bindPaymentCard(rows,card,'123',container);
+  assert.equal(requests.length,2);assert.equal(requests[0].body.profile,'Fixture');assert.equal(requests[1].body.profile,'Other');
+  assert.ok(container.children[0].textContent.includes('Повторное добавление остановлено'));
   assert.equal(rows[0].funding.funding_verified,false);
-  assert.ok(results[0].textContent.includes('•••• 1234'));
-  assert.ok(results[0].textContent.includes('не подтверждена'));
-  sandbox.apiJson=async()=>{throw new Error('CHECKPOINT_REQUIRED')};
-  results.length=0;
-  await sandbox.showFunding();
-  assert.equal(rows[0].funding.funding_verified,false);
-  assert.equal(rows[0].funding.verification_status,'UNVERIFIED');
-  assert.ok(results[0].textContent.includes('Meta требует проверки аккаунта'));
-  console.log('private payment UI: serial inspection, masking, scope and auth failure passed');
-})().catch(error=>{console.error(error);process.exitCode=1});
+  assert.ok(!JSON.stringify(container.children).includes('4111111111111111'));
+  sandbox.$('paymentCardCvv').value='123';sandbox.remaskClearPaymentSecrets();assert.equal(elements.paymentCardCvv.value,'');
+  requests=[];await assert.rejects(()=>sandbox.bindPaymentCard(rows,null,'123',container));assert.equal(requests.length,0);
+  await assert.rejects(()=>sandbox.bindPaymentCard(rows,card,'x',container));assert.equal(requests.length,0);
+  const read=element();await sandbox.inspectFundingRows(rows,read);
+  assert.ok(read.children[0].textContent.includes('•••• 1111'));assert.ok(read.children[0].textContent.includes('не подтверждена'));
+  console.log('card interface: save without CVV, masked selection, serial exact targets, uncertain results and secret clearing passed');
+})().catch(e=>{console.error(e);process.exitCode=1});
