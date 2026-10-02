@@ -82,11 +82,10 @@ class ProvisioningTransport:
 
             host = parsed_url.hostname.lower()
             if host == "facebook.com" or host.endswith(".facebook.com"):
-                if host != "graph.facebook.com":
-                    raise TransportError(
-                        "TRANSPORT_CONFIG_ERROR",
-                        f"{step} private Facebook web route is not allowed",
-                    )
+                raise TransportError(
+                    "TRANSPORT_CONFIG_ERROR",
+                    f"{step} Facebook route is not allowed; use the profile cookie session",
+                )
 
             headers = cfg.get("headers")
             clean_headers: dict[str, str] = {}

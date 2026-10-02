@@ -113,6 +113,13 @@ RUN set -eux; \
     php /tmp/railway-meta-auth-state-overlay.php; \
     php -l /tmp/railway-launch-private-catalog-overlay.php; \
     php /tmp/railway-launch-private-catalog-overlay.php; \
+    php -l /tmp/railway-cookie-only-overlay.php; \
+    php /tmp/railway-cookie-only-overlay.php; \
+    php -l /var/www/html/classes/RemaskCookieProfile.php; \
+    php -l /var/www/html/ajax/addAccount.php; \
+    grep -q 'COOKIE_ONLY_GRAPH_DISABLED' /var/www/html/classes/MetaApiClient.php; \
+    grep -q 'REMASK_COOKIE_PROFILE_UI_V1' /var/www/html/scripts/workspace.js; \
+    ! grep -q 'newProfileToken\|id="editToken"\|name="token"' /var/www/html/scripts/workspace.js /var/www/html/accounts.php; \
     php -l /var/www/html/classes/RemaskPrivateLaunchCatalog.php; \
     php -l /var/www/html/ajax/metaPreflight.php; \
     php -l /var/www/html/ajax/metaAssets.php; \
@@ -322,9 +329,9 @@ RUN set -eux; \
     grep -q 'existing->cookies' /var/www/html/ajax/metaHierarchy.php; \
     grep -q 'setSessionCookies' /var/www/html/classes/MetaApiClient.php; \
     grep -q 'setSessionCookies($account->getCurlCookies())' /var/www/html/classes/MetaEndpoint.php; \
-    grep -q 'session_used' /var/www/html/ajax/checkAccount.php; \
-    grep -q 'new MetaApiClient' /var/www/html/ajax/checkAccount.php; \
-    grep -q "network_identity'=>'profile_bound'" /var/www/html/ajax/checkAccount.php; \
+    grep -q 'cookie_format_valid' /var/www/html/ajax/checkAccount.php; \
+    grep -q "'session_verified'=>false" /var/www/html/ajax/checkAccount.php; \
+    ! grep -q 'new MetaApiClient' /var/www/html/ajax/checkAccount.php; \
     ! grep -q 'curl_init' /var/www/html/ajax/checkAccount.php; \
     ! grep -q 'graph.facebook.com' /var/www/html/ajax/checkAccount.php; \
     grep -q 'private_business_suite_browser' /var/www/html/ajax/metaHierarchy.php; \
@@ -507,7 +514,7 @@ RUN set -eux; \
     grep -q 'DataTransfer' /var/www/html/scripts/media-draft.js; \
     grep -q 'media-draft.js?v=20260918-media-draft-v77' /var/www/html/launch.php; \
     for f in /var/www/html/index.php /var/www/html/workspace.php /var/www/html/launch.php /var/www/html/campaigns.php /var/www/html/adsets.php /var/www/html/accounts.php; do [ ! -f "$f" ] || ! grep -q 'selection-persistence.js' "$f"; done; \
-    grep -q 'accounts.js?v=20260918-accounts-v69' /var/www/html/accounts.php; \
+    grep -q 'accounts.js?v=20261002-cookie-only-v1' /var/www/html/accounts.php; \
     grep -q "'network_identity' => 'profile_bound'" /var/www/html/classes/MetaEndpoint.php; \
     grep -q "'direct_fallback' => false" /var/www/html/classes/MetaEndpoint.php; \
     ! grep -q 'data-remask-fp-action="1"' /var/www/html/scripts/workspace.js; \

@@ -22,6 +22,7 @@ require_once __DIR__ . '/../checkpassword.php';
 require_once __DIR__ . '/../classes/RemaskProxy.php';
 require_once __DIR__ . '/../classes/FbAccount.php';
 require_once __DIR__ . '/../classes/AccountStoreFactory.php';
+require_once __DIR__ . '/../classes/RemaskCookieProfile.php';
 while (ob_get_level() > 0) { @ob_end_clean(); }
 
 header('Content-Type: application/json; charset=utf-8');
@@ -122,7 +123,9 @@ function rmx_pm_safe(FbAccount $acc): array {
     return [
         'name' => $acc->name,
         'user_id' => $acc->userId,
-        'token_saved' => trim((string)$acc->token) !== '',
+        'auth_mode' => 'cookies',
+        'token_required' => false,
+        'session_verified' => false,
         'proxy_configured' => $acc->proxy !== null,
         'session_ready' => rmx_pm_session_ready($acc),
         'cookie_count' => count((array)$acc->cookies),
@@ -142,7 +145,8 @@ function rmx_pm_out(array $payload, int $status = 200): void {
 try {
     $input = rmx_pm_input();
     $action = strtolower(rmx_pm_find_scalar($input, ['action','cmd','op','mode']));
-    $hasSaveFields = rmx_pm_find_scalar($input, ['token','access_token','accessToken','fb_token','meta_token']) !== '';
+    if ($action === 'update_profile') $action = 'save';
+    $hasSaveFields = rmx_pm_find_scalar($input, ['name','profile_name','label']) !== '';
     if ($action === '') $action = $hasSaveFields ? 'save' : 'list';
     $store = AccountStoreFactory::create(ACCOUNTSFILENAME);
 
@@ -172,6 +176,8 @@ try {
         if (!$cookiesProvided || !is_array($incomingCookies) || $incomingCookies === []) {
             throw new InvalidArgumentException('Fresh Facebook Cookies JSON is required.');
         }
+
+        $incomingCookies = RemaskCookieProfile::validate($incomingCookies, $existing->proxy);
 
         $hasCUser = false;
         $hasXs = false;
@@ -233,9 +239,8 @@ try {
     if ($name === '') throw new InvalidArgumentException('Название профиля обязательно.');
     $existing = $store->getAccountByName($name);
 
-    $tokenInput = rmx_pm_find_scalar($input, ['token','access_token','accessToken','fb_token','meta_token']);
-    $token = $tokenInput !== '' ? $tokenInput : (string)($existing?->token ?? '');
-    if (trim($token) === '') throw new InvalidArgumentException('Token обязателен для нового профиля.');
+    // Retain historical stored data, but never import/use an Ads Manager token.
+    $token = (string)($existing?->token ?? '');
 
     // REMASK_SESSION_CLEAR_EXPLICIT_V2
     // A normal profile save must never clear a working Facebook session.
@@ -267,6 +272,8 @@ try {
     elseif ($proxyInput !== '') $proxy = RemaskProxy::fromSemicolonString($proxyInput);
     elseif ($existing instanceof FbAccount) $proxy = $existing->proxy;
     else $proxy = null;
+
+    $cookies = RemaskCookieProfile::validate($cookies, $proxy, !$clearProxy);
 
     $accountsPath = (string)ACCOUNTSFILENAME;
     if (is_file($accountsPath) && filesize($accountsPath) > 2) {

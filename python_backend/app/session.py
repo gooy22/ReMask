@@ -321,7 +321,7 @@ class ProfileResolver:
             cookies=cookie_map,
             proxy=proxy,
             user_agent=user_agent,
-            access_token=str(payload.get("access_token") or "").strip(),
+            access_token="",
             display_name=(
                 ""
                 if (
@@ -459,25 +459,10 @@ class MetaSession:
             return current
 
     async def graph_api(self) -> FacebookGraphApi:
-        current = self._graph_api
-        if current is not None:
-            return current
-
-        async with self._graph_lock:
-            current = self._graph_api
-            if current is None:
-                if not self.context.access_token:
-                    raise ProfileContextError(
-                        "profile access token is not configured"
-                    )
-                current = FacebookGraphApi(
-                    access_token=self.context.access_token,
-                    proxy=self.context.proxy,
-                    user_agent=self.context.user_agent,
-                    timeout_seconds=max(15, int(self.timeout.total or 15)),
-                )
-                self._graph_api = current
-            return current
+        raise ProfileContextError(
+            'COOKIE_ONLY_GRAPH_DISABLED: use the profile cookie session',
+            retryable=False,
+        )
 
     async def close_business_browser(self) -> None:
         """Release Chromium between provisioning phases, retaining HTTP state."""

@@ -5,6 +5,10 @@ on:
     paths:
       - 'python_backend/**'
       - 'railway-python-worker-ui.js'
+      - 'railway-cookie-*'
+      - 'railway-profile-session-guard-overlay.php'
+      - 'railway-python-worker-bridge-overlay.php'
+      - 'tests/cookie-profile-ui.test.cjs'
       - 'railway-launch-private-catalog*'
       - 'railway-launch-multi-profile-overlay.php'
       - 'Dockerfile'
@@ -39,4 +43,6 @@ jobs:
         run: node tests/worker-auto-ui.test.cjs
       - name: Private Launch catalog and funding interface
         run: node tests/launch-private-catalog.test.cjs
+      - name: Cookie-only profile interface
+        run: node tests/cookie-profile-ui.test.cjs
 
