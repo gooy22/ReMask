@@ -1,4 +1,7 @@
 import unittest
+import json
+import tempfile
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -14,6 +17,16 @@ class WrongInventorySurface(BaseException):
 
 
 class SelectedBusinessInventoryTests(unittest.IsolatedAsyncioTestCase):
+    def test_expected_name_uses_existing_exact_profile_binding_without_inventing_inventory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'bindings.json'
+            path.write_text(json.dumps({'8':{'ad_accounts':{'1632909278268870':{'business_id':'1632909278268870','ad_account_id':'1758104775449075','account_name':'ReMask RK 8 20261002'}}},'Other':{'business_id':'999999999','ad_account_id':'888888888','account_name':'Other RK'}}))
+            names=api._sync_expected_account_names('8',[],str(path))
+            self.assertEqual(names,{'1632909278268870':'ReMask RK 8 20261002'})
+            self.assertEqual(api._sync_expected_account_names('Missing',[],str(path)),{})
+            path.write_text('{broken')
+            self.assertEqual(api._sync_expected_account_names('8',[{'business_id':'123456789','account_name':'Worker RK'}],str(path)),{'123456789':'Worker RK'})
+
     def fixtures(self, bindings=()):
         store = SimpleNamespace(**{name:AsyncMock(return_value=[]) for name in (
             'confirmed_ad_account_bindings_for_profile',

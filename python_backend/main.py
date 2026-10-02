@@ -1303,6 +1303,28 @@ def _business_inventory_confirmed_empty(diagnostic: object) -> bool:
     return False
 
 
+def _sync_expected_account_names(profile: str, bindings: list[dict], path: str | None = None) -> dict[str,str]:
+    """Existing worker/PHP bindings supply names only for fresh UI verification."""
+    names={str(row.get('business_id') or ''):str(row.get('account_name') or '').strip()
+        for row in bindings if isinstance(row,dict) and str(row.get('business_id') or '').isdigit() and row.get('account_name')}
+    try:
+        with open(path or os.path.join(DATA_ROOT,'workspace-provisioning-bindings.json'),encoding='utf-8') as handle:
+            raw=handle.read(2_000_001)
+        data=json.loads(raw) if len(raw)<=2_000_000 else {}
+        profile_row=data.get(profile,{}) if isinstance(data,dict) else {}
+        if isinstance(profile_row,dict):
+            rows=profile_row.get('ad_accounts')
+            candidates=list(rows.values()) if isinstance(rows,dict) else [profile_row]
+            for row in candidates:
+                if not isinstance(row,dict):continue
+                business=str(row.get('business_id') or '')
+                target=str(row.get('ad_account_id') or '').removeprefix('act_')
+                name=str(row.get('account_name') or '').strip()
+                if business.isdigit() and target.isdigit() and name and len(name)<=200:names[business]=name
+    except (OSError,ValueError):pass
+    return names
+
+
 def _live_inventory_targets_ready(
     business_map: dict[str,str],
     live_business_ids: set[str],
@@ -1461,6 +1483,7 @@ async def profile_live_inventory(
                 in requested_business_ids
         )
     }
+    expected_account_names=_sync_expected_account_names(clean_profile,confirmed_bindings)
     latest_business_id=str(
         (latest_entities or {}).get('business_id') or ''
     ).strip()
@@ -2046,7 +2069,7 @@ async def profile_live_inventory(
                     settings=await hard_deadline(
                         browser.snapshot_ad_accounts_for_business(
                             business_id=business_key, timeout_seconds=8.0,
-                            expected_account_name=str((binding_by_business.get(business_key) or {}).get('account_name') or ''),
+                            expected_account_name=expected_account_names.get(business_key,''),
                         ), budget(16.0),
                     )
                     log.info('selected RK identity profile=%s business=%s evidence=%s',profile_id,business_key,json.dumps([d for d in settings.get('diagnostics',[]) if d.get('source') in {'selected_account_identity_check','business_settings_details_identity','selected_account_recovery'}],ensure_ascii=False,default=str))
@@ -2127,7 +2150,7 @@ async def profile_live_inventory(
                             browser.snapshot_ad_accounts_for_business(
                                 business_id=str(business_id),
                                 timeout_seconds=8.0,
-                                expected_account_name=str((binding_by_business.get(str(business_id)) or {}).get('account_name') or ''),
+                                expected_account_name=expected_account_names.get(str(business_id),''),
                             ),
                             rk_settings_timeout,
                         )
