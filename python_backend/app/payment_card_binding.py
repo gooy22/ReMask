@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode, urlsplit, parse_qs
 
 from .facebook_business_browser import BrowserBusinessError
-from .payment_inspection import account_id, payment_summary
+from .payment_inspection import account_id, payment_summary, inspect_payment_methods
 
 ALLOWED_HOSTS = {'business.facebook.com', 'www.facebook.com', 'adsmanager.facebook.com', 'secure.facebook.com'}
 FIELD_PATTERNS = {
@@ -59,6 +60,17 @@ async def _unique_visible(scope: Any, role: str, name: str) -> Any:
     return None
 
 
+async def _payment_surface(browser: Any, stage: str) -> None:
+    """Record control labels before card entry; never values or page body."""
+    page=browser.page
+    rows=await page.evaluate("""() => Array.from(document.querySelectorAll('button,[role="button"],a[href],select,[role="combobox"],h1,h2,h3'))
+      .filter(el=>el.getClientRects().length)
+      .map(el=>({role:el.getAttribute('role')||el.tagName.toLowerCase(),label:(el.getAttribute('aria-label')||el.innerText||'').trim()
+        .replace(/\\d{6,}/g,'[id]').slice(0,100)})).filter(r=>r.label).slice(0,65)""")
+    logging.getLogger('remask.payment_card').info('payment surface profile=%s stage=%s path=%s controls=%s',
+        browser.profile_id,stage,urlsplit(str(page.url)).path,rows)
+
+
 async def _form_fields(page: Any) -> list[dict[str, Any]]:
     rows = []
     for frame in page.frames:
@@ -105,7 +117,17 @@ async def _open_card_form(browser: Any, target: str, asset: dict[str,str]) -> di
         return {'status':'BLOCKED','code':'PAYMENT_ACCOUNT_SCOPE_UNVERIFIED'}
     add=await _unique_visible(page,'button',r'^(Add payment method|Добавить способ оплаты|Додати спосіб оплати)$')
     if add is None:
-        return {'status':'BLOCKED','code':'PAYMENT_ADD_CONTROL_MISSING'}
+        add=await _unique_visible(page,'link',r'^(Add payment method|Добавить способ оплаты|Додати спосіб оплати)$')
+    if add is None:
+        await _payment_surface(browser,'selected_settings')
+        # Use the existing rendered Billing navigation, with no guessed URL.
+        funding=await inspect_payment_methods(browser,target,business_id=business)
+        await _payment_surface(browser,'billing_navigation')
+        if not funding['account_scope_verified']:
+            return {'status':'BLOCKED','code':'PAYMENT_ACCOUNT_SCOPE_UNVERIFIED'}
+        add=await _unique_visible(page,'button',r'^(Add payment method|Добавить способ оплаты|Додати спосіб оплати)$')
+        if add is None:
+            return {'status':'BLOCKED','code':'PAYMENT_ADD_CONTROL_MISSING'}
     await add.click(timeout=4000)
     await browser._assert_authenticated()
     for _ in range(4):
@@ -204,8 +226,9 @@ async def payment_card_flow(browser:Any,target:str,asset:dict[str,str],*,operati
         return {**base,'submitted':True,'status':'SUBMITTED_UNVERIFIED','code':'CARD_LINK_NOT_VERIFIED'}
     except BrowserBusinessError as exc:
         return {**base,'submitted':submitted,'status':'SUBMITTED_UNVERIFIED' if submitted else 'BLOCKED','code':exc.code}
-    except Exception:
+    except Exception as exc:
         # Playwright exception messages can contain filled secrets. Never stringify them.
+        logging.getLogger('remask.payment_card').info('card flow interrupted profile=%s submitted=%s exception_type=%s',browser.profile_id,submitted,type(exc).__name__)
         return {**base,'submitted':submitted,'status':'SUBMITTED_UNVERIFIED' if submitted else 'BLOCKED','code':'CARD_BROWSER_INTERRUPTED'}
 
 

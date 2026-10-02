@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from app.facebook_business_browser import BrowserBusinessError
-from app.payment_card_binding import card_values, field_kind, missing_card_fields, payment_card_flow, selected_payment_asset
+from app.payment_card_binding import _open_card_form, card_values, field_kind, missing_card_fields, payment_card_flow, selected_payment_asset
 
 ID='123456789'
 CARD={'number':'4111111111111111','month':12,'year':2099,'holder':'Fixture'}
@@ -41,6 +41,18 @@ class CardFieldTests(unittest.TestCase):
 
 
 class CardBrowserTests(unittest.IsolatedAsyncioTestCase):
+    async def test_billing_fallback_never_adds_to_unverified_account(self):
+        rows=SimpleNamespace(wait_for=AsyncMock())
+        page=SimpleNamespace(url='https://business.facebook.com/latest/settings/ad_accounts/?business_id=987654321',
+            get_by_role=lambda *a,**kw:SimpleNamespace(filter=lambda **kw:rows))
+        browser=SimpleNamespace(page=page,profile_id='Fixture',_goto=AsyncMock(),
+            SETTINGS_AD_ACCOUNTS_URLS=['https://business.facebook.com/latest/settings/ad_accounts/?business_id={business_id}'],
+            _read_selected_ad_account_identity=AsyncMock(return_value={'confirmed':True,'ad_account_id':ID}))
+        with patch('app.payment_card_binding._unique_visible',AsyncMock(return_value=None)) as controls,patch('app.payment_card_binding._payment_surface',AsyncMock()),patch('app.payment_card_binding.inspect_payment_methods',AsyncMock(return_value={'account_scope_verified':False})) as inspect:
+            result=await _open_card_form(browser,ID,{'business_id':'987654321','name':'Fixture RK'})
+        self.assertEqual(result['code'],'PAYMENT_ACCOUNT_SCOPE_UNVERIFIED')
+        self.assertEqual(controls.await_count,2);inspect.assert_awaited_once()
+
     def browser(self,body='Payment methods'):
         save=SimpleNamespace(is_enabled=AsyncMock(return_value=True),click=AsyncMock())
         page=SimpleNamespace(url='https://business.facebook.com/billing_hub/payment_settings?asset_id='+ID,
