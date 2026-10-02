@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from app.facebook_business_browser import BrowserBusinessError
-from app.payment_card_binding import _open_card_form, _selected_account_disabled, _payment_surface, _unique_visible, card_values, configure_payment_account, field_kind, form_action_guard, missing_card_fields, payment_account_setup_required, payment_card_flow, profile_payment_card, selected_payment_asset
+from app.payment_card_binding import _open_card_form, _resolve_payment_account_name, _selected_account_disabled, _payment_surface, _unique_visible, card_values, configure_payment_account, field_kind, form_action_guard, missing_card_fields, payment_account_setup_required, payment_card_flow, profile_payment_card, selected_payment_asset
 from app.payment_inspection import settings_payment_summary, select_settings_payment_tab
 
 ID='123456789'
@@ -63,6 +63,19 @@ class CardFieldTests(unittest.TestCase):
 
 
 class CardBrowserTests(unittest.IsolatedAsyncioTestCase):
+    async def test_placeholder_name_is_recovered_only_from_unique_rendered_rk_row(self):
+        buttons=SimpleNamespace(all_text_contents=AsyncMock(return_value=['Fixture RK\n100','1 person','Details','Open in Ads Manager','More\n\u200b','Assign people']))
+        rows=SimpleNamespace(count=AsyncMock(return_value=1),get_by_role=lambda *a,**kw:buttons)
+        rows.filter=lambda **kw:rows
+        page=SimpleNamespace(get_by_role=lambda *a,**kw:rows)
+        self.assertEqual(await _resolve_payment_account_name(page,ID),'Fixture RK')
+        self.assertEqual(await _resolve_payment_account_name(page,'Known RK'),'Known RK')
+        rows.count.return_value=2
+        self.assertEqual(await _resolve_payment_account_name(page,ID),'')
+        rows.count.return_value=1
+        buttons.all_text_contents.return_value=['Fixture RK','Other RK','Details']
+        self.assertEqual(await _resolve_payment_account_name(page,ID),'')
+
     async def test_setup_advances_only_after_all_explicit_choices_and_no_charge_or_terms(self):
         next_button=SimpleNamespace(is_enabled=AsyncMock(return_value=True),click=AsyncMock())
         page=SimpleNamespace(locator=lambda _:SimpleNamespace(inner_text=AsyncMock(return_value='Select location and currency Set time zone')),wait_for_timeout=AsyncMock())

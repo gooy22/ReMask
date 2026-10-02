@@ -1547,6 +1547,19 @@ $syncProfileReplacement = <<<'PHP'
                 $row['account_id'] = $accountId;
                 $row['business_id'] = $businessId;
                 $row['business_name'] = $businessName;
+                // An ID-only fast revalidation cannot rename a known RK or
+                // discard its Business asset alias. Keep identity metadata only
+                // for the same canonical RK in this exact profile and BM.
+                foreach ((array)($existingSnapshot['ad_accounts'] ?? []) as $knownAccount) {
+                    if (!is_array($knownAccount) || (string)($knownAccount['business_id'] ?? '') !== $businessId) continue;
+                    $knownId = preg_replace('/^act_/', '', (string)($knownAccount['id'] ?? $knownAccount['account_id'] ?? ''));
+                    if ($knownId !== $accountId) continue;
+                    $freshName = trim((string)($row['name'] ?? ''));
+                    $knownName = trim((string)($knownAccount['name'] ?? ''));
+                    if (($freshName === '' || preg_match('/^(?:act_)?\d{5,30}$/', $freshName)) && $knownName !== '' && !preg_match('/^(?:act_)?\d{5,30}$/', $knownName)) $row['name'] = $knownName;
+                    if (empty($row['business_asset_id']) && !empty($knownAccount['business_asset_id'])) $row['business_asset_id'] = $knownAccount['business_asset_id'];
+                    break;
+                }
                 $row['_business_edge'] = (string)($row['_source'] ?? 'business_suite_browser_live_inventory');
                 if (!array_key_exists('funding', $row)) $row['funding'] = null;
 

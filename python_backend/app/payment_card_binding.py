@@ -101,6 +101,25 @@ def _safe_fields(fields: list[dict[str, Any]]) -> list[dict[str, Any]]:
              'label':re.sub(r'\d{6,}', '[redacted]',row['label'])[:80]} for row in fields]
 
 
+async def _resolve_payment_account_name(page: Any, name: str) -> str:
+    """Recover a placeholder name only from one rendered RK row with Details.
+
+    The caller still must prove the exact canonical ID in that row's pane.
+    """
+    if name and not re.fullmatch(r'(?:act_)?\d{5,30}',name):return name
+    details=page.get_by_role('link',name=re.compile(r'^(Details|Подробнее|Деталі)$',re.I))
+    rows=page.get_by_role('row').filter(has=details).filter(visible=True)
+    if await rows.count()!=1:return ''
+    labels=await rows.get_by_role('button').all_text_contents()
+    candidates=[]
+    for label in labels:
+        first=re.sub(r'[\u200b-\u200d\ufeff]','',label).strip().split('\n')[0].strip()
+        if not first or re.match(r'^\d+(?:\s|$)',first):continue
+        if re.fullmatch(r'Details|More|Close|Open in Ads Manager|Deactivate|Assign people|Assign partner|Opportunity score',first,re.I):continue
+        if first not in candidates:candidates.append(first)
+    return candidates[0] if len(candidates)==1 else ''
+
+
 async def _open_card_form(browser: Any, target: str, asset: dict[str,str], billing_setup: dict[str,str] | None = None) -> dict[str,Any]:
     page=browser.page
     business=asset.get('business_id',''); name=asset.get('name','')
@@ -111,6 +130,13 @@ async def _open_card_form(browser: Any, target: str, asset: dict[str,str], billi
     if re.fullmatch(r'\d{5,30}',alias):
         url+='&'+urlencode({'selected_asset_id':alias,'selected_asset_type':'ad-account'})
     await browser._goto(url,timeout_ms=25000,settle_ms=700,attempts=1)
+    if re.fullmatch(r'(?:act_)?\d{5,30}',name):
+        try:
+            await page.get_by_role('link',name=re.compile(r'^(Details|Подробнее|Деталі)$',re.I)).filter(visible=True).wait_for(state='visible',timeout=6000)
+            name=await _resolve_payment_account_name(page,name)
+        except Exception:name=''
+        if not name:return {'status':'BLOCKED','code':'PAYMENT_ACCOUNT_ROW_MISSING'}
+        asset={**asset,'name':name}
     try:
         await page.get_by_role('row').filter(has_text=name).wait_for(state='visible',timeout=6000)
     except Exception:
