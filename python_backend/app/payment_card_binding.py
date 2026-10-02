@@ -55,7 +55,9 @@ def selected_payment_asset(profile: str, target: str, path: Path = Path('/var/li
 
 
 async def _unique_visible(scope: Any, role: str, name: str) -> Any:
-    candidates = scope.get_by_role(role, name=re.compile(name, re.I)).filter(visible=True)
+    # Playwright role selectors serialize Python regexes as /pattern/flags.
+    # A literal slash in Credit/debit must not terminate that serialized regex.
+    candidates = scope.get_by_role(role, name=re.compile(name.replace('/', r'\/'), re.I)).filter(visible=True)
     if await candidates.count() == 1:
         return candidates
     return None
@@ -134,6 +136,7 @@ async def _open_card_form(browser: Any, target: str, asset: dict[str,str]) -> di
             return {'status':'BLOCKED','code':'PAYMENT_ADD_CONTROL_MISSING'}
     await add.click(timeout=4000)
     await browser._assert_authenticated()
+    await _payment_surface(browser,'payment_method_dialog')
     for _ in range(4):
         await page.wait_for_timeout(500)
         fields=await _form_fields(page)

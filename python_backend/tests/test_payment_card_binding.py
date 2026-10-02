@@ -1,12 +1,13 @@
 import json
 import tempfile
+import shutil
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from app.facebook_business_browser import BrowserBusinessError
-from app.payment_card_binding import _open_card_form, _payment_surface, card_values, field_kind, missing_card_fields, payment_card_flow, selected_payment_asset
+from app.payment_card_binding import _open_card_form, _payment_surface, _unique_visible, card_values, field_kind, missing_card_fields, payment_card_flow, selected_payment_asset
 
 ID='123456789'
 CARD={'number':'4111111111111111','month':12,'year':2099,'holder':'Fixture'}
@@ -106,3 +107,22 @@ class CardBrowserTests(unittest.IsolatedAsyncioTestCase):
             result=await payment_card_flow(browser,ID,{},operation='bind',card=CARD,cvv='123')
         self.assertEqual(result['status'],'SUBMITTED_UNVERIFIED');self.assertTrue(result['submitted']);save.click.assert_awaited_once()
         self.assertNotIn(CARD['number'],json.dumps(result));self.assertNotIn('cvv fixture',json.dumps(result))
+
+
+class RealCardSelectorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_credit_debit_label_is_resolved_by_real_playwright_selector_parser(self):
+        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
+        if not executable:self.skipTest('No local Chromium installed')
+        from playwright.async_api import async_playwright
+        async with async_playwright() as playwright:
+            browser=await playwright.chromium.launch(executable_path=executable,headless=True,args=['--no-sandbox'])
+            try:
+                page=await browser.new_page()
+                await page.set_content('<label><input type="radio" name="method">Credit/debit card</label><button>Add payment method</button>')
+                radio=await _unique_visible(page,'radio',r'^(Credit or debit card|Credit/debit card)$')
+                self.assertIsNotNone(radio)
+                await radio.check()
+                self.assertTrue(await radio.is_checked())
+                await page.set_content('<label><input type="radio">Credit/debit card</label><label><input type="radio">Credit/debit card</label>')
+                self.assertIsNone(await _unique_visible(page,'radio',r'^Credit/debit card$'))
+            finally:await browser.close()
