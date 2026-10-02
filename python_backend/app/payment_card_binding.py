@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 import re
+import traceback
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode, urlsplit, parse_qs
@@ -228,7 +229,11 @@ async def payment_card_flow(browser:Any,target:str,asset:dict[str,str],*,operati
         return {**base,'submitted':submitted,'status':'SUBMITTED_UNVERIFIED' if submitted else 'BLOCKED','code':exc.code}
     except Exception as exc:
         # Playwright exception messages can contain filled secrets. Never stringify them.
-        logging.getLogger('remask.payment_card').info('card flow interrupted profile=%s submitted=%s exception_type=%s',browser.profile_id,submitted,type(exc).__name__)
+        # Only classify the error in memory; stack locations contain no values.
+        message=str(exc)
+        reason=next((code for marker,code in [('Target crashed','TARGET_CRASHED'),('Execution context was destroyed','CONTEXT_REPLACED'),('SyntaxError','EVALUATION_SYNTAX'),('strict mode violation','AMBIGUOUS_CONTROL'),('Timeout','CONTROL_TIMEOUT')] if marker in message),'BROWSER_ERROR')
+        locations=[{'file':Path(frame.filename).name,'function':frame.name,'line':frame.lineno} for frame in traceback.extract_tb(exc.__traceback__) if Path(frame.filename).name=='payment_card_binding.py']
+        logging.getLogger('remask.payment_card').info('card flow interrupted profile=%s submitted=%s exception_type=%s reason=%s locations=%s',browser.profile_id,submitted,type(exc).__name__,reason,locations)
         return {**base,'submitted':submitted,'status':'SUBMITTED_UNVERIFIED' if submitted else 'BLOCKED','code':'CARD_BROWSER_INTERRUPTED'}
 
 
