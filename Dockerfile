@@ -119,7 +119,7 @@ RUN set -eux; \
     php -l /var/www/html/ajax/addAccount.php; \
     grep -q 'COOKIE_ONLY_GRAPH_DISABLED' /var/www/html/classes/MetaApiClient.php; \
     grep -q 'REMASK_COOKIE_PROFILE_UI_V1' /var/www/html/scripts/workspace.js; \
-    ! grep -q 'newProfileToken\|id="editToken"\|name="token"' /var/www/html/scripts/workspace.js /var/www/html/accounts.php; \
+    ! grep -q 'newProfileToken\|id="editToken"\|name="token"' /var/www/html/scripts/workspace.js /var/www/html/accounts.php || exit 92; \
     php -l /var/www/html/classes/RemaskPrivateLaunchCatalog.php; \
     php -l /var/www/html/ajax/metaPreflight.php; \
     php -l /var/www/html/ajax/metaAssets.php; \
@@ -404,7 +404,7 @@ RUN set -eux; \
     ! test -f /var/www/html/bin/remask-sync-smoke.php; \
     test -f /var/www/html/scripts/targeting-autocomplete.js; \
     test -f /var/www/html/scripts/selection-persistence.js; \
-    ! grep -q 'MutationObserver' /var/www/html/scripts/selection-persistence.js; \
+    ! grep -Eq 'new[[:space:]]+MutationObserver' /var/www/html/scripts/selection-persistence.js || exit 92; \
     grep -q 'targeting-autocomplete.js' /var/www/html/launch.php; \
     grep -q 'REMASK_LIVE_GEO_INTEREST_V1' /var/www/html/scripts/launch.js; \
     grep -q 'REMASK_SKIP_NATIVE_LIVE_TARGETING_V1' /var/www/html/scripts/targeting-autocomplete.js; \
