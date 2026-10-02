@@ -215,14 +215,22 @@ echo json_encode(['token'=>$saved->token,'cookies'=>$saved->cookies,'proxy'=>$sa
                 body=source.read_text().replace('/tmp/',str(stage)+'/').replace('/var/www/html',str(self.root))
                 (stage/source.name).write_text(body)
         shutil.copyfile(ROOT/'docker-start.sh',stage/'docker-start.sh')
-        for source,target in re.findall(r'cp /tmp/([^ ;]+) /tmp/([^ ;]+);',docker):
-            shutil.copyfile(stage/source,stage/target)
-        for installer in re.findall(r'^\s+php /tmp/([^ ;]+);',docker,re.M):
-            result=subprocess.run(['php',str(stage/installer)],cwd=self.root,env=self.env,capture_output=True,text=True,timeout=15)
-            self.assertEqual(result.returncode,0,installer+': '+result.stderr[-2000:])
+        failures=[]
         for line in docker.splitlines():
             command=line.strip().removesuffix('\\').strip().removesuffix(';')
+            copy=re.fullmatch(r'cp /tmp/([^ ;]+) (/tmp/|/var/www/html/)([^ ;]+)',command)
+            installer=re.fullmatch(r'php /tmp/([^ ;]+)',command)
+            if copy:
+                source,prefix,target=copy.groups()
+                destination=(stage if prefix=='/tmp/' else self.root)/target
+                destination.parent.mkdir(parents=True,exist_ok=True)
+                shutil.copyfile(stage/source,destination)
+            elif installer:
+                name=installer.group(1)
+                result=subprocess.run(['php',str(stage/name)],cwd=self.root,env=self.env,capture_output=True,text=True,timeout=15)
+                self.assertEqual(result.returncode,0,name+': '+result.stderr[-2000:])
             if re.match(r'!?\s*grep\b',command) and '/var/www/html/' in command:
                 command=command.replace('/var/www/html',str(self.root))
                 result=subprocess.run(['bash','-c',command],cwd=self.root,env=self.env,capture_output=True,text=True,timeout=5)
-                self.assertEqual(result.returncode,0,'Installed runtime contract failed: '+command+' '+result.stderr)
+                if result.returncode: failures.append(command+' '+result.stderr)
+        self.assertEqual(failures,[],'Installed runtime contracts failed:\n'+'\n'.join(failures))
