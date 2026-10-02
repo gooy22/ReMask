@@ -63,6 +63,22 @@ class CardFieldTests(unittest.TestCase):
 
 
 class CardBrowserTests(unittest.IsolatedAsyncioTestCase):
+    async def test_initial_billing_setup_stops_before_fields_or_next_confirmation(self):
+        rows=SimpleNamespace(wait_for=AsyncMock(),count=AsyncMock(return_value=1),inner_text=AsyncMock(return_value='Fixture RK\nActive'))
+        rows.filter=lambda **kw:rows
+        add=SimpleNamespace(click=AsyncMock(),is_enabled=AsyncMock(return_value=True))
+        page=SimpleNamespace(url='https://business.facebook.com/latest/settings/ad_accounts/?business_id=987654321',
+            get_by_role=lambda *a,**kw:SimpleNamespace(filter=lambda **kw:rows),wait_for_timeout=AsyncMock(),
+            locator=lambda _:SimpleNamespace(inner_text=AsyncMock(return_value='Add payment information Select location and currency Set time zone')))
+        browser=SimpleNamespace(page=page,profile_id='Fixture',_goto=AsyncMock(),_assert_authenticated=AsyncMock(),
+            SETTINGS_AD_ACCOUNTS_URLS=['https://business.facebook.com/latest/settings/ad_accounts/?business_id={business_id}'],
+            _read_selected_ad_account_identity=AsyncMock(return_value={'confirmed':True,'ad_account_id':ID}))
+        with patch('app.payment_card_binding.select_settings_payment_tab',AsyncMock()),patch('app.payment_card_binding._payment_surface',AsyncMock()),patch('app.payment_card_binding._unique_visible',AsyncMock(return_value=add)) as controls,patch('app.payment_card_binding._form_fields',AsyncMock()) as fields:
+            result=await payment_card_flow(browser,ID,{'business_id':'987654321','name':'Fixture RK'},operation='prepare')
+        self.assertEqual(result['code'],'PAYMENT_ACCOUNT_SETUP_REQUIRED');self.assertFalse(result['submitted'])
+        self.assertEqual(result['required_settings'],['country','currency','timezone']);fields.assert_not_awaited()
+        add.click.assert_awaited_once();self.assertEqual(controls.await_count,1)
+
     async def test_whole_operation_timeout_cancels_setup_and_never_claims_unsubmitted_bind(self):
         original_wait=asyncio.wait_for
         for operation,expected in [('prepare','BLOCKED'),('bind','SUBMITTED_UNVERIFIED')]:
