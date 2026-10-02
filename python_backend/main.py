@@ -1863,7 +1863,7 @@ async def profile_live_inventory(
 
             discovery_revalidation=False
             business_inventory_confirmed_empty=False
-            if known_accounts_by_business and requested_business_ids:
+            if requested_business_ids:
                 # REMASK_SCOPED_HINTS_ARE_REQUIRED_TARGETS_V1
                 # Scoped Sync asks for exact BMs, so those requested live targets
                 # remain required. Full profile Sync never promotes historical

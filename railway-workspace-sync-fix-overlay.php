@@ -488,15 +488,12 @@ async function syncSelection(){
         (done,total)=>{$('workspaceStatus').textContent=`Синхронизация FB: ${done}/${total}`;setProgress(done,total)}
       );
     }else if(tab==='businesses'){
-      // REMASK_BUSINESS_TAB_FULL_PROFILE_SYNC_V1
-      // BM/RK/FP belong to one profile inventory. Selecting one or several BM
-      // rows must refresh the whole owning profile once, not create a partial
-      // snapshot scoped to one BM.
-      const profiles=[...new Set(rows.map(r=>r.profile).filter(Boolean))];
+      // Selected BM rows are explicit targets. The server merges live
+      // siblings from the confirmed snapshot after checking this exact BM.
       results=await concurrent(
-        profiles,
+        rows,
         syncConcurrency,
-        p=>syncProfileSafe(p),
+        row=>syncBusinessSafe(row),
         (done,total)=>{$('workspaceStatus').textContent=`Синхронизация BM: ${done}/${total}`;setProgress(done,total)}
       );
     }else if(tab==='ad_accounts'){
@@ -1409,11 +1406,11 @@ $syncProfileReplacement = <<<'PHP'
                 : [];
         }
 
-        // If we know exact BM->RK pairs, probe only those BMs. Unhinted stale
-        // Business IDs must not consume 15-20 seconds each before the target RK.
-        $liveBusinessHints = $knownAdAccountHints !== []
-            ? array_keys($knownAdAccountHints)
-            : array_keys($knownBusinessIds);
+        // Only an explicitly selected Business restricts live discovery.
+        // Full profile Sync must discover new BMs even when an older BM has RK.
+        $liveBusinessHints = $requestedBusinessId !== ''
+            ? [$requestedBusinessId]
+            : [];
 
         try {
             $liveInventory = hierarchy_worker_live_inventory(

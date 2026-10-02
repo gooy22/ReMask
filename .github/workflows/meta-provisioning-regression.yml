@@ -19,6 +19,7 @@ on:
       - 'Dockerfile'
       - 'tests/launch-private-catalog.test.cjs'
       - 'tests/worker-auto-ui.test.cjs'
+      - 'tests/workspace-sync-scope.test.cjs'
       - '.github/workflows/meta-provisioning-regression.yml'
   workflow_dispatch:
 permissions:
@@ -44,6 +45,8 @@ jobs:
       - name: Backend regression suite
         working-directory: python_backend
         run: /tmp/remask-regression/bin/python -m unittest discover -s tests
+      - name: Selected Business sync scope
+        run: node tests/workspace-sync-scope.test.cjs
       - name: Automatic batch interface
         run: node tests/worker-auto-ui.test.cjs
       - name: Private Launch catalog and funding interface
