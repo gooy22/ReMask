@@ -110,6 +110,20 @@ final class RemaskPrivateLaunchCatalog
         ];
     }
 
+    public static function readiness(array $catalog, string $accountId): array {
+        $funding = self::asset($catalog, 'funding', $accountId);
+        $pages = (array)($catalog['pages']['data'] ?? []);
+        return [
+            'account_id'=>$funding['id'], 'catalog_only'=>true, 'status'=>'NOT_VERIFIED',
+            'pages'=>['status'=>'NOT_VERIFIED', 'count'=>count($pages), 'data'=>$pages,
+                      'ad_account_page_access_verified'=>false],
+            'pixels'=>['status'=>'NOT_CHECKED'], 'media'=>['status'=>'NOT_CHECKED'],
+            'funding'=>['status'=>'NOT_CHECKED', 'funding_verified'=>false],
+            'warnings'=>['Доступ FP для рекламы в выбранном РК не проверен.'],
+            '_cache'=>$catalog['_cache'],
+        ];
+    }
+
     private static function json(string $path): array {
         $raw = @file_get_contents($path);
         $data = is_string($raw) ? json_decode($raw, true) : null;
@@ -187,6 +201,48 @@ try {
 } catch (Throwable $e) { MetaEndpoint::fail($e); }
 ASSETS
 );
+file_put_contents($root.'/ajax/metaAssetReadiness.php', <<<'READINESS'
+<?php
+declare(strict_types=1);
+require_once __DIR__ . '/../settings.php';
+require_once __DIR__ . '/../checkpassword.php';
+require_once __DIR__ . '/../classes/MetaEndpoint.php';
+require_once __DIR__ . '/../classes/RemaskPrivateLaunchCatalog.php';
+try {
+    $input = MetaEndpoint::input();
+    $profile = trim((string)($input['profile'] ?? ''));
+    if ($profile === '') throw new InvalidArgumentException('profile is required');
+    MetaEndpoint::accountForName($profile);
+    MetaEndpoint::ok(RemaskPrivateLaunchCatalog::readiness(
+        RemaskPrivateLaunchCatalog::load($profile), (string)($input['account_id'] ?? '')));
+} catch (Throwable $e) { MetaEndpoint::fail($e); }
+READINESS
+);
+$workspacePath=$root.'/scripts/workspace.js';
+$workspace=file_get_contents($workspacePath);
+$start=is_string($workspace) ? strpos($workspace,'async function checkAssetsSelection(){') : false;
+$end=$start!==false ? strpos($workspace,'async function showFunding(){',$start) : false;
+if ($start===false || $end===false) throw new RuntimeException('Assets readiness UI boundary missing');
+$workspace=substr_replace($workspace, <<<'READINESS_UI'
+async function checkAssetsSelection(){
+  const rows=selectedRows('ad_accounts');
+  if(!rows.length)return;
+  openModal(`Assets — ${rows.length} РК`,`<div class="ws-muted mb-2">Страницы из сохранённого списка профиля. Доступ страницы для рекламы в этом РК требует отдельной проверки.</div><div id="assetReadinessProgress">Загрузка…</div><div id="assetReadinessRows"></div>`,'',null);
+  const body=$('assetReadinessRows'), progress=$('assetReadinessProgress');
+  await concurrent(rows,1,async r=>apiJson('ajax/metaAssetReadiness.php',post({profile:r.profile,account_id:r.id})),(done,total,res,idx)=>{
+    const r=rows[idx], block=document.createElement('div');
+    const names=(res?.pages?.data||[]).map(p=>`${p.name||p.id} · ${p.id}`).join(' · ');
+    block.innerHTML=`<b>${esc(r.name||r.id)}</b><div class="sub">${esc(r.profile)} · ${esc(r.id)}</div>`+
+      (res?.error ? `<div class="job-failed">${esc(res.error)}</div>` :
+      `<div>FP: ${esc(names||'В сохранённом списке страниц нет.')}</div><div>${pill('ДОСТУП FP НЕ ПРОВЕРЕН','warn')}</div><div>Pixel и медиа: не проверены. Оплата: не проверена.</div>`);
+    body.appendChild(block); progress.textContent=`Загружено ${done}/${total}`; setProgress(done,total);
+  });
+  progress.textContent='Для проверки карты используй «Funding / карта». Наличие FP в профиле ещё не подтверждает её доступ для рекламы в РК.';
+}
+
+READINESS_UI
+, $start, $end-$start);
+file_put_contents($workspacePath,$workspace);
 // Review/submit still have only a legacy Graph implementation. Do not silently
 // use that implementation when the user selected private-worker operation.
 foreach (['metaLaunchReview.php','metaDryRun.php','metaJobCreate.php','metaLaunch.php'] as $endpoint) {

@@ -119,11 +119,23 @@ class PrivateLaunchCatalogTests(unittest.TestCase):
         error = self.run_php('$c=json_decode('+raw+',true);try {RemaskPrivateLaunchCatalog::asset($c,"pixels","333333333");} catch(DomainException $e) {echo json_encode(["rejected"=>true]);}')
         self.assertTrue(error['rejected'])
 
+    def test_readiness_exposes_pages_without_claiming_advertising_or_payment_access(self):
+        raw = json.dumps(json.dumps(self.catalog()))
+        data = self.run_php('$c=json_decode('+raw+',true);echo json_encode(RemaskPrivateLaunchCatalog::readiness($c,"act_333333333"));')
+        self.assertEqual(data['status'], 'NOT_VERIFIED')
+        self.assertEqual(data['pages']['count'], 1)
+        self.assertEqual(data['pages']['data'][0]['id'], '222222222')
+        self.assertFalse(data['pages']['ad_account_page_access_verified'])
+        self.assertFalse(data['funding']['funding_verified'])
+        error = self.run_php('$c=json_decode('+raw+',true);try {RemaskPrivateLaunchCatalog::readiness($c,"999999999");} catch(InvalidArgumentException $e) {echo json_encode(["rejected"=>true]);}')
+        self.assertTrue(error['rejected'])
+
     def test_installer_and_generated_php_lint_and_js_cache_bust(self):
         root = Path(self.tmp.name)/'web'
         for folder in ['classes','ajax','scripts']:
             (root/folder).mkdir(parents=True,exist_ok=True)
         (root/'scripts/launch.js').write_text('function validateReady(){}\n')
+        (root/'scripts/workspace.js').write_text('async function checkAssetsSelection(){}\nasync function showFunding(){}\n'.replace('checkAssetsSelection(){}','checkAssetsSelection(){ }'))
         (root/'launch.php').write_text('<script src="scripts/launch.js?v=old"></script>')
         installer = Path(self.tmp.name)/'overlay.php'
         source = OVERLAY.read_text().replace("$root='/var/www/html';", '$root='+json.dumps(str(root))+';')

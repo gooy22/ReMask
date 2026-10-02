@@ -10521,6 +10521,25 @@ class FacebookBusinessBrowser:
         }
 
 
+    async def _read_selected_ad_account_identity(self, *, business_id: str, account_name: str) -> dict[str, Any]:
+        result = await self._reconcile_created_ad_account_from_ui(
+            business_id=business_id, account_name=account_name,
+        )
+        if result.get('confirmed') or self.page is None:
+            return result
+        # A selected_asset_id URL can render only the table until Details is
+        # opened. Read the exact named row; never open Add/Create or a sibling.
+        rows = self.page.get_by_role('row').filter(has_text=account_name)
+        if await rows.count() != 1:
+            return result
+        details = rows.get_by_role('link', name=re.compile(r'^(Details|Подробнее|Деталі)$', re.I))
+        if await details.count() != 1 or not await details.is_visible():
+            return result
+        await details.click(timeout=1000)
+        return await self._reconcile_created_ad_account_from_ui(
+            business_id=business_id, account_name=account_name,
+        )
+
     async def _ad_account_submit_controls(
         self,
     ) -> list[dict[str, Any]]:
@@ -11851,10 +11870,11 @@ class FacebookBusinessBrowser:
                 selected_row = accounts.get(selected)
                 if selected_row and (query.get("business_id") or []) == [business]:
                     identity = await asyncio.wait_for(
-                        self._reconcile_created_ad_account_from_ui(
+                        self._read_selected_ad_account_identity(
                             business_id=business, account_name=_clean(selected_row.get("name")),
-                        ), timeout=0.8,
+                        ), timeout=2.0,
                     )
+                    diagnostics.append({"source":"selected_account_identity_check", "identity":identity})
                     canonical = _normalize_ad_account_id(identity.get("ad_account_id"))
                     if identity.get("confirmed") and canonical and canonical != selected:
                         accounts.pop(selected)
@@ -11864,8 +11884,8 @@ class FacebookBusinessBrowser:
                         }
                         diagnostics.append({"source":"business_settings_details_identity",
                             "business_asset_id":selected, "ad_account_id":canonical})
-            except Exception:
-                pass
+            except Exception as exc:
+                diagnostics.append({"source":"selected_account_identity_check", "error":exc.__class__.__name__})
 
             self._last_ad_account_section_diagnostic = {
                 "stage": "inventory_complete",
