@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import re
@@ -76,7 +77,7 @@ async def _payment_surface(browser: Any, stage: str) -> None:
     """Record control labels before card entry; never values or page body."""
     page=browser.page
     try:
-        rows=await asyncio.wait_for(page.evaluate("""() => Array.from(document.querySelectorAll('button,[role="button"],a[href],select,[role="combobox"],h1,h2,h3'))
+        rows=await asyncio.wait_for(page.evaluate("""() => Array.from(document.querySelectorAll('button,[role="button"],[role="menuitem"],a[href],select,[role="combobox"],h1,h2,h3'))
           .filter(el=>el.getClientRects().length).slice(0,65)
           .map(el=>({role:el.getAttribute('role')||el.tagName.toLowerCase(),label:(el.getAttribute('aria-label')||el.innerText||'').trim()
             .replace(/(?:\\d[ -]?){12,19}/g,'[redacted]').replace(/\\d{6,}/g,'[id]').slice(0,100)})).filter(r=>r.label)"""),timeout=2)
@@ -133,6 +134,16 @@ async def _open_card_form(browser: Any, target: str, asset: dict[str,str]) -> di
     add=await _unique_visible(page,'button',r'^(Add payment method|Добавить способ оплаты|Додати спосіб оплати)$')
     if add is None:
         add=await _unique_visible(page,'link',r'^(Add payment method|Добавить способ оплаты|Додати спосіб оплати)$')
+    if add is None:
+        more=await _unique_visible(page,'button',r'^(More|Ещё|Еще|Більше)$')
+        if more is not None:
+            await more.click(timeout=3000)
+            await page.wait_for_timeout(300)
+            await _payment_surface(browser,'selected_account_more')
+            for role in ('menuitem','button','link'):
+                add=await _unique_visible(page,role,r'^(Add payment method|Добавить способ оплаты|Додати спосіб оплати)$')
+                if add is not None:break
+            if add is None:await page.keyboard.press('Escape')
     if add is None:
         await _payment_surface(browser,'selected_settings')
         # Use the existing rendered Billing navigation, with no guessed URL.
@@ -262,8 +273,17 @@ async def profile_payment_card(resolver:Any,profile:str,payload:dict[str,Any]) -
     async with ProfileSession(context) as session:
         browser=await session.facebook_business_browser()
         try:
-            return await asyncio.wait_for(payment_card_flow(browser,target,asset,operation=operation,
+            result=await asyncio.wait_for(payment_card_flow(browser,target,asset,operation=operation,
                 card=payload.get('card'),cvv=str(payload.get('cvv') or '')),timeout=95)
+            # A review of Meta before any card entry. Images never enter the vault
+            # or jobs; all input values are masked even in this read-only preview.
+            if operation=='prepare' and result.get('code') not in {'SESSION_EXPIRED','CHECKPOINT_REQUIRED','TWO_FACTOR_REQUIRED'}:
+                try:
+                    if urlsplit(str(browser.page.url)).hostname in ALLOWED_HOSTS:
+                        screenshot=await browser.page.screenshot(type='jpeg',quality=65,mask=[browser.page.locator('input,textarea')],timeout=2000)
+                        result['ui_preview']=base64.b64encode(screenshot).decode('ascii')
+                except Exception:pass
+            return result
         except asyncio.TimeoutError:
             # Timeout may happen after Save; never permit blind retry.
             return {**base,'status':'SUBMITTED_UNVERIFIED' if operation=='bind' else 'BLOCKED','code':'CARD_FLOW_TIMEOUT'}

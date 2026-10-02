@@ -63,7 +63,7 @@ class CardBrowserTests(unittest.IsolatedAsyncioTestCase):
         with patch('app.payment_card_binding._unique_visible',AsyncMock(return_value=None)) as controls,patch('app.payment_card_binding._payment_surface',AsyncMock()),patch('app.payment_card_binding.inspect_payment_methods',AsyncMock(return_value={'account_scope_verified':False})) as inspect:
             result=await _open_card_form(browser,ID,{'business_id':'987654321','name':'Fixture RK'})
         self.assertEqual(result['code'],'PAYMENT_ACCOUNT_SCOPE_UNVERIFIED')
-        self.assertEqual(controls.await_count,2);inspect.assert_awaited_once()
+        self.assertEqual(controls.await_count,3);inspect.assert_awaited_once()
 
     def browser(self,body='Payment methods'):
         save=SimpleNamespace(is_enabled=AsyncMock(return_value=True),click=AsyncMock())
