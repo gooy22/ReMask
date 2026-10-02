@@ -1,6 +1,9 @@
 import json
+import base64
+import io
 import shutil
 import subprocess
+import tarfile
 import unittest
 
 from tests import test_cookie_only_profiles as fixture
@@ -123,3 +126,25 @@ class CookieTxtImportTests(unittest.TestCase):
             self.assertIn('scripts/cookie-txt-import.js?v=',(self.root/page).read_text())
         self.assertIn('REMASK_COOKIE_TXT_IMPORT_V1',(self.root/'scripts/cookie-txt-import.js').read_text())
         self.assertTrue((self.root/'classes/RemaskCookieTxt.php').exists())
+
+    def test_real_auth_guard_rejects_missing_csrf_and_accepts_valid_header(self):
+        parts=sorted((fixture.ROOT/'.deploy/clean-preview-valid').glob('runtime.b64.*'))
+        with tarfile.open(fileobj=io.BytesIO(base64.b64decode(''.join(p.read_text() for p in parts)))) as archive:
+            member=next(m for m in archive.getmembers() if m.name.lstrip('./')=='checkpassword.php')
+            (self.root/'checkpassword.php').write_bytes(archive.extractfile(member).read())
+        script = '''ini_set('session.save_path',dirname($argv[1]));session_start();
+$_SESSION['remask_authenticated']=true;$_SESSION['remask_csrf']='csrf-fixture';
+$_SERVER['REQUEST_METHOD']='POST';$_SERVER['REQUEST_URI']='/ajax/metaProfileManager.php';
+if($argv[2]==='1')$_SERVER['HTTP_X_REMASK_CSRF']='csrf-fixture';
+$_POST=json_decode(stream_get_contents(STDIN),true);require $argv[1];'''
+        payload={'action':'import_txt','text':self.row(),'proxy':self.proxy}
+        def run(header):
+            r=subprocess.run(['php','-r',script,str(self.root/'ajax/metaProfileManager.php'),str(header)],
+                input=json.dumps(payload),env=self.env,capture_output=True,text=True,check=True,timeout=10)
+            return json.loads(r.stdout)
+        denied=run(0)
+        self.assertFalse(denied['ok'])
+        self.assertIn('CSRF validation failed',denied['error']['message'])
+        self.assertFalse(self.data.exists() and self.saved())
+        accepted=run(1)
+        self.assertEqual(accepted['imported'],1)

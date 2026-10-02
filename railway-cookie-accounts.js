@@ -4,9 +4,9 @@ let remaskEditingProfile = false;
 
 async function remaskLoadNextProfileNumber() {
     try {
-        const response = await fetch('ajax/metaProfileManager.php', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'next_number'})});
+        const response = await fetch('ajax/metaProfileManager.php', {method:'POST',headers:{'Content-Type':'application/json','X-ReMask-CSRF':document.querySelector('meta[name="remask-csrf"]')?.content || ''},body:JSON.stringify({action:'next_number'})});
         const data = await response.json();
-        if (!data.ok) throw new Error(data.message || data.error || 'Не удалось получить номер');
+        if (!data.ok) throw new Error(data.message || data.error?.message || (typeof data.error === 'string' ? data.error : 'Не удалось получить номер'));
         document.add.name.value = String(data.next_number);
         document.add.name.readOnly = true;
     } catch (error) { alert(error.message); }

@@ -28,11 +28,11 @@ class Element {
   showModal() { this.open=true; }
   close() { this.open=false; return this.fire('close'); }
 }
-const doc={ids:new Map(),readyState:'complete',createElement(tag){return new Element(tag,this);},getElementById(id){return this.ids.get(id);}};
+const doc={ids:new Map(),readyState:'complete',createElement(tag){return new Element(tag,this);},getElementById(id){return this.ids.get(id);},querySelector(selector){return selector==='meta[name="remask-csrf"]'?{content:'csrf-fixture'}:null;}};
 doc.body=new Element('body',doc); const anchor=doc.createElement('button'); anchor.id='addProfileTop'; doc.body.append(anchor);
 let requests=[],responses=[],reloads=0;
 const context={document:doc,TextDecoder,window:{location:{reload(){reloads++;}}},
-  async fetch(url,options){requests.push({url,body:JSON.parse(options.body)}); const data=responses.shift(); return {ok:true,json:async()=>data};}};
+  async fetch(url,options){assert.equal(options.headers['X-ReMask-CSRF'],'csrf-fixture');requests.push({url,body:JSON.parse(options.body)}); const data=responses.shift(); return {ok:true,json:async()=>data};}};
 vm.createContext(context);vm.runInContext(source,context);
 (async()=>{
   await doc.getElementById('remaskTxtImport').fire('click'); const dialog=doc.getElementById('remaskTxtDialog'); assert.equal(dialog.open,true);

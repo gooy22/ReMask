@@ -10,10 +10,12 @@
   let dialog, raw = '', preview = null, busy = false;
 
   async function request(action, extra = {}) {
+    const csrf = document.querySelector('meta[name="remask-csrf"]')?.content || '';
+    if (!csrf) throw new Error('Обновите страницу: не найден CSRF-код сессии.');
     const response = await fetch('ajax/metaProfileManager.php', {method:'POST', cache:'no-store',
-      headers:{'Content-Type':'application/json'}, body:JSON.stringify({action, text:raw, ...extra})});
+      headers:{'Content-Type':'application/json','X-ReMask-CSRF':csrf}, body:JSON.stringify({action, text:raw, ...extra})});
     const result = await response.json();
-    if (!response.ok || !result.ok) throw new Error(result.message || 'Не удалось обработать TXT.');
+    if (!response.ok || !result.ok) throw new Error(result.message || result.error?.message || (typeof result.error === 'string' ? result.error : 'Не удалось обработать TXT.'));
     return result;
   }
   const field = id => dialog.querySelector('#' + id);

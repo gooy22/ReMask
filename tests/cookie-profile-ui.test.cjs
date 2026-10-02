@@ -33,14 +33,14 @@ for(const raw of ['[]','{}','null','invalid',JSON.stringify([{name:'c_user',valu
   // Exercise the legacy Accounts module functions after removing its import.
   const legacy=fs.readFileSync('railway-cookie-accounts.js','utf8').replace(/^import .*\n/,'');
   const form={name:{value:'Fixture',readOnly:false},cookies:{value:JSON.stringify(cookies)},proxy:{value:'http:127.0.0.1:8080:u:p'}};
-  let posts=[];const old={window:{addEventListener(){},location:{reload(){}}},document:{add:form},alert(){},
+  let posts=[];const old={window:{addEventListener(){},location:{reload(){}}},document:{add:form,querySelector:()=>({content:'csrf-fixture'})},alert(){},
     Requests:{async post(url,body){posts.push({url,body});return{};},async checkResponse(){return{success:true};}}};
   vm.createContext(old);vm.runInContext(legacy,old);await old.addAccount();
   assert.deepEqual(posts.map(x=>x.url),['ajax/checkAccount.php','ajax/addAccount.php']);
   assert.equal(posts.some(x=>new URLSearchParams(x.body).has('token')),false);
   assert.equal(new URLSearchParams(posts[1].body).get('action'),'create');
   assert.equal(new URLSearchParams(posts[1].body).get('auto_number'),'1');
-  old.fetch=async()=>({json:async()=>({ok:true,next_number:8})});
+  old.fetch=async(url,options)=>{assert.equal(options.headers['X-ReMask-CSRF'],'csrf-fixture');return{json:async()=>({ok:true,next_number:8})};};
   await old.remaskLoadNextProfileNumber();assert.equal(form.name.value,'8');assert.equal(form.name.readOnly,true);
   posts=[];await old.addAccount();assert.equal(new URLSearchParams(posts[1].body).get('action'),'create');
   assert.equal(await old.validateForm('Fixture','',JSON.stringify(cookies),form.proxy.value,false),true);
