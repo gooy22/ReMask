@@ -90,7 +90,7 @@ class CookieOnlyProfileTests(unittest.TestCase):
 
     def test_create_without_token_and_no_false_live_verification(self):
         result = self.create()
-        self.assertTrue(result['ok'])
+        self.assertTrue(result['ok'], result)
         self.assertEqual(result['profile']['auth_mode'],'cookies')
         self.assertFalse(result['profile']['token_required'])
         self.assertFalse(result['profile']['session_verified'])
@@ -159,3 +159,37 @@ class CookieOnlyProfileTests(unittest.TestCase):
         self.assertNotIn('id="editToken"',workspace)
         self.assertNotIn('name="token"',accounts)
         self.assertIn('Facebook cookies',accounts)
+
+    def test_postgres_store_encrypts_and_restores_tokenless_profile(self):
+        code = r'''
+require $argv[1].'/classes/PostgresProfileStore.php';
+class FixtureStatement extends PDOStatement {
+    public function __construct(private FixturePDO $db, private string $sql) {}
+    public function execute(?array $params = null): bool {
+        if (str_starts_with($this->sql, 'INSERT')) $this->db->saved = $params;
+        return true;
+    }
+    public function rowCount(): int { return 1; }
+    public function fetch(int $mode = PDO::FETCH_DEFAULT, int $orientation = PDO::FETCH_ORI_NEXT, int $offset = 0): mixed {
+        $p=$this->db->saved;
+        return ['name'=>$p['name'],'token_envelope'=>$p['token'],'legacy_envelope'=>$p['legacy'],'proxy_envelope'=>$p['proxy'],'metadata'=>$p['metadata']];
+    }
+}
+class FixturePDO extends PDO {
+    public array $saved=[];
+    public function __construct() {}
+    public function prepare(string $query, array $options = []): PDOStatement|false { return new FixtureStatement($this,$query); }
+}
+$db=new FixturePDO;
+$store=new PostgresProfileStore($db,new CredentialVault(str_repeat('f',32)));
+$acc=new FbAccount('Fixture','',$argv[2],null,RemaskProxy::fromSemicolonString($argv[3]));
+$store->addOrUpdateAccount($acc);
+$saved=$store->getAccountByName('Fixture');
+echo json_encode(['token'=>$saved->token,'cookies'=>$saved->cookies,'proxy'=>$saved->proxy->toArray(),'encrypted'=>$db->saved['legacy']!==$argv[2]]);
+'''
+        result=subprocess.run(['php','-r',code,str(self.root),json.dumps(self.cookies),self.proxy],env=self.env,capture_output=True,text=True,check=True,timeout=10)
+        saved=json.loads(result.stdout)
+        self.assertEqual(saved['token'],'')
+        self.assertEqual(saved['cookies'],self.cookies)
+        self.assertTrue(saved['proxy'])
+        self.assertTrue(saved['encrypted'])

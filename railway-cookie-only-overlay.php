@@ -38,6 +38,17 @@ final class RemaskCookieProfile
 COOKIE_PROFILE;
 file_put_contents($root . '/classes/RemaskCookieProfile.php', $helper);
 
+// Both persistence backends must accept the validated cookie profile.
+foreach (['FbAccountSerializer'=>'acc', 'PostgresProfileStore'=>'account'] as $class => $var) {
+    $path = $root . '/classes/' . $class . '.php';
+    $source = file_get_contents($path);
+    $needle = '$' . $var . "->name === '' || $" . $var . "->token === ''";
+    if (substr_count($source, $needle) !== 1) throw new RuntimeException('Profile store boundary missing: ' . $class);
+    $source = str_replace($needle, '$' . $var . "->name === ''", $source);
+    $source = str_replace(['Name and token are required.', 'Profile name and token are required.'], 'Profile name is required.', $source);
+    file_put_contents($path, $source);
+}
+
 // Canonical Profile Manager accepts tokenless create and preserves omitted
 // session/proxy values. Legacy Accounts and hierarchy updates use that same path.
 file_put_contents($root . '/ajax/addAccount.php', <<<'ADD_ACCOUNT'
