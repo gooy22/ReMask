@@ -64,10 +64,13 @@ async def _unique_visible(scope: Any, role: str, name: str) -> Any:
 async def _payment_surface(browser: Any, stage: str) -> None:
     """Record control labels before card entry; never values or page body."""
     page=browser.page
-    rows=await page.evaluate("""() => Array.from(document.querySelectorAll('button,[role="button"],a[href],select,[role="combobox"],h1,h2,h3'))
-      .filter(el=>el.getClientRects().length)
-      .map(el=>({role:el.getAttribute('role')||el.tagName.toLowerCase(),label:(el.getAttribute('aria-label')||el.innerText||'').trim()
-        .replace(/\\d{6,}/g,'[id]').slice(0,100)})).filter(r=>r.label).slice(0,65)""")
+    try:
+        rows=await asyncio.wait_for(page.evaluate("""() => Array.from(document.querySelectorAll('button,[role="button"],a[href],select,[role="combobox"],h1,h2,h3'))
+          .filter(el=>el.getClientRects().length).slice(0,65)
+          .map(el=>({role:el.getAttribute('role')||el.tagName.toLowerCase(),label:(el.getAttribute('aria-label')||el.innerText||'').trim()
+            .replace(/(?:\\d[ -]?){12,19}/g,'[redacted]').replace(/\\d{6,}/g,'[id]').slice(0,100)})).filter(r=>r.label)"""),timeout=2)
+    except Exception as exc:
+        rows=[{'diagnostic_unavailable':type(exc).__name__}]
     logging.getLogger('remask.payment_card').info('payment surface profile=%s stage=%s path=%s controls=%s',
         browser.profile_id,stage,urlsplit(str(page.url)).path,rows)
 

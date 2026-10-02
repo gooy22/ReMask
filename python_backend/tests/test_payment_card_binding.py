@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from app.facebook_business_browser import BrowserBusinessError
-from app.payment_card_binding import _open_card_form, card_values, field_kind, missing_card_fields, payment_card_flow, selected_payment_asset
+from app.payment_card_binding import _open_card_form, _payment_surface, card_values, field_kind, missing_card_fields, payment_card_flow, selected_payment_asset
 
 ID='123456789'
 CARD={'number':'4111111111111111','month':12,'year':2099,'holder':'Fixture'}
@@ -41,6 +41,12 @@ class CardFieldTests(unittest.TestCase):
 
 
 class CardBrowserTests(unittest.IsolatedAsyncioTestCase):
+    async def test_optional_diagnostics_failure_never_breaks_card_flow_or_logs_secret(self):
+        browser=SimpleNamespace(profile_id='Fixture',page=SimpleNamespace(url='https://business.facebook.com/latest/settings/ad_accounts/',evaluate=AsyncMock(side_effect=RuntimeError(CARD['number']))))
+        with self.assertLogs('remask.payment_card',level='INFO') as logs:
+            await _payment_surface(browser,'fixture')
+        self.assertNotIn(CARD['number'],' '.join(logs.output))
+
     async def test_billing_fallback_never_adds_to_unverified_account(self):
         rows=SimpleNamespace(wait_for=AsyncMock())
         page=SimpleNamespace(url='https://business.facebook.com/latest/settings/ad_accounts/?business_id=987654321',
