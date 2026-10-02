@@ -250,6 +250,10 @@ async def _setup_choice(page: Any, label: str, choice: str, search: str, observe
         if len(set(selected))!=1:return False
         await control.select_option(selected[0],timeout=3000)
         return True
+    # A custom picker exposes its selected value in the closed control.
+    # Reopening an already matching USD/Kyiv menu can produce duplicate labels.
+    current=await control.inner_text(timeout=2000)
+    if any(pattern.fullmatch(line.strip()) for line in re.sub(r'[\u200b-\u200d\ufeff]','',current).splitlines()):return True
     await control.click(timeout=3000)
     for _ in range(3):
         await page.wait_for_timeout(250)
