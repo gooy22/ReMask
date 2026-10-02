@@ -212,7 +212,7 @@ echo json_encode(['token'=>$saved->token,'cookies'=>$saved->cookies,'proxy'=>$sa
         stage.mkdir()
         for source in ROOT.glob('railway-*'):
             if source.is_file():
-                body=source.read_text().replace('/var/www/html',str(self.root)).replace('/tmp/',str(stage)+'/')
+                body=source.read_text().replace('/tmp/',str(stage)+'/').replace('/var/www/html',str(self.root))
                 (stage/source.name).write_text(body)
         shutil.copyfile(ROOT/'docker-start.sh',stage/'docker-start.sh')
         for source,target in re.findall(r'cp /tmp/([^ ;]+) /tmp/([^ ;]+);',docker):
