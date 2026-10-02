@@ -20,15 +20,26 @@ def account_id(value: str) -> str:
     return clean
 
 
+def _billing_url_matches(url: str, target: str, *, require_scope: bool) -> bool:
+    parsed = urlsplit(url)
+    if parsed.scheme != "https" or parsed.hostname not in {
+        "business.facebook.com", "www.facebook.com", "adsmanager.facebook.com",
+    }:
+        return False
+    path = parsed.path.casefold()
+    if not re.search(r"/(?:billing(?:_hub)?|payments?)(?:/|$)", path):
+        return False
+    if re.search(r"/(?:submit|checkout|pay|process|add|edit|remove|delete|confirm|verify|attach)(?:/|$)", path):
+        return False
+    query = parse_qs(parsed.query, keep_blank_values=True)
+    scopes = [query[key] for key in ("act", "asset_id", "ad_account_id") if key in query]
+    return (bool(scopes) or not require_scope) and all(values == [target] for values in scopes)
+
+
 def payment_summary(target: str, url: str, text: str) -> dict[str, Any]:
     """Interpret visible billing evidence, returning only safe masked fields."""
     target = account_id(target)
-    parsed = urlsplit(url)
-    trusted = parsed.scheme == "https" and parsed.hostname in {
-        "business.facebook.com", "www.facebook.com", "adsmanager.facebook.com",
-    }
-    query = parse_qs(parsed.query)
-    scoped = any(query.get(key) == [target] for key in ("act", "asset_id", "ad_account_id"))
+    scoped = _billing_url_matches(url, target, require_scope=True)
     # A requested URL alone does not prove which account Meta actually rendered.
     visible_account = bool(re.search(rf"(?<!\d){re.escape(target)}(?!\d)", text))
     billing = bool(re.search(
@@ -36,7 +47,7 @@ def payment_summary(target: str, url: str, text: str) -> dict[str, Any]:
         r"способ[ыа] оплаты|настройки платеж|платіжн[іи] метод|способи оплати",
         text, re.I,
     ))
-    exact = trusted and scoped and visible_account and billing
+    exact = scoped and visible_account and billing
     methods = []
     if exact:
         pattern = re.compile(
@@ -106,17 +117,8 @@ async def inspect_payment_methods(browser: Any, target: str) -> dict[str, Any]:
         if not isinstance(link, dict):
             continue
         candidate = str(link.get("href") or "")
-        parsed = urlsplit(candidate)
-        if parsed.scheme != "https" or parsed.hostname not in {
-            "business.facebook.com", "www.facebook.com", "adsmanager.facebook.com",
-        }:
-            continue
         # Never follow a payment submission, login or unrelated account link.
-        if not re.search(r"/(?:billing|payment)", parsed.path, re.I):
-            continue
-        query = parse_qs(parsed.query)
-        if any(query.get(key) and query[key] != [target]
-               for key in ("act", "asset_id", "ad_account_id")):
+        if not _billing_url_matches(candidate, target, require_scope=False):
             continue
         billing_url = candidate
         break

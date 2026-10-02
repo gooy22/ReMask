@@ -173,3 +173,32 @@ vm.createContext(sandbox); vm.runInContext(source.slice(start,end), sandbox);
   assert.equal(details.join(' ').includes('secret'),false);
   console.log('Auto/BM/FP interface and checkpoint-safe single/mixed batch retries passed.');
 })().catch(error=>{console.error(error);process.exitCode=1;});
+
+
+// An ambiguous CREATE must show its saved candidate without promoting it to SUCCESS.
+{
+  const detailsStart = source.indexOf('function pythonWorkerFailureDetails(item)');
+  const detailsEnd = source.indexOf('function pythonWorkerSelectionRefresh()', detailsStart);
+  const detailsSandbox = {pythonWorkerItemCanRetry:()=>true};
+  vm.createContext(detailsSandbox);
+  vm.runInContext(source.slice(detailsStart, detailsEnd), detailsSandbox);
+  const details = detailsSandbox.pythonWorkerFailureDetails({
+    provisioning_steps:[{status:'FAILED',result:{
+      phase:'CREATE_RESULT_UNKNOWN', business_id:'1632909278268870',
+      create_response_ad_account_id:'act_123456789',
+      capture_candidate_verification:[{reason:'inventory_not_confirmed',
+        diagnostics:[{exact_name_ids:['123456789'],friendly_name:'InventoryQuery'}]}]
+    }}]
+  });
+  assert.ok(details.includes('РК-кандидат 123456789'));
+  assert.ok(details.includes('BM 1632909278268870'));
+  assert.ok(details.includes('Проверка: inventory_not_confirmed'));
+  assert.ok(!details.some(value=>/SUCCESS/.test(value)));
+  const invalid = detailsSandbox.pythonWorkerFailureDetails({
+    provisioning_steps:[{status:'FAILED',result:{
+      create_response_ad_account_id:'secret=value', business_id:'secret',
+      capture_candidate_verification:[{diagnostics:[{exact_name_ids:['secret']}]}]
+    }}]
+  });
+  assert.ok(!invalid.some(value=>value.includes('secret')));
+}

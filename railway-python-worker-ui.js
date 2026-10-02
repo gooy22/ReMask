@@ -306,6 +306,26 @@ function pythonWorkerFailureDetails(item) {
     return step && String(step.status || '').toUpperCase() === 'FAILED';
   });
   const result = failed && failed.result && typeof failed.result === 'object' ? failed.result : {};
+  const candidate = String(result.create_response_ad_account_id || result.candidate_ad_account_id || '').replace(/^act_/, '');
+  if (/^\d{5,30}$/.test(candidate)) parts.push('РК-кандидат ' + candidate);
+  const businessId = String(result.business_id || '');
+  if (/^\d{5,30}$/.test(businessId)) parts.push('BM ' + businessId);
+  const verification = Array.isArray(result.capture_candidate_verification)
+    ? result.capture_candidate_verification : Array.isArray(result.post_create_verification)
+      ? result.post_create_verification : [];
+  for (const evidence of verification.slice(-1)) {
+    if (!evidence || typeof evidence !== 'object') continue;
+    const reason = String(evidence.reason || '').replace(/[^a-zA-Z0-9_.:-]/g, '').slice(0,100);
+    if (reason) parts.push('Проверка: ' + reason);
+    const observations = Array.isArray(evidence.diagnostics) ? evidence.diagnostics : [];
+    for (const observation of observations.slice(-3)) {
+      const observedIds = Array.isArray(observation.exact_name_ids) ? observation.exact_name_ids : [];
+      const ids = observedIds.map(String).filter(id => /^\d{5,30}$/.test(id));
+      if (ids.length) parts.push('ID по имени: ' + ids.slice(0,3).join(','));
+      const source = String(observation.friendly_name || '').replace(/[^a-zA-Z0-9_]/g,'').slice(0,100);
+      if (source) parts.push('Источник: ' + source);
+    }
+  }
   if (result.phase === 'CREATE_NOT_SUBMITTED') parts.push('CREATE не отправлен');
   else if (result.phase === 'CREATE_SENT') parts.push('CREATE отправлен; результат требует проверки');
   if (!pythonWorkerItemCanRetry(item)) parts.push('Повтор недоступен');

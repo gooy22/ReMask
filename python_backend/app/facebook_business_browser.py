@@ -1222,78 +1222,53 @@ def _business_ids_from_private_selector_request(meta: Any) -> set[str]:
 
 # REMASK_PRIVATE_BUSINESS_INVENTORY_V1
 def _extract_business_inventory_rows(payload: Any) -> list[dict[str, str]]:
-    """Extract Business portfolio rows from Meta Business Suite Relay payloads.
+    """Read portfolio nodes without inheriting scope into their nested assets.
 
-    Only structurally business-scoped nodes are accepted. Generic numeric IDs
-    are ignored so Page/RK/user IDs cannot become phantom Businesses.
+    Explicit owner references provide an ID only when the node is an asset.
+    A generic ID needs a business type or a direct business collection slot.
     """
     found: dict[str, dict[str, str]] = {}
-    business_markers = (
-        "business",
-        "businessportfolio",
-        "business_portfolio",
-        "businessmanager",
-        "business_manager",
-        "bizkit",
-    )
 
     def compact(value: str) -> str:
         return value.casefold().replace("_", "").replace("-", "").replace(" ", "")
 
-    def walk(value: Any, path: str = "root") -> None:
+    business_types = {"business", "businessportfolio", "businessmanager", "bizkitbusiness"}
+    business_slots = business_types | {"businesses", "businessportfolios", "businessmanagers", "ownedbusinesses", "clientbusinesses"}
+    wrappers = {"edges", "nodes", "node", "items"}
+    asset_keys = {"page_id", "pageId", "ad_account_id", "adAccountId", "account_id", "user_id", "userId"}
+
+    def walk(value: Any, business_slot: bool = False) -> None:
         if isinstance(value, dict):
-            typename = _clean(value.get("__typename"))
-            folded_path = compact(path)
-            folded_type = compact(typename)
-            business_context = any(
-                compact(marker) in folded_path or compact(marker) in folded_type
-                for marker in business_markers
+            typename = compact(_clean(value.get("__typename")))
+            semantic = compact(_clean(value.get("asset_type") or value.get("assetType")))
+            typed_business = typename in business_types or semantic in business_types
+            non_business = bool(
+                (typename and typename not in business_types)
+                or (semantic and semantic not in business_types)
+                or (not typed_business and any(key in value for key in asset_keys))
             )
-
-            business_id = _digits(
-                value.get("business_id")
-                or value.get("businessId")
-                or value.get("businessID")
-            )
-            if not business_id and business_context:
+            business_id = _digits(value.get("business_id") or value.get("businessId") or value.get("businessID"))
+            if not business_id and not non_business and (typed_business or business_slot):
                 business_id = _digits(value.get("id"))
-
-            name = _clean(
-                value.get("business_name")
-                or value.get("businessName")
-                or value.get("name")
-            )
-
-            explicit_business_key = any(
-                key in value
-                for key in ("business_id", "businessId", "businessID")
-            )
-            strong_context = bool(
-                explicit_business_key
-                or (
-                    business_context
-                    and (
-                        "business" in folded_type
-                        or "businesses" in folded_path
-                        or "businessportfolio" in folded_path
-                        or "bizkit" in folded_path
-                    )
-                )
-            )
-            if business_id and strong_context:
-                row = found.get(business_id) or {
-                    "id": business_id,
-                    "name": "",
-                }
-                if name and not row.get("name"):
+            name = _clean(value.get("business_name") or value.get("businessName"))
+            if not name and not non_business:
+                name = _clean(value.get("name"))
+            if business_id:
+                row = found.setdefault(business_id, {"id": business_id, "name": ""})
+                if name and not row["name"]:
                     row["name"] = name[:240]
-                found[business_id] = row
-
+            # Collection scope survives edges/nodes wrappers only. Descendants
+            # such as pages, users, assets and arbitrary objects start unscoped.
+            is_row = bool(business_id or _digits(value.get("id")))
             for key, child in value.items():
-                walk(child, f"{path}.{key}")
+                folded_key = compact(key)
+                child_slot = folded_key in business_slots or (
+                    business_slot and not is_row and folded_key in wrappers
+                )
+                walk(child, child_slot)
         elif isinstance(value, list):
-            for index, child in enumerate(value):
-                walk(child, f"{path}[{index}]")
+            for child in value:
+                walk(child, business_slot)
 
     walk(payload)
     return [found[key] for key in sorted(found)]
@@ -13982,17 +13957,23 @@ class FacebookBusinessBrowser:
                 return False
 
             before_signature = _clean(state.get("signature"))
-            action_meta = (
-                await self._click_ad_account_form_action_by_visible_text(
-                    "next"
-                )
-            )
-            if not bool(action_meta.get("clicked")):
+            # The Add chooser is also a fieldless modal. Its tagged Create
+            # row must be selected before the genuine Next/Continue intro.
+            has_create_target = bool(state.get("create_entry") and state.get("create_target"))
+            if has_create_target:
+                action_meta = await self._click_state_detected_ad_account_create_entry()
+            else:
                 action_meta = (
                     await self._click_ad_account_form_action_by_visible_text(
-                        "final"
+                        "next"
                     )
                 )
+                if not bool(action_meta.get("clicked")):
+                    action_meta = (
+                        await self._click_ad_account_form_action_by_visible_text(
+                            "final"
+                        )
+                    )
             if not bool(action_meta.get("clicked")):
                 return False
 
@@ -14010,6 +13991,7 @@ class FacebookBusinessBrowser:
 
         final_state = await self._ad_account_ui_state()
         return self._ad_account_create_form_confirmed(final_state)
+
 
     async def _wait_for_ad_account_create_entry(
         self,
@@ -14681,7 +14663,7 @@ class FacebookBusinessBrowser:
                     post_add_poll_state.get("create_target") or {}
                 )
                 attempt["create_surface_seen"] = bool(
-                    attempt["ui_state_after"] == "CREATE_ENTRY"
+                    attempt["ui_state_after"] in {"CREATE_ENTRY", "INTRO_DIALOG"}
                     or attempt["create_target"]
                 )
 
@@ -14693,7 +14675,7 @@ class FacebookBusinessBrowser:
                 # though the diagnostic had already proved it was visible.
                 state_create_direct: dict[str, Any] = {"clicked": False}
                 if (
-                    attempt["ui_state_after"] == "CREATE_ENTRY"
+                    attempt["ui_state_after"] in {"CREATE_ENTRY", "INTRO_DIALOG"}
                     and attempt["create_target"]
                 ):
                     state_create_direct = (

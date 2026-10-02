@@ -37,6 +37,25 @@ class PaymentSummaryTests(unittest.TestCase):
         result=payment_summary(ID,URL,ID+"\nPayment methods")
         self.assertIsNone(result["card_linked"])
 
+    def test_conflicting_duplicate_or_empty_account_scope_cannot_prove_linkage(self):
+        for suffix in ["&act=999999999", "&asset_id=999999999", "&ad_account_id=", "&act=" + ID + "&act=" + ID]:
+            with self.subTest(suffix=suffix):
+                result = payment_summary(ID, URL + suffix, ID + "\nPayment methods\nVisa •••• 1234")
+                self.assertFalse(result["account_scope_verified"])
+                self.assertEqual(result["payment_methods"], [])
+                self.assertIsNone(result["card_linked"])
+
+    def test_non_billing_route_and_action_route_cannot_prove_linkage(self):
+        for path in ["/adsmanager/manage/campaigns", "/payment/submit", "/payments/checkout", "/billing_hub/payment_settings/submit"]:
+            with self.subTest(path=path):
+                result = payment_summary(ID, "https://business.facebook.com" + path + "?act=" + ID, ID + "\nPayment methods\nVisa •••• 1234")
+                self.assertFalse(result["account_scope_verified"])
+                self.assertEqual(result["payment_methods"], [])
+
+    def test_consistent_account_scope_keys_are_accepted(self):
+        result = payment_summary(ID, URL + "&act=" + ID, ID + "\nPayment methods\nVisa •••• 1234")
+        self.assertTrue(result["account_scope_verified"])
+
     def test_raw_card_number_and_unrelated_body_never_escape(self):
         raw="4111111111111111"
         result=payment_summary(ID,URL,ID+"\nPayment methods\nVisa "+raw+"\nSecurity code fixture\nAddress fixture")
@@ -81,6 +100,15 @@ class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
             await inspect_payment_methods(browser,ID)
         browser.page.evaluate.assert_not_called()
         self.assertEqual(browser._goto.await_count,1)
+
+    async def test_submission_and_ambiguous_scope_links_are_not_followed(self):
+        for url in [URL.replace("/billing_hub/payment_settings", "/payment/submit"), URL + "&act=", URL + "&act=" + ID + "&act=" + ID]:
+            with self.subTest(url=url):
+                browser = self.browser([{"href": url, "label": "Payments"}])
+                with self.assertRaises(BrowserBusinessError) as exc:
+                    await inspect_payment_methods(browser, ID)
+                self.assertEqual(exc.exception.code, "PAYMENT_UI_UNAVAILABLE")
+                self.assertEqual(browser._goto.await_count, 1)
 
     async def test_collapsed_all_tools_is_opened_once_before_reading_billing_link(self):
         browser=self.browser([])
