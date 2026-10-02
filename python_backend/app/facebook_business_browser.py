@@ -10522,6 +10522,7 @@ class FacebookBusinessBrowser:
 
 
     async def _read_selected_ad_account_identity(self, *, business_id: str, account_name: str) -> dict[str, Any]:
+        deadline = time.monotonic() + 6.0
         result = await self._reconcile_created_ad_account_from_ui(
             business_id=business_id, account_name=account_name,
         )
@@ -10530,15 +10531,26 @@ class FacebookBusinessBrowser:
         # A selected_asset_id URL can render only the table until Details is
         # opened. Read the exact named row; never open Add/Create or a sibling.
         rows = self.page.get_by_role('row').filter(has_text=account_name)
+        try:
+            await rows.wait_for(state='visible', timeout=2000)
+        except Exception:
+            return result
         if await rows.count() != 1:
             return result
         details = rows.get_by_role('link', name=re.compile(r'^(Details|Подробнее|Деталі)$', re.I))
         if await details.count() != 1 or not await details.is_visible():
             return result
         await details.click(timeout=1000)
-        return await self._reconcile_created_ad_account_from_ui(
-            business_id=business_id, account_name=account_name,
-        )
+        # Details mounts asynchronously. Poll this same selected pane without
+        # navigation or another mutation; a missing ID is never an asset ID.
+        while time.monotonic() < deadline:
+            result = await self._reconcile_created_ad_account_from_ui(
+                business_id=business_id, account_name=account_name,
+            )
+            if result.get('confirmed'):
+                return result
+            await self.page.wait_for_timeout(150)
+        return result
 
     async def _ad_account_submit_controls(
         self,
@@ -11872,7 +11884,7 @@ class FacebookBusinessBrowser:
                     identity = await asyncio.wait_for(
                         self._read_selected_ad_account_identity(
                             business_id=business, account_name=_clean(selected_row.get("name")),
-                        ), timeout=2.0,
+                        ), timeout=6.5,
                     )
                     diagnostics.append({"source":"selected_account_identity_check", "identity":identity})
                     canonical = _normalize_ad_account_id(identity.get("ad_account_id"))

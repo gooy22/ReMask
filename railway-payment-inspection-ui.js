@@ -13,6 +13,7 @@ function paymentCardMessage(result){
     PAYMENT_ACCOUNT_BINDING_MISSING:'Нет однозначного соответствия профиля и РК. Обновите выбранный РК.',
     PAYMENT_ACCOUNT_ROW_MISSING:'Meta не показала строку выбранного РК.',
     PAYMENT_ADD_CONTROL_MISSING:'У выбранного РК Meta не показала кнопку добавления способа оплаты.',
+    PAYMENT_AD_ACCOUNT_DISABLED:'Meta отключила выбранный РК. Добавление карты остановлено до восстановления РК.',
     PAYMENT_FORM_NOT_EXPOSED:'Meta не открыла форму карты.',
     CARD_BILLING_FIELDS_REQUIRED:'Нужны дополнительные реквизиты владельца или платёжного адреса.',
     CARD_BANK_CONFIRMATION_REQUIRED:'Требуется подтверждение банка. Повторная отправка остановлена.',
@@ -106,6 +107,7 @@ async function showFunding(){
       <button id="paymentCardInspect" type="button">Проверить привязанные карты</button></div>
     <div class="ws-muted mt-2">Реквизиты сохраняются в зашифрованном виде, CVV не сохраняется. РК обрабатываются по одному. Привязка и платёжная проверка показываются отдельно.</div>
     <div id="paymentCardAssignments" class="ws-muted mt-2"></div>
+    <div id="paymentCardProgress" class="ws-muted mt-2" aria-live="polite"></div>
     <div id="fundingResults" aria-live="polite"></div>`,'',null);
   const container=$('fundingResults'),select=$('paymentCardSelect');let cards=[],busy=false;
   const refreshCards=async(preferred='')=>{
@@ -124,8 +126,9 @@ async function showFunding(){
   const run=async(task)=>{
     if(busy)return;busy=true;
     const controls=$('workspaceModalBody').querySelectorAll('input,select,button');controls.forEach(el=>el.disabled=true);
+    $('paymentCardProgress').textContent='Выполняется проверка выбранного РК. Ожидаю ответ Meta…';
     try{await task();}catch(e){const line=document.createElement('div');line.className='ws-result bad';line.textContent=e.message;container.appendChild(line);}
-    finally{remaskClearPaymentSecrets();controls.forEach(el=>el.disabled=false);busy=false;}
+    finally{remaskClearPaymentSecrets();controls.forEach(el=>el.disabled=false);$('paymentCardProgress').textContent='';busy=false;}
   };
   const save=async(bind)=>{
     const cvv=$('paymentCardCvv').value;

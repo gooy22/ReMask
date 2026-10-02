@@ -2046,7 +2046,7 @@ async def profile_live_inventory(
                     settings=await hard_deadline(
                         browser.snapshot_ad_accounts_for_business(
                             business_id=business_key, timeout_seconds=8.0,
-                        ), budget(11.0),
+                        ), budget(16.0),
                     )
                     log.info('selected RK identity profile=%s business=%s evidence=%s',profile_id,business_key,json.dumps([d for d in settings.get('diagnostics',[]) if d.get('source') in {'selected_account_identity_check','business_settings_details_identity'}],ensure_ascii=False,default=str))
                     settings['ads_manager_diagnostic']=cached.get('ads_manager_diagnostic') or {}
@@ -2121,7 +2121,7 @@ async def profile_live_inventory(
                                     'ads_manager_diagnostic':ads_probe,
                                 }
 
-                        rk_settings_timeout=budget(10.0)
+                        rk_settings_timeout=budget(16.0)
                         settings_inventory=await hard_deadline(
                             browser.snapshot_ad_accounts_for_business(
                                 business_id=str(business_id),

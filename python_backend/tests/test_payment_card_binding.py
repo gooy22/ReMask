@@ -66,7 +66,7 @@ class CardBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(CARD['number'],' '.join(logs.output))
 
     async def test_billing_fallback_never_adds_to_unverified_account(self):
-        rows=SimpleNamespace(wait_for=AsyncMock())
+        rows=SimpleNamespace(wait_for=AsyncMock(),count=AsyncMock(return_value=1),inner_text=AsyncMock(return_value='Fixture RK Active'))
         page=SimpleNamespace(url='https://business.facebook.com/latest/settings/ad_accounts/?business_id=987654321',
             get_by_role=lambda *a,**kw:SimpleNamespace(filter=lambda **kw:rows))
         browser=SimpleNamespace(page=page,profile_id='Fixture',_goto=AsyncMock(),
@@ -76,6 +76,14 @@ class CardBrowserTests(unittest.IsolatedAsyncioTestCase):
             result=await _open_card_form(browser,ID,{'business_id':'987654321','name':'Fixture RK'})
         self.assertEqual(result['code'],'PAYMENT_ACCOUNT_SCOPE_UNVERIFIED')
         self.assertEqual(controls.await_count,3);inspect.assert_awaited_once()
+
+    async def test_disabled_exact_account_stops_before_payment_navigation_or_entry(self):
+        rows=SimpleNamespace(wait_for=AsyncMock(),count=AsyncMock(return_value=1),inner_text=AsyncMock(return_value='Fixture RK Disabled Disabled --'))
+        page=SimpleNamespace(url='https://business.facebook.com/latest/settings/ad_accounts/?business_id=987654321',get_by_role=lambda *a,**kw:SimpleNamespace(filter=lambda **kw:rows))
+        browser=SimpleNamespace(page=page,profile_id='Fixture',_goto=AsyncMock(),SETTINGS_AD_ACCOUNTS_URLS=['https://business.facebook.com/latest/settings/ad_accounts/?business_id={business_id}'],_read_selected_ad_account_identity=AsyncMock(return_value={'confirmed':True,'ad_account_id':ID}))
+        with patch('app.payment_card_binding.select_settings_payment_tab',AsyncMock()) as tab,patch('app.payment_card_binding.inspect_payment_methods',AsyncMock()) as inspect:
+            result=await _open_card_form(browser,ID,{'business_id':'987654321','name':'Fixture RK'})
+        self.assertEqual(result['code'],'PAYMENT_AD_ACCOUNT_DISABLED');tab.assert_not_awaited();inspect.assert_not_awaited()
 
     def browser(self,body='Payment methods'):
         save=SimpleNamespace(is_enabled=AsyncMock(return_value=True),click=AsyncMock())

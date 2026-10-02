@@ -121,6 +121,11 @@ async def _open_card_form(browser: Any, target: str, asset: dict[str,str]) -> di
     parsed=urlsplit(str(page.url))
     if parsed.hostname not in ALLOWED_HOSTS or parse_qs(parsed.query).get('business_id')!=[business]:
         return {'status':'BLOCKED','code':'PAYMENT_ACCOUNT_SCOPE_UNVERIFIED'}
+    selected_rows = page.get_by_role('row').filter(has_text=name)
+    if await selected_rows.count() == 1:
+        selected_text = await selected_rows.inner_text(timeout=2000)
+        if re.search(r'\bdisabled\b|отключ[её]н|вимкнен', selected_text, re.I):
+            return {'status':'BLOCKED','code':'PAYMENT_AD_ACCOUNT_DISABLED'}
     await select_settings_payment_tab(browser)
     add=await _unique_visible(page,'button',r'^(Add payment method|Добавить способ оплаты|Додати спосіб оплати)$')
     if add is None:

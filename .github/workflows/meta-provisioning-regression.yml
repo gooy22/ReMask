@@ -62,3 +62,6 @@ jobs:
 
       - name: Encrypted card storage and submission guard
         run: php tests/payment-card-vault.test.php
+
+      - name: Honest Meta sync outcomes
+        run: php tests/sync-outcome.test.php

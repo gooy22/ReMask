@@ -583,6 +583,20 @@ function hierarchy_profile_snapshot(string $profile, ?array $workspaceMeta = nul
 {
 PHP_SIG;
 $hierarchyHelpers = <<<'PHP_HELPERS'
+// REMASK_HONEST_SYNC_OUTCOME_V1
+function hierarchy_private_sync_outcome(array $inventory): array
+{
+    foreach ((array)($inventory['businesses'] ?? []) as $business) {
+        if (!is_array($business) || empty($business['auth_blocked'])) continue;
+        $code = (string)($business['browser_error_code'] ?? '');
+        if (in_array($code, ['CHECKPOINT_REQUIRED', 'TWO_FACTOR_REQUIRED', 'SESSION_EXPIRED'], true)) {
+            return ['complete' => false, 'kind' => $code, 'error' => $code . ': Meta requires account authentication or verification.'];
+        }
+    }
+    $complete = ($inventory['live_ready'] ?? false) === true;
+    return ['complete' => $complete, 'kind' => $complete ? '' : 'PRIVATE_INCONCLUSIVE',
+        'error' => $complete ? '' : 'Live private BM/RK inventory was not confirmed.'];
+}
 // REMASK_PERSISTENT_BM_RK_BINDING_V1
 function hierarchy_worker_state(string $profile): array
 {
@@ -1650,7 +1664,8 @@ $syncProfileReplacement = <<<'PHP'
         // the last confirmed Page snapshot, and report Page uncertainty as a
         // warning/partial dimension instead of PRIVATE_INCONCLUSIVE.
         // REMASK_STABLE_SYNC_BOUNDARY_V2
-        $syncComplete = $liveReady;
+        $syncOutcome = hierarchy_private_sync_outcome($liveInventory);
+        $syncComplete = $syncOutcome['complete'];
 
         $snapshot['sync_source'] = 'private_business_suite_browser';
         $snapshot['live_inventory_available'] = $liveReady;
@@ -1661,8 +1676,8 @@ $syncProfileReplacement = <<<'PHP'
         unset($snapshot['sync_error_kind'], $snapshot['sync_error']);
 
         if (!$syncComplete) {
-            $snapshot['sync_error_kind'] = 'PRIVATE_INCONCLUSIVE';
-            $snapshot['sync_error'] = 'Live private BM/RK inventory was not confirmed.';
+            $snapshot['sync_error_kind'] = $syncOutcome['kind'];
+            $snapshot['sync_error'] = $syncOutcome['error'];
         } elseif (!$pagesLiveVerified) {
             // REMASK_PAGE_LIVE_VERIFICATION_WARNING_V1
             // A usable Page baseline is not the same thing as fresh live Page
@@ -1776,7 +1791,10 @@ $syncProfileReplacement = <<<'PHP'
             'entity_type' => 'profile',
             'entity_id' => $profile,
             'profile_name' => $profile,
-            'summary' => 'Приватная синхронизация FB-профиля завершена',
+            'status' => $syncComplete ? 'SUCCESS' : 'ERROR',
+            'summary' => $syncComplete
+                ? 'Приватная синхронизация FB-профиля завершена'
+                : (string)$snapshot['sync_error'],
             'details' => [
                 'sync_source' => 'private_business_suite_browser',
                 'live_ready' => $liveReady,
