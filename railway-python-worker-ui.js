@@ -283,6 +283,35 @@ async function pythonWorkerMapLimit(items, limit, worker) {
   await Promise.all(runners);
 }
 
+function pythonWorkerItemCanRetry(item) {
+  if (!item || String(item.status || '').toUpperCase() !== 'FAILED') return false;
+  const tasks = Array.isArray(item.tasks) ? item.tasks : [];
+  // A stale aggregate flag must not turn a security checkpoint into a retry.
+  if (pythonWorkerIsProfileAuthBlockedCode(item.error_code) || tasks.some(function(task) {
+    return task && String(task.status || '').toUpperCase() === 'FAILED' &&
+      pythonWorkerIsProfileAuthBlockedCode(task.error_code);
+  })) return false;
+  return item.retryable === true || tasks.some(function(task) {
+    return task && String(task.status || '').toUpperCase() === 'FAILED' && task.retryable === true;
+  });
+}
+
+function pythonWorkerFailureDetails(item) {
+  const parts = [];
+  if (item && /^[a-zA-Z0-9_-]{1,80}$/.test(String(item.worker_job_id || ''))) {
+    parts.push('Job ' + item.worker_job_id);
+  }
+  const steps = Array.isArray(item && item.provisioning_steps) ? item.provisioning_steps : [];
+  const failed = steps.find(function(step) {
+    return step && String(step.status || '').toUpperCase() === 'FAILED';
+  });
+  const result = failed && failed.result && typeof failed.result === 'object' ? failed.result : {};
+  if (result.phase === 'CREATE_NOT_SUBMITTED') parts.push('CREATE не отправлен');
+  else if (result.phase === 'CREATE_SENT') parts.push('CREATE отправлен; результат требует проверки');
+  if (!pythonWorkerItemCanRetry(item)) parts.push('Повтор недоступен');
+  return parts;
+}
+
 function pythonWorkerSelectionRefresh() {
   const profiles = pythonWorkerSelectedProfiles();
   const start = pythonWorkerEl('pythonProvisionStart');
@@ -325,27 +354,14 @@ function pythonWorkerSelectionRefresh() {
     const items = pythonWorkerUiState.job && Array.isArray(pythonWorkerUiState.job.items)
       ? pythonWorkerUiState.job.items
       : [];
-    const hasRetryableFailed = items.some(function(item) {
-      if (!item || String(item.status || '').toUpperCase() !== 'FAILED') return false;
-      if (item.retryable === true) return true;
-      const tasks = Array.isArray(item.tasks) ? item.tasks : [];
-      return tasks.some(function(task) {
-        return task &&
-          String(task.status || '').toUpperCase() === 'FAILED' &&
-          task.retryable === true;
-      });
-    });
+    const hasRetryableFailed = items.some(pythonWorkerItemCanRetry);
     const hasTerminalBatchFailure =
       Array.isArray(pythonWorkerUiState.batchJobIds) &&
       pythonWorkerUiState.batchJobIds.length > 0 &&
       pythonWorkerUiState.busy === false;
 
-    retry.disabled =
-      pythonWorkerUiState.busy ||
-      (
-        !hasTerminalBatchFailure &&
-        (!pythonWorkerUiState.jobId || !hasRetryableFailed)
-      );
+    retry.disabled = pythonWorkerUiState.busy || !hasRetryableFailed ||
+      (!hasTerminalBatchFailure && !pythonWorkerUiState.jobId);
     retry.textContent = hasTerminalBatchFailure
       ? 'Retry Failed batch'
       : 'Retry Failed';
@@ -551,7 +567,8 @@ function pythonWorkerIsProfileAuthBlockedCode(code) {
   return [
     'CHECKPOINT_REQUIRED',
     'SESSION_EXPIRED',
-    'TWO_FACTOR_REQUIRED'
+    'TWO_FACTOR_REQUIRED',
+    'FACEBOOK_TEMPORARILY_BLOCKED'
   ].indexOf(String(code || '').trim().toUpperCase()) !== -1;
 }
 
@@ -828,6 +845,7 @@ function pythonWorkerRenderJob(job) {
         const businessTelemetry = pythonWorkerBusinessTelemetry(item);
 
         if (errorParts.length) {
+          errorParts.push(...pythonWorkerFailureDetails(item));
           if (businessTelemetry.length) {
             errorParts.push(businessTelemetry.join(' · '));
           }
@@ -1954,6 +1972,12 @@ async function pythonWorkerRetryFailed() {
 
       await pythonWorkerMapLimit(batchIds, 4, async function(jobId) {
         try {
+          // Read saved Job state only. Never probe Facebook or requeue a
+          // non-retryable sibling just because another batch item failed.
+          const current = await pythonWorkerBridge({action: 'status', job_id: jobId});
+          const items = current && current.job && Array.isArray(current.job.items)
+            ? current.job.items : [];
+          if (!items.some(pythonWorkerItemCanRetry)) return;
           const data = await pythonWorkerBridge({
             action: 'retry_failed',
             job_id: jobId
@@ -2021,29 +2045,11 @@ async function pythonWorkerRetryFailed() {
     const currentItems = pythonWorkerUiState.job && Array.isArray(pythonWorkerUiState.job.items)
       ? pythonWorkerUiState.job.items
       : [];
-    const checkpointProfiles = Array.from(new Set(
-      currentItems
-        .filter(function(item) {
-          return item &&
-            String(item.status || '').toUpperCase() === 'FAILED' &&
-            pythonWorkerIsProfileAuthBlockedCode(item.error_code);
-        })
-        .map(function(item) { return String(item.profile_id || '').trim(); })
-        .filter(Boolean)
-    ));
-
-    if (checkpointProfiles.length) {
-      const gate = await pythonWorkerFilterFanPageReadyProfiles(checkpointProfiles);
-      if (gate.blocked.length) {
-        pythonWorkerUiState.busy = false;
-        pythonWorkerSelectionRefresh();
-        pythonWorkerSetText(
-          'pythonPwStatus',
-          'Retry приостановлен: Facebook checkpoint у профиля(ей) ' +
-            gate.blocked.join(', ') + '. Job остаётся FAILED/resumable.'
-        );
-        return;
-      }
+    if (!currentItems.some(pythonWorkerItemCanRetry)) {
+      pythonWorkerUiState.busy = false;
+      pythonWorkerSelectionRefresh();
+      pythonWorkerSetText('pythonPwStatus', 'Retry недоступен: нет retryable FAILED элементов. Сохранённый Job не изменён.');
+      return;
     }
 
     pythonWorkerSetText('pythonPwStatus', 'Повторно ставлю FAILED JobItem в очередь...');
@@ -3269,6 +3275,7 @@ async function pythonWorkerPollAdAccountBatch() {
       const target = pythonWorkerUiState.batchTargets[jobIndex] || null;
       (Array.isArray(job.items) ? job.items : []).forEach(function(item) {
         const copy = Object.assign({}, item);
+        copy.worker_job_id = ids[jobIndex];
         if (target) {
           copy.profile_id =
             String(target.profile_id || '') +
@@ -3300,7 +3307,6 @@ async function pythonWorkerPollAdAccountBatch() {
       return pythonWorkerIsProfileAuthBlockedCode(item && item.error_code);
     });
     const onlyAuthBlockedFailures =
-      isRkFpBatch &&
       failedItems.length > 0 &&
       authBlockedFailedItems.length === failedItems.length;
 
@@ -3357,11 +3363,13 @@ async function pythonWorkerPollAdAccountBatch() {
         : (
             allSuccess
               ? 'RK созданы для всех выбранных BM.'
+              : onlyAuthBlockedFailures
+              ? 'Создание РК остановлено: Facebook требует проверку аккаунта. РК не создан. Повтор недоступен; Jobs сохранены.'
               : 'Add RK batch завершён: есть FAILED/PARTIAL Jobs. Повторный CREATE автоматически не отправляется.'
           )
     );
 
-    if (allSuccess || onlyAuthBlockedFailures) {
+    if (allSuccess || (isRkFpBatch && onlyAuthBlockedFailures)) {
       pythonWorkerClearBatchState();
       if (onlyAuthBlockedFailures) {
         pythonWorkerSetText('pythonPwJob', '');

@@ -126,5 +126,50 @@ vm.createContext(sandbox); vm.runInContext(source.slice(start,end), sandbox);
   await sandbox.pythonWorkerStartAutoRkFanPages();
   assert.equal(fpJobs.length,2);
   assert.equal(fpJobs[1][2]['0'].mode,'create','a confirmed empty inventory may create an FP');
-  console.log('Auto modal: counts, validation, POST payload and lost-response idempotency passed. BM: optional Page, no attach and independent scope passed.');
+  // Completed Add RK batches must respect the individual retry flags. This
+  // exercises the actual button refresh and bridge calls, including a mixed
+  // batch whose checkpoint sibling must never receive retry_failed.
+  const retryButton={disabled:false};
+  const checkpoint={status:'FAILED',error_code:'CHECKPOINT_REQUIRED',retryable:true,
+    tasks:[{status:'FAILED',retryable:true}],
+    provisioning_steps:[{status:'FAILED',result:{phase:'CREATE_NOT_SUBMITTED',cookies:'must not render',url:'https://example.test/?token=secret'}}]};
+  const temporary={status:'FAILED',error_code:'NETWORK_ERROR',retryable:true};
+  const permanent={status:'FAILED',error_code:'PAGE_ADD_UI_CHANGED',retryable:false};
+  const rs={batchJobIds:['checkpoint','temporary','permanent','success'],batchTargets:[],jobId:'',
+    busy:false,workerOnline:true,job:{items:[checkpoint]}};
+  const calls=[];
+  const jobs={checkpoint:{items:[checkpoint]},temporary:{items:[temporary]},
+    permanent:{items:[permanent]},success:{items:[{status:'SUCCESS',retryable:true}]}};
+  const rb={pythonWorkerUiState:rs,document:{querySelectorAll:()=>[]},
+    pythonWorkerSelectedProfiles:()=>[],pythonWorkerEl:id=>id==='pythonProvisionRetry'?retryButton:null,
+    pythonWorkerEnsureRkFanPageActions(){},pythonWorkerSetText(){},pythonWorkerPersistBatchState(){},
+    async pythonWorkerMapLimit(items,limit,fn){for(const item of items)await fn(item);},
+    async pythonWorkerBridge(payload){calls.push(payload);return payload.action==='status'
+      ?{job:jobs[payload.job_id]}:{result:{requeued:1}};},
+    async pythonWorkerPollAdAccountBatch(){},async pythonWorkerPoll(){}};
+  vm.createContext(rb);
+  const authStart=source.indexOf('function pythonWorkerIsProfileAuthBlockedCode(');
+  vm.runInContext(source.slice(authStart,source.indexOf('\nasync function pythonWorkerProfilePreflight',authStart)),rb);
+  const retryHelperStart=source.indexOf('function pythonWorkerItemCanRetry(');
+  vm.runInContext(source.slice(retryHelperStart,source.indexOf('\nfunction pythonWorkerErrorText',retryHelperStart)),rb);
+  const retryStart=source.indexOf('async function pythonWorkerRetryFailed(');
+  vm.runInContext(source.slice(retryStart,source.indexOf('\nfunction pythonWorkerSetBmDialogStatus',retryStart)),rb);
+  rb.pythonWorkerSelectionRefresh();
+  assert.equal(retryButton.disabled,true,'a checkpoint-only batch must disable retry despite stale true flags');
+  rs.job.items=[permanent]; rb.pythonWorkerSelectionRefresh(); assert.equal(retryButton.disabled,true);
+  rs.job.items=[checkpoint,temporary]; rb.pythonWorkerSelectionRefresh(); assert.equal(retryButton.disabled,false);
+  rs.busy=true; rb.pythonWorkerSelectionRefresh(); assert.equal(retryButton.disabled,true); rs.busy=false;
+  for(const code of ['CHECKPOINT_REQUIRED','SESSION_EXPIRED','TWO_FACTOR_REQUIRED','FACEBOOK_TEMPORARILY_BLOCKED']){
+    assert.equal(rb.pythonWorkerItemCanRetry({...temporary,error_code:code}),false,code);
+    assert.equal(rb.pythonWorkerItemCanRetry({...temporary,tasks:[{status:'FAILED',error_code:code,retryable:true}]}),false,code+' task');
+  }
+  await rb.pythonWorkerRetryFailed();
+  assert.deepEqual(calls.filter(p=>p.action==='retry_failed').map(p=>p.job_id),['temporary']);
+  assert.equal(calls.some(p=>p.action==='preflight'),false,'retry must not open another Facebook session');
+  rs.batchJobIds=[];rs.jobId='checkpoint';rs.busy=false;rs.job={items:[checkpoint]};calls.length=0;
+  await rb.pythonWorkerRetryFailed();assert.equal(calls.length,0,'a direct call must also guard a blocked single Job');
+  const details=Array.from(rb.pythonWorkerFailureDetails({...checkpoint,worker_job_id:'saved-job'}));
+  assert.deepEqual(details,['Job saved-job','CREATE не отправлен','Повтор недоступен']);
+  assert.equal(details.join(' ').includes('secret'),false);
+  console.log('Auto/BM/FP interface and checkpoint-safe single/mixed batch retries passed.');
 })().catch(error=>{console.error(error);process.exitCode=1;});

@@ -381,7 +381,7 @@ HTML;
 
     $php = preg_replace(
         '#scripts/workspace\.js(?:\?[^"\']*)?#',
-        'scripts/workspace.js?v=20260929-python-worker-ui-v193',
+        'scripts/workspace.js?v=20261002-python-worker-ui-v194',
         $php,
         1,
         $scriptCount
@@ -403,7 +403,7 @@ if ($workerPos === false) {
 
 $php = preg_replace(
     '#scripts/workspace\.js(?:\?[^"\']*)?#',
-    'scripts/workspace.js?v=20260929-python-worker-ui-v193',
+    'scripts/workspace.js?v=20261002-python-worker-ui-v194',
     $php,
     1
 ) ?? $php;
@@ -411,3 +411,4 @@ $php = preg_replace(
 file_put_contents($phpPath, $php);
 file_put_contents($jsPath, $js);
 fwrite(STDERR, "[python-worker-ui] Workspace bulk provisioning panel installed\n");
+
