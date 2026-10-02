@@ -127,6 +127,30 @@ class CookieTxtImportTests(unittest.TestCase):
         self.assertIn('REMASK_COOKIE_TXT_IMPORT_V1',(self.root/'scripts/cookie-txt-import.js').read_text())
         self.assertTrue((self.root/'classes/RemaskCookieTxt.php').exists())
 
+    def test_number_write_failure_is_not_counted_as_confirmed_import_and_retry_deduplicates(self):
+        blocked = self.root / 'profile-sequence.json.tmp'
+        blocked.mkdir()
+        result = self.run_import(self.row() + '\n' + self.row('345678901'))
+        self.assertEqual(result['imported'], 0)
+        self.assertEqual(result['errors'], 1)
+        self.assertEqual(result['processed'], 1)
+        self.assertEqual(result['records'][0]['error'], 'TXT_SAVE_FAILED')
+        self.assertEqual(len(self.saved()), 1)
+        blocked.rmdir()
+        repeated = self.run_import(self.row() + '\n' + self.row('345678901'))
+        self.assertEqual(repeated['imported'], 1)
+        self.assertEqual(repeated['skipped'], 1)
+        self.assertEqual(repeated['records'][0]['status'], 'already_exists')
+        self.assertEqual([row['name'] for row in self.saved()], ['1', '2'])
+
+    def test_broken_cookie_json_cannot_consume_next_cookie_map_account(self):
+        broken = '987654321\tfixture-password\t[{"name":"c_user"'
+        valid = 'fixture@example.test\tfixture-password\t' + json.dumps({'c_user':'234567890','xs':'map-fixture'})
+        result = self.run_import(broken + '\n' + valid)
+        self.assertEqual(result['errors'], 1)
+        self.assertEqual(result['imported'], 1)
+        self.assertEqual(result['records'][1]['user_id'], '234567890')
+
     def test_real_auth_guard_rejects_missing_csrf_and_accepts_valid_header(self):
         parts=sorted((fixture.ROOT/'.deploy/clean-preview-valid').glob('runtime.b64.*'))
         with tarfile.open(fileobj=io.BytesIO(base64.b64decode(''.join(p.read_text() for p in parts)))) as archive:

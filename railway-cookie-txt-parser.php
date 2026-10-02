@@ -31,7 +31,7 @@ final class RemaskCookieTxt
             $continuations = 0;
             while ($scan === null && $i + 1 < count($lines) && $continuations++ < 64 && strlen($raw) < 65536) {
                 // Do not consume the next account if the current JSON is broken.
-                if (preg_match('/^\s*[^\t|;]+[\t|;].*[\t|;]\s*\[\s*\{/', $lines[$i + 1])) break;
+                if (preg_match('/^\s*[^\t|;]+[\t|;].*[\t|;]\s*(?:\[\s*\{|\{\s*"(?:c_user|xs|name)"\s*:)/', $lines[$i + 1])) break;
                 $raw .= "\n" . $lines[++$i];
                 $scan = self::jsonEnd($raw, $start);
             }

@@ -229,11 +229,11 @@ function rmx_pm_txt_import(array $input, mixed $store, bool $preview): array {
                         $store->addOrUpdateAccount($account);
                         $saved = $store->getAccountByName($name);
                         if (!$saved instanceof FbAccount || RemaskCookieTxt::userId((array)$saved->cookies) !== $record['user_id']) throw new RuntimeException();
+                        rmx_pm_sequence_save($store->deserialize(), $sequencePath);
                         $record['status'] = 'imported';
                         $record['profile_name'] = $name;
                         $known[$record['user_id']] = $name;
                         $imported++; $next++;
-                        rmx_pm_sequence_save($store->deserialize(), $sequencePath);
                     } catch (Throwable $e) {
                         // Never echo storage/proxy exception text which may contain credentials.
                         $record['status'] = 'error';
