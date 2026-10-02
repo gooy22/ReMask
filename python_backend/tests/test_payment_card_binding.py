@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from app.facebook_business_browser import BrowserBusinessError
-from app.payment_card_binding import _open_card_form, _selected_account_disabled, _payment_surface, _unique_visible, card_values, field_kind, form_action_guard, missing_card_fields, payment_account_setup_required, payment_card_flow, profile_payment_card, selected_payment_asset
+from app.payment_card_binding import _open_card_form, _selected_account_disabled, _payment_surface, _unique_visible, card_values, configure_payment_account, field_kind, form_action_guard, missing_card_fields, payment_account_setup_required, payment_card_flow, profile_payment_card, selected_payment_asset
 from app.payment_inspection import settings_payment_summary, select_settings_payment_tab
 
 ID='123456789'
@@ -63,6 +63,24 @@ class CardFieldTests(unittest.TestCase):
 
 
 class CardBrowserTests(unittest.IsolatedAsyncioTestCase):
+    async def test_setup_advances_only_after_all_explicit_choices_and_no_charge_or_terms(self):
+        next_button=SimpleNamespace(is_enabled=AsyncMock(return_value=True),click=AsyncMock())
+        page=SimpleNamespace(locator=lambda _:SimpleNamespace(inner_text=AsyncMock(return_value='Select location and currency Set time zone')),wait_for_timeout=AsyncMock())
+        browser=SimpleNamespace(page=page,_assert_authenticated=AsyncMock())
+        setup={'country':'UA','currency':'USD','timezone':'Europe/Kyiv'}
+        with patch('app.payment_card_binding._setup_choice',AsyncMock(return_value=True)) as choice,patch('app.payment_card_binding._unique_visible',AsyncMock(return_value=next_button)):
+            self.assertEqual(await configure_payment_account(browser,setup),{})
+        self.assertEqual(choice.await_count,3);next_button.click.assert_awaited_once()
+        next_button.click.reset_mock()
+        with patch('app.payment_card_binding._setup_choice',AsyncMock(return_value=False)),patch('app.payment_card_binding._payment_surface',AsyncMock()):
+            result=await configure_payment_account(browser,setup)
+        self.assertEqual(result['code'],'PAYMENT_ACCOUNT_SETUP_CONTROL_MISSING');next_button.click.assert_not_awaited()
+        self.assertEqual((await configure_payment_account(browser,{**setup,'country':'US'}))['code'],'PAYMENT_SETUP_INVALID')
+        page.locator=lambda _:SimpleNamespace(inner_text=AsyncMock(return_value='By clicking Next you agree to Payments Terms'))
+        with patch('app.payment_card_binding._setup_choice',AsyncMock()) as choice:
+            result=await configure_payment_account(browser,setup)
+        self.assertEqual(result['code'],'PAYMENT_TERMS_CONFIRMATION_REQUIRED');choice.assert_not_awaited()
+
     async def test_initial_billing_setup_stops_before_fields_or_next_confirmation(self):
         rows=SimpleNamespace(wait_for=AsyncMock(),count=AsyncMock(return_value=1),inner_text=AsyncMock(return_value='Fixture RK\nActive'))
         rows.filter=lambda **kw:rows
@@ -187,6 +205,23 @@ class CardBrowserTests(unittest.IsolatedAsyncioTestCase):
 
 
 class RealCardSelectorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_native_country_currency_timezone_choices_use_requested_values(self):
+        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
+        if not executable:self.skipTest('No local Chromium installed')
+        from playwright.async_api import async_playwright
+        async with async_playwright() as playwright:
+            chromium=await playwright.chromium.launch(executable_path=executable,headless=True,args=['--no-sandbox'])
+            try:
+                page=await chromium.new_page()
+                await page.set_content('<label>Country/region<select id="country"><option value="BD">Bangladesh</option><option value="UA">Ukraine</option></select></label><label>Currency<select id="currency"><option value="BDT">BDT</option><option value="USD">US Dollars</option></select></label><label>Time zone<select id="zone"><option value="America/Los_Angeles">Los Angeles, America (GMT-07:00)</option><option value="Europe/Kyiv">Kyiv, Europe (GMT+03:00)</option></select></label><button onclick="this.dataset.advanced=\'yes\'">Next</button>')
+                browser=SimpleNamespace(page=page,_assert_authenticated=AsyncMock())
+                self.assertEqual(await configure_payment_account(browser,{'country':'UA','currency':'USD','timezone':'Europe/Kyiv'}),{})
+                self.assertEqual(await page.locator('#country').input_value(),'UA')
+                self.assertEqual(await page.locator('#currency').input_value(),'USD')
+                self.assertEqual(await page.locator('#zone').input_value(),'Europe/Kyiv')
+                self.assertEqual(await page.get_by_role('button',name='Next',exact=True).get_attribute('data-advanced'),'yes')
+            finally:await chromium.close()
+
     async def test_nested_meta_rows_disabled_button_without_false_sibling_status(self):
         executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
         if not executable:self.skipTest('No local Chromium installed')

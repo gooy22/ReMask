@@ -101,7 +101,7 @@ def _safe_fields(fields: list[dict[str, Any]]) -> list[dict[str, Any]]:
              'label':re.sub(r'\d{6,}', '[redacted]',row['label'])[:80]} for row in fields]
 
 
-async def _open_card_form(browser: Any, target: str, asset: dict[str,str]) -> dict[str,Any]:
+async def _open_card_form(browser: Any, target: str, asset: dict[str,str], billing_setup: dict[str,str] | None = None) -> dict[str,Any]:
     page=browser.page
     business=asset.get('business_id',''); name=asset.get('name','')
     if not business or not name:
@@ -154,7 +154,12 @@ async def _open_card_form(browser: Any, target: str, asset: dict[str,str]) -> di
         await page.wait_for_timeout(500)
         text=await page.locator('body').inner_text(timeout=3000)
         if payment_account_setup_required(text):
-            return {'status':'ACTION_REQUIRED','code':'PAYMENT_ACCOUNT_SETUP_REQUIRED','required_settings':['country','currency','timezone']}
+            await _payment_surface(browser,'billing_setup')
+            if not billing_setup:
+                return {'status':'ACTION_REQUIRED','code':'PAYMENT_ACCOUNT_SETUP_REQUIRED','required_settings':['country','currency','timezone']}
+            setup_result=await configure_payment_account(browser,billing_setup)
+            if setup_result:return setup_result
+            continue
         fields=await _form_fields(page)
         kinds={f['kind'] for f in fields}
         if 'number' in kinds:
@@ -181,6 +186,77 @@ async def _open_card_form(browser: Any, target: str, asset: dict[str,str]) -> di
 
 def payment_account_setup_required(text: str) -> bool:
     return bool(re.search(r'select location and currency|your location and currency cannot be changed once set|выберите (?:местоположение|страну) и валюту|оберіть (?:розташування|країну) і валюту', text, re.I))
+
+
+async def _setup_choice(page: Any, label: str, choice: str, search: str, observed_default: str = '') -> bool:
+    pattern=re.compile(choice,re.I)
+    # The setup dialog is the only place where these country/currency/city
+    # choices are valid. Background account search must never be used.
+    for role in ('combobox','button'):
+        controls=page.get_by_role(role,name=re.compile(label,re.I)).filter(visible=True)
+        if await controls.count()==1:
+            control=controls
+            break
+    else:
+        label_node=page.get_by_text(re.compile(r'^(?:'+label+r')$',re.I)).filter(visible=True)
+        control=None
+        if await label_node.count()==1:
+            for parent in ('..','../..'):
+                candidates=label_node.locator(parent).locator('select,[role="combobox"],[role="button"],button').filter(visible=True)
+                if await candidates.count()==1:control=candidates;break
+        if control is None and observed_default:
+            candidate=page.get_by_text(observed_default,exact=True).filter(visible=True)
+            if await candidate.count()==1:control=candidate
+        if control is None:return False
+    if await control.evaluate("e=>e.tagName==='SELECT'"):
+        options=await control.locator('option').evaluate_all('(es)=>es.map(e=>({value:e.value,label:e.textContent.trim()}))')
+        selected=[o['value'] for o in options if pattern.search(o['label']) or o['value']==search]
+        if len(set(selected))!=1:return False
+        await control.select_option(selected[0],timeout=3000)
+        return True
+    await control.click(timeout=3000)
+    for _ in range(3):
+        await page.wait_for_timeout(250)
+        for role in ('option','menuitem','radio'):
+            options=page.get_by_role(role,name=pattern).filter(visible=True)
+            if await options.count()==1:
+                await options.click(timeout=3000);return True
+        option=page.get_by_text(pattern).filter(visible=True)
+        if await option.count()==1:
+            await option.click(timeout=3000);return True
+        for finder in (page.get_by_placeholder(re.compile(r'search|поиск|пошук',re.I)),page.get_by_role('textbox',name=re.compile(r'search|поиск|пошук',re.I))):
+            inputs=finder.filter(visible=True)
+            if await inputs.count()==1:
+                await inputs.fill(search,timeout=2000);break
+    return False
+
+
+async def configure_payment_account(browser: Any, setup: dict[str,str]) -> dict[str,Any]:
+    if setup != {'country':'UA','currency':'USD','timezone':'Europe/Kyiv'}:
+        return {'status':'BLOCKED','code':'PAYMENT_SETUP_INVALID'}
+    page=browser.page
+    body=await page.locator('body').inner_text(timeout=3000)
+    guard=form_action_guard(body,[])
+    if guard:return {'status':'ACTION_REQUIRED','code':guard}
+    choices=[('country',r'Country/region|Country|Страна/регион|Країна/регіон',r'^(Ukraine|Украина|Україна)$','Ukraine','Bangladesh'),
+             ('currency',r'Currency|Валюта',r'^(US Dollars|USD|Доллар США|Долари США)$','USD','US Dollars'),
+             ('timezone',r'Time zone|Timezone|Часовой пояс|Часовий пояс',r'^(Kyiv|Kiev|Киев|Київ)(?:\s*[,\(].*)?$','Kyiv','Los Angeles, America (GMT-07:00)')]
+    for key,label,choice,search,default in choices:
+        if not await _setup_choice(page,label,choice,search,default):
+            await _payment_surface(browser,'billing_setup_control_missing')
+            return {'status':'BLOCKED','code':'PAYMENT_ACCOUNT_SETUP_CONTROL_MISSING','missing_fields':[key]}
+    # Advance the explicitly selected settings to the card form. Never accept
+    # terms, a charge, verification or card submission at this stage.
+    body=await page.locator('body').inner_text(timeout=3000)
+    guard=form_action_guard(body,[])
+    if guard:return {'status':'ACTION_REQUIRED','code':guard}
+    next_button=await _unique_visible(page,'button',r'^(Next|Далее|Далі)$')
+    if next_button is None or not await next_button.is_enabled():
+        return {'status':'BLOCKED','code':'PAYMENT_ACCOUNT_SETUP_CONTROL_MISSING'}
+    await next_button.click(timeout=3000)
+    await browser._assert_authenticated()
+    await page.wait_for_timeout(500)
+    return {}
 
 
 async def _selected_account_disabled(page: Any, name: str) -> bool:
@@ -231,11 +307,11 @@ def missing_card_fields(fields: list[dict[str,Any]], values: dict[str,str]) -> l
     return sorted(set(missing))
 
 
-async def payment_card_flow(browser:Any,target:str,asset:dict[str,str],*,operation:str,card:dict[str,Any]|None=None,cvv:str='') -> dict[str,Any]:
+async def payment_card_flow(browser:Any,target:str,asset:dict[str,str],*,operation:str,card:dict[str,Any]|None=None,cvv:str='',billing_setup:dict[str,str]|None=None) -> dict[str,Any]:
     target=account_id(target); submitted=False
     base={'profile_id':browser.profile_id,'account_id':target,'submitted':False,'funding_verified':False}
     try:
-        form=await _open_card_form(browser,target,asset)
+        form=await _open_card_form(browser,target,asset,billing_setup)
         fields=form.pop('_fields',[])
         if operation=='prepare' or form['status']!='FORM_READY':return {**base,**form}
         values=card_values(card or {},cvv)
@@ -302,7 +378,7 @@ async def _profile_payment_card_execute(resolver:Any,profile:str,payload:dict[st
         browser=await session.facebook_business_browser()
         try:
             result=await asyncio.wait_for(payment_card_flow(browser,target,asset,operation=operation,
-                card=payload.get('card'),cvv=str(payload.get('cvv') or '')),timeout=95)
+                card=payload.get('card'),cvv=str(payload.get('cvv') or ''),billing_setup=payload.get('billing_setup')),timeout=95)
             # A review of Meta before any card entry. Images never enter the vault
             # or jobs; all input values are masked even in this read-only preview.
             if operation=='prepare' and result.get('code') not in {'SESSION_EXPIRED','CHECKPOINT_REQUIRED','TWO_FACTOR_REQUIRED'}:

@@ -3551,23 +3551,13 @@ class BrowserInventoryExtractionTests(unittest.TestCase):
 
 
 class BrowserAdAccountPageScopedInventoryRegressionTests(unittest.TestCase):
-    def test_snapshot_uses_exact_ad_accounts_page_as_generic_inventory_scope(self):
-        source = inspect.getsource(
-            FacebookBusinessBrowser.snapshot_ad_accounts_for_business
-        )
-        self.assertIn("page_scoped = bool(page_targets_business)", source)
-        self.assertIn(
-            "preliminary_scope = bool(request_scoped or page_scoped)",
-            source,
-        )
-        self.assertIn(
-            "inventory_scope = bool(",
-            source,
-        )
-        self.assertIn(
-            "request_scoped=inventory_scope",
-            source,
-        )
+    def test_a_settings_document_does_not_prove_background_asset_ownership(self):
+        from app.facebook_business_browser import _inventory_response_business_scope
+        business = "1760742031708754"
+        self.assertFalse(_inventory_response_business_scope(business, set(), set()))
+        self.assertFalse(_inventory_response_business_scope(business, {"1632909278268870"}, {business}))
+        self.assertTrue(_inventory_response_business_scope(business, {business}, set()))
+        self.assertTrue(_inventory_response_business_scope(business, set(), {business}))
 
     def test_page_scope_does_not_authorize_unrelated_generic_connection(self):
         payload = {
@@ -3587,7 +3577,7 @@ class BrowserAdAccountPageScopedInventoryRegressionTests(unittest.TestCase):
             )
         )
 
-    def test_page_scope_authorizes_generic_asset_connection(self):
+    def test_explicit_rk_request_scope_authorizes_generic_asset_connection(self):
         payload = {
             "data": {
                 "business": {

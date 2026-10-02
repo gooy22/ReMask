@@ -15,6 +15,8 @@ function paymentCardMessage(result){
     PAYMENT_ADD_CONTROL_MISSING:'У выбранного РК Meta не показала кнопку добавления способа оплаты.',
     PAYMENT_AD_ACCOUNT_DISABLED:'Meta отключила выбранный РК. Добавление карты остановлено до восстановления РК.',
     PAYMENT_ACCOUNT_SETUP_REQUIRED:'Meta сначала требует настройки страны, валюты и часового пояса РК. Эти настройки нельзя изменить после подтверждения. Карта не отправлена.',
+    PAYMENT_ACCOUNT_SETUP_CONTROL_MISSING:'Не удалось выбрать указанную настройку оплаты в форме Meta. Карта не отправлена.',
+    PAYMENT_SETUP_INVALID:'Укажите Украина, USD и Europe/Kyiv для этой настройки оплаты.',
     PAYMENT_FORM_NOT_EXPOSED:'Meta не открыла форму карты.',
     CARD_BILLING_FIELDS_REQUIRED:'Нужны дополнительные реквизиты владельца или платёжного адреса.',
     CARD_BANK_CONFIRMATION_REQUIRED:'Требуется подтверждение банка. Повторная отправка остановлена.',
@@ -68,7 +70,7 @@ async function bindPaymentCard(rows,card,cvv,container){
   if(!/^\d{3,4}$/.test(cvv))throw new Error('Введите CVV для этой операции. Он не сохраняется.');
   // One browser at a time; uncertain submission never triggers a retry.
   await concurrent(rows,1,async r=>{
-    try{return await apiJson('ajax/paymentCards.php',post({action:'bind',card_id:card.id,cvv,profile:r.profile,account_id:r.id}));}
+    try{return await apiJson('ajax/paymentCards.php',post({action:'bind',card_id:card.id,cvv,profile:r.profile,account_id:r.id,setup_country:$('paymentSetupCountry').value||'UA',setup_currency:$('paymentSetupCurrency').value||'USD',setup_timezone:$('paymentSetupTimezone').value||'Europe/Kyiv'}));}
     catch(e){return {error:e.message};}
   },(d,t,res,idx)=>{
     const r=rows[idx],result=res?.result,line=document.createElement('div');
@@ -87,6 +89,9 @@ async function showFunding(){
     <div class="ws-form mt-3">
       <div class="full"><label for="paymentCardSelect">Сохранённая карта</label><select id="paymentCardSelect"><option value="">Загрузка карт…</option></select></div>
       <div><label for="paymentCardCvv">CVV — только для текущей привязки</label><input id="paymentCardCvv" type="password" inputmode="numeric" maxlength="4" autocomplete="off"></div>
+      <div><label for="paymentSetupCountry">Страна оплаты РК</label><select id="paymentSetupCountry"><option value="UA">Украина</option></select></div>
+      <div><label for="paymentSetupCurrency">Валюта оплаты РК</label><select id="paymentSetupCurrency"><option value="USD">USD — доллар США</option></select></div>
+      <div><label for="paymentSetupTimezone">Часовой пояс РК</label><input id="paymentSetupTimezone" value="Europe/Kyiv"></div>
     </div>
     <details id="paymentCardNew" class="mt-3"><summary>Добавить новую карту</summary>
       <div class="ws-form mt-2">
@@ -144,7 +149,7 @@ async function showFunding(){
   $('paymentCardInspect').addEventListener('click',()=>run(()=>inspectFundingRows(rows,container)));
   $('paymentCardPrepare').addEventListener('click',()=>run(async()=>{
     for(let i=0;i<rows.length;i++){
-      const r=rows[i],data=await apiJson('ajax/paymentCards.php',post({action:'prepare',profile:r.profile,account_id:r.id}));
+      const r=rows[i],data=await apiJson('ajax/paymentCards.php',post({action:'prepare',profile:r.profile,account_id:r.id,setup_country:$('paymentSetupCountry').value,setup_currency:$('paymentSetupCurrency').value,setup_timezone:$('paymentSetupTimezone').value}));
       const line=document.createElement('div');line.className='ws-result '+(data.result.status==='FORM_READY'?'ok':'bad');
       line.textContent=r.profile+' / '+r.id+': '+paymentCardMessage(data.result);container.appendChild(line);setProgress(i+1,rows.length);
       if(data.result.ui_preview&&/^[A-Za-z0-9+/=]+$/.test(data.result.ui_preview)){

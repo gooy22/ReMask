@@ -41,6 +41,11 @@ try {
     require_once __DIR__.'/../classes/RemaskPrivateLaunchCatalog.php';
     RemaskPrivateLaunchCatalog::asset(RemaskPrivateLaunchCatalog::load($profile),'funding',$account);
     $payload=['operation'=>$action,'account_id'=>$account];$id='';
+    if (isset($input['setup_country'], $input['setup_currency'], $input['setup_timezone'])) {
+        $country=strtoupper(trim((string)$input['setup_country']));$currency=strtoupper(trim((string)$input['setup_currency']));$timezone=trim((string)$input['setup_timezone']);
+        if (!preg_match('/^[A-Z]{2}$/D',$country)||!preg_match('/^[A-Z]{3}$/D',$currency)||!in_array($timezone,DateTimeZone::listIdentifiers(),true)) throw new InvalidArgumentException('PAYMENT_SETUP_INVALID');
+        $payload['billing_setup']=['country'=>$country,'currency'=>$currency,'timezone'=>$timezone];
+    }
     if($action==='bind'){
         $id=(string)($input['card_id']??'');$cvv=(string)($input['cvv']??'');
         if(!preg_match('/^card_[a-f0-9]{24}$/D',$id)||!preg_match('/^\d{3,4}$/D',$cvv))throw new InvalidArgumentException('CARD_AND_CVV_REQUIRED');
