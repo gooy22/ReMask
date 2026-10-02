@@ -2,6 +2,7 @@ import asyncio
 import json
 import unittest
 import tempfile
+import shutil
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -137,9 +138,54 @@ class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
             browser.page.evaluate.return_value=[{"href":URL,"label":"Billing & payments"}]
         browser.page.wait_for_function.side_effect=hydrate
         result=await inspect_payment_methods(browser,ID)
-        browser.page.wait_for_function.assert_awaited_once()
-        self.assertEqual(browser.page.wait_for_function.await_args.kwargs['timeout'],5000)
+        self.assertEqual(browser.page.wait_for_function.await_count,2)
+        self.assertEqual(browser.page.wait_for_function.await_args_list[0].kwargs['timeout'],5000)
         self.assertEqual(result['verification_status'],'LINKED')
+
+    async def test_billing_skeleton_waits_for_exact_rendered_account_before_summary(self):
+        browser=self.browser([{'href':URL,'label':'Billing & payments'}])
+        body=SimpleNamespace(inner_text=AsyncMock(return_value='Loading'))
+        browser.page.locator=lambda _:body
+        async def hydrate(script, **kwargs):
+            if kwargs.get('arg')==ID:
+                self.assertEqual(kwargs['timeout'],15000)
+                body.inner_text.return_value=ID+'\nPayment methods\nNo payment methods'
+        browser.page.wait_for_function.side_effect=hydrate
+        result=await inspect_payment_methods(browser,ID)
+        self.assertTrue(result['account_scope_verified'])
+        self.assertEqual(result['verification_status'],'NONE')
+
+    async def test_real_chromium_waits_for_lazy_billing_account(self):
+        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
+        if not executable:self.skipTest('No local Chromium installed')
+        from playwright.async_api import async_playwright
+        async with async_playwright() as playwright:
+            chromium=await playwright.chromium.launch(executable_path=executable,headless=True,args=['--no-sandbox'])
+            try:
+                page=await chromium.new_page()
+                async def route(request):
+                    html='<body>Loading<script>setTimeout(()=>document.body.innerText="'+ID+' Payment methods No payment methods",250)</script></body>'
+                    await request.fulfill(status=200,content_type='text/html',body=html)
+                await page.route(URL,route)
+                async def goto(url, **kwargs):
+                    if url==URL:await page.goto(url,wait_until='domcontentloaded')
+                    else:await page.set_content('<a href="'+URL+'">Billing & payments</a>')
+                browser=SimpleNamespace(page=page,profile_id='Fixture',ADS_MANAGER_URL='https://adsmanager.facebook.com/adsmanager/manage/campaigns',_goto=goto,_assert_authenticated=AsyncMock())
+                result=await inspect_payment_methods(browser,ID)
+                self.assertTrue(result['account_scope_verified'])
+                self.assertEqual(result['verification_status'],'NONE')
+            finally:await chromium.close()
+
+    async def test_billing_wait_timeout_keeps_wrong_account_unverified(self):
+        browser=self.browser([{'href':URL,'label':'Billing & payments'}])
+        browser.page.locator=lambda _:SimpleNamespace(inner_text=AsyncMock(return_value='999999999\nPayment methods\nVisa •••• 1234'))
+        async def timeout(script, **kwargs):
+            if kwargs.get('arg')==ID:raise asyncio.TimeoutError()
+        browser.page.wait_for_function.side_effect=timeout
+        result=await inspect_payment_methods(browser,ID)
+        self.assertFalse(result['account_scope_verified'])
+        self.assertEqual(result['payment_methods'],[])
+        browser._assert_authenticated.assert_awaited_once()
 
     async def test_hydration_timeout_does_not_invent_billing_destination(self):
         browser=self.browser([])
@@ -175,3 +221,4 @@ class SavedPaymentBusinessTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

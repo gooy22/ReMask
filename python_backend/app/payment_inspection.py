@@ -262,6 +262,16 @@ async def inspect_payment_methods(browser: Any, target: str, *, business_id: str
             retryable=False, diagnostic=diagnostic,
         )
     await browser._goto(billing_url, timeout_ms=25000, settle_ms=700, attempts=1)
+    # Billing is a lazy SPA: DOMContentLoaded can still show only its skeleton.
+    # Wait for rendered account evidence, then keep the same strict scope check.
+    try:
+        await page.wait_for_function("""target => {
+          const text=document.body?.innerText||'';
+          return new RegExp('(^|[^0-9])'+target+'([^0-9]|$)').test(text) &&
+            /payment methods|payment settings|billing.{0,12}payments|способ[ыа] оплаты|настройки платеж|платіжн[іи] метод|способи оплати/i.test(text);
+        }""", arg=target, timeout=15000)
+    except Exception:
+        await browser._assert_authenticated()
     # Body text remains in memory only. Return explicitly whitelisted masked data.
     text = await page.locator("body").inner_text(timeout=5000)
     result = payment_summary(target, str(page.url), text)
