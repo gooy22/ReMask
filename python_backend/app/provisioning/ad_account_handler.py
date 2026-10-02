@@ -1197,6 +1197,7 @@ async def ad_account_handler(
         "CREATE_SUBMIT_INTENT",
         "CREATE_SUBMITTED",
         "CREATE_RESULT_UNKNOWN",
+        "CREATE_RESULT_UNVERIFIED",
         "RECONCILE_CREATE",
     }:
         # A submit may have reached Meta. Resolve it with the same strong,

@@ -10419,16 +10419,39 @@ class FacebookBusinessBrowser:
             return {"confirmed": False}
 
         candidates: list[dict[str, Any]] = []
+        actor = _normalize_ad_account_id(
+            getattr(self.context, "cookies", {}).get("c_user")
+            if isinstance(getattr(self.context, "cookies", {}), dict)
+            else ""
+        )
+        excluded_ids = {_normalize_ad_account_id(business), actor}
         for row in rows[:20]:
             if not isinstance(row, dict):
                 continue
             text_value = _clean(row.get("text"))
             if expected.casefold() not in text_value.casefold():
                 continue
+            # Numbers in the entered name (dates, sequence numbers), generic
+            # DOM IDs and the portfolio/actor scope are not RK identities.
+            href = _clean(row.get("href"))
+            parsed_href = urlsplit(href)
+            scoped_ids: list[str] = []
+            if parsed_href.scheme == "https" and parsed_href.hostname in {
+                "business.facebook.com", "adsmanager.facebook.com", "www.facebook.com",
+            } and any(part in parsed_href.path.casefold() for part in (
+                "/settings/ad_accounts", "/settings/ad-accounts", "/adsmanager",
+            )):
+                query = parse_qs(parsed_href.query)
+                for key in ("act", "asset_id", "ad_account_id"):
+                    scoped_ids.extend(query.get(key) or [])
+            scoped_ids.extend(re.findall(
+                r"(?:\bad\s+account\s+id|\baccount\s+id|\bid)\s*[:：#]?\s*(\d{5,30})(?!\d)",
+                text_value, flags=re.IGNORECASE,
+            ))
             ids = []
-            for raw_id in row.get("ids") or []:
+            for raw_id in scoped_ids:
                 normalized = _normalize_ad_account_id(raw_id)
-                if normalized and normalized not in ids:
+                if normalized and normalized not in excluded_ids and normalized not in ids:
                     ids.append(normalized)
             candidates.append(
                 {
@@ -10463,6 +10486,7 @@ class FacebookBusinessBrowser:
             "candidates": candidates[:8],
             "unique_ids": unique_ids[:12],
         }
+
 
     async def _ad_account_submit_controls(
         self,
