@@ -189,6 +189,7 @@ def payment_account_setup_required(text: str) -> bool:
 
 
 async def _setup_choice(page: Any, label: str, choice: str, search: str, observed_default: str = '') -> bool:
+    label=label.replace('/',r'\/')
     pattern=re.compile(choice,re.I)
     # The setup dialog is the only place where these country/currency/city
     # choices are valid. Background account search must never be used.
