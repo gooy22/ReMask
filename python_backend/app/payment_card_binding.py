@@ -7,6 +7,7 @@ import json
 import logging
 import re
 import traceback
+import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode, urlsplit, parse_qs
@@ -177,15 +178,19 @@ async def _open_card_form(browser: Any, target: str, asset: dict[str,str], billi
     await add.click(timeout=4000)
     await browser._assert_authenticated()
     await _payment_surface(browser,'payment_method_dialog')
-    for _ in range(4):
+    form_deadline=time.monotonic()+20.0
+    setup_advanced=False;method_advanced=False
+    while time.monotonic()<form_deadline:
         await page.wait_for_timeout(500)
         text=await page.locator('body').inner_text(timeout=3000)
         if payment_account_setup_required(text):
+            if setup_advanced:continue
             await _payment_surface(browser,'billing_setup')
             if not billing_setup:
                 return {'status':'ACTION_REQUIRED','code':'PAYMENT_ACCOUNT_SETUP_REQUIRED','required_settings':['country','currency','timezone']}
             setup_result=await configure_payment_account(browser,billing_setup)
             if setup_result:return setup_result
+            setup_advanced=True
             continue
         fields=await _form_fields(page)
         kinds={f['kind'] for f in fields}
@@ -195,6 +200,7 @@ async def _open_card_form(browser: Any, target: str, asset: dict[str,str], billi
             if guard:return {'status':'ACTION_REQUIRED','code':guard,'fields':_safe_fields(fields)}
             return {'status':'FORM_READY','code':'CARD_FORM_READY','fields':_safe_fields(fields),'_fields':fields}
         # Only advance a payment-method selection, never a funded/verification action.
+        if method_advanced:continue
         radio=await _unique_visible(page,'radio',r'^(Credit or debit card|Debit or credit card|Credit/debit card|Кредитная или дебетовая карта)$')
         if radio is not None:
             await radio.check(timeout=3000)
@@ -207,7 +213,9 @@ async def _open_card_form(browser: Any, target: str, asset: dict[str,str], billi
         guard=form_action_guard(body,fields)
         if guard:return {'status':'ACTION_REQUIRED','code':guard}
         await next_button.click(timeout=3000)
+        method_advanced=True
         await browser._assert_authenticated()
+    await _payment_surface(browser,'card_form_not_exposed')
     return {'status':'BLOCKED','code':'PAYMENT_FORM_NOT_EXPOSED'}
 
 

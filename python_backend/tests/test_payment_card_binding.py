@@ -218,6 +218,27 @@ class CardBrowserTests(unittest.IsolatedAsyncioTestCase):
 
 
 class RealCardSelectorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_lazy_payment_dialog_is_awaited_without_reclicking_add(self):
+        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
+        if not executable:self.skipTest('No local Chromium installed')
+        from playwright.async_api import async_playwright
+        async with async_playwright() as playwright:
+            chromium=await playwright.chromium.launch(executable_path=executable,headless=True,args=['--no-sandbox'])
+            try:
+                page=await chromium.new_page()
+                url='https://business.facebook.com/latest/settings/ad_accounts/?business_id=987654321'
+                html="""<div role="row"><button>Fixture RK</button><a>Details</a></div>
+                  <button id="add" onclick="this.dataset.clicks=Number(this.dataset.clicks||0)+1;setTimeout(()=>document.getElementById('form').innerHTML='<label>Card number<input autocomplete=cc-number></label><label>Expiry<input autocomplete=cc-exp></label><label>CVV<input autocomplete=cc-csc></label>',2500)">Add payment method</button><div id="form">Loading</div>"""
+                await page.route(url,lambda route:route.fulfill(status=200,content_type='text/html',body=html))
+                async def goto(url, **kwargs):await page.goto(url,wait_until='domcontentloaded')
+                browser=SimpleNamespace(page=page,profile_id='Fixture',_goto=goto,_assert_authenticated=AsyncMock(),SETTINGS_AD_ACCOUNTS_URLS=[url],_read_selected_ad_account_identity=AsyncMock(return_value={'confirmed':True,'ad_account_id':ID}))
+                with patch('app.payment_card_binding.select_settings_payment_tab',AsyncMock()):
+                    result=await payment_card_flow(browser,ID,{'business_id':'987654321','name':'Fixture RK'},operation='prepare')
+                self.assertEqual(result['status'],'FORM_READY');self.assertFalse(result['submitted'])
+                self.assertEqual(await page.locator('#add').get_attribute('data-clicks'),'1')
+                self.assertEqual(await page.locator('input').evaluate_all('(es)=>es.map(e=>e.value)'),['','',''])
+            finally:await chromium.close()
+
     async def test_native_country_currency_timezone_choices_use_requested_values(self):
         executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
         if not executable:self.skipTest('No local Chromium installed')
