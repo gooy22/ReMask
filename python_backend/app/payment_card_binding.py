@@ -177,8 +177,11 @@ async def _open_card_form(browser: Any, target: str, asset: dict[str,str]) -> di
 async def _selected_account_disabled(page: Any, name: str) -> bool:
     # Meta can expose nested/hidden table rows for one asset. Its named asset
     # button remains unique. Call only after canonical RK and BM proof.
-    candidates = [page.get_by_role('row').filter(has_text=name).filter(visible=True),
-                  page.get_by_role('button', name=re.compile(r'^'+re.escape(name)+r'(?:\s|$)')).filter(visible=True)]
+    asset_button = page.get_by_role('button', name=re.compile(r'^'+re.escape(name)+r'(?:\s|$)')).filter(visible=True)
+    button_count = await asset_button.count()
+    if button_count > 1:
+        return False
+    candidates = [asset_button] if button_count == 1 else [page.get_by_role('row').filter(has_text=name).filter(visible=True)]
     for candidate in candidates:
         if await candidate.count() != 1:
             continue
