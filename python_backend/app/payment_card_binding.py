@@ -136,7 +136,7 @@ async def _open_card_form(browser: Any, target: str, asset: dict[str,str], billi
             name=await _resolve_payment_account_name(page,name)
         except Exception:name=''
         if not name:return {'status':'BLOCKED','code':'PAYMENT_ACCOUNT_ROW_MISSING'}
-        asset={**asset,'name':name}
+        asset['name']=name
     try:
         await page.get_by_role('row').filter(has_text=name).wait_for(state='visible',timeout=6000)
     except Exception:
