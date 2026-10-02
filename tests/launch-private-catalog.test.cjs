@@ -22,6 +22,6 @@ assert.equal(label({account_status:1,funding_source_details:{id:'123'}}),'SOURCE
 assert.equal(controls.launchButton.disabled,true);
 assert.equal(controls.reviewLaunch.disabled,true);
 assert.equal(controls.dryRunPlan.disabled,true);
-assert.match(controls.reviewStatus.textContent,/проверки/);
+assert.match(controls.reviewStatus.textContent,/Запуск рекламы недоступен/);
 assert.equal(controls.preflight.textContent,'Загрузить сохранённые РК');
 console.log('Private Launch catalog and funding truth checks passed');
