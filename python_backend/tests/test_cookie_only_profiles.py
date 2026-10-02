@@ -160,6 +160,49 @@ class CookieOnlyProfileTests(unittest.TestCase):
         self.assertTrue(all('COOKIE_ONLY_GRAPH_DISABLED' in value for value in data[:3]))
         self.assertIsNone(data[3])
 
+    def test_next_number_and_failed_import_do_not_consume_number(self):
+        self.create(name='7')
+        next_number=lambda:self.endpoint('metaProfileManager.php',{'action':'next_number'})['next_number']
+        self.assertEqual(next_number(),8)
+        result=self.create(auto_number=True,cookies=[])
+        self.assertFalse(result['ok'])
+        self.assertEqual(next_number(),8)
+        result=self.create(auto_number=True)
+        self.assertEqual(result['profile']['name'],'8')
+        self.assertEqual(next_number(),9)
+
+    def test_deleted_highest_number_is_not_reused(self):
+        self.create(name='7')
+        self.create(auto_number=True)
+        self.endpoint('metaProfileManager.php',{'action':'delete','name':'8'})
+        next_number=self.endpoint('metaProfileManager.php',{'action':'next_number'})['next_number']
+        self.assertEqual(next_number,9)
+
+    def test_create_cannot_overwrite_existing_profile(self):
+        self.create()
+        before=self.saved()
+        result=self.create(cookies=[{'name':'c_user','value':'987654321'},{'name':'xs','value':'different-fixture'}])
+        self.assertFalse(result['ok'])
+        self.assertEqual(self.saved(),before)
+
+    def test_parallel_numbered_imports_allocate_distinct_numbers(self):
+        self.create(name='7')
+        script='$_POST=json_decode($argv[1],true);require $argv[2];'
+        jobs=[]
+        for index in range(3):
+            payload={'action':'create','auto_number':True,'cookies':self.cookies,'proxy':self.proxy}
+            jobs.append(subprocess.Popen(['php','-r',script,json.dumps(payload),str(self.root/'ajax/metaProfileManager.php')],
+                env=self.env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True))
+        numbers=[]
+        for job in jobs:
+            stdout,stderr=job.communicate(timeout=15)
+            self.assertEqual(job.returncode,0,stderr)
+            result=json.loads(stdout)
+            self.assertTrue(result['ok'],result)
+            numbers.append(int(result['profile']['name']))
+        self.assertEqual(sorted(numbers),[8,9,10])
+        self.assertEqual(len(self.saved()),4)
+
     def test_actual_installed_ui_contains_no_token_inputs(self):
         workspace=(self.root/'scripts/workspace.js').read_text()
         accounts=(self.root/'accounts.php').read_text()

@@ -85,10 +85,22 @@ async def inspect_payment_methods(browser: Any, target: str) -> dict[str, Any]:
 
     # Read a rendered navigation link, validate its destination, then navigate.
     # We do not consume internal Relay stores or capture payment network payloads.
-    links = await page.evaluate("""() => Array.from(document.querySelectorAll('a[href]'))
+    read_links = """() => Array.from(document.querySelectorAll('a[href]'))
       .filter(a => a.getClientRects().length)
       .map(a => ({href:a.href,label:(a.innerText||a.getAttribute('aria-label')||'').trim()}))
-      .filter(a => /billing|payment|платеж|платіж|оплат/i.test(a.label)).slice(0,20)""")
+      .filter(a => /billing|payment|платеж|платіж|оплат/i.test(a.label)).slice(0,20)"""
+    links = await page.evaluate(read_links)
+    if not links:
+        # Meta may keep Billing inside the rendered All tools drawer.
+        # Open an exact observed menu control once; no guessed Billing URL.
+        menu_name = re.compile(r"^(All tools|Все инструменты|Усі інструменти)$", re.I)
+        for role in ("button", "link"):
+            menu = page.get_by_role(role, name=menu_name)
+            if await menu.count() == 1 and await menu.is_visible():
+                await menu.click(timeout=4000)
+                await browser._assert_authenticated()
+                links = await page.evaluate(read_links)
+                break
     billing_url = ""
     for link in links if isinstance(links, list) else []:
         if not isinstance(link, dict):

@@ -142,6 +142,32 @@ function rmx_pm_out(array $payload, int $status = 200): void {
     exit;
 }
 
+function rmx_pm_sequence_open(int $operation): array {
+    $directory = dirname((string)ACCOUNTSFILENAME);
+    if (!is_dir($directory) && !mkdir($directory, 0700, true)) throw new RuntimeException('PROFILE_NUMBER_STORAGE_UNAVAILABLE');
+    $lock = fopen($directory . '/profile-sequence.lock', 'c');
+    if ($lock === false) throw new RuntimeException('PROFILE_NUMBER_LOCK_UNAVAILABLE');
+    $deadline = microtime(true) + 2.0;
+    while (!flock($lock, $operation | LOCK_NB)) {
+        if (microtime(true) >= $deadline) {
+            fclose($lock);
+            throw new RuntimeException('PROFILE_NUMBER_BUSY');
+        }
+        usleep(20000);
+    }
+    return [$lock, $directory . '/profile-sequence.json'];
+}
+
+function rmx_pm_sequence_last(array $profiles, string $path): int {
+    $saved = json_decode((string)(@file_get_contents($path) ?: ''), true);
+    $last = max(0, (int)($saved['last_number'] ?? 0));
+    foreach ($profiles as $profile) {
+        $name = (string)$profile->name;
+        if (preg_match('/^[1-9]\d{0,14}$/', $name)) $last = max($last, (int)$name);
+    }
+    return $last;
+}
+
 try {
     $input = rmx_pm_input();
     $action = strtolower(rmx_pm_find_scalar($input, ['action','cmd','op','mode']));
@@ -149,6 +175,13 @@ try {
     $hasSaveFields = rmx_pm_find_scalar($input, ['name','profile_name','label']) !== '';
     if ($action === '') $action = $hasSaveFields ? 'save' : 'list';
     $store = AccountStoreFactory::create(ACCOUNTSFILENAME);
+
+    if ($action === 'next_number') {
+        [$sequenceLock, $sequencePath] = rmx_pm_sequence_open(LOCK_SH);
+        $next = rmx_pm_sequence_last($store->deserialize(), $sequencePath) + 1;
+        fclose($sequenceLock);
+        rmx_pm_out(['ok'=>true,'success'=>true,'next_number'=>$next]);
+    }
 
     if (in_array($action, ['list','get','load','all'], true)) {
         $profiles = array_map('rmx_pm_safe', $store->deserialize());
@@ -236,8 +269,19 @@ try {
     }
 
     $name = rmx_pm_find_scalar($input, ['name','profile_name','profile','label','fb_id','profile_id','account_id']);
+    $creating = in_array($action, ['create','add'], true);
+    $sequenceLock = null;
+    $sequencePath = '';
+    if ($creating) {
+        // Serialize allocation and save, including named legacy creates.
+        [$sequenceLock, $sequencePath] = rmx_pm_sequence_open(LOCK_EX);
+        if (rmx_pm_find_bool($input, ['auto_number'], false)) {
+            $name = (string)(rmx_pm_sequence_last($store->deserialize(), $sequencePath) + 1);
+        }
+    }
     if ($name === '') throw new InvalidArgumentException('Название профиля обязательно.');
     $existing = $store->getAccountByName($name);
+    if ($creating && $existing instanceof FbAccount) throw new InvalidArgumentException('PROFILE_ALREADY_EXISTS: создание не может перезаписать существующий профиль.');
 
     // Retain historical stored data, but never import/use an Ads Manager token.
     $token = (string)($existing?->token ?? '');
@@ -285,6 +329,13 @@ try {
     $store->addOrUpdateAccount($account);
     $saved = $store->getAccountByName($name);
     if (!$saved instanceof FbAccount) throw new RuntimeException('Профиль не сохранился.');
+    if ($sequenceLock !== null) {
+        $last = rmx_pm_sequence_last($store->deserialize(), $sequencePath);
+        $temporary = $sequencePath . '.tmp';
+        if (file_put_contents($temporary, json_encode(['last_number'=>$last], JSON_THROW_ON_ERROR)) === false
+            || !rename($temporary, $sequencePath)) throw new RuntimeException('PROFILE_NUMBER_SAVE_FAILED');
+        fclose($sequenceLock);
+    }
 
     rmx_pm_out([
         'ok'=>true,

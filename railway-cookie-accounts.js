@@ -1,5 +1,17 @@
 import {Requests} from './requests.js';
 
+let remaskEditingProfile = false;
+
+async function remaskLoadNextProfileNumber() {
+    try {
+        const response = await fetch('ajax/metaProfileManager.php', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'next_number'})});
+        const data = await response.json();
+        if (!data.ok) throw new Error(data.message || data.error || 'Не удалось получить номер');
+        document.add.name.value = String(data.next_number);
+        document.add.name.readOnly = true;
+    } catch (error) { alert(error.message); }
+}
+
 window.addEventListener('DOMContentLoaded', () => {
     document.querySelectorAll('.delaccount').forEach(button => button.addEventListener('click', async (event) => delAccount(event.target.dataset.name)));
     document.querySelectorAll('.editaccount').forEach(button => button.addEventListener('click', async (event) => editAccount(event.target.dataset.name)));
@@ -9,6 +21,7 @@ window.addEventListener('DOMContentLoaded', () => {
         try { await addAccount(); } finally { loadingIcon.style.display = 'none'; }
     });
     loadStorageStatus();
+    remaskLoadNextProfileNumber();
 });
 
 async function loadStorageStatus() {
@@ -34,7 +47,7 @@ async function addAccount() {
     const token = ''; // historical function argument only; never collected/sent
     const cookies = document.add.cookies.value.trim();
     const proxy = document.add.proxy.value.trim();
-    const editing = document.add.name.readOnly;
+    const editing = remaskEditingProfile;
     if (!await validateForm(name, token, cookies, proxy, editing)) return;
 
     const check = await Requests.post('ajax/checkAccount.php', `name=${encodeURIComponent(name)}&cookies=${encodeURIComponent(editing ? cookies : (cookies || '[]'))}&proxy=${encodeURIComponent(proxy)}`);
@@ -44,7 +57,7 @@ async function addAccount() {
         return;
     }
 
-    const resp = await Requests.post('ajax/addAccount.php', `name=${encodeURIComponent(name)}&cookies=${encodeURIComponent(editing ? cookies : (cookies || '[]'))}&proxy=${encodeURIComponent(proxy)}`);
+    const resp = await Requests.post('ajax/addAccount.php', `action=${editing?'save':'create'}&auto_number=${editing?'0':'1'}&name=${encodeURIComponent(name)}&cookies=${encodeURIComponent(editing ? cookies : (cookies || '[]'))}&proxy=${encodeURIComponent(proxy)}`);
     const saved = await Requests.checkResponse(resp, false);
     if (saved.success) window.location.reload();
     else alert(`Error saving account: ${saved.error}`);
@@ -55,6 +68,7 @@ async function editAccount(name) {
     const checked = await Requests.checkResponse(resp);
     if (!checked.success) return alert(`Error editing account: ${checked.error}`);
     const data = checked.data;
+    remaskEditingProfile = true;
     document.add.name.value = data.name;
     document.add.name.readOnly = true;
     document.add.cookies.value = '';

@@ -20,14 +20,16 @@ function remaskCookieRows(raw) {
   }
   return rows;
 }
-function prepareAddProfile() {
-  openModal('Добавить FB аккаунт', `<div class="ws-form"><div><label>Название в ReMask</label><input id="newProfileName"></div><div class="full"><label>Прокси</label><input id="newProfileProxy" placeholder="http:ip:port:login:password"></div><div class="full"><label>Facebook cookies JSON</label><textarea id="newProfileCookies" rows="5" placeholder="JSON cookies с c_user и xs"></textarea></div></div><div class="ws-muted mt-2">Авторизация через cookies. Токен Ads Manager не нужен. Сохранение профиля не подтверждает действительность Facebook-сессии.</div>`, 'Добавить', async () => {
+async function prepareAddProfile() {
+  const sequence = await apiJson('ajax/metaProfileManager.php', post({action:'next_number'}));
+  const nextNumber = String(sequence.next_number);
+  openModal('Добавить FB аккаунт', `<div class="ws-form"><div><label>Номер аккаунта</label><input id="newProfileName" value="${esc(nextNumber)}" readonly></div><div class="full"><label>Прокси</label><input id="newProfileProxy" placeholder="http:ip:port:login:password"></div><div class="full"><label>Facebook cookies JSON</label><textarea id="newProfileCookies" rows="5" placeholder="JSON cookies с c_user и xs"></textarea></div></div><div class="ws-muted mt-2">Авторизация через cookies. Токен Ads Manager не нужен. Сохранение профиля не подтверждает действительность Facebook-сессии.</div>`, 'Добавить', async () => {
     const name = $('newProfileName').value.trim();
     const proxy = $('newProfileProxy').value.trim();
     if (!name) throw new Error('Название профиля обязательно.');
     if (!proxy) throw new Error('Прокси обязателен.');
     const cookies = JSON.stringify(remaskCookieRows($('newProfileCookies').value.trim()));
-    await apiJson('ajax/metaProfileManager.php', post({action:'create', name, cookies, proxy}));
+    await apiJson('ajax/metaProfileManager.php', post({action:'create', name, cookies, proxy, auto_number:'1'}));
     await loadInventory('Профиль сохранён. Facebook-сессия ещё не проверена.');
     closeModal();
   });

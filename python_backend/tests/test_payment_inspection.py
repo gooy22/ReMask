@@ -52,9 +52,11 @@ class PaymentSummaryTests(unittest.TestCase):
 
 class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
     def browser(self, links):
+        menu=SimpleNamespace(count=AsyncMock(return_value=0),is_visible=AsyncMock(return_value=False),click=AsyncMock())
         page=SimpleNamespace(url=URL,evaluate=AsyncMock(return_value=links),
+            get_by_role=lambda role,**kwargs:menu,
             locator=lambda selector:SimpleNamespace(inner_text=AsyncMock(return_value=ID+"\nPayment methods\nVisa •••• 1234")))
-        return SimpleNamespace(page=page,profile_id="Fixture",ADS_MANAGER_URL="https://adsmanager.facebook.com/adsmanager/manage/campaigns",_goto=AsyncMock())
+        return SimpleNamespace(page=page,profile_id="Fixture",ADS_MANAGER_URL="https://adsmanager.facebook.com/adsmanager/manage/campaigns",_goto=AsyncMock(),_assert_authenticated=AsyncMock())
 
     async def test_follows_only_rendered_meta_billing_link_and_returns_masked_data(self):
         browser=self.browser([{"href":URL,"label":"Billing & payments"}])
@@ -78,6 +80,24 @@ class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(BrowserBusinessError):
             await inspect_payment_methods(browser,ID)
         browser.page.evaluate.assert_not_called()
+        self.assertEqual(browser._goto.await_count,1)
+
+    async def test_collapsed_all_tools_is_opened_once_before_reading_billing_link(self):
+        browser=self.browser([])
+        menu=SimpleNamespace(count=AsyncMock(return_value=1),is_visible=AsyncMock(return_value=True),click=AsyncMock())
+        browser.page.get_by_role=lambda role,**kwargs:menu
+        browser.page.evaluate.side_effect=[[],[{"href":URL,"label":"Billing & payments"}]]
+        result=await inspect_payment_methods(browser,ID)
+        menu.click.assert_awaited_once()
+        browser._assert_authenticated.assert_awaited_once()
+        self.assertEqual(result["verification_status"],"LINKED")
+
+    async def test_auth_gate_after_menu_open_stops_before_billing_navigation(self):
+        browser=self.browser([])
+        menu=SimpleNamespace(count=AsyncMock(return_value=1),is_visible=AsyncMock(return_value=True),click=AsyncMock())
+        browser.page.get_by_role=lambda role,**kwargs:menu
+        browser._assert_authenticated.side_effect=BrowserBusinessError("CHECKPOINT_REQUIRED","Verification required",retryable=False)
+        with self.assertRaises(BrowserBusinessError): await inspect_payment_methods(browser,ID)
         self.assertEqual(browser._goto.await_count,1)
 
 
