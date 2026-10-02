@@ -1,33 +1,63 @@
-# ReMask: private Launch catalog and verification audit, 2026-10-02
+# ReMask: проверка Launch, FP и оплаты — 2 октября 2026
 
-## Confirmed defects and scope
+## Что исправлено и проверено
 
-The saved Workspace RK/Page list was still loaded through legacy Meta Graph preflight/assets endpoints. A stale token could prevent opening already confirmed assets and restart live synchronization unnecessarily. The private worker snapshot is now used for these local catalog reads. This is identity/catalog data, not current Facebook session readiness or advertising permission.
+| Участок | Найденный дефект | Изменение и подтверждение |
+|---|---|---|
+| Загрузка РК в Launch | Для показа сохранённого списка вызывался старый Graph preflight. Истёкший токен ломал открытие уже известных объектов. | metaPreflight и поддержанные metaAssets (ad_accounts, pages, funding) читают сохранённые данные рабочего приватного worker. Профиль проверяется локально; MetaApiClient не создаётся. В браузере выбран только профиль 7, загружен один сохранённый РК. |
+| Каталог FP | Старый снимок содержал два Page ID и два profile-plus ID. Получались четыре варианта вместо двух страниц; названия могли быть Profile picture/Promote. | Дедупликация использует точные сохранённые delegate-page соответствия прежнего live Your Pages. В браузере осталось ровно две страницы с правильными Page ID и названиями. Новые FP не создавались. |
+| Неизвестные права | Наличие сохранённого объекта могло восприниматься как готовая сессия/доступ. | catalog_only=true; session_ready и разрешения остаются null. В интерфейсе явно показаны устаревший снимок и непроверенный рекламный доступ. |
+| Новый РК в каталоге | Подтверждённая worker-привязка могла отсутствовать в более старом снимке. | При наличии точных BM/RK ID добавляется идентичность РК. Статус ACTIVE и валюта не выдумываются; повторные ID не дублируются. |
+| Несколько профилей | Каталог проверялся параллельно, business_id терялся при создании targets. | Чтения выполняются последовательно; исходный business_id сохраняется в targets для нескольких профилей. Live тест на нескольких профилях не выполнялся. |
+| FUNDING, новый job | funding_source_id в сохранённом scope позволял пропустить платёжный handler и вернуть SUCCESS. | Новый job обязан пройти handler. Сохранённый ID сам по себе не завершает шаг. Регрессия проверена с настоящим ProvisioningStateStore. |
+| FUNDING, результат handler | Ответ только с funding_source_id считался достаточным успехом. | Требуются funding_verified=true, точный целевой ad_account_id и точный выбранный funding_source_id. Пропущенное подтверждение, чужой РК/источник и строка true отклоняются без auto-retry. |
+| FUNDING, старая SUCCESS | Исторический непроверенный SUCCESS мог повторно пропускать шаг. | Неполное подтверждение вызывает FUNDING_RESULT_UNVERIFIED без повторной платёжной отправки. Уже подтверждённый результат того же job остаётся идемпотентным. |
+| Funding UI | Сохранённый источник или is_prepay_account, в том числе пустой баланс, давали READY. | Состояния UNKNOWN, STALE, EXPIRED, PREPAY EMPTY/BALANCE и SOURCE SAVED не объявляют готовую карту. Локальный каталог возвращает NOT CHECKED. Это подтверждено в браузере. |
+| Добавление FP | Добавление страницы в BM могло выглядеть как доказательство её рекламного доступа для РК. | Результат отдельно содержит page_business_attached, attachment_scope и ad_account_page_access_verified=false. Сам проверенный механизм добавления в Business Settings сохранён. |
+| Выбор страницы | Выбранные Page/Pixel давали RK READY без рекламной проверки. | Это выбор объектов, а не рекламное подтверждение. Page-каталог отображается до необязательного Pixel lookup. |
+| Review и отправка рекламы | В этом участке сохранился только старый Graph-путь. | До реализации и проверки приватного пути новые Review, server dry run и ad job submit останавливаются до Graph, с PRIVATE_LAUNCH_VERIFICATION_REQUIRED. Это временно недоступные действия, а не готовый private Launch. |
 
-FUNDING previously skipped new jobs when a scope contained funding_source_id and accepted a transport result containing only that ID. It now requires explicit funding_verified=true plus exact requested RK and source IDs. Historical SUCCESS without that proof fails without resubmitting the payment action. A verified completed step in the same job remains idempotent.
+## Браузерная проверка в окончательной сборке
 
-Fan Page attachment verifies the Page's relation to the Business, not its advertising access for an RK. The result now separately reports page_business_attached, attachment_scope and ad_account_page_access_verified=false. Existing attachment behavior is preserved.
+Проверено на сайте https://remask-production-c246.up.railway.app/launch.php после успешного развёртывания, только профиль 7:
 
-## Launch behavior and remaining gaps
+1. Выбран ровно один Facebook-профиль.
+2. «Загрузить сохранённые РК» возвращает один РК: 2172569806673120. Новый РК этим действием не создавался; принадлежность этого старого РК к целевому BM не подтверждалась.
+3. Интерфейс показывает, что сохранённые данные устарели, а сессия и рекламный доступ не проверены.
+4. В селекторе FP ровно два объекта; profile-plus ID больше не являются отдельными FP.
+5. Выбрана Media Shopsw с Page ID 1289628847574478. Это локальный выбор в форме, а не выдача прав или привязка для рекламы.
+6. «Показать состояние оплаты» возвращает NOT CHECKED. Карта не привязывалась, списания не выполнялись.
+7. Кнопки отправки рекламы остаются недоступны. Campaign/AdSet/Creative/Ad не создавались.
 
-- Profile existence is checked locally; metaPreflight and the supported metaAssets resources (ad_accounts/pages/funding) do not create a MetaApiClient or contact Facebook.
-- Canonical Page IDs deduplicate aliases; profiles and confirmed RK/BM bindings are kept separate. A newly confirmed RK is merged with unknown status/currency rather than invented ACTIVE/USD fields.
-- Stale/missing snapshots and unverified session/permissions are explicit. Empty or expired prepay funding cannot report READY.
-- Multi-profile catalog reads run serially. BM IDs are retained when building Launch targets.
-- Confirmed Page rows are rendered before optional Pixel lookup, and selecting a Page does not report verified advertising readiness.
-- Remaining asset resources are unavailable in this private catalog path. This change does not implement private Pixels, audiences, media, campaign/adset/creative/ad submission or card attachment.
-- Review, server dry run and new ad job submission still have only a legacy Graph implementation. Their endpoints are stopped before that implementation, with PRIVATE_LAUNCH_VERIFICATION_REQUIRED. This is an explicit temporary limitation, not a completed private launch engine.
-- No private card attachment implementation was found. The older payUnsettled endpoint pays outstanding charges and must never be reused as card attachment.
+| Page | Канонический Page ID | ID её profile-plus |
+|---|---|---|
+| Media Shopsw | 1289628847574478 | 61594993341059 |
+| ReMask Page | 1372205759306015 | 61595071734540 |
 
-## Live safety and prior evidence
+Источник этих соответствий: ранее наблюдённые точные viewer.actor.additional_profiles_with_biz_tools delegate_page_id/delegate_page.id и совпадающие карточки Pages you manage. Связи записаны как данные в railway-confirmed-page-identities.php. Они применяются только к Page ID, уже присутствующему в снимке, не добавляют новый объект и не подтверждают сегодняшние права. Неоднозначные и неподтверждённые связи не объединяются.
 
-Profile 7; confirmed BM 2478360152656679. Previous single RK attempt job 2f0595ff87fe450d8939ad0338c020d0 failed before Create because Facebook presented CHECKPOINT_REQUIRED. No new RK or card was created by this continuation. No automated checkpoint bypass or repeated Facebook mutation is authorized by these changes. The cloud app UI can be checked independently against saved data without restarting Meta synchronization.
+## Что ещё не работает / не подтверждено
 
-Two canonical FP IDs in the previous confirmed catalog: 1289628847574478 and 1372205759306015. Alias rows are not additional Pages. Origin/time of creation of the second Page is not newly established.
+| Этап | Фактическая граница |
+|---|---|
+| Новый РК в целевом BM | Последняя live попытка на профиле 7, BM 2478360152656679, job 2f0595ff87fe450d8939ad0338c020d0, остановилась до Create из-за CHECKPOINT_REQUIRED. В этом продолжении новые попытки Meta и обход checkpoint не выполнялись. |
+| FP для рекламы | Наличие страницы у профиля, выбор её в Launch и добавление в BM не доказывают доступ к ней при создании рекламы конкретного РК. Такой live результат ещё не получен. |
+| Привязка карты | Готового браузерного пути добавления карты в коде не найдено. FUNDING — route-based transport для настроенного backend, а не готовая платёжная форма Meta. |
+| payUnsettled | Старый endpoint оплачивает задолженность. Он не является добавлением карты и не использовался. |
+| Остальные Launch assets | Приватный каталог пока не реализует Pixels, Custom Audiences, media и прочие ресурсы. Автоматический lookup аудитории в UI показывает явную недоступность; пустой успешный ответ не подставляется. |
+| Создание рекламных объектов | Приватное создание Campaign/AdSet/Creative/Ad не реализовано этим изменением и не проверено. |
+| Старые надписи/редакторы | В общих элементах интерфейса и декларативных SDK-редакторах остались обозначения Official Meta API. Они не означают, что сохранённый каталог обращается к Graph. Остальные старые функции проекта целиком не мигрированы. |
+| Первоначальное количество FP | Ранее подтверждены две реальные страницы. Дата/автор создания второй страницы заново не установлены; происхождение не выводится только из названия или старой незавершённой задачи. |
 
-No worker concurrency or Railway capacity is increased; one browser slot is retained. No ten-profile or batch live test is performed.
+**Полный сценарий BM → новый РК → подтверждённый рекламный доступ FP → привязанная карта не завершён.** Для дальнейшей live проверки нужна восстановленная Facebook-сессия профиля 7 и наблюдение реальных рекламного и платёжного интерфейсов. Готовность нельзя заменить сохранённым ID, локальным полем или придуманным селектором.
 
-## Validation
+## Тесты и развёртывание
 
-Local: six backend regressions passed, Node private catalog/funding assertions passed, Python compilation and Node syntax passed. Six PHP catalog/installer tests require PHP and will run in CI (php --version required); they are skipped only in the PHP-less local environment. Full existing suite, deployment and one-profile UI verification are pending at the initial commit and will be recorded after completion.
-
+- GitHub Actions: run 36967489928, job 110714286061, SUCCESS.
+- Backend: 533 теста, 27.630 секунды, OK без skipped. PHP 8.3.6 доступен в CI; тесты каталога и установщика выполнены.
+- Node: automatic batch interface и private catalog/funding assertions — успешно.
+- Финальный код: commit 41beec3cf512e24952ed90b8d9a1a1d33bc28497.
+- Railway: deployment 8a3a7cba-e972-4178-b622-6171b4b5839b, SUCCESS.
+- Первое развёртывание 5e3b552 остановилось на устаревших build assertions старого JS cache tag и заменённых Graph endpoints. Проверки обновлены под новый каталог; работающая предыдущая сборка оставалась доступной.
+- Один browser slot сохранён. Лимиты worker, память и ёмкость Railway не повышались. Live нагрузка на десяти аккаунтах и массовое создание не выполнялись.
+- Скриншот проверки: remask-launch-catalog-1790917951069.jpg; видны один выбранный РК и NOT CHECKED оплаты.
