@@ -203,6 +203,10 @@ echo json_encode(['token'=>$saved->token,'cookies'=>$saved->cookies,'proxy'=>$sa
         self.assertTrue(saved['encrypted'])
 
     def test_complete_runtime_overlay_order_and_installed_php_build_contracts(self):
+        parts=sorted((ROOT/'.deploy/clean-preview-valid').glob('runtime.b64.*'))
+        archive=base64.b64decode(''.join(p.read_text() for p in parts))
+        with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
+            tar.extractall(self.root,filter='data')
         docker=(ROOT/'Dockerfile').read_text()
         stage=self.root/'build-sources'
         stage.mkdir()
