@@ -3,6 +3,7 @@ function remaskClearPaymentSecrets(){
 }
 
 function paymentCardMessage(result){
+  const names={number:'номер карты',cvv:'CVV',holder:'имя владельца',expiry:'срок действия',month:'месяц',year:'год',country:'страна',address:'платёжный адрес',city:'город',region:'область / штат',postal_code:'индекс',unknown_required_field:'дополнительное поле Meta'};
   const messages={
     CARD_FORM_READY:'Форма Meta доступна для выбранного РК.',
     CARD_LINK_OBSERVED:'Карта привязана к выбранному РК. Платёжная проверка не выполнена.',
@@ -24,8 +25,10 @@ function paymentCardMessage(result){
     SESSION_EXPIRED:'Facebook-сессия истекла.',
     TWO_FACTOR_REQUIRED:'Meta требует двухфакторной проверки.'
   };
+  const fields=[...new Set((result.fields||[]).filter(f=>f.required&&f.kind).map(f=>names[f.kind]||f.kind))];
   return (messages[result.code]||result.code||'Не удалось подтвердить результат')+
-    (result.missing_fields?.length?' Поля: '+result.missing_fields.join(', ')+'.':'');
+    (result.missing_fields?.length?' Поля: '+result.missing_fields.map(f=>names[f]||f).join(', ')+'.':'')+
+    (fields.length?' Поля формы Meta: '+fields.join(', ')+'.':'');
 }
 
 async function inspectFundingRows(rows,container){

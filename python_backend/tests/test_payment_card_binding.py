@@ -7,13 +7,18 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from app.facebook_business_browser import BrowserBusinessError
-from app.payment_card_binding import _open_card_form, _payment_surface, _unique_visible, card_values, field_kind, missing_card_fields, payment_card_flow, selected_payment_asset
+from app.payment_card_binding import _open_card_form, _payment_surface, _unique_visible, card_values, field_kind, form_action_guard, missing_card_fields, payment_card_flow, selected_payment_asset
 
 ID='123456789'
 CARD={'number':'4111111111111111','month':12,'year':2099,'holder':'Fixture'}
 
 
 class CardFieldTests(unittest.TestCase):
+    def test_implicit_terms_or_temporary_charge_cannot_be_submitted_as_card_save(self):
+        self.assertEqual(form_action_guard('By clicking Save you agree to Payments Terms',[]),'PAYMENT_TERMS_CONFIRMATION_REQUIRED')
+        self.assertEqual(form_action_guard('A temporary authorization may apply',[]),'PAYMENT_FINANCIAL_ACTION_REQUIRED')
+        self.assertEqual(form_action_guard('Privacy Terms Add payment method',[]),'')
+
     def test_fields_use_labels_or_standard_card_autocomplete(self):
         self.assertEqual(field_kind('Card number'),'number')
         self.assertEqual(field_kind('','cc-csc'),'cvv')

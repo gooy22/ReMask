@@ -31,6 +31,15 @@ AUTOCOMPLETE = {'cc-number':'number','cc-name':'holder','cc-exp':'expiry','cc-ex
                 'cc-exp-year':'year','cc-csc':'cvv','country':'country','country-name':'country',
                 'address-line1':'address','address-level2':'city','address-level1':'region','postal-code':'postal_code'}
 
+FINANCIAL_ACTION = re.compile(r'verify card|verification charge|temporary (?:charge|hold|authorization)|pay now|make payment|top up|add funds|пополн|оплатить|проверочн.*списан',re.I)
+TERMS_ACCEPTANCE = re.compile(r'by (?:clicking|continuing|saving|adding)[^\n]{0,180}(?:agree|accept)|нажимая[^\n]{0,180}(?:соглас|принима)|натискаючи[^\n]{0,180}(?:погодж|прийма)',re.I)
+
+
+def form_action_guard(text: str, fields: list[dict[str,Any]]) -> str:
+    if FINANCIAL_ACTION.search(text):return 'PAYMENT_FINANCIAL_ACTION_REQUIRED'
+    if TERMS_ACCEPTANCE.search(text) or any(f['type']=='checkbox' and not f['checked'] for f in fields):return 'PAYMENT_TERMS_CONFIRMATION_REQUIRED'
+    return ''
+
 
 def field_kind(label: str, autocomplete: str = '') -> str:
     if autocomplete in AUTOCOMPLETE:
@@ -142,6 +151,9 @@ async def _open_card_form(browser: Any, target: str, asset: dict[str,str]) -> di
         fields=await _form_fields(page)
         kinds={f['kind'] for f in fields}
         if 'number' in kinds:
+            text=await page.locator('body').inner_text(timeout=3000)
+            guard=form_action_guard(text,fields)
+            if guard:return {'status':'ACTION_REQUIRED','code':guard,'fields':_safe_fields(fields)}
             return {'status':'FORM_READY','code':'CARD_FORM_READY','fields':_safe_fields(fields),'_fields':fields}
         # Only advance a payment-method selection, never a funded/verification action.
         radio=await _unique_visible(page,'radio',r'^(Credit or debit card|Debit or credit card|Credit/debit card|Кредитная или дебетовая карта)$')
@@ -151,10 +163,8 @@ async def _open_card_form(browser: Any, target: str, asset: dict[str,str]) -> di
         if next_button is None or not await next_button.is_enabled():
             return {'status':'BLOCKED','code':'PAYMENT_FORM_NOT_EXPOSED','fields':_safe_fields(fields)}
         body=await page.locator('body').inner_text(timeout=3000)
-        if re.search(r'verify card|verification charge|pay now|make payment|top up|add funds|пополн|оплатить|проверочн.*списан',body,re.I):
-            return {'status':'ACTION_REQUIRED','code':'PAYMENT_FINANCIAL_ACTION_REQUIRED'}
-        if any(f['type']=='checkbox' and not f['checked'] for f in fields):
-            return {'status':'ACTION_REQUIRED','code':'PAYMENT_TERMS_CONFIRMATION_REQUIRED'}
+        guard=form_action_guard(body,fields)
+        if guard:return {'status':'ACTION_REQUIRED','code':guard}
         await next_button.click(timeout=3000)
         await browser._assert_authenticated()
     return {'status':'BLOCKED','code':'PAYMENT_FORM_NOT_EXPOSED'}
@@ -199,10 +209,8 @@ async def payment_card_flow(browser:Any,target:str,asset:dict[str,str],*,operati
         if missing:return {**base,'status':'BLOCKED','code':'CARD_BILLING_FIELDS_REQUIRED','missing_fields':missing}
         page=browser.page
         body=await page.locator('body').inner_text(timeout=3000)
-        if re.search(r'verification charge|pay now|make payment|top up|add funds|пополн|оплатить|проверочн.*списан',body,re.I):
-            return {**base,'status':'ACTION_REQUIRED','code':'PAYMENT_FINANCIAL_ACTION_REQUIRED'}
-        if any(f['type']=='checkbox' and not f['checked'] for f in fields):
-            return {**base,'status':'ACTION_REQUIRED','code':'PAYMENT_TERMS_CONFIRMATION_REQUIRED'}
+        guard=form_action_guard(body,fields)
+        if guard:return {**base,'status':'ACTION_REQUIRED','code':guard}
         for field in fields:
             kind=field['kind'];value=values.get(kind,'')
             if not value:continue
