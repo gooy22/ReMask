@@ -138,7 +138,7 @@ if ($brace === false) throw new RuntimeException('FbRequests Execute boundary mi
 $guard = <<<'GRAPH_GUARD'
 
         $host = strtolower((string)parse_url((string)($optArray[CURLOPT_URL] ?? ''), PHP_URL_HOST));
-        if ($host === 'graph.facebook.com' || str_ends_with($host, '.graph.facebook.com')) throw new RuntimeException('COOKIE_ONLY_GRAPH_DISABLED');
+        if ($host === 'graph.facebook.com' || $host === 'graph-video.facebook.com' || str_ends_with($host, '.graph.facebook.com')) throw new RuntimeException('COOKIE_ONLY_GRAPH_DISABLED');
 GRAPH_GUARD;
 file_put_contents($fbPath, substr($fb, 0, $brace + 1) . $guard . substr($fb, $brace + 1));
 

@@ -127,6 +127,14 @@ class CookieOnlyProfileTests(unittest.TestCase):
         self.assertFalse(result['ok'])
         self.assertEqual(self.saved(),before)
 
+    def test_legacy_update_profile_name_alias_preserves_session(self):
+        result=self.create()
+        self.assertTrue(result['ok'],result)
+        before=self.saved()
+        result=self.endpoint('metaProfileManager.php',{'action':'update_profile','profile':'Fixture','cookies':'','proxy':''})
+        self.assertTrue(result['ok'],result)
+        self.assertEqual(self.saved(),before)
+
     def test_historical_token_is_preserved_but_cannot_be_updated(self):
         self.create()
         saved = self.saved()

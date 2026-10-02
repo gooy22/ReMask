@@ -235,7 +235,7 @@ try {
         rmx_pm_out(['ok'=>false,'success'=>false,'error'=>'UNSUPPORTED_ACTION','message'=>'Unsupported profile action.'], 400);
     }
 
-    $name = rmx_pm_find_scalar($input, ['name','profile_name','label','fb_id','profile_id','account_id']);
+    $name = rmx_pm_find_scalar($input, ['name','profile_name','profile','label','fb_id','profile_id','account_id']);
     if ($name === '') throw new InvalidArgumentException('Название профиля обязательно.');
     $existing = $store->getAccountByName($name);
 
