@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from app.facebook_business_browser import BrowserBusinessError
-from app.payment_card_binding import _open_card_form, _payment_surface, _unique_visible, card_values, field_kind, form_action_guard, missing_card_fields, payment_card_flow, profile_payment_card, selected_payment_asset
+from app.payment_card_binding import _open_card_form, _selected_account_disabled, _payment_surface, _unique_visible, card_values, field_kind, form_action_guard, missing_card_fields, payment_card_flow, profile_payment_card, selected_payment_asset
 from app.payment_inspection import settings_payment_summary, select_settings_payment_tab
 
 ID='123456789'
@@ -84,6 +84,7 @@ class CardBrowserTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_billing_fallback_never_adds_to_unverified_account(self):
         rows=SimpleNamespace(wait_for=AsyncMock(),count=AsyncMock(return_value=1),inner_text=AsyncMock(return_value='Fixture RK Active'))
+        rows.filter=lambda **kw:rows
         page=SimpleNamespace(url='https://business.facebook.com/latest/settings/ad_accounts/?business_id=987654321',
             get_by_role=lambda *a,**kw:SimpleNamespace(filter=lambda **kw:rows))
         browser=SimpleNamespace(page=page,profile_id='Fixture',_goto=AsyncMock(),
@@ -95,12 +96,27 @@ class CardBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(controls.await_count,3);inspect.assert_awaited_once()
 
     async def test_disabled_exact_account_stops_before_payment_navigation_or_entry(self):
-        rows=SimpleNamespace(wait_for=AsyncMock(),count=AsyncMock(return_value=1),inner_text=AsyncMock(return_value='Fixture RK Disabled Disabled --'))
+        rows=SimpleNamespace(wait_for=AsyncMock(),count=AsyncMock(return_value=1),inner_text=AsyncMock(return_value='Fixture RK\nDisabled\nDisabled\n--'))
+        rows.filter=lambda **kw:rows
         page=SimpleNamespace(url='https://business.facebook.com/latest/settings/ad_accounts/?business_id=987654321',get_by_role=lambda *a,**kw:SimpleNamespace(filter=lambda **kw:rows))
         browser=SimpleNamespace(page=page,profile_id='Fixture',_goto=AsyncMock(),SETTINGS_AD_ACCOUNTS_URLS=['https://business.facebook.com/latest/settings/ad_accounts/?business_id={business_id}'],_read_selected_ad_account_identity=AsyncMock(return_value={'confirmed':True,'ad_account_id':ID}))
         with patch('app.payment_card_binding.select_settings_payment_tab',AsyncMock()) as tab,patch('app.payment_card_binding.inspect_payment_methods',AsyncMock()) as inspect:
             result=await _open_card_form(browser,ID,{'business_id':'987654321','name':'Fixture RK'})
         self.assertEqual(result['code'],'PAYMENT_AD_ACCOUNT_DISABLED');tab.assert_not_awaited();inspect.assert_not_awaited()
+
+    async def test_nested_rows_use_unique_asset_button_and_reject_ambiguous_or_name_status(self):
+        rows=SimpleNamespace(count=AsyncMock(return_value=2))
+        rows.filter=lambda **kw:rows
+        button=SimpleNamespace(count=AsyncMock(return_value=1),inner_text=AsyncMock(return_value='Fixture RK\nDisabled\nDisabled\n--'))
+        button.filter=lambda **kw:button
+        page=SimpleNamespace(get_by_role=lambda role,**kw:rows if role=='row' else button)
+        self.assertTrue(await _selected_account_disabled(page,'Fixture RK'))
+        button.count.return_value=2
+        self.assertFalse(await _selected_account_disabled(page,'Fixture RK'))
+        button.count.return_value=1
+        for text in ('Fixture RK Disabled\nActive', 'Fixture RK sibling\nDisabled', 'Fixture RK\nActive'):
+            button.inner_text.return_value=text
+            self.assertFalse(await _selected_account_disabled(page,'Fixture RK'))
 
     def browser(self,body='Payment methods'):
         save=SimpleNamespace(is_enabled=AsyncMock(return_value=True),click=AsyncMock())
@@ -152,6 +168,20 @@ class CardBrowserTests(unittest.IsolatedAsyncioTestCase):
 
 
 class RealCardSelectorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_nested_meta_rows_disabled_button_without_false_sibling_status(self):
+        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
+        if not executable:self.skipTest('No local Chromium installed')
+        from playwright.async_api import async_playwright
+        async with async_playwright() as playwright:
+            browser=await playwright.chromium.launch(executable_path=executable,headless=True,args=['--no-sandbox'])
+            try:
+                page=await browser.new_page()
+                await page.set_content('<div role="row"><div role="row"><button>Fixture RK<br>Disabled<br>Disabled<br>--</button></div></div><div role="row" style="display:none">Fixture RK Disabled</div>')
+                self.assertTrue(await _selected_account_disabled(page,'Fixture RK'))
+                await page.set_content('<div role="row"><button>Fixture RK<br>Active</button><button>Other RK<br>Disabled</button></div>')
+                self.assertFalse(await _selected_account_disabled(page,'Fixture RK'))
+            finally:await browser.close()
+
     async def test_payment_tab_waits_for_lazy_add_method_control(self):
         executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
         if not executable:self.skipTest('No local Chromium installed')

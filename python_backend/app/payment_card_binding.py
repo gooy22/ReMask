@@ -121,11 +121,8 @@ async def _open_card_form(browser: Any, target: str, asset: dict[str,str]) -> di
     parsed=urlsplit(str(page.url))
     if parsed.hostname not in ALLOWED_HOSTS or parse_qs(parsed.query).get('business_id')!=[business]:
         return {'status':'BLOCKED','code':'PAYMENT_ACCOUNT_SCOPE_UNVERIFIED'}
-    selected_rows = page.get_by_role('row').filter(has_text=name)
-    if await selected_rows.count() == 1:
-        selected_text = await selected_rows.inner_text(timeout=2000)
-        if re.search(r'\bdisabled\b|отключ[её]н|вимкнен', selected_text, re.I):
-            return {'status':'BLOCKED','code':'PAYMENT_AD_ACCOUNT_DISABLED'}
+    if await _selected_account_disabled(page, name):
+        return {'status':'BLOCKED','code':'PAYMENT_AD_ACCOUNT_DISABLED'}
     await select_settings_payment_tab(browser)
     add=await _unique_visible(page,'button',r'^(Add payment method|Добавить способ оплаты|Додати спосіб оплати)$')
     if add is None:
@@ -175,6 +172,24 @@ async def _open_card_form(browser: Any, target: str, asset: dict[str,str]) -> di
         await next_button.click(timeout=3000)
         await browser._assert_authenticated()
     return {'status':'BLOCKED','code':'PAYMENT_FORM_NOT_EXPOSED'}
+
+
+async def _selected_account_disabled(page: Any, name: str) -> bool:
+    # Meta can expose nested/hidden table rows for one asset. Its named asset
+    # button remains unique. Call only after canonical RK and BM proof.
+    candidates = [page.get_by_role('row').filter(has_text=name).filter(visible=True),
+                  page.get_by_role('button', name=re.compile(r'^'+re.escape(name)+r'(?:\s|$)')).filter(visible=True)]
+    for candidate in candidates:
+        if await candidate.count() != 1:
+            continue
+        text = await candidate.inner_text(timeout=2000)
+        lines = [line.replace('\u200b','').strip().casefold() for line in text.splitlines() if line.replace('\u200b','').strip()]
+        # Never interpret Disabled in an account name or a sibling's status.
+        if lines and lines[0] == name.casefold() and any(line in {
+            'disabled', 'отключен', 'отключён', 'вимкнено', 'вимкнений',
+        } for line in lines[1:]):
+            return True
+    return False
 
 
 def card_values(card: dict[str,Any],cvv: str) -> dict[str,str]:
