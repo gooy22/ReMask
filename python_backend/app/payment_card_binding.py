@@ -263,7 +263,7 @@ async def payment_card_flow(browser:Any,target:str,asset:dict[str,str],*,operati
         return {**base,'submitted':submitted,'status':'SUBMITTED_UNVERIFIED' if submitted else 'BLOCKED','code':'CARD_BROWSER_INTERRUPTED'}
 
 
-async def profile_payment_card(resolver:Any,profile:str,payload:dict[str,Any]) -> dict[str,Any]:
+async def _profile_payment_card_execute(resolver:Any,profile:str,payload:dict[str,Any]) -> dict[str,Any]:
     from .session import ProfileSession
     target=account_id(payload.get('account_id',''));operation=payload.get('operation','')
     if operation not in {'prepare','bind'}:raise ValueError('CARD_OPERATION_INVALID')
@@ -287,4 +287,16 @@ async def profile_payment_card(resolver:Any,profile:str,payload:dict[str,Any]) -
             return result
         except asyncio.TimeoutError:
             # Timeout may happen after Save; never permit blind retry.
-            return {**base,'status':'SUBMITTED_UNVERIFIED' if operation=='bind' else 'BLOCKED','code':'CARD_FLOW_TIMEOUT'}
+            return {**base,'submitted':None if operation=='bind' else False,'status':'SUBMITTED_UNVERIFIED' if operation=='bind' else 'BLOCKED','code':'CARD_FLOW_TIMEOUT'}
+
+
+async def profile_payment_card(resolver:Any,profile:str,payload:dict[str,Any]) -> dict[str,Any]:
+    target=account_id(payload.get('account_id',''));operation=payload.get('operation','')
+    if operation not in {'prepare','bind'}:raise ValueError('CARD_OPERATION_INVALID')
+    try:
+        # PHP waits 130s. Resolution, browser-slot acquisition, the form and
+        # cancellation/cleanup must all fit inside that transport boundary.
+        return await asyncio.wait_for(_profile_payment_card_execute(resolver,profile,payload),timeout=110)
+    except asyncio.TimeoutError:
+        return {'profile_id':profile,'account_id':target,'submitted':None if operation=='bind' else False,'funding_verified':False,
+            'status':'SUBMITTED_UNVERIFIED' if operation=='bind' else 'BLOCKED','code':'CARD_FLOW_TIMEOUT'}

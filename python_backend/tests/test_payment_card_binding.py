@@ -1,3 +1,4 @@
+import asyncio
 import json
 import tempfile
 import shutil
@@ -7,7 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from app.facebook_business_browser import BrowserBusinessError
-from app.payment_card_binding import _open_card_form, _payment_surface, _unique_visible, card_values, field_kind, form_action_guard, missing_card_fields, payment_card_flow, selected_payment_asset
+from app.payment_card_binding import _open_card_form, _payment_surface, _unique_visible, card_values, field_kind, form_action_guard, missing_card_fields, payment_card_flow, profile_payment_card, selected_payment_asset
 from app.payment_inspection import settings_payment_summary, select_settings_payment_tab
 
 ID='123456789'
@@ -59,6 +60,22 @@ class CardFieldTests(unittest.TestCase):
 
 
 class CardBrowserTests(unittest.IsolatedAsyncioTestCase):
+    async def test_whole_operation_timeout_cancels_setup_and_never_claims_unsubmitted_bind(self):
+        original_wait=asyncio.wait_for
+        for operation,expected in [('prepare','BLOCKED'),('bind','SUBMITTED_UNVERIFIED')]:
+            cancelled=[]
+            async def setup(*args):
+                try:await asyncio.Event().wait()
+                finally:cancelled.append(True)
+            async def short_wait(task,timeout):
+                self.assertEqual(timeout,110)
+                return await original_wait(task,0.01)
+            with patch('app.payment_card_binding._profile_payment_card_execute',setup),patch('app.payment_card_binding.asyncio.wait_for',short_wait):
+                result=await profile_payment_card(None,'Fixture',{'account_id':ID,'operation':operation})
+            self.assertEqual(result['status'],expected);self.assertEqual(result['code'],'CARD_FLOW_TIMEOUT')
+            self.assertEqual(cancelled,[True]);self.assertFalse(result['funding_verified'])
+            if operation=='bind':self.assertIsNone(result['submitted'])
+
     async def test_optional_diagnostics_failure_never_breaks_card_flow_or_logs_secret(self):
         browser=SimpleNamespace(profile_id='Fixture',page=SimpleNamespace(url='https://business.facebook.com/latest/settings/ad_accounts/',evaluate=AsyncMock(side_effect=RuntimeError(CARD['number']))))
         with self.assertLogs('remask.payment_card',level='INFO') as logs:
