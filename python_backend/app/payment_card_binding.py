@@ -123,8 +123,9 @@ async def _resolve_payment_account_name(page: Any, name: str) -> str:
 async def _open_card_form(browser: Any, target: str, asset: dict[str,str], billing_setup: dict[str,str] | None = None) -> dict[str,Any]:
     page=browser.page
     business=asset.get('business_id',''); name=asset.get('name','')
-    if not business or not name:
+    if not business:
         return {'status':'BLOCKED','code':'PAYMENT_ACCOUNT_BINDING_MISSING'}
+    name=name or target
     url=browser.SETTINGS_AD_ACCOUNTS_URLS[0].format(business_id=business)
     alias=asset.get('business_asset_id','')
     if re.fullmatch(r'\d{5,30}',alias):
