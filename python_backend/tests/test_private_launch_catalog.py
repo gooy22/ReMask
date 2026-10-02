@@ -30,10 +30,10 @@ class PrivateLaunchCatalogTests(unittest.TestCase):
             capture_output=True,text=True,check=True,timeout=10)
         return json.loads(result.stdout)
 
-    def catalog(self, bindings=None, now=1100):
-        args = [self.snapshot, bindings or {}]
+    def catalog(self, bindings=None, now=1100, identities=None):
+        args = [self.snapshot, bindings or {}, identities or {}]
         return self.run_php('$args=json_decode('+json.dumps(json.dumps(args))+',true);'
-            + f'echo json_encode(RemaskPrivateLaunchCatalog::fromState("7",$args[0],$args[1],{now}));')
+            + f'echo json_encode(RemaskPrivateLaunchCatalog::fromState("7",$args[0],$args[1],{now},$args[2]));')
 
     def test_profile_and_alias_dedup_without_false_permissions(self):
         catalog = self.catalog()
@@ -66,6 +66,37 @@ class PrivateLaunchCatalogTests(unittest.TestCase):
         self.assertTrue(catalog['_cache']['stale'])
         self.assertEqual(catalog['ad_accounts']['data'], [])
 
+    def test_recorded_profile_plus_pairs_repair_four_rows_into_two_pages(self):
+        self.snapshot['7']['pages'] = [
+            {'id':'61594993341059','name':'Profile picture for Media Shopsw'},
+            {'id':'61595071734540','name':'Profile picture for ReMask Page'},
+            {'id':'1289628847574478','name':'Promote'},
+            {'id':'1372205759306015','name':'Promote'}]
+        recorded = self.run_php('echo json_encode(require '+json.dumps(str(ROOT/'railway-confirmed-page-identities.php'))+');')
+        pages = self.catalog(identities=recorded)['pages']['data']
+        self.assertEqual([(r['id'],r['name']) for r in pages], [
+            ('1289628847574478','Media Shopsw'),('1372205759306015','ReMask Page')])
+        self.assertTrue(all(r['ad_account_page_access_verified'] is False for r in pages))
+        self.assertEqual(len(self.catalog(identities={'8':recorded['7']})['pages']['data']),4)
+
+    def test_confirmed_mapping_cannot_inject_page_or_use_unverified_alias(self):
+        self.snapshot['7']['pages'] = [{'id':'222222222','name':'Page'}, {'id':'555555555','name':'Alias'}]
+        proof = {'7':[{'id':'888888888','profile_id':'555555555','identity_verified':True}]}
+        self.assertEqual(len(self.catalog(identities=proof)['pages']['data']),2)
+        proof = {'7':[{'id':'222222222','profile_id':'555555555','identity_verified':False}]}
+        self.assertEqual(len(self.catalog(identities=proof)['pages']['data']),2)
+
+    def test_snapshot_delegate_evidence_deduplicates_without_manual_mapping(self):
+        self.snapshot['7']['pages'] = [
+            {'id':'222222222','name':'Page','profile_id':'555555555','ownership_verified':True},
+            {'id':'555555555','name':'Profile picture'}]
+        self.assertEqual([r['id'] for r in self.catalog()['pages']['data']], ['222222222'])
+
+    def test_ambiguous_alias_is_not_silently_merged(self):
+        self.snapshot['7']['pages'] = [{'id':'222222222'},{'id':'555555555'},{'id':'888888888'}]
+        proof = {'7':[{'id':id,'profile_id':'555555555','identity_verified':True} for id in ['222222222','888888888']]}
+        self.assertEqual(len(self.catalog(identities=proof)['pages']['data']),3)
+
     def test_funding_is_unverified_and_rejects_rk_outside_profile(self):
         raw = json.dumps(json.dumps(self.catalog()))
         data = self.run_php('$c=json_decode('+raw+',true);echo json_encode(RemaskPrivateLaunchCatalog::asset($c,"funding","act_333333333"));')
@@ -88,6 +119,7 @@ class PrivateLaunchCatalogTests(unittest.TestCase):
         installer = Path(self.tmp.name)/'overlay.php'
         source = OVERLAY.read_text().replace("$root='/var/www/html';", '$root='+json.dumps(str(root))+';')
         source = source.replace('/tmp/railway-launch-private-catalog.js', str(ROOT/'railway-launch-private-catalog.js'))
+        source = source.replace('/tmp/railway-confirmed-page-identities.php', str(ROOT/'railway-confirmed-page-identities.php'))
         installer.write_text(source)
         subprocess.run(['php','-l',str(installer)],capture_output=True,check=True,timeout=10)
         for _ in range(2):

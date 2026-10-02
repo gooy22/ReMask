@@ -2,6 +2,8 @@
 declare(strict_types=1);
 // REMASK_PRIVATE_LAUNCH_CATALOG_V1
 $root='/var/www/html';
+file_put_contents($root.'/classes/RemaskConfirmedPageIdentities.json',
+    json_encode(require '/tmp/railway-confirmed-page-identities.php', JSON_UNESCAPED_UNICODE));
 file_put_contents($root.'/classes/RemaskPrivateLaunchCatalog.php', <<<'CATALOG'
 <?php
 declare(strict_types=1);
@@ -15,7 +17,7 @@ final class RemaskPrivateLaunchCatalog
         return preg_match('/^\d{5,30}$/', $id) ? $id : '';
     }
 
-    public static function fromState(string $profile, array $snapshots, array $bindings = [], int $now = 0): array {
+    public static function fromState(string $profile, array $snapshots, array $bindings = [], int $now = 0, array $pageIdentities = []): array {
         $now = $now ?: time();
         $snapshot = is_array($snapshots[$profile] ?? null) ? $snapshots[$profile] : [];
         $accounts = [];
@@ -51,16 +53,43 @@ final class RemaskPrivateLaunchCatalog
                 'advertising_access_verified'=>false,
             ];
         }
+        $pageRows = array_values(array_filter((array)($snapshot['pages'] ?? []),
+            static fn($row) => is_array($row) && (!isset($row['profile']) || (string)$row['profile'] === $profile)));
+        $present = [];
+        foreach ($pageRows as $row) {
+            $id = self::id($row['id'] ?? '');
+            if ($id !== '') $present[$id] = true;
+        }
+        $aliases = []; $names = []; $ambiguous = [];
+        $evidence = (array)($pageIdentities[$profile] ?? []);
+        foreach ($pageRows as $row) {
+            if (($row['ownership_verified'] ?? null) === true && isset($row['profile_id']))
+                $evidence[] = $row + ['identity_verified'=>true];
+        }
+        foreach ($evidence as $row) {
+            if (!is_array($row) || ($row['identity_verified'] ?? null) !== true) continue;
+            $id = self::id($row['id'] ?? '');
+            $alias = self::id($row['profile_id'] ?? '');
+            // Evidence can repair identities already in the saved snapshot; it
+            // cannot add a Page or prove live advertising access.
+            if ($id === '' || $alias === '' || $id === $alias || !isset($present[$id])) continue;
+            if (isset($aliases[$alias]) && $aliases[$alias] !== $id) {
+                $ambiguous[$alias] = true; unset($aliases[$alias]); continue;
+            }
+            if (isset($ambiguous[$alias])) continue;
+            $aliases[$alias] = $id;
+            if (trim((string)($row['name'] ?? '')) !== '') $names[$id] = trim((string)$row['name']);
+        }
         $pages = [];
-        foreach ((array)($snapshot['pages'] ?? []) as $row) {
+        foreach ($pageRows as $row) {
             if (!is_array($row)) continue;
             if (isset($row['profile']) && (string)$row['profile'] !== $profile) continue;
             $id = self::id($row['id'] ?? '');
             if ($id === '') continue;
             // Prefer the canonical Page ID when an alias mapping is present.
-            $canonical = self::id($row['page_id'] ?? '') ?: $id;
+            $canonical = self::id($row['page_id'] ?? '') ?: ($aliases[$id] ?? $id);
             $pages[$canonical] = [
-                'id'=>$canonical, 'name'=>trim((string)($row['name'] ?? $canonical)),
+                'id'=>$canonical, 'name'=>$names[$canonical] ?? trim((string)($row['name'] ?? $canonical)),
                 'business_id'=>self::id($row['business_id'] ?? ''),
                 'source'=>'last_confirmed_private_inventory',
                 'ad_account_page_access_verified'=>false,
@@ -88,7 +117,8 @@ final class RemaskPrivateLaunchCatalog
     public static function load(string $profile): array {
         return self::fromState($profile,
             self::json('/var/lib/remask/workspace-live-meta-snapshots.json'),
-            self::json('/var/lib/remask/workspace-provisioning-bindings.json'));
+            self::json('/var/lib/remask/workspace-provisioning-bindings.json'), time(),
+            self::json(__DIR__.'/RemaskConfirmedPageIdentities.json'));
     }
 
     public static function asset(array $catalog, string $resource, string $accountId = ''): array {
