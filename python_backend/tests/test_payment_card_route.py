@@ -42,3 +42,10 @@ class PaymentRouteErrorTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(account=account),patch('app.payment_card_binding.profile_payment_card',AsyncMock(side_effect=RuntimeError('fixture'))):
                 with self.assertRaises(HTTPException) as caught:await route('Fixture',{'account_id':account})
             self.assertEqual(caught.exception.status_code,400);self.assertEqual(caught.exception.detail,'INVALID_PAYMENT_TARGET')
+
+    async def test_bind_failure_requires_reconciliation_when_submission_is_unknown(self):
+        route=payment_route()
+        with patch('app.payment_card_binding.profile_payment_card',AsyncMock(side_effect=RuntimeError('fixture cleanup failure'))) as worker:
+            result=await route('Fixture',{'account_id':'act_123456789','operation':'bind'})
+        self.assertEqual(result['status'],'SUBMITTED_UNVERIFIED');self.assertIsNone(result['submitted'])
+        self.assertFalse(result['funding_verified']);worker.assert_awaited_once()

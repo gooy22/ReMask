@@ -1188,7 +1188,10 @@ async def profile_payment_card_action(profile_id: str, payload: dict = Body(...)
         if not re.fullmatch(r'\d{5,30}',target):
             raise HTTPException(status_code=400,detail='INVALID_PAYMENT_TARGET') from None
         code=exc.code if isinstance(exc,BrowserBusinessError) else 'PROFILE_CONTEXT_ERROR' if isinstance(exc,ProfileContextError) else 'CARD_BROWSER_INTERRUPTED'
-        return {'profile_id':profile,'account_id':target,'status':'BLOCKED','submitted':False,'funding_verified':False,'code':code}
+        # A session/cleanup failure may occur after card submission. Without
+        # an observed result, bind must require reconciliation instead of retry.
+        uncertain=payload.get('operation')=='bind'
+        return {'profile_id':profile,'account_id':target,'status':'SUBMITTED_UNVERIFIED' if uncertain else 'BLOCKED','submitted':None if uncertain else False,'funding_verified':False,'code':code}
 
 
 @app.get('/api/v1/facebook/docids',dependencies=[Depends(require_key)])
