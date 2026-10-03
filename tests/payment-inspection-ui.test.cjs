@@ -27,6 +27,13 @@ vm.createContext(sandbox);vm.runInContext(fs.readFileSync('railway-payment-inspe
   const container=element();requests=[];
   await sandbox.bindPaymentCard(rows,card,'123',container);
   assert.equal(requests.length,2);assert.equal(requests[0].body.profile,'Fixture');assert.equal(requests[1].body.profile,'Other');
+  assert.equal(requests[0].body.setup_country,'UA');assert.equal(requests[0].body.setup_country_mode,'prefer_ua');
+  assert.equal(requests[0].body.setup_currency,'USD');assert.equal(requests[0].body.setup_timezone,'Europe/Kyiv');
+  sandbox.$('paymentSetupCountry').value='CURRENT';
+  assert.equal(sandbox.paymentSetupPayload().setup_country_mode,'current');
+  assert.equal(sandbox.paymentSetupPayload().setup_country,'UA');
+  const countryMessage=sandbox.paymentCardMessage({code:'CARD_FORM_READY',billing_setup_observed:{country_label:'Bangladesh',country_preserved:true,country_reason:'meta_control_locked',saved:false}});
+  assert.ok(countryMessage.includes('Bangladesh'));assert.ok(countryMessage.includes('заблокировано Meta'));assert.ok(countryMessage.includes('пока не подтверждено'));
   assert.ok(container.children[0].textContent.includes('Повторное добавление остановлено'));
   assert.equal(rows[0].funding.funding_verified,false);
   assert.ok(!JSON.stringify(container.children).includes('4111111111111111'));

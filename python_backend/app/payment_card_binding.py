@@ -179,7 +179,7 @@ async def _open_card_form(browser: Any, target: str, asset: dict[str,str], billi
     await browser._assert_authenticated()
     await _payment_surface(browser,'payment_method_dialog')
     form_deadline=time.monotonic()+20.0
-    setup_advanced=False;method_advanced=False
+    setup_advanced=False;method_advanced=False;setup_observed={}
     while time.monotonic()<form_deadline:
         await page.wait_for_timeout(500)
         text=await page.locator('body').inner_text(timeout=3000)
@@ -189,7 +189,8 @@ async def _open_card_form(browser: Any, target: str, asset: dict[str,str], billi
             if not billing_setup:
                 return {'status':'ACTION_REQUIRED','code':'PAYMENT_ACCOUNT_SETUP_REQUIRED','required_settings':['country','currency','timezone']}
             setup_result=await configure_payment_account(browser,billing_setup)
-            if setup_result:return setup_result
+            if setup_result.get('status')!='SETUP_ADVANCED':return setup_result
+            setup_observed={'billing_setup_observed':setup_result['billing_setup_observed']}
             setup_advanced=True
             continue
         fields=await _form_fields(page)
@@ -197,8 +198,8 @@ async def _open_card_form(browser: Any, target: str, asset: dict[str,str], billi
         if 'number' in kinds:
             text=await page.locator('body').inner_text(timeout=3000)
             guard=form_action_guard(text,fields)
-            if guard:return {'status':'ACTION_REQUIRED','code':guard,'fields':_safe_fields(fields)}
-            return {'status':'FORM_READY','code':'CARD_FORM_READY','fields':_safe_fields(fields),'_fields':fields}
+            if guard:return {**setup_observed,'status':'ACTION_REQUIRED','code':guard,'fields':_safe_fields(fields)}
+            return {**setup_observed,'status':'FORM_READY','code':'CARD_FORM_READY','fields':_safe_fields(fields),'_fields':fields}
         # Only advance a payment-method selection, never a funded/verification action.
         if method_advanced:continue
         radio=await _unique_visible(page,'radio',r'^(Credit or debit card|Debit or credit card|Credit/debit card|Кредитная или дебетовая карта)$')
@@ -211,28 +212,26 @@ async def _open_card_form(browser: Any, target: str, asset: dict[str,str], billi
             continue
         body=await page.locator('body').inner_text(timeout=3000)
         guard=form_action_guard(body,fields)
-        if guard:return {'status':'ACTION_REQUIRED','code':guard}
+        if guard:return {**setup_observed,'status':'ACTION_REQUIRED','code':guard}
         await next_button.click(timeout=3000)
         method_advanced=True
         await browser._assert_authenticated()
     await _payment_surface(browser,'card_form_not_exposed')
-    return {'status':'BLOCKED','code':'PAYMENT_FORM_NOT_EXPOSED'}
+    return {**setup_observed,'status':'BLOCKED','code':'PAYMENT_FORM_NOT_EXPOSED'}
 
 
 def payment_account_setup_required(text: str) -> bool:
     return bool(re.search(r'select location and currency|your location and currency cannot be changed once set|выберите (?:местоположение|страну) и валюту|оберіть (?:розташування|країну) і валюту', text, re.I))
 
 
-async def _setup_choice(page: Any, label: str, choice: str, search: str, observed_default: str = '') -> bool:
+async def _setup_control(page: Any, label: str, observed_default: str = '') -> Any:
     label=label.replace('/',r'\/')
-    pattern=re.compile(choice,re.I)
     # The setup dialog is the only place where these country/currency/city
     # choices are valid. Background account search must never be used.
     for role in ('combobox','button'):
         controls=page.get_by_role(role,name=re.compile(label,re.I)).filter(visible=True)
         if await controls.count()==1:
-            control=controls
-            break
+            return controls
     else:
         label_node=page.get_by_text(re.compile(r'^(?:'+label+r')$',re.I)).filter(visible=True)
         control=None
@@ -243,60 +242,153 @@ async def _setup_choice(page: Any, label: str, choice: str, search: str, observe
         if control is None and observed_default:
             candidate=page.get_by_text(observed_default,exact=True).filter(visible=True)
             if await candidate.count()==1:control=candidate
-        if control is None:return False
+        return control
+
+
+async def _setup_choice(page: Any, label: str, choice: str, search: str, observed_default: str = '') -> bool:
+    pattern=re.compile(choice,re.I)
+    control=await _setup_control(page,label,observed_default)
+    if control is None:
+        # Meta's timezone button may expose only its selected city as its name.
+        current_button=page.get_by_role('button',name=pattern).filter(visible=True)
+        if await current_button.count()!=1:return False
+        control=current_button
     if await control.evaluate("e=>e.tagName==='SELECT'"):
         options=await control.locator('option').evaluate_all('(es)=>es.map(e=>({value:e.value,label:e.textContent.trim()}))')
         selected=[o['value'] for o in options if pattern.search(o['label']) or o['value']==search]
         if len(set(selected))!=1:return False
+        if await control.input_value()==selected[0]:return True
+        if not await control.is_enabled():return False
         await control.select_option(selected[0],timeout=3000)
-        return True
+        return await control.input_value()==selected[0]
     # A custom picker exposes its selected value in the closed control.
     # Reopening an already matching USD/Kyiv menu can produce duplicate labels.
-    current=await control.inner_text(timeout=2000)
-    if any(pattern.fullmatch(line.strip()) for line in re.sub(r'[\u200b-\u200d\ufeff]','',current).splitlines()):return True
+    if await _custom_setup_matches(control,pattern):return True
+    if not await control.is_enabled():return False
     await control.click(timeout=3000)
     for _ in range(3):
         await page.wait_for_timeout(250)
         for role in ('option','menuitem','radio'):
             options=page.get_by_role(role,name=pattern).filter(visible=True)
             if await options.count()==1:
-                await options.click(timeout=3000);return True
+                await options.click(timeout=3000)
+                return await _wait_setup_match(page,control,pattern)
         option=page.get_by_text(pattern).filter(visible=True)
         if await option.count()==1:
-            await option.click(timeout=3000);return True
-        for finder in (page.get_by_placeholder(re.compile(r'search|поиск|пошук',re.I)),page.get_by_role('textbox',name=re.compile(r'search|поиск|пошук',re.I))):
+            await option.click(timeout=3000)
+            return await _wait_setup_match(page,control,pattern)
+        # Search only the picker, never the background Billing account search.
+        popup=page.locator('[role="listbox"],[role="menu"]').filter(visible=True)
+        if await popup.count()!=1:continue
+        for finder in (popup.get_by_placeholder(re.compile(r'search|поиск|пошук',re.I)),popup.get_by_role('textbox',name=re.compile(r'search|поиск|пошук',re.I))):
             inputs=finder.filter(visible=True)
             if await inputs.count()==1:
                 await inputs.fill(search,timeout=2000);break
     return False
 
 
+async def _custom_setup_matches(control: Any, pattern: re.Pattern) -> bool:
+    current=await control.inner_text(timeout=2000)
+    return any(pattern.fullmatch(line.strip()) for line in re.sub(r'[\u200b-\u200d\ufeff]','',current).splitlines())
+
+
+async def _wait_setup_match(page: Any, control: Any, pattern: re.Pattern) -> bool:
+    for _ in range(3):
+        await page.wait_for_timeout(250)
+        if await _custom_setup_matches(control,pattern):return True
+    return False
+
+
+async def _setup_selected(scope: Any, label: str, choice: str, search: str, observed_default: str = '') -> bool:
+    """Final read only proof after all dependent pickers have been changed."""
+    pattern=re.compile(choice,re.I)
+    control=await _setup_control(scope,label,observed_default)
+    if control is None:
+        candidate=scope.get_by_role('button',name=pattern).filter(visible=True)
+        if await candidate.count()!=1:return False
+        control=candidate
+    if await control.evaluate("e=>e.tagName==='SELECT'"):
+        selected=await control.evaluate("e=>({value:e.value,label:e.selectedOptions[0]?.textContent.trim()||''})")
+        return bool(selected['value'] and (selected['value']==search or pattern.fullmatch(selected['label'])))
+    return await _custom_setup_matches(control,pattern)
+
+
+async def _country_setting(scope: Any) -> dict[str,Any]:
+    """Only the rendered country control is evidence; locale/proxy are not."""
+    label=r'Country/region|Country|Страна/регион|Країна/регіон'
+    control=await _setup_control(scope,label)
+    if control is None:return {}
+    info=await control.evaluate("""el => ({
+        label:el.tagName==='SELECT' ? (el.selectedOptions[0]?.textContent||'') : (el.innerText||''),
+        code:el.tagName==='SELECT' ? el.value : '',
+        locked:el.disabled===true || el.matches(':disabled') || el.getAttribute('aria-disabled')==='true' || el.readOnly===true || el.getAttribute('aria-readonly')==='true'
+    })""")
+    lines=[line.strip() for line in re.sub(r'[\u200b-\u200d\ufeff]','',str(info.get('label') or '')).splitlines() if line.strip()]
+    lines=[line for line in lines if not re.fullmatch(label,line,re.I)]
+    if len(lines)!=1:return {}
+    country=re.sub(r'^(?:'+label+r')\s*:\s*','',lines[0],flags=re.I).strip()
+    if not country or len(country)>80 or not re.fullmatch(r"[^\W\d_][^\d<>:]{0,79}",country,re.UNICODE):return {}
+    if re.search(r'select|choose|loading|search|unavailable|failed|error|try again|please wait|выберите|загрузка|ошибка|недоступ|оберіть|пошук|помилка',country,re.I):return {}
+    # Native empty values are placeholders, even when they have a country-like label.
+    if await control.evaluate("e=>e.tagName==='SELECT'") and not info.get('code'):return {}
+    code=str(info.get('code') or '')
+    return {'country_label':country,'country_code':code if re.fullmatch(r'[A-Z]{2}',code) else '', 'locked':info.get('locked') is True}
+
+
 async def configure_payment_account(browser: Any, setup: dict[str,str]) -> dict[str,Any]:
-    if setup != {'country':'UA','currency':'USD','timezone':'Europe/Kyiv'}:
+    mode=setup.get('country_mode','strict')
+    if any(setup.get(key)!=value for key,value in {'country':'UA','currency':'USD','timezone':'Europe/Kyiv'}.items()) or mode not in {'strict','prefer_ua','current'} or set(setup)-{'country','currency','timezone','country_mode'}:
         return {'status':'BLOCKED','code':'PAYMENT_SETUP_INVALID'}
     page=browser.page
     body=await page.locator('body').inner_text(timeout=3000)
     guard=form_action_guard(body,[])
     if guard:return {'status':'ACTION_REQUIRED','code':guard}
-    choices=[('country',r'Country/region|Country|Страна/регион|Країна/регіон',r'^(Ukraine|Украина|Україна)$','Ukraine','Bangladesh'),
-             ('currency',r'Currency|Валюта',r'^(US Dollars|USD|Доллар США|Долари США)$','USD','US Dollars'),
+    dialogs=page.get_by_role('dialog').filter(visible=True).filter(has_text=re.compile(r'select location and currency|выберите (?:местоположение|страну) и валюту|оберіть (?:розташування|країну) і валюту',re.I))
+    count=await dialogs.count()
+    if count>1:return {'status':'BLOCKED','code':'PAYMENT_ACCOUNT_SETUP_CONTROL_MISSING','missing_fields':['country']}
+    scope=dialogs if count==1 else page
+    country=await _country_setting(scope)
+    if not country:return {'status':'BLOCKED','code':'PAYMENT_COUNTRY_UNVERIFIED','missing_fields':['country']}
+    preferred=bool(re.fullmatch(r'Ukraine|Украина|Україна',country['country_label'],re.I))
+    reason='already_selected' if preferred else 'current_requested' if mode=='current' else 'meta_control_locked' if country['locked'] else 'requested_ua'
+    preserved=not preferred and (mode=='current' or (mode=='prefer_ua' and country['locked']))
+    if not preferred and country['locked'] and mode=='strict':
+        return {'status':'BLOCKED','code':'PAYMENT_COUNTRY_LOCKED','missing_fields':['country'],'billing_setup_observed':{**country,'country_preserved':False,'saved':False}}
+    if not preferred and not preserved:
+        if not await _setup_choice(scope,r'Country/region|Country|Страна/регион|Країна/регіон',r'^(Ukraine|Украина|Україна)$','Ukraine'):
+            await _payment_surface(browser,'billing_setup_control_missing')
+            return {'status':'BLOCKED','code':'PAYMENT_ACCOUNT_SETUP_CONTROL_MISSING','missing_fields':['country']}
+        country=await _country_setting(scope)
+        if not country or not re.fullmatch(r'Ukraine|Украина|Україна',country['country_label'],re.I):
+            return {'status':'BLOCKED','code':'PAYMENT_COUNTRY_UNVERIFIED','missing_fields':['country']}
+    observed={**country,'country_preserved':preserved,'country_reason':reason,'currency':'USD','timezone':'Europe/Kyiv','saved':False}
+    choices=[('currency',r'Currency|Валюта',r'^(US Dollars|USD|Доллар США|Долари США)$','USD','US Dollars'),
              ('timezone',r'Time zone|Timezone|Часовой пояс|Часовий пояс',r'^(Kyiv|Kiev|Киев|Київ)(?:\s*[,\(].*)?$','Kyiv','Los Angeles, America (GMT-07:00)')]
     for key,label,choice,search,default in choices:
-        if not await _setup_choice(page,label,choice,search,default):
+        if not await _setup_choice(scope,label,choice,search,default):
             await _payment_surface(browser,'billing_setup_control_missing')
             return {'status':'BLOCKED','code':'PAYMENT_ACCOUNT_SETUP_CONTROL_MISSING','missing_fields':[key]}
+    for key,label,choice,search,default in choices:
+        if not await _setup_selected(scope,label,choice,search,default):
+            return {'status':'BLOCKED','code':'PAYMENT_ACCOUNT_SETUP_CONTROL_MISSING','missing_fields':[key]}
+    # Re-read country after changing other fields; dependent pickers may reset it.
+    final_country=await _country_setting(scope)
+    if not final_country or (final_country['country_label'],final_country['country_code'])!=(country['country_label'],country['country_code']):
+        return {'status':'BLOCKED','code':'PAYMENT_COUNTRY_UNVERIFIED','missing_fields':['country']}
     # Advance the explicitly selected settings to the card form. Never accept
     # terms, a charge, verification or card submission at this stage.
     body=await page.locator('body').inner_text(timeout=3000)
     guard=form_action_guard(body,[])
     if guard:return {'status':'ACTION_REQUIRED','code':guard}
-    next_button=await _unique_visible(page,'button',r'^(Next|Далее|Далі)$')
+    next_button=await _unique_visible(scope,'button',r'^(Next|Далее|Далі)$')
     if next_button is None or not await next_button.is_enabled():
         return {'status':'BLOCKED','code':'PAYMENT_ACCOUNT_SETUP_CONTROL_MISSING'}
     await next_button.click(timeout=3000)
     await browser._assert_authenticated()
     await page.wait_for_timeout(500)
-    return {}
+    # These are observed selections. Opening the next pane does not prove the
+    # billing profile was persisted, and never proves a card or payment.
+    return {'status':'SETUP_ADVANCED','billing_setup_observed':observed}
 
 
 async def _selected_account_disabled(page: Any, name: str) -> bool:
@@ -353,6 +445,7 @@ async def payment_card_flow(browser:Any,target:str,asset:dict[str,str],*,operati
     try:
         form=await _open_card_form(browser,target,asset,billing_setup)
         fields=form.pop('_fields',[])
+        if 'billing_setup_observed' in form:base['billing_setup_observed']=form['billing_setup_observed']
         if operation=='prepare' or form['status']!='FORM_READY':return {**base,**form}
         values=card_values(card or {},cvv)
         missing=missing_card_fields(fields,values)

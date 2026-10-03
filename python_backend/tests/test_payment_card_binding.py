@@ -102,13 +102,17 @@ class CardBrowserTests(unittest.IsolatedAsyncioTestCase):
     async def test_setup_advances_only_after_all_explicit_choices_and_no_charge_or_terms(self):
         next_button=SimpleNamespace(is_enabled=AsyncMock(return_value=True),click=AsyncMock())
         page=SimpleNamespace(locator=lambda _:SimpleNamespace(inner_text=AsyncMock(return_value='Select location and currency Set time zone')),wait_for_timeout=AsyncMock())
+        dialogs=SimpleNamespace(count=AsyncMock(return_value=0));dialogs.filter=lambda **kw:dialogs
+        page.get_by_role=lambda *a,**kw:dialogs
         browser=SimpleNamespace(page=page,_assert_authenticated=AsyncMock())
         setup={'country':'UA','currency':'USD','timezone':'Europe/Kyiv'}
-        with patch('app.payment_card_binding._setup_choice',AsyncMock(return_value=True)) as choice,patch('app.payment_card_binding._unique_visible',AsyncMock(return_value=next_button)):
-            self.assertEqual(await configure_payment_account(browser,setup),{})
+        bd={'country_label':'Bangladesh','country_code':'BD','locked':False};ua={**bd,'country_label':'Ukraine','country_code':'UA'}
+        with patch('app.payment_card_binding._country_setting',AsyncMock(side_effect=[bd,ua,ua])),patch('app.payment_card_binding._setup_selected',AsyncMock(return_value=True)),patch('app.payment_card_binding._setup_choice',AsyncMock(return_value=True)) as choice,patch('app.payment_card_binding._unique_visible',AsyncMock(return_value=next_button)):
+            result=await configure_payment_account(browser,setup)
+            self.assertEqual(result['status'],'SETUP_ADVANCED');self.assertFalse(result['billing_setup_observed']['saved'])
         self.assertEqual(choice.await_count,3);next_button.click.assert_awaited_once()
         next_button.click.reset_mock()
-        with patch('app.payment_card_binding._setup_choice',AsyncMock(return_value=False)),patch('app.payment_card_binding._payment_surface',AsyncMock()):
+        with patch('app.payment_card_binding._country_setting',AsyncMock(return_value=bd)),patch('app.payment_card_binding._setup_choice',AsyncMock(return_value=False)),patch('app.payment_card_binding._payment_surface',AsyncMock()):
             result=await configure_payment_account(browser,setup)
         self.assertEqual(result['code'],'PAYMENT_ACCOUNT_SETUP_CONTROL_MISSING');next_button.click.assert_not_awaited()
         self.assertEqual((await configure_payment_account(browser,{**setup,'country':'US'}))['code'],'PAYMENT_SETUP_INVALID')
@@ -132,6 +136,31 @@ class CardBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['code'],'PAYMENT_ACCOUNT_SETUP_REQUIRED');self.assertFalse(result['submitted'])
         self.assertEqual(result['required_settings'],['country','currency','timezone']);fields.assert_not_awaited()
         add.click.assert_awaited_once();self.assertEqual(controls.await_count,1)
+
+    async def test_locked_country_is_preserved_but_selector_failure_is_not_a_restriction(self):
+        next_button=SimpleNamespace(is_enabled=AsyncMock(return_value=True),click=AsyncMock())
+        dialogs=SimpleNamespace(count=AsyncMock(return_value=0));dialogs.filter=lambda **kw:dialogs
+        page=SimpleNamespace(locator=lambda _:SimpleNamespace(inner_text=AsyncMock(return_value='Select location and currency')),get_by_role=lambda *a,**kw:dialogs,wait_for_timeout=AsyncMock())
+        browser=SimpleNamespace(page=page,profile_id='Fixture',_assert_authenticated=AsyncMock())
+        setup={'country':'UA','currency':'USD','timezone':'Europe/Kyiv','country_mode':'prefer_ua'}
+        locked={'country_label':'Bangladesh','country_code':'BD','locked':True}
+        with patch('app.payment_card_binding._country_setting',AsyncMock(return_value=locked)),patch('app.payment_card_binding._setup_choice',AsyncMock(return_value=True)) as choices,patch('app.payment_card_binding._setup_selected',AsyncMock(return_value=True)),patch('app.payment_card_binding._unique_visible',AsyncMock(return_value=next_button)):
+            result=await configure_payment_account(browser,setup)
+        self.assertEqual(result['status'],'SETUP_ADVANCED');self.assertTrue(result['billing_setup_observed']['country_preserved'])
+        self.assertEqual(result['billing_setup_observed']['country_reason'],'meta_control_locked');self.assertFalse(result['billing_setup_observed']['saved'])
+        self.assertEqual(choices.await_count,2);self.assertTrue(all(call.args[1] in {'Currency|Валюта',r'Time zone|Timezone|Часовой пояс|Часовий пояс'} for call in choices.await_args_list))
+        next_button.click.reset_mock()
+        for value in ({**locked,'locked':False},{}):
+            with patch('app.payment_card_binding._country_setting',AsyncMock(return_value=value)),patch('app.payment_card_binding._setup_choice',AsyncMock(return_value=False)),patch('app.payment_card_binding._payment_surface',AsyncMock()),patch('app.payment_card_binding._unique_visible',AsyncMock(return_value=next_button)):
+                result=await configure_payment_account(browser,setup)
+            self.assertEqual(result['status'],'BLOCKED');self.assertNotEqual(result.get('status'),'SETUP_ADVANCED');next_button.click.assert_not_awaited()
+
+    async def test_setup_evidence_survives_card_form_prepare_without_claiming_saved_or_funded(self):
+        evidence={'country_label':'Bangladesh','country_preserved':True,'country_reason':'meta_control_locked','saved':False}
+        browser=SimpleNamespace(profile_id='Fixture')
+        with patch('app.payment_card_binding._open_card_form',AsyncMock(return_value={'status':'FORM_READY','code':'CARD_FORM_READY','billing_setup_observed':evidence,'_fields':[]})):
+            result=await payment_card_flow(browser,ID,{},operation='prepare')
+        self.assertEqual(result['billing_setup_observed'],evidence);self.assertFalse(result['submitted']);self.assertFalse(result['funding_verified'])
 
     async def test_whole_operation_timeout_cancels_setup_and_never_claims_unsubmitted_bind(self):
         original_wait=asyncio.wait_for
@@ -241,6 +270,60 @@ class CardBrowserTests(unittest.IsolatedAsyncioTestCase):
 
 
 class RealCardSelectorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_country_policy_and_dependent_settings_in_real_browser(self):
+        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
+        if not executable:self.skipTest('No local Chromium installed')
+        from playwright.async_api import async_playwright
+        setup={'country':'UA','currency':'USD','timezone':'Europe/Kyiv'}
+        settings='<label>Currency<select id="currency"><option value="USD">US Dollars</option><option value="BDT">BDT</option></select></label><label>Time zone<select id="zone"><option value="Europe/Kyiv">Kyiv, Europe (GMT+03:00)</option><option value="America/Los_Angeles">Los Angeles, America (GMT-07:00)</option></select></label>'
+        country='<label>Country/region<select id="country" {lock} onchange="this.dataset.changes=Number(this.dataset.changes||0)+1"><option value="BD">Bangladesh</option><option value="UA">Ukraine</option></select></label>'
+        reset_settings='<label>Currency<select id="currency"><option value="USD">US Dollars</option></select></label><label>Time zone<select id="zone" onchange="document.getElementById(\'country\').value=\'UA\'"><option value="America/Los_Angeles">Los Angeles, America (GMT-07:00)</option><option value="Europe/Kyiv">Kyiv, Europe (GMT+03:00)</option></select></label>'
+        scenarios=[
+            ('prefer_ua',country.format(lock='disabled'),settings,'SETUP_ADVANCED','Bangladesh',True),
+            ('prefer_ua',country.format(lock=''),settings,'SETUP_ADVANCED','Ukraine',False),
+            ('current',country.format(lock=''),settings,'SETUP_ADVANCED','Bangladesh',True),
+            ('strict',country.format(lock='disabled'),settings,'PAYMENT_COUNTRY_LOCKED','Bangladesh',False),
+            ('prefer_ua','<div role="combobox" aria-label="Country/region" aria-disabled="true">Country/region<br>Bangladesh</div>',settings,'SETUP_ADVANCED','Bangladesh',True),
+            ('current','<div role="combobox" aria-label="Country/region" aria-disabled="true">Loading</div>',settings,'PAYMENT_COUNTRY_UNVERIFIED','',False),
+            ('prefer_ua','<div role="combobox" aria-label="Country/region">Country/region<br>Bangladesh</div>',settings,'PAYMENT_ACCOUNT_SETUP_CONTROL_MISSING','',False),
+            ('current','',settings,'PAYMENT_COUNTRY_UNVERIFIED','',False),
+            ('prefer_ua',country.format(lock='disabled'),settings.replace('<option value="USD">US Dollars</option>',''),'PAYMENT_ACCOUNT_SETUP_CONTROL_MISSING','',False),
+            ('current',country.format(lock=''),reset_settings,'PAYMENT_COUNTRY_UNVERIFIED','',False),
+        ]
+        async with async_playwright() as playwright:
+            chromium=await playwright.chromium.launch(executable_path=executable,headless=True,args=['--no-sandbox'])
+            try:
+                page=await chromium.new_page()
+                for mode,country_html,other_settings,expected,label,preserved in scenarios:
+                    with self.subTest(mode=mode,expected=expected,country=country_html[:80]):
+                        await page.set_content('<div role="dialog"><h2>Select location and currency</h2>'+country_html+other_settings+'<button onclick="this.dataset.clicks=Number(this.dataset.clicks||0)+1">Next</button></div><input id="background" placeholder="Search accounts">')
+                        browser=SimpleNamespace(page=page,profile_id='Fixture',_assert_authenticated=AsyncMock())
+                        result=await configure_payment_account(browser,{**setup,'country_mode':mode})
+                        self.assertEqual(result.get('code',result.get('status')),expected)
+                        next_button=page.get_by_role('button',name='Next',exact=True)
+                        self.assertEqual(await next_button.get_attribute('data-clicks'),'1' if expected=='SETUP_ADVANCED' else None)
+                        self.assertEqual(await page.locator('#background').input_value(),'')
+                        if expected=='SETUP_ADVANCED':
+                            observed=result['billing_setup_observed']
+                            self.assertEqual(observed['country_label'],label);self.assertEqual(observed['country_preserved'],preserved);self.assertFalse(observed['saved'])
+                            self.assertEqual(await page.locator('#currency').input_value(),'USD');self.assertEqual(await page.locator('#zone').input_value(),'Europe/Kyiv')
+                        if mode=='current' and await page.locator('#country').count():self.assertIsNone(await page.locator('#country').get_attribute('data-changes'))
+            finally:await chromium.close()
+
+    async def test_picker_click_without_selected_value_change_does_not_advance(self):
+        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
+        if not executable:self.skipTest('No local Chromium installed')
+        from playwright.async_api import async_playwright
+        from app.payment_card_binding import _setup_choice
+        async with async_playwright() as playwright:
+            chromium=await playwright.chromium.launch(executable_path=executable,headless=True,args=['--no-sandbox'])
+            try:
+                page=await chromium.new_page()
+                await page.set_content('<div role="combobox" aria-label="Country/region" onclick="document.getElementById(\'options\').hidden=false">Country/region<br>Bangladesh</div><div id="options" role="listbox" hidden><button role="option" onclick="this.dataset.clicked=\'yes\';document.getElementById(\'options\').hidden=true">Ukraine</button></div>')
+                self.assertFalse(await _setup_choice(page,'Country/region',r'^Ukraine$','Ukraine'))
+                self.assertEqual(await page.get_by_role('option',include_hidden=True).get_attribute('data-clicked'),'yes')
+            finally:await chromium.close()
+
     async def test_lazy_payment_dialog_is_awaited_without_reclicking_add(self):
         executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
         if not executable:self.skipTest('No local Chromium installed')
@@ -272,7 +355,10 @@ class RealCardSelectorTests(unittest.IsolatedAsyncioTestCase):
                 page=await chromium.new_page()
                 await page.set_content('<label>Country/region<select id="country"><option value="BD">Bangladesh</option><option value="UA">Ukraine</option></select></label><label>Currency<select id="currency"><option value="BDT">BDT</option><option value="USD">US Dollars</option></select></label><label>Time zone<select id="zone"><option value="America/Los_Angeles">Los Angeles, America (GMT-07:00)</option><option value="Europe/Kyiv">Kyiv, Europe (GMT+03:00)</option></select></label><button onclick="this.dataset.advanced=\'yes\'">Next</button>')
                 browser=SimpleNamespace(page=page,_assert_authenticated=AsyncMock())
-                self.assertEqual(await configure_payment_account(browser,{'country':'UA','currency':'USD','timezone':'Europe/Kyiv'}),{})
+                result=await configure_payment_account(browser,{'country':'UA','currency':'USD','timezone':'Europe/Kyiv'})
+                self.assertEqual(result['status'],'SETUP_ADVANCED')
+                self.assertEqual(result['billing_setup_observed']['country_label'],'Ukraine')
+                self.assertFalse(result['billing_setup_observed']['saved'])
                 self.assertEqual(await page.locator('#country').input_value(),'UA')
                 self.assertEqual(await page.locator('#currency').input_value(),'USD')
                 self.assertEqual(await page.locator('#zone').input_value(),'Europe/Kyiv')
