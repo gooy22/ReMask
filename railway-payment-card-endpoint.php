@@ -47,6 +47,12 @@ try {
     $vault=new RemaskPaymentCardVault();$action=(string)($input['action']??'');
     if($action==='list')card_out(['ok'=>true,'data'=>$vault->all()]);
     if($action==='add')card_out(['ok'=>true,'data'=>['card'=>$vault->add($input)]]);
+    if($action==='billing_update'){
+        $id=(string)($input['card_id']??'');
+        if(!preg_match('/^card_[a-f0-9]{24}$/D',$id))throw new InvalidArgumentException('CARD_NOT_FOUND');
+        $patch=$input;unset($patch['action'],$patch['card_id']);
+        card_out(['ok'=>true,'data'=>['card'=>$vault->updateBilling($id,$patch)]]);
+    }
     if(!in_array($action,['prepare','bind','reconcile'],true))throw new InvalidArgumentException('CARD_ACTION_INVALID');
     $profile=trim((string)($input['profile']??''));$account=preg_replace('/^act_/','',trim((string)($input['account_id']??'')));
     if($profile===''||strlen($profile)>160||!preg_match('/^\d{5,30}$/D',$account))throw new InvalidArgumentException('INVALID_PAYMENT_TARGET');
@@ -61,7 +67,8 @@ try {
         $result=$vault->reconcile($id,$profile,$account,$expected,$funding);
         card_out(['ok'=>true,'data'=>['result'=>['profile_id'=>$profile,'account_id'=>$account]+$result]]);
     }
-    $payload=['operation'=>$action,'account_id'=>$account];$id='';
+    $payload=['operation'=>$action,'account_id'=>$account];$id='';$attemptId=null;
+    if($action==='prepare'&&!empty($input['card_id'])&&!preg_match('/^card_[a-f0-9]{24}$/D',(string)$input['card_id']))throw new InvalidArgumentException('CARD_NOT_FOUND');
     $setupFields=['setup_country','setup_currency','setup_timezone','setup_country_mode'];
     if (array_intersect($setupFields,array_keys($input)) && !isset($input['setup_country'],$input['setup_currency'],$input['setup_timezone'])) throw new InvalidArgumentException('PAYMENT_SETUP_INVALID');
     if (isset($input['setup_country'], $input['setup_currency'], $input['setup_timezone'])) {
@@ -78,18 +85,32 @@ try {
         // and this does not claim a fresh Meta/payment verification.
         if($vault->linkedBinding($id,$profile,$account)!==null)card_out(['ok'=>true,'data'=>['result'=>['profile_id'=>$profile,'account_id'=>$account,'status'=>'LINKED','code'=>'ALREADY_LINKED','submitted'=>false,'funding_verified'=>false]]]);
         if(!preg_match('/^\d{3,4}$/D',$cvv))throw new InvalidArgumentException('CARD_AND_CVV_REQUIRED');
-        $secret=$vault->secret($id);
-        $binding=$vault->begin($id,$profile,$account);
+        $reviewed=($input['retry_confirmed']??'')==='1';
+        if($reviewed){
+            $expected=$vault->binding($id,$profile,$account);
+            $funding=card_worker_inspect($profile,$account);
+            $secret=$vault->secret($id);
+            $binding=$vault->beginReviewed($id,$profile,$account,(string)($input['retry_review']??''),$expected,$funding);
+        }else{
+            $secret=$vault->secret($id);
+            $binding=$vault->begin($id,$profile,$account);
+        }
+        $attemptId=$binding['attempt_id']??null;
         if($binding['status']==='LINKED')card_out(['ok'=>true,'data'=>['result'=>['profile_id'=>$profile,'account_id'=>$account,'status'=>'LINKED','code'=>'ALREADY_LINKED','submitted'=>false]]]);
         $payload['card']=$secret;$payload['cvv']=$cvv;unset($secret,$cvv,$input);
     }
     try {
         $result=card_worker($profile,$payload);unset($payload);
         if(($result['profile_id']??'')!==$profile||($result['account_id']??'')!==$account)throw new RuntimeException('CARD_WORKER_RESULT_UNKNOWN');
-        if($id!=='')$vault->finish($id,$profile,$account,(string)$result['status'],$result);
+        if($id!=='')$vault->finish($id,$profile,$account,(string)$result['status'],$result,$attemptId);
     } catch(Throwable $e){
-        if($id!=='')$vault->finish($id,$profile,$account,'SUBMITTED_UNVERIFIED');
+        if($e->getMessage()==='CARD_BINDING_CHANGED')throw $e;
+        if($id!=='')$vault->finish($id,$profile,$account,'SUBMITTED_UNVERIFIED',[],$attemptId);
         throw new RuntimeException('CARD_WORKER_RESULT_UNKNOWN');
+    }
+    if($action==='prepare'&&($result['status']??'')==='FORM_READY'&&!empty($input['card_id'])){
+        $missing=$vault->missingBilling((string)$input['card_id'],$result['fields']??[]);
+        if($missing){$result['form_status']='FORM_READY';$result['status']='BLOCKED';$result['code']='CARD_BILLING_FIELDS_REQUIRED';$result['missing_fields']=$missing;}
     }
     card_out(['ok'=>true,'data'=>['result'=>$result]]);
 }catch(InvalidArgumentException $e){

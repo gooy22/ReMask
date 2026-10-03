@@ -13,6 +13,10 @@ function paymentCardMessage(result){
     CARD_RECONCILE_UNVERIFIED:'Meta пока не подтвердила эту карту у выбранного РК. Повторное добавление остаётся заблокированным.',
     CARD_RECONCILE_NO_METHOD:'Meta показывает отсутствие способа оплаты у выбранного РК. Карта не привязана; результат предыдущей отправки требует разбора.',
     CARD_META_REJECTED:'Meta показала ошибку сохранения карты. Привязка не подтверждена; повторная отправка остановлена.',
+    CARD_RETRY_REVIEW_REQUIRED:'Сначала проверьте результат предыдущей попытки в Meta.',
+    CARD_RETRY_REVIEW_EXPIRED:'Проверка устарела. Нажмите «Проверить результат» ещё раз.',
+    CARD_RETRY_REVIEW_INVALID:'Подтверждение проверки не подходит этой попытке. Проверьте результат заново.',
+    CARD_RETRY_ACCOUNT_NOT_EMPTY:'Meta больше не подтверждает отсутствие карты у этого РК. Повтор остановлен.',
     CARD_BINDING_CARD_MISMATCH:'Для проверки выберите карту предыдущей попытки привязки.',
     CARD_BINDING_CHANGED:'Состояние привязки изменилось во время проверки. Обновите результат.',
     CARD_BINDING_IN_PROGRESS:'Предыдущая операция ещё выполняется. Повторная отправка остановлена.',
@@ -86,24 +90,29 @@ async function savePaymentCard(){
   finally{$('paymentCardNumber').value='';payload.number='';}
 }
 
-async function bindPaymentCard(rows,card,cvv,container){
+async function bindPaymentCard(rows,card,cvv,container,reviews={}){
+  const missing=[];
   if(!card?.id)throw new Error('Выберите сохранённую карту или добавьте новую.');
   if(cvv&&!/^\d{3,4}$/.test(cvv))throw new Error('CVV должен содержать 3 или 4 цифры.');
   // One browser at a time; uncertain submission never triggers a retry.
   await concurrent(rows,1,async r=>{
-    try{return await apiJson('ajax/paymentCards.php',post({action:'bind',card_id:card.id,...(cvv?{cvv}:{}),profile:r.profile,account_id:r.id,...paymentSetupPayload()}));}
+    const review=reviews[r.profile+'|'+String(r.id).replace(/^act_/,'')];
+    try{return await apiJson('ajax/paymentCards.php',post({action:'bind',card_id:card.id,...(cvv?{cvv}:{}),
+      ...(review?{retry_confirmed:'1',retry_review:review.token}:{}),profile:r.profile,account_id:r.id,...paymentSetupPayload()}));}
     catch(e){return {error:e.message};}
   },(d,t,res,idx)=>{
     const r=rows[idx],result=res?.result,line=document.createElement('div');
+    if(result?.code==='CARD_BILLING_FIELDS_REQUIRED')missing.push(...(result.missing_fields||[]));
     line.className='ws-result '+(result?.status==='LINKED'?'ok':'bad');
     line.textContent=r.profile+' / '+r.id+' · •••• '+card.last4+': '+paymentCardMessage(result||{code:res?.error||'Результат неизвестен'});
     r.funding=result?.funding||{funding_verified:false,verification_status:'UNVERIFIED'};
     container.appendChild(line);setProgress(d,t);
-  });render();
+  });render();return [...new Set(missing)];
 }
 
 async function reconcilePaymentCard(rows,card,container){
   if(!card?.id)throw new Error('Выберите карту предыдущей попытки привязки.');
+  const reviews={};
   await concurrent(rows,1,async r=>{
     try{return await apiJson('ajax/paymentCards.php',post({action:'reconcile',card_id:card.id,profile:r.profile,account_id:r.id}));}
     catch(e){return {error:e.message};}
@@ -112,6 +121,8 @@ async function reconcilePaymentCard(rows,card,container){
     line.className='ws-result '+(result?.status==='LINKED'?'ok':'bad');
     line.textContent=r.profile+' / '+r.id+' · •••• '+card.last4+': '+paymentCardMessage(result||{code:res?.error||'Результат неизвестен'});
     r.funding=result?.funding||{funding_verified:false,verification_status:'UNVERIFIED'};
+    if(result?.code==='CARD_RECONCILE_NO_METHOD'&&result.retry_review?.token&&result.retry_review?.expires_at)
+      reviews[r.profile+'|'+String(r.id).replace(/^act_/,'')]={...result.retry_review,card_id:card.id};
     container.appendChild(line);
     const f=result?.funding;
     if(f?.ui_preview&&/^[A-Za-z0-9+/=]+$/.test(f.ui_preview)){
@@ -120,7 +131,7 @@ async function reconcilePaymentCard(rows,card,container){
       image.src='data:image/jpeg;base64,'+f.ui_preview;preview.appendChild(summary);preview.appendChild(image);container.appendChild(preview);
     }
     setProgress(d,t);
-  });render();
+  });render();return reviews;
 }
 
 async function showFunding(){
@@ -152,6 +163,8 @@ async function showFunding(){
       <button id="paymentCardSave" type="button" class="mt-2">Сохранить карту</button>
       <button id="paymentCardSaveBind" type="button" class="mt-2">Сохранить и привязать к выбранным РК</button>
     </details>
+    <div id="paymentCardBillingMissing" class="ws-form mt-2"></div>
+    <label id="paymentCardRetryField" hidden class="mt-2"><input id="paymentCardRetryConfirmed" type="checkbox"> Разрешаю одну повторную попытку после проверки Meta</label>
     <div class="mt-3"><button id="paymentCardBind" type="button">Привязать и проверить</button></div>
     <details class="mt-2"><summary>Диагностика</summary>
       <button id="paymentCardPrepare" type="button">Проверить форму Meta</button>
@@ -160,11 +173,16 @@ async function showFunding(){
     <div id="paymentCardAssignments" class="ws-muted mt-2"></div>
     <div id="paymentCardProgress" class="ws-muted mt-2" aria-live="polite"></div>
     <div id="fundingResults" aria-live="polite"></div>`,'',null);
-  const container=$('fundingResults'),select=$('paymentCardSelect');let cards=[],bindings=[],busy=false;
+  const container=$('fundingResults'),select=$('paymentCardSelect');let cards=[],bindings=[],busy=false,reviews={},billingMissing=[];
   const pending=()=>bindings.some(b=>['IN_PROGRESS','SUBMITTED_UNVERIFIED','ACTION_REQUIRED'].includes(b.status));
+  const retryAvailable=()=>pending()&&bindings.filter(b=>['IN_PROGRESS','SUBMITTED_UNVERIFIED','ACTION_REQUIRED'].includes(b.status)).every(b=>{
+    const review=reviews[b.profile+'|'+b.account_id];return review?.card_id===select.value&&Date.parse(review.expires_at)>Date.now();
+  });
+  const retryConfirmed=()=>retryAvailable()&&$('paymentCardRetryConfirmed').checked===true;
   const updatePrimary=()=>{
-    const checking=pending();$('paymentCardBind').textContent=checking?'Проверить результат':'Привязать и проверить';
-    $('paymentCardCvvField').hidden=checking;
+    const checking=pending(),retry=retryConfirmed();$('paymentCardBind').textContent=checking?(retry?'Повторить привязку':'Проверить результат'):'Привязать и проверить';
+    $('paymentCardRetryField').hidden=!retryAvailable();
+    $('paymentCardCvvField').hidden=checking&&!retry;
     $('paymentCardSaveBind').disabled=busy||checking;
   };
   const refreshCards=async(preferred='')=>{
@@ -177,11 +195,21 @@ async function showFunding(){
     bindings.forEach(binding=>{
       const line=document.createElement('div');
       const status={LINKED:'ранее подтверждена',BLOCKED:'не привязана',FAILED:'ошибка',IN_PROGRESS:'операция начата',SUBMITTED_UNVERIFIED:'результат требует проверки',ACTION_REQUIRED:'требуется подтверждение'}[binding.status]||binding.status;
-      line.textContent=binding.profile+' / act_'+binding.account_id+' · •••• '+binding.last4+' · '+status;assignments.appendChild(line);
+      line.textContent=binding.profile+' / act_'+binding.account_id+' · •••• '+binding.last4+' · '+status+
+        (binding.last_result_code?' · '+paymentCardMessage({code:binding.last_result_code}):'');assignments.appendChild(line);
     });
     if(preferred)select.value=preferred;
     else if(!select.value&&rows.length===1&&bindings.length===1)select.value=bindings[0].card_id;
     updatePrimary();
+  };
+  const showMissingBilling=missing=>{
+    const labels={holder:'Имя владельца карты',country:'Страна платёжного адреса',address:'Платёжный адрес',city:'Город',region:'Область / штат',postal_code:'Почтовый индекс'};
+    billingMissing=[...new Set(missing.filter(k=>labels[k]))];
+    $('paymentCardBillingMissing').innerHTML=billingMissing.map(k=>'<div><label for="paymentCardExisting_'+k+'">'+labels[k]+' — требуется Meta</label><input id="paymentCardExisting_'+k+'" autocomplete="off"></div>').join('');
+  };
+  const saveExistingBilling=async card=>{
+    const patch={};for(const key of billingMissing){const value=$('paymentCardExisting_'+key).value.trim();if(!value)throw new Error('Заполните обязательные реквизиты карты.');patch[key]=value;}
+    if(Object.keys(patch).length){await apiJson('ajax/paymentCards.php',post({action:'billing_update',card_id:card.id,...patch}));showMissingBilling([]);}
   };
   const run=async(task,clearSecrets=true)=>{
     if(busy)return;busy=true;container.innerHTML='';
@@ -195,23 +223,34 @@ async function showFunding(){
     const cvv=$('paymentCardCvv').value;
     const card=await savePaymentCard();await refreshCards(card.id);$('paymentCardNew').open=false;
     const line=document.createElement('div');line.className='ws-result ok';line.textContent='Карта •••• '+card.last4+' сохранена в ReMask.';container.appendChild(line);
-    if(bind){await bindPaymentCard(rows,card,cvv,container);await refreshCards(card.id);}
+    if(bind){showMissingBilling(await bindPaymentCard(rows,card,cvv,container));await refreshCards(card.id);}
   };
-  select.addEventListener('change',()=>{$('paymentCardCvv').value='';updatePrimary();});
+  select.addEventListener('change',()=>{$('paymentCardCvv').value='';$('paymentCardRetryConfirmed').checked=false;reviews={};showMissingBilling([]);updatePrimary();});
+  $('paymentCardRetryConfirmed').addEventListener('change',updatePrimary);
   $('paymentCardSave').addEventListener('click',()=>run(()=>save(false),false));
   $('paymentCardSaveBind').addEventListener('click',()=>run(()=>save(true)));
   $('paymentCardBind').addEventListener('click',()=>run(async()=>{
     const card=cards.find(c=>c.id===select.value);
-    if(pending())await reconcilePaymentCard(rows,card,container);
-    else await bindPaymentCard(rows,card,$('paymentCardCvv').value,container);
+    if(pending()&&!retryConfirmed()){
+      $('paymentCardRetryConfirmed').checked=false;
+      reviews=await reconcilePaymentCard(rows,card,container);
+    }else{
+      if(!card?.id)throw new Error('Выберите сохранённую карту.');
+      const confirmed=retryConfirmed(),cvv=$('paymentCardCvv').value;
+      if(confirmed&&!/^\d{3,4}$/.test(cvv))throw new Error('Введите CVV для одной повторной попытки.');
+      await saveExistingBilling(card);
+      try{showMissingBilling(await bindPaymentCard(rows,card,cvv,container,confirmed?reviews:{}));}
+      finally{reviews={};$('paymentCardRetryConfirmed').checked=false;}
+    }
     await refreshCards(card?.id||'');
   }));
   $('paymentCardInspect').addEventListener('click',()=>run(()=>inspectFundingRows(rows,container),false));
   $('paymentCardPrepare').addEventListener('click',()=>run(async()=>{
     for(let i=0;i<rows.length;i++){
-      const r=rows[i],data=await apiJson('ajax/paymentCards.php',post({action:'prepare',profile:r.profile,account_id:r.id,...paymentSetupPayload()}));
+      const r=rows[i],data=await apiJson('ajax/paymentCards.php',post({action:'prepare',...(select.value?{card_id:select.value}:{}),profile:r.profile,account_id:r.id,...paymentSetupPayload()}));
       const line=document.createElement('div');line.className='ws-result '+(data.result.status==='FORM_READY'?'ok':'bad');
       line.textContent=r.profile+' / '+r.id+': '+paymentCardMessage(data.result);container.appendChild(line);setProgress(i+1,rows.length);
+      if(data.result.code==='CARD_BILLING_FIELDS_REQUIRED')showMissingBilling([...billingMissing,...(data.result.missing_fields||[])]);
       if(data.result.ui_preview&&/^[A-Za-z0-9+/=]+$/.test(data.result.ui_preview)){
         const preview=document.createElement('details'),summary=document.createElement('summary'),image=document.createElement('img');
         summary.textContent='Экран Meta перед вводом карты';image.alt='Meta — '+r.profile+' / '+r.id;image.style.maxWidth='100%';

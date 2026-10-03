@@ -69,6 +69,56 @@ INSPECT);
             expect(str_ends_with($request['url'],'/profiles/Fixture/payment-methods?account_id=123456789'),'Inspection target mismatch');
             expect(!str_contains(json_encode($request),'fixture-forbidden'),'CVV passed to inspection');
         }
+        // Exercise the endpoint with synthetic credentials and an isolated stream wrapper.
+        file_put_contents($root.'/operation.php', <<<'OPERATION'
+<?php
+putenv('REMASK_DATA_DIR='.$argv[1].'/state');putenv('REMASK_PYTHON_WORKER_URL=fixture://worker');putenv('REMASK_WORKER_API_KEY=fixture');
+class FixtureOperationStream {
+    public $context;private string $body='';private int $pos=0;
+    function stream_open($path,$mode,$options,&$opened): bool {
+        $http=stream_context_get_options($this->context)['http'];
+        file_put_contents($GLOBALS['argv'][1].'/operations.jsonl',json_encode(['url'=>$path,'http'=>$http])."\n",FILE_APPEND);
+        $this->body=file_get_contents($GLOBALS['argv'][1].($http['method']==='GET'?'/funding.json':'/result.json'));return true;
+    }
+    function stream_read($count): string {$chunk=substr($this->body,$this->pos,$count);$this->pos+=strlen($chunk);return $chunk;}
+    function stream_eof(): bool {return $this->pos>=strlen($this->body);}
+    function stream_stat(): array {return [];}
+}
+stream_wrapper_register('fixture',FixtureOperationStream::class);
+$_SERVER=['REQUEST_METHOD'=>'POST','HTTP_X_REMASK_CSRF'=>'fixture'];$_POST=json_decode(file_get_contents($argv[1].'/input.json'),true);
+require $argv[1].'/ajax/paymentCards.php';
+OPERATION);
+        $c=$v->add(['number'=>'4111111111111111','month'=>12,'year'=>2099]);
+        $invoke=function(array $input)use($root):array{
+            file_put_contents($root.'/input.json',json_encode($input));file_put_contents($root.'/operations.jsonl','');
+            $output=[];$exit=0;exec(escapeshellarg(PHP_BINARY).' '.escapeshellarg($root.'/operation.php').' '.escapeshellarg($root),$output,$exit);
+            expect($exit===0,'Operation endpoint failed');return json_decode(implode("\n",$output),true);
+        };
+        file_put_contents($root.'/result.json',json_encode(['profile_id'=>'Fixture','account_id'=>'123456789','status'=>'FORM_READY','fields'=>[['kind'=>'holder','required'=>false],['kind'=>'number','required'=>true],['kind'=>'cvv','required'=>true]]]));
+        $input=['action'=>'prepare','profile'=>'Fixture','account_id'=>'123456789','card_id'=>$c['id']];
+        $result=$invoke($input);expect(($result['data']['result']['missing_fields']??[])===['holder'],'Prepare missed stored billing gap');
+        $operations=file($root.'/operations.jsonl',FILE_IGNORE_NEW_LINES);$request=json_decode($operations[0],true);
+        $payload=json_decode($request['http']['content'],true);expect(!isset($payload['card'],$payload['cvv'],$payload['card_id']),'Prepare forwarded card data');
+        $result=$invoke(['action'=>'billing_update','card_id'=>$c['id'],'holder'=>'Fixture Holder']);
+        expect(($result['data']['card']['id']??'')===$c['id']&&file_get_contents($root.'/operations.jsonl')==='','Billing edit touched worker');
+        $result=$invoke($input);expect(($result['data']['result']['status']??'')==='FORM_READY','Fixed metadata still blocked');
+        $v->finish($c['id'],'Fixture','123456789','SUBMITTED_UNVERIFIED');
+        $data=json_decode(file_get_contents($path),true);$data['bindings'][hash('sha256','Fixture|123456789')]['updated_at']=gmdate('c',time()-240);file_put_contents($path,json_encode($data));
+        $old=$v->binding($c['id'],'Fixture','123456789');$empty=array_replace($proof,['verification_status'=>'NONE','payment_methods'=>[]]);
+        $review=$v->reconcile($c['id'],'Fixture','123456789',$old,$empty)['retry_review'];
+        file_put_contents($root.'/funding.json',json_encode($empty));file_put_contents($root.'/result.json',json_encode(['profile_id'=>'Fixture','account_id'=>'123456789','status'=>'BLOCKED','code'=>'CARD_SAVE_CONTROL_UNAVAILABLE','submitted'=>false]));
+        $bind=['action'=>'bind','profile'=>'Fixture','account_id'=>'123456789','card_id'=>$c['id'],'cvv'=>'123','retry_confirmed'=>'1','retry_review'=>$review['token']];
+        $result=$invoke(array_replace($bind,['retry_confirmed'=>true]));expect(($result['error']['message']??'')==='CARD_BINDING_RECONCILE_REQUIRED','Nonexplicit retry accepted');
+        expect(file_get_contents($root.'/operations.jsonl')==='','Blocked retry reached worker');
+        file_put_contents($root.'/funding.json',json_encode(array_replace($empty,['verification_status'=>'UNVERIFIED'])));
+        $result=$invoke($bind);expect(($result['error']['message']??'')==='CARD_RETRY_ACCOUNT_NOT_EMPTY','Retry trusted stale review');
+        expect(count(file($root.'/operations.jsonl'))===1,'Unverified retry submitted card');
+        file_put_contents($root.'/funding.json',json_encode($empty));$result=$invoke($bind);
+        expect(($result['data']['result']['code']??'')==='CARD_SAVE_CONTROL_UNAVAILABLE','Reviewed endpoint failed');
+        $operations=array_map(fn($line)=>json_decode($line,true),file($root.'/operations.jsonl'));
+        expect(count($operations)===2&&$operations[0]['http']['method']==='GET'&&$operations[1]['http']['method']==='POST','Reviewed retry did not recheck first or submitted repeatedly');
+        $payload=json_decode($operations[1]['http']['content'],true);
+        expect($payload['operation']==='bind'&&!isset($payload['retry_review'],$payload['retry_confirmed']),'Review leaked into worker transport');
     } finally {
         $files=new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root,FilesystemIterator::SKIP_DOTS),RecursiveIteratorIterator::CHILD_FIRST);
         foreach($files as $file){if($file->isDir())rmdir($file->getPathname());else unlink($file->getPathname());}rmdir($root);
@@ -125,6 +175,38 @@ try{
     expect($vault->begin($card['id'],'Fixture','123456789')['status']==='LINKED','Idempotent linkage');
     expect($vault->begin($card['id'],'Other profile','123456789')['status']==='IN_PROGRESS','Profile scope');
     expect($vault->linkedBinding($card['id'],'Other profile','123456789')===null,'In-progress binding treated as linked');
+    $saved=$vault->updateBilling($card['id'],['address'=>'Fixture Street','city'=>'Fixture City']);
+    expect($saved['id']===$card['id']&&count($vault->all()['cards'])===1,'Billing update duplicated card');
+    expect($vault->secret($card['id'])['number']==='4111111111111111','Billing update changed PAN');
+    expect($vault->missingBilling($card['id'],[['kind'=>'holder','required'=>false],['kind'=>'postal_code','required'=>true],['kind'=>'cvv','required'=>true]])===['postal_code'],'Billing preflight leaked or invented fields');
+    foreach(['cvv','number','month'] as $forbidden)rejected(fn()=>$vault->updateBilling($card['id'],[$forbidden=>'fixture']),'CARD_BILLING_PATCH_INVALID');
+    $vault->finish($card['id'],'Other profile','123456789','SUBMITTED_UNVERIFIED');
+    $key=hash('sha256','Other profile|123456789');$path=$directory.'/cards.json';
+    $data=json_decode(file_get_contents($path),true);$data['bindings'][$key]['updated_at']=gmdate('c',time()-240);file_put_contents($path,json_encode($data));
+    $old=$vault->binding($card['id'],'Other profile','123456789');
+    $empty=array_replace($proof,['profile_id'=>'Other profile','verification_status'=>'NONE','payment_methods'=>[]]);
+    $before=file_get_contents($path);
+    foreach([['checked_live'=>false],['checked_live'=>1],['account_id'=>'987654321'],['source'=>'cached'],['verification_status'=>'UNVERIFIED'],['payment_methods'=>[['type'=>'Visa','last4'=>'1111']]]] as $bad){
+        $check=$vault->reconcile($card['id'],'Other profile','123456789',$old,array_replace($empty,$bad));
+        expect(!isset($check['retry_review']),'Unproven absence offered retry');
+    }
+    $check=$vault->reconcile($card['id'],'Other profile','123456789',$old,$empty);$token=$check['retry_review']['token'];
+    expect(file_get_contents($path)===$before,'Review silently unlocked financial submission');
+    rejected(fn()=>$vault->begin($card['id'],'Other profile','123456789'),'CARD_BINDING_RECONCILE_REQUIRED');
+    rejected(fn()=>$vault->beginReviewed($card['id'],'Other profile','123456789','invalid',$old,$empty),'CARD_RETRY_REVIEW_EXPIRED');
+    $tampered=substr($token,0,-1).(str_ends_with($token,'a')?'b':'a');
+    rejected(fn()=>$vault->beginReviewed($card['id'],'Other profile','123456789',$tampered,$old,$empty),'CARD_RETRY_REVIEW_INVALID');
+    rejected(fn()=>$vault->beginReviewed($card['id'],'Other profile','123456789',$token,$old,array_replace($empty,['verification_status'=>'LINKED'])),'CARD_RETRY_ACCOUNT_NOT_EMPTY');
+    $new=$vault->beginReviewed($card['id'],'Other profile','123456789',$token,$old,$empty);
+    expect($new['reviewed_retry']===true&&$new['attempt_id']!==$old['attempt_id'],'Retry has no independent attempt');
+    $before=file_get_contents($path);
+    rejected(fn()=>$vault->beginReviewed($card['id'],'Other profile','123456789',$token,$old,$empty),'CARD_BINDING_CHANGED');
+    rejected(fn()=>$vault->finish($card['id'],'Other profile','123456789','FAILED',[],$old['attempt_id']),'CARD_BINDING_CHANGED');
+    expect(file_get_contents($path)===$before,'Late result overwrote reviewed retry');
+    $vault->finish($card['id'],'Other profile','123456789','ACTION_REQUIRED',[],$new['attempt_id']);
+    $data=json_decode(file_get_contents($path),true);$data['bindings'][$key]['updated_at']=gmdate('c',time()-240);file_put_contents($path,json_encode($data));
+    $old=$vault->binding($card['id'],'Other profile','123456789');
+    expect(!isset($vault->reconcile($card['id'],'Other profile','123456789',$old,$empty)['retry_review']),'Bank action was made retryable');
     $data=json_decode(file_get_contents($directory.'/cards.json'),true);$bytes=base64_decode($data['cards'][$card['id']]['encrypted']);$bytes[30]=chr(ord($bytes[30])^1);
     $data['cards'][$card['id']]['encrypted']=base64_encode($bytes);file_put_contents($directory.'/cards.json',json_encode($data));
     try{$vault->secret($card['id']);throw new RuntimeException('Tamper accepted');}catch(RuntimeException $e){expect($e->getMessage()==='CARD_DECRYPTION_FAILED','Authenticated encryption');}
