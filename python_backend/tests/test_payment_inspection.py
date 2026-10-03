@@ -5,7 +5,7 @@ import tempfile
 import shutil
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from app.facebook_business_browser import BrowserBusinessError
 from app.payment_inspection import account_id, inspect_payment_methods, payment_summary, saved_payment_business
@@ -79,6 +79,31 @@ class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
             get_by_role=lambda role,**kwargs:menu,
             locator=lambda selector:SimpleNamespace(inner_text=AsyncMock(return_value=ID+"\nPayment methods\nVisa •••• 1234")))
         return SimpleNamespace(page=page,profile_id="Fixture",ADS_MANAGER_URL="https://adsmanager.facebook.com/adsmanager/manage/campaigns",SETTINGS_AD_ACCOUNTS_URLS=('https://business.facebook.com/latest/settings/ad_accounts?business_id={business_id}',),_goto=AsyncMock(),_assert_authenticated=AsyncMock())
+
+
+    async def test_reuses_only_exact_settings_scope_with_fresh_canonical_identity(self):
+        asset={'name':'Fixture RK','business_id':'987654321','business_asset_id':'555555555'}
+        settings='https://business.facebook.com/latest/settings/ad_accounts/?business_id=987654321&selected_asset_id=555555555&selected_asset_type=ad-account'
+        variants=[(settings,ID,1),(settings, '999999999',2),
+            (settings.replace('987654321','999999999'),ID,2),
+            (settings.replace('555555555','999999999'),ID,2),
+            (settings+'&selected_asset_id=555555555',ID,2),
+            (settings+'&act=999999999',ID,2),
+            (settings.replace('ad-account','page'),ID,2),
+            (settings.replace('business.facebook.com','example.test'),ID,2)]
+        for current,canonical,navigations in variants:
+            with self.subTest(url=current,canonical=canonical):
+                browser=self.browser([{'href':URL,'label':'Billing & payments'}])
+                browser.page.url=current
+                async def goto(url,**kwargs):browser.page.url=url
+                browser._goto.side_effect=goto
+                browser._read_selected_ad_account_identity=AsyncMock(return_value={'confirmed':True,'ad_account_id':canonical,'business_id':'987654321'})
+                with patch('app.payment_inspection.select_settings_payment_tab',AsyncMock(return_value=False)):
+                    await inspect_payment_methods(browser,ID,business_id=asset['business_id'],asset=asset)
+                self.assertEqual(browser._goto.await_count,navigations)
+                self.assertEqual(browser._goto.await_args_list[-1].args[0],URL)
+                if navigations==1:browser._read_selected_ad_account_identity.assert_awaited_once()
+                else:self.assertIn('/settings/ad_accounts',browser._goto.await_args_list[0].args[0])
 
     async def test_follows_only_rendered_meta_billing_link_and_returns_masked_data(self):
         browser=self.browser([{"href":URL,"label":"Billing & payments"}])

@@ -189,16 +189,34 @@ async def inspect_payment_methods(browser: Any, target: str, *, business_id: str
         start_url = browser.SETTINGS_AD_ACCOUNTS_URLS[0].format(business_id=business_id)
         alias=(asset or {}).get('business_asset_id','')
         if re.fullmatch(r'\d{5,30}',alias):start_url+='&selected_asset_id='+alias+'&selected_asset_type=ad-account'
-    await browser._goto(
-        start_url,
-        timeout_ms=25000, settle_ms=700, attempts=1,
-    )
+    page=browser.page
+    parsed=urlsplit(str(getattr(page,'url','')))
+    query=parse_qs(parsed.query,keep_blank_values=True)
+    aliases={target,(asset or {}).get('business_asset_id','')}-{''}
+    current_settings=(bool(asset and asset.get('name') and business_id)
+        and parsed.scheme=='https' and parsed.hostname=='business.facebook.com'
+        and parsed.path.rstrip('/')=='/latest/settings/ad_accounts'
+        and query.get('business_id')==[business_id]
+        and len(query.get('selected_asset_id',[]))==1 and query['selected_asset_id'][0] in aliases
+        and all(query[key]==[target] for key in ('act','ad_account_id','asset_id') if key in query)
+        and ('selected_asset_type' not in query or query['selected_asset_type']==['ad-account']))
+    identity=None
+    if current_settings:
+        identity=await browser._read_selected_ad_account_identity(business_id=business_id,account_name=asset['name'])
+        current_settings=(identity.get('confirmed') is True
+            and re.sub(r'^act_','',str(identity.get('ad_account_id') or ''))==target
+            and identity.get('business_id',business_id)==business_id)
+    if not current_settings:
+        # A card preparation already proved this exact Settings pane. Reloading
+        # it before Billing loads the large Meta SPA twice in the 1 GB worker.
+        await browser._goto(start_url,timeout_ms=25000,settle_ms=700,attempts=1)
+        identity=None
     page = browser.page
     if page is None:
         raise BrowserBusinessError("BROWSER_NOT_READY", "Payment browser is not open.", retryable=False)
 
     if asset and asset.get('name') and business_id:
-        identity=await browser._read_selected_ad_account_identity(business_id=business_id,account_name=asset['name'])
+        identity=identity or await browser._read_selected_ad_account_identity(business_id=business_id,account_name=asset['name'])
         if identity.get('confirmed') and re.sub(r'^act_','',str(identity.get('ad_account_id') or ''))==target:
             if await select_settings_payment_tab(browser):
                 text=await selected_payment_pane_text(browser,asset['name'])
