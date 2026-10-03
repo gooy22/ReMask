@@ -1185,7 +1185,7 @@ async def profile_payment_card_action(profile_id: str, payload: dict = Body(...)
     except Exception as exc:
         # Never return/log validation or Playwright messages containing card data.
         target=re.sub(r'^act_', '', str(payload.get('account_id') or ''))
-        if not re.fullmatch(r'\\d{5,30}',target):
+        if not re.fullmatch(r'\d{5,30}',target):
             raise HTTPException(status_code=400,detail='INVALID_PAYMENT_TARGET') from None
         code=exc.code if isinstance(exc,BrowserBusinessError) else 'PROFILE_CONTEXT_ERROR' if isinstance(exc,ProfileContextError) else 'CARD_BROWSER_INTERRUPTED'
         return {'profile_id':profile,'account_id':target,'status':'BLOCKED','submitted':False,'funding_verified':False,'code':code}
