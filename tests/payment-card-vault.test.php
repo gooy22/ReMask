@@ -36,6 +36,39 @@ INVOKE);
             }else expect(($response['error']['message']??'')==='CARD_AND_CVV_REQUIRED','New target bypassed CVV');
             expect(file_get_contents($path)===$before,'No-CVV endpoint mutated binding state');
         }
+        file_put_contents($root.'/inspect.php', <<<'INSPECT'
+<?php
+putenv('REMASK_DATA_DIR='.$argv[1].'/state');putenv('REMASK_PYTHON_WORKER_URL=fixture://worker');putenv('REMASK_WORKER_API_KEY=fixture');
+class FixtureInspectionStream {
+    public $context;private string $body='';private int $pos=0;
+    function stream_open($path,$mode,$options,&$opened): bool {
+        $http=stream_context_get_options($this->context)['http'];
+        file_put_contents($GLOBALS['argv'][1].'/request.json',json_encode(['url'=>$path,'http'=>$http]));
+        $this->body=file_get_contents($GLOBALS['argv'][1].'/funding.json');return true;
+    }
+    function stream_read($count): string {$chunk=substr($this->body,$this->pos,$count);$this->pos+=strlen($chunk);return $chunk;}
+    function stream_eof(): bool {return $this->pos>=strlen($this->body);}
+    function stream_stat(): array {return [];}
+}
+stream_wrapper_register('fixture',FixtureInspectionStream::class);
+$_SERVER=['REQUEST_METHOD'=>'POST','HTTP_X_REMASK_CSRF'=>'fixture'];
+$_POST=['action'=>'reconcile','profile'=>'Fixture','account_id'=>'act_123456789','card_id'=>$argv[2],
+    'funding'=>['verification_status'=>'LINKED','checked_live'=>true],'cvv'=>'fixture-forbidden'];
+require $argv[1].'/ajax/paymentCards.php';
+INSPECT);
+        $v->finish($c['id'],'Fixture','123456789','SUBMITTED_UNVERIFIED');
+        $proof=['profile_id'=>'Fixture','account_id'=>'123456789','account_scope_verified'=>true,'checked_live'=>true,
+            'source'=>'private_facebook_billing_ui','verification_status'=>'LINKED','payment_methods'=>[['type'=>'Visa','last4'=>'1111']]];
+        foreach(['UNVERIFIED','LINKED'] as $status){
+            file_put_contents($root.'/funding.json',json_encode(array_replace($proof,['verification_status'=>$status])));
+            $output=[];$exit=0;exec(escapeshellarg(PHP_BINARY).' '.escapeshellarg($root.'/inspect.php').' '.escapeshellarg($root).' '.escapeshellarg($c['id']),$output,$exit);
+            expect($exit===0,'Inspection endpoint fixture failed');$response=json_decode(implode("\n",$output),true);
+            expect(($response['data']['result']['status']??'')===($status==='LINKED'?'LINKED':'SUBMITTED_UNVERIFIED'),'Inspection trusted POST proof or decrypted corrupt PAN');
+            $request=json_decode(file_get_contents($root.'/request.json'),true);
+            expect($request['http']['method']==='GET'&&!isset($request['http']['content']),'Reconciliation submitted financial payload');
+            expect(str_ends_with($request['url'],'/profiles/Fixture/payment-methods?account_id=123456789'),'Inspection target mismatch');
+            expect(!str_contains(json_encode($request),'fixture-forbidden'),'CVV passed to inspection');
+        }
     } finally {
         $files=new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root,FilesystemIterator::SKIP_DOTS),RecursiveIteratorIterator::CHILD_FIRST);
         foreach($files as $file){if($file->isDir())rmdir($file->getPathname());else unlink($file->getPathname());}rmdir($root);
@@ -61,8 +94,29 @@ try{
     rejected(fn()=>$vault->add(array_replace($fixture,['year'=>2001])),'CARD_EXPIRY_INVALID');
     $vault->begin($card['id'],'Fixture','123456789');
     rejected(fn()=>$vault->begin($card['id'],'Fixture','123456789'),'CARD_BINDING_RECONCILE_REQUIRED');
+    $expected=$vault->binding($card['id'],'Fixture','123456789');
+    $proof=['profile_id'=>'Fixture','account_id'=>'123456789','account_scope_verified'=>true,'checked_live'=>true,
+        'source'=>'private_facebook_billing_ui','verification_status'=>'LINKED','payment_methods'=>[['type'=>'Visa','last4'=>'1111']]];
+    rejected(fn()=>$vault->reconcile($card['id'],'Fixture','123456789',$expected,$proof),'CARD_BINDING_IN_PROGRESS');
     $vault->finish($card['id'],'Fixture','123456789','SUBMITTED_UNVERIFIED');
     expect($vault->linkedBinding($card['id'],'Fixture','123456789')===null,'Unknown binding treated as linked');
+    $expected=$vault->binding($card['id'],'Fixture','123456789');$before=file_get_contents($directory.'/cards.json');
+    foreach([
+        ['profile_id'=>'Other'],['account_id'=>'987654321'],['account_scope_verified'=>false],['checked_live'=>false],
+        ['checked_live'=>1],['source'=>'cached'],['verification_status'=>'NONE'],['payment_methods'=>[['type'=>'Visa','last4'=>'2222']]],
+        ['payment_methods'=>[['type'=>'Mastercard','last4'=>'1111']]],['payment_methods'=>[]]
+    ] as $invalid){
+        $result=$vault->reconcile($card['id'],'Fixture','123456789',$expected,array_replace($proof,$invalid));
+        expect($result['status']==='SUBMITTED_UNVERIFIED'&&$result['submitted']===false&&$result['funding_verified']===false,'Unsafe reconciliation claim');
+        expect(file_get_contents($directory.'/cards.json')===$before,'Unproven inspection unlocked retry');
+    }
+    rejected(fn()=>$vault->reconcile($card['id'],'Fixture','123456789',null,$proof),'CARD_BINDING_CHANGED');
+    $result=$vault->reconcile($card['id'],'Fixture','123456789',$expected,$proof);
+    expect($result['status']==='LINKED'&&$result['submitted']===false&&$result['funding_verified']===false,'Read-only positive proof not reconciled');
+    expect($vault->linkedBinding($card['id'],'Fixture','123456789')['checked_live']===true,'Live proof not retained');
+    $vault->finish($card['id'],'Fixture','123456789','SUBMITTED_UNVERIFIED',['code'=>'CARD_LINK_NOT_VERIFIED','submitted'=>null,'number'=>'4111111111111111','cvv'=>'123']);
+    $state=$vault->binding($card['id'],'Fixture','123456789');expect($state['last_result_code']==='CARD_LINK_NOT_VERIFIED'&&$state['submitted']===null,'Safe result metadata lost');
+    expect(!str_contains(file_get_contents($directory.'/cards.json'),'4111111111111111'),'Raw result stored');
     rejected(fn()=>$vault->begin($card['id'],'Fixture','123456789'),'CARD_BINDING_RECONCILE_REQUIRED');
     $vault->finish($card['id'],'Fixture','123456789','LINKED');
     expect($vault->linkedBinding($card['id'],'Fixture','123456789')['status']==='LINKED','No-CVV linked lookup');

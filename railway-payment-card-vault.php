@@ -114,12 +114,47 @@ final class RemaskPaymentCardVault {
             $data['bindings'][$key]=$row;return $row;
         });
     }
-    public function finish(string $id,string $profile,string $account,string $status): void {
+    public function binding(string $id,string $profile,string $account): ?array {
+        return $this->locked(static function(array &$data)use($id,$profile,$account){
+            if(!isset($data['cards'][$id]))throw new InvalidArgumentException('CARD_NOT_FOUND');
+            $row=$data['bindings'][hash('sha256',$profile.'|'.$account)]??null;
+            if(is_array($row)&&$row['card_id']!==$id)throw new InvalidArgumentException('CARD_BINDING_CARD_MISMATCH');
+            return is_array($row)?$row:null;
+        });
+    }
+    public function reconcile(string $id,string $profile,string $account,?array $expected,array $funding): array {
+        return $this->locked(static function(array &$data)use($id,$profile,$account,$expected,$funding){
+            $card=$data['cards'][$id]??null;
+            if(!is_array($card))throw new InvalidArgumentException('CARD_NOT_FOUND');
+            $key=hash('sha256',$profile.'|'.$account);$current=$data['bindings'][$key]??null;
+            if($current!==$expected)throw new InvalidArgumentException('CARD_BINDING_CHANGED');
+            if(is_array($current)&&$current['status']==='IN_PROGRESS'&&
+                time()-(strtotime((string)$current['updated_at'])?:time())<180)throw new InvalidArgumentException('CARD_BINDING_IN_PROGRESS');
+            $scope=($funding['profile_id']??null)===$profile&&($funding['account_id']??null)===$account&&
+                ($funding['account_scope_verified']??false)===true&&($funding['checked_live']??false)===true&&
+                in_array($funding['source']??'',['private_facebook_billing_ui','private_facebook_selected_rk_payment_tab'],true);
+            $brand=static fn(string $value)=>strtolower(preg_replace('/[^a-z]/i','',$value));
+            $matches=array_filter($data['cards'],static fn($c)=>$c['last4']===$card['last4']&&$brand($c['brand'])===$brand($card['brand']));
+            $observed=false;
+            if($scope&&count($matches)===1&&($funding['verification_status']??'')==='LINKED'){
+                foreach($funding['payment_methods']??[] as $method){
+                    if(is_array($method)&&($method['last4']??null)===$card['last4']&&$brand((string)($method['type']??''))===$brand($card['brand']))$observed=true;
+                }
+            }
+            if(!$observed)return ['status'=>'SUBMITTED_UNVERIFIED','code'=>'CARD_RECONCILE_UNVERIFIED','submitted'=>false,'funding_verified'=>false,'funding'=>$funding];
+            $data['bindings'][$key]=['card_id'=>$id,'profile'=>$profile,'account_id'=>$account,'last4'=>$card['last4'],
+                'status'=>'LINKED','updated_at'=>gmdate('c'),'last_result_code'=>'CARD_LINK_OBSERVED','submitted'=>false,'checked_live'=>true];
+            return ['status'=>'LINKED','code'=>'CARD_LINK_OBSERVED','submitted'=>false,'funding_verified'=>false,'funding'=>$funding];
+        });
+    }
+    public function finish(string $id,string $profile,string $account,string $status,array $result=[]): void {
         if(!in_array($status,['LINKED','BLOCKED','FAILED','SUBMITTED_UNVERIFIED','ACTION_REQUIRED'],true))$status='SUBMITTED_UNVERIFIED';
-        $this->locked(static function(array &$data)use($id,$profile,$account,$status){
+        $this->locked(static function(array &$data)use($id,$profile,$account,$status,$result){
             $key=hash('sha256',$profile.'|'.$account);$row=$data['bindings'][$key]??null;
             if(!is_array($row)||$row['card_id']!==$id)throw new RuntimeException('CARD_BINDING_SCOPE_MISMATCH');
             $data['bindings'][$key]['status']=$status;$data['bindings'][$key]['updated_at']=gmdate('c');
+            if(preg_match('/^[A-Z0-9_]{1,64}$/D',(string)($result['code']??'')))$data['bindings'][$key]['last_result_code']=$result['code'];
+            if(array_key_exists('submitted',$result)&&in_array($result['submitted'],[true,false,null],true))$data['bindings'][$key]['submitted']=$result['submitted'];
         });
     }
 }

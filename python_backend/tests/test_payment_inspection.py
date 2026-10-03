@@ -112,6 +112,30 @@ class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["profile_id"],"Fixture")
         self.assertFalse(result["funding_verified"])
 
+    async def test_uninformative_settings_tab_continues_to_observed_billing(self):
+        asset={'name':'Fixture RK','business_id':'987654321','business_asset_id':'555555555'}
+        browser=self.browser([{'href':URL,'label':'Billing & payments'}])
+        async def goto(url,**kwargs):browser.page.url=url
+        browser._goto.side_effect=goto
+        browser._read_selected_ad_account_identity=AsyncMock(return_value={'confirmed':True,'ad_account_id':ID,'business_id':asset['business_id']})
+        with patch('app.payment_inspection.select_settings_payment_tab',AsyncMock(return_value=True)),patch('app.payment_inspection.selected_payment_pane_text',AsyncMock(return_value='Fixture RK Payment methods Loading')):
+            result=await inspect_payment_methods(browser,ID,business_id=asset['business_id'],asset=asset)
+        self.assertEqual(browser._goto.await_args_list[-1].args[0],URL)
+        self.assertEqual(result['verification_status'],'LINKED');self.assertFalse(result['funding_verified'])
+
+    async def test_placeholder_is_resolved_before_exact_identity_check(self):
+        asset={'name':'act_'+ID,'business_id':'987654321','business_asset_id':'555555555'}
+        browser=self.browser([{'href':URL,'label':'Billing & payments'}])
+        details=SimpleNamespace(filter=lambda **kw:SimpleNamespace(wait_for=AsyncMock()))
+        browser.page.get_by_role=lambda role,**kwargs:details
+        async def goto(url,**kwargs):browser.page.url=url
+        browser._goto.side_effect=goto
+        browser._read_selected_ad_account_identity=AsyncMock(return_value={'confirmed':True,'ad_account_id':ID,'business_id':asset['business_id']})
+        with patch('app.payment_inspection._resolve_payment_account_name',AsyncMock(return_value='Actual RK')),patch('app.payment_inspection.select_settings_payment_tab',AsyncMock(return_value=True)),patch('app.payment_inspection.selected_payment_pane_text',AsyncMock(return_value='Actual RK Payment methods Visa •••• 1234')):
+            result=await inspect_payment_methods(browser,ID,business_id=asset['business_id'],asset=asset)
+        browser._read_selected_ad_account_identity.assert_awaited_once_with(business_id=asset['business_id'],account_name='Actual RK')
+        self.assertEqual(result['source'],'private_facebook_selected_rk_payment_tab');self.assertEqual(result['verification_status'],'LINKED')
+
     async def test_missing_other_account_or_untrusted_link_stops_without_guessed_route(self):
         for links in [[],[{"href":URL.replace(ID,"999999999")}],[{"href":URL.replace("business.facebook.com","example.test")}]]:
             browser=self.browser(links)
@@ -166,7 +190,6 @@ class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(browser.page.wait_for_function.await_args_list[0].kwargs['timeout'],5000)
         self.assertEqual(result['verification_status'],'LINKED')
 
-
     async def test_slow_all_tools_drawer_waits_for_rendered_billing_link_once(self):
         executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
         if not executable:self.skipTest('No local Chromium installed')
@@ -191,7 +214,6 @@ class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(result['account_scope_verified']);self.assertEqual(result['verification_status'],'NONE')
                 self.assertFalse(result['funding_verified'])
             finally:await chromium.close()
-
 
     async def test_fresh_billing_process_uses_validated_link_and_new_page_scope(self):
         executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
@@ -231,7 +253,6 @@ class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
             await inspect_payment_methods(browser,ID,fresh_billing_context=True)
         browser.close.assert_not_awaited();browser.open.assert_not_awaited()
         self.assertEqual(browser._goto.await_count,1)
-
     async def test_billing_skeleton_waits_for_exact_rendered_account_before_summary(self):
         browser=self.browser([{'href':URL,'label':'Billing & payments'}])
         body=SimpleNamespace(inner_text=AsyncMock(return_value='Loading'))

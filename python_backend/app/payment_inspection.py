@@ -119,6 +119,25 @@ def selected_payment_asset(profile: str, target: str, path: Path = Path('/var/li
     return {}
 
 
+async def _resolve_payment_account_name(page: Any, name: str) -> str:
+    """Recover a placeholder name only from one rendered RK row with Details.
+
+    The caller still must prove the exact canonical ID in that row's pane.
+    """
+    if name and not re.fullmatch(r'(?:act_)?\d{5,30}',name):return name
+    details=page.get_by_role('link',name=re.compile(r'^(Details|Подробнее|Деталі)$',re.I))
+    rows=page.get_by_role('row').filter(has=details).filter(visible=True)
+    if await rows.count()!=1:return ''
+    labels=await rows.get_by_role('button').all_text_contents()
+    candidates=[]
+    for label in labels:
+        first=re.sub(r'[\u200b-\u200d\ufeff]','',label).strip().split('\n')[0].strip()
+        if not first or re.match(r'^\d+(?:\s|$)',first):continue
+        if re.fullmatch(r'Details|More|Close|Open in Ads Manager|Deactivate|Assign people|Assign partner|Opportunity score',first,re.I):continue
+        if first not in candidates:candidates.append(first)
+    return candidates[0] if len(candidates)==1 else ''
+
+
 async def select_settings_payment_tab(browser: Any) -> bool:
     """Open the observed Payment methods tab in the selected RK pane."""
     page=browser.page
@@ -215,6 +234,12 @@ async def inspect_payment_methods(browser: Any, target: str, *, business_id: str
     if page is None:
         raise BrowserBusinessError("BROWSER_NOT_READY", "Payment browser is not open.", retryable=False)
 
+    if asset and business_id and (not asset.get('name') or re.fullmatch(r'(?:act_)?\d{5,30}',asset['name'])):
+        try:
+            await page.get_by_role('link',name=re.compile(r'^(Details|Подробнее|Деталі)$',re.I)).filter(visible=True).wait_for(state='visible',timeout=6000)
+            name=await _resolve_payment_account_name(page,asset.get('name') or target)
+            if name:asset={**asset,'name':name};identity=None
+        except Exception:pass
     if asset and asset.get('name') and business_id:
         identity=identity or await browser._read_selected_ad_account_identity(business_id=business_id,account_name=asset['name'])
         if identity.get('confirmed') and re.sub(r'^act_','',str(identity.get('ad_account_id') or ''))==target:
@@ -222,7 +247,7 @@ async def inspect_payment_methods(browser: Any, target: str, *, business_id: str
                 text=await selected_payment_pane_text(browser,asset['name'])
                 result=settings_payment_summary(target,str(page.url),text,asset=asset,identity=identity)
                 result['profile_id']=browser.profile_id
-                return result
+                if result['verification_status'] in {'LINKED','NONE'}:return result
 
     # Read a rendered navigation link, validate its destination, then navigate.
     # We do not consume internal Relay stores or capture payment network payloads.
@@ -316,8 +341,17 @@ async def inspect_profile_payment_methods(resolver: Any, profile_id: str, target
         # Existing browser profile lock/global semaphore limits concurrent load.
         try:
             asset=selected_payment_asset(profile_id,target)
-            return await asyncio.wait_for(inspect_payment_methods(browser, target,
-                business_id=asset.get('business_id') or saved_payment_business(profile_id,target),asset=asset), timeout=65)
+            result=await asyncio.wait_for(inspect_payment_methods(browser, target,
+                business_id=asset.get('business_id') or saved_payment_business(profile_id,target),asset=asset,fresh_billing_context=True), timeout=65)
+            result['diagnostic']={'stage':'payment_methods_observed' if result['account_scope_verified'] else 'payment_account_scope_unverified',
+                'path':urlsplit(str(browser.page.url)).path,'masked_method_count':len(result['payment_methods'])}
+            try:
+                import base64
+                masks=[frame.locator('input,textarea') for frame in browser.page.frames]
+                result['ui_preview']=base64.b64encode(await browser.page.screenshot(type='jpeg',quality=65,mask=masks,timeout=4000)).decode('ascii')
+            except Exception as exc:result['ui_preview_unavailable']=type(exc).__name__
+            logging.getLogger('remask.payment_inspection').info('payment inspection profile=%s status=%s scope_verified=%s diagnostic=%s',profile_id,result['verification_status'],result['account_scope_verified'],result['diagnostic'])
+            return result
         except BrowserBusinessError:
             raise
         except Exception as exc:

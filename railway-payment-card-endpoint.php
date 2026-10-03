@@ -24,6 +24,18 @@ function card_worker(string $profile,array $payload): array {
     if(!is_array($result)||!isset($result['status']))throw new RuntimeException('CARD_WORKER_RESULT_UNKNOWN');
     return $result;
 }
+function card_worker_inspect(string $profile,string $account): array {
+    $base=rtrim((string)(getenv('REMASK_PYTHON_WORKER_URL')?:'http://127.0.0.1:8081'),'/');
+    $key=(string)(getenv('REMASK_WORKER_API_KEY')?:'');
+    if($key==='')throw new RuntimeException('CARD_WORKER_KEY_UNAVAILABLE');
+    $context=stream_context_create(['http'=>['method'=>'GET','header'=>"Accept: application/json\r\nX-Remask-Worker-Key: ".$key."\r\n",
+        'timeout'=>100,'ignore_errors'=>true,'follow_location'=>0]]);
+    $raw=@file_get_contents($base.'/api/v1/profiles/'.rawurlencode($profile).'/payment-methods?account_id='.rawurlencode($account),false,$context);
+    if($raw===false)throw new RuntimeException('CARD_WORKER_RESULT_UNKNOWN');
+    $result=json_decode($raw,true);
+    if(!is_array($result)||($result['profile_id']??'')!==$profile||($result['account_id']??'')!==$account)throw new RuntimeException('CARD_WORKER_RESULT_UNKNOWN');
+    return $result;
+}
 try {
     if($_SERVER['REQUEST_METHOD']!=='POST')card_out(['ok'=>false,'error'=>['message'=>'POST_REQUIRED']],405);
     $provided=(string)($_SERVER['HTTP_X_REMASK_CSRF']??'');
@@ -35,11 +47,20 @@ try {
     $vault=new RemaskPaymentCardVault();$action=(string)($input['action']??'');
     if($action==='list')card_out(['ok'=>true,'data'=>$vault->all()]);
     if($action==='add')card_out(['ok'=>true,'data'=>['card'=>$vault->add($input)]]);
-    if(!in_array($action,['prepare','bind'],true))throw new InvalidArgumentException('CARD_ACTION_INVALID');
+    if(!in_array($action,['prepare','bind','reconcile'],true))throw new InvalidArgumentException('CARD_ACTION_INVALID');
     $profile=trim((string)($input['profile']??''));$account=preg_replace('/^act_/','',trim((string)($input['account_id']??'')));
     if($profile===''||strlen($profile)>160||!preg_match('/^\d{5,30}$/D',$account))throw new InvalidArgumentException('INVALID_PAYMENT_TARGET');
     require_once __DIR__.'/../classes/RemaskPrivateLaunchCatalog.php';
     RemaskPrivateLaunchCatalog::asset(RemaskPrivateLaunchCatalog::load($profile),'funding',$account);
+    if($action==='reconcile'){
+        $id=(string)($input['card_id']??'');
+        if(!preg_match('/^card_[a-f0-9]{24}$/D',$id))throw new InvalidArgumentException('CARD_NOT_FOUND');
+        $expected=$vault->binding($id,$profile,$account);
+        if(is_array($expected)&&$expected['status']==='IN_PROGRESS'&&time()-(strtotime((string)$expected['updated_at'])?:time())<180)throw new InvalidArgumentException('CARD_BINDING_IN_PROGRESS');
+        $funding=card_worker_inspect($profile,$account);
+        $result=$vault->reconcile($id,$profile,$account,$expected,$funding);
+        card_out(['ok'=>true,'data'=>['result'=>['profile_id'=>$profile,'account_id'=>$account]+$result]]);
+    }
     $payload=['operation'=>$action,'account_id'=>$account];$id='';
     $setupFields=['setup_country','setup_currency','setup_timezone','setup_country_mode'];
     if (array_intersect($setupFields,array_keys($input)) && !isset($input['setup_country'],$input['setup_currency'],$input['setup_timezone'])) throw new InvalidArgumentException('PAYMENT_SETUP_INVALID');
@@ -65,7 +86,7 @@ try {
     try {
         $result=card_worker($profile,$payload);unset($payload);
         if(($result['profile_id']??'')!==$profile||($result['account_id']??'')!==$account)throw new RuntimeException('CARD_WORKER_RESULT_UNKNOWN');
-        if($id!=='')$vault->finish($id,$profile,$account,(string)$result['status']);
+        if($id!=='')$vault->finish($id,$profile,$account,(string)$result['status'],$result);
     } catch(Throwable $e){
         if($id!=='')$vault->finish($id,$profile,$account,'SUBMITTED_UNVERIFIED');
         throw new RuntimeException('CARD_WORKER_RESULT_UNKNOWN');
