@@ -237,7 +237,13 @@ async def _setup_control(page: Any, label: str, observed_default: str = '') -> A
         control=None
         if await label_node.count()==1:
             for parent in ('..','../..'):
-                candidates=label_node.locator(parent).locator('select,[role="combobox"],[role="button"],button').filter(visible=True)
+                container=label_node.locator(parent)
+                # Meta's combobox has no accessible name: its visible label
+                # is a child of the control itself. Descendant-only lookup
+                # skips that parent and then finds both country and currency.
+                if await container.evaluate("e=>e.matches('select,[role=\"combobox\"],[role=\"button\"],button')"):
+                    control=container;break
+                candidates=container.locator('select,[role="combobox"],[role="button"],button').filter(visible=True)
                 if await candidates.count()==1:control=candidates;break
         if control is None and observed_default:
             candidate=page.get_by_text(observed_default,exact=True).filter(visible=True)
@@ -328,14 +334,6 @@ async def _country_setting(scope: Any) -> dict[str,Any]:
         code:el.tagName==='SELECT' ? el.value : '',
         locked:el.disabled===true || el.matches(':disabled') || el.getAttribute('aria-disabled')==='true' || el.readOnly===true || el.getAttribute('aria-readonly')==='true'
     })""")
-    # This runs before any card entry and reads only the country control.
-    # Compare the rendered text with its accessibility label, without dumping
-    # the dialog, other fields, attributes, or any session/payment values.
-    diagnostic=await control.evaluate("""el => ({tag:el.tagName,role:el.getAttribute('role')||'',
-        text:el.innerText||'',aria_label:el.getAttribute('aria-label')||''})""")
-    for key in ('text','aria_label'):
-        diagnostic[key]=re.sub(r'\d{6,}','[redacted]',str(diagnostic[key]))[:160]
-    logging.getLogger('remask.payment_card').info('billing country observation %s',diagnostic)
     lines=[line.strip() for line in re.sub(r'[\u200b-\u200d\ufeff]','',str(info.get('label') or '')).splitlines() if line.strip()]
     lines=[line for line in lines if not re.fullmatch(label,line,re.I)]
     if len(lines)!=1:return {}

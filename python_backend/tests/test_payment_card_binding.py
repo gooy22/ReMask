@@ -270,6 +270,41 @@ class CardBrowserTests(unittest.IsolatedAsyncioTestCase):
 
 
 class RealCardSelectorTests(unittest.IsolatedAsyncioTestCase):
+
+    async def test_unnamed_country_currency_controls_resolve_the_label_parent(self):
+        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
+        if not executable:self.skipTest('No local Chromium installed')
+        import re
+        from playwright.async_api import async_playwright
+        async with async_playwright() as playwright:
+            chromium=await playwright.chromium.launch(executable_path=executable,headless=True,args=['--no-sandbox'])
+            try:
+                page=await chromium.new_page()
+                await page.set_content("""<style>.label,.value{display:block}</style>
+                  <div role="dialog"><h2>Select location and currency</h2><div class="fields">
+                    <div id="country" role="combobox" tabindex="0" onclick="document.getElementById('countryOptions').hidden=false">
+                      <span class="label">Country/region</span><span id="countryValue" class="value">Bangladesh</span></div>
+                    <div id="currency" role="combobox" tabindex="0" onclick="this.dataset.clicks=Number(this.dataset.clicks||0)+1">
+                      <span class="label">Currency</span><span class="value">US Dollars</span></div>
+                  </div><button id="zone" onclick="document.getElementById('zoneOptions').hidden=false">Los Angeles, America (GMT-07:00)</button>
+                  <button id="next" onclick="this.dataset.clicks=Number(this.dataset.clicks||0)+1">Next</button></div>
+                  <div id="countryOptions" role="listbox" hidden><button role="option" onclick="document.getElementById('countryValue').textContent='Ukraine';document.getElementById('countryOptions').hidden=true">Ukraine</button></div>
+                  <div id="zoneOptions" role="listbox" hidden><button role="option" onclick="document.getElementById('zone').textContent='Kyiv, Europe (GMT+03:00)';document.getElementById('zoneOptions').hidden=true">Kyiv, Europe (GMT+03:00)</button></div>
+                  <input id="background" placeholder="Search accounts">""")
+                # Visible content does not provide a combobox accessible name.
+                self.assertEqual(await page.get_by_role('combobox',name=re.compile('Country')).count(),0)
+                self.assertEqual(await page.get_by_role('combobox').count(),2)
+                browser=SimpleNamespace(page=page,profile_id='Fixture',_assert_authenticated=AsyncMock())
+                result=await configure_payment_account(browser,{'country':'UA','country_mode':'prefer_ua','currency':'USD','timezone':'Europe/Kyiv'})
+                self.assertEqual(result['status'],'SETUP_ADVANCED')
+                self.assertEqual(result['billing_setup_observed']['country_label'],'Ukraine')
+                self.assertFalse(result['billing_setup_observed']['saved'])
+                self.assertEqual(await page.locator('#next').get_attribute('data-clicks'),'1')
+                self.assertIsNone(await page.locator('#currency').get_attribute('data-clicks'))
+                self.assertEqual(await page.locator('#background').input_value(),'')
+                self.assertEqual(await page.locator('#zone').inner_text(),'Kyiv, Europe (GMT+03:00)')
+            finally:await chromium.close()
+
     async def test_country_policy_and_dependent_settings_in_real_browser(self):
         executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
         if not executable:self.skipTest('No local Chromium installed')
