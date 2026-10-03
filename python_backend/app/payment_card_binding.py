@@ -320,12 +320,22 @@ async def _country_setting(scope: Any) -> dict[str,Any]:
     """Only the rendered country control is evidence; locale/proxy are not."""
     label=r'Country/region|Country|Страна/регион|Країна/регіон'
     control=await _setup_control(scope,label)
-    if control is None:return {}
+    if control is None:
+        logging.getLogger('remask.payment_card').info('billing country observation control=missing')
+        return {}
     info=await control.evaluate("""el => ({
         label:el.tagName==='SELECT' ? (el.selectedOptions[0]?.textContent||'') : (el.innerText||''),
         code:el.tagName==='SELECT' ? el.value : '',
         locked:el.disabled===true || el.matches(':disabled') || el.getAttribute('aria-disabled')==='true' || el.readOnly===true || el.getAttribute('aria-readonly')==='true'
     })""")
+    # This runs before any card entry and reads only the country control.
+    # Compare the rendered text with its accessibility label, without dumping
+    # the dialog, other fields, attributes, or any session/payment values.
+    diagnostic=await control.evaluate("""el => ({tag:el.tagName,role:el.getAttribute('role')||'',
+        text:el.innerText||'',aria_label:el.getAttribute('aria-label')||''})""")
+    for key in ('text','aria_label'):
+        diagnostic[key]=re.sub(r'\d{6,}','[redacted]',str(diagnostic[key]))[:160]
+    logging.getLogger('remask.payment_card').info('billing country observation %s',diagnostic)
     lines=[line.strip() for line in re.sub(r'[\u200b-\u200d\ufeff]','',str(info.get('label') or '')).splitlines() if line.strip()]
     lines=[line for line in lines if not re.fullmatch(label,line,re.I)]
     if len(lines)!=1:return {}
