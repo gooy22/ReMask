@@ -361,7 +361,15 @@ async def configure_payment_account(browser: Any, setup: dict[str,str]) -> dict[
     if count>1:return {'status':'BLOCKED','code':'PAYMENT_ACCOUNT_SETUP_CONTROL_MISSING','missing_fields':['country']}
     scope=dialogs if count==1 else page
     country=await _country_setting(scope)
-    if not country:return {'status':'BLOCKED','code':'PAYMENT_COUNTRY_UNVERIFIED','missing_fields':['country']}
+    if not country:
+        observation=await page.evaluate("""() => Array.from(document.querySelectorAll('[role="combobox"]'))
+          .filter(e=>e.getClientRects().length && /Country|Страна|Країна/i.test(e.getAttribute('aria-label')||e.innerText||''))
+          .map(e=>({tag:e.tagName,role:e.getAttribute('role'),label:(e.getAttribute('aria-label')||e.innerText||'').replace(/\\d{6,}/g,'[redacted]').slice(0,120),
+            aria_hidden:e.closest('[aria-hidden]')?.getAttribute('aria-hidden')||'',inert:!!e.closest('[inert]'),
+            inside_dialog:!!e.closest('[role="dialog"]')}))""")
+        counts={role:await page.get_by_role(role,name=re.compile(r'Country|Страна|Країна',re.I)).filter(visible=True).count() for role in ('combobox','button')}
+        logging.getLogger('remask.payment_card').info('billing country scope dialogs=%s page_roles=%s dom=%s',count,counts,observation)
+        return {'status':'BLOCKED','code':'PAYMENT_COUNTRY_UNVERIFIED','missing_fields':['country']}
     preferred=bool(re.fullmatch(r'Ukraine|Украина|Україна',country['country_label'],re.I))
     reason='already_selected' if preferred else 'current_requested' if mode=='current' else 'meta_control_locked' if country['locked'] else 'requested_ua'
     preserved=not preferred and (mode=='current' or (mode=='prefer_ua' and country['locked']))
