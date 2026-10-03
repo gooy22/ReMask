@@ -279,25 +279,34 @@ async def _setup_choice(page: Any, label: str, choice: str, search: str, observe
     # Reopening an already matching USD/Kyiv menu can produce duplicate labels.
     if await _custom_setup_matches(control,pattern):return True
     if not await control.is_enabled():return False
-    await control.click(timeout=3000)
-    for _ in range(3):
+    try:
+        await control.click(timeout=9000)
+    except PlaywrightTimeoutError:
+        # A click can open the picker before its transition times out.
+        # Observe that one attempt; do not toggle the control a second time.
+        pass
+    picker_deadline=time.monotonic()+8.0
+    searched=False
+    while time.monotonic()<picker_deadline:
         await asyncio.sleep(0.25)
         for role in ('option','menuitem','radio'):
             options=picker_scope.get_by_role(role,name=pattern).filter(visible=True)
             if await options.count()==1:
-                await options.click(timeout=3000)
+                try:await options.click(timeout=3000)
+                except PlaywrightTimeoutError:pass
                 return await _wait_setup_match(page,label,choice,search,observed_default)
         option=picker_scope.get_by_text(pattern).filter(visible=True)
         if await option.count()==1:
-            await option.click(timeout=3000)
+            try:await option.click(timeout=3000)
+            except PlaywrightTimeoutError:pass
             return await _wait_setup_match(page,label,choice,search,observed_default)
         # Search only the picker, never the background Billing account search.
         popup=picker_scope.locator('[role="listbox"],[role="menu"]').filter(visible=True)
-        if await popup.count()!=1:continue
+        if searched or await popup.count()!=1:continue
         for finder in (popup.get_by_placeholder(re.compile(r'search|поиск|пошук',re.I)),popup.get_by_role('textbox',name=re.compile(r'search|поиск|пошук',re.I))):
             inputs=finder.filter(visible=True)
             if await inputs.count()==1:
-                await inputs.fill(search,timeout=2000);break
+                await inputs.fill(search,timeout=2000);searched=True;break
     return False
 
 
@@ -307,7 +316,8 @@ async def _custom_setup_matches(control: Any, pattern: re.Pattern) -> bool:
 
 
 async def _wait_setup_match(page: Any, label: str, choice: str, search: str, observed_default: str) -> bool:
-    for _ in range(3):
+    selected_deadline=time.monotonic()+3.0
+    while time.monotonic()<selected_deadline:
         await asyncio.sleep(0.25)
         # Re-resolve the control: timezone's accessible name changes after
         # selection, so a locator using its old city must not be reused.

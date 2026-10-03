@@ -426,6 +426,50 @@ class RealCardSelectorTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(await page.locator('input').evaluate_all('(es)=>es.map(e=>e.value)'),['','',''])
             finally:await chromium.close()
 
+
+    async def test_slow_picker_overlay_search_and_selection_are_observed_once(self):
+        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
+        if not executable:self.skipTest('No local Chromium installed')
+        from playwright.async_api import async_playwright
+        from app.payment_card_binding import _setup_choice
+        async with async_playwright() as playwright:
+            chromium=await playwright.chromium.launch(executable_path=executable,headless=True,args=['--no-sandbox'])
+            try:
+                page=await chromium.new_page()
+                await page.set_content("""<div id="overlay" style="position:fixed;inset:0;z-index:999;background:rgba(0,0,0,.1)">Loading</div>
+                  <div id="country" role="combobox" aria-label="Country" onclick="this.dataset.clicks=Number(this.dataset.clicks||0)+1;setTimeout(()=>document.getElementById('options').hidden=false,1600)">Country<br><span id="selected">Bangladesh</span></div>
+                  <div id="options" role="listbox" hidden><input id="search" placeholder="Search" oninput="this.dataset.fills=Number(this.dataset.fills||0)+1;setTimeout(()=>document.getElementById('option').hidden=false,1800)">
+                  <button id="option" role="option" hidden onclick="document.getElementById('options').hidden=true;setTimeout(()=>document.getElementById('selected').textContent='Ukraine',1100)">Ukraine</button></div>
+                  <input id="background" placeholder="Search accounts"><script>setTimeout(()=>document.getElementById('overlay').remove(),4200)</script>""")
+                self.assertTrue(await _setup_choice(page,'Country',r'^Ukraine$','Ukraine'))
+                self.assertEqual(await page.locator('#country').get_attribute('data-clicks'),'1')
+                self.assertEqual(await page.locator('#search').get_attribute('data-fills'),'1')
+                self.assertEqual(await page.locator('#background').input_value(),'')
+                self.assertEqual(await page.locator('#selected').inner_text(),'Ukraine')
+            finally:await chromium.close()
+
+    async def test_picker_click_timeout_after_opening_does_not_toggle_it_again(self):
+        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
+        if not executable:self.skipTest('No local Chromium installed')
+        from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
+        from app.payment_card_binding import _setup_choice
+        async with async_playwright() as playwright:
+            chromium=await playwright.chromium.launch(executable_path=executable,headless=True,args=['--no-sandbox'])
+            try:
+                page=await chromium.new_page()
+                await page.set_content("""<div id="country" role="combobox" aria-label="Country" onclick="this.dataset.clicks=Number(this.dataset.clicks||0)+1;document.getElementById('options').hidden=false">Country<br><span id="selected">Bangladesh</span></div>
+                  <div id="options" role="listbox" hidden><button role="option" onclick="document.getElementById('selected').textContent='Ukraine';document.getElementById('options').hidden=true">Ukraine</button></div>""")
+                control=page.locator('#country')
+                async def click_then_timeout(**kwargs):
+                    await control.click()
+                    raise PlaywrightTimeoutError('Fixture picker transition after click')
+                wrapper=SimpleNamespace(evaluate=control.evaluate,inner_text=control.inner_text,is_enabled=control.is_enabled,click=AsyncMock(side_effect=click_then_timeout))
+                with patch('app.payment_card_binding._setup_control',AsyncMock(return_value=wrapper)):
+                    self.assertTrue(await _setup_choice(page,'Country',r'^Ukraine$','Ukraine'))
+                wrapper.click.assert_awaited_once()
+                self.assertEqual(await control.get_attribute('data-clicks'),'1')
+            finally:await chromium.close()
+
     async def test_native_country_currency_timezone_choices_use_requested_values(self):
         executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
         if not executable:self.skipTest('No local Chromium installed')
