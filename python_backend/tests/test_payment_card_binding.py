@@ -63,6 +63,26 @@ class CardFieldTests(unittest.TestCase):
 
 
 class CardBrowserTests(unittest.IsolatedAsyncioTestCase):
+    async def test_unverified_account_diagnostics_exclude_identity_error_candidate_text_and_card_data(self):
+        rows=SimpleNamespace(wait_for=AsyncMock(),count=AsyncMock(return_value=1))
+        rows.filter=lambda **kw:rows
+        page=SimpleNamespace(url='https://business.facebook.com/latest/settings/ad_accounts/?business_id=987654321',
+            get_by_role=lambda *a,**kw:rows)
+        browser=SimpleNamespace(page=page,profile_id='Fixture',_goto=AsyncMock(),
+            SETTINGS_AD_ACCOUNTS_URLS=[page.url],_read_selected_ad_account_identity=AsyncMock())
+        for confirmed,observed in [(False,''),(True,'987654320')]:
+            browser._read_selected_ad_account_identity.return_value={'confirmed':confirmed,'ad_account_id':observed,
+                'error':CARD['number'],'candidates':[{'text':CARD['number'],'href':CARD['number']}],'unique_ids':['999999999']}
+            with patch('app.payment_card_binding._payment_surface',AsyncMock()) as surface,patch('app.payment_card_binding.select_settings_payment_tab',AsyncMock()) as payment_tab:
+                with self.assertLogs('remask.payment_card',level='INFO') as logs:
+                    result=await _open_card_form(browser,ID,{'business_id':'987654321','name':'Fixture RK'})
+            self.assertEqual(result['code'],'PAYMENT_ACCOUNT_SCOPE_UNVERIFIED')
+            self.assertEqual(result['account_scope_diagnostic']['observed_account_id'],observed)
+            self.assertEqual(result['account_scope_diagnostic']['candidate_count'],1)
+            self.assertNotIn(CARD['number'],json.dumps(result)+' '.join(logs.output))
+            surface.assert_awaited_once_with(browser,'selected_account_identity_unverified')
+            payment_tab.assert_not_awaited()
+
     async def test_placeholder_name_is_recovered_only_from_unique_rendered_rk_row(self):
         buttons=SimpleNamespace(all_text_contents=AsyncMock(return_value=['Fixture RK\n100','1 person','Details','Open in Ads Manager','More\n\u200b','Assign people']))
         rows=SimpleNamespace(count=AsyncMock(return_value=1),get_by_role=lambda *a,**kw:buttons)

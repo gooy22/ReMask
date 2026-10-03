@@ -146,10 +146,21 @@ async def _open_card_form(browser: Any, target: str, asset: dict[str,str], billi
         return {'status':'BLOCKED','code':'PAYMENT_ACCOUNT_ROW_MISSING'}
     identity=await browser._read_selected_ad_account_identity(business_id=business,account_name=name)
     if not identity.get('confirmed') or re.sub(r'^act_','',str(identity.get('ad_account_id') or ''))!=target:
-        return {'status':'BLOCKED','code':'PAYMENT_ACCOUNT_SCOPE_UNVERIFIED'}
+        await _payment_surface(browser,'selected_account_identity_unverified')
+        observed=re.sub(r'^act_','',str(identity.get('ad_account_id') or ''))
+        error_type=str(identity.get('error') or '').split(':',1)[0]
+        error_type=error_type if re.fullmatch(r'[A-Za-z]{1,40}Error',error_type) else ''
+        diagnostic={'stage':'selected_account_identity_unverified','identity_confirmed':identity.get('confirmed') is True,
+            'observed_account_id':observed if re.fullmatch(r'\d{5,30}',observed) else '',
+            'candidate_count':len(identity.get('candidates') or []),'unique_id_count':len(identity.get('unique_ids') or []),
+            'identity_error_type':error_type}
+        logging.getLogger('remask.payment_card').info('payment account identity profile=%s diagnostic=%s',browser.profile_id,diagnostic)
+        return {'status':'BLOCKED','code':'PAYMENT_ACCOUNT_SCOPE_UNVERIFIED','account_scope_diagnostic':diagnostic}
     parsed=urlsplit(str(page.url))
     if parsed.hostname not in ALLOWED_HOSTS or parse_qs(parsed.query).get('business_id')!=[business]:
-        return {'status':'BLOCKED','code':'PAYMENT_ACCOUNT_SCOPE_UNVERIFIED'}
+        await _payment_surface(browser,'selected_business_scope_unverified')
+        return {'status':'BLOCKED','code':'PAYMENT_ACCOUNT_SCOPE_UNVERIFIED',
+            'account_scope_diagnostic':{'stage':'selected_business_scope_unverified','path':parsed.path}}
     if await _selected_account_disabled(page, name):
         return {'status':'BLOCKED','code':'PAYMENT_AD_ACCOUNT_DISABLED'}
     await select_settings_payment_tab(browser)
@@ -606,9 +617,11 @@ async def _profile_payment_card_execute(resolver:Any,profile:str,payload:dict[st
             if operation=='prepare' and result.get('code') not in {'SESSION_EXPIRED','CHECKPOINT_REQUIRED','TWO_FACTOR_REQUIRED'}:
                 try:
                     if urlsplit(str(browser.page.url)).hostname in ALLOWED_HOSTS:
-                        screenshot=await browser.page.screenshot(type='jpeg',quality=65,mask=[browser.page.locator('input:not([type="radio"]):not([type="checkbox"]),textarea')],timeout=2000)
+                        screenshot=await browser.page.screenshot(type='jpeg',quality=65,mask=[browser.page.locator('input:not([type="radio"]):not([type="checkbox"]),textarea')],timeout=4000)
                         result['ui_preview']=base64.b64encode(screenshot).decode('ascii')
-                except Exception:pass
+                except Exception as exc:
+                    result['ui_preview_unavailable']=type(exc).__name__
+                    logging.getLogger('remask.payment_card').info('payment preview unavailable profile=%s exception_type=%s',profile,type(exc).__name__)
             return result
         except asyncio.TimeoutError:
             # Timeout may happen after Save; never permit blind retry.
