@@ -283,10 +283,12 @@ async def _setup_choice(page: Any, label: str, choice: str, search: str, observe
     if not await control.is_enabled():return False
     try:
         await control.click(timeout=9000)
-    except PlaywrightTimeoutError:
+    except PlaywrightTimeoutError as exc:
         # A click can open the picker before its transition times out.
         # Observe that one attempt; do not toggle the control a second time.
-        pass
+        message=str(exc)
+        reason=next((code for marker,code in [('intercepts pointer events','POINTER_INTERCEPTED'),('not stable','CONTROL_MOVING'),('not enabled','CONTROL_DISABLED'),('not visible','CONTROL_HIDDEN'),('detached','CONTROL_REPLACED')] if marker in message),'TRANSITION_TIMEOUT')
+        logging.getLogger('remask.payment_card').info('billing picker open pending field=%s reason=%s',label,reason)
     picker_deadline=time.monotonic()+8.0
     searched=False
     while time.monotonic()<picker_deadline:
