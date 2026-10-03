@@ -470,6 +470,36 @@ class RealCardSelectorTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(await control.get_attribute('data-clicks'),'1')
             finally:await chromium.close()
 
+
+    async def test_slow_setup_gets_its_own_card_form_observation_window(self):
+        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
+        if not executable:self.skipTest('No local Chromium installed')
+        from playwright.async_api import async_playwright
+        async with async_playwright() as playwright:
+            chromium=await playwright.chromium.launch(executable_path=executable,headless=True,args=['--no-sandbox'])
+            try:
+                page=await chromium.new_page()
+                url='https://business.facebook.com/latest/settings/ad_accounts/?business_id=987654321'
+                html="""<div role="row"><button>Fixture RK</button><a>Details</a></div>
+                  <button id="add" onclick="this.dataset.clicks=Number(this.dataset.clicks||0)+1;document.getElementById('form').textContent='Select location and currency Set time zone'">Add payment method</button><div id="form"></div>"""
+                await page.route(url,lambda route:route.fulfill(status=200,content_type='text/html',body=html))
+                async def goto(url,**kwargs):await page.goto(url,wait_until='domcontentloaded')
+                tick=[0.0]
+                async def slow_setup(*args):
+                    # Advance only this module's clock, leaving Chromium/event
+                    # loop clocks real. The setup consumed the old 20s budget.
+                    tick[0]+=25
+                    await page.set_content('<label>Card number<input autocomplete="cc-number"></label><label>Expiry<input autocomplete="cc-exp"></label><label>CVV<input autocomplete="cc-csc"></label>')
+                    return {'status':'SETUP_ADVANCED','billing_setup_observed':{'country_label':'Ukraine','saved':False}}
+                setup=AsyncMock(side_effect=slow_setup)
+                browser=SimpleNamespace(page=page,profile_id='Fixture',_goto=goto,_assert_authenticated=AsyncMock(),SETTINGS_AD_ACCOUNTS_URLS=[url],_read_selected_ad_account_identity=AsyncMock(return_value={'confirmed':True,'ad_account_id':ID}))
+                with patch('app.payment_card_binding.select_settings_payment_tab',AsyncMock()),patch('app.payment_card_binding.configure_payment_account',setup),patch('app.payment_card_binding.time',SimpleNamespace(monotonic=lambda:tick[0])):
+                    result=await payment_card_flow(browser,ID,{'business_id':'987654321','name':'Fixture RK'},operation='prepare',billing_setup={'country':'UA','currency':'USD','timezone':'Europe/Kyiv'})
+                self.assertEqual(result['status'],'FORM_READY');self.assertFalse(result['submitted'])
+                self.assertFalse(result['billing_setup_observed']['saved']);setup.assert_awaited_once()
+                self.assertEqual(await page.locator('input').evaluate_all('(es)=>es.map(e=>e.value)'),['','',''])
+            finally:await chromium.close()
+
     async def test_native_country_currency_timezone_choices_use_requested_values(self):
         executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
         if not executable:self.skipTest('No local Chromium installed')

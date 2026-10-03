@@ -199,6 +199,7 @@ async def _open_card_form(browser: Any, target: str, asset: dict[str,str], billi
             if setup_result.get('status')!='SETUP_ADVANCED':return setup_result
             setup_observed={'billing_setup_observed':setup_result['billing_setup_observed']}
             setup_advanced=True
+            form_deadline=time.monotonic()+20.0
             continue
         fields=await _form_fields(page)
         kinds={f['kind'] for f in fields}
@@ -222,6 +223,7 @@ async def _open_card_form(browser: Any, target: str, asset: dict[str,str], billi
         if guard:return {**setup_observed,'status':'ACTION_REQUIRED','code':guard}
         await next_button.click(timeout=3000)
         method_advanced=True
+        form_deadline=time.monotonic()+20.0
         await browser._assert_authenticated()
     await _payment_surface(browser,'card_form_not_exposed')
     return {**setup_observed,'status':'BLOCKED','code':'PAYMENT_FORM_NOT_EXPOSED'}
