@@ -326,7 +326,7 @@ class RealCardSelectorTests(unittest.IsolatedAsyncioTestCase):
             try:
                 page=await chromium.new_page();url='https://business.facebook.com/billing_hub/payment_settings?asset_id='+ID
                 html=ID+' Payment methods No payment method'+''.join('<input id="'+key+'">' for key in ('number','holder','expiry','cvv'))+'''<button id="save" onclick="this.dataset.clicks=Number(this.dataset.clicks||0)+1;setTimeout(()=>document.getElementById('method').textContent='Visa •••• 1111',1800)">Save</button><div id="method"></div>'''
-                await page.route(url,lambda route:route.fulfill(status=200,content_type='text/html',body=html));await page.goto(url)
+                await page.route(url,lambda route:route.fulfill(status=200,content_type='text/html; charset=utf-8',body=html));await page.goto(url)
                 fields=[{'kind':key,'required':True,'type':'text','tag':'input','control':page.locator('#'+key)} for key in ('number','holder','expiry','cvv')]
                 browser=SimpleNamespace(page=page,profile_id='Fixture',_assert_authenticated=AsyncMock(),_read_selected_ad_account_identity=AsyncMock())
                 with patch('app.payment_card_binding._open_card_form',AsyncMock(return_value={'status':'FORM_READY','_fields':fields})),patch('app.payment_card_binding._unique_visible',AsyncMock(return_value=page.locator('#save'))):
