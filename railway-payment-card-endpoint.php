@@ -52,7 +52,11 @@ try {
     }
     if($action==='bind'){
         $id=(string)($input['card_id']??'');$cvv=(string)($input['cvv']??'');
-        if(!preg_match('/^card_[a-f0-9]{24}$/D',$id)||!preg_match('/^\d{3,4}$/D',$cvv))throw new InvalidArgumentException('CARD_AND_CVV_REQUIRED');
+        if(!preg_match('/^card_[a-f0-9]{24}$/D',$id))throw new InvalidArgumentException('CARD_AND_CVV_REQUIRED');
+        // A confirmed cached binding is a no-op. No CVV or PAN is needed,
+        // and this does not claim a fresh Meta/payment verification.
+        if($vault->linkedBinding($id,$profile,$account)!==null)card_out(['ok'=>true,'data'=>['result'=>['profile_id'=>$profile,'account_id'=>$account,'status'=>'LINKED','code'=>'ALREADY_LINKED','submitted'=>false,'funding_verified'=>false]]]);
+        if(!preg_match('/^\d{3,4}$/D',$cvv))throw new InvalidArgumentException('CARD_AND_CVV_REQUIRED');
         $secret=$vault->secret($id);
         $binding=$vault->begin($id,$profile,$account);
         if($binding['status']==='LINKED')card_out(['ok'=>true,'data'=>['result'=>['profile_id'=>$profile,'account_id'=>$account,'status'=>'LINKED','code'=>'ALREADY_LINKED','submitted'=>false]]]);

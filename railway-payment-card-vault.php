@@ -96,6 +96,13 @@ final class RemaskPaymentCardVault {
         if(!is_string($raw))throw new RuntimeException('CARD_DECRYPTION_FAILED');
         return json_decode($raw,true,16,JSON_THROW_ON_ERROR);
     }
+    public function linkedBinding(string $id,string $profile,string $account): ?array {
+        return $this->locked(static function(array &$data) use($id,$profile,$account) {
+            if(!isset($data['cards'][$id]))throw new InvalidArgumentException('CARD_NOT_FOUND');
+            $row=$data['bindings'][hash('sha256',$profile.'|'.$account)]??null;
+            return is_array($row)&&$row['card_id']===$id&&$row['status']==='LINKED'?$row:null;
+        });
+    }
     public function begin(string $id,string $profile,string $account): array {
         return $this->locked(static function(array &$data) use($id,$profile,$account) {
             if(!isset($data['cards'][$id]))throw new InvalidArgumentException('CARD_NOT_FOUND');

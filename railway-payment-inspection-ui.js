@@ -8,6 +8,8 @@ function paymentCardMessage(result){
     CARD_FORM_READY:'Форма Meta доступна для выбранного РК.',
     CARD_LINK_OBSERVED:'Карта привязана к выбранному РК. Платёжная проверка не выполнена.',
     ALREADY_LINKED:'Эта привязка ранее подтверждена. Для текущего состояния нажмите «Проверить привязанные карты».',
+    CARD_AND_CVV_REQUIRED:'Для новой привязки нужен CVV. Введите его один раз для выбранной группы РК.',
+    CARD_BINDING_RECONCILE_REQUIRED:'Предыдущая привязка ещё не подтверждена. Сначала проверьте состояние карты в Meta; повтор остановлен.',
     CARD_LINK_NOT_VERIFIED:'Карта отправлена в Meta; привязка пока не подтверждена. Повторное добавление остановлено.',
     PAYMENT_ACCOUNT_SCOPE_UNVERIFIED:'Meta не подтвердила точный РК. Карта не отправлена.',
     PAYMENT_ACCOUNT_BINDING_MISSING:'Нет однозначного соответствия профиля и РК. Обновите выбранный РК.',
@@ -78,15 +80,15 @@ async function savePaymentCard(){
 
 async function bindPaymentCard(rows,card,cvv,container){
   if(!card?.id)throw new Error('Выберите сохранённую карту или добавьте новую.');
-  if(!/^\d{3,4}$/.test(cvv))throw new Error('Введите CVV для этой операции. Он не сохраняется.');
+  if(cvv&&!/^\d{3,4}$/.test(cvv))throw new Error('CVV должен содержать 3 или 4 цифры.');
   // One browser at a time; uncertain submission never triggers a retry.
   await concurrent(rows,1,async r=>{
-    try{return await apiJson('ajax/paymentCards.php',post({action:'bind',card_id:card.id,cvv,profile:r.profile,account_id:r.id,...paymentSetupPayload()}));}
+    try{return await apiJson('ajax/paymentCards.php',post({action:'bind',card_id:card.id,...(cvv?{cvv}:{}),profile:r.profile,account_id:r.id,...paymentSetupPayload()}));}
     catch(e){return {error:e.message};}
   },(d,t,res,idx)=>{
     const r=rows[idx],result=res?.result,line=document.createElement('div');
     line.className='ws-result '+(result?.status==='LINKED'?'ok':'bad');
-    line.textContent=r.profile+' / '+r.id+' · •••• '+card.last4+': '+(result?paymentCardMessage(result):res?.error||'Результат неизвестен');
+    line.textContent=r.profile+' / '+r.id+' · •••• '+card.last4+': '+paymentCardMessage(result||{code:res?.error||'Результат неизвестен'});
     r.funding=result?.funding||{funding_verified:false,verification_status:'UNVERIFIED'};
     container.appendChild(line);setProgress(d,t);
   });render();
@@ -99,7 +101,7 @@ async function showFunding(){
     <div class="ws-muted">Выбранные рекламные аккаунты: ${selected}</div>
     <div class="ws-form mt-3">
       <div class="full"><label for="paymentCardSelect">Сохранённая карта</label><select id="paymentCardSelect"><option value="">Загрузка карт…</option></select></div>
-      <div><label for="paymentCardCvv">CVV — только для текущей привязки</label><input id="paymentCardCvv" type="password" inputmode="numeric" maxlength="4" autocomplete="off"></div>
+      <div><label for="paymentCardCvv">CVV — один раз для новой привязки выбранных РК</label><input id="paymentCardCvv" type="password" inputmode="numeric" maxlength="4" autocomplete="off"></div>
       <div><label for="paymentSetupCountry">Страна оплаты РК</label><select id="paymentSetupCountry"><option value="UA">Украина; если поле заблокировано — текущая страна Meta</option><option value="CURRENT">Текущая страна Meta</option></select></div>
       <div><label for="paymentSetupCurrency">Валюта оплаты РК</label><select id="paymentSetupCurrency"><option value="USD">USD — доллар США</option></select></div>
       <div><label for="paymentSetupTimezone">Часовой пояс РК</label><input id="paymentSetupTimezone" value="Europe/Kyiv"></div>
@@ -122,7 +124,7 @@ async function showFunding(){
     <div class="mt-3"><button id="paymentCardBind" type="button">Привязать выбранную карту</button>
       <button id="paymentCardPrepare" type="button">Проверить форму Meta</button>
       <button id="paymentCardInspect" type="button">Проверить привязанные карты</button></div>
-    <div class="ws-muted mt-2">Реквизиты сохраняются в зашифрованном виде, CVV не сохраняется. РК обрабатываются по одному. Привязка и платёжная проверка показываются отдельно.</div>
+    <div class="ws-muted mt-2">Реквизиты сохраняются в зашифрованном виде. CVV остаётся только в открытой форме до попытки привязки или закрытия окна; проверки его не стирают. Для ранее подтверждённой привязки CVV не нужен. РК обрабатываются по одному.</div>
     <div id="paymentCardAssignments" class="ws-muted mt-2"></div>
     <div id="paymentCardProgress" class="ws-muted mt-2" aria-live="polite"></div>
     <div id="fundingResults" aria-live="polite"></div>`,'',null);
@@ -140,24 +142,24 @@ async function showFunding(){
     });
     if(preferred)select.value=preferred;
   };
-  const run=async(task)=>{
+  const run=async(task,clearSecrets=true)=>{
     if(busy)return;busy=true;
     const controls=$('workspaceModalBody').querySelectorAll('input,select,button');controls.forEach(el=>el.disabled=true);
     $('paymentCardProgress').textContent='Выполняется проверка выбранного РК. Ожидаю ответ Meta…';
     try{await task();}catch(e){const line=document.createElement('div');line.className='ws-result bad';line.textContent=e.message;container.appendChild(line);}
-    finally{remaskClearPaymentSecrets();controls.forEach(el=>el.disabled=false);$('paymentCardProgress').textContent='';busy=false;}
+    finally{if(clearSecrets)remaskClearPaymentSecrets();controls.forEach(el=>el.disabled=false);$('paymentCardProgress').textContent='';busy=false;}
   };
   const save=async(bind)=>{
     const cvv=$('paymentCardCvv').value;
-    if(bind&&!/^\d{3,4}$/.test(cvv))throw new Error('Введите CVV перед привязкой.');
     const card=await savePaymentCard();await refreshCards(card.id);$('paymentCardNew').open=false;
     const line=document.createElement('div');line.className='ws-result ok';line.textContent='Карта •••• '+card.last4+' сохранена в ReMask.';container.appendChild(line);
     if(bind){await bindPaymentCard(rows,card,cvv,container);await refreshCards(card.id);}
   };
-  $('paymentCardSave').addEventListener('click',()=>run(()=>save(false)));
+  select.addEventListener('change',()=>{$('paymentCardCvv').value='';});
+  $('paymentCardSave').addEventListener('click',()=>run(()=>save(false),false));
   $('paymentCardSaveBind').addEventListener('click',()=>run(()=>save(true)));
   $('paymentCardBind').addEventListener('click',()=>run(async()=>{const card=cards.find(c=>c.id===select.value);await bindPaymentCard(rows,card,$('paymentCardCvv').value,container);await refreshCards(card.id);}));
-  $('paymentCardInspect').addEventListener('click',()=>run(()=>inspectFundingRows(rows,container)));
+  $('paymentCardInspect').addEventListener('click',()=>run(()=>inspectFundingRows(rows,container),false));
   $('paymentCardPrepare').addEventListener('click',()=>run(async()=>{
     for(let i=0;i<rows.length;i++){
       const r=rows[i],data=await apiJson('ajax/paymentCards.php',post({action:'prepare',profile:r.profile,account_id:r.id,...paymentSetupPayload()}));
@@ -169,6 +171,6 @@ async function showFunding(){
         image.src='data:image/jpeg;base64,'+data.result.ui_preview;preview.appendChild(summary);preview.appendChild(image);container.appendChild(preview);
       }
     }
-  }));
+  },false));
   try{await refreshCards();}catch(e){select.innerHTML='<option value="">Список карт недоступен</option>';const line=document.createElement('div');line.className='ws-result bad';line.textContent=e.message;container.appendChild(line);}
 }

@@ -13,6 +13,7 @@ const sandbox={
   apiJson:async(url,body)=>{requests.push({url,body});if(body.action==='list')return {cards:[card],bindings:[]};
     if(body.action==='add'){assert.equal(body.cvv,undefined);return {card}}
     if(body.action==='bind')return {result:{status:'SUBMITTED_UNVERIFIED',code:'CARD_LINK_NOT_VERIFIED',submitted:true}};
+    if(body.action==='prepare')return {result:{status:'FORM_READY',code:'CARD_FORM_READY',submitted:false}};
     return {funding:{verification_status:'LINKED',account_scope_verified:true,card_linked:true,funding_verified:false,payment_methods:[{type:'Visa',last4:'1111'}]}}}
 };
 vm.createContext(sandbox);vm.runInContext(fs.readFileSync('railway-payment-inspection-ui.js','utf8'),sandbox);
@@ -42,5 +43,14 @@ vm.createContext(sandbox);vm.runInContext(fs.readFileSync('railway-payment-inspe
   await assert.rejects(()=>sandbox.bindPaymentCard(rows,card,'x',container));assert.equal(requests.length,0);
   const read=element();await sandbox.inspectFundingRows(rows,read);
   assert.ok(read.children[0].textContent.includes('•••• 1111'));assert.ok(read.children[0].textContent.includes('не подтверждена'));
+  requests=[];await sandbox.bindPaymentCard(rows,card,'',element());
+  assert.equal(requests.length,2);assert.ok(requests.every(r=>r.body.cvv===undefined));
+  sandbox.$('paymentCardCvv').value='123';requests=[];
+  await elements.paymentCardPrepare.handlers.click();
+  assert.equal(elements.paymentCardCvv.value,'123');assert.ok(requests.every(r=>r.body.cvv===undefined));
+  await elements.paymentCardInspect.handlers.click();assert.equal(elements.paymentCardCvv.value,'123');
+  elements.paymentCardSelect.value=card.id;await elements.paymentCardBind.handlers.click();
+  assert.equal(elements.paymentCardCvv.value,'');
+  sandbox.$('paymentCardCvv').value='123';elements.paymentCardSelect.handlers.change();assert.equal(elements.paymentCardCvv.value,'');
   console.log('card interface: save without CVV, masked selection, serial exact targets, uncertain results and secret clearing passed');
 })().catch(e=>{console.error(e);process.exitCode=1});
