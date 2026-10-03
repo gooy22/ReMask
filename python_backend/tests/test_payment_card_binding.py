@@ -271,6 +271,71 @@ class CardBrowserTests(unittest.IsolatedAsyncioTestCase):
 
 class RealCardSelectorTests(unittest.IsolatedAsyncioTestCase):
 
+    async def test_card_scope_selects_only_account_and_rejects_ambiguous_or_broad_scope(self):
+        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
+        if not executable:self.skipTest('No local Chromium installed')
+        from playwright.async_api import async_playwright
+        from app.payment_card_binding import _set_card_account_availability
+        only='<label><input id="only" type="radio" name="scope">Only this account</label>'
+        broad='<label><input id="all" type="radio" name="scope" checked>All accounts in this business portfolio</label>'
+        cases=[
+            ('native radio',broad+only,'only_this_account'),
+            ('disabled only',broad+only.replace('id="only"','id="only" disabled'),'BLOCKED'),
+            ('duplicate only',broad+only+only.replace('id="only"','id="other"'),'BLOCKED'),
+            ('only broad',broad,'BLOCKED'),
+            ('independent checkboxes',(broad+only).replace('type="radio"','type="checkbox"'),'BLOCKED'),
+            ('duplicate broad',broad+broad.replace('id="all"','id="other"')+only,'BLOCKED'),
+            ('custom radio',"""<div id="all" role="radio" aria-checked="true" aria-label="All accounts in this business portfolio">All accounts in this business portfolio</div>
+              <div id="only" role="radio" aria-checked="false" aria-label="Only this account" onclick="this.setAttribute('aria-checked','true');document.getElementById('all').setAttribute('aria-checked','false')">Only this account</div>""",'only_this_account'),
+            ('unknown scope options','<h3>Which accounts can use this card?</h3><button>Different scope</button>','BLOCKED'),
+            ('no chooser','<h3>Debit or credit card</h3>','not_exposed'),
+        ]
+        async with async_playwright() as playwright:
+            chromium=await playwright.chromium.launch(executable_path=executable,headless=True,args=['--no-sandbox'])
+            try:
+                page=await chromium.new_page()
+                for name,html,expected in cases:
+                    with self.subTest(name=name):
+                        await page.set_content(html)
+                        result=await _set_card_account_availability(page)
+                        if expected=='BLOCKED':
+                            self.assertEqual(result['code'],'CARD_ACCOUNT_SCOPE_UNVERIFIED')
+                            self.assertEqual(result['status'],'BLOCKED')
+                        else:
+                            self.assertEqual(result['card_availability'],expected)
+                            if expected=='only_this_account':
+                                self.assertTrue(await page.locator('#only').evaluate("e=>e.tagName==='INPUT'?e.checked:e.getAttribute('aria-checked')==='true'"))
+                                self.assertFalse(await page.locator('#all').evaluate("e=>e.tagName==='INPUT'?e.checked:e.getAttribute('aria-checked')==='true'"))
+            finally:await chromium.close()
+
+    async def test_unselectable_only_account_scope_blocks_before_card_entry_or_save(self):
+        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
+        if not executable:self.skipTest('No local Chromium installed')
+        from playwright.async_api import async_playwright
+        async with async_playwright() as playwright:
+            chromium=await playwright.chromium.launch(executable_path=executable,headless=True,args=['--no-sandbox'])
+            try:
+                page=await chromium.new_page()
+                url='https://business.facebook.com/latest/settings/ad_accounts/?business_id=987654321'
+                html="""<div role="row"><button>Fixture RK</button><a>Details</a></div>
+                  <button id="add" onclick="document.getElementById('form').hidden=false">Add payment method</button><div id="form" hidden>
+                  <label>Card number<input autocomplete="cc-number"></label><label>Expiry<input autocomplete="cc-exp"></label><label>CVV<input autocomplete="cc-csc"></label>
+                  <h3>Which accounts can use this card?</h3>
+                  <label><input id="all" type="radio" name="scope" checked>All accounts in this business portfolio</label>
+                  <label><input type="radio" name="scope" disabled>Only this account</label>
+                  <button id="save" onclick="this.dataset.saved='yes'">Save</button></div>"""
+                await page.route(url,lambda route:route.fulfill(status=200,content_type='text/html',body=html))
+                async def goto(url,**kwargs):await page.goto(url,wait_until='domcontentloaded')
+                browser=SimpleNamespace(page=page,profile_id='Fixture',_goto=goto,_assert_authenticated=AsyncMock(),SETTINGS_AD_ACCOUNTS_URLS=[url],_read_selected_ad_account_identity=AsyncMock(return_value={'confirmed':True,'ad_account_id':ID}))
+                with patch('app.payment_card_binding.select_settings_payment_tab',AsyncMock()):
+                    result=await payment_card_flow(browser,ID,{'business_id':'987654321','name':'Fixture RK'},operation='bind',card=CARD,cvv='123')
+                self.assertEqual(result['code'],'CARD_ACCOUNT_SCOPE_UNVERIFIED')
+                self.assertFalse(result['submitted']);self.assertFalse(result['funding_verified'])
+                self.assertEqual(await page.locator('input[autocomplete]').evaluate_all('(es)=>es.map(e=>e.value)'),['','',''])
+                self.assertIsNone(await page.locator('#save').get_attribute('data-saved'))
+                self.assertTrue(await page.locator('#all').is_checked())
+            finally:await chromium.close()
+
     async def test_unnamed_country_currency_controls_resolve_the_label_parent(self):
         executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
         if not executable:self.skipTest('No local Chromium installed')
@@ -304,7 +369,6 @@ class RealCardSelectorTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(await page.locator('#background').input_value(),'')
                 self.assertEqual(await page.locator('#zone').inner_text(),'Kyiv, Europe (GMT+03:00)')
             finally:await chromium.close()
-
     async def test_country_policy_and_dependent_settings_in_real_browser(self):
         executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
         if not executable:self.skipTest('No local Chromium installed')
@@ -426,7 +490,6 @@ class RealCardSelectorTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(await page.locator('input').evaluate_all('(es)=>es.map(e=>e.value)'),['','',''])
             finally:await chromium.close()
 
-
     async def test_slow_picker_overlay_search_and_selection_are_observed_once(self):
         executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
         if not executable:self.skipTest('No local Chromium installed')
@@ -470,7 +533,6 @@ class RealCardSelectorTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(await control.get_attribute('data-clicks'),'1')
             finally:await chromium.close()
 
-
     async def test_slow_setup_gets_its_own_card_form_observation_window(self):
         executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
         if not executable:self.skipTest('No local Chromium installed')
@@ -499,7 +561,6 @@ class RealCardSelectorTests(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(result['billing_setup_observed']['saved']);setup.assert_awaited_once()
                 self.assertEqual(await page.locator('input').evaluate_all('(es)=>es.map(e=>e.value)'),['','',''])
             finally:await chromium.close()
-
     async def test_native_country_currency_timezone_choices_use_requested_values(self):
         executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
         if not executable:self.skipTest('No local Chromium installed')

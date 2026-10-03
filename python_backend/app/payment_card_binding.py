@@ -69,9 +69,9 @@ async def _payment_surface(browser: Any, stage: str) -> None:
     """Record control labels before card entry; never values or page body."""
     page=browser.page
     try:
-        rows=await asyncio.wait_for(page.evaluate("""() => Array.from(document.querySelectorAll('button,[role="button"],[role="menuitem"],a[href],select,[role="combobox"],h1,h2,h3'))
+        rows=await asyncio.wait_for(page.evaluate("""() => Array.from(document.querySelectorAll('button,[role="button"],[role="menuitem"],a[href],select,[role="combobox"],input[type="radio"],input[type="checkbox"],[role="radio"],[role="checkbox"],h1,h2,h3'))
           .filter(el=>el.getClientRects().length).slice(0,65)
-          .map(el=>({role:el.getAttribute('role')||el.tagName.toLowerCase(),label:(el.getAttribute('aria-label')||el.innerText||'').trim()
+          .map(el=>({role:el.getAttribute('role')||el.tagName.toLowerCase(),label:(el.getAttribute('aria-label')||Array.from(el.labels||[]).map(l=>l.innerText).join(' ')||el.innerText||'').trim()
             .replace(/(?:\\d[ -]?){12,19}/g,'[redacted]').replace(/\\d{6,}/g,'[id]').slice(0,100)})).filter(r=>r.label)"""),timeout=2)
     except Exception as exc:
         rows=[{'diagnostic_unavailable':type(exc).__name__}]
@@ -204,10 +204,15 @@ async def _open_card_form(browser: Any, target: str, asset: dict[str,str], billi
         fields=await _form_fields(page)
         kinds={f['kind'] for f in fields}
         if 'number' in kinds:
+            availability=await _set_card_account_availability(page)
+            if availability.get('status')=='BLOCKED':
+                await _payment_surface(browser,'card_account_availability_unverified')
+                return {**setup_observed,**availability,'fields':_safe_fields(fields)}
+            fields=await _form_fields(page)
             text=await page.locator('body').inner_text(timeout=3000)
             guard=form_action_guard(text,fields)
             if guard:return {**setup_observed,'status':'ACTION_REQUIRED','code':guard,'fields':_safe_fields(fields)}
-            return {**setup_observed,'status':'FORM_READY','code':'CARD_FORM_READY','fields':_safe_fields(fields),'_fields':fields}
+            return {**setup_observed,'card_availability':availability['card_availability'],'status':'FORM_READY','code':'CARD_FORM_READY','fields':_safe_fields(fields),'_fields':fields}
         # Only advance a payment-method selection, never a funded/verification action.
         if method_advanced:continue
         radio=await _unique_visible(page,'radio',r'^(Credit or debit card|Debit or credit card|Credit/debit card|Кредитная или дебетовая карта)$')
@@ -231,6 +236,46 @@ async def _open_card_form(browser: Any, target: str, asset: dict[str,str], billi
 
 def payment_account_setup_required(text: str) -> bool:
     return bool(re.search(r'select location and currency|your location and currency cannot be changed once set|выберите (?:местоположение|страну) и валюту|оберіть (?:розташування|країну) і валюту', text, re.I))
+
+
+async def _set_card_account_availability(page: Any) -> dict[str,str]:
+    only_pattern=r'^(Only this account|Только этот аккаунт|Лише цей акаунт|Тільки цей обліковий запис)$'
+    all_pattern=r'^(All accounts in this business portfolio|Все аккаунты в этом бизнес-портфолио|Усі акаунти в цьому бізнес-портфоліо)$'
+    async def control(pattern: str) -> Any:
+        for role in ('radio','checkbox'):
+            candidate=await _unique_visible(page,role,pattern)
+            if candidate is not None:return candidate
+        candidate=page.get_by_label(re.compile(pattern,re.I)).filter(visible=True)
+        return candidate if await candidate.count()==1 else None
+    only=await control(only_pattern);all_accounts=await control(all_pattern)
+    all_visible=page.get_by_text(re.compile(all_pattern,re.I)).filter(visible=True)
+    if all_accounts is None and await all_visible.count():
+        return {'status':'BLOCKED','code':'CARD_ACCOUNT_SCOPE_UNVERIFIED'}
+    if only is None:
+        visible=page.get_by_text(re.compile(only_pattern+'|'+all_pattern+r'|Which accounts can use this card\?|Какие аккаунты могут использовать эту карту|Які акаунти можуть використовувати цю картку',re.I)).filter(visible=True)
+        if all_accounts is not None or await visible.count():
+            return {'status':'BLOCKED','code':'CARD_ACCOUNT_SCOPE_UNVERIFIED'}
+        return {'status':'SCOPE_READY','card_availability':'not_exposed'}
+    state="""e => {
+        if(e.matches('input[type="radio"],input[type="checkbox"]'))return e.checked;
+        const checked=e.getAttribute('aria-checked');
+        if(checked==='true'||checked==='false')return checked==='true';
+        const inputs=e.querySelectorAll('input[type="radio"],input[type="checkbox"]');
+        return inputs.length===1 ? inputs[0].checked : null;
+    }"""
+    if await only.evaluate(state) is not True:
+        if not await only.is_enabled():return {'status':'BLOCKED','code':'CARD_ACCOUNT_SCOPE_UNVERIFIED'}
+        native=await only.evaluate("e=>e.matches('input[type=\"radio\"],input[type=\"checkbox\"]')")
+        try:
+            if native:await only.check(timeout=9000)
+            else:await only.click(timeout=9000)
+        except PlaywrightTimeoutError:pass
+    deadline=time.monotonic()+3.0
+    while time.monotonic()<deadline:
+        if await only.evaluate(state) is True and (all_accounts is None or await all_accounts.evaluate(state) is False):
+            return {'status':'SCOPE_READY','card_availability':'only_this_account'}
+        await asyncio.sleep(0.25)
+    return {'status':'BLOCKED','code':'CARD_ACCOUNT_SCOPE_UNVERIFIED'}
 
 
 async def _setup_control(page: Any, label: str, observed_default: str = '') -> Any:
@@ -556,11 +601,12 @@ async def _profile_payment_card_execute(resolver:Any,profile:str,payload:dict[st
             result=await asyncio.wait_for(payment_card_flow(browser,target,asset,operation=operation,
                 card=payload.get('card'),cvv=str(payload.get('cvv') or ''),billing_setup=payload.get('billing_setup')),timeout=95)
             # A review of Meta before any card entry. Images never enter the vault
-            # or jobs; all input values are masked even in this read-only preview.
+            # or jobs; text inputs are masked, while non-sensitive choice states
+            # remain visible for account availability verification.
             if operation=='prepare' and result.get('code') not in {'SESSION_EXPIRED','CHECKPOINT_REQUIRED','TWO_FACTOR_REQUIRED'}:
                 try:
                     if urlsplit(str(browser.page.url)).hostname in ALLOWED_HOSTS:
-                        screenshot=await browser.page.screenshot(type='jpeg',quality=65,mask=[browser.page.locator('input,textarea')],timeout=2000)
+                        screenshot=await browser.page.screenshot(type='jpeg',quality=65,mask=[browser.page.locator('input:not([type="radio"]):not([type="checkbox"]),textarea')],timeout=2000)
                         result['ui_preview']=base64.b64encode(screenshot).decode('ascii')
                 except Exception:pass
             return result

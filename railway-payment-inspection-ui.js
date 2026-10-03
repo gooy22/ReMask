@@ -12,6 +12,7 @@ function paymentCardMessage(result){
     CARD_BINDING_RECONCILE_REQUIRED:'Предыдущая привязка ещё не подтверждена. Сначала проверьте состояние карты в Meta; повтор остановлен.',
     CARD_LINK_NOT_VERIFIED:'Карта отправлена в Meta; привязка пока не подтверждена. Повторное добавление остановлено.',
     PAYMENT_ACCOUNT_SCOPE_UNVERIFIED:'Meta не подтвердила точный РК. Карта не отправлена.',
+    CARD_ACCOUNT_SCOPE_UNVERIFIED:'Meta не подтвердила выбор «Только этот аккаунт». Карта не отправлена; добавление карты для всего BM остановлено.',
     PAYMENT_ACCOUNT_BINDING_MISSING:'Нет однозначного соответствия профиля и РК. Обновите выбранный РК.',
     PAYMENT_ACCOUNT_ROW_MISSING:'Meta не показала строку выбранного РК.',
     PAYMENT_ADD_CONTROL_MISSING:'У выбранного РК Meta не показала кнопку добавления способа оплаты.',
@@ -38,7 +39,8 @@ function paymentCardMessage(result){
   const country=setup?.country_label?' Страна в форме Meta: '+setup.country_label+
     (setup.country_preserved?' — сохранён текущий выбор'+(setup.country_reason==='meta_control_locked'?' (поле заблокировано Meta)':''):'')+
     '. Сохранение настроек в Meta пока не подтверждено.':'';
-  return (messages[result.code]||result.code||'Не удалось подтвердить результат')+country+
+  const availability=result.card_availability==='only_this_account'?' В форме выбрано «Только этот РК».':'';
+  return (messages[result.code]||result.code||'Не удалось подтвердить результат')+country+availability+
     (result.missing_fields?.length?' Поля: '+result.missing_fields.map(f=>names[f]||f).join(', ')+'.':'')+
     (fields.length?' Поля формы Meta: '+fields.join(', ')+'.':'');
 }
