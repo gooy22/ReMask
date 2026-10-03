@@ -245,7 +245,8 @@ async def _setup_control(page: Any, label: str, observed_default: str = '') -> A
         return control
 
 
-async def _setup_choice(page: Any, label: str, choice: str, search: str, observed_default: str = '') -> bool:
+async def _setup_choice(page: Any, label: str, choice: str, search: str, observed_default: str = '', *, picker_scope: Any = None) -> bool:
+    picker_scope=picker_scope if picker_scope is not None else page
     pattern=re.compile(choice,re.I)
     control=await _setup_control(page,label,observed_default)
     if control is None:
@@ -267,18 +268,18 @@ async def _setup_choice(page: Any, label: str, choice: str, search: str, observe
     if not await control.is_enabled():return False
     await control.click(timeout=3000)
     for _ in range(3):
-        await page.wait_for_timeout(250)
+        await asyncio.sleep(0.25)
         for role in ('option','menuitem','radio'):
-            options=page.get_by_role(role,name=pattern).filter(visible=True)
+            options=picker_scope.get_by_role(role,name=pattern).filter(visible=True)
             if await options.count()==1:
                 await options.click(timeout=3000)
-                return await _wait_setup_match(page,control,pattern)
-        option=page.get_by_text(pattern).filter(visible=True)
+                return await _wait_setup_match(page,label,choice,search,observed_default)
+        option=picker_scope.get_by_text(pattern).filter(visible=True)
         if await option.count()==1:
             await option.click(timeout=3000)
-            return await _wait_setup_match(page,control,pattern)
+            return await _wait_setup_match(page,label,choice,search,observed_default)
         # Search only the picker, never the background Billing account search.
-        popup=page.locator('[role="listbox"],[role="menu"]').filter(visible=True)
+        popup=picker_scope.locator('[role="listbox"],[role="menu"]').filter(visible=True)
         if await popup.count()!=1:continue
         for finder in (popup.get_by_placeholder(re.compile(r'search|поиск|пошук',re.I)),popup.get_by_role('textbox',name=re.compile(r'search|поиск|пошук',re.I))):
             inputs=finder.filter(visible=True)
@@ -292,10 +293,12 @@ async def _custom_setup_matches(control: Any, pattern: re.Pattern) -> bool:
     return any(pattern.fullmatch(line.strip()) for line in re.sub(r'[\u200b-\u200d\ufeff]','',current).splitlines())
 
 
-async def _wait_setup_match(page: Any, control: Any, pattern: re.Pattern) -> bool:
+async def _wait_setup_match(page: Any, label: str, choice: str, search: str, observed_default: str) -> bool:
     for _ in range(3):
-        await page.wait_for_timeout(250)
-        if await _custom_setup_matches(control,pattern):return True
+        await asyncio.sleep(0.25)
+        # Re-resolve the control: timezone's accessible name changes after
+        # selection, so a locator using its old city must not be reused.
+        if await _setup_selected(page,label,choice,search,observed_default):return True
     return False
 
 
@@ -355,7 +358,7 @@ async def configure_payment_account(browser: Any, setup: dict[str,str]) -> dict[
     if not preferred and country['locked'] and mode=='strict':
         return {'status':'BLOCKED','code':'PAYMENT_COUNTRY_LOCKED','missing_fields':['country'],'billing_setup_observed':{**country,'country_preserved':False,'saved':False}}
     if not preferred and not preserved:
-        if not await _setup_choice(scope,r'Country/region|Country|Страна/регион|Країна/регіон',r'^(Ukraine|Украина|Україна)$','Ukraine'):
+        if not await _setup_choice(scope,r'Country/region|Country|Страна/регион|Країна/регіон',r'^(Ukraine|Украина|Україна)$','Ukraine',picker_scope=page):
             await _payment_surface(browser,'billing_setup_control_missing')
             return {'status':'BLOCKED','code':'PAYMENT_ACCOUNT_SETUP_CONTROL_MISSING','missing_fields':['country']}
         country=await _country_setting(scope)
@@ -365,7 +368,7 @@ async def configure_payment_account(browser: Any, setup: dict[str,str]) -> dict[
     choices=[('currency',r'Currency|Валюта',r'^(US Dollars|USD|Доллар США|Долари США)$','USD','US Dollars'),
              ('timezone',r'Time zone|Timezone|Часовой пояс|Часовий пояс',r'^(Kyiv|Kiev|Киев|Київ)(?:\s*[,\(].*)?$','Kyiv','Los Angeles, America (GMT-07:00)')]
     for key,label,choice,search,default in choices:
-        if not await _setup_choice(scope,label,choice,search,default):
+        if not await _setup_choice(scope,label,choice,search,default,picker_scope=page):
             await _payment_surface(browser,'billing_setup_control_missing')
             return {'status':'BLOCKED','code':'PAYMENT_ACCOUNT_SETUP_CONTROL_MISSING','missing_fields':[key]}
     for key,label,choice,search,default in choices:

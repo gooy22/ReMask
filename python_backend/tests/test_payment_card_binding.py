@@ -324,6 +324,21 @@ class RealCardSelectorTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(await page.get_by_role('option',include_hidden=True).get_attribute('data-clicked'),'yes')
             finally:await chromium.close()
 
+    async def test_timezone_name_change_and_picker_outside_dialog_remain_verifiable(self):
+        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
+        if not executable:self.skipTest('No local Chromium installed')
+        from playwright.async_api import async_playwright
+        from app.payment_card_binding import _setup_choice, _setup_selected
+        async with async_playwright() as playwright:
+            chromium=await playwright.chromium.launch(executable_path=executable,headless=True,args=['--no-sandbox'])
+            try:
+                page=await chromium.new_page()
+                await page.set_content('<div role="dialog"><button id="zone" onclick="document.getElementById(\'popup\').hidden=false">Los Angeles, America (GMT-07:00)</button></div><div id="popup" role="listbox" hidden><button role="option" onclick="document.getElementById(\'zone\').textContent=\'Kyiv, Europe (GMT+03:00)\';document.getElementById(\'popup\').hidden=true">Kyiv, Europe (GMT+03:00)</button></div>')
+                scope=page.get_by_role('dialog');pattern=r'^(Kyiv|Kiev)(?:\s*[,\(].*)?$';default='Los Angeles, America (GMT-07:00)'
+                self.assertTrue(await _setup_choice(scope,'Time zone',pattern,'Kyiv',default,picker_scope=page))
+                self.assertTrue(await _setup_selected(scope,'Time zone',pattern,'Kyiv',default))
+            finally:await chromium.close()
+
     async def test_lazy_payment_dialog_is_awaited_without_reclicking_add(self):
         executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
         if not executable:self.skipTest('No local Chromium installed')
