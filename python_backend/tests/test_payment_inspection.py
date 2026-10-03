@@ -104,7 +104,6 @@ class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(browser._goto.await_args_list[-1].args[0],URL)
                 if navigations==1:browser._read_selected_ad_account_identity.assert_awaited_once()
                 else:self.assertIn('/settings/ad_accounts',browser._goto.await_args_list[0].args[0])
-
     async def test_follows_only_rendered_meta_billing_link_and_returns_masked_data(self):
         browser=self.browser([{"href":URL,"label":"Billing & payments"}])
         result=await inspect_payment_methods(browser,ID)
@@ -166,6 +165,32 @@ class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(browser.page.wait_for_function.await_count,2)
         self.assertEqual(browser.page.wait_for_function.await_args_list[0].kwargs['timeout'],5000)
         self.assertEqual(result['verification_status'],'LINKED')
+
+
+    async def test_slow_all_tools_drawer_waits_for_rendered_billing_link_once(self):
+        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
+        if not executable:self.skipTest('No local Chromium installed')
+        from playwright.async_api import async_playwright
+        start='https://adsmanager.facebook.com/adsmanager/manage/campaigns?act='+ID
+        async with async_playwright() as playwright:
+            chromium=await playwright.chromium.launch(executable_path=executable,headless=True,args=['--no-sandbox'])
+            try:
+                page=await chromium.new_page()
+                html="""<button id="menu" aria-label="All Tools menu" onclick="this.dataset.clicks=Number(this.dataset.clicks||0)+1;window.menuClicks=Number(this.dataset.clicks);document.getElementById('drawer').textContent='Loading';setTimeout(()=>document.getElementById('drawer').innerHTML='<a href=&quot;"""+URL+"""&quot;>Billing & payments</a>',4500)">All Tools</button><div id="drawer"></div>"""
+                await page.route(start,lambda route:route.fulfill(status=200,content_type='text/html',body=html))
+                await page.route(URL,lambda route:route.fulfill(status=200,content_type='text/html',body=ID+' Payment methods No payment methods'))
+                navigations=[]
+                async def goto(url,**kwargs):
+                    if navigations:
+                        self.assertEqual(await page.locator('#menu').get_attribute('data-clicks'),'1')
+                    navigations.append(url)
+                    await page.goto(url,wait_until='domcontentloaded')
+                browser=SimpleNamespace(page=page,profile_id='Fixture',ADS_MANAGER_URL=start.split('?')[0],_goto=goto,_assert_authenticated=AsyncMock())
+                result=await inspect_payment_methods(browser,ID)
+                self.assertEqual(navigations,[start,URL])
+                self.assertTrue(result['account_scope_verified']);self.assertEqual(result['verification_status'],'NONE')
+                self.assertFalse(result['funding_verified'])
+            finally:await chromium.close()
 
     async def test_billing_skeleton_waits_for_exact_rendered_account_before_summary(self):
         browser=self.browser([{'href':URL,'label':'Billing & payments'}])
@@ -246,4 +271,3 @@ class SavedPaymentBusinessTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

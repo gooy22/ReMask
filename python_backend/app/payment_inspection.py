@@ -234,7 +234,7 @@ async def inspect_payment_methods(browser: Any, target: str, *, business_id: str
     # actual rendered navigation control, rather than treating a loading shell
     # as a permanently missing Billing menu.
     navigation_ready = """() => Array.from(document.querySelectorAll('a[href],button,[role="button"],[role="link"]'))
-      .some(a => a.getClientRects().length && /billing|payment|платеж|платіж|оплат|^all tools$|^все инструменты$|^усі інструменти$/i.test(
+      .some(a => a.getClientRects().length && /billing|payment|платеж|платіж|оплат|^all tools(?: menu)?$|^все инструменты$|^усі інструменти$/i.test(
         (a.innerText||a.getAttribute('aria-label')||'').trim()))"""
     try:
         await page.wait_for_function(navigation_ready, timeout=5000)
@@ -244,7 +244,7 @@ async def inspect_payment_methods(browser: Any, target: str, *, business_id: str
     if not links:
         # Meta may keep Billing inside the rendered All tools drawer.
         # Open an exact observed menu control once; no guessed Billing URL.
-        menu_name = re.compile(r"^(All tools|Все инструменты|Усі інструменти)$", re.I)
+        menu_name = re.compile(r"^(All tools(?: menu)?|Все инструменты|Усі інструменти)$", re.I)
         for role in ("button", "link"):
             menu = page.get_by_role(role, name=menu_name)
             if await menu.count() == 1 and await menu.is_visible():
@@ -253,7 +253,7 @@ async def inspect_payment_methods(browser: Any, target: str, *, business_id: str
                 try:
                     await page.wait_for_function("""() => Array.from(document.querySelectorAll('a[href]'))
                       .some(a => a.getClientRects().length && /billing|payment|платеж|платіж|оплат/i.test(
-                        (a.innerText||a.getAttribute('aria-label')||'').trim()))""", timeout=4000)
+                        (a.innerText||a.getAttribute('aria-label')||'').trim()))""", timeout=15000)
                 except Exception:
                     pass
                 links = await page.evaluate(read_links)
