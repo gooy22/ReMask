@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode, urlsplit, parse_qs
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from .facebook_business_browser import BrowserBusinessError
 from .payment_inspection import account_id, payment_summary, inspect_payment_methods, select_settings_payment_tab, selected_payment_pane_text, settings_payment_summary, selected_payment_asset
@@ -175,7 +176,12 @@ async def _open_card_form(browser: Any, target: str, asset: dict[str,str], billi
         add=await _unique_visible(page,'button',r'^(Add payment method|Добавить способ оплаты|Додати спосіб оплати)$')
         if add is None:
             return {'status':'BLOCKED','code':'PAYMENT_ADD_CONTROL_MISSING'}
-    await add.click(timeout=4000)
+    try:
+        await add.click(timeout=4000)
+    except PlaywrightTimeoutError:
+        # Meta can open the modal before Playwright finishes the click.
+        # Observe the same bounded dialog transition; never click Add twice.
+        await _payment_surface(browser,'payment_add_click_pending')
     await browser._assert_authenticated()
     await _payment_surface(browser,'payment_method_dialog')
     form_deadline=time.monotonic()+20.0
