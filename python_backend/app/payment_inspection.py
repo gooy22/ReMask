@@ -181,7 +181,7 @@ def settings_payment_summary(target: str, url: str, text: str, *, asset: dict[st
             'checked_live':True,'source':'private_facebook_selected_rk_payment_tab'}
 
 
-async def inspect_payment_methods(browser: Any, target: str, *, business_id: str = '', asset: dict[str,str] | None = None) -> dict[str, Any]:
+async def inspect_payment_methods(browser: Any, target: str, *, business_id: str = '', asset: dict[str,str] | None = None, fresh_billing_context: bool = False) -> dict[str, Any]:
     """Discover Billing from the authenticated Ads Manager UI; never guess it."""
     target = account_id(target)
     start_url = browser.ADS_MANAGER_URL + '?act=' + target
@@ -279,6 +279,15 @@ async def inspect_payment_methods(browser: Any, target: str, *, business_id: str
             "Ads Manager did not expose a rendered Billing / Payments navigation link.",
             retryable=False, diagnostic=diagnostic,
         )
+    if fresh_billing_context:
+        # Preserve only the validated rendered navigation destination and RK
+        # identity. Release the large Settings SPA before opening Billing.
+        # No card fields or payment submissions exist at this boundary.
+        await browser.close()
+        await browser.open()
+        page=browser.page
+        if page is None:
+            raise BrowserBusinessError("BROWSER_NOT_READY","Payment browser is not open.",retryable=False)
     await browser._goto(billing_url, timeout_ms=25000, settle_ms=700, attempts=1)
     # Billing is a lazy SPA: DOMContentLoaded can still show only its skeleton.
     # Wait for rendered account evidence, then keep the same strict scope check.

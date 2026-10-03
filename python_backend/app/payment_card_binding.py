@@ -169,7 +169,8 @@ async def _open_card_form(browser: Any, target: str, asset: dict[str,str], billi
     if add is None:
         await _payment_surface(browser,'selected_settings')
         # Use the existing rendered Billing navigation, with no guessed URL.
-        funding=await inspect_payment_methods(browser,target,business_id=business,asset=asset)
+        funding=await inspect_payment_methods(browser,target,business_id=business,asset=asset,fresh_billing_context=True)
+        page=browser.page
         await _payment_surface(browser,'billing_navigation')
         if not funding['account_scope_verified']:
             return {'status':'BLOCKED','code':'PAYMENT_ACCOUNT_SCOPE_UNVERIFIED'}

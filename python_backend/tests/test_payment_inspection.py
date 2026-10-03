@@ -192,6 +192,46 @@ class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(result['funding_verified'])
             finally:await chromium.close()
 
+
+    async def test_fresh_billing_process_uses_validated_link_and_new_page_scope(self):
+        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
+        if not executable:self.skipTest('No local Chromium installed')
+        from playwright.async_api import async_playwright
+        start='https://adsmanager.facebook.com/adsmanager/manage/campaigns?act='+ID
+        async with async_playwright() as playwright:
+            for body,expected in [(ID+' Payment methods No payment methods','NONE'),('999999999 Payment methods Visa •••• 1234','UNVERIFIED')]:
+                with self.subTest(expected=expected):
+                    chromium=None;pages=[];closes=[];navigations=[]
+                    browser=SimpleNamespace(page=None,profile_id='Fixture',ADS_MANAGER_URL=start.split('?')[0],_assert_authenticated=AsyncMock())
+                    async def open_browser():
+                        nonlocal chromium
+                        chromium=await playwright.chromium.launch(executable_path=executable,headless=True,args=['--no-sandbox'])
+                        page=await chromium.new_page();pages.append(page);browser.page=page
+                        await page.route(start,lambda route:route.fulfill(status=200,content_type='text/html',body='<a href="'+URL+'">Billing & payments</a>'))
+                        await page.route(URL,lambda route:route.fulfill(status=200,content_type='text/html',body=body))
+                    async def close_browser():
+                        closes.append(True);await chromium.close();browser.page=None
+                    async def goto(url,**kwargs):
+                        navigations.append(url);await browser.page.goto(url,wait_until='domcontentloaded')
+                    browser.open=open_browser;browser.close=close_browser;browser._goto=goto
+                    try:
+                        await open_browser()
+                        result=await inspect_payment_methods(browser,ID,fresh_billing_context=True)
+                        self.assertEqual(navigations,[start,URL]);self.assertEqual(len(closes),1);self.assertEqual(len(pages),2)
+                        self.assertTrue(pages[0].is_closed());self.assertIs(browser.page,pages[1])
+                        self.assertEqual(result['verification_status'],expected);self.assertFalse(result['funding_verified'])
+                        if expected=='UNVERIFIED':self.assertFalse(result['account_scope_verified']);self.assertEqual(result['payment_methods'],[])
+                    finally:
+                        if chromium:await chromium.close()
+
+    async def test_untrusted_billing_link_never_restarts_browser_or_navigates_it(self):
+        browser=self.browser([{'href':URL.replace('business.facebook.com','example.test'),'label':'Billing & payments'}])
+        browser.close=AsyncMock();browser.open=AsyncMock()
+        with self.assertRaises(BrowserBusinessError):
+            await inspect_payment_methods(browser,ID,fresh_billing_context=True)
+        browser.close.assert_not_awaited();browser.open.assert_not_awaited()
+        self.assertEqual(browser._goto.await_count,1)
+
     async def test_billing_skeleton_waits_for_exact_rendered_account_before_summary(self):
         browser=self.browser([{'href':URL,'label':'Billing & payments'}])
         body=SimpleNamespace(inner_text=AsyncMock(return_value='Loading'))
