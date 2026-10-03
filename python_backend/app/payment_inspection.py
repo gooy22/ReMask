@@ -73,7 +73,7 @@ def payment_summary(target: str, url: str, text: str) -> dict[str, Any]:
     exact = scoped and visible_account and billing
     methods = masked_payment_methods(text) if exact else []
     empty = exact and bool(re.search(
-        r"no payment methods|haven.t added (?:(?:a|any) )?payment|"
+        r"no payment methods?\b|haven.t added (?:(?:a|any) )?payment|"
         r"нет (?:добавленных )?способов оплаты|немає (?:доданих )?способів оплати",
         text, re.I,
     ))
@@ -194,7 +194,7 @@ def settings_payment_summary(target: str, url: str, text: str, *, asset: dict[st
     # Reuse the proven mask parser; the actual Settings scope above supplies
     # the identity evidence rather than manufacturing a Billing URL.
     methods=masked_payment_methods(text) if exact else []
-    empty=exact and bool(re.search(r'no payment methods|haven.t added (?:(?:a|any) )?payment|нет (?:добавленных )?способов оплаты|немає (?:доданих )?способів оплати',text,re.I))
+    empty=exact and bool(re.search(r'no payment methods?\b|haven.t added (?:(?:a|any) )?payment|нет (?:добавленных )?способов оплаты|немає (?:доданих )?способів оплати',text,re.I))
     return {'account_id':target,'account_scope_verified':exact,'verification_status':'LINKED' if methods else 'NONE' if empty else 'UNVERIFIED',
             'card_linked':True if methods else False if empty else None,'payment_methods':methods,'funding_verified':False,
             'checked_live':True,'source':'private_facebook_selected_rk_payment_tab'}

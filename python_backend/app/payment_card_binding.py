@@ -552,21 +552,37 @@ async def payment_card_flow(browser:Any,target:str,asset:dict[str,str],*,operati
         if save is None or not await save.is_enabled():return {**base,'status':'BLOCKED','code':'CARD_SAVE_CONTROL_UNAVAILABLE'}
         submitted=True
         await save.click(timeout=4000)
-        await page.wait_for_timeout(1200)
+        # Save can finish before Meta hydrates the masked method. Observe the
+        # same page once; never replay Save or enter card fields again.
+        try:
+            await page.wait_for_function("""last4 => {
+              const text=document.body?.innerText||'';
+              const masked=new RegExp('(?:[•*·●xX]{2,}|ending\\\\s+in|ends\\\\s+in)\\\\s*'+last4+'(?![0-9])','i').test(text);
+              const alert=Array.from(document.querySelectorAll('[role="alert"]')).some(e=>e.getClientRects().length&&e.innerText.trim());
+              return masked || alert || /3d secure|verify (?:your )?card|verification code|bank.*authentication/i.test(text);
+            }""",arg=values['number'][-4:],timeout=12000)
+        except Exception:pass
         await browser._assert_authenticated()
         body=await page.locator('body').inner_text(timeout=3000)
         funding=payment_summary(target,str(page.url),body)
-        if not funding['account_scope_verified']:
+        parsed=urlsplit(str(page.url))
+        if not funding['account_scope_verified'] and parsed.hostname in ALLOWED_HOSTS and parsed.path.rstrip('/')=='/latest/settings/ad_accounts':
             identity=await browser._read_selected_ad_account_identity(business_id=asset['business_id'],account_name=asset['name'])
             await select_settings_payment_tab(browser)
             pane=await selected_payment_pane_text(browser,asset['name'])
             funding=settings_payment_summary(target,str(page.url),pane,asset=asset,identity=identity)
-        linked=funding['account_scope_verified'] and any(m['last4']==values['number'][-4:] for m in funding['payment_methods'])
+        number=values['number'];brands={'visa'} if number.startswith('4') else {'mastercard'} if re.match(r'^(5[1-5]|2[2-7])',number) else {'amex','americanexpress'} if re.match(r'^3[47]',number) else set()
+        linked=funding['account_scope_verified'] and any(m['last4']==number[-4:] and re.sub(r'[^a-z]','',m['type'].casefold()) in brands for m in funding['payment_methods'])
         if linked:return {**base,'submitted':True,'status':'LINKED','code':'CARD_LINK_OBSERVED','funding':funding}
         if re.search(r'3d secure|verify (?:your )?card|verification code|one.time|bank.*authentication|подтверд.*банк',body,re.I):
             return {**base,'submitted':True,'status':'ACTION_REQUIRED','code':'CARD_BANK_CONFIRMATION_REQUIRED'}
         # A success toast alone is not proof of linkage to this RK. No automatic resubmission.
-        return {**base,'submitted':True,'status':'SUBMITTED_UNVERIFIED','code':'CARD_LINK_NOT_VERIFIED'}
+        alerts=[]
+        try:alerts=await page.get_by_role('alert').filter(visible=True).all_text_contents()
+        except Exception:pass
+        rejected=any(re.search(r'card (?:was |is )?declined|card (?:could not|couldn.t) be (?:added|saved)|unable to (?:add|save) (?:this |your |the )?card|карта отклонена|картку відхилено',text,re.I) for text in alerts)
+        return {**base,'submitted':True,'status':'SUBMITTED_UNVERIFIED','code':'CARD_META_REJECTED' if rejected else 'CARD_LINK_NOT_VERIFIED','funding':funding,
+            'diagnostic':{'stage':'card_save_observed','path':parsed.path,'account_scope_verified':funding['account_scope_verified'],'masked_method_count':len(funding['payment_methods']),'validation_error_observed':rejected}}
     except BrowserBusinessError as exc:
         return {**base,'submitted':submitted,'status':'SUBMITTED_UNVERIFIED' if submitted else 'BLOCKED','code':exc.code}
     except Exception as exc:

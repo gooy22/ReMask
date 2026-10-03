@@ -141,7 +141,7 @@ final class RemaskPaymentCardVault {
                     if(is_array($method)&&($method['last4']??null)===$card['last4']&&$brand((string)($method['type']??''))===$brand($card['brand']))$observed=true;
                 }
             }
-            if(!$observed)return ['status'=>'SUBMITTED_UNVERIFIED','code'=>'CARD_RECONCILE_UNVERIFIED','submitted'=>false,'funding_verified'=>false,'funding'=>$funding];
+            if(!$observed)return ['status'=>'SUBMITTED_UNVERIFIED','code'=>$scope&&($funding['verification_status']??'')==='NONE'?'CARD_RECONCILE_NO_METHOD':'CARD_RECONCILE_UNVERIFIED','submitted'=>false,'funding_verified'=>false,'funding'=>$funding];
             $data['bindings'][$key]=['card_id'=>$id,'profile'=>$profile,'account_id'=>$account,'last4'=>$card['last4'],
                 'status'=>'LINKED','updated_at'=>gmdate('c'),'last_result_code'=>'CARD_LINK_OBSERVED','submitted'=>false,'checked_live'=>true];
             return ['status'=>'LINKED','code'=>'CARD_LINK_OBSERVED','submitted'=>false,'funding_verified'=>false,'funding'=>$funding];

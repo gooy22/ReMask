@@ -40,6 +40,12 @@ class PaymentSummaryTests(unittest.TestCase):
         result=payment_summary(ID,URL,ID+"\nPayment methods")
         self.assertIsNone(result["card_linked"])
 
+    def test_live_billing_accounts_singular_empty_state_is_recognized(self):
+        result=payment_summary(ID,URL,ID+' Billing & payments Accounts No payment method')
+        self.assertEqual(result['verification_status'],'NONE');self.assertFalse(result['card_linked']);self.assertFalse(result['funding_verified'])
+        wrong=payment_summary(ID,URL.replace(ID,'987654321'),ID+' Billing & payments No payment method')
+        self.assertEqual(wrong['verification_status'],'UNVERIFIED')
+
     def test_conflicting_duplicate_or_empty_account_scope_cannot_prove_linkage(self):
         for suffix in ["&act=999999999", "&asset_id=999999999", "&ad_account_id=", "&act=" + ID + "&act=" + ID]:
             with self.subTest(suffix=suffix):

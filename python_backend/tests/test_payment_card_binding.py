@@ -288,8 +288,52 @@ class CardBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['status'],'SUBMITTED_UNVERIFIED');self.assertTrue(result['submitted']);save.click.assert_awaited_once()
         self.assertNotIn(CARD['number'],json.dumps(result));self.assertNotIn('cvv fixture',json.dumps(result))
 
+    async def test_billing_save_waits_for_mask_without_settings_fallback_or_replay(self):
+        browser,save=self.browser(ID+' Payment methods Loading');fields=self.fields()
+        current={'body':ID+' Payment methods Loading'}
+        browser.page.locator=lambda _:SimpleNamespace(inner_text=AsyncMock(side_effect=lambda **kwargs:current['body']))
+        async def hydrate(script,**kwargs):
+            self.assertEqual(kwargs['arg'],'1111');self.assertEqual(kwargs['timeout'],12000)
+            current['body']=ID+' Payment methods Visa •••• 1111'
+        browser.page.wait_for_function=AsyncMock(side_effect=hydrate)
+        browser._read_selected_ad_account_identity=AsyncMock()
+        with patch('app.payment_card_binding._open_card_form',AsyncMock(return_value={'status':'FORM_READY','_fields':fields})),patch('app.payment_card_binding._unique_visible',AsyncMock(return_value=save)):
+            result=await payment_card_flow(browser,ID,{},operation='bind',card=CARD,cvv='123')
+        self.assertEqual(result['status'],'LINKED');save.click.assert_awaited_once();browser._read_selected_ad_account_identity.assert_not_awaited()
+        self.assertFalse(result['funding_verified'])
+
+    async def test_wrong_brand_and_explicit_validation_never_confirm_or_leak_secrets(self):
+        for body,alert,code in [(ID+' Payment methods Mastercard •••• 1111','Help','CARD_LINK_NOT_VERIFIED'),
+            (ID+' Payment methods No payment method','Your card was declined '+CARD['number']+' cvv fixture','CARD_META_REJECTED')]:
+            browser,save=self.browser(body);fields=self.fields();browser.page.wait_for_function=AsyncMock()
+            browser.page.get_by_role=lambda role:SimpleNamespace(filter=lambda **kwargs:SimpleNamespace(all_text_contents=AsyncMock(return_value=[alert])))
+            browser._read_selected_ad_account_identity=AsyncMock()
+            with patch('app.payment_card_binding._open_card_form',AsyncMock(return_value={'status':'FORM_READY','_fields':fields})),patch('app.payment_card_binding._unique_visible',AsyncMock(return_value=save)):
+                result=await payment_card_flow(browser,ID,{},operation='bind',card=CARD,cvv='123')
+            self.assertEqual(result['status'],'SUBMITTED_UNVERIFIED');self.assertEqual(result['code'],code)
+            save.click.assert_awaited_once();browser._read_selected_ad_account_identity.assert_not_awaited()
+            self.assertNotIn(CARD['number'],json.dumps(result));self.assertNotIn('cvv fixture',json.dumps(result))
+
 
 class RealCardSelectorTests(unittest.IsolatedAsyncioTestCase):
+
+    async def test_delayed_mask_after_save_is_observed_in_real_chromium(self):
+        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
+        if not executable:self.skipTest('No local Chromium installed')
+        from playwright.async_api import async_playwright
+        async with async_playwright() as playwright:
+            chromium=await playwright.chromium.launch(executable_path=executable,headless=True,args=['--no-sandbox'])
+            try:
+                page=await chromium.new_page();url='https://business.facebook.com/billing_hub/payment_settings?asset_id='+ID
+                html=ID+' Payment methods No payment method'+''.join('<input id="'+key+'">' for key in ('number','holder','expiry','cvv'))+'''<button id="save" onclick="this.dataset.clicks=Number(this.dataset.clicks||0)+1;setTimeout(()=>document.getElementById('method').textContent='Visa •••• 1111',1800)">Save</button><div id="method"></div>'''
+                await page.route(url,lambda route:route.fulfill(status=200,content_type='text/html',body=html));await page.goto(url)
+                fields=[{'kind':key,'required':True,'type':'text','tag':'input','control':page.locator('#'+key)} for key in ('number','holder','expiry','cvv')]
+                browser=SimpleNamespace(page=page,profile_id='Fixture',_assert_authenticated=AsyncMock(),_read_selected_ad_account_identity=AsyncMock())
+                with patch('app.payment_card_binding._open_card_form',AsyncMock(return_value={'status':'FORM_READY','_fields':fields})),patch('app.payment_card_binding._unique_visible',AsyncMock(return_value=page.locator('#save'))):
+                    result=await payment_card_flow(browser,ID,{},operation='bind',card=CARD,cvv='123')
+                self.assertEqual(result['status'],'LINKED');self.assertFalse(result['funding_verified']);self.assertEqual(await page.locator('#save').get_attribute('data-clicks'),'1')
+                browser._read_selected_ad_account_identity.assert_not_awaited()
+            finally:await chromium.close()
 
     async def test_card_scope_selects_only_account_and_rejects_ambiguous_or_broad_scope(self):
         executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
