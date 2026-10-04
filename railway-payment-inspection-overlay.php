@@ -98,7 +98,7 @@ foreach (['accounts.php', 'workspace.php'] as $name) {
     $html = file_get_contents($path);
     // These pages use custom modals; Bootstrap JS requires absent jQuery.
     $html = str_replace('<script src="styles/bootstrap.min.js"></script>', '', $html);
-    $html = str_replace('python-worker-ui-v199-cookie-only-v1', 'python-worker-ui-v199-cookie-only-v1-payment-cards-v10', $html);
+    $html = str_replace('python-worker-ui-v200-cookie-only-v1', 'python-worker-ui-v200-cookie-only-v1-payment-cards-v10', $html);
     file_put_contents($path, $html);
 }
 fwrite(STDERR, "[private-payment] profile browser inspection and canonical RK display installed\n");

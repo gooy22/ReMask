@@ -932,6 +932,22 @@ function pythonWorkerRenderJob(job) {
           }
         }
 
+        const fpStep = (item.provisioning_steps || []).find(function(s) { return s.step === 'FAN_PAGES'; });
+        const fpDiagnostic = fpStep && fpStep.result && fpStep.result.browser_diagnostic;
+        if (itemStatus === 'FAILED' && fpDiagnostic && typeof fpDiagnostic === 'object') {
+          const details = document.createElement('details');
+          const summary = document.createElement('summary');
+          summary.textContent = 'Диагностика Confirm / FP';
+          const pre = document.createElement('pre');
+          pre.textContent = JSON.stringify(fpDiagnostic, null, 2);
+          pre.style.whiteSpace = 'pre-wrap';
+          pre.style.maxHeight = '360px';
+          pre.style.overflow = 'auto';
+          details.appendChild(summary);
+          details.appendChild(pre);
+          errorTd.appendChild(details);
+        }
+
         tr.appendChild(profileTd);
         tr.appendChild(statusTd);
         tr.appendChild(stepTd);
