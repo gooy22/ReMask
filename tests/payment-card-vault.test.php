@@ -69,6 +69,15 @@ INSPECT);
             expect(str_ends_with($request['url'],'/profiles/Fixture/payment-methods?account_id=123456789'),'Inspection target mismatch');
             expect(!str_contains(json_encode($request),'fixture-forbidden'),'CVV passed to inspection');
         }
+        $before=file_get_contents($path);
+        foreach(['SESSION_EXPIRED','CHECKPOINT_REQUIRED','TWO_FACTOR_REQUIRED','PROFILE_CONTEXT_ERROR','PAYMENT_INSPECTION_TIMEOUT','PAYMENT_BROWSER_CRASHED','sensitive fixture message','SESSION_EXPIRED sensitive fixture message'] as $detail){
+            file_put_contents($root.'/funding.json',json_encode(['detail'=>$detail]));
+            $output=[];$exit=0;exec(escapeshellarg(PHP_BINARY).' '.escapeshellarg($root.'/inspect.php').' '.escapeshellarg($root).' '.escapeshellarg($c['id']),$output,$exit);
+            expect($exit===0,'Inspection error endpoint fixture failed');$response=json_decode(implode("\n",$output),true);
+            $expectedCode=str_contains($detail,'sensitive')?'CARD_WORKER_RESULT_UNKNOWN':$detail;
+            expect(($response['error']['message']??'')===$expectedCode,'Inspection hid known gate or leaked raw worker message');
+            expect(file_get_contents($path)===$before,'Inspection failure mutated binding');
+        }
         // Exercise the endpoint with synthetic credentials and an isolated stream wrapper.
         file_put_contents($root.'/operation.php', <<<'OPERATION'
 <?php

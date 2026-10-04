@@ -33,6 +33,10 @@ function card_worker_inspect(string $profile,string $account): array {
     $raw=@file_get_contents($base.'/api/v1/profiles/'.rawurlencode($profile).'/payment-methods?account_id='.rawurlencode($account),false,$context);
     if($raw===false)throw new RuntimeException('CARD_WORKER_RESULT_UNKNOWN');
     $result=json_decode($raw,true);
+    // The inspection route returns a deliberately sanitized code for auth gates.
+    // Preserve only known codes; arbitrary response bodies never reach the UI.
+    $known=['SESSION_EXPIRED','CHECKPOINT_REQUIRED','TWO_FACTOR_REQUIRED','PROFILE_CONTEXT_ERROR','PAYMENT_INSPECTION_TIMEOUT','PAYMENT_BROWSER_CRASHED'];
+    if(is_array($result)&&is_string($result['detail']??null)&&in_array($result['detail'],$known,true))throw new RuntimeException($result['detail']);
     if(!is_array($result)||($result['profile_id']??'')!==$profile||($result['account_id']??'')!==$account)throw new RuntimeException('CARD_WORKER_RESULT_UNKNOWN');
     return $result;
 }
@@ -117,7 +121,8 @@ try {
     card_out(['ok'=>false,'error'=>['message'=>$e->getMessage()]],400);
 }catch(Throwable $e){
     // Raw request bodies, browser errors, PAN and CVV must never reach logs.
-    $safe=['CARD_STORAGE_UNAVAILABLE','CARD_KEY_MISSING','CARD_KEY_INVALID','CARD_ENCRYPTION_FAILED','CARD_DECRYPTION_FAILED','CARD_STORAGE_INVALID','CARD_WORKER_KEY_UNAVAILABLE','CARD_WORKER_RESULT_UNKNOWN'];
+    $safe=['CARD_STORAGE_UNAVAILABLE','CARD_KEY_MISSING','CARD_KEY_INVALID','CARD_ENCRYPTION_FAILED','CARD_DECRYPTION_FAILED','CARD_STORAGE_INVALID','CARD_WORKER_KEY_UNAVAILABLE','CARD_WORKER_RESULT_UNKNOWN',
+        'SESSION_EXPIRED','CHECKPOINT_REQUIRED','TWO_FACTOR_REQUIRED','PROFILE_CONTEXT_ERROR','PAYMENT_INSPECTION_TIMEOUT','PAYMENT_BROWSER_CRASHED'];
     $code=in_array($e->getMessage(),$safe,true)?$e->getMessage():'CARD_OPERATION_FAILED';
     card_out(['ok'=>false,'error'=>['message'=>$code]],503);
 }
