@@ -10,7 +10,7 @@ import re
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
-from .facebook_business_browser import BrowserBusinessError, _request_graphql_meta
+from .facebook_business_browser import BrowserBusinessError, _request_graphql_meta, _ads_manager_scope_account_from_request
 
 PAGE_TASK = re.compile(
     r"(?:Create|Confirm) Facebook Page|Созда(?:ть|ние) Страниц|Подтвердить Страниц|"
@@ -50,6 +50,8 @@ async def confirm_main_page(browser: Any, *, business_id: str,
             value = str(variables.get("firstLevelScopeId") or "")
             if value.isdigit():
                 observed.add(value)
+        if _ads_manager_scope_account_from_request(meta, business_id=business_id):
+            observed.add(business_id)
         name = str(meta.get("friendly_name") or "")
         if name and name not in queries and len(queries) < 20:
             queries.append(name[:180])
@@ -60,7 +62,7 @@ async def confirm_main_page(browser: Any, *, business_id: str,
             "https://adsmanager.facebook.com/adsmanager/manage/accounts?business_id=" + business_id,
             timeout_ms=15000, wait_until="commit", settle_ms=1000,
         )
-        deadline = asyncio.get_running_loop().time() + 12
+        deadline = asyncio.get_running_loop().time() + 45
         card = None
         while asyncio.get_running_loop().time() < deadline:
             await browser._assert_authenticated()
@@ -71,7 +73,8 @@ async def confirm_main_page(browser: Any, *, business_id: str,
                 candidate = headings.first.locator("xpath=ancestor::*[.//*[self::button or @role='button'][normalize-space(.)='Confirm' or normalize-space(.)='Подтвердить' or normalize-space(.)='Підтвердити'] or .//*[normalize-space(.)='Completed' or normalize-space(.)='Confirmed']][1]")
                 if await candidate.count() and await candidate.is_visible():
                     card = candidate
-                    break
+                    if exact_main_scope(str(page.url), business_id, observed):
+                        break
             await page.wait_for_timeout(250)
 
         async def fail(code: str, detail: str) -> None:
@@ -80,6 +83,9 @@ async def confirm_main_page(browser: Any, *, business_id: str,
                                "observed_scopes": sorted(observed), "queries": queries})
             raise BrowserBusinessError(code, detail, retryable=True, diagnostic=diagnostic)
 
+        body = await browser._body_text()
+        if not observed and re.search(r"Loading your ad account|Загрузка рекламного", body, re.I):
+            await fail("PAGE_CONFIRM_LOADING", "Ads Manager is still loading the ad account. No Confirm was clicked.")
         if not exact_main_scope(str(page.url), business_id, observed):
             await fail("MAIN_BUSINESS_SCOPE_UNCONFIRMED", "Meta did not confirm the requested main Business scope. No Confirm was clicked.")
         if card is None:

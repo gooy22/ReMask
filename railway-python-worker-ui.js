@@ -4303,7 +4303,7 @@ async function pythonWorkerOpenPageConfirmationModal() {
     if (submit.disabled) return;
     for (const id of profiles) configs[id]={mode:'confirm_existing',existing_page_id:fields[id].select.value,
       page_name:fields[id].select.selectedOptions[0].textContent.split(' — ')[0],main_business_id:fields[id].bm.value.trim()};
-    submit.disabled=true; cancel.disabled=true;
+    submit.disabled=true; cancel.disabled=true; status.textContent='Проверяю FB-сессию и запускаю Confirm…';
     try { await pythonWorkerStartFanPages({profiles:profiles,configs:configs}); pythonWorkerCloseOwnBmModal(); }
     catch(error) { status.textContent=String(error.message || error); cancel.disabled=false; refresh(); }
   });
