@@ -122,6 +122,7 @@ async def confirm_main_page(browser: Any, *, business_id: str,
             if asyncio.get_running_loop().time() >= next_snapshot:
                 try:
                     surface = await asyncio.wait_for(page.evaluate("""() => {
+                        if(!document.body) return {};
                         const walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);
                         let node,h=null;
                         while((node=walker.nextNode())) if(/^(Create|Confirm) Facebook Page$/i.test((node.nodeValue||'').trim())){h=node.parentElement;break;}
@@ -130,7 +131,7 @@ async def confirm_main_page(browser: Any, *, business_id: str,
                         return {body_excerpt:(document.body?.innerText||'').slice(0,5000),task_surface:task};
                     }"""), timeout=2)
                     last_surface = {**surface, 'url':str(page.url), 'memory':_cgroup_memory_snapshot_mb()}
-                except asyncio.TimeoutError:
+                except Exception:
                     pass
                 next_snapshot = asyncio.get_running_loop().time() + 1
             await browser._assert_authenticated()

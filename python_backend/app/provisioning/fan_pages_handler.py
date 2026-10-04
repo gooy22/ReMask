@@ -98,6 +98,8 @@ async def _confirm_created_pages(session: Any, params: dict[str, Any], checkpoin
 
         verify_only = (_clean(checkpoint.get("phase")) in {"PAGE_CONFIRM_CLICK_INTENT", "PAGE_CONFIRM_RESULT_UNKNOWN"}
                        and _clean(checkpoint.get("confirm_page_id")) == page_id)
+        if verify_only:
+            await save({"activity":"VERIFY_MAIN_BUSINESS_PAGE"})
         try:
             async with FacebookBusinessBrowser(session.context, timeout_seconds=75) as browser:
                 try:
