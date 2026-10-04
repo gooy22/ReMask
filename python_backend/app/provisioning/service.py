@@ -334,7 +334,7 @@ class ProvisioningService:
                 f"network error: {exc.__class__.__name__}",
                 retryable=True,
             )
-        if "page crashed" in str(exc).casefold():
+        if any(marker in str(exc).casefold() for marker in ("page crashed", "target crashed")):
             # A renderer failure is resumable. Mutation checkpoints decide
             # whether retry may CREATE or must only reconcile a prior submit.
             return ProvisioningError("BROWSER_PAGE_CRASHED", str(exc), retryable=True)

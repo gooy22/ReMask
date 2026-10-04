@@ -58,6 +58,9 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
         crash = ProvisioningService._classify(RuntimeError('Page.wait_for_timeout: Page crashed'))
         self.assertEqual(crash.code, 'BROWSER_PAGE_CRASHED')
         self.assertTrue(crash.retryable)
+        target = ProvisioningService._classify(RuntimeError('Locator.count: Target crashed'))
+        self.assertEqual(target.code, 'BROWSER_PAGE_CRASHED')
+        self.assertTrue(target.retryable)
         self.assertFalse(ProvisioningService._classify(RuntimeError('Invalid task')).retryable)
         closed=ProvisioningService._classify(RuntimeError('unable to perform operation on <WriteUnixTransport closed=True>; the handler is closed'))
         self.assertEqual(closed.code,'BROWSER_CONNECTION_CLOSED'); self.assertTrue(closed.retryable)
@@ -79,6 +82,17 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
         saved=await self.provisioning_state.step(item_id,ProvisioningStep.FAN_PAGES)
         self.assertEqual(saved['result']['phase'],'PAGE_CONFIRM_CLICK_INTENT')
         self.assertEqual(saved['result']['confirm_page_id'],'222222222')
+
+    async def test_target_crash_restores_same_confirm_job(self):
+        job_id,item_id=self._seed(task_status='FAILED')
+        task=(await self.store.tasks(item_id))[0]
+        with self.store._connect() as con:
+            con.execute('UPDATE job_tasks SET payload_json=? WHERE id=?',(json.dumps({'steps':['FAN_PAGES']}),task['id']))
+        await self.store.set_task_failed(task['id'],'TASK_FAILED','Locator.count: Target crashed')
+        await self.store.finalize_item(item_id)
+        await self.store.init()
+        self.assertEqual((await self.store.job_view(job_id))['items'][0]['error_code'],'BROWSER_PAGE_CRASHED')
+        self.assertEqual(await self.store.retry_failed(job_id),1)
 
     async def asyncSetUp(self):
         self.tmp = tempfile.TemporaryDirectory()

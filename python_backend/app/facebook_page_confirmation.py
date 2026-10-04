@@ -10,7 +10,7 @@ import re
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
-from .facebook_business_browser import BrowserBusinessError, _request_graphql_meta, _ads_manager_scope_account_from_request, _decode_graphql_text
+from .facebook_business_browser import BrowserBusinessError, _request_graphql_meta, _ads_manager_scope_account_from_request, _decode_graphql_text, _cgroup_memory_snapshot_mb
 
 PAGE_TASK = re.compile(
     r"(?:Create|Confirm) Facebook Page|Созда(?:ть|ние) Страниц|Подтвердить Страниц|"
@@ -60,6 +60,8 @@ async def confirm_main_page(browser: Any, *, business_id: str,
     queries: list[str] = []
     status_evidence: list[dict[str, Any]] = []
     response_tasks: set[asyncio.Task[Any]] = set()
+    last_surface: dict[str, Any] = {}
+    next_snapshot = 0.0
 
     def on_request(request: Any) -> None:
         meta = _request_graphql_meta(request)
@@ -117,6 +119,20 @@ async def confirm_main_page(browser: Any, *, business_id: str,
         deadline = asyncio.get_running_loop().time() + 45
         card = None
         while asyncio.get_running_loop().time() < deadline:
+            if asyncio.get_running_loop().time() >= next_snapshot:
+                try:
+                    surface = await asyncio.wait_for(page.evaluate("""() => {
+                        const walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);
+                        let node,h=null;
+                        while((node=walker.nextNode())) if(/^(Create|Confirm) Facebook Page$/i.test((node.nodeValue||'').trim())){h=node.parentElement;break;}
+                        let e=h; const task=[];
+                        for(let n=0;e&&n<5;n++,e=e.parentElement) task.push({text:(e.innerText||'').slice(0,2200),labels:[...e.querySelectorAll('[aria-label],svg title')].map(x=>x.getAttribute('aria-label')||x.textContent).slice(0,20)});
+                        return {body_excerpt:(document.body?.innerText||'').slice(0,5000),task_surface:task};
+                    }"""), timeout=2)
+                    last_surface = {**surface, 'url':str(page.url), 'memory':_cgroup_memory_snapshot_mb()}
+                except asyncio.TimeoutError:
+                    pass
+                next_snapshot = asyncio.get_running_loop().time() + 1
             await browser._assert_authenticated()
             headings = page.get_by_text(PAGE_TASK)
             if await headings.count():
@@ -134,7 +150,7 @@ async def confirm_main_page(browser: Any, *, business_id: str,
 
         async def fail(code: str, detail: str) -> None:
             diagnostic = await browser._diagnostic("main_page_confirmation")
-            diagnostic.update({"main_business_id": business_id, "page_id": page_id,
+            diagnostic.update({"last_surface":last_surface,"main_business_id": business_id, "page_id": page_id,
                                "observed_scopes": sorted(observed), "queries": queries,
                                "page_task_statuses":status_evidence})
             raise BrowserBusinessError(code, detail, retryable=True, diagnostic=diagnostic)
@@ -190,6 +206,16 @@ async def confirm_main_page(browser: Any, *, business_id: str,
                 return {"confirmed": True, "already_confirmed": False, "main_business_id": business_id, "page_id": page_id}
             await page.wait_for_timeout(250)
         await fail("PAGE_CONFIRM_RESULT_UNKNOWN", "Confirm was clicked, but Meta did not show completion of this Page task. Retry is verification-only.")
+    except Exception as exc:
+        lower = str(exc).casefold()
+        if any(marker in lower for marker in ('page crashed','target crashed')) or ('writeunixtransport' in lower and 'handler is closed' in lower):
+            code = 'BROWSER_PAGE_CRASHED' if 'crashed' in lower else 'BROWSER_CONNECTION_CLOSED'
+            raise BrowserBusinessError(code, str(exc), retryable=True, diagnostic={
+                'stage':'confirm_browser_failure','last_surface':last_surface,
+                'main_business_id':business_id,'page_id':page_id,'observed_scopes':sorted(observed),
+                'queries':queries,'page_task_statuses':status_evidence,'memory':_cgroup_memory_snapshot_mb(),
+                'verification_only':verification_only}) from exc
+        raise
     finally:
         page.remove_listener("request", on_request)
         page.remove_listener("response", on_response)

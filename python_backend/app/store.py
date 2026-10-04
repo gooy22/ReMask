@@ -147,7 +147,7 @@ class JobStore:
         rows = con.execute(
             "SELECT id,item_id,payload_json,error_message FROM job_tasks "
             "WHERE status='FAILED' AND action='provisioning' "
-            "AND error_code='TASK_FAILED' AND (lower(error_message) LIKE '%page crashed%' "
+            "AND error_code='TASK_FAILED' AND (lower(error_message) LIKE '%page crashed%' OR lower(error_message) LIKE '%target crashed%' "
             "OR (lower(error_message) LIKE '%writeunixtransport%' AND lower(error_message) LIKE '%handler is closed%'))"
         ).fetchall()
         for row in rows:
@@ -158,7 +158,7 @@ class JobStore:
             steps = payload.get('steps') if isinstance(payload, dict) else None
             if not isinstance(steps, list) or 'FAN_PAGES' not in [str(step).upper() for step in steps]:
                 continue
-            code = 'BROWSER_PAGE_CRASHED' if 'page crashed' in str(row['error_message']).lower() else 'BROWSER_CONNECTION_CLOSED'
+            code = 'BROWSER_PAGE_CRASHED' if any(marker in str(row['error_message']).lower() for marker in ('page crashed', 'target crashed')) else 'BROWSER_CONNECTION_CLOSED'
             con.execute("UPDATE job_tasks SET error_code=?,retryable=1 WHERE id=?", (code, row['id']))
             con.execute(
                 "UPDATE job_items SET retryable=1,error_code=CASE "
