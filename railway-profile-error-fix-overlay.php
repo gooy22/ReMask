@@ -114,13 +114,22 @@ async function remaskSessionRefreshRun(){
       'ajax/metaHierarchy.php',
       post({action:'sync_profile',profile:name})
     );
-    if(typeof applySnapshot==='function')applySnapshot(snapshot);
+    if(!snapshot || snapshot.sync_complete!==true){
+      throw new Error('FB-сессия сохранена; синхронизация Meta не завершена: '+
+        String(snapshot?.sync_error||'Live inventory не подтверждён'));
+    }
+    if(typeof applySnapshot==='function' && !applySnapshot(snapshot)){
+      throw new Error('FB-сессия сохранена; результат синхронизации не применён');
+    }
+    if(typeof render==='function')render();
 
     if(typeof $==='function'&&$('workspaceStatus')){
       $('workspaceStatus').textContent=
         'FB-сессия '+name+' обновлена'+
         (updated&&updated.token_refreshed?' · Ads Manager token обновлён':'')+
-        ' · Meta синхронизирована';
+        ' · Meta синхронизирована'+
+        (Array.isArray(snapshot.sync_warnings)&&snapshot.sync_warnings.length
+          ? ' · '+snapshot.sync_warnings.join(' | '):'');
     }
     if(typeof updateSelectionUi==='function')updateSelectionUi();
   }catch(error){

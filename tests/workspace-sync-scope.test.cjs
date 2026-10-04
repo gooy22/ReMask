@@ -29,6 +29,27 @@ function snapshotPreservation() {
   assert.equal(sandbox.state.inventory.profiles.length,2);
 }
 
+async function sessionRefreshOutcome() {
+  const refreshOverlay=fs.readFileSync('railway-profile-error-fix-overlay.php','utf8');
+  const refresh=refreshOverlay.slice(refreshOverlay.indexOf('async function remaskSessionRefreshRun(){'),
+    refreshOverlay.indexOf('function remaskSessionRefreshUpdateButton(){'));
+  const status={textContent:''}; let applied=0,rendered=0;
+  const ctx={window:{prompt:()=>JSON.stringify([
+    {name:'c_user',value:'fixture-user'},{name:'xs',value:'fixture-session'},
+  ])},remaskSelectedProfileNameForSessionRefresh:()=> '8',
+    $:()=>status,post:x=>x,profileSaveJson:async()=>({session_updated:true}),
+    apiJson:async()=>({sync_complete:false,sync_error:'LIVE_INVENTORY_TIMEOUT:rk_inventory'}),
+    applySnapshot:()=>{applied++;return true;},render:()=>{rendered++;},updateSelectionUi(){}};
+  vm.createContext(ctx);vm.runInContext(refresh,ctx);
+  await assert.rejects(ctx.remaskSessionRefreshRun(),/LIVE_INVENTORY_TIMEOUT:rk_inventory/);
+  assert.equal(applied,0); assert.equal(rendered,0);
+  assert.ok(!status.textContent.includes('Meta синхронизирована'));
+  ctx.apiJson=async()=>({sync_complete:true,sync_warnings:['Список РК проверен частично']});
+  await ctx.remaskSessionRefreshRun();
+  assert.equal(applied,1);assert.equal(rendered,1);
+  assert.ok(status.textContent.includes('Список РК проверен частично'));
+}
+
 async function run(activeTab, rows) {
   const calls = [];
   const elements = new Map();
@@ -48,6 +69,7 @@ async function run(activeTab, rows) {
 
 (async()=>{
   snapshotPreservation();
+  await sessionRefreshOutcome();
   const bm = await run('businesses',[{profile:'8',id:'1632909278268870'}]);
   assert.equal(bm.length,1);
   assert.equal(bm[0].profile,'8');
