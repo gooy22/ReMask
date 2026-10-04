@@ -3654,6 +3654,47 @@ class BrowserBusinessDiscoveryBootstrapRegressionTests(unittest.TestCase):
 
 
 class BrowserAuthenticationStateTests(unittest.IsolatedAsyncioTestCase):
+    async def test_fp_preflight_only_navigates_to_pages_without_filling_or_submitting(self):
+        browser = FacebookBusinessBrowser(SimpleNamespace(profile_id="9", cookies={"c_user":"123456789"}))
+        browser.page = SimpleNamespace(url="https://www.facebook.com/pages/create")
+        browser._goto = AsyncMock(return_value=browser.page.url)
+        browser._open_create_entry = AsyncMock()
+        result = await browser.preflight_fan_pages()
+        browser._goto.assert_awaited_once_with("https://www.facebook.com/pages/create")
+        browser._open_create_entry.assert_not_awaited()
+        self.assertFalse(result.create_surface_ready)
+        self.assertIn("facebook_pages_authenticated", result.diagnostics)
+
+    async def test_login_reference_in_authenticated_url_is_not_expired_session(self):
+        for url in (
+            "https://business.facebook.com/latest/home?next=/login.php",
+            "https://business.facebook.com/latest/settings/login_settings",
+            "https://otherfacebook.com/login.php",
+        ):
+            with self.subTest(url=url):
+                browser = FacebookBusinessBrowser(SimpleNamespace(profile_id="9"))
+                browser.page = SimpleNamespace(url=url)
+                browser._body_text = AsyncMock(return_value="Meta Business Suite")
+                browser._diagnostic = AsyncMock(return_value={})
+                await browser._assert_authenticated()
+                browser._diagnostic.assert_not_awaited()
+
+    async def test_real_login_route_blocks_session_and_reports_route_without_query(self):
+        for path in ("/login", "/login.php", "/login/device-based/regular/login/", "/business/loginpage/"):
+            with self.subTest(path=path):
+                browser = FacebookBusinessBrowser(SimpleNamespace(profile_id="9"))
+                host = "business.facebook.com" if path == "/business/loginpage/" else "www.facebook.com"
+                browser.page = SimpleNamespace(url="https://" + host + path + "?next=private-query")
+                browser._body_text = AsyncMock(return_value="")
+                browser._diagnostic = AsyncMock(return_value={})
+                with self.assertRaises(BrowserBusinessError) as caught:
+                    await browser._assert_authenticated()
+                self.assertEqual(caught.exception.code, "SESSION_EXPIRED")
+                self.assertEqual(caught.exception.diagnostic["login_path"], path)
+                self.assertIn(host + path, str(caught.exception))
+                self.assertNotIn("private-query", str(caught.exception))
+                browser._body_text.assert_not_awaited()
+
     async def test_business_suite_body_word_checkpoint_is_not_auth_checkpoint(self):
         browser = FacebookBusinessBrowser(
             SimpleNamespace(profile_id="profile-checkpoint-word")
@@ -5383,4 +5424,3 @@ class BrowserAdAccountCaptureCrashStateTests(unittest.TestCase):
             "if not final_attempted:",
             source,
         )
-

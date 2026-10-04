@@ -34,6 +34,7 @@ const source = fs.readFileSync('railway-python-worker-ui.js', 'utf8');
       error=>error.message.includes('9: '+code+': Original Facebook reason') &&
         (code==='CHECKPOINT_REQUIRED'||!error.message.includes('CHECKPOINT_REQUIRED')));
     assert.deepEqual(calls.map(p=>p.action),['preflight']);
+    assert.equal(calls[0].purpose,'fan_pages');
     assert.equal(authState.jobId,'previous-failed-job');
     assert.equal(messages.some(m=>m.id==='pythonPwJob'&&m.text===''),false);
   }

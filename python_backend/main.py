@@ -834,7 +834,7 @@ async def _require_fp_auth_ready(profile_ids: list[str]) -> None:
         cached = _cached_fp_auth_gate(profile_id)
         if cached is not None:
             return profile_id, cached
-        preflight = await profile_preflight(profile_id)
+        preflight = await profile_preflight(profile_id, purpose='fan_pages')
         _remember_fp_auth_gate(profile_id, preflight)
         return profile_id, preflight
 
@@ -906,7 +906,9 @@ async def ready():
     }
 
 @app.post('/api/v1/profiles/{profile_id}/preflight',dependencies=[Depends(require_key)])
-async def profile_preflight(profile_id: str):
+async def profile_preflight(profile_id: str, purpose: str = 'business'):
+    if purpose not in {'business','fan_pages'}:
+        raise HTTPException(status_code=400,detail='INVALID_PREFLIGHT_PURPOSE')
     clean_profile=str(profile_id or '').strip()
     if not clean_profile:
         raise HTTPException(status_code=400,detail='profile_id is required')
@@ -940,7 +942,8 @@ async def profile_preflight(profile_id: str):
             try:
                 business_browser=await profile_session.facebook_business_browser()
                 browser_preflight=await asyncio.wait_for(
-                    business_browser.preflight(),
+                    (business_browser.preflight_fan_pages()
+                     if purpose == 'fan_pages' else business_browser.preflight()),
                     timeout=50.0,
                 )
                 browser_state.update({
@@ -953,7 +956,7 @@ async def profile_preflight(profile_id: str):
                 })
             except asyncio.TimeoutError:
                 browser_state.update({
-                    'error':'Business Suite browser preflight exceeded 50 seconds',
+                    'error':f'{purpose} browser preflight exceeded 50 seconds',
                     'error_code':'BUSINESS_PREFLIGHT_TIMEOUT',
                 })
             except BrowserBusinessError as exc:
@@ -1001,7 +1004,8 @@ async def profile_preflight(profile_id: str):
             pages_source='saved_profile_pages' if saved_pages else ''
 
             pages_ms=0
-            if not saved_pages and browser_state['session_ready'] and business_browser is not None:
+            if (purpose == 'business' and not saved_pages
+                and browser_state['session_ready'] and business_browser is not None):
                 pages_started=time.monotonic()
                 try:
                     discovered_pages=await asyncio.wait_for(
@@ -1041,9 +1045,10 @@ async def profile_preflight(profile_id: str):
 
             total_ms=int((time.monotonic()-preflight_started)*1000)
             log.info(
-                'bm preflight profile=%s total_ms=%d proxy_ms=%d browser_ms=%d pages_ms=%d '
+                '%s preflight profile=%s total_ms=%d proxy_ms=%d browser_ms=%d pages_ms=%d '
                 'browser_ready=%s create_ready=%s pages=%d page_source=%s browser_error=%s '
                 'auth_evidence=%s current_url=%s pages_error=%s',
+                purpose,
                 clean_profile,
                 total_ms,
                 proxy_ms,
@@ -1078,7 +1083,8 @@ async def profile_preflight(profile_id: str):
                 and not auth_blocked
             )
             browser_ui_ready=bool(
-                browser_state['ready']
+                purpose == 'business'
+                and browser_state['ready']
                 and browser_state['create_surface_ready']
                 and facebook_session_ready
             )
@@ -1095,6 +1101,7 @@ async def profile_preflight(profile_id: str):
     result = {
         'ok':True,
         'profile_id':clean_profile,
+        'purpose':purpose,
         'profile_context':'ok',
         'proxy':'ok',
         'proxy_exit_ip':str(proxy_result.get('exit_ip') or ''),
@@ -1147,7 +1154,8 @@ async def profile_preflight(profile_id: str):
         },
         'bm_route_ready':browser_ui_ready,
     }
-    _remember_fp_auth_gate(clean_profile, result)
+    if purpose == 'fan_pages':
+        _remember_fp_auth_gate(clean_profile, result)
     return result
 
 @app.get('/api/v1/profiles/{profile_id}/payment-methods',dependencies=[Depends(require_key)])

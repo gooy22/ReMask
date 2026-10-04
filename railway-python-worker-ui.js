@@ -595,7 +595,8 @@ function pythonWorkerIsProfileAuthBlockedCode(code) {
 async function pythonWorkerProfilePreflight(profileId) {
   const data = await pythonWorkerBridge({
     action: 'preflight',
-    profile_id: String(profileId || '').trim()
+    profile_id: String(profileId || '').trim(),
+    purpose: 'fan_pages'
   });
 
   const preflight = data && data.preflight ? data.preflight : null;

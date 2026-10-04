@@ -2468,22 +2468,6 @@ class FacebookBusinessBrowser:
             )
 
         url = _clean(self.page.url)
-        lower_url = url.lower()
-
-        # REMASK_AUTH_URL_BEFORE_BODY_V1
-        # URL-level auth evidence is immediate and authoritative. Do not block
-        # a commit-level read-only navigation on body hydration before checking
-        # login/checkpoint redirects.
-        if "/login" in lower_url or "login.php" in lower_url:
-            diagnostic = await self._diagnostic("login")
-            diagnostic["auth_evidence"] = "login_url"
-            raise BrowserBusinessError(
-                "SESSION_EXPIRED",
-                "Facebook redirected the profile to login.",
-                retryable=False,
-                diagnostic=diagnostic,
-            )
-
         try:
             parsed_url = urlsplit(url)
             current_host = _clean(parsed_url.hostname).lower()
@@ -2491,13 +2475,39 @@ class FacebookBusinessBrowser:
         except Exception:
             current_host = ""
             current_path = ""
+        facebook_host = (
+            current_host == "facebook.com"
+            or current_host.endswith(".facebook.com")
+        )
+
+        # REMASK_AUTH_URL_BEFORE_BODY_V1
+        # URL-level auth evidence is immediate and authoritative. Do not block
+        # a commit-level read-only navigation on body hydration before checking
+        # login/checkpoint redirects.
+        login_url = facebook_host and (
+            current_path in {"/login", "/login.php"}
+            or current_path.startswith("/login/")
+            or (current_host == "business.facebook.com"
+                and current_path.rstrip("/") == "/business/loginpage")
+        )
+        if login_url:
+            diagnostic = await self._diagnostic("login")
+            diagnostic["auth_evidence"] = "login_url"
+            diagnostic["login_path"] = current_path
+            raise BrowserBusinessError(
+                "SESSION_EXPIRED",
+                "Facebook redirected the profile to login "
+                f"({current_host}{current_path}).",
+                retryable=False,
+                diagnostic=diagnostic,
+            )
 
         # A generic occurrence of the word "checkpoint" in Business Suite body
         # text is NOT proof of an account checkpoint. Meta's SPA can expose
         # internal/help text containing that word on otherwise authenticated
         # pages. Only a real Facebook checkpoint route is authoritative here.
         checkpoint_url = (
-            current_host.endswith("facebook.com")
+            facebook_host
             and (
                 current_path == "/checkpoint"
                 or current_path.startswith("/checkpoint/")
@@ -5872,6 +5882,23 @@ class FacebookBusinessBrowser:
             diagnostic=diagnostic,
         )
 
+
+    async def preflight_fan_pages(self) -> BrowserPreflightResult:
+        """Read-only authentication check on the actual Page creation route.
+
+        Business Suite may require its own login while Facebook Pages is
+        accessible. A BM creation route cannot determine FP authentication.
+        Navigation performs the normal login/checkpoint/2FA checks and never
+        fills or submits the form. Create-surface readiness is not asserted.
+        """
+        await self._goto(self.FAN_PAGE_CREATE_URLS[0])
+        return BrowserPreflightResult(
+            ready=False,
+            current_url=_clean(self.page.url),
+            create_surface_ready=False,
+            account_id=_digits(getattr(self.context, "cookies", {}).get("c_user")),
+            diagnostics=["facebook_pages_authenticated"],
+        )
 
     async def preflight(self) -> BrowserPreflightResult:
         diagnostics: list[str] = []

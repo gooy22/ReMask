@@ -255,7 +255,7 @@ class LiveSyncContractTests(unittest.TestCase):
         )
         self.assertIn("REMASK_AUTH_URL_BEFORE_BODY_V1", auth_source)
         self.assertLess(
-            auth_source.index('if "/login" in lower_url'),
+            auth_source.index('if login_url:'),
             auth_source.index("body = ("),
         )
 

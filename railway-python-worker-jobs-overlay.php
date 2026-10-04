@@ -159,9 +159,13 @@ try {
             rmx_pwj_out(['ok'=>false,'error'=>'INVALID_PROFILE_ID'], 400);
         }
 
+        $purpose = trim((string)($input['purpose'] ?? 'business'));
+        if (!in_array($purpose, ['business', 'fan_pages'], true)) {
+            rmx_pwj_out(['ok'=>false,'error'=>'INVALID_PREFLIGHT_PURPOSE'], 400);
+        }
         $result = rmx_pwj_worker_request(
             'POST',
-            '/api/v1/profiles/' . rawurlencode($profileId) . '/preflight',
+            '/api/v1/profiles/' . rawurlencode($profileId) . '/preflight?purpose=' . rawurlencode($purpose),
             null,
             150
         );
