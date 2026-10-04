@@ -86,23 +86,29 @@ def response_shape(payload: Any) -> list[str]:
     return sorted(keys)[:100]
 
 
-async def inspect_browser_pages(browser: Any, target: str, business: str, *, timeout: float = 22) -> dict:
+async def inspect_browser_pages(browser: Any, target: str, business: str, *, timeout: float = 30) -> dict:
     page = browser.page
     pages: dict[str, dict] = {}
     observed: set[str] = set()
     diagnostics: list[dict] = []
+    operations: list[dict] = []
     tasks: set[asyncio.Task] = set()
     deadline = time.monotonic() + timeout
 
     def on_request(request):
         meta = _request_graphql_meta(request)
+        friendly = str(meta.get('friendly_name') or '')[:180]
+        if friendly and len(operations) < 20:
+            variables = meta.get('variables') or {}
+            operations.append({'operation':friendly, 'variable_keys':sorted(str(k) for k in variables)[:40],
+                'account_ids':sorted(request_accounts(variables))})
         selected = _ads_manager_scope_account_from_request(meta, business_id=business)
         if selected: observed.add(selected)
 
     async def inspect(response):
         try:
             response_url = urlsplit(str(response.url))
-            if response_url.hostname not in {'www.facebook.com','business.facebook.com','adsmanager.facebook.com','graph.facebook.com'} or 'graphql' not in response_url.path.lower(): return
+            if response_url.hostname not in {'www.facebook.com','business.facebook.com','adsmanager.facebook.com','graph.facebook.com'} or 'graphql' not in str(response.url).lower(): return
             meta = _request_graphql_meta(response.request)
             friendly = str(meta.get('friendly_name') or '').lower()
             if 'page' not in friendly or any(w in friendly for w in ('mutation','create','update','delete')): return
@@ -123,7 +129,7 @@ async def inspect_browser_pages(browser: Any, target: str, business: str, *, tim
 
     page.on('request', on_request); page.on('response', on_response)
     try:
-        await browser._goto('https://adsmanager.facebook.com/adsmanager/manage/ads?act=' + target +
+        await browser._goto('https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=' + target +
             '&business_id=' + business, timeout_ms=12000, wait_until='commit', settle_ms=0, attempts=1)
         while time.monotonic() < deadline:
             await browser._assert_authenticated()
@@ -132,12 +138,19 @@ async def inspect_browser_pages(browser: Any, target: str, business: str, *, tim
         parsed = urlsplit(str(page.url)); query = parse_qs(parsed.query)
         exact = parsed.hostname in {'adsmanager.facebook.com','business.facebook.com'} and observed == {target} and query.get('act') == [target] and query.get('business_id') == [business]
         verified = list(pages.values()) if exact else []
+        surface = ''
+        if not verified:
+            try:
+                surface = str(await asyncio.wait_for(page.locator('body').inner_text(timeout=1500),timeout=2))[:1800]
+            except Exception:
+                pass
         return {'account_id':target, 'business_id':business, 'checked_live':True,
             'account_scope_verified':exact,
             'status':'VERIFIED' if verified else 'UNVERIFIED',
             'ad_account_page_access_verified':bool(verified), 'data':verified,
             'checked_at':int(time.time()),
             'diagnostic':{'observed_account_ids':sorted(observed), 'queries':diagnostics,
+                'operations':operations, 'url':str(page.url), 'surface':surface,
                 'code':'' if verified else 'PAGE_ACCESS_EVIDENCE_MISSING'}}
     finally:
         page.remove_listener('request', on_request); page.remove_listener('response', on_response)
