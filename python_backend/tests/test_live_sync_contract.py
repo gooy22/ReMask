@@ -201,7 +201,8 @@ class LiveSyncContractTests(unittest.TestCase):
         self.assertIn("REMASK_FULL_PROFILE_DISCOVERY_BUDGET_V1", source)
         self.assertIn("business_inventory_confirmed_empty", source)
         self.assertIn("REMASK_DISCOVERY_TIMEOUT_HINT_FALLBACK_V1", source)
-        self.assertIn("REMASK_RK_TIMEOUT_IS_ROW_FAILURE_V1", source)
+        # RK timeout recovery and terminal failure are exercised by the async
+        # SelectedBusinessInventoryTests, rather than an obsolete comment tag.
         self.assertIn("invalidating browser session", source)
 
 
