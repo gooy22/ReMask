@@ -12,11 +12,54 @@ from pathlib import Path
 from app.store import JobStore
 from app.provisioning.state import ProvisioningStateStore
 from app.runner import _await_with_hard_watchdog
-from app.provisioning.models import ProvisioningError
+from app.provisioning.models import ProvisioningError, ProvisioningStep
+from app.provisioning.service import ProvisioningService
 from app.session import ProfileContextError, ProfileResolver
 
 
 class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_legacy_fp_crash_restores_same_job_retry_and_preserves_submit_intent(self):
+        job_id, item_id = self._seed(task_status='FAILED')
+        task = (await self.store.tasks(item_id))[0]
+        with self.store._connect() as con:
+            con.execute('UPDATE job_tasks SET payload_json=? WHERE id=?',
+                (json.dumps({'steps':['FAN_PAGES']}), task['id']))
+        await self.store.set_task_failed(task['id'], 'TASK_FAILED', 'Page.wait_for_timeout: Page crashed')
+        await self.store.finalize_item(item_id)
+        await self.provisioning_state.set_running(item_id, '4', 'default', ProvisioningStep.FAN_PAGES)
+        await self.provisioning_state.checkpoint(item_id, '4', 'default', ProvisioningStep.FAN_PAGES,
+            {'phase':'PAGE_CREATE_CLICK_INTENT', 'active_page_name':'ReMask Page', 'active_before_ids':['123456789']})
+        old_view = await self.store.job_view(job_id)
+        await self.store.init()
+        # A restored mirror must not overwrite the repaired retryability.
+        await self.store.import_snapshots([old_view])
+        view = await self.store.job_view(job_id)
+        self.assertEqual(view['id'], job_id)
+        self.assertEqual(view['status'], 'FAILED')
+        self.assertTrue(view['items'][0]['retryable'])
+        self.assertEqual(view['items'][0]['tasks'][0]['error_code'], 'BROWSER_PAGE_CRASHED')
+        self.assertEqual(await self.store.retry_failed(job_id), 1)
+        checkpoint = await self.provisioning_state.step(item_id, ProvisioningStep.FAN_PAGES)
+        self.assertEqual(checkpoint['result']['phase'], 'PAGE_CREATE_CLICK_INTENT')
+        self.assertEqual(checkpoint['result']['active_before_ids'], ['123456789'])
+
+    async def test_legacy_crash_repair_does_not_make_other_task_failures_retryable(self):
+        job_id, item_id = self._seed(task_status='FAILED')
+        task = (await self.store.tasks(item_id))[0]
+        with self.store._connect() as con:
+            con.execute('UPDATE job_tasks SET payload_json=? WHERE id=?',
+                (json.dumps({'steps':['BUSINESS']}), task['id']))
+        await self.store.set_task_failed(task['id'], 'TASK_FAILED', 'Page.wait_for_timeout: Page crashed')
+        await self.store.finalize_item(item_id)
+        await self.store.init()
+        self.assertEqual(await self.store.retry_failed(job_id), 0)
+
+    def test_renderer_crash_is_resumable_while_unrelated_failure_is_not(self):
+        crash = ProvisioningService._classify(RuntimeError('Page.wait_for_timeout: Page crashed'))
+        self.assertEqual(crash.code, 'BROWSER_PAGE_CRASHED')
+        self.assertTrue(crash.retryable)
+        self.assertFalse(ProvisioningService._classify(RuntimeError('Invalid task')).retryable)
+
     async def asyncSetUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         db_path = str(Path(self.tmp.name) / "jobs.sqlite3")

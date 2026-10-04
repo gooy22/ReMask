@@ -135,6 +135,39 @@ class JobStore:
                     raise
                 finally:
                     con.execute("PRAGMA foreign_keys=ON")
+            self._recover_legacy_fp_page_crashes(con)
+
+    @staticmethod
+    def _recover_legacy_fp_page_crashes(con: sqlite3.Connection) -> None:
+        """Restore manual retry for FP renderer failures mislabeled TASK_FAILED.
+
+        Keep IDs, results and mutation checkpoints intact. Nothing is enqueued;
+        the existing FP handler reconciles a saved submit intent before CREATE.
+        """
+        rows = con.execute(
+            "SELECT id,item_id,payload_json,error_message FROM job_tasks "
+            "WHERE status='FAILED' AND action='provisioning' "
+            "AND error_code='TASK_FAILED' AND lower(error_message) LIKE '%page crashed%'"
+        ).fetchall()
+        for row in rows:
+            try:
+                payload = json.loads(row['payload_json'])
+            except (ValueError, TypeError):
+                continue
+            steps = payload.get('steps') if isinstance(payload, dict) else None
+            if not isinstance(steps, list) or 'FAN_PAGES' not in [str(step).upper() for step in steps]:
+                continue
+            con.execute(
+                "UPDATE job_tasks SET error_code='BROWSER_PAGE_CRASHED',retryable=1 WHERE id=?",
+                (row['id'],),
+            )
+            con.execute(
+                "UPDATE job_items SET retryable=1,error_code=CASE "
+                "WHEN error_code='TASK_FAILED' AND lower(error_message) LIKE '%page crashed%' "
+                "THEN 'BROWSER_PAGE_CRASHED' ELSE error_code END "
+                "WHERE id=? AND status='FAILED'",
+                (row['item_id'],),
+            )
 
     async def create_job(self, request: Any) -> tuple[str, bool]:
         return await asyncio.to_thread(self._create_job_sync, request)
@@ -439,6 +472,7 @@ class JobStore:
                                 (result_value, pupdated, profile_id, scope_key),
                             )
                 imported += 1
+            self._recover_legacy_fp_page_crashes(con)
         return imported
 
     async def retry_failed(self, job_id: str) -> int:

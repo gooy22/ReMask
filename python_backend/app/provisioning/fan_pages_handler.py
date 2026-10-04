@@ -859,6 +859,7 @@ async def fan_pages_handler(
                         page_name=page_name,
                         category=category,
                         bio=bio,
+                        before_pages=current_pages,
                         before_submit=before_submit,
                     )
                 break

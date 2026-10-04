@@ -67,6 +67,17 @@ class FanPageProvisioningStructureTests(unittest.TestCase):
 
 
 class FanPageProvisioningRuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_creation_reuses_supplied_inventory_without_loading_pages_again(self):
+        browser = FacebookBusinessBrowser(SimpleNamespace(profile_id='9'))
+        browser._fan_page_snapshot = AsyncMock(side_effect=RuntimeError('Page crashed'))
+        result = await browser.create_fan_page(
+            page_name='ReMask Page', category='Digital creator',
+            before_pages=[{'id':'123456789', 'name':'ReMask Page'}],
+        )
+        self.assertEqual(result['page_id'], '123456789')
+        self.assertTrue(result['reused'])
+        browser._fan_page_snapshot.assert_not_awaited()
+
 
     async def test_auth_checkpoint_records_safe_resume_state(self) -> None:
         state = SimpleNamespace(checkpoint=AsyncMock(return_value={}))
@@ -465,7 +476,8 @@ class FanPageProvisioningRuntimeTests(unittest.IsolatedAsyncioTestCase):
             {"id": "1111111111", "name": "Existing Page"}
         ]
 
-        async def create_page(*, page_name, category, bio, before_submit):
+        async def create_page(*, page_name, category, bio, before_pages, before_submit):
+            self.assertEqual(before_pages[0]['id'], '1111111111')
             await before_submit(
                 {
                     "before_ids": ["1111111111"],

@@ -4392,6 +4392,7 @@ class FacebookBusinessBrowser:
         page_name: str,
         category: str,
         bio: str = "",
+        before_pages: list[dict[str, Any]] | None = None,
         before_submit: CheckpointCallback | None = None,
     ) -> dict[str, Any]:
         """Create one Facebook Page through Meta's own profile-bound UI."""
@@ -4410,7 +4411,13 @@ class FacebookBusinessBrowser:
                 retryable=False,
             )
 
-        before_pages = await self._fan_page_snapshot()
+        # The provisioning handler already reads inventory in a separate,
+        # closed Chromium lease. Reuse that baseline rather than loading the
+        # heavy Your-Pages SPA again in the creation browser.
+        before_pages = (
+            list(before_pages) if before_pages is not None
+            else await self._fan_page_snapshot()
+        )
         before_ids = {
             _digits(row.get("id"))
             for row in before_pages
