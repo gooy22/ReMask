@@ -3,6 +3,31 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const overlay = fs.readFileSync('railway-workspace-sync-fix-overlay.php','utf8');
 const source = overlay.match(/\$newSync = <<<'JS'\n([\s\S]*?)\nJS;/)[1];
+const applySource = overlay.match(/\$newApplySnapshot = <<<'JS'\n([\s\S]*?)\nJS;/)[1];
+
+function snapshotPreservation() {
+  const sandbox={state:{inventory:{
+    profiles:[{name:'8',proxy:'saved proxy'},{name:'7'}],
+    businesses:[{profile:'8',id:'11111111'},{profile:'7',id:'22222222'}],
+    ad_accounts:[{profile:'8',id:'33333333'},{profile:'7',id:'44444444'}],
+  }}};
+  vm.createContext(sandbox); vm.runInContext(applySource,sandbox);
+  const before=JSON.stringify(sandbox.state.inventory);
+  assert.equal(sandbox.applySnapshot({profile:{name:'8'},sync_complete:false,
+    businesses:[],ad_accounts:[]}),false);
+  assert.equal(JSON.stringify(sandbox.state.inventory),before);
+  assert.equal(sandbox.applySnapshot({profile:{name:'8',session_updated:true}}),true);
+  assert.equal(sandbox.state.inventory.businesses.length,2);
+  assert.equal(sandbox.state.inventory.ad_accounts.length,2);
+  assert.equal(sandbox.state.inventory.profiles.length,2);
+  assert.equal(sandbox.state.inventory.profiles.find(p=>p.name==='8').proxy,'saved proxy');
+  // Explicitly verified empty arrays still clear this profile only.
+  assert.equal(sandbox.applySnapshot({profile:{name:'8'},sync_complete:true,
+    businesses:[],ad_accounts:[]}),true);
+  assert.equal(sandbox.state.inventory.businesses.length,1);
+  assert.equal(sandbox.state.inventory.ad_accounts.length,1);
+  assert.equal(sandbox.state.inventory.profiles.length,2);
+}
 
 async function run(activeTab, rows) {
   const calls = [];
@@ -22,6 +47,7 @@ async function run(activeTab, rows) {
 }
 
 (async()=>{
+  snapshotPreservation();
   const bm = await run('businesses',[{profile:'8',id:'1632909278268870'}]);
   assert.equal(bm.length,1);
   assert.equal(bm[0].profile,'8');

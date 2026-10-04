@@ -152,6 +152,8 @@ $oldApplySnapshot = "function applySnapshot(s){ if(!s?.profile)return; const p=s
 $newApplySnapshot = <<<'JS'
 function applySnapshot(s){
   if(!s || typeof s!=='object')return false;
+  // Inconclusive live responses are diagnostics, never replacement inventory.
+  if(s.sync_complete===false)return false;
   const profileRow=(s.profile && typeof s.profile==='object')
     ? s.profile
     : (Array.isArray(s.profiles)
@@ -207,12 +209,18 @@ function applySnapshot(s){
   state.inventory.profiles=state.inventory.profiles
     .filter(x=>String(x.name||x.profile||'')!==p)
     .concat([normalizedProfile]);
-  state.inventory.businesses=state.inventory.businesses
-    .filter(x=>String(x.profile||'')!==p)
-    .concat(businesses);
-  state.inventory.ad_accounts=state.inventory.ad_accounts
-    .filter(x=>String(x.profile||'')!==p)
-    .concat(accounts);
+  // Session updates contain a profile row only. Omitted collections are not
+  // an authoritative empty Meta inventory.
+  if(Array.isArray(s.businesses)){
+    state.inventory.businesses=state.inventory.businesses
+      .filter(x=>String(x.profile||'')!==p)
+      .concat(businesses);
+  }
+  if(Array.isArray(s.ad_accounts)){
+    state.inventory.ad_accounts=state.inventory.ad_accounts
+      .filter(x=>String(x.profile||'')!==p)
+      .concat(accounts);
+  }
   return true;
 }
 JS;
@@ -1523,7 +1531,7 @@ $syncProfileReplacement = <<<'PHP'
             $accountsForBusiness = [];
             if (!empty($liveBusiness['ad_accounts_partial'])) {
                 $rkPartial = true;
-                $syncWarnings[] = 'РК проверен через Details. Полный список РК этого BM не подтверждён; остальные сохранённые строки сохранены без новой проверки.';
+                $syncWarnings[] = 'Проверены отдельные РК. Полный список РК этого BM не подтверждён; остальные сохранённые строки сохранены без новой проверки.';
                 foreach ((array)($existingSnapshot['ad_accounts'] ?? []) as $oldAccount) {
                     if (!is_array($oldAccount) || (string)($oldAccount['business_id'] ?? '') !== $businessId) continue;
                     $oldId = preg_replace('/^act_/', '', (string)($oldAccount['id'] ?? $oldAccount['account_id'] ?? ''));

@@ -4,6 +4,7 @@ import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
+import asyncio
 
 import main as api
 
@@ -79,3 +80,110 @@ class SelectedBusinessInventoryTests(unittest.IsolatedAsyncioTestCase):
         browser.probe_ads_manager_inventory_context.assert_awaited_once()
         self.assertEqual(browser.snapshot_ad_accounts_for_business.await_args.kwargs['business_id'],
                          '1632909278268870')
+
+    async def test_full_sync_ads_timeout_reads_settings_on_fresh_same_profile_browser(self):
+        pool,browser,factory=self.fixtures()
+        browser.snapshot_businesses.side_effect=None
+        browser.snapshot_businesses.return_value={'1632909278268870':'Existing BM'}
+        browser.probe_ads_manager_inventory_context.side_effect=asyncio.TimeoutError()
+        browser.close=AsyncMock()
+        fresh=SimpleNamespace(
+            probe_ads_manager_inventory_context=AsyncMock(side_effect=WrongInventorySurface()),
+            snapshot_ad_accounts_for_business=AsyncMock(side_effect=InventoryProbeReached()),
+        )
+        session=factory.return_value.__aenter__.return_value
+        session.facebook_business_browser.side_effect=[browser,fresh]
+        session._business_browser=browser
+        with patch.object(api,'pool',pool),patch.object(api,'ProfileSession',factory):
+            with self.assertRaises(InventoryProbeReached):
+                await api.profile_live_inventory('8')
+        browser.close.assert_awaited_once()
+        self.assertIsNone(session._business_browser)
+        self.assertEqual(session.facebook_business_browser.await_count,2)
+        fresh.probe_ads_manager_inventory_context.assert_not_awaited()
+        self.assertEqual(fresh.snapshot_ad_accounts_for_business.await_args.kwargs['business_id'],
+                         '1632909278268870')
+
+    async def test_selected_hint_timeout_uses_settings_without_repeating_ads_probe(self):
+        pool,browser,factory=self.fixtures([{
+            'business_id':'1632909278268870','ad_account_id':'120251669477430356',
+        }])
+        browser.probe_ads_manager_inventory_context.side_effect=asyncio.TimeoutError()
+        browser.close=AsyncMock()
+        fresh=SimpleNamespace(
+            probe_ads_manager_inventory_context=AsyncMock(side_effect=WrongInventorySurface()),
+            snapshot_ad_accounts_for_business=AsyncMock(side_effect=InventoryProbeReached()),
+        )
+        session=factory.return_value.__aenter__.return_value
+        session.facebook_business_browser.side_effect=[browser,fresh]
+        with patch.object(api,'pool',pool),patch.object(api,'ProfileSession',factory):
+            with self.assertRaises(InventoryProbeReached):
+                await api.profile_live_inventory('8',business_ids='1632909278268870')
+        browser.close.assert_awaited_once()
+        fresh.probe_ads_manager_inventory_context.assert_not_awaited()
+        fresh.snapshot_ad_accounts_for_business.assert_awaited_once()
+
+    async def test_settings_timeout_after_ads_timeout_remains_failure(self):
+        pool,browser,factory=self.fixtures()
+        browser.snapshot_businesses.side_effect=None
+        browser.snapshot_businesses.return_value={'1632909278268870':'Existing BM'}
+        browser.probe_ads_manager_inventory_context.side_effect=asyncio.TimeoutError()
+        browser.close=AsyncMock()
+        fresh=SimpleNamespace(
+            close=AsyncMock(),
+            snapshot_ad_accounts_for_business=AsyncMock(side_effect=asyncio.TimeoutError()),
+        )
+        session=factory.return_value.__aenter__.return_value
+        session.facebook_business_browser.side_effect=[browser,fresh]
+        with patch.object(api,'pool',pool),patch.object(api,'ProfileSession',factory):
+            with self.assertRaises(api.HTTPException) as failure:
+                await api.profile_live_inventory('8')
+        self.assertEqual(failure.exception.status_code,504)
+        self.assertEqual(failure.exception.detail,'LIVE_INVENTORY_TIMEOUT:rk_inventory')
+        self.assertEqual(session.facebook_business_browser.await_count,2)
+        fresh.close.assert_awaited_once()
+
+    async def test_settings_live_success_recovers_full_sync_after_ads_timeout(self):
+        pool,browser,factory=self.fixtures()
+        browser.snapshot_businesses.side_effect=None
+        browser.snapshot_businesses.return_value={'1632909278268870':'Existing BM'}
+        browser.probe_ads_manager_inventory_context.side_effect=asyncio.TimeoutError()
+        browser.close=AsyncMock()
+        fresh=SimpleNamespace(
+            snapshot_ad_accounts_for_business=AsyncMock(return_value={
+                'ready':True,'accounts':[{'id':'1758104775449075'}],
+                'source':'business_settings_live_inventory',
+            }),
+            discover_managed_pages_isolated=AsyncMock(return_value=[]),
+        )
+        session=factory.return_value.__aenter__.return_value
+        session.facebook_business_browser.side_effect=[browser,fresh]
+        with patch.object(api,'pool',pool),patch.object(api,'ProfileSession',factory):
+            result=await api.profile_live_inventory('8')
+        self.assertTrue(result['live_ready'])
+        row=result['businesses'][0]
+        self.assertEqual(row['ad_accounts'][0]['id'],'1758104775449075')
+        self.assertEqual(row['ad_accounts_source'],'business_settings_live_inventory')
+        self.assertFalse(row['ad_accounts_partial'])
+        self.assertFalse(row['ads_manager_diagnostic']['confirmed'])
+
+    async def test_single_ads_account_is_partial_in_full_and_selected_sync(self):
+        for selected in (False,True):
+            with self.subTest(selected=selected):
+                pool,browser,factory=self.fixtures([{
+                    'business_id':'1632909278268870','ad_account_id':'1758104775449075',
+                }])
+                browser.snapshot_businesses.side_effect=None
+                browser.snapshot_businesses.return_value={'1632909278268870':'Existing BM'}
+                browser.probe_ads_manager_inventory_context.side_effect=None
+                browser.probe_ads_manager_inventory_context.return_value={
+                    'confirmed':True,'confirmed_accounts':[{'id':'1758104775449075'}],
+                    'confirmation_source':'ads_manager_generic_live_act_matches_confirmed_snapshot',
+                }
+                browser.discover_managed_pages_isolated=AsyncMock(return_value=[])
+                with patch.object(api,'pool',pool),patch.object(api,'ProfileSession',factory):
+                    result=await api.profile_live_inventory('8',
+                        business_ids='1632909278268870' if selected else '')
+                self.assertTrue(result['live_ready'])
+                self.assertTrue(result['businesses'][0]['ad_accounts_partial'])
+                self.assertEqual(result['businesses'][0]['ad_accounts_count'],1)

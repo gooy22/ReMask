@@ -1736,6 +1736,21 @@ async def profile_live_inventory(
             discovery_source=''
             prevalidated_inventory: dict[str,dict] = {}
 
+            async def reopen_inventory_browser():
+                nonlocal browser
+                # Drop the timed-out renderer before using the existing Settings
+                # fallback. Keep the same profile/cookies/proxy and total budget.
+                try:
+                    await browser.close()
+                except Exception:
+                    pass
+                finally:
+                    profile_session._business_browser=None
+                reopen_timeout=budget(6.0)
+                browser=await hard_deadline(
+                    profile_session.facebook_business_browser(),reopen_timeout,
+                )
+
             # REMASK_CONFIRMED_HINT_FAST_REVALIDATION_V1
             # When Workspace has a last-live-confirmed BM->RK pair, validate that
             # exact pair against the current authenticated Ads Manager first.
@@ -1769,18 +1784,10 @@ async def profile_live_inventory(
                                 clean_profile,
                                 hinted_business_id,
                             )
-                            try:
-                                await browser.close()
-                            except Exception:
-                                pass
-                            try:
-                                profile_session._business_browser=None
-                            except Exception:
-                                pass
-                            raise HTTPException(
-                                status_code=504,
-                                detail='LIVE_INVENTORY_TIMEOUT:confirmed_hint_revalidation',
-                            ) from exc
+                            # A selected-account probe cannot establish an empty
+                            # catalog. Reopen once and let the existing exact BM
+                            # Settings inventory handle this inconclusive hint.
+                            await reopen_inventory_browser()
                         business_key=str(hinted_business_id)
                         prevalidated_inventory[business_key]={
                             'business_id':business_key,
@@ -1880,6 +1887,7 @@ async def profile_live_inventory(
                         'confirmed_empty':False,
                         'accounts':confirmed_accounts,
                         'accounts_count':len(confirmed_accounts),
+                        'accounts_partial':True,
                         'source':str(
                             ads_probe.get('confirmation_source')
                             or 'ads_manager_confirmed_snapshot_revalidation'
@@ -2103,15 +2111,11 @@ async def profile_live_inventory(
                                 clean_profile,
                                 business_id,
                             )
-                            try:
-                                await browser.close()
-                            except Exception:
-                                pass
-                            # REMASK_RK_TIMEOUT_IS_ROW_FAILURE_V1
-                            # One BM timeout is an inconclusive row, not a fatal
-                            # profile transport failure. The outer row loop marks
-                            # it unready and continues with other current BMs/FPs.
-                            raise
+                            await reopen_inventory_browser()
+                            ads_probe={
+                                'confirmed':False,
+                                'diagnostics':[{'phase':'ads_manager_scope_timeout'}],
+                            }
 
                         if ads_probe.get('confirmed'):
                             confirmed_accounts=[
@@ -2128,6 +2132,9 @@ async def profile_live_inventory(
                                     'confirmed_empty':False,
                                     'accounts':confirmed_accounts,
                                     'accounts_count':len(confirmed_accounts),
+                                    # This probe confirms a selected RK, not the
+                                    # complete Business Settings account list.
+                                    'accounts_partial':True,
                                     'source':str(
                                         ads_probe.get('confirmation_source')
                                         or 'ads_manager_business_scope_inventory'
