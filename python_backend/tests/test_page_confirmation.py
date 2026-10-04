@@ -3,7 +3,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from app.facebook_page_confirmation import exact_main_scope, page_task_statuses
+from app.facebook_page_confirmation import exact_main_scope, page_task_statuses, confirmed_page_task_surface
 from app.facebook_business_browser import BrowserBusinessError
 from app.provisioning.fan_pages_handler import fan_pages_handler
 from app.provisioning.models import ProvisioningStep, ProvisioningError
@@ -11,6 +11,13 @@ from app.provisioning.state import ProvisioningStateStore
 
 
 class PageConfirmTests(unittest.IsolatedAsyncioTestCase):
+    def test_live_completed_page_card_without_preview_or_confirm_button(self):
+        card={'text':'Confirm Facebook Page\nYour Page access has been confirmed.','labels':['Tick']}
+        self.assertTrue(confirmed_page_task_surface({'task_surface':[card]}))
+        self.assertFalse(confirmed_page_task_surface({'task_surface':[dict(card,labels=[])]}))
+        self.assertFalse(confirmed_page_task_surface({'task_surface':[dict(card,text='Add payment method\nYour Page access has been confirmed.')]}))
+        self.assertFalse(confirmed_page_task_surface({'task_surface':[dict(card,text=card['text']+'\nAdd Payment Method')]}))
+
     def test_generic_success_and_payment_completion_are_not_page_confirmation(self):
         self.assertEqual(page_task_statuses({'success':True,'onboarding':{'payment':{'status':'COMPLETED'}}}),[])
         statuses=page_task_statuses({'onboarding':{'page_creation':{'status':'COMPLETED'}}})

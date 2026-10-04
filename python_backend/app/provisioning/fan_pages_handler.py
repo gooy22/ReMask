@@ -117,9 +117,12 @@ async def _confirm_created_pages(session: Any, params: dict[str, Any], checkpoin
         if result.get("confirmed") is not True or _clean(result.get("page_id")) != page_id:
             raise ProvisioningError("PAGE_CONFIRM_RESULT_UNKNOWN", "Meta Page confirmation was not verified", retryable=True)
         row.update(main_business_confirmed=True, main_business_id=business,
-                   confirmation_transport="ads_manager_account_overview_ui")
+                   confirmation_transport="ads_manager_account_overview_ui",
+                   confirmation_evidence=result.get('completion_evidence') or {})
         await save({"phase": "PAGE_CONFIRM_CONFIRMED", "confirm_page_id": page_id,
-                    "main_business_id": business, "activity": "MAIN_BUSINESS_PAGE_CONFIRMED"})
+                    "main_business_id": business, "activity": "MAIN_BUSINESS_PAGE_CONFIRMED",
+                    "browser_diagnostic":{'stage':'main_page_confirmed','main_business_id':business,
+                        'page_id':page_id,'completion_evidence':result.get('completion_evidence') or {}}})
 
 
 def _target_names(params: dict[str, Any]) -> list[str]:

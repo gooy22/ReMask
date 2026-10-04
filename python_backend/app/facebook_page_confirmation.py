@@ -19,6 +19,21 @@ PAGE_TASK = re.compile(
 CONFIRM = re.compile(r"^(Confirm|Подтвердить|Підтвердити|Bestätigen|Confirmer|নিশ্চিত করুন|Xác nhận|पुष्टि करें)$", re.I)
 
 
+def confirmed_page_task_surface(surface: dict[str, Any]) -> bool:
+    """Match Meta's completed Page card, including its accessible Tick icon.
+
+    The completed card no longer contains the Page preview or Confirm button.
+    Payment/phone tasks and a generic checkmark are not Page completion proof.
+    """
+    for row in surface.get('task_surface') or []:
+        lines = [line.strip() for line in str(row.get('text') or '').splitlines() if line.strip()]
+        if (len(lines) == 2 and PAGE_TASK.fullmatch(lines[0])
+                and lines[1] == 'Your Page access has been confirmed.'
+                and 'Tick' in (row.get('labels') or [])):
+            return True
+    return False
+
+
 def exact_main_scope(url: str, business: str, observed: set[str]) -> bool:
     parsed = urlsplit(url)
     if parsed.hostname not in {"adsmanager.facebook.com", "business.facebook.com"}:
@@ -134,6 +149,9 @@ async def confirm_main_page(browser: Any, *, business_id: str,
                 except Exception:
                     pass
                 next_snapshot = asyncio.get_running_loop().time() + 1
+            if exact_main_scope(str(page.url), business_id, observed) and confirmed_page_task_surface(last_surface):
+                return {'confirmed':True,'already_confirmed':True,'main_business_id':business_id,'page_id':page_id,
+                        'completion_evidence':{'source':'scoped_page_task_ui','task_surface':last_surface['task_surface']}}
             await browser._assert_authenticated()
             headings = page.get_by_text(PAGE_TASK)
             if await headings.count():
@@ -177,6 +195,12 @@ async def confirm_main_page(browser: Any, *, business_id: str,
         async def completed() -> bool:
             if any(s['scoped'] and s['completed'] for s in status_evidence):
                 return True
+            done = page.get_by_text(PAGE_TASK).first.locator("xpath=ancestor::*[.//*[normalize-space(.)='Your Page access has been confirmed.']][1]")
+            if await done.count() and await done.is_visible():
+                text = await done.inner_text(timeout=2500)
+                labels = await asyncio.wait_for(done.locator('[aria-label]').evaluate_all("els=>els.map(e=>e.getAttribute('aria-label'))"),timeout=2.5)
+                if confirmed_page_task_surface({'task_surface':[{'text':text,'labels':labels}]}):
+                    return True
             return bool(await card.get_by_text(re.compile(r"^(Completed|Confirmed|Done|Подтверждено|Выполнено|Підтверджено|Завершено)$", re.I)).count())
 
         if await completed():
