@@ -166,7 +166,7 @@ async def _fresh_page_inventory(session: Any) -> list[dict[str, Any]]:
         # flaky Your-Pages SPA never hydrated. That is NOT authoritative proof
         # of an empty account. Preserve the error so uncertain CREATE recovery
         # can keep duplicate protection enabled.
-        rows = await browser.discover_managed_pages(fast=True)
+        rows = await browser.discover_managed_pages(fast=True, navigation_timeout_ms=9000)
         session.context.pages = rows
         return _normalize_pages(rows)
 
@@ -1118,4 +1118,3 @@ async def fan_pages_handler(
             else "facebook_pages_profile_ui"
         ),
     }
-

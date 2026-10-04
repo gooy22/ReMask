@@ -4327,6 +4327,35 @@ class BrowserCreateFormNavigationTests(unittest.IsolatedAsyncioTestCase):
 
 
 class BrowserPageDiscoveryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_auth_redirect_during_hydration_is_not_a_page_inventory(self):
+        browser = FacebookBusinessBrowser(SimpleNamespace(profile_id="9"))
+        browser.page = SimpleNamespace(url="https://www.facebook.com/checkpoint/123/", content=AsyncMock())
+        browser._goto = AsyncMock()
+        browser._assert_authenticated = AsyncMock(side_effect=BrowserBusinessError(
+            "CHECKPOINT_REQUIRED", "Actual checkpoint redirect", retryable=False,
+        ))
+        with self.assertRaises(BrowserBusinessError) as caught:
+            await browser.discover_managed_pages(fast=True)
+        self.assertEqual(caught.exception.code, "CHECKPOINT_REQUIRED")
+        browser.page.content.assert_not_awaited()
+
+    async def test_page_inventory_does_not_wait_for_spa_domcontentloaded(self):
+        class SlowHydrationPage:
+            url = "https://www.facebook.com/pages/?category=your_pages"
+            async def goto(self, url, *, wait_until, timeout):
+                if wait_until != "commit":
+                    raise TimeoutError("DOMContentLoaded never fired")
+                self.url = url
+            async def wait_for_timeout(self, ms):
+                return None
+            async def content(self):
+                return '<script type="application/json">{"__typename":"Page","id":"123456789","name":"Existing FP","is_owned":true}</script>'
+        browser = FacebookBusinessBrowser(SimpleNamespace(profile_id="9"))
+        browser.page = SlowHydrationPage()
+        browser._body_text = AsyncMock(return_value="Facebook Pages")
+        rows = await browser.discover_managed_pages(fast=True, navigation_timeout_ms=9000)
+        self.assertEqual(rows[0]["id"], "123456789")
+
     async def test_discovers_pages_from_rendered_browser_surface(self):
         class _RenderedPage:
             async def wait_for_timeout(self, ms):
@@ -4345,6 +4374,7 @@ class BrowserPageDiscoveryTests(unittest.IsolatedAsyncioTestCase):
         )
         browser.page = _RenderedPage()
         browser._goto = AsyncMock(return_value="https://www.facebook.com/pages/")
+        browser._assert_authenticated = AsyncMock()
 
         pages = await browser.discover_managed_pages()
 
@@ -4380,6 +4410,7 @@ class BrowserPageDiscoveryTests(unittest.IsolatedAsyncioTestCase):
         browser._goto = AsyncMock(
             return_value="https://www.facebook.com/pages/?category=your_pages"
         )
+        browser._assert_authenticated = AsyncMock()
 
         browser._diagnostic = AsyncMock(return_value={})
         with self.assertRaises(BrowserBusinessError) as error:
@@ -4449,6 +4480,7 @@ class BrowserPageDiscoveryTests(unittest.IsolatedAsyncioTestCase):
             return url
 
         browser._goto = AsyncMock(side_effect=_goto)
+        browser._assert_authenticated = AsyncMock()
 
         pages = await browser.discover_managed_pages(fast=True)
 

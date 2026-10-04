@@ -4380,7 +4380,7 @@ class FacebookBusinessBrowser:
 
     async def _fan_page_snapshot(self) -> list[dict[str, Any]]:
         try:
-            return await self.discover_managed_pages(fast=True)
+            return await self.discover_managed_pages(fast=True, navigation_timeout_ms=9000)
         except BrowserBusinessError as exc:
             if exc.code == "FAN_PAGES_NOT_DISCOVERED":
                 return []
@@ -4603,7 +4603,7 @@ class FacebookBusinessBrowser:
         last_pages: list[dict[str, Any]] = []
         for attempt in range(4):
             try:
-                after_pages = await self.discover_managed_pages(fast=True)
+                after_pages = await self.discover_managed_pages(fast=True, navigation_timeout_ms=9000)
                 successful_inventory_reads += 1
                 last_pages = after_pages
             except BrowserBusinessError as exc:
@@ -5492,7 +5492,7 @@ class FacebookBusinessBrowser:
                             if navigation_timeout_ms is not None
                             else (4500 if fast else 6500)
                         ),
-                        wait_until="domcontentloaded",
+                        wait_until="commit",
                         settle_ms=900,
                         attempts=1,
                         auth_body_timeout_ms=500 if fast else 1500,
@@ -5519,6 +5519,13 @@ class FacebookBusinessBrowser:
                                 cancel_pending=False,
                             )
 
+                    # The response can commit before Meta's SPA finishes
+                    # hydration. Recheck auth after the bounded Relay wait so
+                    # a later login/checkpoint redirect is not mistaken for
+                    # successful Page discovery.
+                    await self._assert_authenticated(
+                        body_timeout_ms=500 if fast else 1500,
+                    )
                     if relay_pages:
                         for row in relay_pages.values():
                             merge_page(merged, row)

@@ -239,10 +239,11 @@ class SystemAuditTests(unittest.IsolatedAsyncioTestCase):
         browser = FacebookBusinessBrowser(SimpleNamespace(profile_id="audit-profile"))
         browser.page = page
         browser._goto = AsyncMock()
+        browser._assert_authenticated = AsyncMock()
         result = await browser.discover_managed_pages(fast=True)
         self.assertEqual(result[0]["id"], "123456789")
         self.assertEqual(browser._goto.await_count, 1)
-        self.assertEqual(browser._goto.call_args.kwargs["wait_until"], "domcontentloaded")
+        self.assertEqual(browser._goto.call_args.kwargs["wait_until"], "commit")
 
 
 if __name__ == "__main__":
