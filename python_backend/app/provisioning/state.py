@@ -761,6 +761,8 @@ class ProvisioningStateStore:
                         "ad_account_id": str(page.get("ad_account_id") or ""),
                         "attached": bool(page.get("attached")),
                         "already_attached": bool(page.get("already_attached")),
+                        "main_business_confirmed": bool(page.get("main_business_confirmed")),
+                        "main_business_id": str(page.get("main_business_id") or ""),
                         "source": "python_worker_confirmed",
                         "scope_key": str(row["scope_key"] or ""),
                         "updated_at": int(row["updated_at"] or 0),

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from typing import Any
 
@@ -70,6 +71,50 @@ def _checkpoint_result(step_state: Any) -> dict[str, Any]:
         return {}
     result = step_state.get("result")
     return dict(result) if isinstance(result, dict) else {}
+
+
+async def _confirm_created_pages(session: Any, params: dict[str, Any], checkpoint: dict[str, Any],
+                                 pages: list[dict[str, Any]], *, provisioning_state: Any,
+                                 item_id: str, profile_id: str, scope_key: str,
+                                 target_names: list[str]) -> None:
+    from ..facebook_page_confirmation import confirm_main_page
+    business = _clean(params.get("main_business_id") or session.context.cookies.get("c_user"))
+    if not business.isdigit():
+        raise ProvisioningError("MAIN_BUSINESS_REQUIRED", "A numeric main Business scope is required for Page Confirm")
+    all_pages = await provisioning_state.latest_profile_fan_pages(profile_id)
+    for row in pages:
+        if row.get("main_business_confirmed") and _clean(row.get("main_business_id")) == business:
+            continue
+        page_id = _clean(row.get("id"))
+        name = _clean(row.get("name"))
+        aliases = {_clean(p.get("id")) for p in [*all_pages, *pages]
+                   if _clean(p.get("name")).casefold() == name.casefold()}
+        if aliases != {page_id}:
+            raise ProvisioningError("PAGE_CONFIRM_AMBIGUOUS", "Multiple saved Pages have this name; Confirm requires an exact Page identity")
+
+        async def save(patch: dict[str, Any]) -> None:
+            await provisioning_state.checkpoint(item_id, profile_id, scope_key, ProvisioningStep.FAN_PAGES,
+                {"created_pages": pages, "target_names": target_names, **patch})
+
+        verify_only = (_clean(checkpoint.get("phase")) in {"PAGE_CONFIRM_CLICK_INTENT", "PAGE_CONFIRM_RESULT_UNKNOWN"}
+                       and _clean(checkpoint.get("confirm_page_id")) == page_id)
+        try:
+            async with FacebookBusinessBrowser(session.context, timeout_seconds=75) as browser:
+                result = await confirm_main_page(browser, business_id=business, page_id=page_id,
+                    page_name=name, before_submit=save, verification_only=verify_only)
+        except BrowserBusinessError as exc:
+            current = _checkpoint_result(await provisioning_state.step(item_id, ProvisioningStep.FAN_PAGES))
+            await save({"phase": current.get("phase") or "PAGE_CONFIRM_PENDING",
+                        "confirm_page_id": page_id, "main_business_id": business,
+                        "last_error_code": exc.code, "browser_diagnostic": exc.diagnostic})
+            raise ProvisioningError(exc.code, str(exc) + " diagnostic=" + json.dumps(exc.diagnostic, ensure_ascii=False),
+                                    retryable=_browser_retryable(exc)) from exc
+        if result.get("confirmed") is not True or _clean(result.get("page_id")) != page_id:
+            raise ProvisioningError("PAGE_CONFIRM_RESULT_UNKNOWN", "Meta Page confirmation was not verified", retryable=True)
+        row.update(main_business_confirmed=True, main_business_id=business,
+                   confirmation_transport="ads_manager_account_overview_ui")
+        await save({"phase": "PAGE_CONFIRM_CONFIRMED", "confirm_page_id": page_id,
+                    "main_business_id": business, "activity": "MAIN_BUSINESS_PAGE_CONFIRMED"})
 
 
 def _target_names(params: dict[str, Any]) -> list[str]:
@@ -459,10 +504,10 @@ async def fan_pages_handler(
     mode = _clean(params.get("mode")).lower()
     if not mode:
         mode = "attach_existing" if existing_page_id else "create"
-    if mode not in {"create", "attach_existing"}:
+    if mode not in {"create", "attach_existing", "confirm_existing"}:
         raise ProvisioningError(
             "INVALID_INPUT",
-            "FAN_PAGES.mode must be create or attach_existing.",
+            "FAN_PAGES.mode must be create, attach_existing or confirm_existing.",
             retryable=False,
         )
 
@@ -479,8 +524,8 @@ async def fan_pages_handler(
             retryable=False,
         )
 
-    if mode == "attach_existing":
-        if not business_id:
+    if mode in {"attach_existing", "confirm_existing"}:
+        if mode == "attach_existing" and not business_id:
             raise ProvisioningError(
                 "INVALID_INPUT",
                 "attach_existing requires business_id.",
@@ -532,16 +577,24 @@ async def fan_pages_handler(
             "business_id": _clean(row.get("business_id")),
             "ad_account_id": _clean(row.get("ad_account_id")),
             "already_attached": bool(row.get("already_attached")),
+            "main_business_confirmed": bool(row.get("main_business_confirmed")),
+            "main_business_id": _clean(row.get("main_business_id")),
         }
         for row in (checkpoint.get("created_pages") or [])
         if isinstance(row, dict)
         and _clean(row.get("id")).isdigit()
         and _clean(row.get("name"))
     ]
-    if mode == "attach_existing" and not any(
+    if mode in {"attach_existing", "confirm_existing"} and not any(
         _clean(row.get("id")) == existing_page_id
         for row in created_pages
     ):
+        if mode == "confirm_existing":
+            known = await provisioning_state.latest_profile_fan_pages(profile_id)
+            exact = [row for row in known if _clean(row.get("id")) == existing_page_id]
+            if len(exact) != 1:
+                raise ProvisioningError("CONFIRMED_PAGE_REQUIRED", "Confirm requires the saved Page from this FB profile")
+            names = [_clean(exact[0].get("name"))]
         created_pages.append(
             {
                 "id": existing_page_id,
@@ -1027,6 +1080,11 @@ async def fan_pages_handler(
     by_name = {row["name"].casefold(): row for row in created_pages}
     ordered = [by_name[name.casefold()] for name in names if name.casefold() in by_name]
 
+    if mode == "confirm_existing" or params.get("confirm_main_business") is True:
+        await _confirm_created_pages(session, params, checkpoint, ordered,
+            provisioning_state=provisioning_state, item_id=item_id, profile_id=profile_id,
+            scope_key=scope_key, target_names=names)
+
     if business_id:
         for row in ordered:
             row_page_id = _clean(row.get("id"))
@@ -1096,7 +1154,7 @@ async def fan_pages_handler(
         "mode": mode,
         "requested_count": len(names),
         "created_count": (
-            0 if mode == "attach_existing"
+            0 if mode in {"attach_existing", "confirm_existing"}
             else len(ordered)
         ),
         "attached_count": sum(
@@ -1106,6 +1164,8 @@ async def fan_pages_handler(
         "pages": ordered,
         "target_names": names,
         "category": category,
+        "main_business_confirmed": bool(ordered) and all(bool(row.get("main_business_confirmed")) for row in ordered),
+        "main_business_id": _clean(ordered[0].get("main_business_id")) if ordered else "",
         "business_id": business_id,
         "ad_account_id": ad_account_id,
         "page_business_attached": bool(business_id) and all(bool(row.get("attached")) for row in ordered),

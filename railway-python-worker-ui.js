@@ -797,6 +797,17 @@ function pythonWorkerBusinessTelemetry(item) {
   return parts;
 }
 
+function pythonWorkerFanPageResult(item) {
+  const step = (item.provisioning_steps || []).find(function(s) { return s.step === 'FAN_PAGES'; });
+  const result = step && step.result;
+  if (!result) return '';
+  const pages = result.pages || result.created_pages || [];
+  return pages.map(function(p) {
+    return 'FP ' + p.id + ' ' + (p.name || '') +
+      (p.main_business_confirmed ? ' · Confirm OK · основной BM ' + p.main_business_id : ' · Confirm не выполнен');
+  }).join('; ');
+}
+
 function pythonWorkerRenderJob(job) {
   pythonWorkerUiState.job = job;
   const items = Array.isArray(job && job.items) ? job.items : [];
@@ -860,8 +871,10 @@ function pythonWorkerRenderJob(job) {
         if (item && item.error_message) errorParts.push(item.error_message);
 
         const businessTelemetry = pythonWorkerBusinessTelemetry(item);
+        const fanPageResult = pythonWorkerFanPageResult(item);
 
         if (errorParts.length) {
+          if (fanPageResult) errorParts.unshift(fanPageResult);
           errorParts.push(...pythonWorkerFailureDetails(item));
           if (businessTelemetry.length) {
             errorParts.push(businessTelemetry.join(' · '));
@@ -908,6 +921,9 @@ function pythonWorkerRenderJob(job) {
             }
             errorTd.className = 'pw-result';
             errorTd.textContent = resultParts.join(' · ');
+          } else if (fanPageResult) {
+            errorTd.className = 'pw-result';
+            errorTd.textContent = fanPageResult;
           } else if (businessTelemetry.length) {
             errorTd.className = 'pw-result';
             errorTd.textContent = businessTelemetry.join(' · ');
@@ -3895,7 +3911,7 @@ async function pythonWorkerOpenAutoModal() {
   head.append(title, close);
   const body = document.createElement('div'); body.className = 'pwbm-body';
   const note = document.createElement('div'); note.className = 'pwbm-note';
-  note.textContent = 'Каждый комплект: новая FP на FB-аккаунте → отдельный BM → РК в этом BM. FP к BM не привязывается. Названия и случайный адрес @gmail.com сохраняются при запуске и не меняются при Retry. Адрес — значение для формы; Gmail-ящик не регистрируется. Лимиты и проверки Meta действуют.';
+  note.textContent = 'Каждый комплект: FP → Confirm в основном BM → отдельный BM → РК. Названия и адрес для формы сохраняются при Retry. Лимиты и проверки Meta действуют.';
   body.appendChild(note);
   function field(label, input) {
     const holder = document.createElement('label'); holder.className = 'pwbm-field';
@@ -3985,6 +4001,7 @@ async function pythonWorkerStartFanPages(options) {
 
   const invalid = profiles.filter(function(profileId) {
     const cfg = configs[String(profileId)] || {};
+    if (cfg.mode === 'confirm_existing') return !/^\d+$/.test(String(cfg.existing_page_id || ''));
     const count = Number(cfg.count || 0);
     return !String(cfg.base_name || '').trim()
       || !String(cfg.category || '').trim()
@@ -4019,7 +4036,10 @@ async function pythonWorkerStartFanPages(options) {
   );
 
   try {
-    const nonce = Date.now() + '-' + Math.random().toString(16).slice(2);
+    const confirming = gate.ready.every(function(id) { return configs[id].mode === 'confirm_existing'; });
+    const nonce = confirming ? 'confirm-' + pythonWorkerStableKey(JSON.stringify(gate.ready.map(function(id) {
+      return [id, configs[id].existing_page_id, configs[id].main_business_id || 'personal'];
+    }))) : Date.now() + '-' + Math.random().toString(16).slice(2);
     const payloadProfiles = gate.ready.map(function(profileId, index) {
       const cfg = configs[String(profileId)] || {};
       return {
@@ -4032,6 +4052,11 @@ async function pythonWorkerStartFanPages(options) {
             scope_key: 'add-fp-' + nonce + '-' + index,
             parameters: {
               FAN_PAGES: {
+                mode: cfg.mode || 'create',
+                existing_page_id: String(cfg.existing_page_id || '').trim(),
+                page_name: String(cfg.page_name || '').trim(),
+                main_business_id: String(cfg.main_business_id || '').trim(),
+                confirm_main_business: true,
                 base_name: String(cfg.base_name || '').trim(),
                 count: Number(cfg.count),
                 category: String(cfg.category || '').trim(),
@@ -4103,7 +4128,7 @@ async function pythonWorkerOpenOwnFanPageModal() {
   body.className = 'pwbm-body';
   const note = document.createElement('div');
   note.className = 'pwbm-note';
-  note.textContent = 'По умолчанию создаётся 1 FP на профиль. При необходимости count можно увеличить до 10; каждый подтверждённый Page ID сохраняется в worker state.';
+  note.textContent = 'FP создаётся на профиле, затем выполняется Confirm в основном BM. Сохранённый Page ID используется при Retry; повторяется только незавершённый шаг.';
   body.appendChild(note);
 
   const rows = {};
@@ -4161,7 +4186,12 @@ async function pythonWorkerOpenOwnFanPageModal() {
   create.type='button'; create.className='btn btn-primary'; create.textContent='Создать FP';
   const checkSession = document.createElement('button');
   checkSession.type='button'; checkSession.className='btn btn-secondary'; checkSession.textContent='Проверить FB-сессию';
-  actions.appendChild(cancel); actions.appendChild(checkSession); actions.appendChild(create);
+  const confirmExisting = document.createElement('button');
+  confirmExisting.type='button'; confirmExisting.className='btn btn-secondary'; confirmExisting.textContent='Подтвердить существующую FP';
+  confirmExisting.addEventListener('click', function() { pythonWorkerOpenPageConfirmationModal().catch(function(error) {
+    status.textContent=String(error.message || error);
+  }); });
+  actions.appendChild(cancel); actions.appendChild(checkSession); actions.appendChild(confirmExisting); actions.appendChild(create);
   footer.appendChild(status); footer.appendChild(actions);
 
   card.appendChild(head); card.appendChild(body); card.appendChild(footer);
@@ -4229,6 +4259,55 @@ async function pythonWorkerOpenOwnFanPageModal() {
 }
 
 window.pythonWorkerStartFanPages = pythonWorkerStartFanPages;
+
+async function pythonWorkerOpenPageConfirmationModal() {
+  const profiles = pythonWorkerSelectedProfiles();
+  if (!profiles.length || pythonWorkerUiState.busy) return;
+  pythonWorkerCloseOwnBmModal();
+  const modal=document.createElement('div'); modal.id='pythonWorkerBmModal';
+  const card=document.createElement('div'); card.className='pwbm-card';
+  const body=document.createElement('div'); body.className='pwbm-body';
+  const title=document.createElement('div'); title.className='pwbm-title'; title.textContent='Confirm FP в основном BM'; body.appendChild(title);
+  const note=document.createElement('p'); note.textContent='Подтверждение существующей страницы для рекламы. По умолчанию используется личный основной BM этого FB-профиля.'; body.appendChild(note);
+  const configs={}; const fields={};
+  for (const id of profiles) {
+    const label=document.createElement('label'); label.className='pwbm-field'; label.textContent='Профиль ' + id + ' · Страница';
+    const select=document.createElement('select'); select.disabled=true; label.appendChild(select); body.appendChild(label);
+    const bmLabel=document.createElement('label'); bmLabel.className='pwbm-field'; bmLabel.textContent='Основной BM ID (необязательно)';
+    const bm=document.createElement('input'); bm.placeholder='Личный основной BM'; bmLabel.appendChild(bm); body.appendChild(bmLabel);
+    fields[id]={select:select,bm:bm};
+  }
+  const footer=document.createElement('div'); footer.className='pwbm-footer';
+  const status=document.createElement('div'); status.className='pwbm-status'; status.textContent='Загружаю сохранённые Pages…';
+  const actions=document.createElement('div'); actions.className='pwbm-actions';
+  const cancel=document.createElement('button'); cancel.type='button'; cancel.textContent='Отмена'; cancel.addEventListener('click',pythonWorkerCloseOwnBmModal);
+  const submit=document.createElement('button'); submit.type='button'; submit.textContent='Выполнить Confirm'; submit.disabled=true;
+  actions.appendChild(cancel); actions.appendChild(submit); footer.appendChild(status); footer.appendChild(actions);
+  card.appendChild(body); card.appendChild(footer); modal.appendChild(card); document.body.appendChild(modal);
+  let loadFailed=false;
+  function refresh() {
+    submit.disabled=loadFailed || profiles.some(function(id) { return !fields[id].select.value || (fields[id].bm.value && !/^\d+$/.test(fields[id].bm.value)); });
+  }
+  await pythonWorkerMapLimit(profiles,3,async function(id) {
+    try {
+      const pages=await pythonWorkerLoadPages(id);
+      for (const page of pages) {
+        const opt=document.createElement('option'); opt.value=String(page.id); opt.textContent=String(page.name) + ' — ' + page.id; fields[id].select.appendChild(opt);
+      }
+      fields[id].select.disabled=false;
+      fields[id].select.addEventListener('change',refresh); fields[id].bm.addEventListener('input',refresh);
+    } catch(error) { loadFailed=true; status.textContent=String(error.message || error); }
+  });
+  refresh(); if (!loadFailed) status.textContent=submit.disabled ? 'Сохранённая FP не найдена.' : 'Готово к Confirm. Новая FP не создаётся.';
+  submit.addEventListener('click',async function() {
+    if (submit.disabled) return;
+    for (const id of profiles) configs[id]={mode:'confirm_existing',existing_page_id:fields[id].select.value,
+      page_name:fields[id].select.selectedOptions[0].textContent.split(' — ')[0],main_business_id:fields[id].bm.value.trim()};
+    submit.disabled=true; cancel.disabled=true;
+    try { await pythonWorkerStartFanPages({profiles:profiles,configs:configs}); pythonWorkerCloseOwnBmModal(); }
+    catch(error) { status.textContent=String(error.message || error); cancel.disabled=false; refresh(); }
+  });
+}
 
 function pythonWorkerEnhanceProfileThreeDots() {
   const candidates = Array.from(document.querySelectorAll(
