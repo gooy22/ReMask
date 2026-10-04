@@ -134,6 +134,21 @@ final class RemaskPrivateLaunchCatalog
         foreach ($verified as $id => $row) {
             if (!in_array($id, array_column($pages,'id'), true)) $pages[] = $row;
         }
+        // Saved onboarding Confirm remains distinct from live RK permissions.
+        if (($proof['profile_id'] ?? '') === $catalog['profile'] && ($proof['account_id'] ?? '') === $target) {
+            foreach ((array)($proof['page_confirmations'] ?? []) as $confirmation) {
+                if (!is_array($confirmation) || ($confirmation['main_business_confirmed'] ?? null) !== true
+                    || ($confirmation['source'] ?? '') !== 'saved_worker_confirmation'
+                    || self::id($confirmation['main_business_id'] ?? '') === '') continue;
+                foreach ($pages as &$page) {
+                    if ($page['id'] === self::id($confirmation['id'] ?? '')) {
+                        $page['main_business_confirmed'] = true;
+                        $page['main_business_id'] = $confirmation['main_business_id'];
+                    }
+                }
+                unset($page);
+            }
+        }
         $pageStatus = $verified !== [] ? 'VERIFIED' : 'NOT_VERIFIED';
         return [
             'account_id'=>$funding['id'], 'catalog_only'=>true, 'status'=>'NOT_VERIFIED',
@@ -272,7 +287,9 @@ async function checkAssetsSelection(){
   await concurrent(rows,1,async r=>apiJson('ajax/metaAssetReadiness.php',post({profile:r.profile,account_id:r.id})),(done,total,res,idx)=>{
     const r=rows[idx], block=document.createElement('div');
     const pages=res?.pages?.data||[];
-    const names=pages.map(p=>`${p.name||p.id} · ${p.id} — ${p.ad_account_page_access_verified===true?'доступ РК подтверждён':'доступ РК не подтверждён'}`).join(' · ');
+    const names=pages.map(p=>`${p.name||p.id} · ${p.id}`+
+      (p.main_business_confirmed===true?` · Confirm основного BM ${p.main_business_id}: выполнен`:'')+
+      ` — ${p.ad_account_page_access_verified===true?'доступ РК подтверждён':'доступ РК не подтверждён'}`).join(' · ');
     const verified=res?.pages?.ad_account_page_access_verified===true;
     const diagnostic=res?.pages?.diagnostic;
     block.innerHTML=`<b>${esc(r.name||r.id)}</b><div class="sub">${esc(r.profile)} · ${esc(r.id)}</div>`+

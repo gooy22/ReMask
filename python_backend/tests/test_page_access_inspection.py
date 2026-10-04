@@ -70,6 +70,7 @@ class PageAccessBrowserTests(unittest.IsolatedAsyncioTestCase):
                 class Empty:
                     async def count(self): return 0
                 return Empty()
+            def locator(self,*args,**kwargs): return self.get_by_role()
             async def wait_for_timeout(self,ms): await asyncio.sleep(.001)
         page=Page()
         class Browser:

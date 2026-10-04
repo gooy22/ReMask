@@ -33,7 +33,7 @@ console.log('Private Launch catalog and funding truth checks passed');
   const ctx={selectedRows:()=>[{id:'act_333333333',profile:'7',name:'Saved RK'}],
     openModal(){},$:id=>output[id]||(output[id]={appendChild(node){this.html=node.innerHTML;}}),
     document:{createElement:()=>({})},esc:String,pill:(label)=>label,post:x=>x,setProgress(){},
-    apiJson:async(url,input)=>{request={url,input};return {status:'NOT_VERIFIED',pages:{data:[{id:'222222222',name:'Existing Page'}]},funding:{status:'NOT_CHECKED'}};},
+    apiJson:async(url,input)=>{request={url,input};return {status:'NOT_VERIFIED',pages:{data:[{id:'222222222',name:'Existing Page',main_business_confirmed:true,main_business_id:'111111111'}]},funding:{status:'NOT_CHECKED'}};},
     concurrent:async(rows,n,fn,cb)=>{assert.equal(n,1);const result=await fn(rows[0]);cb(1,1,result,0);return [result];}};
   vm.createContext(ctx);vm.runInContext(readiness,ctx);await ctx.checkAssetsSelection();
   assert.equal(request.url,'ajax/metaAssetReadiness.php');
@@ -41,6 +41,7 @@ console.log('Private Launch catalog and funding truth checks passed');
   assert.equal(request.input.account_id,'act_333333333');
   assert.match(output.assetReadinessRows.html,/Existing Page · 222222222/);
   assert.match(output.assetReadinessRows.html,/ДОСТУП FP НЕ ПОДТВЕРЖДЁН/);
+  assert.match(output.assetReadinessRows.html,/Confirm основного BM 111111111: выполнен/);
   assert.doesNotMatch(output.assetReadinessRows.html,/ASSETS READY|PAGE ISSUE|EMPTY/);
   assert.match(output.assetReadinessProgress.textContent,/Проверка FP завершена/);
   ctx.apiJson=async()=>({pages:{ad_account_page_access_verified:true,data:[

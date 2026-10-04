@@ -171,6 +171,11 @@ class PrivateLaunchCatalogTests(unittest.TestCase):
                       {'data':[{**proof['data'][0],'account_id':'999999999'}]}]:
             result=readiness({**proof,**patch})
             self.assertFalse(result['pages']['ad_account_page_access_verified'])
+        confirmed={**proof,'status':'UNVERIFIED','data':[], 'page_confirmations':[
+            {'id':'222222222','main_business_confirmed':True,'main_business_id':'111111111','source':'saved_worker_confirmation'}]}
+        result=readiness(confirmed)
+        self.assertTrue(result['pages']['data'][0]['main_business_confirmed'])
+        self.assertFalse(result['pages']['ad_account_page_access_verified'])
 
 
 if __name__ == '__main__':

@@ -164,19 +164,30 @@ async def inspect_browser_pages(browser: Any, target: str, business: str, *, tim
             if pages and observed == {target}: break
             if not opened and observed == {target}:
                 create = page.get_by_role('button',name='Create',exact=True)
-                if await create.count() == 1 and await create.is_visible():
+                progress = page.locator('[data-surface*="ads_progress_dialog_modal"]')
+                loading = await progress.count() and await progress.first.is_visible()
+                if not loading and await create.count() == 1 and await create.is_visible():
                     opened = True
-                    await create.click(timeout=2500); editor.append('objective_dialog_opened')
+                    try:
+                        await create.click(timeout=6000); editor.append('objective_dialog_opened')
+                    except Exception:
+                        editor.append('create_entry_unavailable')
             if opened and 'traffic_selected_locally' not in editor:
                 traffic = page.get_by_role('radio',name='Traffic',exact=True)
                 if await traffic.count() != 1:
                     traffic = page.get_by_text('Traffic',exact=True)
                 if await traffic.count() == 1 and await traffic.is_visible():
-                    await traffic.click(timeout=2500); editor.append('traffic_selected_locally')
+                    try:
+                        await traffic.click(timeout=4000); editor.append('traffic_selected_locally')
+                    except Exception:
+                        editor.append('objective_selection_unavailable'); break
             if 'traffic_selected_locally' in editor and 'identity_form_requested_readonly' not in editor:
                 proceed = page.get_by_role('button',name='Continue',exact=True)
                 if await proceed.count() == 1 and await proceed.is_enabled():
-                    await proceed.click(timeout=2500); editor.append('identity_form_requested_readonly')
+                    try:
+                        await proceed.click(timeout=4000); editor.append('identity_form_requested_readonly')
+                    except Exception:
+                        editor.append('identity_form_unavailable'); break
             await page.wait_for_timeout(250)
         parsed = urlsplit(str(page.url)); query = parse_qs(parsed.query)
         exact = parsed.hostname in {'adsmanager.facebook.com','business.facebook.com'} and observed == {target} and query.get('act') == [target] and (not query.get('business_id') or query.get('business_id') == [business])

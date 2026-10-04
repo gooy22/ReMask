@@ -1165,7 +1165,14 @@ async def profile_page_access(profile_id: str, account_id: str):
     if not profile or len(profile)>160:
         raise HTTPException(status_code=400,detail='INVALID_PROFILE')
     try:
-        return await inspect_profile_pages(pool.resolver,profile,account_id)
+        result=await inspect_profile_pages(pool.resolver,profile,account_id)
+        saved=await pool.provisioning_state.latest_profile_fan_pages(profile)
+        result['page_confirmations']=[{
+            'id':str(p.get('id') or ''), 'main_business_id':str(p.get('main_business_id') or ''),
+            'main_business_confirmed':True, 'source':'saved_worker_confirmation',
+        } for p in saved if p.get('main_business_confirmed') is True
+            and str(p.get('id') or '').isdigit() and str(p.get('main_business_id') or '').isdigit()]
+        return result
     except ValueError as exc:
         raise HTTPException(status_code=400,detail='INVALID_PAGE_ACCESS_TARGET') from exc
     except ProfileContextError as exc:
