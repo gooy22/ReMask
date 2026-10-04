@@ -246,7 +246,7 @@ try {
     if ($key === '') throw new RuntimeException('PAGE_ACCESS_WORKER_UNAVAILABLE');
     $ctx = stream_context_create(['http'=>['method'=>'GET',
         'header'=>"Accept: application/json\r\nX-Remask-Worker-Key: ".$key."\r\n",
-        'timeout'=>66,'ignore_errors'=>true,'follow_location'=>0]]);
+        'timeout'=>82,'ignore_errors'=>true,'follow_location'=>0]]);
     $raw = @file_get_contents($base.'/api/v1/profiles/'.rawurlencode($profile).'/page-access?account_id='.rawurlencode($account),false,$ctx);
     $proof = is_string($raw) ? json_decode($raw,true) : null;
     if (!is_array($proof) || ($proof['profile_id'] ?? '') !== $profile || ($proof['account_id'] ?? '') !== $account) {

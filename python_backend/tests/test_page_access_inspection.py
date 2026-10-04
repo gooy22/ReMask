@@ -4,7 +4,7 @@ import unittest
 from types import SimpleNamespace
 from urllib.parse import urlencode
 
-from app.page_access_inspection import promotable_pages, request_accounts, inspect_browser_pages
+from app.page_access_inspection import promotable_pages, request_accounts, inspect_browser_pages, allowed_readonly_request
 
 RK='2279305019588057'
 BM='61594882851656'
@@ -12,6 +12,14 @@ PAGE='1270757506131209'
 
 
 class PageAccessEvidenceTests(unittest.TestCase):
+    def test_identity_editor_cannot_save_any_meta_mutation_or_unknown_post(self):
+        for friendly, allowed in [('AdsCreatePageIdentityQuery',True),('SaveCampaignMutation',False),('',False)]:
+            request=SimpleNamespace(method='POST',url='https://adsmanager.facebook.com/api/graphql/',
+                post_data=urlencode({'fb_api_req_friendly_name':friendly}))
+            self.assertEqual(allowed_readonly_request(request),allowed)
+        self.assertFalse(allowed_readonly_request(SimpleNamespace(method='POST',url='https://graph.facebook.com/act_'+RK+'/campaigns',post_data='')))
+        self.assertFalse(allowed_readonly_request(SimpleNamespace(method='GET',url='https://graph.facebook.com/graphql?fb_api_req_friendly_name=SaveCampaignMutation',post_data='')))
+        self.assertFalse(allowed_readonly_request(SimpleNamespace(method='GET',url='https://graph.facebook.com/act_'+RK+'?method=delete',post_data='')))
     def payload(self, key='promotable_pages', rk=RK):
         return {'data':{'node':{'__typename':'AdAccount','id':rk,
             key:{'edges':[{'node':{'__typename':'Page','id':PAGE,'name':'ReMask Page'}}]}}}}
@@ -56,6 +64,12 @@ class PageAccessBrowserTests(unittest.IsolatedAsyncioTestCase):
             url='about:blank'
             def on(self,event,fn): callbacks[event]=fn
             def remove_listener(self,event,fn): callbacks.pop(event,None)
+            async def route(self,pattern,fn): pass
+            async def unroute(self,pattern,fn): raise AssertionError('write barrier must survive until context close')
+            def get_by_role(self,*args,**kwargs):
+                class Empty:
+                    async def count(self): return 0
+                return Empty()
             async def wait_for_timeout(self,ms): await asyncio.sleep(.001)
         page=Page()
         class Browser:
