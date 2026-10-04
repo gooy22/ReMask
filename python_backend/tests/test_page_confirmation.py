@@ -3,7 +3,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from app.facebook_page_confirmation import exact_main_scope
+from app.facebook_page_confirmation import exact_main_scope, page_task_statuses
 from app.facebook_business_browser import BrowserBusinessError
 from app.provisioning.fan_pages_handler import fan_pages_handler
 from app.provisioning.models import ProvisioningStep, ProvisioningError
@@ -11,6 +11,11 @@ from app.provisioning.state import ProvisioningStateStore
 
 
 class PageConfirmTests(unittest.IsolatedAsyncioTestCase):
+    def test_generic_success_and_payment_completion_are_not_page_confirmation(self):
+        self.assertEqual(page_task_statuses({'success':True,'onboarding':{'payment':{'status':'COMPLETED'}}}),[])
+        statuses=page_task_statuses({'onboarding':{'page_creation':{'status':'COMPLETED'}}})
+        self.assertEqual(statuses,[{'path':'.onboarding.page_creation.status','completed':True}])
+        self.assertFalse(page_task_statuses({'onboarding':{'page_creation':{'status':'PENDING'}}})[0]['completed'])
     def test_main_scope_rejects_ignored_route_and_mixed_live_scope(self):
         url='https://adsmanager.facebook.com/adsmanager/manage/accounts?business_id=111111111'
         self.assertFalse(exact_main_scope(url,'111111111',set()))

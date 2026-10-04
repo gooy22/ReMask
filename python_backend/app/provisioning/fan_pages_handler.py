@@ -100,8 +100,11 @@ async def _confirm_created_pages(session: Any, params: dict[str, Any], checkpoin
                        and _clean(checkpoint.get("confirm_page_id")) == page_id)
         try:
             async with FacebookBusinessBrowser(session.context, timeout_seconds=75) as browser:
-                result = await confirm_main_page(browser, business_id=business, page_id=page_id,
-                    page_name=name, before_submit=save, verification_only=verify_only)
+                try:
+                    result = await asyncio.wait_for(confirm_main_page(browser, business_id=business, page_id=page_id,
+                        page_name=name, before_submit=save, verification_only=verify_only), timeout=85)
+                except asyncio.TimeoutError as exc:
+                    raise BrowserBusinessError("PAGE_CONFIRM_TIMEOUT", "Page Confirm verification exceeded 85s; saved submit intent is preserved", retryable=True) from exc
         except BrowserBusinessError as exc:
             current = _checkpoint_result(await provisioning_state.step(item_id, ProvisioningStep.FAN_PAGES))
             await save({"phase": current.get("phase") or "PAGE_CONFIRM_PENDING",

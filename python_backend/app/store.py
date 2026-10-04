@@ -147,7 +147,8 @@ class JobStore:
         rows = con.execute(
             "SELECT id,item_id,payload_json,error_message FROM job_tasks "
             "WHERE status='FAILED' AND action='provisioning' "
-            "AND error_code='TASK_FAILED' AND lower(error_message) LIKE '%page crashed%'"
+            "AND error_code='TASK_FAILED' AND (lower(error_message) LIKE '%page crashed%' "
+            "OR (lower(error_message) LIKE '%writeunixtransport%' AND lower(error_message) LIKE '%handler is closed%'))"
         ).fetchall()
         for row in rows:
             try:
@@ -157,16 +158,13 @@ class JobStore:
             steps = payload.get('steps') if isinstance(payload, dict) else None
             if not isinstance(steps, list) or 'FAN_PAGES' not in [str(step).upper() for step in steps]:
                 continue
-            con.execute(
-                "UPDATE job_tasks SET error_code='BROWSER_PAGE_CRASHED',retryable=1 WHERE id=?",
-                (row['id'],),
-            )
+            code = 'BROWSER_PAGE_CRASHED' if 'page crashed' in str(row['error_message']).lower() else 'BROWSER_CONNECTION_CLOSED'
+            con.execute("UPDATE job_tasks SET error_code=?,retryable=1 WHERE id=?", (code, row['id']))
             con.execute(
                 "UPDATE job_items SET retryable=1,error_code=CASE "
-                "WHEN error_code='TASK_FAILED' AND lower(error_message) LIKE '%page crashed%' "
-                "THEN 'BROWSER_PAGE_CRASHED' ELSE error_code END "
+                "WHEN error_code='TASK_FAILED' AND error_message=? THEN ? ELSE error_code END "
                 "WHERE id=? AND status='FAILED'",
-                (row['item_id'],),
+                (row['error_message'], code, row['item_id']),
             )
 
     async def create_job(self, request: Any) -> tuple[str, bool]:

@@ -338,4 +338,6 @@ class ProvisioningService:
             # A renderer failure is resumable. Mutation checkpoints decide
             # whether retry may CREATE or must only reconcile a prior submit.
             return ProvisioningError("BROWSER_PAGE_CRASHED", str(exc), retryable=True)
+        if "writeunixtransport" in str(exc).casefold() and "handler is closed" in str(exc).casefold():
+            return ProvisioningError("BROWSER_CONNECTION_CLOSED", str(exc), retryable=True)
         return ProvisioningError("TASK_FAILED", str(exc))
