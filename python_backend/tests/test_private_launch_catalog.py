@@ -153,6 +153,25 @@ class PrivateLaunchCatalogTests(unittest.TestCase):
             self.assertIn('PRIVATE_LAUNCH_VERIFICATION_REQUIRED',(root/'ajax'/name).read_text())
             self.assertNotIn('cachedAsset',(root/'ajax'/name).read_text())
 
+    def test_live_page_proof_cannot_cross_profile_account_or_expiry(self):
+        import time
+        proof={'profile_id':'7','account_id':'333333333','checked_live':True,
+            'account_scope_verified':True,'status':'VERIFIED','checked_at':int(time.time()),
+            'data':[{'id':'222222222','name':'Page','account_id':'333333333',
+                'ad_account_page_access_verified':True,'source':'scoped_private_promotable_pages'}]}
+        def readiness(p):
+            args=json.dumps(json.dumps([self.catalog(),p]))
+            return self.run_php('$a=json_decode('+args+',true);echo json_encode(RemaskPrivateLaunchCatalog::readiness($a[0],"333333333",$a[1]));')
+        result=readiness(proof)
+        self.assertTrue(result['pages']['data'][0]['ad_account_page_access_verified'])
+        self.assertFalse(result['funding']['funding_verified'])
+        self.assertEqual(result['status'],'NOT_VERIFIED')
+        for patch in [{'profile_id':'8'},{'account_id':'999999999'},{'checked_at':1},
+                      {'account_scope_verified':False},{'checked_live':False},
+                      {'data':[{**proof['data'][0],'account_id':'999999999'}]}]:
+            result=readiness({**proof,**patch})
+            self.assertFalse(result['pages']['ad_account_page_access_verified'])
+
 
 if __name__ == '__main__':
     unittest.main()

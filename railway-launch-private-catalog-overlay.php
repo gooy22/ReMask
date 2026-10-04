@@ -110,16 +110,40 @@ final class RemaskPrivateLaunchCatalog
         ];
     }
 
-    public static function readiness(array $catalog, string $accountId): array {
+    public static function readiness(array $catalog, string $accountId, array $proof = []): array {
         $funding = self::asset($catalog, 'funding', $accountId);
         $pages = (array)($catalog['pages']['data'] ?? []);
+        $target = self::id($funding['id']);
+        $verified = [];
+        if (($proof['profile_id'] ?? '') === $catalog['profile'] && ($proof['account_id'] ?? '') === $target
+            && ($proof['checked_live'] ?? null) === true && ($proof['account_scope_verified'] ?? null) === true
+            && ($proof['status'] ?? '') === 'VERIFIED' && (int)($proof['checked_at'] ?? 0) >= time()-120
+            && (int)($proof['checked_at'] ?? 0) <= time()+5) {
+            foreach ((array)($proof['data'] ?? []) as $row) {
+                if (!is_array($row) || ($row['account_id'] ?? '') !== $target
+                    || ($row['ad_account_page_access_verified'] ?? null) !== true
+                    || ($row['source'] ?? '') !== 'scoped_private_promotable_pages') continue;
+                $id = self::id($row['id'] ?? '');
+                if ($id !== '') $verified[$id] = $row;
+            }
+        }
+        foreach ($pages as &$page) {
+            if (isset($verified[$page['id']])) $page = $verified[$page['id']];
+        }
+        unset($page);
+        foreach ($verified as $id => $row) {
+            if (!in_array($id, array_column($pages,'id'), true)) $pages[] = $row;
+        }
+        $pageStatus = $verified !== [] ? 'VERIFIED' : 'NOT_VERIFIED';
         return [
             'account_id'=>$funding['id'], 'catalog_only'=>true, 'status'=>'NOT_VERIFIED',
-            'pages'=>['status'=>'NOT_VERIFIED', 'count'=>count($pages), 'data'=>$pages,
-                      'ad_account_page_access_verified'=>false],
+            'pages'=>['status'=>$pageStatus, 'count'=>count($pages), 'data'=>$pages,
+                      'ad_account_page_access_verified'=>$verified !== [],
+                      'checked_live'=>($proof['checked_live'] ?? false) === true,
+                      'diagnostic'=>$proof['diagnostic'] ?? []],
             'pixels'=>['status'=>'NOT_CHECKED'], 'media'=>['status'=>'NOT_CHECKED'],
             'funding'=>['status'=>'NOT_CHECKED', 'funding_verified'=>false],
-            'warnings'=>['Доступ FP для рекламы в выбранном РК не проверен.'],
+            'warnings'=>$verified !== [] ? [] : ['Доступ FP для рекламы в выбранном РК не подтверждён.'],
             '_cache'=>$catalog['_cache'],
         ];
     }
@@ -213,8 +237,24 @@ try {
     $profile = trim((string)($input['profile'] ?? ''));
     if ($profile === '') throw new InvalidArgumentException('profile is required');
     MetaEndpoint::accountForName($profile);
-    MetaEndpoint::ok(RemaskPrivateLaunchCatalog::readiness(
-        RemaskPrivateLaunchCatalog::load($profile), (string)($input['account_id'] ?? '')));
+    $catalog = RemaskPrivateLaunchCatalog::load($profile);
+    $account = preg_replace('/^act_/', '', trim((string)($input['account_id'] ?? '')));
+    RemaskPrivateLaunchCatalog::asset($catalog,'funding',$account);
+    if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
+    $base = rtrim((string)(getenv('REMASK_PYTHON_WORKER_URL') ?: 'http://127.0.0.1:8081'),'/');
+    $key = (string)(getenv('REMASK_WORKER_API_KEY') ?: '');
+    if ($key === '') throw new RuntimeException('PAGE_ACCESS_WORKER_UNAVAILABLE');
+    $ctx = stream_context_create(['http'=>['method'=>'GET',
+        'header'=>"Accept: application/json\r\nX-Remask-Worker-Key: ".$key."\r\n",
+        'timeout'=>66,'ignore_errors'=>true,'follow_location'=>0]]);
+    $raw = @file_get_contents($base.'/api/v1/profiles/'.rawurlencode($profile).'/page-access?account_id='.rawurlencode($account),false,$ctx);
+    $proof = is_string($raw) ? json_decode($raw,true) : null;
+    if (!is_array($proof) || ($proof['profile_id'] ?? '') !== $profile || ($proof['account_id'] ?? '') !== $account) {
+        $code = is_array($proof) ? (string)($proof['detail'] ?? '') : '';
+        $known = ['CHECKPOINT_REQUIRED','SESSION_EXPIRED','TWO_FACTOR_REQUIRED','PROFILE_CONTEXT_ERROR','PAGE_ACCESS_INSPECTION_TIMEOUT'];
+        $proof = ['diagnostic'=>['code'=>in_array($code,$known,true) ? $code : 'PAGE_ACCESS_RESULT_UNAVAILABLE']];
+    }
+    MetaEndpoint::ok(RemaskPrivateLaunchCatalog::readiness($catalog,$account,$proof));
 } catch (Throwable $e) { MetaEndpoint::fail($e); }
 READINESS
 );
@@ -227,17 +267,22 @@ $workspace=substr_replace($workspace, <<<'READINESS_UI'
 async function checkAssetsSelection(){
   const rows=selectedRows('ad_accounts');
   if(!rows.length)return;
-  openModal(`Assets — ${rows.length} РК`,`<div class="ws-muted mb-2">Страницы из сохранённого списка профиля. Доступ страницы для рекламы в этом РК требует отдельной проверки.</div><div id="assetReadinessProgress">Загрузка…</div><div id="assetReadinessRows"></div>`,'',null);
+  openModal(`Assets — ${rows.length} РК`,`<div class="ws-muted mb-2">Проверка доступа FP в выбранном РК через FB-сессию профиля.</div><div id="assetReadinessProgress">Проверка Meta…</div><div id="assetReadinessRows"></div>`,'',null);
   const body=$('assetReadinessRows'), progress=$('assetReadinessProgress');
   await concurrent(rows,1,async r=>apiJson('ajax/metaAssetReadiness.php',post({profile:r.profile,account_id:r.id})),(done,total,res,idx)=>{
     const r=rows[idx], block=document.createElement('div');
-    const names=(res?.pages?.data||[]).map(p=>`${p.name||p.id} · ${p.id}`).join(' · ');
+    const pages=res?.pages?.data||[];
+    const names=pages.map(p=>`${p.name||p.id} · ${p.id} — ${p.ad_account_page_access_verified===true?'доступ РК подтверждён':'доступ РК не подтверждён'}`).join(' · ');
+    const verified=res?.pages?.ad_account_page_access_verified===true;
+    const diagnostic=res?.pages?.diagnostic;
     block.innerHTML=`<b>${esc(r.name||r.id)}</b><div class="sub">${esc(r.profile)} · ${esc(r.id)}</div>`+
       (res?.error ? `<div class="job-failed">${esc(res.error)}</div>` :
-      `<div>FP: ${esc(names||'В сохранённом списке страниц нет.')}</div><div>${pill('ДОСТУП FP НЕ ПРОВЕРЕН','warn')}</div><div>Pixel и медиа: не проверены. Оплата: не проверена.</div>`);
+      `<div>FP: ${esc(names||'В сохранённом списке страниц нет.')}</div><div>${pill(verified?'ДОСТУП FP ПОДТВЕРЖДЁН':'ДОСТУП FP НЕ ПОДТВЕРЖДЁН',verified?'ok':'warn')}</div><div>Pixel и медиа: не проверены. Оплата: не проверена.</div>`+
+      (diagnostic?.code?`<div class="sub">${esc(diagnostic.code)}</div>`:'')+
+      (diagnostic?`<details><summary>Диагностика проверки</summary><pre>${esc(JSON.stringify(diagnostic,null,2))}</pre></details>`:''));
     body.appendChild(block); progress.textContent=`Загружено ${done}/${total}`; setProgress(done,total);
   });
-  progress.textContent='Для проверки карты используй «Funding / карта». Наличие FP в профиле ещё не подтверждает её доступ для рекламы в РК.';
+  progress.textContent='Проверка FP завершена. Для проверки карты используй «Funding / карта».';
 }
 
 READINESS_UI

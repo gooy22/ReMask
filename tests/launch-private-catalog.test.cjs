@@ -40,9 +40,16 @@ console.log('Private Launch catalog and funding truth checks passed');
   assert.equal(request.input.profile,'7');
   assert.equal(request.input.account_id,'act_333333333');
   assert.match(output.assetReadinessRows.html,/Existing Page · 222222222/);
-  assert.match(output.assetReadinessRows.html,/ДОСТУП FP НЕ ПРОВЕРЕН/);
+  assert.match(output.assetReadinessRows.html,/ДОСТУП FP НЕ ПОДТВЕРЖДЁН/);
   assert.doesNotMatch(output.assetReadinessRows.html,/ASSETS READY|PAGE ISSUE|EMPTY/);
-  assert.match(output.assetReadinessProgress.textContent,/ещё не подтверждает/);
+  assert.match(output.assetReadinessProgress.textContent,/Проверка FP завершена/);
+  ctx.apiJson=async()=>({pages:{ad_account_page_access_verified:true,data:[
+    {id:'222222222',name:'Verified Page',ad_account_page_access_verified:true},
+    {id:'444444444',name:'Saved only',ad_account_page_access_verified:false}]}});
+  await ctx.checkAssetsSelection();
+  assert.match(output.assetReadinessRows.html,/Verified Page · 222222222 — доступ РК подтверждён/);
+  assert.match(output.assetReadinessRows.html,/Saved only · 444444444 — доступ РК не подтверждён/);
+  assert.match(output.assetReadinessRows.html,/Оплата: не проверена/);
   ctx.apiJson=async()=>({error:'profile scope mismatch'});await ctx.checkAssetsSelection();
   assert.match(output.assetReadinessRows.html,/profile scope mismatch/);
   assert.doesNotMatch(output.assetReadinessRows.html,/Existing Page/);
