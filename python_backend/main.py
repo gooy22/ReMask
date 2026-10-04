@@ -15,7 +15,7 @@ from app.models import CreateJobRequest, HealthResponse, JobAccepted, RetryRespo
 from app.runner import WorkerPool
 from app.session import ProfileContextError, ProfileSession, ProxyCheckError
 from app.store import JobStore
-from app.facebook_business_browser import BrowserBusinessError, FacebookBusinessBrowser
+from app.facebook_business_browser import BROWSER_TERMINAL_ACCESS_CODES, BrowserBusinessError, FacebookBusinessBrowser
 from app.facebook_page_discovery import PageDiscoveryError, list_pages_via_private_graphql
 from app.provisioning.models import ProvisioningStep
 from app.facebook_docids import (
@@ -1066,17 +1066,13 @@ async def profile_preflight(profile_id: str):
                 )
             )
 
-            auth_codes={
-                'CHECKPOINT_REQUIRED',
-                'SESSION_EXPIRED',
-                'TWO_FACTOR_REQUIRED',
-            }
-            auth_error_code=str(
-                browser_state.get('error_code')
-                or browser_state.get('page_discovery_error_code')
-                or ''
-            ).strip().upper()
-            auth_blocked=auth_error_code in auth_codes
+            error_codes=[str(browser_state.get(key) or '').strip().upper()
+                         for key in ('error_code','page_discovery_error_code')]
+            auth_error_code=next(
+                (code for code in error_codes if code in BROWSER_TERMINAL_ACCESS_CODES),
+                next((code for code in error_codes if code),''),
+            )
+            auth_blocked=auth_error_code in BROWSER_TERMINAL_ACCESS_CODES
             facebook_session_ready=bool(
                 browser_state.get('session_ready')
                 and not auth_blocked

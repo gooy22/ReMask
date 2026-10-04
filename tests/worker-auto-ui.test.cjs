@@ -3,6 +3,56 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const {webcrypto} = require('node:crypto');
 const source = fs.readFileSync('railway-python-worker-ui.js', 'utf8');
+// A failed FP preflight must preserve the real auth reason, never synthesize
+// checkpoint, and the read-only session button must never enqueue CREATE.
+(async()=>{
+  const messages=[]; const calls=[]; const elms=[];
+  const authState={workerOnline:true,busy:false,jobId:'previous-failed-job'};
+  class AuthElement {
+    constructor(tag){this.tag=tag;this.children=[];this.events={};this.value='';}
+    appendChild(child){this.children.push(child);}
+    addEventListener(kind,cb){this.events[kind]=cb;}
+  }
+  const auth={pythonWorkerUiState:authState,window:{},
+    document:{body:new AuthElement('body'),createElement(tag){const e=new AuthElement(tag);elms.push(e);return e;}},
+    pythonWorkerSelectedProfiles:()=>['9'], pythonWorkerEnsureBmModalStyle(){}, pythonWorkerCloseOwnBmModal(){},
+    pythonWorkerSelectionRefresh(){},pythonWorkerSetText:(id,text)=>messages.push({id,text}),
+    async pythonWorkerMapLimit(items,limit,fn){for(const item of items)await fn(item);},
+    async pythonWorkerBridge(payload){calls.push(payload);return {preflight:auth.result};}};
+  vm.createContext(auth);
+  const preStart=source.indexOf('function pythonWorkerIsProfileAuthBlockedCode(');
+  vm.runInContext(source.slice(preStart,source.indexOf('\nfunction pythonWorkerCurrentStep',preStart)),auth);
+  const filterStart=source.indexOf('async function pythonWorkerFilterFanPageReadyProfiles(');
+  vm.runInContext(source.slice(filterStart,source.indexOf('\nasync function pythonWorkerStartAutoRkFanPages',filterStart)),auth);
+  const createStart=source.indexOf('async function pythonWorkerStartFanPages(');
+  vm.runInContext(source.slice(createStart,source.indexOf('\nwindow.pythonWorkerStartFanPages',createStart)),auth);
+  for(const code of ['CHECKPOINT_REQUIRED','SESSION_EXPIRED','TWO_FACTOR_REQUIRED','FACEBOOK_TEMPORARILY_BLOCKED']){
+    auth.result={ok:true,facebook_session_ready:false,auth_blocked:true,auth_error_code:code,
+      browser_business:{error_code:code,error:'Original Facebook reason'}};
+    calls.length=0;
+    await assert.rejects(auth.pythonWorkerStartFanPages({profiles:['9'],configs:{'9':{base_name:'Page',category:'Digital creator',count:1}}}),
+      error=>error.message.includes('9: '+code+': Original Facebook reason') &&
+        (code==='CHECKPOINT_REQUIRED'||!error.message.includes('CHECKPOINT_REQUIRED')));
+    assert.deepEqual(calls.map(p=>p.action),['preflight']);
+    assert.equal(authState.jobId,'previous-failed-job');
+    assert.equal(messages.some(m=>m.id==='pythonPwJob'&&m.text===''),false);
+  }
+  auth.result={ok:true,facebook_session_ready:true,auth_blocked:false,
+    browser_business:{session_ready:true,error_code:'BUSINESS_CREATE_UI_UNAVAILABLE',error:'BM create unavailable',
+      page_discovery_error_code:'SESSION_EXPIRED',page_discovery_error:'Page redirected to login'}};
+  await assert.rejects(auth.pythonWorkerProfilePreflight('9'),/SESSION_EXPIRED: Page redirected to login/);
+  auth.result={ok:true,auth_blocked:true,auth_error_code:'TWO_FACTOR_REQUIRED',
+    browser_business:{error_code:'TWO_FACTOR_REQUIRED',error:'Original 2FA reason'}};
+  await auth.pythonWorkerOpenOwnFanPageModal();
+  calls.length=0;
+  await elms.find(e=>e.textContent==='Проверить FB-сессию').events.click();
+  assert.deepEqual(calls.map(p=>p.action),['preflight']);
+  const status=elms.find(e=>e.className==='pwbm-status');
+  assert.match(status.textContent,/9: TWO_FACTOR_REQUIRED: Original 2FA reason/);
+  assert.doesNotMatch(status.textContent,/checkpoint|CHECKPOINT_REQUIRED/i);
+  assert.match(status.textContent,/FP Job не создавался/);
+  console.log('FP preflight reasons and read-only session check passed.');
+})().catch(error=>{console.error(error);process.exitCode=1;});
 const start = source.indexOf('async function pythonWorkerOpenAutoModal()');
 const end = source.indexOf('async function pythonWorkerStartFanPages', start);
 class Element {

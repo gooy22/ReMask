@@ -610,12 +610,9 @@ async function pythonWorkerProfilePreflight(profileId) {
     ? preflight.bm_routes
     : {};
 
-  const authErrorCode = String(
-    preflight.auth_error_code ||
-    browser.error_code ||
-    browser.page_discovery_error_code ||
-    ''
-  ).trim().toUpperCase();
+  const errorCodes = [preflight.auth_error_code, browser.error_code, browser.page_discovery_error_code]
+    .map(function(code) { return String(code || '').trim().toUpperCase(); });
+  const authErrorCode = errorCodes.find(pythonWorkerIsProfileAuthBlockedCode) || errorCodes.find(Boolean) || '';
   const authBlocked =
     preflight.auth_blocked === true ||
     pythonWorkerIsProfileAuthBlockedCode(authErrorCode);
@@ -631,8 +628,7 @@ async function pythonWorkerProfilePreflight(profileId) {
 
   if (authBlocked) {
     const detail = String(
-      browser.error ||
-      browser.page_discovery_error ||
+      (authErrorCode === browser.page_discovery_error_code ? browser.page_discovery_error : browser.error) ||
       'Facebook profile authentication is blocked.'
     ).trim();
     throw new Error(
@@ -2722,6 +2718,7 @@ async function pythonWorkerFilterFanPageReadyProfiles(profileIds) {
   ));
   const ready = [];
   const blocked = [];
+  const blockedErrors = [];
   const errors = [];
 
   await pythonWorkerMapLimit(source, 3, async function(profileId) {
@@ -2732,6 +2729,7 @@ async function pythonWorkerFilterFanPageReadyProfiles(profileIds) {
       const authMessage = pythonWorkerFpAuthBlockedMessage(error);
       if (authMessage) {
         blocked.push(profileId);
+        blockedErrors.push(profileId + ': ' + authMessage);
       } else {
         errors.push(
           profileId + ': ' + String((error && error.message) || error)
@@ -2740,14 +2738,14 @@ async function pythonWorkerFilterFanPageReadyProfiles(profileIds) {
     }
   });
 
-  return {ready: ready, blocked: blocked, errors: errors};
+  return {ready: ready, blocked: blocked, blockedErrors: blockedErrors, errors: errors};
 }
 
 function pythonWorkerFpAuthBlockedMessage(error) {
   const message = String((error && error.message) || error || '');
-  const codeMatch = message.match(/\b(CHECKPOINT_REQUIRED|TWO_FACTOR_REQUIRED|SESSION_EXPIRED)\b/i);
+  const codeMatch = message.match(/\b(CHECKPOINT_REQUIRED|TWO_FACTOR_REQUIRED|SESSION_EXPIRED|FACEBOOK_TEMPORARILY_BLOCKED|FACEBOOK_AUTH_BLOCKED)\b/i);
   if (
-    !(codeMatch && pythonWorkerIsProfileAuthBlockedCode(codeMatch[1])) &&
+    !codeMatch &&
     !/(checkpoint|two-factor|redirected.*login)/i.test(message)
   ) {
     return '';
@@ -2811,8 +2809,8 @@ async function pythonWorkerStartAutoRkFanPages() {
       pythonWorkerSetText('pythonPwJob', '');
       pythonWorkerSetText(
         'pythonPwStatus',
-        'FP авто приостановлено: Facebook checkpoint у профиля(ей) ' +
-          blockedProfiles.join(', ') +
+        'FP авто приостановлено: ' +
+          blockedProfiles.map(function(id) { return id + ': ' + authBlocked.get(id); }).join('; ') +
           '. Backend Job сохранён; новых Jobs и FP не создавалось.'
       );
       return;
@@ -3374,7 +3372,7 @@ async function pythonWorkerPollAdAccountBatch() {
               ? 'Все запущенные FP Jobs SUCCESS: ' + ids.length + ' RK.'
               : onlyAuthBlockedFailures
               ? (
-                  'FP batch приостановлен: Facebook checkpoint у ' +
+                  'FP batch приостановлен: Facebook-сессия заблокирована у ' +
                   authBlockedFailedItems.length +
                   ' Job. Backend Jobs сохранены; повторный Create/attach не отправляется.'
                 )
@@ -4001,10 +3999,9 @@ async function pythonWorkerStartFanPages(options) {
   if (!gate.ready.length) {
     pythonWorkerUiState.busy = false;
     pythonWorkerSelectionRefresh();
-    pythonWorkerSetText('pythonPwJob', '');
     throw new Error(
       gate.blocked.length
-        ? 'CHECKPOINT_REQUIRED: профили ' + gate.blocked.join(', ') +
+        ? gate.blockedErrors.join('; ') +
           '. Fan Page Job не создан.'
         : 'FP preflight не прошёл: ' + (gate.errors[0] || 'нет READY профилей.')
     );
@@ -4016,7 +4013,7 @@ async function pythonWorkerStartFanPages(options) {
     'pythonPwStatus',
     'Создаю Fan Page Job для ' + gate.ready.length + ' FB-профилей...' +
       (gate.blocked.length
-        ? ' Пропущены checkpoint-профили: ' + gate.blocked.join(', ') + '.'
+        ? ' Пропущены профили: ' + gate.blockedErrors.join('; ') + '.'
         : '')
   );
 
@@ -4161,7 +4158,9 @@ async function pythonWorkerOpenOwnFanPageModal() {
   cancel.addEventListener('click', pythonWorkerCloseOwnBmModal);
   const create = document.createElement('button');
   create.type='button'; create.className='btn btn-primary'; create.textContent='Создать FP';
-  actions.appendChild(cancel); actions.appendChild(create);
+  const checkSession = document.createElement('button');
+  checkSession.type='button'; checkSession.className='btn btn-secondary'; checkSession.textContent='Проверить FB-сессию';
+  actions.appendChild(cancel); actions.appendChild(checkSession); actions.appendChild(create);
   footer.appendChild(status); footer.appendChild(actions);
 
   card.appendChild(head); card.appendChild(body); card.appendChild(footer);
@@ -4178,6 +4177,24 @@ async function pythonWorkerOpenOwnFanPageModal() {
     create.disabled = pythonWorkerUiState.busy || bad.length > 0;
     status.textContent = bad.length ? 'Не готовы: ' + bad.join(', ') : 'Готово к Add FP.';
   };
+
+  checkSession.addEventListener('click', async function() {
+    if (checkSession.disabled || pythonWorkerUiState.busy) return;
+    checkSession.disabled=true; create.disabled=true;
+    status.textContent='Проверяю FB-сессию…';
+    try {
+      const gate=await pythonWorkerFilterFanPageReadyProfiles(profiles);
+      refresh();
+      status.textContent=gate.blockedErrors.concat(gate.errors).concat(
+        gate.ready.length ? ['FB-сессия готова: ' + gate.ready.join(', ')] : []
+      ).join('; ') + '. FP Job не создавался.';
+    } catch (error) {
+      refresh();
+      status.textContent='Проверка FB-сессии: ' + String((error && error.message) || error);
+    } finally {
+      checkSession.disabled=false;
+    }
+  });
 
   profiles.forEach(function(profileId) {
     const cfg=rows[profileId];
@@ -4198,11 +4215,11 @@ async function pythonWorkerOpenOwnFanPageModal() {
         bio:String(cfg.bio.value || '').trim()
       };
     });
-    create.disabled=true; cancel.disabled=true; status.textContent='Отправляю Add FP Job…';
+    create.disabled=true; cancel.disabled=true; checkSession.disabled=true; status.textContent='Отправляю Add FP Job…';
     pythonWorkerStartFanPages({profiles:profiles,configs:configs})
       .then(pythonWorkerCloseOwnBmModal)
       .catch(function(error){
-        cancel.disabled=false; refresh();
+        cancel.disabled=false; checkSession.disabled=false; refresh();
         status.textContent='Ошибка: ' + String((error && error.message) || error);
       });
   });
