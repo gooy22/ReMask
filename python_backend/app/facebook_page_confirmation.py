@@ -145,7 +145,8 @@ async def confirm_main_page(browser: Any, *, business_id: str,
                         for(let n=0;e&&n<5;n++,e=e.parentElement) task.push({text:(e.innerText||'').slice(0,2200),labels:[...e.querySelectorAll('[aria-label],svg title')].map(x=>x.getAttribute('aria-label')||x.textContent).slice(0,20)});
                         return {body_excerpt:(document.body?.innerText||'').slice(0,5000),task_surface:task};
                     }"""), timeout=2)
-                    last_surface = {**surface, 'url':str(page.url), 'memory':_cgroup_memory_snapshot_mb()}
+                    last_surface = {**surface, 'url':str(page.url), 'memory':_cgroup_memory_snapshot_mb(),
+                                    'v8_old_space_mb':getattr(browser,'v8_old_space_mb',None)}
                 except Exception:
                     pass
                 next_snapshot = asyncio.get_running_loop().time() + 1

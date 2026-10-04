@@ -1925,11 +1925,14 @@ class FacebookBusinessBrowser:
         "Seite hinzufügen",
     )
 
-    def __init__(self, context: Any, *, timeout_seconds: int = 45) -> None:
+    def __init__(self, context: Any, *, timeout_seconds: int = 45,
+                 v8_old_space_mb: int | None = None) -> None:
         self._close_lock = asyncio.Lock()
         self.context = context
         self.timeout_seconds = max(15, int(timeout_seconds))
         self.timeout_ms = self.timeout_seconds * 1000
+        self.v8_old_space_mb = (max(128,min(int(v8_old_space_mb),512))
+                                if v8_old_space_mb is not None else None)
 
         self._playwright = None
         self._browser = None
@@ -2099,6 +2102,11 @@ class FacebookBusinessBrowser:
                 ],
             }
             proxy = _proxy_config(getattr(self.context, "proxy", None))
+            if self.v8_old_space_mb is not None:
+                # Ads Manager's optional assistant/recommendations can grow
+                # V8 beyond the container budget before onboarding hydrates.
+                # Keep this opt-in: other BM/RK browser flows retain defaults.
+                launch_kwargs['args'].append(f'--js-flags=--max-old-space-size={self.v8_old_space_mb}')
             if proxy:
                 launch_kwargs["proxy"] = proxy
 

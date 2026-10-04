@@ -101,7 +101,7 @@ async def _confirm_created_pages(session: Any, params: dict[str, Any], checkpoin
         if verify_only:
             await save({"activity":"VERIFY_MAIN_BUSINESS_PAGE"})
         try:
-            async with FacebookBusinessBrowser(session.context, timeout_seconds=75) as browser:
+            async with FacebookBusinessBrowser(session.context, timeout_seconds=75, v8_old_space_mb=256) as browser:
                 try:
                     result = await asyncio.wait_for(confirm_main_page(browser, business_id=business, page_id=page_id,
                         page_name=name, before_submit=save, verification_only=verify_only), timeout=85)
