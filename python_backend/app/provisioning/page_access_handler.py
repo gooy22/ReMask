@@ -217,10 +217,17 @@ async def _ads_only(dialog) -> None:
 async def _request_target_page_access(browser, config: dict, business: str, checkpoint, prior: dict) -> bool:
     """Request Ads task access from the target BM; never claim Page ownership."""
     phase=str(prior.get('phase') or '')
-    if phase in {'TARGET_PAGE_ACCESS_OWNER_CONFIRMED','TARGET_PAGE_ACCESS_RK_CONFIRMED'}:
-        # Durable owner-side Partners-with-access + Ads proof, and any later
-        # exact-RK proof, are stronger than another Business Settings relation
-        # navigation. Continue from the saved grant without re-requesting.
+    if phase in {
+            'TARGET_PAGE_ACCESS_OWNER_CONFIRMED',
+            'TARGET_PAGE_ACCESS_RK_CONFIRMED',
+            'TARGET_PAGE_ACCESS_RK_PROBE_BLOCKED',
+            'TARGET_PAGE_OPERATOR_ASSIGN_CLICK_INTENT',
+            'TARGET_PAGE_OPERATOR_ASSIGN_SUBMITTED',
+            'TARGET_PAGE_OPERATOR_ASSIGN_CONFIRMED',
+        }:
+        # All of these phases exist only after the exact Page -> target BM
+        # relation was durably proven. Never re-open/re-request that relation
+        # while continuing RK/operator reconciliation.
         return True
     if phase in {
             'TARGET_PAGE_ACCESS_SUBMITTED',
@@ -884,7 +891,7 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
     prior=((await state.step(item,ProvisioningStep.PAGE_ACCESS)) or {}).get('result') or {}
     async def checkpoint(patch):
         phase=str(patch.get('phase') or '')
-        if phase.startswith('TARGET_PAGE_ACCESS_'):
+        if phase.startswith('TARGET_PAGE_ACCESS_') or phase.startswith('TARGET_PAGE_OPERATOR_'):
             current=await store.get(); grants=current.get('grants') or {}
             await store.patch(grants={**grants,business:{**grants.get(business,{}),**patch}})
         await state.checkpoint(item,profile,scope,ProvisioningStep.PAGE_ACCESS,
@@ -901,12 +908,14 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
             config=await store.get()
             config={**config,'target_business_identity':target_business_identity}
             saved_grant=(config.get('grants') or {}).get(business) or {}
+            resume_state={**saved_grant,**prior}
+            resume_phase=str(resume_state.get('phase') or '')
 
             # 1) Establish/reconcile the Page -> target BM relation.
             async with FacebookBusinessBrowser(session.context,v8_old_space_mb=256) as browser:
                 try:
                     target_relation=await _request_target_page_access(
-                        browser,config,business,checkpoint,saved_grant or prior)
+                        browser,config,business,checkpoint,resume_state)
                     if not target_relation:
                         target_relation=await _approve_owner_page_access(
                             browser,config,business,checkpoint)
@@ -930,84 +939,256 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
                         await checkpoint({'diagnostic':diagnostic})
                     raise
 
-            # 2) Before mutating People access, prove whether the exact RK already
-            # has this Page as a scoped promotable identity. This dedicated
-            # browser is read-only: page_access_inspection blocks Meta writes.
-            progress={}
-            try:
-                async with FacebookBusinessBrowser(session.context,v8_old_space_mb=256) as probe_browser:
-                    rk_access_proof=await asyncio.wait_for(
-                        inspect_browser_pages(
-                            probe_browser,account,business,
-                            timeout=18,open_identity=False,progress=progress,
-                        ),
-                        timeout=24,
-                    )
-                rk_access_preverified=(
-                    rk_access_proof.get('account_scope_verified') is True
-                    and any(
-                        str(row.get('id') or '')==str(config['page_id'])
-                        and str(row.get('account_id') or '')==account
-                        and row.get('ad_account_page_access_verified') is True
-                        for row in (rk_access_proof.get('data') or [])
-                        if isinstance(row,dict)
-                    )
-                )
-            except BrowserBusinessError as exc:
-                await checkpoint({'phase':'TARGET_PAGE_ACCESS_RK_PROBE_BLOCKED',
-                    'page_shared_to_business':True,
-                    'diagnostic':{'stage':'target_rk_readonly_probe',
-                        'error_code':exc.code,**(exc.diagnostic or {}),**progress}})
-                if exc.code=='CHECKPOINT_REQUIRED':
-                    raise
-                log.warning(
-                    'PAGE_RK readonly probe failed page=%s business=%s account=%s code=%s',
-                    str(config.get('page_id') or ''),business,account,exc.code,
-                )
-            except Exception as exc:
-                await checkpoint({'diagnostic':{'stage':'target_rk_readonly_probe',
-                    'error':exc.__class__.__name__,**progress}})
-                log.warning(
-                    'PAGE_RK readonly probe inconclusive page=%s business=%s account=%s error=%s',
-                    str(config.get('page_id') or ''),business,account,exc.__class__.__name__,
-                )
-
-            if rk_access_preverified:
-                await checkpoint({
-                    'phase':'TARGET_PAGE_ACCESS_RK_CONFIRMED',
-                    'page_shared_to_business':True,
-                    'ad_account_page_access_verified':True,
-                    'operator_assignment':'not_required',
-                    'rk_access_source':'scoped_private_promotable_pages',
-                })
-                log.info(
-                    'PAGE_RK access already proven page=%s business=%s account=%s; operator assignment skipped',
-                    str(config.get('page_id') or ''),business,account,
-                )
+            # 2) Exact-RK proof is the final authority. A durable confirmed
+            # checkpoint is enough to finish after a worker/container restart.
+            operator_submitted=resume_phase in {
+                'TARGET_PAGE_OPERATOR_ASSIGN_CLICK_INTENT',
+                'TARGET_PAGE_OPERATOR_ASSIGN_SUBMITTED',
+            }
+            if resume_phase=='TARGET_PAGE_OPERATOR_ASSIGN_CONFIRMED':
+                operator_assignment_performed=True
+                rk_access_preverified=True
+                rk_access_proof=resume_state.get('rk_access_proof') or {
+                    'source':'durable_operator_assignment_confirmation',
+                    'account_scope_verified':True,
+                }
+            elif resume_phase=='TARGET_PAGE_ACCESS_RK_CONFIRMED':
+                rk_access_preverified=True
+                rk_access_proof=resume_state.get('rk_access_proof') or {
+                    'source':'durable_rk_page_access_confirmation',
+                    'account_scope_verified':True,
+                }
             else:
-                # 3) Only a missing exact-RK proof justifies the People/Ads
-                # mutation. Use a fresh browser because the read-only probe
-                # intentionally leaves a write barrier installed until close.
-                async with FacebookBusinessBrowser(session.context,v8_old_space_mb=256) as browser:
-                    try:
-                        await _assign_operator(
-                            browser,config,business,checkpoint,
-                            relation_preconfirmed=True)
+                # Before any People mutation -- and after any uncertain operator
+                # submit -- ask the exact RK read-only whether the Page is
+                # already an available promotable identity.
+                progress={}
+                try:
+                    async with FacebookBusinessBrowser(
+                            session.context,v8_old_space_mb=256) as probe_browser:
+                        rk_access_proof=await asyncio.wait_for(
+                            inspect_browser_pages(
+                                probe_browser,account,business,
+                                timeout=18,open_identity=False,progress=progress,
+                            ),
+                            timeout=24,
+                        )
+                    rk_access_preverified=(
+                        rk_access_proof.get('account_scope_verified') is True
+                        and any(
+                            str(row.get('id') or '')==str(config['page_id'])
+                            and str(row.get('account_id') or '')==account
+                            and row.get('ad_account_page_access_verified') is True
+                            for row in (rk_access_proof.get('data') or [])
+                            if isinstance(row,dict)
+                        )
+                    )
+                except BrowserBusinessError as exc:
+                    blocked_phase=(
+                        resume_phase
+                        if operator_submitted
+                        else 'TARGET_PAGE_ACCESS_RK_PROBE_BLOCKED'
+                    )
+                    await checkpoint({
+                        'phase':blocked_phase,
+                        'page_shared_to_business':True,
+                        'operator_assignment_may_have_been_submitted':operator_submitted,
+                        'diagnostic':{
+                            'stage':'target_rk_readonly_probe',
+                            'error_code':exc.code,
+                            **(exc.diagnostic or {}),
+                            **progress,
+                        },
+                    })
+                    raise
+                except Exception as exc:
+                    await checkpoint({
+                        'phase':resume_phase if operator_submitted else resume_phase,
+                        'diagnostic':{
+                            'stage':'target_rk_readonly_probe',
+                            'error':exc.__class__.__name__,
+                            **progress,
+                        },
+                    })
+                    log.warning(
+                        'PAGE_RK readonly probe inconclusive page=%s business=%s account=%s error=%s',
+                        str(config.get('page_id') or ''),business,account,
+                        exc.__class__.__name__,
+                    )
+
+                if rk_access_preverified:
+                    if operator_submitted:
                         operator_assignment_performed=True
-                    except Exception as exc:
-                        diagnostic={'stage':'target_page_operator_assignment',
-                            'url':str(getattr(browser.page,'url','')),
-                            'memory':_cgroup_memory_snapshot_mb(),'v8_old_space_mb':256}
+                        await checkpoint({
+                            'phase':'TARGET_PAGE_OPERATOR_ASSIGN_CONFIRMED',
+                            'page_shared_to_business':True,
+                            'ad_account_page_access_verified':True,
+                            'operator_assignment':'performed',
+                            'operator_ads_access_assigned':True,
+                            'rk_access_source':'scoped_private_promotable_pages',
+                            'rk_access_proof':rk_access_proof,
+                        })
+                        log.info(
+                            'PAGE_OPERATOR assignment reconciled page=%s business=%s account=%s',
+                            str(config.get('page_id') or ''),business,account,
+                        )
+                    else:
+                        await checkpoint({
+                            'phase':'TARGET_PAGE_ACCESS_RK_CONFIRMED',
+                            'page_shared_to_business':True,
+                            'ad_account_page_access_verified':True,
+                            'operator_assignment':'not_required',
+                            'rk_access_source':'scoped_private_promotable_pages',
+                            'rk_access_proof':rk_access_proof,
+                        })
+                        log.info(
+                            'PAGE_RK access already proven page=%s business=%s account=%s; operator assignment skipped',
+                            str(config.get('page_id') or ''),business,account,
+                        )
+                elif operator_submitted:
+                    # CLICK_INTENT is already an irreversible boundary: the
+                    # click may have reached Meta before Chromium failed. Never
+                    # press Assign/Save again. Only future read-only probes may
+                    # reconcile this state.
+                    await checkpoint({
+                        'phase':resume_phase,
+                        'page_shared_to_business':True,
+                        'operator_assignment_may_have_been_submitted':True,
+                        'diagnostic':{
+                            'stage':'page_operator_assign_result_unverified',
+                            'rk_probe':rk_access_proof,
+                            **progress,
+                        },
+                    })
+                    raise BrowserBusinessError(
+                        'PAGE_OPERATOR_ASSIGN_RESULT_UNKNOWN',
+                        'Operator Ads assignment was submitted or may have been submitted, but exact RK access is not confirmed yet',
+                        retryable=True,
+                        diagnostic={
+                            'phase':resume_phase,
+                            'page_id':str(config.get('page_id') or ''),
+                            'business_id':business,
+                            'ad_account_id':account,
+                        },
+                    )
+                else:
+                    # 3) Only a confirmed missing exact-RK proof justifies one
+                    # People/Ads mutation. _assign_operator checkpoints intent
+                    # before the click and SUBMITTED immediately after.
+                    async with FacebookBusinessBrowser(
+                            session.context,v8_old_space_mb=256) as browser:
                         try:
-                            diagnostic.update(await asyncio.wait_for(
-                                browser._diagnostic('target_page_operator_assignment'),timeout=3))
-                        except Exception:
-                            pass
-                        if isinstance(exc,BrowserBusinessError):
-                            exc.diagnostic={**diagnostic,**(exc.diagnostic or {})}
-                        else:
-                            await checkpoint({'diagnostic':diagnostic})
+                            await _assign_operator(
+                                browser,config,business,checkpoint,
+                                relation_preconfirmed=True)
+                        except Exception as exc:
+                            diagnostic={
+                                'stage':'target_page_operator_assignment',
+                                'url':str(getattr(browser.page,'url','')),
+                                'memory':_cgroup_memory_snapshot_mb(),
+                                'v8_old_space_mb':256,
+                            }
+                            try:
+                                diagnostic.update(await asyncio.wait_for(
+                                    browser._diagnostic(
+                                        'target_page_operator_assignment'),
+                                    timeout=3,
+                                ))
+                            except Exception:
+                                pass
+                            if isinstance(exc,BrowserBusinessError):
+                                exc.diagnostic={
+                                    **diagnostic,
+                                    **(exc.diagnostic or {}),
+                                }
+                            else:
+                                await checkpoint({'diagnostic':diagnostic})
+                            raise
+
+                    # 4) Save/click success is NOT effective access. Close the
+                    # mutating browser and prove the exact RK in a fresh
+                    # read-only browser before marking PAGE_ACCESS successful.
+                    post_progress={}
+                    try:
+                        async with FacebookBusinessBrowser(
+                                session.context,v8_old_space_mb=256) as probe_browser:
+                            post_proof=await asyncio.wait_for(
+                                inspect_browser_pages(
+                                    probe_browser,account,business,
+                                    timeout=18,open_identity=False,
+                                    progress=post_progress,
+                                ),
+                                timeout=24,
+                            )
+                        post_verified=(
+                            post_proof.get('account_scope_verified') is True
+                            and any(
+                                str(row.get('id') or '')==str(config['page_id'])
+                                and str(row.get('account_id') or '')==account
+                                and row.get('ad_account_page_access_verified') is True
+                                for row in (post_proof.get('data') or [])
+                                if isinstance(row,dict)
+                            )
+                        )
+                    except BrowserBusinessError as exc:
+                        await checkpoint({
+                            'phase':'TARGET_PAGE_OPERATOR_ASSIGN_SUBMITTED',
+                            'page_shared_to_business':True,
+                            'operator_assignment_may_have_been_submitted':True,
+                            'diagnostic':{
+                                'stage':'page_operator_post_submit_probe',
+                                'error_code':exc.code,
+                                **(exc.diagnostic or {}),
+                                **post_progress,
+                            },
+                        })
                         raise
+                    except Exception as exc:
+                        post_proof={}
+                        post_verified=False
+                        post_progress={
+                            **post_progress,
+                            'error':exc.__class__.__name__,
+                        }
+
+                    if not post_verified:
+                        await checkpoint({
+                            'phase':'TARGET_PAGE_OPERATOR_ASSIGN_SUBMITTED',
+                            'page_shared_to_business':True,
+                            'operator_assignment_may_have_been_submitted':True,
+                            'diagnostic':{
+                                'stage':'page_operator_assign_result_unverified',
+                                'rk_probe':post_proof,
+                                **post_progress,
+                            },
+                        })
+                        raise BrowserBusinessError(
+                            'PAGE_OPERATOR_ASSIGN_RESULT_UNKNOWN',
+                            'Operator Ads assignment submit completed, but exact RK access is not confirmed yet',
+                            retryable=True,
+                            diagnostic={
+                                'page_id':str(config.get('page_id') or ''),
+                                'business_id':business,
+                                'ad_account_id':account,
+                            },
+                        )
+
+                    operator_assignment_performed=True
+                    rk_access_preverified=True
+                    rk_access_proof=post_proof
+                    await checkpoint({
+                        'phase':'TARGET_PAGE_OPERATOR_ASSIGN_CONFIRMED',
+                        'page_shared_to_business':True,
+                        'ad_account_page_access_verified':True,
+                        'operator_assignment':'performed',
+                        'operator_ads_access_assigned':True,
+                        'rk_access_source':'scoped_private_promotable_pages',
+                        'rk_access_proof':post_proof,
+                    })
+                    log.info(
+                        'PAGE_OPERATOR assignment confirmed by exact RK page=%s business=%s account=%s',
+                        str(config.get('page_id') or ''),business,account,
+                    )
 
         result={'page_id':config['page_id'],'page_name':config['name'],'business_id':business,
             'ad_account_id':account,'page_shared_to_business':True,
