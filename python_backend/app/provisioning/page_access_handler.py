@@ -18,12 +18,108 @@ async def _one(locator):
     return await locator.count()==1 and await locator.is_visible()
 
 
-async def _select_page(browser, name: str) -> None:
-    button=browser.page.get_by_role('button',name=name,exact=True)
-    text=browser.page.get_by_text(name,exact=True)
-    if await _one(button): await button.click(timeout=3000)
-    elif await _one(text): await text.click(timeout=3000)
-    else: raise BrowserBusinessError('PAGE_SHARE_UI_UNAVAILABLE','Exact Page entry is not unique',retryable=True)
+async def _select_page(browser, name: str, page_id: str) -> dict:
+    """Select the exact Page row in Business Settings without global-name ambiguity."""
+    page=str(page_id or '').strip()
+    expected=' '.join(str(name or '').split()).strip()
+    if not page.isdigit() or not expected:
+        raise BrowserBusinessError(
+            'PAGE_SHARE_UI_UNAVAILABLE',
+            'Exact Page identity is unavailable for operator assignment',
+            retryable=True,
+            diagnostic={'page_id':page,'page_name':expected},
+        )
+
+    rows=browser.page.get_by_role('row').filter(has_text=expected)
+    candidates=[]
+    exact=[]
+    visible=[]
+    for index in range(min(await rows.count(),20)):
+        row=rows.nth(index)
+        if not await row.is_visible():
+            continue
+        visible.append(row)
+        try:
+            evidence=await row.evaluate("""(el, pageId) => {
+                const clean = value => String(value || '').replace(/\\s+/g,' ').trim();
+                const links=[...el.querySelectorAll('a[href]')].map(a=>a.getAttribute('href')||'');
+                const text=clean(el.innerText || el.textContent || '');
+                const attrs=[
+                    el.getAttribute('data-key')||'',
+                    el.getAttribute('data-testid')||'',
+                    el.getAttribute('aria-label')||'',
+                ];
+                const hay=[text,...links,...attrs].join(' | ');
+                const rx=new RegExp('(^|\\\\D)'+pageId+'(\\\\D|$)');
+                return {text:text.slice(0,1200),links:links.slice(0,12),id_match:rx.test(hay)};
+            }""",page)
+        except Exception:
+            evidence={'text':'','links':[],'id_match':False}
+        row_info={
+            'index':index,
+            'text':str((evidence or {}).get('text') or '')[:1200],
+            'links':list((evidence or {}).get('links') or [])[:12],
+            'id_match':bool((evidence or {}).get('id_match')),
+        }
+        candidates.append(row_info)
+        if row_info['id_match']:
+            exact.append(row)
+
+    target=None
+    source=''
+    if len(exact)==1:
+        target=exact[0]; source='row_exact_page_id'
+    elif len(exact)>1:
+        raise BrowserBusinessError(
+            'PAGE_SHARE_UI_UNAVAILABLE',
+            'Multiple Business Settings rows match the exact Page ID',
+            retryable=True,
+            diagnostic={'page_id':page,'page_name':expected,'rows':candidates[:10]},
+        )
+    elif len(visible)==1:
+        # The exact Page/BM relation has already been proven before this stage.
+        # A single visible row with the exact Page name is therefore safe to
+        # select even when Meta omits the Page ID from rendered table markup.
+        target=visible[0]; source='single_exact_name_row'
+
+    if target is not None:
+        for role in ('button','link'):
+            locator=target.get_by_role(role,name=expected,exact=True)
+            if await _one(locator):
+                await locator.click(timeout=3000)
+                return {'source':source,'page_id':page,'page_name':expected,'rows':candidates[:10]}
+        named=target.get_by_text(expected,exact=True)
+        if await _one(named):
+            await named.click(timeout=3000)
+            return {'source':source,'page_id':page,'page_name':expected,'rows':candidates[:10]}
+        try:
+            await target.click(timeout=3000)
+            return {'source':source+'_row_click','page_id':page,'page_name':expected,'rows':candidates[:10]}
+        except Exception:
+            pass
+
+    # Last safe fallback: exactly one global interactive control with the exact
+    # name. Never click one of several duplicate text nodes.
+    for role in ('button','link'):
+        locator=browser.page.get_by_role(role,name=expected,exact=True)
+        if await _one(locator):
+            await locator.click(timeout=3000)
+            return {'source':'unique_global_'+role,'page_id':page,'page_name':expected,'rows':candidates[:10]}
+
+    diagnostic=await browser._diagnostic('operator_exact_page_entry_missing')
+    diagnostic.update({
+        'page_id':page,
+        'page_name':expected,
+        'matching_rows':candidates[:10],
+        'visible_name_rows':len(visible),
+        'exact_id_rows':len(exact),
+    })
+    raise BrowserBusinessError(
+        'PAGE_OPERATOR_PAGE_SELECTION_UNAVAILABLE',
+        'The exact Page row is unavailable for operator assignment',
+        retryable=True,
+        diagnostic=diagnostic,
+    )
 
 
 async def _ads_only(dialog) -> None:
@@ -591,7 +687,11 @@ async def _assign_operator(
         business_id=business,page_id=config['page_id'])
     if not verified and not relation_preconfirmed:
         raise BrowserBusinessError('PAGE_OPERATOR_ASSIGNMENT_REQUIRED','Target BM Page access is unconfirmed',retryable=True)
-    await _select_page(browser,config['name'])
+    selection=await _select_page(browser,config['name'],config['page_id'])
+    log.info(
+        'PAGE_OPERATOR exact Page selected page=%s business=%s source=%s',
+        str(config.get('page_id') or ''),business,str(selection.get('source') or ''),
+    )
     assign=browser.page.get_by_role('button',name=re.compile(r'^(Assign people|Add people)$',re.I))
     if not await _one(assign):
         raise BrowserBusinessError('PAGE_OPERATOR_ASSIGNMENT_REQUIRED','Target BM people assignment is unavailable',retryable=True)
