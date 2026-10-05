@@ -42,8 +42,14 @@ async def _request_target_page_access(browser, config: dict, business: str, chec
     """Request Ads task access from the target BM; never claim Page ownership."""
     if await browser.verify_page_attached(business_id=business,page_id=config['page_id']):
         return True
-    if prior.get('phase')=='TARGET_PAGE_ACCESS_SUBMITTED':
-        # Continue at the Page owner's approval surface, never send twice.
+    if prior.get('phase') in {
+            'TARGET_PAGE_ACCESS_SUBMITTED',
+            'TARGET_PAGE_ACCESS_OWNER_APPROVE_CLICK_INTENT',
+            'TARGET_PAGE_ACCESS_OWNER_APPROVED',
+            'TARGET_PAGE_ACCESS_OWNER_CONFIRMED',
+        }:
+        # Every owner-side phase belongs to the same already-submitted request.
+        # A retry must reconcile/continue it and must never create a duplicate.
         return False
     if prior.get('phase') in {'TARGET_PAGE_ACCESS_CLICK_INTENT',
             'PARTNER_SHARE_CLICK_INTENT','PARTNER_SHARE_SUBMITTED'}:
