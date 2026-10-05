@@ -28,6 +28,12 @@ console.log('Private Launch catalog and funding truth checks passed');
 
 (async()=>{
   const overlay=fs.readFileSync(path.join(__dirname,'..','railway-launch-private-catalog-overlay.php'),'utf8');
+  assert.match(overlay,/\/payment-methods\?account_id=/);
+  assert.match(overlay,/private_facebook_billing_ui/);
+  assert.match(overlay,/private_facebook_selected_rk_payment_tab/);
+  assert.match(overlay,/'funding_verified'=>false/);
+  assert.doesNotMatch(overlay,/'funding_verified'=>true/);
+  assert.match(overlay,/PRIVATE_LAUNCH_VERIFICATION_REQUIRED/);
   const readiness=overlay.match(/<<<'READINESS_UI'\n([\s\S]*?)\nREADINESS_UI/)[1];
   const output={}; let request;
   const ctx={selectedRows:()=>[{id:'act_333333333',profile:'7',name:'Saved RK'}],
@@ -43,14 +49,30 @@ console.log('Private Launch catalog and funding truth checks passed');
   assert.match(output.assetReadinessRows.html,/ДОСТУП FP НЕ ПОДТВЕРЖДЁН/);
   assert.match(output.assetReadinessRows.html,/Confirm основного BM 111111111: выполнен/);
   assert.doesNotMatch(output.assetReadinessRows.html,/ASSETS READY|PAGE ISSUE|EMPTY/);
-  assert.match(output.assetReadinessProgress.textContent,/Проверка FP завершена/);
+  assert.match(output.assetReadinessProgress.textContent,/Проверка FP и оплаты завершена/);
   ctx.apiJson=async()=>({pages:{ad_account_page_access_verified:true,data:[
     {id:'222222222',name:'Verified Page',ad_account_page_access_verified:true},
-    {id:'444444444',name:'Saved only',ad_account_page_access_verified:false}]}});
+    {id:'444444444',name:'Saved only',ad_account_page_access_verified:false}]},
+    funding:{status:'LINKED',verification_status:'LINKED',card_linked:true,
+      account_scope_verified:true,checked_live:true,funding_verified:false,
+      payment_methods:[{type:'Visa',last4:'1111',linkage_status:'OBSERVED'}],diagnostic:{}}});
   await ctx.checkAssetsSelection();
   assert.match(output.assetReadinessRows.html,/Verified Page · 222222222 — доступ РК подтверждён/);
   assert.match(output.assetReadinessRows.html,/Saved only · 444444444 — доступ РК не подтверждён/);
-  assert.match(output.assetReadinessRows.html,/Оплата: не проверена/);
+  assert.match(output.assetReadinessRows.html,/Карта присутствует у выбранного РК — Visa •••• 1111/);
+  assert.match(output.assetReadinessRows.html,/Платёжная\/charge verification не подтверждена/);
+  ctx.apiJson=async()=>({pages:{ad_account_page_access_verified:true,data:[
+    {id:'222222222',name:'Verified Page',ad_account_page_access_verified:true}]},
+    funding:{status:'NONE',verification_status:'NONE',card_linked:false,
+      account_scope_verified:true,checked_live:true,funding_verified:false,
+      payment_methods:[],diagnostic:{}}});
+  await ctx.checkAssetsSelection();
+  assert.match(output.assetReadinessRows.html,/Meta live подтверждает отсутствие payment methods/);
+  ctx.apiJson=async()=>({pages:{ad_account_page_access_verified:false,data:[]},
+    funding:{status:'NOT_CHECKED',funding_verified:false,payment_methods:[],
+      diagnostic:{code:'PAYMENT_SKIPPED_PAGE_ACCESS_UNVERIFIED'}}});
+  await ctx.checkAssetsSelection();
+  assert.match(output.assetReadinessRows.html,/Оплата не проверялась: сначала нужен подтверждённый доступ FP/);
   ctx.apiJson=async()=>({error:'profile scope mismatch'});await ctx.checkAssetsSelection();
   assert.match(output.assetReadinessRows.html,/profile scope mismatch/);
   assert.doesNotMatch(output.assetReadinessRows.html,/Existing Page/);
