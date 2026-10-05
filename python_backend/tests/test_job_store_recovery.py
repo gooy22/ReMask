@@ -274,7 +274,22 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(access['result']['phase'],'TARGET_PAGE_ACCESS_OWNER_CONFIRMED')
         self.assertTrue(access['result']['owner_confirmed_operator_assignment_retry'])
 
-        # A second operator failure must not create an automatic restart loop.
+        # A second pre-submit Page-selection failure may retry once through
+        # the new read-only exact selected_asset_id route.
+        await self.provisioning_state.fail(
+            item,'4','default',ProvisioningStep.PAGE_ACCESS,
+            'PAGE_OPERATOR_PAGE_SELECTION_UNAVAILABLE',message,
+        )
+        await self.store.set_task_failed(
+            task['id'],'PAGE_OPERATOR_PAGE_SELECTION_UNAVAILABLE',message,retryable=True,
+        )
+        await self.store.finalize_item(item)
+        await self.store.init()
+        self.assertEqual((await self.store.item(item))['status'],'QUEUED')
+        access=await self.provisioning_state.step(item,ProvisioningStep.PAGE_ACCESS)
+        self.assertTrue(access['result']['operator_exact_asset_route_retry'])
+
+        # After the exact-asset attempt, automatic recovery is exhausted.
         await self.provisioning_state.fail(
             item,'4','default',ProvisioningStep.PAGE_ACCESS,
             'PAGE_OPERATOR_PAGE_SELECTION_UNAVAILABLE',message,
