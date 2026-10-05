@@ -423,7 +423,11 @@ READINESS
 );
 $workspacePath=$root.'/scripts/workspace.js';
 $workspace=file_get_contents($workspacePath);
-$start=is_string($workspace) ? strpos($workspace,'async function checkAssetsSelection(){
+$start=is_string($workspace) ? strpos($workspace,'async function checkAssetsSelection(){') : false;
+$end=$start!==false ? strpos($workspace,'async function showFunding(){',$start) : false;
+if ($start===false || $end===false) throw new RuntimeException('Assets readiness UI boundary missing');
+$workspace=substr_replace($workspace, <<<'READINESS_UI'
+async function checkAssetsSelection(){
   const rows=selectedRows('ad_accounts');
   if(!rows.length)return;
   openModal(`Assets — ${rows.length} РК`,`<div class="ws-muted mb-2">Проверка доступа FP и live-состояния оплаты в выбранном РК через FB-сессию профиля.</div><div id="assetReadinessProgress">Проверка Meta…</div><div id="assetReadinessRows"></div>`,'',null);
