@@ -24,32 +24,9 @@ jobs:
           echo
           for i in $(seq 1 150); do
             BODY="$(curl --fail --silent --show-error --max-time 20 "$BASE/api/v1/jobs/$JOB")"
-            SUMMARY="$(BODY="$BODY" python3 - <<'PY'
-import json, os
-j=json.loads(os.environ['BODY'])
-items=j.get('items') or []
-item=items[0] if items else {}
-tasks=item.get('tasks') or []
-failed=[t for t in tasks if str(t.get('status') or '').upper()=='FAILED']
-print(json.dumps({
-  'status':j.get('status'),
-  'item_status':item.get('status'),
-  'error_code':item.get('error_code'),
-  'error_message':item.get('error_message'),
-  'failed_tasks':[{
-    'action':t.get('action'),
-    'error_code':t.get('error_code'),
-    'error_message':t.get('error_message')
-  } for t in failed]
-},ensure_ascii=False))
-PY
-)"
+            SUMMARY="$(BODY="$BODY" python3 -c "import json,os; j=json.loads(os.environ['BODY']); items=j.get('items') or []; item=items[0] if items else {}; tasks=item.get('tasks') or []; failed=[t for t in tasks if str(t.get('status') or '').upper()=='FAILED']; print(json.dumps({'status':j.get('status'),'item_status':item.get('status'),'error_code':item.get('error_code'),'error_message':item.get('error_message'),'failed_tasks':[{'action':t.get('action'),'error_code':t.get('error_code'),'error_message':t.get('error_message')} for t in failed]},ensure_ascii=False))")"
             echo "$SUMMARY"
-            STATUS="$(SUMMARY="$SUMMARY" python3 - <<'PY'
-import json, os
-print(json.loads(os.environ['SUMMARY']).get('status') or '')
-PY
-)"
+            STATUS="$(SUMMARY="$SUMMARY" python3 -c "import json,os; print(json.loads(os.environ['SUMMARY']).get('status') or '')")"
             case "$STATUS" in
               SUCCESS|FAILED|PARTIAL) exit 0 ;;
             esac
@@ -57,5 +34,3 @@ PY
           done
           echo "Timed out waiting for terminal job state" >&2
           exit 1
-
-# trigger retry run
