@@ -20,6 +20,15 @@ class PageAccessEvidenceTests(unittest.TestCase):
         self.assertFalse(allowed_readonly_request(SimpleNamespace(method='POST',url='https://graph.facebook.com/act_'+RK+'/campaigns',post_data='')))
         self.assertFalse(allowed_readonly_request(SimpleNamespace(method='GET',url='https://graph.facebook.com/graphql?fb_api_req_friendly_name=SaveCampaignMutation',post_data='')))
         self.assertFalse(allowed_readonly_request(SimpleNamespace(method='GET',url='https://graph.facebook.com/act_'+RK+'?method=delete',post_data='')))
+        self.assertTrue(allowed_readonly_request(SimpleNamespace(method='GET',url='https://graph.facebook.com/v22.0/act_'+RK,post_data='')))
+        self.assertTrue(allowed_readonly_request(SimpleNamespace(method='POST',url='https://graph.facebook.com/v22.0/act_'+RK,post_data='method=GET')))
+        for batch, allowed in [([{'method':'GET','relative_url':'act_'+RK}],True),
+                               ([{'method':'GET','relative_url':'act_'+RK},{'method':'POST','relative_url':'act_'+RK+'/campaigns'}],False),
+                               ([{'method':'GET','relative_url':'act_'+RK+'?method=delete'}],False),([],False)]:
+            req=SimpleNamespace(method='POST',url='https://graph.facebook.com/',post_data=urlencode({'batch':json.dumps(batch)}))
+            self.assertEqual(allowed_readonly_request(req),allowed)
+        self.assertTrue(allowed_readonly_request(SimpleNamespace(method='POST',url='https://adsmanager.facebook.com/ajax/bulk-route-definitions/',post_data='')))
+        self.assertFalse(allowed_readonly_request(SimpleNamespace(method='POST',url='https://adsmanager.facebook.com/ajax/save_campaign/',post_data='')))
     def payload(self, key='promotable_pages', rk=RK):
         return {'data':{'node':{'__typename':'AdAccount','id':rk,
             key:{'edges':[{'node':{'__typename':'Page','id':PAGE,'name':'ReMask Page'}}]}}}}

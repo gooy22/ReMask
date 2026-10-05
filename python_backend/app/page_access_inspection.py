@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import time
 from typing import Any
@@ -39,10 +40,33 @@ def allowed_readonly_request(request: Any) -> bool:
     friendly = str(meta.get('friendly_name') or '').lower()
     if 'mutation' in friendly: return False
     query = parse_qs(parsed.query)
-    if any(v.upper() not in {'GET','POST'} for v in query.get('method',[])): return False
-    if host == 'graph.facebook.com' or 'graphql' in str(meta.get('url') or '').lower():
+    try:
+        raw = getattr(request,'post_data',None) or ''
+    except Exception:
+        return False
+    body = parse_qs(raw,keep_blank_values=True) if isinstance(raw,str) else {}
+    overrides = [str(v).upper() for v in [*query.get('method',[]),*body.get('method',[])]]
+    if any(v not in {'GET','POST'} for v in overrides): return False
+    method = str(getattr(request,'method','') or '').upper()
+    if 'graphql' in str(meta.get('url') or '').lower():
         return 'query' in friendly
-    return str(meta.get('method') or '').upper() in {'GET','HEAD','OPTIONS'}
+    if method in {'GET','HEAD','OPTIONS'} and (not overrides or set(overrides)=={'GET'}): return True
+    # Ads Manager's own GET reads can be tunneled through POST. These are
+    # observed browser requests, not a separate API/token client.
+    if host == 'graph.facebook.com':
+        if overrides and set(overrides)=={'GET'}: return True
+        batch = body.get('batch') or query.get('batch') or []
+        try:
+            rows = json.loads(batch[0]) if len(batch)==1 else None
+        except (ValueError,TypeError):
+            rows = None
+        return bool(isinstance(rows,list) and rows and not overrides
+            and all(isinstance(row,dict) and str(row.get('method') or '').upper()=='GET'
+                and not any(v.upper()!='GET' for v in parse_qs(urlsplit(str(row.get('relative_url') or '')).query).get('method',[]))
+                for row in rows))
+    # This exact POST is Meta's lazy JavaScript route-definition loader;
+    # blocking it leaves the objective dialog at "Loading Creation".
+    return method == 'POST' and parsed.path == '/ajax/bulk-route-definitions/'
 
 
 def promotable_pages(payload: Any, meta: dict, target: str) -> list[dict]:
@@ -138,7 +162,7 @@ async def inspect_browser_pages(browser: Any, target: str, business: str, *, tim
             if response_url.hostname not in {'www.facebook.com','business.facebook.com','adsmanager.facebook.com','graph.facebook.com'} or 'graphql' not in str(response.url).lower(): return
             meta = _request_graphql_meta(response.request)
             friendly = str(meta.get('friendly_name') or '').lower()
-            if 'page' not in friendly or 'mutation' in friendly: return
+            if 'mutation' in friendly or ('page' not in friendly and request_accounts(meta.get('variables')) != {target}): return
             payload = _decode_graphql_text(await response.text())
             found = promotable_pages(payload, meta, target)
             pages.update({p['id']:p for p in found})
