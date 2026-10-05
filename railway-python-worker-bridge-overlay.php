@@ -117,6 +117,7 @@ function rmx_py_saved_pages(FbAccount $account): array {
                 'tasks' => $tasks,
                 'business_id' => $businessId,
                 'is_owned' => array_key_exists('is_owned', $row) ? (bool)$row['is_owned'] : null,
+                'profile_id' => trim((string)($row['profile_id'] ?? '')),
                 'source' => trim((string)($row['source'] ?? '')) ?: 'profile_saved',
             ];
             $seen[$id] = true;
@@ -161,6 +162,7 @@ function rmx_py_profile_pages(FbAccount $account, string $profile): array {
                 'tasks' => $tasks,
                 'business_id' => $businessId,
                 'is_owned' => array_key_exists('is_owned', $row) ? (bool)$row['is_owned'] : null,
+                'profile_id' => trim((string)($row['profile_id'] ?? '')),
                 'source' => 'profile_cache',
             ];
             $seen[$id] = true;
