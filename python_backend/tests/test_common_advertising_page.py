@@ -9,7 +9,7 @@ from app.provisioning.advertising_page import AdvertisingPageStore,ensure_common
 from app.provisioning.models import ProvisioningError,ProvisioningStep
 from app.provisioning.state import ProvisioningStateStore
 from app.provisioning.service import ProvisioningService
-from app.provisioning.page_access_handler import page_access_handler,_ads_only,_request_target_page_access,_approve_owner_page_access
+from app.provisioning.page_access_handler import page_access_handler,_ads_only,_request_target_page_access,_approve_owner_page_access,_resolve_owner_page_actor
 from app.facebook_business_browser import BrowserBusinessError
 
 PAGE='1270757506131209'; BM='1476521050987548'; RK='958245207339458'
@@ -277,6 +277,20 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events,['TARGET_PAGE_ACCESS_CLICK_INTENT','CLICK_CONFIRM','TARGET_PAGE_ACCESS_SUBMITTED'])
         ads.assert_awaited_once_with(dialog)
 
+
+    async def test_owner_actor_is_discovered_live_when_session_context_has_no_page(self):
+        live={'id':PAGE,'profile_id':'777777777','name':'PrgssTeam'}
+        browser=SimpleNamespace(
+            context=SimpleNamespace(pages=[]),
+            discover_managed_pages=AsyncMock(return_value=[live]),
+            _last_page_inventory_diagnostic={'stage':'done'},
+        )
+        actor,evidence=await _resolve_owner_page_actor(
+            browser,{'page_id':PAGE,'name':'PrgssTeam'})
+        self.assertEqual(actor,'777777777')
+        self.assertEqual(evidence['source'],'live_managed_pages_profile_id')
+        browser.discover_managed_pages.assert_awaited_once_with(
+            fast=True,navigation_timeout_ms=9000)
 
     async def test_owner_approval_switches_to_exact_page_then_restores_user_and_verifies(self):
         events=[]
