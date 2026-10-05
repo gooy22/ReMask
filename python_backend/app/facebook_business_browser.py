@@ -2536,8 +2536,19 @@ class FacebookBusinessBrowser:
             # conceal what Facebook actually asks the user to confirm.
             try:
                 await self.page.wait_for_load_state('domcontentloaded', timeout=2500)
+                await self.page.wait_for_function(
+                    "() => document.body && (document.body.innerText || '').trim().length > 0",
+                    timeout=6000,
+                )
             except Exception:
                 pass
+            # Do not classify an intermediate redirect after Meta has already
+            # returned to an ordinary document. Recheck the current URL/auth.
+            rendered_url=urlsplit(_clean(self.page.url))
+            rendered_path=_clean(rendered_url.path).lower()
+            if rendered_path != '/checkpoint' and not rendered_path.startswith('/checkpoint/'):
+                await self._assert_authenticated(body_timeout_ms=body_timeout_ms)
+                return
             diagnostic = await self._diagnostic("checkpoint")
             diagnostic["auth_evidence"] = "checkpoint_url"
             diagnostic["checkpoint_path"] = current_path

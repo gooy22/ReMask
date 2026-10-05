@@ -3737,6 +3737,19 @@ class BrowserAuthenticationStateTests(unittest.IsolatedAsyncioTestCase):
             "checkpoint_url",
         )
 
+    async def test_intermediate_checkpoint_redirect_is_rechecked_after_document_render(self):
+        browser=FacebookBusinessBrowser(SimpleNamespace(profile_id='redirect-profile'))
+        page=SimpleNamespace(url='https://www.facebook.com/checkpoint/1501092823525282/')
+        async def rendered(*args,**kwargs):
+            page.url='https://business.facebook.com/latest/home'
+        page.wait_for_load_state=AsyncMock(side_effect=rendered)
+        page.wait_for_function=AsyncMock()
+        browser.page=page
+        browser._body_text=AsyncMock(return_value='Meta Business Suite')
+        browser._diagnostic=AsyncMock(return_value={})
+        await browser._assert_authenticated()
+        browser._diagnostic.assert_not_awaited()
+
     async def test_temporary_feature_block_is_not_retryable(self):
         browser = FacebookBusinessBrowser(
             SimpleNamespace(profile_id="profile-temp-block")
