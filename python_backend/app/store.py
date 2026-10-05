@@ -394,16 +394,11 @@ class JobStore:
             if page.get('owner_active_partner_reconciliation_retry') is not True:
                 retry_marker='owner_active_partner_reconciliation_retry'
             elif page.get('owner_access_surface_wait_retry') is not True:
-                diagnostic=page.get('diagnostic') if isinstance(page.get('diagnostic'),dict) else {}
-                probe=diagnostic.get('partner_access_probe') if isinstance(diagnostic.get('partner_access_probe'),dict) else {}
-                body=' '.join(str(diagnostic.get('body_excerpt') or '').split())
-                exact_count=int(probe.get('exact_name_count') or 0)
-                menu_count=int(probe.get('partner_menu_count') or 0)
-                # This extra retry is only for the observed React render race:
-                # the submitted request is durable, the previous reconciliation
-                # already ran, and the owner access DOM was effectively empty.
-                if body or exact_count or menu_count:
-                    continue
+                # One final continuation is safe after the active-partner pass:
+                # the exact request is already durably SUBMITTED and the
+                # BUSINESS/AD_ACCOUNT checkpoints below must match it. The
+                # handler therefore reconciles the existing relation and can
+                # never send a second Page request.
                 retry_marker='owner_access_surface_wait_retry'
             else:
                 continue
