@@ -93,17 +93,89 @@ async def _request_target_page_access(browser, config: dict, business: str, chec
     return await browser.verify_page_attached(business_id=business,page_id=config['page_id'])
 
 
-def _owner_page_actor_id(browser, config: dict) -> str:
-    """Return the New Pages Experience profile actor for the exact Page asset."""
+async def _resolve_owner_page_actor(browser, config: dict) -> tuple[str, dict]:
+    """Resolve the switchable Page actor from exact managed-Page evidence."""
     page_id=str(config.get('page_id') or '')
-    for row in (getattr(getattr(browser,'context',None),'pages',None) or []):
-        if not isinstance(row,dict) or str(row.get('id') or '')!=page_id:
-            continue
-        actor=str(row.get('profile_id') or '')
+    if not page_id.isdigit():
+        raise BrowserBusinessError(
+            'PAGE_OWNER_SWITCH_UNAVAILABLE',
+            'The advertising Page ID is unavailable for owner switching',
+            retryable=True,
+            diagnostic={'page_id':page_id},
+        )
+
+    def exact(rows):
+        return next(
+            (
+                row for row in (rows or [])
+                if isinstance(row,dict)
+                and str(row.get('id') or row.get('page_id') or '')==page_id
+            ),
+            None,
+        )
+
+    saved=exact(getattr(getattr(browser,'context',None),'pages',None) or [])
+    if saved is not None:
+        actor=str(saved.get('profile_id') or '')
         if actor.isdigit():
-            return actor
-    # Some accounts expose the Page asset itself as the switchable profile.
-    return page_id
+            return actor,{'source':'session_context','page':saved}
+        # A saved exact Page row proves the asset belongs to this FB profile.
+        return page_id,{'source':'session_context_page_asset','page':saved}
+
+    try:
+        rows=await asyncio.wait_for(
+            browser.discover_managed_pages(
+                fast=True,
+                navigation_timeout_ms=9000,
+            ),
+            timeout=24,
+        )
+    except Exception as exc:
+        diagnostic=dict(
+            getattr(browser,'_last_page_inventory_diagnostic',{})
+            if isinstance(getattr(browser,'_last_page_inventory_diagnostic',{}),dict)
+            else {}
+        )
+        diagnostic.update({
+            'page_id':page_id,
+            'actor_resolution':'managed_pages_discovery_failed',
+            'discovery_error':f'{exc.__class__.__name__}: {exc}'[:1200],
+        })
+        raise BrowserBusinessError(
+            'PAGE_OWNER_SWITCH_UNAVAILABLE',
+            'The exact Page actor could not be discovered from the authenticated managed-Pages surface',
+            retryable=True,
+            diagnostic=diagnostic,
+        ) from exc
+
+    live=exact(rows)
+    if live is None:
+        diagnostic=dict(
+            getattr(browser,'_last_page_inventory_diagnostic',{})
+            if isinstance(getattr(browser,'_last_page_inventory_diagnostic',{}),dict)
+            else {}
+        )
+        diagnostic.update({
+            'page_id':page_id,
+            'actor_resolution':'exact_page_not_in_live_inventory',
+            'discovered_page_ids':[
+                str(row.get('id') or row.get('page_id') or '')
+                for row in rows if isinstance(row,dict)
+            ][:20],
+        })
+        raise BrowserBusinessError(
+            'PAGE_OWNER_SWITCH_UNAVAILABLE',
+            'The exact advertising Page is absent from the live managed-Pages inventory',
+            retryable=True,
+            diagnostic=diagnostic,
+        )
+
+    actor=str(live.get('profile_id') or '')
+    if actor.isdigit():
+        return actor,{'source':'live_managed_pages_profile_id','page':live}
+    # Some New Pages Experience accounts expose no separate profile_id and
+    # switch using the exact managed Page asset ID itself.
+    return page_id,{'source':'live_managed_pages_page_asset','page':live}
 
 
 def _saved_i_user_cookie(browser) -> dict | None:
@@ -224,11 +296,11 @@ async def _approve_owner_page_access(browser, config: dict, business: str, check
     if await browser.verify_page_attached(business_id=business,page_id=page_id):
         return True
 
-    actor=_owner_page_actor_id(browser,config)
-    if not actor.isdigit():
-        raise BrowserBusinessError('PAGE_OWNER_SWITCH_UNAVAILABLE',
-            'The exact Page profile actor is unavailable',retryable=True,
-            diagnostic={'page_id':page_id,'business_id':business})
+    actor,actor_evidence=await _resolve_owner_page_actor(browser,config)
+    log.info(
+        'PAGE_OWNER actor resolved page=%s business=%s actor=%s source=%s',
+        page_id,business,actor,str(actor_evidence.get('source') or ''),
+    )
     saved_i_user=_saved_i_user_cookie(browser)
     approval_error=None
     try:
@@ -241,7 +313,16 @@ async def _approve_owner_page_access(browser, config: dict, business: str, check
         if review is None:
             diagnostic=await browser._diagnostic('page_owner_access_request_missing')
             diagnostic.update(page_id=page_id,business_id=business,page_actor_id=actor,
+                page_actor_source=str(actor_evidence.get('source') or ''),
+                page_actor_evidence=actor_evidence.get('page') or {},
                 pending_request_candidates=evidence[:8])
+            log.warning(
+                'PAGE_OWNER pending request missing page=%s business=%s actor=%s source=%s '
+                'url=%s body=%s',
+                page_id,business,actor,str(actor_evidence.get('source') or ''),
+                str(diagnostic.get('url') or '')[:700],
+                str(diagnostic.get('body_excerpt') or '')[:2400],
+            )
             code='PAGE_OWNER_REQUEST_AMBIGUOUS' if len(evidence)>1 else 'PAGE_OWNER_APPROVAL_UI_UNAVAILABLE'
             message=('Multiple Page access requests are visible and the target Business cannot be uniquely proven'
                 if code=='PAGE_OWNER_REQUEST_AMBIGUOUS'
