@@ -9,7 +9,7 @@ from app.provisioning.advertising_page import AdvertisingPageStore,ensure_common
 from app.provisioning.models import ProvisioningError,ProvisioningStep
 from app.provisioning.state import ProvisioningStateStore
 from app.provisioning.service import ProvisioningService
-from app.provisioning.page_access_handler import page_access_handler,_ads_only,_request_target_page_access,_approve_owner_page_access,_resolve_owner_page_actor,_resolve_target_business_name,_owner_active_partner_ads_access
+from app.provisioning.page_access_handler import page_access_handler,_ads_only,_request_target_page_access,_approve_owner_page_access,_resolve_owner_page_actor,_resolve_target_business_name,_owner_active_partner_ads_access,_pick_owner_review_request
 from app.facebook_business_browser import BrowserBusinessError
 
 PAGE='1270757506131209'; BM='1476521050987548'; RK='958245207339458'
@@ -303,6 +303,47 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(evidence['business_id'],BM)
         self.assertEqual(evidence['source'],'snapshot_businesses')
 
+    async def test_duplicate_business_names_cannot_prove_exact_partner_identity(self):
+        browser=SimpleNamespace(snapshot_businesses=AsyncMock(return_value={
+            BM:'Prgss Business','999999999':'Prgss  Business'}))
+        name,evidence=await _resolve_target_business_name(browser,BM)
+        self.assertEqual(name,'')
+        self.assertEqual(evidence['source'],'ambiguous_business_name')
+
+    async def test_owner_request_matches_exact_business_including_single_request(self):
+        item=SimpleNamespace(evaluate=AsyncMock())
+        for context,expected in [
+            ('Review request from business '+BM,True),
+            ('Review request from business 9'+BM,False),
+            ('Review request from business '+BM+'0',False),
+            ('Review request from another Business',False),
+        ]:
+            with self.subTest(context=context):
+                item.evaluate.return_value=context
+                with patch('app.provisioning.page_access_handler._visible_owner_review_requests',
+                        new=AsyncMock(return_value=[item])):
+                    selected,evidence=await _pick_owner_review_request(SimpleNamespace(),BM)
+                self.assertEqual(selected is item,expected)
+                self.assertEqual(evidence[0]['business_id_match'],expected)
+
+    async def test_owner_request_can_use_uniquely_resolved_business_name(self):
+        wrong=SimpleNamespace(evaluate=AsyncMock(return_value='Other Business Review request'))
+        target=SimpleNamespace(evaluate=AsyncMock(return_value='Orchid Studio a5b1ce0a76 Review request'))
+        with patch('app.provisioning.page_access_handler._visible_owner_review_requests',
+                new=AsyncMock(return_value=[wrong,target])):
+            selected,evidence=await _pick_owner_review_request(
+                SimpleNamespace(),BM,'Orchid Studio a5b1ce0a76')
+        self.assertIs(selected,target)
+        self.assertTrue(evidence[1]['business_name_match'])
+
+    async def test_owner_request_with_repeated_target_identity_is_not_selected(self):
+        items=[SimpleNamespace(evaluate=AsyncMock(return_value='Review request '+BM)) for _ in range(2)]
+        with patch('app.provisioning.page_access_handler._visible_owner_review_requests',
+                new=AsyncMock(return_value=items)):
+            selected,evidence=await _pick_owner_review_request(SimpleNamespace(),BM)
+        self.assertIsNone(selected)
+        self.assertEqual(len(evidence),2)
+
     async def test_owner_page_access_proves_existing_partner_ads_row(self):
         class Item:
             async def is_visible(self): return True
@@ -386,7 +427,7 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
             def get_by_role(self,role,**kwargs):
                 return self._router(role,kwargs.get('name')) if self._router else Locator()
 
-        review=Locator(count=1,label='REVIEW')
+        review=Locator(count=1,label='REVIEW',context='Review request from '+BM)
         next_button=Locator(count=1,label='NEXT')
         approve=Locator(count=1,label='APPROVE')
         empty=Locator()
@@ -478,7 +519,7 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
             async def is_checked(self): return self._checked
             async def get_attribute(self,name): return 'true' if self._checked else None
             async def click(self,**kwargs): events.append('CLICK_'+self.label)
-            async def evaluate(self,*args,**kwargs): return ''
+            async def evaluate(self,*args,**kwargs): return 'Review request from '+BM
             def filter(self,**kwargs): return self
             def get_by_role(self,role,**kwargs):
                 return self._router(role,kwargs.get('name')) if self._router else Locator()

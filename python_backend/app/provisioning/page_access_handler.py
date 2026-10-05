@@ -229,6 +229,13 @@ async def _owner_request_context(item) -> str:
             let node=el, parts=[];
             for (let i=0; node && i<9; i++, node=node.parentElement) {
                 const text=(node.innerText || node.textContent || '').replace(/\\s+/g,' ').trim();
+                // Stop before the surrounding list/settings surface: it can
+                // contain another Business's name or an already-active partner.
+                if (text.length>1600 || /Partners with access|Manage and view access/i.test(text)) break;
+                const reviews=[...node.querySelectorAll('button,a,[role="button"],[role="link"]')]
+                    .filter(item => /^(Review request|Respond to request|Review access request)$/i.test(
+                        (item.innerText || item.textContent || '').trim()));
+                if (reviews.length>1) break;
                 const href=node.getAttribute ? (node.getAttribute('href') || '') : '';
                 const aria=node.getAttribute ? (node.getAttribute('aria-label') || '') : '';
                 const testid=node.getAttribute ? (node.getAttribute('data-testid') || '') : '';
@@ -240,16 +247,19 @@ async def _owner_request_context(item) -> str:
         return ''
 
 
-async def _pick_owner_review_request(page, business: str):
+async def _pick_owner_review_request(page, business: str, business_name: str=''):
     candidates=await _visible_owner_review_requests(page)
-    if len(candidates)==1:
-        return candidates[0],[{'business_match':None}]
     evidence=[]
     matched=[]
     for item in candidates:
         context=await _owner_request_context(item)
-        hit=bool(re.search(r'(?<!\\d)'+re.escape(str(business))+r'(?!\\d)',context))
-        evidence.append({'business_match':hit,'context':context[:1200]})
+        id_hit=bool(re.search(r'(?<!\d)'+re.escape(str(business))+r'(?!\d)',context))
+        name=' '.join(str(business_name or '').split())
+        normalized=' '.join(context.split())
+        name_hit=bool(name and re.search(r'(?<!\w)'+re.escape(name)+r'(?!\w)',normalized))
+        hit=id_hit or name_hit
+        evidence.append({'business_match':hit,'business_id_match':id_hit,
+            'business_name_match':name_hit,'context':context[:1200]})
         if hit:
             matched.append(item)
     if len(matched)==1:
@@ -302,6 +312,10 @@ async def _resolve_target_business_name(browser, business: str) -> tuple[str, di
             'error':f'{exc.__class__.__name__}: {exc}'[:900],
         }
     name=str((rows or {}).get(business_id) or '').strip()
+    if name and sum(' '.join(str(value or '').split())==' '.join(name.split())
+            for value in (rows or {}).values())!=1:
+        return '',{'source':'ambiguous_business_name','business_id':business_id,
+            'business_name':name}
     return name,{
         'source':'snapshot_businesses',
         'business_id':business_id,
@@ -401,7 +415,7 @@ async def _approve_owner_page_access(browser, config: dict, business: str, check
                 'business_identity_proof':business_evidence,
             })
         else:
-            review,evidence=await _pick_owner_review_request(browser.page,business)
+            review,evidence=await _pick_owner_review_request(browser.page,business,business_name)
             if review is None:
                 diagnostic=await browser._diagnostic('page_owner_access_request_missing')
                 diagnostic.update(page_id=page_id,business_id=business,page_actor_id=actor,
