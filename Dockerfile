@@ -50,6 +50,8 @@ RUN set -eux; \
     else echo "Unsupported or corrupt ReMask runtime archive" >&2; exit 21; fi; \
     php -l /tmp/railway-persistence-overlay.php; \
     php /tmp/railway-persistence-overlay.php; \
+    php -l /tmp/railway-ui-session-persistence-overlay.php; \
+    php /tmp/railway-ui-session-persistence-overlay.php; \
     php /tmp/railway-launch-overlay.php; \
     php /tmp/railway-launch-job-ui-overlay.php; \
     php /tmp/railway-launch-flow-overlay.php; \
@@ -117,6 +119,8 @@ RUN set -eux; \
     php /tmp/railway-cookie-only-overlay.php; \
     php -l /tmp/railway-payment-inspection-overlay.php; \
     php /tmp/railway-payment-inspection-overlay.php; \
+    grep -q 'REMASK_UI_SESSION_PERSISTENCE_V2' /var/www/html/checkpassword.php; \
+    php -l /var/www/html/checkpassword.php; \
     php -l /var/www/html/ajax/metaHierarchy.php; \
     php -l /var/www/html/ajax/pythonWorkerJobs.php; \
     grep -q 'hierarchy_canonical_account_snapshot' /var/www/html/ajax/metaHierarchy.php; \
