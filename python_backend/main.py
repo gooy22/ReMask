@@ -2244,6 +2244,7 @@ async def profile_live_inventory(
 
             businesses=[]
             live_business_ids:set[str]=set()
+            auth_blocked_business_codes:dict[str,str]={}
 
             async def load_business_inventory(business_id: str):
                 nonlocal browser
@@ -2482,6 +2483,8 @@ async def profile_live_inventory(
                         'SESSION_EXPIRED',
                         'TWO_FACTOR_REQUIRED',
                     }
+                    if row['auth_blocked']:
+                        auth_blocked_business_codes[str(business_id)]=exc.code
                     warnings.append(
                         f'BM {business_id}: {exc.code}'
                     )
@@ -2971,10 +2974,9 @@ async def profile_live_inventory(
                 'live_businesses_count':len(live_business_ids),
                 'known_businesses_count':len(known_business_ids),
                 'auth_blocked_businesses':[
-                    str(row.get('id') or '')
-                    for row in businesses
-                    if isinstance(row,dict) and row.get('auth_blocked')
+                    value for value in sorted(auth_blocked_business_codes)
                 ],
+                'auth_blocked_business_codes':auth_blocked_business_codes,
                 'discovery_source':discovery_source,
                 'business_inventory_diagnostic':getattr(
                     browser,

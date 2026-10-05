@@ -18,6 +18,14 @@ foreach (['CHECKPOINT_REQUIRED','TWO_FACTOR_REQUIRED','SESSION_EXPIRED'] as $cod
     // Authentication failure overrides even an inconsistent ready flag.
     $result = hierarchy_private_sync_outcome(['live_ready'=>true,'businesses'=>[['auth_blocked'=>true,'browser_error_code'=>$code]]]);
     check(!$result['complete'] && $result['kind'] === $code);
+    $result = hierarchy_private_sync_outcome([
+        'live_ready'=>false,
+        'businesses'=>[],
+        'auth_blocked_businesses'=>['987654321'],
+        'auth_blocked_business_codes'=>['987654321'=>$code],
+    ]);
+    check(!$result['complete'] && $result['kind'] === $code);
+    check(str_contains($result['error'], '987654321'));
 }
 $result = hierarchy_private_sync_outcome(['live_ready'=>false,'businesses'=>[]]);
 check(!$result['complete'] && $result['kind'] === 'PRIVATE_INCONCLUSIVE');

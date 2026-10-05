@@ -650,6 +650,22 @@ function hierarchy_private_sync_outcome(array $inventory): array
             return ['complete' => false, 'kind' => $code, 'error' => $code . ': Meta requires account authentication or verification.'];
         }
     }
+    $blockedCodes = is_array($inventory['auth_blocked_business_codes'] ?? null)
+        ? $inventory['auth_blocked_business_codes']
+        : [];
+    foreach ($blockedCodes as $businessId => $code) {
+        $businessId = trim((string)$businessId);
+        $code = trim((string)$code);
+        if (!preg_match('/^\d{5,30}$/', $businessId)
+            || !in_array($code, ['CHECKPOINT_REQUIRED', 'TWO_FACTOR_REQUIRED', 'SESSION_EXPIRED'], true)) continue;
+        $targets = array_values(array_filter(array_map('strval', (array)($inventory['auth_blocked_businesses'] ?? [])),
+            static fn($id) => preg_match('/^\d{5,30}$/', trim($id))));
+        return [
+            'complete' => false,
+            'kind' => $code,
+            'error' => $code . ': ReMask session was redirected while verifying added BM(s): ' . implode(', ', $targets),
+        ];
+    }
     $complete = ($inventory['live_ready'] ?? false) === true;
     return ['complete' => $complete, 'kind' => $complete ? '' : 'PRIVATE_INCONCLUSIVE',
         'error' => $complete ? '' : 'Live private BM/RK inventory was not confirmed.'];
