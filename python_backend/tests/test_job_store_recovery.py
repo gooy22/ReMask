@@ -911,6 +911,48 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tasks[0]["status"], "QUEUED")
         self.assertIsNone(tasks[0]["error_code"])
 
+    async def test_retry_failed_excludes_auth_blocked_profile_but_requeues_healthy_peer(self):
+        now=int(time.time())
+        job_id='job-auth-partition'
+        with self.store._connect() as con:
+            con.execute(
+                "INSERT INTO jobs(id,status,idempotency_key,created_at,updated_at) VALUES(?,?,?,?,?)",
+                (job_id,'FAILED','idem-auth-partition',now,now),
+            )
+            for suffix,profile,code,retryable in (
+                ('blocked','9','CHECKPOINT_REQUIRED',0),
+                ('healthy','8','BROWSER_PAGE_CRASHED',1),
+            ):
+                item_id='item-'+suffix
+                task_id='task-'+suffix
+                con.execute(
+                    """INSERT INTO job_items(
+                        id,job_id,profile_id,status,error_code,error_message,retryable,
+                        created_at,updated_at
+                    ) VALUES(?,?,?,?,?,?,?,?,?)""",
+                    (item_id,job_id,profile,'FAILED',code,code,retryable,now,now),
+                )
+                con.execute(
+                    """INSERT INTO job_tasks(
+                        id,item_id,position,action,payload_json,idempotency_key,status,
+                        error_code,error_message,retryable,created_at,updated_at
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (task_id,item_id,0,'provisioning','{}','idem-'+suffix,
+                     'FAILED',code,code,retryable,now,now),
+                )
+
+        requeued=await self.store.retry_failed(
+            job_id,excluded_profile_ids={'9'})
+        self.assertEqual(requeued,1)
+        blocked=await self.store.item('item-blocked')
+        healthy=await self.store.item('item-healthy')
+        self.assertEqual(blocked['status'],'FAILED')
+        self.assertEqual(blocked['error_code'],'CHECKPOINT_REQUIRED')
+        self.assertEqual(healthy['status'],'QUEUED')
+        healthy_task=(await self.store.tasks('item-healthy'))[0]
+        self.assertEqual(healthy_task['status'],'QUEUED')
+        self.assertIsNone(healthy_task['error_code'])
+
     async def test_manual_retry_requeues_page_add_ui_changed(self):
         now = int(time.time())
         job_id = "job-page-ui-changed"
