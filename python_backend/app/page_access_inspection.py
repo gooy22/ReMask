@@ -276,9 +276,17 @@ async def inspect_browser_pages(browser: Any, target: str, business: str, *, tim
             await asyncio.wait(list(tasks),timeout=.5)
 
 
-async def inspect_profile_pages(resolver: Any, profile: str, target: str) -> dict:
+async def inspect_profile_pages(resolver: Any, profile: str, target: str, *, state: Any = None) -> dict:
     target = account_id(target)
     business = saved_payment_business(profile, target)
+    if not business and state is not None:
+        # A successful CREATE checkpoint can supply the navigation target
+        # before the next inventory sync. Live RK scope still has to be proved.
+        bindings=await state.confirmed_ad_account_bindings_for_profile(profile)
+        matches={str(row.get('business_id') or '') for row in bindings
+            if str(row.get('ad_account_id') or '').removeprefix('act_')==target
+            and re.fullmatch(r'\d{5,30}',str(row.get('business_id') or ''))}
+        if len(matches)==1: business=next(iter(matches))
     if not business: raise ValueError('RK is absent from this profile inventory')
     context = await asyncio.wait_for(resolver.resolve(profile), timeout=12)
     progress = {'stage':'opening_browser'}

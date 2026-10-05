@@ -1167,7 +1167,7 @@ async def profile_page_access(profile_id: str, account_id: str):
         raise HTTPException(status_code=400,detail='INVALID_PROFILE')
     try:
         account_id=normalize_account(account_id)
-        result=await inspect_profile_pages(pool.resolver,profile,account_id)
+        result=await inspect_profile_pages(pool.resolver,profile,account_id,state=pool.provisioning_state)
     except ValueError as exc:
         raise HTTPException(status_code=400,detail='INVALID_PAGE_ACCESS_TARGET') from exc
     except ProfileContextError as exc:

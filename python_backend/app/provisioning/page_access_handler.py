@@ -143,12 +143,16 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
                             # Never send another ownership request on this path.
                             requests=browser.page.get_by_text('Requests',exact=True).filter(visible=True)
                             if await requests.count()==1:
-                                await requests.click(timeout=3000)
-                                await browser.page.wait_for_timeout(1800)
-                                sent=browser.page.get_by_role('tab',name='Sent',exact=True).filter(visible=True)
-                                if await sent.count()==1:
-                                    await sent.click(timeout=3000)
-                                    await browser.page.wait_for_timeout(1000)
+                                # The long settings sidebar can place this
+                                # link beneath its sticky footer. Follow its
+                                # observed href rather than force a click.
+                                href=await requests.evaluate("e => (e.closest('a') || e.closest('[role=listitem]')?.querySelector('a'))?.href || ''")
+                                if href.startswith('https://business.facebook.com/'):
+                                    await browser._goto(href,timeout_ms=12000,wait_until='domcontentloaded',settle_ms=1800,attempts=1)
+                                    sent=browser.page.get_by_role('tab',name='Sent',exact=True).filter(visible=True)
+                                    if await sent.count()==1:
+                                        await sent.click(timeout=3000)
+                                        await browser.page.wait_for_timeout(1000)
                             diagnostic=await browser._diagnostic('owner_page_claim_reconciliation')
                             raise BrowserBusinessError('PAGE_ATTACH_RESULT_UNKNOWN','Owner Page claim needs reconciliation',retryable=True,diagnostic=diagnostic)
                         async def owner_checkpoint(patch):

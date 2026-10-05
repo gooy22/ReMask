@@ -128,6 +128,26 @@ class PageAccessBrowserTests(unittest.IsolatedAsyncioTestCase):
 
 
 class PageAccessApiTests(unittest.IsolatedAsyncioTestCase):
+    async def test_created_binding_is_navigation_only_and_conflicts_block_probe(self):
+        from app.page_access_inspection import inspect_profile_pages
+        resolver=SimpleNamespace(resolve=AsyncMock(return_value=object()))
+        state=SimpleNamespace(confirmed_ad_account_bindings_for_profile=AsyncMock(return_value=[
+            {'business_id':BM,'ad_account_id':'act_'+RK}]))
+        class Browser:
+            async def __aenter__(self): return self
+            async def __aexit__(self,*args): pass
+        probe=AsyncMock(return_value={'status':'UNVERIFIED','data':[], 'account_scope_verified':False})
+        with patch('app.page_access_inspection.saved_payment_business',return_value=''), \
+             patch('app.page_access_inspection.FacebookBusinessBrowser',return_value=Browser()), \
+             patch('app.page_access_inspection.inspect_browser_pages',probe):
+            result=await inspect_profile_pages(resolver,'9',RK,state=state)
+            self.assertFalse(result['account_scope_verified'])
+            self.assertEqual(probe.call_args.args[1:],(RK,BM))
+            state.confirmed_ad_account_bindings_for_profile.assert_awaited_once_with('9')
+            state.confirmed_ad_account_bindings_for_profile.return_value.append({'business_id':'999999999','ad_account_id':RK})
+            with self.assertRaises(ValueError): await inspect_profile_pages(resolver,'9',RK,state=state)
+            self.assertEqual(probe.await_count,1)
+
     async def test_memory_pressure_closes_browser_and_never_claims_page_permission(self):
         from app.page_access_inspection import inspect_profile_pages
         closed=[]
