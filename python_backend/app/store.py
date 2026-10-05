@@ -285,7 +285,7 @@ class JobStore:
                 continue
             if not all(isinstance(value,dict) for value in (page,business,account)):
                 continue
-            if page.get('owner_actor_probe_retry') is True:
+            if page.get('owner_actor_live_discovery_retry') is True:
                 continue
             if str(page.get('phase') or '')!='TARGET_PAGE_ACCESS_SUBMITTED':
                 continue
@@ -306,8 +306,12 @@ class JobStore:
             ):
                 continue
 
-            page['owner_actor_probe_retry']=True
-            page['owner_actor_probe_retry_at']=now
+            if page.get('owner_actor_probe_retry') is True:
+                page['owner_actor_live_discovery_retry']=True
+                page['owner_actor_live_discovery_retry_at']=now
+            else:
+                page['owner_actor_probe_retry']=True
+                page['owner_actor_probe_retry_at']=now
             con.execute(
                 """UPDATE provisioning_steps
                    SET result_json=?,updated_at=?
