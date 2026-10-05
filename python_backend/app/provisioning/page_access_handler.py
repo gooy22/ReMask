@@ -289,6 +289,75 @@ def _facebook_password(browser) -> str:
     return ''
 
 
+async def _resolve_target_business_name(browser, business: str) -> tuple[str, dict]:
+    """Map one exact Business ID to its live Business Suite display name."""
+    business_id=str(business or '').strip()
+    if not business_id.isdigit():
+        return '',{'source':'invalid_business_id'}
+    try:
+        rows=await asyncio.wait_for(browser.snapshot_businesses(),timeout=24)
+    except Exception as exc:
+        return '',{
+            'source':'snapshot_businesses_failed',
+            'error':f'{exc.__class__.__name__}: {exc}'[:900],
+        }
+    name=str((rows or {}).get(business_id) or '').strip()
+    return name,{
+        'source':'snapshot_businesses',
+        'business_id':business_id,
+        'business_name':name,
+        'known_business_ids':sorted(str(key) for key in (rows or {}).keys())[:20],
+    }
+
+
+async def _owner_active_partner_ads_access(page, business_name: str) -> dict | None:
+    """Prove an exact Business is already an Ads partner on this Page."""
+    expected=' '.join(str(business_name or '').split()).strip()
+    if not expected:
+        return None
+    locator=page.get_by_text(expected,exact=True)
+    count=min(await locator.count(),8)
+    for index in range(count):
+        item=locator.nth(index)
+        if not await item.is_visible():
+            continue
+        try:
+            evidence=await item.evaluate("""(el, expected) => {
+                const norm = value => String(value || '').replace(/\s+/g,' ').trim();
+                let node=el;
+                const ancestors=[];
+                for (let i=0; node && i<10; i++, node=node.parentElement) {
+                    const text=norm(node.innerText || node.textContent || '');
+                    if (text) ancestors.push(text.slice(0,5000));
+                }
+                let row='';
+                for (const text of ancestors) {
+                    if (text.includes(expected) && /(^|\W)Ads(\W|$)/i.test(text) && text.length <= 1200) {
+                        row=text;
+                        break;
+                    }
+                }
+                const section=ancestors.find(text =>
+                    /Partners with access/i.test(text) && text.includes(expected)
+                ) || '';
+                return {row,section:section.slice(0,3000)};
+            }""",expected)
+        except Exception:
+            continue
+        if not isinstance(evidence,dict):
+            continue
+        row=' '.join(str(evidence.get('row') or '').split())
+        section=' '.join(str(evidence.get('section') or '').split())
+        if row and section and expected in row and re.search(r'(^|\W)Ads(\W|$)',row,re.I):
+            return {
+                'business_name':expected,
+                'row':row[:1200],
+                'section':section[:3000],
+                'source':'page_access_partners_with_ads',
+            }
+    return None
+
+
 async def _approve_owner_page_access(browser, config: dict, business: str, checkpoint) -> bool:
     """Approve one exact pending Ads-access request as the Page owner, then restore the user actor."""
     page_id=str(config['page_id'])
@@ -296,6 +365,11 @@ async def _approve_owner_page_access(browser, config: dict, business: str, check
     if await browser.verify_page_attached(business_id=business,page_id=page_id):
         return True
 
+    business_name,business_evidence=await _resolve_target_business_name(browser,business)
+    log.info(
+        'PAGE_OWNER business resolved business=%s name=%s source=%s',
+        business,business_name,str(business_evidence.get('source') or ''),
+    )
     actor,actor_evidence=await _resolve_owner_page_actor(browser,config)
     log.info(
         'PAGE_OWNER actor resolved page=%s business=%s actor=%s source=%s',
@@ -303,89 +377,114 @@ async def _approve_owner_page_access(browser, config: dict, business: str, check
     )
     saved_i_user=_saved_i_user_cookie(browser)
     approval_error=None
+    owner_relation_proof=None
     try:
         await _set_i_user(browser,actor)
         await browser._goto('https://www.facebook.com/settings/?tab=profile_access',
             timeout_ms=12000,wait_until='commit',settle_ms=1100,attempts=1)
         await browser._assert_authenticated()
 
-        review,evidence=await _pick_owner_review_request(browser.page,business)
-        if review is None:
-            diagnostic=await browser._diagnostic('page_owner_access_request_missing')
-            diagnostic.update(page_id=page_id,business_id=business,page_actor_id=actor,
-                page_actor_source=str(actor_evidence.get('source') or ''),
-                page_actor_evidence=actor_evidence.get('page') or {},
-                pending_request_candidates=evidence[:8])
-            log.warning(
-                'PAGE_OWNER pending request missing page=%s business=%s actor=%s source=%s '
-                'url=%s body=%s',
-                page_id,business,actor,str(actor_evidence.get('source') or ''),
-                str(diagnostic.get('url') or '')[:700],
-                str(diagnostic.get('body_excerpt') or '')[:2400],
+        owner_relation_proof=await _owner_active_partner_ads_access(
+            browser.page,business_name)
+        if owner_relation_proof is not None:
+            log.info(
+                'PAGE_OWNER active partner Ads access proven page=%s business=%s name=%s',
+                page_id,business,business_name,
             )
-            code='PAGE_OWNER_REQUEST_AMBIGUOUS' if len(evidence)>1 else 'PAGE_OWNER_APPROVAL_UI_UNAVAILABLE'
-            message=('Multiple Page access requests are visible and the target Business cannot be uniquely proven'
-                if code=='PAGE_OWNER_REQUEST_AMBIGUOUS'
-                else 'The exact pending Page access request is not visible on Page access settings')
-            raise BrowserBusinessError(code,message,retryable=True,diagnostic=diagnostic)
+            await checkpoint({
+                'phase':'TARGET_PAGE_ACCESS_OWNER_CONFIRMED',
+                'requested_tasks':['ADVERTISE'],
+                'page_id':page_id,
+                'business_id':business,
+                'page_actor_id':actor,
+                'owner_relation_proof':owner_relation_proof,
+                'business_identity_proof':business_evidence,
+            })
+        else:
+            review,evidence=await _pick_owner_review_request(browser.page,business)
+            if review is None:
+                diagnostic=await browser._diagnostic('page_owner_access_request_missing')
+                diagnostic.update(page_id=page_id,business_id=business,page_actor_id=actor,
+                    page_actor_source=str(actor_evidence.get('source') or ''),
+                    page_actor_evidence=actor_evidence.get('page') or {},
+                    target_business_name=business_name,
+                    target_business_evidence=business_evidence,
+                    pending_request_candidates=evidence[:8])
+                log.warning(
+                    'PAGE_OWNER pending request missing page=%s business=%s actor=%s source=%s '
+                    'business_name=%s url=%s body=%s',
+                    page_id,business,actor,str(actor_evidence.get('source') or ''),
+                    business_name,
+                    str(diagnostic.get('url') or '')[:700],
+                    str(diagnostic.get('body_excerpt') or '')[:2400],
+                )
+                code='PAGE_OWNER_REQUEST_AMBIGUOUS' if len(evidence)>1 else 'PAGE_OWNER_APPROVAL_UI_UNAVAILABLE'
+                message=('Multiple Page access requests are visible and the target Business cannot be uniquely proven'
+                    if code=='PAGE_OWNER_REQUEST_AMBIGUOUS'
+                    else 'The exact pending Page access request is not visible on Page access settings')
+                raise BrowserBusinessError(code,message,retryable=True,diagnostic=diagnostic)
 
-        await review.click(timeout=4000)
-        await browser.page.wait_for_timeout(700)
-        scope=await _visible_dialog_or_page(browser.page)
-        next_button=scope.get_by_role('button',name=re.compile(r'^Next$',re.I)).filter(visible=True)
-        if await _one(next_button) and await next_button.is_enabled():
-            await next_button.click(timeout=3500)
-            await browser.page.wait_for_timeout(650)
+            await review.click(timeout=4000)
+            await browser.page.wait_for_timeout(700)
             scope=await _visible_dialog_or_page(browser.page)
+            next_button=scope.get_by_role('button',name=re.compile(r'^Next$',re.I)).filter(visible=True)
+            if await _one(next_button) and await next_button.is_enabled():
+                await next_button.click(timeout=3500)
+                await browser.page.wait_for_timeout(650)
+                scope=await _visible_dialog_or_page(browser.page)
 
-        await _reject_full_control(scope)
-        approve=scope.get_by_role('button',
-            name=re.compile(r'^(Accept|Approve|Confirm|Accept request|Approve request)$',re.I)).filter(visible=True)
-        if not await _one(approve) or not await approve.is_enabled():
-            diagnostic=await browser._diagnostic('page_owner_access_final_action_missing')
-            diagnostic.update(page_id=page_id,business_id=business,page_actor_id=actor)
-            raise BrowserBusinessError('PAGE_OWNER_APPROVAL_UI_UNAVAILABLE',
-                'Owner review opened, but the final access approval action is unavailable',
-                retryable=True,diagnostic=diagnostic)
-
-        await checkpoint({'phase':'TARGET_PAGE_ACCESS_OWNER_APPROVE_CLICK_INTENT',
-            'requested_tasks':['ADVERTISE'],'page_id':page_id,'business_id':business})
-        await approve.click(timeout=5000)
-        await browser.page.wait_for_timeout(800)
-
-        password_inputs=browser.page.locator('input[type="password"]:visible')
-        if await password_inputs.count():
-            if await password_inputs.count()!=1:
-                raise BrowserBusinessError('PAGE_OWNER_PASSWORD_CONFIRM_REQUIRED',
-                    'Meta opened an ambiguous password confirmation form',retryable=False)
-            password=_facebook_password(browser)
-            if not password:
-                diagnostic=await browser._diagnostic('page_owner_password_required')
+            await _reject_full_control(scope)
+            approve=scope.get_by_role('button',
+                name=re.compile(r'^(Accept|Approve|Confirm|Accept request|Approve request)$',re.I)).filter(visible=True)
+            if not await _one(approve) or not await approve.is_enabled():
+                diagnostic=await browser._diagnostic('page_owner_access_final_action_missing')
                 diagnostic.update(page_id=page_id,business_id=business,page_actor_id=actor)
-                raise BrowserBusinessError('PAGE_OWNER_PASSWORD_CONFIRM_REQUIRED',
-                    'Meta requires the Facebook password to approve this Page access request',
-                    retryable=False,diagnostic=diagnostic)
-            await password_inputs.first.fill(password,timeout=3000)
-            scope=await _visible_dialog_or_page(browser.page)
-            confirm=scope.get_by_role('button',
-                name=re.compile(r'^(Confirm|Continue|Submit)$',re.I)).filter(visible=True)
-            if not await _one(confirm) or not await confirm.is_enabled():
-                raise BrowserBusinessError('PAGE_OWNER_PASSWORD_CONFIRM_REQUIRED',
-                    'Facebook password was filled but its confirmation action is unavailable',
-                    retryable=True,diagnostic=await browser._diagnostic('page_owner_password_confirm_missing'))
-            await confirm.click(timeout=5000)
-            await browser.page.wait_for_timeout(900)
+                raise BrowserBusinessError('PAGE_OWNER_APPROVAL_UI_UNAVAILABLE',
+                    'Owner review opened, but the final access approval action is unavailable',
+                    retryable=True,diagnostic=diagnostic)
 
-        await checkpoint({'phase':'TARGET_PAGE_ACCESS_OWNER_APPROVED',
-            'requested_tasks':['ADVERTISE'],'page_id':page_id,'business_id':business,
-            'diagnostic':await browser._diagnostic('page_owner_access_approved')})
+            await checkpoint({'phase':'TARGET_PAGE_ACCESS_OWNER_APPROVE_CLICK_INTENT',
+                'requested_tasks':['ADVERTISE'],'page_id':page_id,'business_id':business})
+            await approve.click(timeout=5000)
+            await browser.page.wait_for_timeout(800)
+
+            password_inputs=browser.page.locator('input[type="password"]:visible')
+            if await password_inputs.count():
+                if await password_inputs.count()!=1:
+                    raise BrowserBusinessError('PAGE_OWNER_PASSWORD_CONFIRM_REQUIRED',
+                        'Meta opened an ambiguous password confirmation form',retryable=False)
+                password=_facebook_password(browser)
+                if not password:
+                    diagnostic=await browser._diagnostic('page_owner_password_required')
+                    diagnostic.update(page_id=page_id,business_id=business,page_actor_id=actor)
+                    raise BrowserBusinessError('PAGE_OWNER_PASSWORD_CONFIRM_REQUIRED',
+                        'Meta requires the Facebook password to approve this Page access request',
+                        retryable=False,diagnostic=diagnostic)
+                await password_inputs.first.fill(password,timeout=3000)
+                scope=await _visible_dialog_or_page(browser.page)
+                confirm=scope.get_by_role('button',
+                    name=re.compile(r'^(Confirm|Continue|Submit)$',re.I)).filter(visible=True)
+                if not await _one(confirm) or not await confirm.is_enabled():
+                    raise BrowserBusinessError('PAGE_OWNER_PASSWORD_CONFIRM_REQUIRED',
+                        'Facebook password was filled but its confirmation action is unavailable',
+                        retryable=True,diagnostic=await browser._diagnostic('page_owner_password_confirm_missing'))
+                await confirm.click(timeout=5000)
+                await browser.page.wait_for_timeout(900)
+
+            await checkpoint({'phase':'TARGET_PAGE_ACCESS_OWNER_APPROVED',
+                'requested_tasks':['ADVERTISE'],'page_id':page_id,'business_id':business,
+                'diagnostic':await browser._diagnostic('page_owner_access_approved')})
     except BrowserBusinessError as exc:
         approval_error=exc
     finally:
         await _set_i_user(browser,None,restore=saved_i_user)
 
-    # Verification runs only after restoring the personal Facebook actor so a
-    # Page-profile view can never be mistaken for Business asset evidence.
+    # Verification runs only after restoring the personal Facebook actor.
+    # Exact owner-side Page access evidence is independently authoritative:
+    # it maps the exact target Business ID to its live name first, then proves
+    # that same name inside this exact Page's Partners-with-access Ads row.
+    if owner_relation_proof is not None:
+        return True
     if await browser.verify_page_attached(business_id=business,page_id=page_id):
         await checkpoint({'phase':'TARGET_PAGE_ACCESS_OWNER_CONFIRMED',
             'requested_tasks':['ADVERTISE'],'page_id':page_id,'business_id':business})
@@ -395,9 +494,14 @@ async def _approve_owner_page_access(browser, config: dict, business: str, check
     return False
 
 
-async def _assign_operator(browser, config: dict, business: str) -> None:
+async def _assign_operator(
+    browser, config: dict, business: str, *, relation_preconfirmed: bool=False
+) -> None:
     # Partner administrators do not automatically receive the Ads task on a Page.
-    if not await browser.verify_page_attached(business_id=business,page_id=config['page_id']):
+    # verify_page_attached also navigates to the exact target-BM Pages route.
+    verified=await browser.verify_page_attached(
+        business_id=business,page_id=config['page_id'])
+    if not verified and not relation_preconfirmed:
         raise BrowserBusinessError('PAGE_OPERATOR_ASSIGNMENT_REQUIRED','Target BM Page access is unconfirmed',retryable=True)
     await _select_page(browser,config['name'])
     assign=browser.page.get_by_role('button',name=re.compile(r'^(Assign people|Add people)$',re.I))
@@ -498,7 +602,9 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
                     if not target_relation:
                         raise BrowserBusinessError('TARGET_PAGE_ACCESS_APPROVAL_REQUIRED',
                             'Meta has not confirmed the exact Page advertising access after owner approval',retryable=True)
-                    await _assign_operator(browser,config,business)
+                    await _assign_operator(
+                        browser,config,business,
+                        relation_preconfirmed=bool(target_relation))
                 except Exception as exc:
                     diagnostic={'stage':'target_page_access','url':str(getattr(browser.page,'url','')),
                         'memory':_cgroup_memory_snapshot_mb(),'v8_old_space_mb':256}
