@@ -176,6 +176,41 @@ class WorkerPool:
                 str(row.get('updated_at') or ''),
             )
 
+
+        try:
+            from .provisioning.advertising_page import AdvertisingPageStore
+            profiles=sorted({str(row.get('profile_id') or '').strip() for row in rows
+                if str(row.get('profile_id') or '').strip()})
+            for profile_id in profiles:
+                store=AdvertisingPageStore(self.provisioning_state,profile_id)
+                facebook_uid=''
+                try:
+                    context=await asyncio.wait_for(self.resolver.resolve(profile_id),timeout=3)
+                    facebook_uid=str((getattr(context,'cookies',{}) or {}).get('c_user') or '')
+                    store=AdvertisingPageStore.for_context(self.provisioning_state,context,profile_id)
+                except Exception:
+                    pass
+                page=await store.get()
+                grants=page.get('grants') if isinstance(page.get('grants'),dict) else {}
+                grant_phases={str(key):str((value or {}).get('phase') or '')
+                    for key,value in grants.items() if isinstance(value,dict)}
+                log.info(
+                    'ADVERTISING_PAGE durable state profile=%s facebook_uid=%s '
+                    'page=%s name=%s owner_profile=%s owner_business=%s '
+                    'ownership_phase=%s owner_business_confirmed=%s grants=%s',
+                    profile_id,
+                    facebook_uid,
+                    str(page.get('page_id') or ''),
+                    str(page.get('name') or ''),
+                    str(page.get('owner_profile_id') or ''),
+                    str(page.get('owner_business_id') or ''),
+                    str(page.get('ownership_phase') or ''),
+                    bool(page.get('owner_business_confirmed')),
+                    json.dumps(grant_phases,separators=(',',':')),
+                )
+        except Exception as exc:
+            log.warning('ADVERTISING_PAGE startup state audit failed: %s',exc)
+
     async def _persist_created_businesses(self) -> None:
         # Local display mirror; never contacts Meta and never marks live inventory.
         async with self._created_businesses_lock:
