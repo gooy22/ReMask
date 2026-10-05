@@ -157,7 +157,7 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
         access=await self.provisioning_state.step(item,ProvisioningStep.PAGE_ACCESS)
         self.assertTrue(access['result']['owner_active_partner_reconciliation_retry'])
 
-    async def test_live_actor_failure_gets_one_active_partner_reconciliation_retry(self):
+    async def test_live_actor_failure_gets_bounded_active_partner_then_surface_retry(self):
         job,item=self._seed(task_status='FAILED')
         task=(await self.store.tasks(item))[0]
         bm='1630095732002500'
@@ -190,23 +190,52 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
         )
         await self.store.finalize_item(item)
 
+        # First post-live-discovery retry reconciles an already-active partner.
         await self.store.init()
         self.assertEqual((await self.store.item(item))['status'],'QUEUED')
         access=await self.provisioning_state.step(item,ProvisioningStep.PAGE_ACCESS)
         self.assertTrue(access['result']['owner_active_partner_reconciliation_retry'])
         self.assertEqual(access['result']['phase'],'TARGET_PAGE_ACCESS_SUBMITTED')
 
-        await self.store.set_task_failed(
-            task['id'],'PAGE_OWNER_APPROVAL_UI_UNAVAILABLE',message,retryable=True,
+        # If that pass observed an empty owner-access React surface, permit one
+        # final retry with the explicit render wait added to the handler.
+        await self.provisioning_state.checkpoint(
+            item,'4','default',ProvisioningStep.PAGE_ACCESS,
+            {'diagnostic':{
+                'stage':'page_owner_access_request_missing',
+                'body_excerpt':'',
+                'partner_access_probe':{
+                    'exact_name_count':0,
+                    'partner_menu_count':0,
+                },
+            }},
         )
-        await self.store.finalize_item(item)
         await self.provisioning_state.fail(
             item,'4','default',ProvisioningStep.PAGE_ACCESS,
             'PAGE_OWNER_APPROVAL_UI_UNAVAILABLE',message,
         )
+        await self.store.set_task_failed(
+            task['id'],'PAGE_OWNER_APPROVAL_UI_UNAVAILABLE',message,retryable=True,
+        )
+        await self.store.finalize_item(item)
+        await self.store.init()
+        self.assertEqual((await self.store.item(item))['status'],'QUEUED')
+        access=await self.provisioning_state.step(item,ProvisioningStep.PAGE_ACCESS)
+        self.assertTrue(access['result']['owner_access_surface_wait_retry'])
+
+        # The render-wait retry is terminal for automatic startup recovery.
+        await self.provisioning_state.fail(
+            item,'4','default',ProvisioningStep.PAGE_ACCESS,
+            'PAGE_OWNER_APPROVAL_UI_UNAVAILABLE',message,
+        )
+        await self.store.set_task_failed(
+            task['id'],'PAGE_OWNER_APPROVAL_UI_UNAVAILABLE',message,retryable=True,
+        )
+        await self.store.finalize_item(item)
         await self.store.init()
         self.assertEqual((await self.store.item(item))['status'],'FAILED')
         self.assertEqual((await self.store.tasks(item))[0]['status'],'FAILED')
+
 
     async def test_legacy_owner_approval_recovery_refuses_unsubmitted_or_mismatched_state(self):
         for suffix,phase,rk_business in (
