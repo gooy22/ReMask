@@ -296,14 +296,7 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
         empty=Locator()
         def dialog_router(role,name):
             text=getattr(name,'pattern',str(name or ''))
-            if role=='button' and text=='^Next
-    async def test_ads_sharing_never_silently_accepts_full_control(self):
-        full=SimpleNamespace(is_checked=AsyncMock(return_value=True))
-        locator=SimpleNamespace(all=AsyncMock(return_value=[full]))
-        dialog=SimpleNamespace(get_by_role=lambda *args,**kwargs:locator)
-        with self.assertRaises(BrowserBusinessError) as exc: await _ads_only(dialog)
-        self.assertEqual(exc.exception.code,'PAGE_SHARE_PERMISSION_REVIEW_REQUIRED')
-: return next_button
+            if role=='button' and text=='^Next$': return next_button
             if role=='button' and 'Accept' in text: return approve
             return empty
         dialog=Locator(count=1,router=dialog_router)
@@ -355,14 +348,12 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
             def filter(self,**kwargs): return self
         a=Locator(context='Request from Other Business A')
         b=Locator(context='Request from Other Business B')
-        reviews=Locator(items=[a,b]); empty=SimpleNamespace(count=AsyncMock(return_value=0))
-        empty.filter=lambda **kwargs:empty
+        reviews=Locator(items=[a,b])
+        empty=Locator(items=[])
         def page_role(role,name=None,**kwargs):
             text=getattr(name,'pattern',str(name or ''))
             if role=='button' and 'Review request' in text: return reviews
-            if role=='link' and 'Review request' in text: return Locator(items=[])
-            if role=='dialog': return empty
-            return Locator(items=[])
+            return empty
         page=SimpleNamespace(get_by_role=page_role,wait_for_timeout=AsyncMock())
         browser_context=SimpleNamespace(clear_cookies=AsyncMock(),add_cookies=AsyncMock())
         browser=SimpleNamespace(
