@@ -9,7 +9,7 @@ from app.provisioning.advertising_page import AdvertisingPageStore,ensure_common
 from app.provisioning.models import ProvisioningError,ProvisioningStep
 from app.provisioning.state import ProvisioningStateStore
 from app.provisioning.service import ProvisioningService
-from app.provisioning.page_access_handler import page_access_handler,_ads_only,_request_target_page_access,_approve_owner_page_access,_resolve_owner_page_actor
+from app.provisioning.page_access_handler import page_access_handler,_ads_only,_request_target_page_access,_approve_owner_page_access,_resolve_owner_page_actor,_resolve_target_business_name,_owner_active_partner_ads_access
 from app.facebook_business_browser import BrowserBusinessError
 
 PAGE='1270757506131209'; BM='1476521050987548'; RK='958245207339458'
@@ -291,6 +291,81 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(evidence['source'],'live_managed_pages_profile_id')
         browser.discover_managed_pages.assert_awaited_once_with(
             fast=True,navigation_timeout_ms=9000)
+
+    async def test_exact_business_id_maps_to_live_name_before_owner_reconciliation(self):
+        browser=SimpleNamespace(
+            snapshot_businesses=AsyncMock(return_value={
+                BM:'Orchid Studio a5b1ce0a76',
+                '999999999':'Other Business',
+            }))
+        name,evidence=await _resolve_target_business_name(browser,BM)
+        self.assertEqual(name,'Orchid Studio a5b1ce0a76')
+        self.assertEqual(evidence['business_id'],BM)
+        self.assertEqual(evidence['source'],'snapshot_businesses')
+
+    async def test_owner_page_access_proves_existing_partner_ads_row(self):
+        class Item:
+            async def is_visible(self): return True
+            async def evaluate(self,*args):
+                return {
+                    'row':'Orchid Studio a5b1ce0a76 Insights, Ads',
+                    'section':'Partners with access Orchid Studio a5b1ce0a76 Insights, Ads',
+                }
+        class Locator:
+            async def count(self): return 1
+            def nth(self,index): return Item()
+        page=SimpleNamespace(
+            get_by_text=lambda text,exact=False:Locator())
+        proof=await _owner_active_partner_ads_access(
+            page,'Orchid Studio a5b1ce0a76')
+        self.assertIsNotNone(proof)
+        self.assertEqual(proof['source'],'page_access_partners_with_ads')
+        self.assertIn('Ads',proof['row'])
+
+    async def test_owner_reconciliation_accepts_already_active_exact_partner(self):
+        browser_context=SimpleNamespace(
+            clear_cookies=AsyncMock(),add_cookies=AsyncMock())
+        browser=SimpleNamespace(
+            page=SimpleNamespace(),
+            _browser_context=browser_context,
+            context=SimpleNamespace(
+                cookies={'c_user':'100','i_user':'100'},
+                pages=[{'id':PAGE,'profile_id':'777777777'}]),
+            verify_page_attached=AsyncMock(return_value=False),
+            _goto=AsyncMock(),_assert_authenticated=AsyncMock(),
+        )
+        checkpoints=[]
+        async def checkpoint(patch): checkpoints.append(patch)
+        with patch(
+            'app.provisioning.page_access_handler._resolve_target_business_name',
+            new=AsyncMock(return_value=(
+                'Orchid Studio a5b1ce0a76',
+                {'source':'snapshot_businesses','business_id':BM},
+            )),
+        ), patch(
+            'app.provisioning.page_access_handler._owner_active_partner_ads_access',
+            new=AsyncMock(return_value={
+                'source':'page_access_partners_with_ads',
+                'business_name':'Orchid Studio a5b1ce0a76',
+                'row':'Orchid Studio a5b1ce0a76 Insights, Ads',
+            }),
+        ), patch(
+            'app.provisioning.page_access_handler._pick_owner_review_request',
+            new=AsyncMock(),
+        ) as pending:
+            self.assertTrue(await _approve_owner_page_access(
+                browser,{'page_id':PAGE,'name':'PrgssTeam'},BM,checkpoint))
+        pending.assert_not_awaited()
+        self.assertEqual(browser.verify_page_attached.await_count,1)
+        confirmed=[
+            row for row in checkpoints
+            if row.get('phase')=='TARGET_PAGE_ACCESS_OWNER_CONFIRMED'
+        ]
+        self.assertEqual(len(confirmed),1)
+        self.assertEqual(
+            confirmed[0]['owner_relation_proof']['source'],
+            'page_access_partners_with_ads',
+        )
 
     async def test_owner_approval_switches_to_exact_page_then_restores_user_and_verifies(self):
         events=[]
