@@ -864,6 +864,48 @@ async def _require_fp_auth_ready(profile_ids: list[str]) -> None:
             detail='FP_SESSION_NOT_READY: ' + ', '.join(not_ready),
         )
 
+
+def _view_terminal_auth_retry_profile_ids(view: dict[str, Any]) -> list[str]:
+    """Profiles whose failed item is blocked by a terminal Facebook auth state."""
+    out: list[str] = []
+    for item in view.get('items') or []:
+        if not isinstance(item,dict) or str(item.get('status') or '').upper()!='FAILED':
+            continue
+        codes={str(item.get('error_code') or '').strip().upper()}
+        for task in item.get('tasks') or []:
+            if isinstance(task,dict) and str(task.get('status') or '').upper()=='FAILED':
+                codes.add(str(task.get('error_code') or '').strip().upper())
+        if not any(code in BROWSER_TERMINAL_ACCESS_CODES for code in codes):
+            continue
+        profile=str(item.get('profile_id') or '').strip()
+        if profile and profile not in out:
+            out.append(profile)
+    return out
+
+
+async def _partition_auth_retry_profiles(
+    profile_ids: list[str],
+) -> tuple[set[str], dict[str,str]]:
+    """Preflight only terminal-auth failures before requeueing the same Job."""
+    if not profile_ids:
+        return set(),{}
+    async def check(profile_id: str):
+        try:
+            state=await profile_preflight(profile_id,purpose='business')
+            code=str(state.get('auth_error_code') or '').strip().upper()
+            ready=state.get('facebook_session_ready') is True and not bool(state.get('auth_blocked'))
+            return profile_id,ready,code or ('SESSION_NOT_READY' if not ready else '')
+        except HTTPException as exc:
+            detail=str(getattr(exc,'detail','') or '')
+            return profile_id,False,detail[:160] or f'HTTP_{exc.status_code}'
+        except Exception as exc:
+            return profile_id,False,exc.__class__.__name__
+    rows=await asyncio.gather(*(check(profile) for profile in profile_ids))
+    ready={profile for profile,is_ready,_code in rows if is_ready}
+    blocked={profile:(code or 'FACEBOOK_AUTH_REQUIRED')
+        for profile,is_ready,code in rows if not is_ready}
+    return ready,blocked
+
 def _automatic_profile_page_tasks(tasks) -> bool:
     """Automatic Page jobs validate each Facebook session inside the queue.
 
@@ -3016,13 +3058,31 @@ async def retry_failed(job_id: str, consent: dict | None = Body(default=None)) -
                 policies_owner_profile_id=profile,policies_owner_facebook_uid=page.get('owner_facebook_uid',''),
                 policies_consent_at=int(time.time()))
 
+    # Terminal Facebook auth failures are intentionally non-retryable in the
+    # worker. Retry Failed may resume them only after a fresh browser preflight
+    # proves that the profile session is usable again. Blocked profiles stay
+    # FAILED while healthy profiles from the same bulk Job can continue.
+    auth_retry_profiles=_view_terminal_auth_retry_profile_ids(current_view)
+    _auth_ready,auth_blocked=await _partition_auth_retry_profiles(auth_retry_profiles)
+    excluded_profiles=set(auth_blocked)
+
     fp_profiles=_view_fan_page_retry_profile_ids(current_view)
-    automatic=bool(fp_profiles) and all(_automatic_profile_page_tasks(item.get('tasks') or [])
-        for item in current_view.get('items',[]) if str(item.get('profile_id') or '') in fp_profiles
-        and str(item.get('status') or '').upper()=='FAILED')
-    if fp_profiles and not automatic:
-        await _require_fp_auth_ready(fp_profiles)
-    count=await store.retry_failed(job_id)
+    fp_profiles_for_gate=[
+        profile for profile in fp_profiles
+        if profile not in excluded_profiles
+    ]
+    automatic=bool(fp_profiles_for_gate) and all(
+        _automatic_profile_page_tasks(item.get('tasks') or [])
+        for item in current_view.get('items',[])
+        if str(item.get('profile_id') or '') in fp_profiles_for_gate
+        and str(item.get('status') or '').upper()=='FAILED'
+    )
+    if fp_profiles_for_gate and not automatic:
+        await _require_fp_auth_ready(fp_profiles_for_gate)
+    count=await store.retry_failed(
+        job_id,
+        excluded_profile_ids=excluded_profiles,
+    )
     view=await store.job_view(job_id)
     if view and mirror.enabled:
         try:
@@ -3031,4 +3091,9 @@ async def retry_failed(job_id: str, consent: dict | None = Body(default=None)) -
             log.error('persistent job mirror retry save failed job=%s: %s',job_id,exc)
     if count:
         await pool.enqueue_job(job_id)
-    return RetryResponse(job_id=job_id,requeued=count)
+    return RetryResponse(
+        job_id=job_id,
+        requeued=count,
+        blocked_profiles=sorted(excluded_profiles),
+        blocked_reason='FACEBOOK_AUTH_REQUIRED' if excluded_profiles else '',
+    )
