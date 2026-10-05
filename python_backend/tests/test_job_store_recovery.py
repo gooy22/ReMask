@@ -88,7 +88,7 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(access['result']['phase'],'TARGET_PAGE_ACCESS_SUBMITTED')
         self.assertEqual(access['result']['page_id'],page)
 
-    async def test_current_owner_surface_failure_retries_actor_probe_only_once(self):
+    async def test_current_owner_surface_failure_allows_one_probe_then_one_live_discovery_retry(self):
         job,item=self._seed(task_status='FAILED')
         task=(await self.store.tasks(item))[0]
         bm='1630095732002500'
@@ -126,8 +126,23 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(access['result']['owner_actor_probe_retry'])
         self.assertEqual(access['result']['phase'],'TARGET_PAGE_ACCESS_SUBMITTED')
 
-        # Simulate the one diagnostic retry failing the same way. The marker
-        # must prevent every later process restart from looping this Job.
+        # First probe can still fail because the session context had no Page
+        # actor. One later deploy may retry with live managed-Pages discovery.
+        await self.store.set_task_failed(
+            task['id'],'PAGE_OWNER_APPROVAL_UI_UNAVAILABLE',message,retryable=True,
+        )
+        await self.store.finalize_item(item)
+        await self.provisioning_state.fail(
+            item,'4','default',ProvisioningStep.PAGE_ACCESS,
+            'PAGE_OWNER_APPROVAL_UI_UNAVAILABLE',message,
+        )
+        await self.store.init()
+        self.assertEqual((await self.store.item(item))['status'],'QUEUED')
+        access=await self.provisioning_state.step(item,ProvisioningStep.PAGE_ACCESS)
+        self.assertTrue(access['result']['owner_actor_live_discovery_retry'])
+
+        # If the live-discovery attempt also fails, every later restart must
+        # leave the Job failed rather than loop the same owner-side action.
         await self.store.set_task_failed(
             task['id'],'PAGE_OWNER_APPROVAL_UI_UNAVAILABLE',message,retryable=True,
         )
