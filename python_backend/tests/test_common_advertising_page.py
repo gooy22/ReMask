@@ -260,20 +260,32 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('obsolete',str(diagnostic))
         self.assertEqual(diagnostic['v8_old_space_mb'],256)
     async def test_pending_target_request_is_not_resent_and_never_uses_owner_claim(self):
-        phases=(
+        for phase in (
             'TARGET_PAGE_ACCESS_SUBMITTED',
             'TARGET_PAGE_ACCESS_OWNER_APPROVE_CLICK_INTENT',
             'TARGET_PAGE_ACCESS_OWNER_APPROVED',
-            'TARGET_PAGE_ACCESS_OWNER_CONFIRMED',
-        )
-        for phase in phases:
+        ):
             browser=SimpleNamespace(verify_page_attached=AsyncMock(return_value=False),_open_pages_add_action=AsyncMock())
             checkpoint=AsyncMock()
             self.assertFalse(await _request_target_page_access(browser,{'page_id':PAGE},BM,checkpoint,
                 {'phase':phase}))
             browser._open_pages_add_action.assert_not_awaited()
             checkpoint.assert_not_awaited()
-            browser.verify_page_attached.assert_awaited_once_with(business_id=BM,page_id=PAGE)
+            browser.verify_page_attached.assert_not_awaited()
+
+        # OWNER_CONFIRMED is durable owner-side Ads proof. It must bypass all
+        # relation navigation and continue directly to operator assignment.
+        browser=SimpleNamespace(
+            verify_page_attached=AsyncMock(side_effect=AssertionError('must not navigate')),
+            _open_pages_add_action=AsyncMock(),
+        )
+        checkpoint=AsyncMock()
+        self.assertTrue(await _request_target_page_access(
+            browser,{'page_id':PAGE},BM,checkpoint,
+            {'phase':'TARGET_PAGE_ACCESS_OWNER_CONFIRMED'}))
+        browser.verify_page_attached.assert_not_awaited()
+        browser._open_pages_add_action.assert_not_awaited()
+        checkpoint.assert_not_awaited()
 
     async def test_operator_page_selection_prefers_exact_page_id_row_over_duplicate_name_text(self):
         clicks=[]
