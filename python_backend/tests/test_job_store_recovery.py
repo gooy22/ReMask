@@ -88,6 +88,58 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(access['result']['phase'],'TARGET_PAGE_ACCESS_SUBMITTED')
         self.assertEqual(access['result']['page_id'],page)
 
+    async def test_current_owner_surface_failure_retries_actor_probe_only_once(self):
+        job,item=self._seed(task_status='FAILED')
+        task=(await self.store.tasks(item))[0]
+        bm='1630095732002500'
+        rk='1123543757207776'
+        page='1324227614109193'
+        await self.provisioning_state.complete(
+            item,'4','default',ProvisioningStep.BUSINESS,
+            {'business_id':bm},
+        )
+        await self.provisioning_state.complete(
+            item,'4','default',ProvisioningStep.AD_ACCOUNT,
+            {'business_id':bm,'ad_account_id':rk},
+        )
+        await self.provisioning_state.set_running(
+            item,'4','default',ProvisioningStep.PAGE_ACCESS,
+        )
+        await self.provisioning_state.checkpoint(
+            item,'4','default',ProvisioningStep.PAGE_ACCESS,
+            {'phase':'TARGET_PAGE_ACCESS_SUBMITTED','page_id':page,
+             'business_id':bm,'ad_account_id':rk},
+        )
+        message='The exact pending Page access request is not visible on Page access settings'
+        await self.provisioning_state.fail(
+            item,'4','default',ProvisioningStep.PAGE_ACCESS,
+            'PAGE_OWNER_APPROVAL_UI_UNAVAILABLE',message,
+        )
+        await self.store.set_task_failed(
+            task['id'],'PAGE_OWNER_APPROVAL_UI_UNAVAILABLE',message,retryable=True,
+        )
+        await self.store.finalize_item(item)
+
+        await self.store.init()
+        self.assertEqual((await self.store.item(item))['status'],'QUEUED')
+        access=await self.provisioning_state.step(item,ProvisioningStep.PAGE_ACCESS)
+        self.assertTrue(access['result']['owner_actor_probe_retry'])
+        self.assertEqual(access['result']['phase'],'TARGET_PAGE_ACCESS_SUBMITTED')
+
+        # Simulate the one diagnostic retry failing the same way. The marker
+        # must prevent every later process restart from looping this Job.
+        await self.store.set_task_failed(
+            task['id'],'PAGE_OWNER_APPROVAL_UI_UNAVAILABLE',message,retryable=True,
+        )
+        await self.store.finalize_item(item)
+        await self.provisioning_state.fail(
+            item,'4','default',ProvisioningStep.PAGE_ACCESS,
+            'PAGE_OWNER_APPROVAL_UI_UNAVAILABLE',message,
+        )
+        await self.store.init()
+        self.assertEqual((await self.store.item(item))['status'],'FAILED')
+        self.assertEqual((await self.store.tasks(item))[0]['status'],'FAILED')
+
     async def test_legacy_owner_approval_recovery_refuses_unsubmitted_or_mismatched_state(self):
         for suffix,phase,rk_business in (
             ('pre-submit','TARGET_PAGE_ACCESS_CLICK_INTENT','1630095732002500'),
