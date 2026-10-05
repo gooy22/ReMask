@@ -104,6 +104,7 @@ class WorkerPool:
         await self.provisioning_state.init()
         await self._restore_workspace_bindings()
         recovered=await self.store.recover()
+        await self._log_recent_page_access_state()
         for item_id in recovered:
             await self.queue.put(item_id)
         self._workers=[
@@ -111,6 +112,55 @@ class WorkerPool:
             for i in range(self.concurrency)
         ]
         log.info('worker pool started concurrency=%d recovered=%d',self.concurrency,len(recovered))
+
+    async def _log_recent_page_access_state(self) -> None:
+        """Emit durable PAGE_ACCESS state so recovery outcomes are observable."""
+        def load_rows() -> list[dict[str,Any]]:
+            with self.store._connect() as con:
+                rows=con.execute(
+                    """SELECT i.job_id,i.id AS item_id,i.profile_id,
+                              i.status AS item_status,i.error_code AS item_error_code,
+                              i.error_message AS item_error_message,i.updated_at,
+                              p.status AS page_status,p.error_code AS page_error_code,
+                              p.error_message AS page_error_message,p.result_json
+                       FROM job_items i
+                       JOIN provisioning_steps p
+                         ON p.item_id=i.id AND p.step='PAGE_ACCESS'
+                       ORDER BY i.updated_at DESC
+                       LIMIT 20"""
+                ).fetchall()
+                return [dict(row) for row in rows]
+
+        try:
+            rows=await asyncio.to_thread(load_rows)
+        except Exception as exc:
+            log.warning('PAGE_ACCESS startup state audit failed: %s',exc)
+            return
+        for row in rows:
+            result={}
+            try:
+                decoded=json.loads(str(row.get('result_json') or '{}'))
+                if isinstance(decoded,dict):
+                    result=decoded
+            except (TypeError,ValueError,json.JSONDecodeError):
+                result={}
+            log.info(
+                'PAGE_ACCESS durable state job=%s item=%s profile=%s '
+                'item_status=%s item_error=%s page_status=%s page_error=%s '
+                'phase=%s page=%s business=%s ad_account=%s updated_at=%s',
+                str(row.get('job_id') or ''),
+                str(row.get('item_id') or ''),
+                str(row.get('profile_id') or ''),
+                str(row.get('item_status') or ''),
+                str(row.get('item_error_code') or ''),
+                str(row.get('page_status') or ''),
+                str(row.get('page_error_code') or ''),
+                str(result.get('phase') or ''),
+                str(result.get('page_id') or ''),
+                str(result.get('business_id') or ''),
+                str(result.get('ad_account_id') or ''),
+                str(row.get('updated_at') or ''),
+            )
 
     async def _persist_created_businesses(self) -> None:
         # Local display mirror; never contacts Meta and never marks live inventory.
@@ -413,6 +463,26 @@ class WorkerPool:
                     )
             finally:
                 await self.store.finalize_item(item_id)
+                try:
+                    current=await self.store.item(item_id)
+                    page_state=await self.provisioning_state.step(
+                        item_id,ProvisioningStep.PAGE_ACCESS
+                    )
+                    page_result=(page_state or {}).get('result') or {}
+                    log.info(
+                        'worker item finalized job=%s item=%s profile=%s '
+                        'status=%s error=%s page_status=%s page_error=%s phase=%s',
+                        str((current or {}).get('job_id') or ''),
+                        item_id,
+                        profile_id,
+                        str((current or {}).get('status') or ''),
+                        str((current or {}).get('error_code') or ''),
+                        str((page_state or {}).get('status') or ''),
+                        str((page_state or {}).get('error_code') or ''),
+                        str(page_result.get('phase') or ''),
+                    )
+                except Exception as exc:
+                    log.warning('worker item final state logging failed item=%s: %s',item_id,exc)
                 try:
                     await self._restore_workspace_bindings()
                 except Exception as exc:
