@@ -141,8 +141,9 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
         access=await self.provisioning_state.step(item,ProvisioningStep.PAGE_ACCESS)
         self.assertTrue(access['result']['owner_actor_live_discovery_retry'])
 
-        # If the live-discovery attempt also fails, every later restart must
-        # leave the Job failed rather than loop the same owner-side action.
+        # Live actor discovery can reveal that Meta already applied the request.
+        # Allow exactly one later reconciliation pass using the active partner
+        # Ads row, still from the same SUBMITTED request checkpoint.
         await self.store.set_task_failed(
             task['id'],'PAGE_OWNER_APPROVAL_UI_UNAVAILABLE',message,retryable=True,
         )
@@ -152,8 +153,9 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
             'PAGE_OWNER_APPROVAL_UI_UNAVAILABLE',message,
         )
         await self.store.init()
-        self.assertEqual((await self.store.item(item))['status'],'FAILED')
-        self.assertEqual((await self.store.tasks(item))[0]['status'],'FAILED')
+        self.assertEqual((await self.store.item(item))['status'],'QUEUED')
+        access=await self.provisioning_state.step(item,ProvisioningStep.PAGE_ACCESS)
+        self.assertTrue(access['result']['owner_active_partner_reconciliation_retry'])
 
     async def test_live_actor_failure_gets_one_active_partner_reconciliation_retry(self):
         job,item=self._seed(task_status='FAILED')
