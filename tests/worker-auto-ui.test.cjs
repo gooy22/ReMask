@@ -3,6 +3,23 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const {webcrypto} = require('node:crypto');
 const source = fs.readFileSync('railway-python-worker-ui.js', 'utf8');
+// Both BM and RK context menus must expose the same automatic bulk action.
+for(const [tab,label] of [['businesses','Добавить RK'],['ad_accounts','Проверить Assets']]){
+  let inserted;
+  const parent={querySelector(){return null;},insertBefore(action){inserted=action;}};
+  const anchor={textContent:label,parentNode:parent,cloneNode(){return {
+    tagName:'BUTTON',removeAttribute(){},setAttribute(){},addEventListener(kind,callback){this.click=callback;}};}};
+  let prepared=0;
+  const menu={state:{activeTab:tab},document:{querySelectorAll(){return [anchor];}},
+    pythonWorkerPrepareCommonPage(){prepared++;}};
+  vm.createContext(menu);
+  const begin=source.indexOf('function pythonWorkerEnhanceCommonPageMenu()');
+  vm.runInContext(source.slice(begin,source.indexOf('\nfunction pythonWorkerEl',begin)),menu);
+  menu.pythonWorkerEnhanceCommonPageMenu();
+  assert.equal(inserted.textContent,'Добавить FP');
+  inserted.click({preventDefault(){},stopPropagation(){},stopImmediatePropagation(){}});
+  assert.equal(prepared,1);
+}
 // One bulk action prepares two BM accounts per profile without any Page picker.
 (async()=>{
   const profiles=Array.from({length:100},(_,i)=>String(i+1));

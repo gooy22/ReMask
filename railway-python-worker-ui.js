@@ -246,8 +246,9 @@ async function pythonWorkerPrepareCommonPage() {
 
 function pythonWorkerEnhanceCommonPageMenu() {
   if (!state || !['businesses','ad_accounts'].includes(state.activeTab)) return;
+  const anchorLabel=state.activeTab==='businesses' ? /Добавить RK|Add RK/ : /Проверить Assets/;
   const anchor=Array.from(document.querySelectorAll('button,a,[role="menuitem"]')).find(el=>
-    /Проверить Assets/.test(String(el.textContent || '')));
+    anchorLabel.test(String(el.textContent || '')));
   if (!anchor || !anchor.parentNode || anchor.parentNode.querySelector('[data-python-common-page]')) return;
   const action=anchor.cloneNode(true);
   action.removeAttribute('id'); action.removeAttribute('onclick'); action.removeAttribute('data-action');
