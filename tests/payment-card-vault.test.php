@@ -11,7 +11,9 @@ function endpointNoCvvFixture(): void {
         copy(__DIR__.'/../railway-payment-card-vault.php',$root.'/classes/RemaskPaymentCardVault.php');
         file_put_contents($root.'/settings.php',"<?php function remask_csrf_token(){return 'fixture';}");
         file_put_contents($root.'/checkpassword.php','<?php // Isolated test authentication.');
-        file_put_contents($root.'/classes/RemaskPrivateLaunchCatalog.php',"<?php class RemaskPrivateLaunchCatalog {static function load(\$p){return [];} static function asset(\$c,\$kind,\$id){return ['id'=>\$id];}}");
+        // The PHP-side catalog can lag a confirmed worker-created RK. Payment
+        // actions must validate their exact target in the worker instead.
+        file_put_contents($root.'/classes/RemaskPrivateLaunchCatalog.php',"<?php class RemaskPrivateLaunchCatalog {static function load(\$p){return [];} static function asset(\$c,\$kind,\$id){throw new InvalidArgumentException('STALE_PHP_CATALOG');}}");
         file_put_contents($root.'/invoke.php', <<<'INVOKE'
 <?php
 putenv('REMASK_DATA_DIR='.$argv[1].'/state');

@@ -60,8 +60,10 @@ try {
     if(!in_array($action,['prepare','bind','reconcile'],true))throw new InvalidArgumentException('CARD_ACTION_INVALID');
     $profile=trim((string)($input['profile']??''));$account=preg_replace('/^act_/','',trim((string)($input['account_id']??'')));
     if($profile===''||strlen($profile)>160||!preg_match('/^\d{5,30}$/D',$account))throw new InvalidArgumentException('INVALID_PAYMENT_TARGET');
-    require_once __DIR__.'/../classes/RemaskPrivateLaunchCatalog.php';
-    RemaskPrivateLaunchCatalog::asset(RemaskPrivateLaunchCatalog::load($profile),'funding',$account);
+    // The worker is the source of truth for payment targets. Its resolver
+    // accepts both synced inventory and an exact confirmed RK creation, while
+    // rejecting personal or ambiguous accounts. Requiring the PHP-side launch
+    // catalog here made a newly created RK fail until a separate inventory sync.
     if($action==='reconcile'){
         $id=(string)($input['card_id']??'');
         if(!preg_match('/^card_[a-f0-9]{24}$/D',$id))throw new InvalidArgumentException('CARD_NOT_FOUND');
@@ -121,8 +123,13 @@ try {
     card_out(['ok'=>false,'error'=>['message'=>$e->getMessage()]],400);
 }catch(Throwable $e){
     // Raw request bodies, browser errors, PAN and CVV must never reach logs.
-    $safe=['CARD_STORAGE_UNAVAILABLE','CARD_KEY_MISSING','CARD_KEY_INVALID','CARD_ENCRYPTION_FAILED','CARD_DECRYPTION_FAILED','CARD_STORAGE_INVALID','CARD_WORKER_KEY_UNAVAILABLE','CARD_WORKER_RESULT_UNKNOWN',
-        'SESSION_EXPIRED','CHECKPOINT_REQUIRED','TWO_FACTOR_REQUIRED','PROFILE_CONTEXT_ERROR','PAYMENT_INSPECTION_TIMEOUT','PAYMENT_BROWSER_CRASHED'];
-    $code=in_array($e->getMessage(),$safe,true)?$e->getMessage():'CARD_OPERATION_FAILED';
+    $message=$e->getMessage();
+    $code=preg_match('/^(?:CARD|PAYMENT|PROFILE|INVALID|PRIVATE_LAUNCH|SESSION|CHECKPOINT|TWO_FACTOR)_[A-Z0-9_]{1,80}$/D',$message)
+        ? $message : 'CARD_OPERATION_FAILED';
+    error_log(sprintf('[payment-card] operation=%s profile=%s account=%s exception=%s code=%s',
+        preg_replace('/[^A-Za-z0-9_.-]/','_', (string)($input['action']??'')),
+        preg_replace('/[^A-Za-z0-9_.-]/','_', (string)($input['profile']??'')),
+        preg_replace('/[^0-9]/','', (string)($input['account_id']??'')),
+        get_class($e),$code));
     card_out(['ok'=>false,'error'=>['message'=>$code]],503);
 }
