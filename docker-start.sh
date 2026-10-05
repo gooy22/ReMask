@@ -101,7 +101,13 @@ mkdir -p /usr/local/etc/php/conf.d
 cat > /usr/local/etc/php/conf.d/remask-session.ini <<EOF
 session.save_handler = files
 session.save_path = "$REMASK_PHP_SESSION_DIR"
+session.gc_maxlifetime = 604800
+session.cookie_lifetime = 604800
+session.cookie_httponly = 1
+session.cookie_samesite = Lax
 EOF
+
+echo "[ui-session] configured save_path=$REMASK_PHP_SESSION_DIR persistent=1" >&2
 
 if [ "${REMASK_JOB_EXECUTION_MODE:-browser}" = "background" ] && [ -f "$ROOT/bin/remask-worker.php" ]; then
   (
