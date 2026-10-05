@@ -301,7 +301,7 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
             _unused=True,
         )
         browser=SimpleNamespace(page=page,_diagnostic=AsyncMock(return_value={'stage':'operator'}))
-        proof=await _select_page(browser,'PrgssTeam',PAGE)
+        proof=await _select_page(browser,'PrgssTeam',PAGE,BM)
         self.assertEqual(proof['source'],'row_exact_page_id')
         self.assertEqual(clicks,['target-button'])
 
