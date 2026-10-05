@@ -143,6 +143,7 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
                             await checkpoint(patch)
                         await browser.add_existing_page(business_id=owner,page_id=page_id,before_submit=owner_checkpoint)
                         await store.patch(ownership_phase='PAGE_ATTACHED')
+                    await store.patch(owner_business_confirmed=True)
                     if business!=owner:
                         saved_grant=(config.get('grants') or {}).get(business) or {}
                         await _share_partner(browser,config,business,checkpoint,saved_grant or prior)
@@ -152,6 +153,10 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
         if profile!=config['owner_profile_id']:
             async with FacebookBusinessBrowser(session.context,v8_old_space_mb=256) as browser:
                 await _assign_operator(browser,config,business)
+        if params.get('verify_identity') is not True:
+            return {'page_id':config['page_id'],'page_name':config['name'],'business_id':business,
+                'ad_account_id':account,'page_shared_to_business':True,'ad_account_page_access_verified':False,
+                'identity_verification':'not_requested','transport':'business_page_advertise_share_ui'}
         await checkpoint({'phase':'VERIFY_AD_IDENTITY','page_shared_to_business':True})
         async with FacebookBusinessBrowser(session.context,v8_old_space_mb=128) as browser:
             proof=await asyncio.wait_for(inspect_browser_pages(browser,account,business),timeout=55)

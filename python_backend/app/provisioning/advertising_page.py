@@ -47,7 +47,7 @@ async def ensure_common_page(session: Any, params: dict, state: Any, resolver: A
                 if str(p.get('name') or '').casefold()==page['name'].casefold()]
             if len({p['id'] for p in known})>1:
                 raise ProvisioningError('COMMON_PAGE_AMBIGUOUS','Several saved Pages have the workspace advertising name')
-            if known and known[0].get('main_business_confirmed') is True:
+            if known:
                 selected=known[0]
             else:
                 if session.context.profile_id==owner:
@@ -60,10 +60,9 @@ async def ensure_common_page(session: Any, params: dict, state: Any, resolver: A
                     from .models import ProvisioningStep
                     await state.set_running('workspace-common-page-'+owner,owner,'workspace-common-page',ProvisioningStep.FAN_PAGES)
                     creation={'names':[page['name']],'count':1,'category':params.get('category') or 'Digital creator',
-                         'confirm_main_business':True,'require_policy_consent':True,
+                         'confirm_main_business':False,'require_policy_consent':True,
                          'policies_accepted':page.get('policies_accepted') is True and page.get('policies_name')==page['name']
                              and page.get('policies_owner_profile_id')==owner}
-                    if known: creation.update(mode='confirm_existing',existing_page_id=known[0]['id'],page_name=known[0]['name'])
                     result=await fan_pages_handler(owner_session,creation, {},
                         provisioning_state=state,item_id='workspace-common-page-'+owner,
                         profile_id=owner,scope_key='workspace-common-page')

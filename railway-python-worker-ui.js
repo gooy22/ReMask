@@ -3580,7 +3580,7 @@ async function pythonWorkerOpenSelectedBusinessAdAccountModal() {
   timezoneField.className = 'pwbm-field';
   const timezone = document.createElement('input');
   timezone.type = 'number';
-  timezone.value = '1';
+  timezone.value = '137';
   timezone.min = '0';
   timezone.placeholder = 'Meta timezone_id';
   timezoneField.appendChild(timezone);
@@ -3736,7 +3736,7 @@ async function pythonWorkerOpenOwnAdAccountModal() {
     const timezone = document.createElement('input');
     timezone.type = 'number';
     timezone.className = 'pwbm-manual';
-    timezone.value = '1';
+    timezone.value = '137';
     timezone.min = '0';
     timezone.placeholder = 'Meta timezone_id';
 
@@ -3965,7 +3965,7 @@ async function pythonWorkerOpenAutoModal() {
   head.append(title, close);
   const body = document.createElement('div'); body.className = 'pwbm-body';
   const note = document.createElement('div'); note.className = 'pwbm-note';
-  note.textContent = 'Одна общая FP PrgssTeam. Каждый комплект: отдельный BM → его РК → доступ к PrgssTeam → проверка выбора FP в форме рекламы. Страница создаётся один раз на профиле 9 и используется повторно.';
+  note.textContent = 'Одна общая FP PrgssTeam. Каждый комплект: отдельный BM → его РК → доступ к PrgssTeam. Правила принимаются автоматически после первого подтверждения. Страница создаётся один раз на профиле 9 и используется повторно.';
   body.appendChild(note);
   function field(label, input) {
     const holder = document.createElement('label'); holder.className = 'pwbm-field';
@@ -3981,7 +3981,7 @@ async function pythonWorkerOpenAutoModal() {
   field('Комплектов на каждый профиль (1–20)', count);
   const category = document.createElement('input'); category.value = 'Digital creator'; field('Категория FP', category);
   const currency = document.createElement('input'); currency.value = 'USD'; currency.maxLength = 3; field('Валюта РК', currency);
-  const timezone = document.createElement('input'); timezone.type = 'number'; timezone.min = '0'; timezone.value = '1'; field('Meta timezone_id РК', timezone);
+  const timezone = document.createElement('select'); [['137','Киев (Europe/Kyiv)'],['474','UTC'],['1','Лос-Анджелес (America/Los_Angeles)']].forEach(function(pair){const option=document.createElement('option');option.value=pair[0];option.textContent=pair[1];timezone.appendChild(option);}); timezone.value='137'; field('Часовой пояс РК', timezone);
   const footer = document.createElement('div'); footer.className = 'pwbm-footer';
   const status = document.createElement('div'); status.className = 'pwbm-status';
   const actions = document.createElement('div'); actions.className = 'pwbm-actions';
@@ -4005,7 +4005,7 @@ async function pythonWorkerOpenAutoModal() {
     const valid = Number.isInteger(n) && n >= 1 && n <= 20 && total <= 500 && category.value.trim()
       && (!rk || (/^[A-Z]{3}$/.test(currency.value.trim().toUpperCase()) && Number.isInteger(Number(timezone.value)) && Number(timezone.value) >= 0 && timezone.value.trim()));
     create.disabled = pythonWorkerUiState.busy || !valid;
-    status.textContent = valid ? 'Общая FP: PrgssTeam. BM: ' + (Number(mode.value) >= 3 ? total : 0) + ', РК этих BM: ' + (rk ? total : 0) + '. Доступ к FP проверяется автоматически.'
+    status.textContent = valid ? 'Общая FP: PrgssTeam. BM: ' + (Number(mode.value) >= 3 ? total : 0) + ', РК этих BM: ' + (rk ? total : 0) + '. Доступ к FP настраивается автоматически.'
       : 'Нужны категория, число комплектов 1–20 и параметры РК. Всего не больше 500 комплектов.';
   }
   [mode, count, category, currency, timezone].forEach(function(input) { input.addEventListener('input', refresh); input.addEventListener('change', refresh); });

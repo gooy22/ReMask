@@ -137,6 +137,23 @@ class JobStore:
                     con.execute("PRAGMA foreign_keys=ON")
             self._recover_legacy_fp_page_crashes(con)
             self._recover_common_page_checkpoint_failure(con)
+            self._repair_unstarted_prgssteam_rk_timezone(con)
+
+    @staticmethod
+    def _repair_unstarted_prgssteam_rk_timezone(con: sqlite3.Connection) -> None:
+        # The saved trial used the old UI's timezone default. Change it only
+        # while no RK step has ever started; preserve every submitted RK.
+        if not con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='provisioning_steps'").fetchone(): return
+        rows=con.execute("SELECT t.id,t.payload_json FROM job_tasks t JOIN job_items i ON i.id=t.item_id "
+            "WHERE i.job_id=? AND t.status='FAILED' AND NOT EXISTS "
+            "(SELECT 1 FROM provisioning_steps s WHERE s.item_id=i.id AND s.step='AD_ACCOUNT')",
+            ('cbd636ff53bd48c89259b015f2775797',)).fetchall()
+        for row in rows:
+            payload=json.loads(row['payload_json']); params=payload.get('parameters') or {}
+            rk=params.get('AD_ACCOUNT') or {}
+            if (params.get('FAN_PAGES') or {}).get('common_page') is True and rk.get('timezone_id')==1 and rk.get('currency')=='USD':
+                rk['timezone_id']=137
+                con.execute('UPDATE job_tasks SET payload_json=? WHERE id=?',(json.dumps(payload),row['id']))
 
     @staticmethod
     def _recover_common_page_checkpoint_failure(con: sqlite3.Connection) -> None:

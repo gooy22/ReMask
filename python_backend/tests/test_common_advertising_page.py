@@ -34,19 +34,20 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
             a,b=await asyncio.gather(*[ensure_common_page(session,{},self.state,None) for _ in range(2)])
         self.assertEqual(len(calls),1)
         self.assertEqual(calls[0][0]['names'],['PrgssTeam'])
-        self.assertTrue(calls[0][0]['confirm_main_business'])
+        self.assertFalse(calls[0][0]['confirm_main_business'])
         self.assertEqual(a['page_ids'],b['page_ids'])
         self.assertEqual((await AdvertisingPageStore(self.state).get())['page_id'],PAGE)
         self.assertEqual((await self.state.latest_profile_fan_pages('9'))[0]['id'],PAGE)
 
-    async def test_existing_unconfirmed_brand_page_is_confirmed_without_creating_a_second(self):
+    async def test_existing_brand_page_does_not_require_personal_rk_onboarding_confirm(self):
         await self.state.complete('existing','9','old',ProvisioningStep.FAN_PAGES,
             {'pages':[{'id':PAGE,'name':'PrgssTeam','main_business_confirmed':False}]})
         handler=AsyncMock(return_value={'pages':[{'id':PAGE,'name':'PrgssTeam','main_business_confirmed':True}]})
         with patch('app.provisioning.fan_pages_handler.fan_pages_handler',handler):
             await ensure_common_page(SimpleNamespace(context=SimpleNamespace(profile_id='9')),{},self.state,None)
-        self.assertEqual(handler.call_args.args[1]['mode'],'confirm_existing')
-        self.assertEqual(handler.call_args.args[1]['existing_page_id'],PAGE)
+        handler.assert_not_awaited()
+        self.assertEqual((await AdvertisingPageStore(self.state).get())['page_id'],PAGE)
+        self.assertFalse((await AdvertisingPageStore(self.state).get())['main_business_confirmed'])
 
     async def test_ambiguous_name_does_not_pick_an_arbitrary_public_page(self):
         await self.state.complete('old','9','old',ProvisioningStep.FAN_PAGES,
@@ -102,6 +103,24 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
                     {'existing_target':True,'business_id':BM,'ad_account_id':RK}, {},
                     provisioning_state=self.state,profile_id='9',item_id='personal',scope_key='personal')
         verify.assert_not_awaited()
+
+    async def test_native_business_access_does_not_require_ads_editor_verification(self):
+        await AdvertisingPageStore(self.state).patch(page_id=PAGE,name='PrgssTeam',owner_profile_id='9',owner_business_id=BM)
+        await self.state.complete('one','9','one',ProvisioningStep.AD_ACCOUNT,{'business_id':BM,'ad_account_id':RK})
+        browser=SimpleNamespace(verify_page_attached=AsyncMock(return_value=True))
+        factory=SimpleNamespace(__aenter__=AsyncMock(return_value=browser),__aexit__=AsyncMock(return_value=False))
+        class Lease:
+            async def __aenter__(self): return browser
+            async def __aexit__(self,*args): return False
+        session=SimpleNamespace(context=SimpleNamespace(cookies={'c_user':'61594882851656'}))
+        with patch('app.provisioning.page_access_handler.ensure_common_page',new=AsyncMock()), \
+             patch('app.provisioning.page_access_handler.FacebookBusinessBrowser',return_value=Lease()), \
+             patch('app.provisioning.page_access_handler.inspect_browser_pages',new=AsyncMock()) as inspect:
+            result=await page_access_handler(session,{}, {'business_id':BM,'ad_account_id':RK},
+                provisioning_state=self.state,profile_id='9',item_id='one',scope_key='one')
+        self.assertTrue(result['page_shared_to_business'])
+        self.assertFalse(result['ad_account_page_access_verified'])
+        inspect.assert_not_awaited()
 
 
 class AdsPermissionTests(unittest.IsolatedAsyncioTestCase):

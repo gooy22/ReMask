@@ -53,7 +53,7 @@ def expand_auto_profiles(profiles: list[Any], job_id: str) -> list[Any]:
             params["FAN_PAGES"]["names"] = [page_name]
             params["FAN_PAGES"]["count"] = 1
             params["FAN_PAGES"]["mode"] = "create"
-            params["FAN_PAGES"]["confirm_main_business"] = True
+            params["FAN_PAGES"]["confirm_main_business"] = False
             params["FAN_PAGES"]["common_page"] = True
             for key in ("page_id", "existing_page_id", "business_id", "bm_id", "ad_account_id"):
                 params["FAN_PAGES"].pop(key, None)
