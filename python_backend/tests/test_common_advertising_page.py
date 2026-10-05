@@ -246,6 +246,29 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
             ('Request shared access to a Facebook Page','Request access to a Page'))
         browser.add_existing_page.assert_not_awaited()
 
+    async def test_native_confirm_access_action_preserves_submit_checkpoint(self):
+        events=[]
+        async def checkpoint(patch): events.append(patch['phase'])
+        async def click(**kwargs): events.append('CLICK_CONFIRM')
+        submit=SimpleNamespace(count=AsyncMock(return_value=1),is_visible=AsyncMock(return_value=True),
+            is_enabled=AsyncMock(return_value=True),click=AsyncMock(side_effect=click))
+        def dialog_role(role,**kwargs):
+            self.assertEqual(role,'button'); self.assertIsNotNone(kwargs['name'].fullmatch('Confirm'))
+            self.assertIsNone(kwargs['name'].fullmatch('Add Page'))
+            return submit
+        dialog=SimpleNamespace(count=AsyncMock(return_value=1),get_by_role=dialog_role)
+        dialog.filter=lambda **kwargs:dialog
+        next_button=SimpleNamespace(count=AsyncMock(return_value=0)); next_button.filter=lambda **kwargs:next_button
+        page=SimpleNamespace(wait_for_timeout=AsyncMock(),
+            get_by_role=lambda role,**kwargs:dialog if role=='dialog' else next_button)
+        browser=SimpleNamespace(page=page,verify_page_attached=AsyncMock(side_effect=[False,True]),
+            _open_pages_add_action=AsyncMock(return_value=True),_click_named=AsyncMock(return_value=True),
+            _fill_page_add_identifier=AsyncMock(return_value=True),_click_exact_page_search_name=AsyncMock(return_value=True))
+        with patch('app.provisioning.page_access_handler._ads_only',new=AsyncMock()) as ads:
+            self.assertTrue(await _request_target_page_access(browser,{'page_id':PAGE,'name':'PrgssTeam'},BM,checkpoint,{}))
+        self.assertEqual(events,['TARGET_PAGE_ACCESS_CLICK_INTENT','CLICK_CONFIRM','TARGET_PAGE_ACCESS_SUBMITTED'])
+        ads.assert_awaited_once_with(dialog)
+
 
 class AdsPermissionTests(unittest.IsolatedAsyncioTestCase):
     async def test_ads_sharing_never_silently_accepts_full_control(self):

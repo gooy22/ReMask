@@ -67,7 +67,9 @@ async def _request_target_page_access(browser, config: dict, business: str, chec
     if await dialog.count()!=1:
         raise BrowserBusinessError('PAGE_SHARE_UI_UNAVAILABLE','Shared-access review dialog is not unique',retryable=True)
     await _ads_only(dialog)
-    submit=dialog.get_by_role('button',name=re.compile(r'^(Request access|Send request)$',re.I))
+    # The current NorthStar access wizard uses Confirm on Choose access.
+    # Scope this to the reviewed request dialog; never match ownership buttons.
+    submit=dialog.get_by_role('button',name=re.compile(r'^(Confirm|Request access|Send request)$',re.I))
     if not await _one(submit) or not await submit.is_enabled():
         raise BrowserBusinessError('PAGE_SHARE_UI_UNAVAILABLE','Shared-access final request action is unavailable',retryable=True)
     await checkpoint({'phase':'TARGET_PAGE_ACCESS_CLICK_INTENT','requested_tasks':['ADVERTISE'],
