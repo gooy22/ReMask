@@ -18,6 +18,21 @@ from app.session import ProfileContextError, ProfileResolver
 
 
 class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_exact_common_page_picker_failure_can_resume_without_submit(self):
+        job,item=self._seed(task_status='FAILED'); task=(await self.store.tasks(item))[0]
+        with self.store._connect() as con:
+            con.execute('UPDATE job_tasks SET payload_json=? WHERE id=?',
+                (json.dumps({'parameters':{'FAN_PAGES':{'common_page':True}}}),task['id']))
+        await self.provisioning_state.set_running(item,'4','default',ProvisioningStep.PAGE_ACCESS)
+        await self.provisioning_state.checkpoint(item,'4','default',ProvisioningStep.PAGE_ACCESS,
+            {'diagnostic':{'stage':'page_add_submit_missing','result_selected':False}})
+        await self.provisioning_state.fail(item,'4','default',ProvisioningStep.PAGE_ACCESS,'PAGE_ADD_UI_CHANGED','picker')
+        await self.store.set_task_failed(task['id'],'PAGE_ADD_UI_CHANGED','Meta Page-add review/submit action was not found.')
+        await self.store.finalize_item(item)
+        await self.store.init()
+        self.assertEqual(await self.store.queued_item_ids(job),[])
+        self.assertEqual(await self.store.retry_failed(job),1)
+
     async def test_completed_act_prefix_rk_restores_access_retry_without_recreation(self):
         job,item=self._seed(task_status='FAILED'); task=(await self.store.tasks(item))[0]
         await self.provisioning_state.complete(item,'4','default',ProvisioningStep.BUSINESS,{'business_id':'934505709362142'})

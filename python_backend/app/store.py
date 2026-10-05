@@ -139,6 +139,22 @@ class JobStore:
             self._recover_common_page_checkpoint_failure(con)
             self._repair_unstarted_prgssteam_rk_timezone(con)
             self._recover_premature_page_access(con)
+            self._recover_common_page_picker_failure(con)
+
+    @staticmethod
+    def _recover_common_page_picker_failure(con: sqlite3.Connection) -> None:
+        if not con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='provisioning_steps'").fetchone(): return
+        rows=con.execute("SELECT t.id,t.item_id,t.payload_json,s.result_json FROM job_tasks t "
+            "JOIN provisioning_steps s ON s.item_id=t.item_id AND s.step='PAGE_ACCESS' AND s.status='FAILED' "
+            "WHERE t.status='FAILED' AND t.action='provisioning' AND t.error_code='PAGE_ADD_UI_CHANGED' "
+            "AND t.error_message='Meta Page-add review/submit action was not found.'").fetchall()
+        for row in rows:
+            payload=json.loads(row['payload_json']); result=json.loads(row['result_json'] or '{}')
+            diagnostic=result.get('diagnostic') or {}
+            if (payload.get('parameters',{}).get('FAN_PAGES') or {}).get('common_page') is not True: continue
+            if diagnostic.get('stage')!='page_add_submit_missing' or diagnostic.get('result_selected') is not False or result.get('phase'): continue
+            con.execute('UPDATE job_tasks SET retryable=1 WHERE id=?',(row['id'],))
+            con.execute("UPDATE job_items SET retryable=1 WHERE id=? AND status='FAILED' AND error_code='PAGE_ADD_UI_CHANGED'",(row['item_id'],))
 
     @staticmethod
     def _recover_premature_page_access(con: sqlite3.Connection) -> None:

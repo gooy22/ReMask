@@ -142,7 +142,7 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
                         async def owner_checkpoint(patch):
                             if patch.get('phase'): await store.patch(ownership_phase=patch['phase'])
                             await checkpoint(patch)
-                        await browser.add_existing_page(business_id=owner,page_id=page_id,before_submit=owner_checkpoint)
+                        await browser.add_existing_page(business_id=owner,page_id=page_id,page_name=config['name'],before_submit=owner_checkpoint)
                         await store.patch(ownership_phase='PAGE_ATTACHED')
                     await store.patch(owner_business_confirmed=True)
                     if business!=owner:

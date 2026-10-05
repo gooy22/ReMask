@@ -110,6 +110,20 @@ async function bindPaymentCard(rows,card,cvv,container,reviews={}){
   });render();return [...new Set(missing)];
 }
 
+function paymentCardTargetPlan(rows,bindings,cardId){
+  const plan={fresh:[],pending:[],linked:[],blocked:[]},seen=new Set();
+  for(const row of rows){
+    const account=String(row.id).replace(/^act_/,''); const key=row.profile+'|'+account;
+    if(seen.has(key))continue;seen.add(key);
+    const binding=bindings.find(b=>b.profile===row.profile&&b.account_id===account);
+    if(binding&&['IN_PROGRESS','SUBMITTED_UNVERIFIED','ACTION_REQUIRED'].includes(binding.status)){
+      plan[!cardId||binding.card_id===cardId?'pending':'blocked'].push(row);
+    }else if(binding?.status==='LINKED'&&binding.card_id===cardId)plan.linked.push(row);
+    else plan.fresh.push(row);
+  }
+  return plan;
+}
+
 async function reconcilePaymentCard(rows,card,container){
   if(!card?.id)throw new Error('Выберите карту предыдущей попытки привязки.');
   const reviews={};
@@ -174,13 +188,18 @@ async function showFunding(){
     <div id="paymentCardProgress" class="ws-muted mt-2" aria-live="polite"></div>
     <div id="fundingResults" aria-live="polite"></div>`,'',null);
   const container=$('fundingResults'),select=$('paymentCardSelect');let cards=[],bindings=[],busy=false,reviews={},billingMissing=[];
-  const pending=()=>bindings.some(b=>['IN_PROGRESS','SUBMITTED_UNVERIFIED','ACTION_REQUIRED'].includes(b.status));
-  const retryAvailable=()=>pending()&&bindings.filter(b=>['IN_PROGRESS','SUBMITTED_UNVERIFIED','ACTION_REQUIRED'].includes(b.status)).every(b=>{
+  const targetPlan=()=>paymentCardTargetPlan(rows,bindings,select.value);
+  const pending=()=>targetPlan().pending.length>0&&targetPlan().fresh.length===0;
+  const retryAvailable=()=>pending()&&bindings.filter(b=>b.card_id===select.value&&['IN_PROGRESS','SUBMITTED_UNVERIFIED','ACTION_REQUIRED'].includes(b.status)).every(b=>{
     const review=reviews[b.profile+'|'+b.account_id];return review?.card_id===select.value&&Date.parse(review.expires_at)>Date.now();
   });
   const retryConfirmed=()=>retryAvailable()&&$('paymentCardRetryConfirmed').checked===true;
   const updatePrimary=()=>{
-    const checking=pending(),retry=retryConfirmed();$('paymentCardBind').textContent=checking?(retry?'Повторить привязку':'Проверить результат'):'Привязать и проверить';
+    const plan=targetPlan(),checking=pending(),retry=retryConfirmed();
+    $('paymentCardBind').textContent=checking?(retry?'Повторить привязку':'Проверить результат'):
+      plan.fresh.length?(plan.pending.length||plan.linked.length||plan.blocked.length?'Продолжить привязку — '+plan.fresh.length+' РК':'Привязать и проверить'):
+      plan.blocked.length?'Выберите карту незавершённой привязки':'Все выбранные РК уже привязаны';
+    $('paymentCardBind').disabled=busy||(!plan.fresh.length&&!plan.pending.length);
     $('paymentCardRetryField').hidden=!retryAvailable();
     $('paymentCardCvvField').hidden=checking&&!retry;
     $('paymentCardSaveBind').disabled=busy||checking;
@@ -214,7 +233,7 @@ async function showFunding(){
   const run=async(task,clearSecrets=true)=>{
     if(busy)return;busy=true;container.innerHTML='';
     const controls=$('workspaceModalBody').querySelectorAll('input,select,button');controls.forEach(el=>el.disabled=true);
-    $('paymentCardProgress').textContent='Выполняется проверка выбранного РК. Ожидаю ответ Meta…';
+    $('paymentCardProgress').textContent='Обработка группы из '+rows.length+' РК. Ожидаю ответ Meta…';
     try{await task();}catch(e){const line=document.createElement('div');line.className='ws-result bad';line.textContent=e.message;container.appendChild(line);}
     finally{if(clearSecrets)remaskClearPaymentSecrets();controls.forEach(el=>el.disabled=false);$('paymentCardProgress').textContent='';busy=false;updatePrimary();}
   };
@@ -223,7 +242,7 @@ async function showFunding(){
     const cvv=$('paymentCardCvv').value;
     const card=await savePaymentCard();await refreshCards(card.id);$('paymentCardNew').open=false;
     const line=document.createElement('div');line.className='ws-result ok';line.textContent='Карта •••• '+card.last4+' сохранена в ReMask.';container.appendChild(line);
-    if(bind){showMissingBilling(await bindPaymentCard(rows,card,cvv,container));await refreshCards(card.id);}
+    if(bind){const plan=targetPlan();showMissingBilling(await bindPaymentCard(plan.fresh,card,cvv,container));await refreshCards(card.id);}
   };
   select.addEventListener('change',()=>{$('paymentCardCvv').value='';$('paymentCardRetryConfirmed').checked=false;reviews={};showMissingBilling([]);updatePrimary();});
   $('paymentCardRetryConfirmed').addEventListener('change',updatePrimary);
@@ -233,13 +252,18 @@ async function showFunding(){
     const card=cards.find(c=>c.id===select.value);
     if(pending()&&!retryConfirmed()){
       $('paymentCardRetryConfirmed').checked=false;
-      reviews=await reconcilePaymentCard(rows,card,container);
+      reviews=await reconcilePaymentCard(targetPlan().pending,card,container);
     }else{
       if(!card?.id)throw new Error('Выберите сохранённую карту.');
       const confirmed=retryConfirmed(),cvv=$('paymentCardCvv').value;
       if(confirmed&&!/^\d{3,4}$/.test(cvv))throw new Error('Введите CVV для одной повторной попытки.');
       await saveExistingBilling(card);
-      try{showMissingBilling(await bindPaymentCard(rows,card,cvv,container,confirmed?reviews:{}));}
+      const plan=targetPlan(),targets=confirmed?plan.pending:plan.fresh;
+      if(!targets.length)throw new Error(plan.blocked.length?'Для незавершённых РК выберите карту предыдущей попытки.':'Все выбранные РК уже привязаны.');
+      if(plan.pending.length&&!confirmed){const note=document.createElement('div');note.className='ws-result';note.textContent='Незавершённые привязки: '+plan.pending.length+' РК. Повторная отправка пропущена.';container.appendChild(note);}
+      if(plan.linked.length){const note=document.createElement('div');note.className='ws-result ok';note.textContent='Уже привязаны: '+plan.linked.length+' РК. Пропущены.';container.appendChild(note);}
+      if(plan.blocked.length){const note=document.createElement('div');note.className='ws-result bad';note.textContent='Для '+plan.blocked.length+' РК нужно проверить предыдущую карту. Остальные продолжаются.';container.appendChild(note);}
+      try{showMissingBilling(await bindPaymentCard(targets,card,cvv,container,confirmed?reviews:{}));}
       finally{reviews={};$('paymentCardRetryConfirmed').checked=false;}
     }
     await refreshCards(card?.id||'');

@@ -609,6 +609,19 @@ class PageHydrationTests(unittest.IsolatedAsyncioTestCase):
         browser._goto.assert_not_awaited()
         self.assertEqual(browser._click_named.await_count,31)
 
+    async def test_page_autocomplete_portal_uses_exact_saved_name_and_id(self):
+        browser=FacebookBusinessBrowser(SimpleNamespace(profile_id='9'))
+        field=SimpleNamespace(count=AsyncMock(return_value=1),input_value=AsyncMock(return_value='https://www.facebook.com/1324227614109193'))
+        result=SimpleNamespace(count=AsyncMock(return_value=1),click=AsyncMock())
+        field.filter=lambda **kw:field; result.filter=lambda **kw:result
+        browser.page=SimpleNamespace(get_by_placeholder=lambda *a,**k:field,get_by_text=lambda *a,**k:result)
+        self.assertTrue(await browser._click_exact_page_search_name('1324227614109193','PrgssTeam'))
+        result.click.assert_awaited_once()
+        result.count.return_value=2
+        self.assertFalse(await browser._click_exact_page_search_name('1324227614109193','PrgssTeam'))
+        field.input_value.return_value='https://www.facebook.com/999999999'
+        self.assertFalse(await browser._click_exact_page_search_name('1324227614109193','PrgssTeam'))
+
     async def test_current_name_url_picker_receives_page_url(self):
         browser=FacebookBusinessBrowser(SimpleNamespace(profile_id='7'))
         browser.page=SimpleNamespace()

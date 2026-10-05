@@ -59,6 +59,14 @@ vm.createContext(sandbox);vm.runInContext(fs.readFileSync('railway-payment-inspe
   sandbox.$('paymentCardCvv').value='123';elements.paymentCardSelect.handlers.change();assert.equal(elements.paymentCardCvv.value,'');
   bindings=[{profile:'Fixture',account_id:'123456789',card_id:card.id,last4:'1111',status:'SUBMITTED_UNVERIFIED'},
     {profile:'Unselected',account_id:'444444444',card_id:card.id,last4:'1111',status:'IN_PROGRESS'}];
+  await sandbox.showFunding();elements.paymentCardSelect.value=card.id;elements.paymentCardCvv.value='123';requests=[];
+  assert.equal(elements.paymentCardBind.textContent,'Продолжить привязку — 1 РК');
+  assert.equal(elements.paymentCardCvvField.hidden,false);
+  await elements.paymentCardBind.handlers.click();
+  assert.equal(requests.filter(r=>r.body.action==='bind').length,1);
+  assert.equal(requests.find(r=>r.body.action==='bind').body.profile,'Other');
+  assert.equal(requests.filter(r=>r.body.action==='reconcile').length,0);
+  bindings.push({profile:'Other',account_id:'987654321',card_id:card.id,last4:'1111',status:'SUBMITTED_UNVERIFIED'});
   await sandbox.showFunding();elements.paymentCardSelect.value=card.id;
   assert.equal(elements.paymentCardBind.textContent,'Проверить результат');assert.equal(elements.paymentCardCvvField.hidden,true);
   assert.equal(elements.paymentCardSaveBind.disabled,true);
@@ -109,5 +117,17 @@ vm.createContext(sandbox);vm.runInContext(fs.readFileSync('railway-payment-inspe
   await elements.paymentCardBind.handlers.click();assert.ok(elements.paymentCardBillingMissing.innerHTML.includes('paymentCardExisting_city'));
   bindings=[];await sandbox.showFunding();assert.equal(elements.paymentCardBind.textContent,'Привязать и проверить');
   assert.equal(elements.paymentCardCvvField.hidden,false);
+  const ten=Array.from({length:10},(_,i)=>({profile:'Profile'+i,id:'act_'+(100000000+i)}));
+  const states=[{...ten[0],account_id:'100000000',card_id:card.id,status:'LINKED'},
+    {...ten[1],account_id:'100000001',card_id:card.id,status:'SUBMITTED_UNVERIFIED'},
+    {...ten[2],account_id:'100000002',card_id:card.id,status:'ACTION_REQUIRED'},
+    {...ten[3],account_id:'100000003',card_id:'card_previous',status:'IN_PROGRESS'}];
+  const plan=sandbox.paymentCardTargetPlan([...ten,ten[4]],states,card.id);
+  assert.equal(plan.fresh.length,6);assert.equal(plan.pending.length,2);
+  assert.equal(plan.linked.length,1);assert.equal(plan.blocked.length,1);
+  requests=[];bindResult={status:'LINKED',code:'CARD_LINK_OBSERVED'};
+  await sandbox.bindPaymentCard(plan.fresh,card,'123',element());
+  assert.equal(requests.length,6);assert.equal(new Set(requests.map(r=>r.body.account_id)).size,6);
+  assert.ok(requests.every(r=>r.body.number===undefined&&Number(r.body.account_id.replace('act_',''))>=100000004));
   console.log('card interface: save without CVV, masked selection, serial exact targets, uncertain results and secret clearing passed');
 })().catch(e=>{console.error(e);process.exitCode=1});

@@ -20181,11 +20181,24 @@ timeout_seconds=4.0,
             "current_url": _clean(self.page.url),
         }
 
+    async def _click_exact_page_search_name(self, page_id: str, page_name: str) -> bool:
+        # Meta renders this autocomplete outside the dialog in a portal.
+        # Require the exact ID search and one exact saved Page name, never
+        # choose a generic first suggestion or a similarly named Page.
+        field=self.page.get_by_placeholder('Facebook Page name or URL',exact=True).filter(visible=True)
+        if await field.count()!=1: return False
+        if (await field.input_value()).strip()!=f'https://www.facebook.com/{page_id}': return False
+        result=self.page.get_by_text(page_name,exact=True).filter(visible=True)
+        if await result.count()!=1: return False
+        await result.click(timeout=3000)
+        return True
+
     async def add_existing_page(
         self,
         *,
         business_id: str,
         page_id: str,
+        page_name: str = "",
         before_submit: CheckpointCallback | None = None,
     ) -> BrowserPageResult:
         business = _digits(business_id)
@@ -20366,6 +20379,10 @@ timeout_seconds=4.0,
                 # selection inside the Page-specific surface while hydration
                 # settles; never click Add/Confirm/Continue here.
                 for _ in range(6):
+                    if page_name and await self._click_exact_page_search_name(page, page_name):
+                        result_selected = True
+                        await self.page.wait_for_timeout(350)
+                        break
                     if await self._click_unique_page_add_result(
                         page_id=page,
                     ):
