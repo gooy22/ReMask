@@ -344,7 +344,8 @@ async def _wait_owner_access_surface(page, business_name: str, *, timeout_second
     deadline=asyncio.get_running_loop().time()+max(0.5,float(timeout_seconds))
     last_text=''
     polls=0
-    while asyncio.get_running_loop().time()<deadline:
+    max_polls=24
+    while asyncio.get_running_loop().time()<deadline and polls<max_polls:
         polls+=1
         try:
             text=await page.locator('body').inner_text(timeout=1800)
