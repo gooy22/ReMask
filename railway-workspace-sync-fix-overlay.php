@@ -324,7 +324,8 @@ async function syncSelection(){
     const message=errorText(e);
     const s=message.toLowerCase();
     let kind='PRIVATE_SYNC';
-    if(/checkpoint_required/.test(s))kind='CHECKPOINT_REQUIRED';
+    if(/authentication required|http 401|status 401/.test(s))kind='REMASK_AUTH_EXPIRED';
+    else if(/checkpoint_required/.test(s))kind='CHECKPOINT_REQUIRED';
     else if(/two_factor_required/.test(s))kind='TWO_FACTOR_REQUIRED';
     else if(/session_expired/.test(s))kind='SESSION_EXPIRED';
     else if(/rate.?limit|too many|code[^0-9]*(4|17|32|613)\\b/.test(s))kind='RATE_LIMIT';
