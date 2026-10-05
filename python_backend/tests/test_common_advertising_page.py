@@ -226,13 +226,20 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('obsolete',str(diagnostic))
         self.assertEqual(diagnostic['v8_old_space_mb'],256)
     async def test_pending_target_request_is_not_resent_and_never_uses_owner_claim(self):
-        browser=SimpleNamespace(verify_page_attached=AsyncMock(return_value=False),_open_pages_add_action=AsyncMock())
-        checkpoint=AsyncMock()
-        self.assertFalse(await _request_target_page_access(browser,{'page_id':PAGE},BM,checkpoint,
-            {'phase':'TARGET_PAGE_ACCESS_SUBMITTED'}))
-        browser._open_pages_add_action.assert_not_awaited()
-        checkpoint.assert_not_awaited()
-        browser.verify_page_attached.assert_awaited_once_with(business_id=BM,page_id=PAGE)
+        phases=(
+            'TARGET_PAGE_ACCESS_SUBMITTED',
+            'TARGET_PAGE_ACCESS_OWNER_APPROVE_CLICK_INTENT',
+            'TARGET_PAGE_ACCESS_OWNER_APPROVED',
+            'TARGET_PAGE_ACCESS_OWNER_CONFIRMED',
+        )
+        for phase in phases:
+            browser=SimpleNamespace(verify_page_attached=AsyncMock(return_value=False),_open_pages_add_action=AsyncMock())
+            checkpoint=AsyncMock()
+            self.assertFalse(await _request_target_page_access(browser,{'page_id':PAGE},BM,checkpoint,
+                {'phase':phase}))
+            browser._open_pages_add_action.assert_not_awaited()
+            checkpoint.assert_not_awaited()
+            browser.verify_page_attached.assert_awaited_once_with(business_id=BM,page_id=PAGE)
 
     async def test_missing_share_option_never_falls_back_to_add_existing_page(self):
         browser=SimpleNamespace(verify_page_attached=AsyncMock(return_value=False),
