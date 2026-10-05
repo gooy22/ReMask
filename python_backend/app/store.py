@@ -511,6 +511,20 @@ class JobStore:
                 # One retry is safe after adding the read-only exact-asset route.
                 retry_marker='operator_exact_asset_route_retry'
             elif (
+                str(row['error_code'] or '')=='PAGE_OPERATOR_PAGE_SELECTION_UNAVAILABLE'
+                and page.get('operator_rk_readonly_probe_retry') is not True
+            ):
+                diagnostic=page.get('diagnostic') if isinstance(page.get('diagnostic'),dict) else {}
+                surface=diagnostic.get('business_pages_surface') if isinstance(
+                    diagnostic.get('business_pages_surface'),dict) else {}
+                if str(surface.get('direct_route_error_code') or '')!='CHECKPOINT_REQUIRED':
+                    continue
+                # The exact Business Settings asset route hit a Facebook
+                # checkpoint before any Assign/Save mutation. New code first
+                # asks the exact RK read-only whether Page access is already
+                # effective, so this one continuation cannot duplicate a write.
+                retry_marker='operator_rk_readonly_probe_retry'
+            elif (
                 str(row['error_code'] or '')=='FACEBOOK_NAVIGATION_FAILED'
                 and page.get('operator_preconfirmed_navigation_retry') is not True
             ):
