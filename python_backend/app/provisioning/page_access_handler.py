@@ -1,6 +1,7 @@
 """Prepare one shared Page after the RK creation checkpoint, then prove Identity."""
 from __future__ import annotations
 import asyncio
+import logging
 import re
 from typing import Any
 
@@ -9,6 +10,8 @@ from ..page_access_inspection import inspect_browser_pages
 from .advertising_page import AdvertisingPageStore, _PAGE_LOCK, ensure_common_page
 from .models import ProvisioningError, ProvisioningStep
 from .ad_account_handler import _normalize_ad_account_id
+
+log=logging.getLogger('remask.page_access')
 
 
 async def _one(locator):
@@ -371,6 +374,25 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
             raise ProvisioningError('CREATED_BUSINESS_RK_REQUIRED','RK creation result does not match this portfolio')
     await ensure_common_page(session,{'page_id':params.get('page_id'),'reuse_only':params.get('reuse_only') is True,'policies_accepted':params.get('policies_accepted') is not False},state,resolver)
     store=AdvertisingPageStore.for_context(state,session.context,profile); config=await store.get()
+    context_pages=[
+        {
+            'id':str(row.get('id') or ''),
+            'profile_id':str(row.get('profile_id') or ''),
+            'business_id':str(row.get('business_id') or ''),
+            'is_owned':row.get('is_owned'),
+            'source':str(row.get('source') or ''),
+        }
+        for row in (getattr(session.context,'pages',None) or [])
+        if isinstance(row,dict) and str(row.get('id') or '')==str(config.get('page_id') or '')
+    ]
+    log.info(
+        'PAGE_ACCESS actor context profile=%s page=%s owner_business=%s ownership_phase=%s context=%s',
+        profile,
+        str(config.get('page_id') or ''),
+        str(config.get('owner_business_id') or ''),
+        str(config.get('ownership_phase') or ''),
+        context_pages,
+    )
     prior=((await state.step(item,ProvisioningStep.PAGE_ACCESS)) or {}).get('result') or {}
     async def checkpoint(patch):
         phase=str(patch.get('phase') or '')
