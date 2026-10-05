@@ -4033,7 +4033,7 @@ async function pythonWorkerOpenAutoModal() {
   head.append(title, close);
   const body = document.createElement('div'); body.className = 'pwbm-body';
   const note = document.createElement('div'); note.className = 'pwbm-note';
-  note.textContent = 'Одна общая FP PrgssTeam. Каждый комплект: отдельный BM → его РК → доступ к PrgssTeam. Правила принимаются автоматически после первого подтверждения. Страница создаётся один раз на профиле 9 и используется повторно.';
+  note.textContent = 'Одна FP PrgssTeam на каждый FB-аккаунт. Все его новые BM и РК используют эту же страницу. Система сама найдёт или создаст FP и подготовит доступ; выбирать страницы для каждого профиля не требуется.';
   body.appendChild(note);
   function field(label, input) {
     const holder = document.createElement('label'); holder.className = 'pwbm-field';
@@ -4073,7 +4073,7 @@ async function pythonWorkerOpenAutoModal() {
     const valid = Number.isInteger(n) && n >= 1 && n <= 20 && total <= 500 && category.value.trim()
       && (!rk || (/^[A-Z]{3}$/.test(currency.value.trim().toUpperCase()) && Number.isInteger(Number(timezone.value)) && Number(timezone.value) >= 0 && timezone.value.trim()));
     create.disabled = pythonWorkerUiState.busy || !valid;
-    status.textContent = valid ? 'Общая FP: PrgssTeam. BM: ' + (Number(mode.value) >= 3 ? total : 0) + ', РК этих BM: ' + (rk ? total : 0) + '. Доступ к FP настраивается автоматически.'
+    status.textContent = valid ? 'FP каждого профиля: PrgssTeam. BM: ' + (Number(mode.value) >= 3 ? total : 0) + ', РК этих BM: ' + (rk ? total : 0) + '. Доступ к FP настраивается автоматически.'
       : 'Нужны категория, число комплектов 1–20 и параметры РК. Всего не больше 500 комплектов.';
   }
   [mode, count, category, currency, timezone].forEach(function(input) { input.addEventListener('input', refresh); input.addEventListener('change', refresh); });
