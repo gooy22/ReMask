@@ -1008,14 +1008,31 @@ class JobStore:
             self._recover_owner_confirmed_operator_assignment(con)
         return imported
 
-    async def retry_failed(self, job_id: str) -> int:
-        return await asyncio.to_thread(self._retry_failed_sync, job_id)
+    async def retry_failed(
+        self,
+        job_id: str,
+        *,
+        excluded_profile_ids: set[str] | None = None,
+    ) -> int:
+        excluded=tuple(sorted({
+            str(value).strip()
+            for value in (excluded_profile_ids or set())
+            if str(value).strip()
+        }))
+        return await asyncio.to_thread(
+            self._retry_failed_sync, job_id, excluded
+        )
 
-    def _retry_failed_sync(self, job_id: str) -> int:
+    def _retry_failed_sync(
+        self,
+        job_id: str,
+        excluded_profile_ids: tuple[str, ...] = (),
+    ) -> int:
         now=_now()
+        excluded=set(excluded_profile_ids)
         with self._connect() as con:
             rows=con.execute(
-                """SELECT id FROM job_items
+                """SELECT id,profile_id FROM job_items
                    WHERE job_id=? AND status='FAILED'
                      AND (
                        retryable=1
@@ -1028,7 +1045,11 @@ class JobStore:
                      )""",
                 (job_id,),
             ).fetchall()
-            ids=[str(r['id']) for r in rows]
+            ids=[
+                str(row['id'])
+                for row in rows
+                if str(row['profile_id'] or '') not in excluded
+            ]
             for item_id in ids:
                 con.execute(
                     "UPDATE job_items SET status='QUEUED',error_code=NULL,error_message=NULL,retryable=0,updated_at=? WHERE id=?",
