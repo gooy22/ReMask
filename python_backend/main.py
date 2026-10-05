@@ -1857,7 +1857,16 @@ async def profile_live_inventory(
             # Historical BM->RK bindings are hints, not the authoritative full
             # profile inventory. Use this direct fast path only for an explicit
             # scoped request; full profile Sync performs live BM discovery first.
-            if known_accounts_by_business and requested_business_ids:
+            # REMASK_SCOPED_SETTINGS_FIRST_V1
+            # Ads Manager can trigger an account-level checkpoint even while
+            # Business Suite Settings remains readable. Keep the historical
+            # fast-path opt-in only; normal Sync verifies BM/RK via Settings first.
+            if (
+                known_accounts_by_business
+                and requested_business_ids
+                and str(os.getenv('REMASK_SYNC_ADS_MANAGER_FASTPATH','0')).strip().lower()
+                    in {'1','true','yes'}
+            ):
                 stage='confirmed_hint_revalidation'
                 fast_started=time.monotonic()
                 for hinted_business_id,expected_ids in sorted(
@@ -2186,6 +2195,30 @@ async def profile_live_inventory(
                 last_error=None
                 for attempt in range(2):
                     try:
+                        # REMASK_SCOPED_SETTINGS_FIRST_V1
+                        # Verify the exact BM/RK in Business Suite Settings before
+                        # touching Ads Manager. Profile 9 demonstrated that Ads
+                        # Manager can checkpoint an otherwise readable Business
+                        # Suite session.
+                        rk_settings_timeout=budget(16.0)
+                        settings_inventory=await hard_deadline(
+                            browser.snapshot_ad_accounts_for_business(
+                                business_id=str(business_id),
+                                timeout_seconds=8.0,
+                                expected_account_name=expected_account_names.get(str(business_id),''),
+                            ),
+                            rk_settings_timeout,
+                        )
+                        if (
+                            settings_inventory.get('ready')
+                            or settings_inventory.get('confirmed_empty')
+                            or bool(settings_inventory.get('accounts'))
+                        ):
+                            settings_inventory['ads_manager_diagnostic']={}
+                            return settings_inventory
+
+                        # Settings was genuinely inconclusive. Only now use the
+                        # selected-account Ads Manager probe as a fallback.
                         try:
                             rk_ads_timeout=budget(12.0)
                             ads_probe=await hard_deadline(
@@ -2204,7 +2237,7 @@ async def profile_live_inventory(
                         except asyncio.TimeoutError:
                             log.warning(
                                 'live inventory profile=%s business=%s Ads Manager '
-                                'scope probe timed out; releasing browser lease',
+                                'fallback scope probe timed out; releasing browser lease',
                                 clean_profile,
                                 business_id,
                             )
@@ -2229,8 +2262,6 @@ async def profile_live_inventory(
                                     'confirmed_empty':False,
                                     'accounts':confirmed_accounts,
                                     'accounts_count':len(confirmed_accounts),
-                                    # This probe confirms a selected RK, not the
-                                    # complete Business Settings account list.
                                     'accounts_partial':True,
                                     'source':str(
                                         ads_probe.get('confirmation_source')
@@ -2252,15 +2283,6 @@ async def profile_live_inventory(
                                     'ads_manager_diagnostic':ads_probe,
                                 }
 
-                        rk_settings_timeout=budget(16.0)
-                        settings_inventory=await hard_deadline(
-                            browser.snapshot_ad_accounts_for_business(
-                                business_id=str(business_id),
-                                timeout_seconds=8.0,
-                                expected_account_name=expected_account_names.get(str(business_id),''),
-                            ),
-                            rk_settings_timeout,
-                        )
                         settings_inventory['ads_manager_diagnostic']=ads_probe
                         return settings_inventory
                     except BrowserBusinessError as exc:
