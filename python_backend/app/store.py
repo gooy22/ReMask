@@ -480,7 +480,8 @@ class JobStore:
                  AND t.error_code IN (
                    'PAGE_SHARE_UI_UNAVAILABLE',
                    'PAGE_OPERATOR_PAGE_SELECTION_UNAVAILABLE',
-                   'PAGE_OPERATOR_ASSIGNMENT_REQUIRED'
+                   'PAGE_OPERATOR_ASSIGNMENT_REQUIRED',
+                   'FACEBOOK_NAVIGATION_FAILED'
                  )
             """
         ).fetchall()
