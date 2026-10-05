@@ -509,6 +509,15 @@ class JobStore:
                 # mutation because the exact Page asset could not be selected.
                 # One retry is safe after adding the read-only exact-asset route.
                 retry_marker='operator_exact_asset_route_retry'
+            elif (
+                str(row['error_code'] or '')=='FACEBOOK_NAVIGATION_FAILED'
+                and page.get('operator_preconfirmed_navigation_retry') is not True
+            ):
+                # Legacy operator flow re-navigated verify_page_attached even
+                # after OWNER_CONFIRMED and could fail before Page selection.
+                # New code skips that redundant navigation and checkpoints any
+                # future Assign/Save intent before mutation.
+                retry_marker='operator_preconfirmed_navigation_retry'
             else:
                 continue
 
