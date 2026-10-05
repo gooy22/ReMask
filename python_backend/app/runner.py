@@ -10,6 +10,7 @@ from typing import Any, Awaitable, Callable
 
 from .mirror import MirrorError, SnapshotMirror
 from .provisioning import ProvisioningError, ProvisioningService, ProvisioningStateStore
+from .provisioning.models import ProvisioningStep
 from .provisioning.timeouts import browser_provisioning_hard_timeout
 from .router import RoutePolicyError, TransparentPostRouter
 from .session import ProfileResolver, ProfileSession, ProfileContextError, ProxyCheckError
