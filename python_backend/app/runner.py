@@ -184,20 +184,33 @@ class WorkerPool:
             for profile_id in profiles:
                 store=AdvertisingPageStore(self.provisioning_state,profile_id)
                 facebook_uid=''
+                page_context=[]
                 try:
                     context=await asyncio.wait_for(self.resolver.resolve(profile_id),timeout=3)
                     facebook_uid=str((getattr(context,'cookies',{}) or {}).get('c_user') or '')
                     store=AdvertisingPageStore.for_context(self.provisioning_state,context,profile_id)
+                    page_context=[
+                        {
+                            'id':str(row.get('id') or ''),
+                            'profile_id':str(row.get('profile_id') or ''),
+                            'business_id':str(row.get('business_id') or ''),
+                            'is_owned':row.get('is_owned'),
+                        }
+                        for row in (getattr(context,'pages',None) or [])
+                        if isinstance(row,dict)
+                    ]
                 except Exception:
                     pass
                 page=await store.get()
                 grants=page.get('grants') if isinstance(page.get('grants'),dict) else {}
                 grant_phases={str(key):str((value or {}).get('phase') or '')
                     for key,value in grants.items() if isinstance(value,dict)}
+                target_context=[row for row in page_context
+                    if row.get('id')==str(page.get('page_id') or '')]
                 log.info(
                     'ADVERTISING_PAGE durable state profile=%s facebook_uid=%s '
                     'page=%s name=%s owner_profile=%s owner_business=%s '
-                    'ownership_phase=%s owner_business_confirmed=%s grants=%s',
+                    'ownership_phase=%s owner_business_confirmed=%s grants=%s page_context=%s',
                     profile_id,
                     facebook_uid,
                     str(page.get('page_id') or ''),
@@ -207,6 +220,7 @@ class WorkerPool:
                     str(page.get('ownership_phase') or ''),
                     bool(page.get('owner_business_confirmed')),
                     json.dumps(grant_phases,separators=(',',':')),
+                    json.dumps(target_context,separators=(',',':')),
                 )
         except Exception as exc:
             log.warning('ADVERTISING_PAGE startup state audit failed: %s',exc)
