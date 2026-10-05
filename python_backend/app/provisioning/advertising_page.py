@@ -57,6 +57,8 @@ async def ensure_common_page(session: Any, params: dict, state: Any, resolver: A
                 else:
                     raise ProvisioningError('COMMON_PAGE_OWNER_UNAVAILABLE','The advertising Page owner profile is unavailable')
                 try:
+                    from .models import ProvisioningStep
+                    await state.set_running('workspace-common-page-'+owner,owner,'workspace-common-page',ProvisioningStep.FAN_PAGES)
                     creation={'names':[page['name']],'count':1,'category':params.get('category') or 'Digital creator',
                          'confirm_main_business':True}
                     if known: creation.update(mode='confirm_existing',existing_page_id=known[0]['id'],page_name=known[0]['name'])
@@ -64,7 +66,6 @@ async def ensure_common_page(session: Any, params: dict, state: Any, resolver: A
                         provisioning_state=state,item_id='workspace-common-page-'+owner,
                         profile_id=owner,scope_key='workspace-common-page')
                     selected=result['pages'][0]
-                    from .models import ProvisioningStep
                     await state.complete('workspace-common-page-'+owner,owner,'workspace-common-page',ProvisioningStep.FAN_PAGES,result)
                 finally:
                     if owner_session is not session: await owner_session.close()

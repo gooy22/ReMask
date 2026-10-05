@@ -136,6 +136,23 @@ class JobStore:
                 finally:
                     con.execute("PRAGMA foreign_keys=ON")
             self._recover_legacy_fp_page_crashes(con)
+            self._recover_common_page_checkpoint_failure(con)
+
+    @staticmethod
+    def _recover_common_page_checkpoint_failure(con: sqlite3.Connection) -> None:
+        # The shared Page's missing step row failed before the final CREATE
+        # callback could return. Preserve the Job and restore manual retry only.
+        rows=con.execute("SELECT id,item_id,payload_json,error_message FROM job_tasks "
+            "WHERE status='FAILED' AND action='provisioning' AND error_code='TASK_FAILED' "
+            "AND error_message='cannot checkpoint FAN_PAGES: step row does not exist for item workspace-common-page-9'").fetchall()
+        for row in rows:
+            try: payload=json.loads(row['payload_json'])
+            except (ValueError,TypeError): continue
+            if (payload.get('parameters',{}).get('FAN_PAGES') or {}).get('common_page') is not True: continue
+            code='COMMON_PAGE_STATE_REPAIRED'
+            con.execute("UPDATE job_tasks SET error_code=?,retryable=1 WHERE id=?",(code,row['id']))
+            con.execute("UPDATE job_items SET error_code=?,retryable=1 WHERE id=? AND status='FAILED' AND error_code='TASK_FAILED'",
+                (code,row['item_id']))
 
     @staticmethod
     def _recover_legacy_fp_page_crashes(con: sqlite3.Connection) -> None:

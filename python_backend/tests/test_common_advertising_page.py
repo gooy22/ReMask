@@ -24,7 +24,10 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
     async def test_parallel_units_create_and_confirm_one_page_and_reuse_saved_identity(self):
         calls=[]
         async def create(session,params,snapshot,**kwargs):
-            calls.append((params,kwargs)); await asyncio.sleep(.01)
+            calls.append((params,kwargs))
+            await kwargs['provisioning_state'].checkpoint(kwargs['item_id'],kwargs['profile_id'],kwargs['scope_key'],
+                ProvisioningStep.FAN_PAGES,{'phase':'PAGE_CREATE_CLICK_INTENT'})
+            await asyncio.sleep(.01)
             return {'pages':[{'id':PAGE,'name':'PrgssTeam','main_business_confirmed':True}],'page_ids':[PAGE]}
         session=SimpleNamespace(context=SimpleNamespace(profile_id='9'))
         with patch('app.provisioning.fan_pages_handler.fan_pages_handler',side_effect=create):
