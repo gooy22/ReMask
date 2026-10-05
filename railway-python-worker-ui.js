@@ -4354,6 +4354,23 @@ function pythonWorkerEnhanceProfileThreeDots() {
       if (addBm.nextSibling) parent.insertBefore(addFp,addBm.nextSibling); else parent.appendChild(addFp);
     }
 
+    if (!parent.querySelector('[data-python-worker-auto-menu="1"]')) {
+      const auto=addBm.cloneNode(true);
+      auto.removeAttribute('id'); auto.removeAttribute('onclick'); auto.removeAttribute('data-action');
+      auto.setAttribute('data-python-worker-auto-menu','1');
+      auto.setAttribute('aria-label','Создать комплект');
+      auto.textContent='Создать комплект';
+      if (auto.tagName === 'A') auto.setAttribute('href','#');
+      if (auto.tagName === 'BUTTON') auto.type='button';
+      auto.addEventListener('click',function(event){
+        event.preventDefault(); event.stopPropagation(); event.stopImmediatePropagation();
+        pythonWorkerOpenAutoModal().catch(function(error){
+          pythonWorkerSetText('pythonPwStatus','Создание: ' + String((error && error.message) || error));
+        });
+      },true);
+      parent.insertBefore(auto,addBm);
+    }
+
     if (!parent.querySelector('[data-python-worker-rk-menu="1"]')) {
       const addRk=addBm.cloneNode(true);
       addRk.removeAttribute('id'); addRk.removeAttribute('onclick'); addRk.removeAttribute('data-action');
