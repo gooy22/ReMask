@@ -3,6 +3,43 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const {webcrypto} = require('node:crypto');
 const source = fs.readFileSync('railway-python-worker-ui.js', 'utf8');
+// One bulk action prepares two BM accounts per profile without any Page picker.
+(async()=>{
+  const profiles=Array.from({length:100},(_,i)=>String(i+1));
+  const inventory={ad_accounts:[]}; const scopes={};
+  for(const profile of profiles){
+    scopes[profile]='900000'+profile;
+    for(let n=1;n<=2;n++)inventory.ad_accounts.push({profile_id:profile,
+      business_id:'800000'+profile+n,id:'act_700000'+profile+n,name:'BM account'});
+    inventory.ad_accounts.push({profile_id:profile,business_id:scopes[profile],id:'act_600000'+profile});
+  }
+  inventory.ad_accounts.push({...inventory.ad_accounts[0]});
+  const calls=[]; const ui={busy:false,workerOnline:true};
+  const bulk={state:{activeTab:'profiles',inventory},pythonWorkerUiState:ui,
+    selectedRows:()=>profiles.map(profile=>({profile_id:profile})),
+    pythonWorkerSelectionRefresh(){},pythonWorkerSetText(){},pythonWorkerClearBatchState(){},
+    localStorage:{setItem(){}},async pythonWorkerPoll(){},
+    pythonWorkerStableKey:v=>v,
+    async pythonWorkerProfileProvisioningState(profile){return {personal_scope_id:scopes[profile]};},
+    async pythonWorkerMapLimit(items,limit,fn){assert.equal(limit,6);await Promise.all(items.map(fn));},
+    async pythonWorkerBridge(payload){calls.push(JSON.parse(JSON.stringify(payload)));return {job:{job_id:'bulk-100'}};}};
+  vm.createContext(bulk);
+  const begin=source.indexOf('function pythonWorkerPageTargetPlan(');
+  vm.runInContext(source.slice(begin,source.indexOf('\nfunction pythonWorkerEnhanceCommonPageMenu',begin)),bulk);
+  await bulk.pythonWorkerPrepareCommonPage();
+  assert.equal(calls.length,1); assert.equal(calls[0].profiles.length,100);
+  assert.equal(calls[0].profiles.reduce((sum,p)=>sum+p.tasks.length,0),200);
+  for(const group of calls[0].profiles)for(const task of group.tasks){
+    assert.equal(task.payload.parameters.FAN_PAGES.count,1);
+    assert.equal(task.payload.parameters.FAN_PAGES.policies_accepted,true);
+    assert.notEqual(task.payload.parameters.PAGE_ACCESS.business_id,scopes[group.profile_id]);
+    assert.deepEqual(task.payload.steps,['PROXY_CHECK','FAN_PAGES','PAGE_ACCESS']);
+  }
+  const account=inventory.ad_accounts[0];
+  assert.equal(bulk.pythonWorkerPageTargetPlan(inventory,'ad_accounts',[account],scopes).targets.length,1);
+  assert.equal(bulk.pythonWorkerPageTargetPlan(inventory,'businesses',[{profile_id:account.profile_id,id:account.business_id}],scopes).targets.length,1);
+  console.log('100 profiles / 200 BM accounts: one automatic FP job, no personal accounts or duplicates.');
+})().catch(error=>{console.error(error);process.exitCode=1;});
 // A failed FP preflight must preserve the real auth reason, never synthesize
 // checkpoint, and the read-only session button must never enqueue CREATE.
 (async()=>{

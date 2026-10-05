@@ -91,6 +91,8 @@ class ProvisioningService:
             if ProvisioningStep.PAGE_ACCESS in steps:
                 steps.remove(ProvisioningStep.PAGE_ACCESS)
             steps.insert(steps.index(ProvisioningStep.AD_ACCOUNT)+1,ProvisioningStep.PAGE_ACCESS)
+            if rk_params.get('page_policies_accepted') is True:
+                parameters.setdefault('PAGE_ACCESS',{})['policies_accepted']=True
 
         scope_key = str(
             payload.get("scope_key")
@@ -298,7 +300,7 @@ class ProvisioningService:
             try:
                 return await ensure_common_page(session,params,self.state,self.profile_resolver)
             except ProvisioningError:
-                config=await AdvertisingPageStore(self.state).get()
+                config=await AdvertisingPageStore.for_context(self.state,session.context).get()
                 saved=await self.state.step('workspace-common-page-'+config['owner_profile_id'],step)
                 await self.state.checkpoint(kwargs['item_id'],kwargs['profile_id'],kwargs['scope_key'],step,
                     (saved or {}).get('result') or {})

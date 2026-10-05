@@ -4,7 +4,7 @@ import asyncio
 import re
 from typing import Any
 
-from ..facebook_business_browser import FacebookBusinessBrowser, BrowserBusinessError
+from ..facebook_business_browser import FacebookBusinessBrowser, BrowserBusinessError, _cgroup_memory_snapshot_mb
 from ..page_access_inspection import inspect_browser_pages
 from .advertising_page import AdvertisingPageStore, _PAGE_LOCK, ensure_common_page
 from .models import ProvisioningError, ProvisioningStep
@@ -135,8 +135,8 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
         result=(rk_state or {}).get('result') or {}
         if str(result.get('business_id') or '')!=business or _normalize_ad_account_id(result.get('ad_account_id')).removeprefix('act_')!=account:
             raise ProvisioningError('CREATED_BUSINESS_RK_REQUIRED','RK creation result does not match this portfolio')
-    await ensure_common_page(session,{},state,resolver)
-    store=AdvertisingPageStore(state); config=await store.get()
+    await ensure_common_page(session,{'page_id':params.get('page_id'),'reuse_only':params.get('reuse_only') is True,'policies_accepted':params.get('policies_accepted') is True},state,resolver)
+    store=AdvertisingPageStore.for_context(state,session.context,profile); config=await store.get()
     prior=((await state.step(item,ProvisioningStep.PAGE_ACCESS)) or {}).get('result') or {}
     async def checkpoint(patch):
         phase=str(patch.get('phase') or '')
@@ -145,50 +145,59 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
             await store.patch(grants={**grants,business:{**grants.get(business,{}),**patch}})
         await state.checkpoint(item,profile,scope,ProvisioningStep.PAGE_ACCESS,
             {'page_id':config['page_id'],'business_id':business,'ad_account_id':account,**patch})
+    await checkpoint({'diagnostic':{'stage':'target_page_access_start','business_id':business,
+        'ad_account_id':account,'owner_bm_required':False}})
     try:
-        async def probe(*, identity=False):
-            async with FacebookBusinessBrowser(session.context,v8_old_space_mb=128) as browser:
-                return await asyncio.wait_for(inspect_browser_pages(browser,account,business,
-                    timeout=25 if not identity else 45,open_identity=identity),timeout=30 if not identity else 55)
-        def has_access(proof):
-            return proof.get('account_scope_verified') is True and any(
-                row.get('id')==config['page_id'] and row.get('account_id')==account
-                and row.get('ad_account_page_access_verified') is True
-                for row in proof.get('data',[]))
-        # The Page remains on its Facebook owner profile. A scoped RK can
-        # already advertise with it even when it is absent from BM inventory.
-        # Never make a separate owner/main portfolio a prerequisite.
-        proof=await probe()
-        target_relation=False
-        if not has_access(proof):
-            await checkpoint({'phase':'VERIFY_TARGET_PAGE_ACCESS','diagnostic':proof.get('diagnostic') or {}})
-            async with _PAGE_LOCK:
-                config=await store.get()
-                saved_grant=(config.get('grants') or {}).get(business) or {}
-                async with FacebookBusinessBrowser(session.context,v8_old_space_mb=128) as browser:
+        # Prepare access in lightweight Business Settings first. Loading the
+        # campaigns editor is an optional verification, not a sharing dependency.
+        async with _PAGE_LOCK:
+            config=await store.get()
+            saved_grant=(config.get('grants') or {}).get(business) or {}
+            async with FacebookBusinessBrowser(session.context,v8_old_space_mb=256) as browser:
+                try:
                     target_relation=await _request_target_page_access(browser,config,business,checkpoint,saved_grant or prior)
                     if not target_relation:
                         raise BrowserBusinessError('TARGET_PAGE_ACCESS_APPROVAL_REQUIRED',
                             'The target BM requested Ads access; approval belongs to the Facebook Page owner, not a main BM',
                             retryable=True,diagnostic=await browser._diagnostic('target_page_access_pending'))
                     await _assign_operator(browser,config,business)
-            proof=await probe()
-        if not has_access(proof):
-            await checkpoint({'phase':'PAGE_ADVERTISING_ACCESS_UNVERIFIED','diagnostic':proof.get('diagnostic') or {}})
-            raise ProvisioningError('PAGE_ADVERTISING_ACCESS_UNVERIFIED',
-                'Meta did not prove advertising access to the exact Page for this created BM RK',retryable=True)
-        if params.get('verify_identity') is True:
-            proof=await probe(identity=True)
-            if not has_access(proof) or proof.get('identity_form_verified') is not True:
-                await checkpoint({'phase':'PAGE_IDENTITY_UNVERIFIED','ad_account_page_access_verified':True,
-                    'diagnostic':proof.get('diagnostic') or {}})
-                raise ProvisioningError('PAGE_IDENTITY_UNVERIFIED',
-                    'RK advertising permission is separate from a verified Page selector in the ad form',retryable=True)
-        return {'page_id':config['page_id'],'page_name':config['name'],'business_id':business,
-            'ad_account_id':account,'page_shared_to_business':target_relation,
-            'ad_account_page_access_verified':True,
-            'identity_verification':'verified' if params.get('verify_identity') is True else 'not_requested',
-            'verification':proof,'transport':'target_rk_page_advertising_access'}
+                except Exception as exc:
+                    diagnostic={'stage':'target_page_access','url':str(getattr(browser.page,'url','')),
+                        'memory':_cgroup_memory_snapshot_mb(),'v8_old_space_mb':256}
+                    try:
+                        diagnostic.update(await asyncio.wait_for(browser._diagnostic('target_page_access'),timeout=3))
+                    except Exception:
+                        pass
+                    if isinstance(exc,BrowserBusinessError):
+                        exc.diagnostic={**diagnostic,**(exc.diagnostic or {})}
+                    else:
+                        await checkpoint({'diagnostic':diagnostic})
+                    raise
+        result={'page_id':config['page_id'],'page_name':config['name'],'business_id':business,
+            'ad_account_id':account,'page_shared_to_business':True,'operator_ads_access_assigned':True,
+            'ad_account_page_access_verified':False,'identity_verification':'not_requested',
+            'transport':'target_business_page_advertising_access'}
+        if params.get('verify_identity') is not True:
+            return result
+        await checkpoint({'phase':'VERIFY_AD_IDENTITY','page_shared_to_business':True})
+        progress={}
+        async with FacebookBusinessBrowser(session.context,v8_old_space_mb=256) as browser:
+            try:
+                proof=await asyncio.wait_for(inspect_browser_pages(browser,account,business,
+                    timeout=45,open_identity=True,progress=progress),timeout=55)
+            except Exception:
+                await checkpoint({'diagnostic':{**progress,'stage':'target_rk_identity_probe',
+                    'memory':_cgroup_memory_snapshot_mb(),'v8_old_space_mb':256}})
+                raise
+        has_access=proof.get('account_scope_verified') is True and any(
+            row.get('id')==config['page_id'] and row.get('account_id')==account
+            and row.get('ad_account_page_access_verified') is True for row in proof.get('data',[]))
+        if not has_access or proof.get('identity_form_verified') is not True:
+            await checkpoint({'phase':'PAGE_IDENTITY_UNVERIFIED','page_shared_to_business':True,
+                'ad_account_page_access_verified':has_access,'diagnostic':proof.get('diagnostic') or {}})
+            raise ProvisioningError('PAGE_IDENTITY_UNVERIFIED',
+                'BM access preparation is separate from a verified Page selector in this RK ad form',retryable=True)
+        return {**result,'ad_account_page_access_verified':True,'identity_verification':'verified','verification':proof}
     except BrowserBusinessError as exc:
         await checkpoint({'last_error_code':exc.code,'diagnostic':{'stage':'page_access',**(exc.diagnostic or {})}})
         raise ProvisioningError(exc.code,str(exc),retryable=exc.retryable) from exc

@@ -2910,11 +2910,12 @@ async def profile_provisioning_state(profile_id: str):
     )
     fan_pages=await pool.provisioning_state.latest_profile_fan_pages(clean_profile)
     from app.provisioning.advertising_page import AdvertisingPageStore
-    advertising_page=await AdvertisingPageStore(pool.provisioning_state).get()
+    advertising_page=await AdvertisingPageStore(pool.provisioning_state,clean_profile).get()
     personal_scope_id=''
     try:
         profile_context=await asyncio.wait_for(pool.resolver.resolve(clean_profile),timeout=3)
         personal_scope_id=str(profile_context.cookies.get('c_user') or '')
+        advertising_page=await AdvertisingPageStore.for_context(pool.provisioning_state,profile_context,clean_profile).get()
     except (asyncio.TimeoutError,ProfileContextError):
         pass
     return {
@@ -2979,10 +2980,20 @@ async def retry_failed(job_id: str, consent: dict | None = Body(default=None)) -
         if not eligible:
             raise HTTPException(status_code=409,detail='PAGE_POLICY_REVIEW_JOB_REQUIRED')
         from app.provisioning.advertising_page import AdvertisingPageStore
-        page_store=AdvertisingPageStore(pool.provisioning_state)
-        page=await page_store.get()
-        await page_store.patch(policies_accepted=True,policies_name=page['name'],
-            policies_owner_profile_id=page['owner_profile_id'],policies_consent_at=int(time.time()))
+        eligible_items=[item for item in current_view.get('items',[]) if item.get('error_code')=='PAGE_POLICIES_CONFIRMATION_REQUIRED']
+        for item in eligible_items:
+            profile=str(item.get('profile_id') or '9')
+            page_store=AdvertisingPageStore(pool.provisioning_state,profile)
+            try:
+                context=await pool.resolver.resolve(profile)
+                page_store=AdvertisingPageStore.for_context(pool.provisioning_state,context,profile)
+            except (AttributeError,ProfileContextError):
+                pass
+            page=await page_store.get()
+            await page_store.patch(policies_accepted=True,policies_name=page['name'],
+                policies_owner_profile_id=profile,policies_owner_facebook_uid=page.get('owner_facebook_uid',''),
+                policies_consent_at=int(time.time()))
+
     fp_profiles=_view_fan_page_retry_profile_ids(current_view)
     if fp_profiles:
         await _require_fp_auth_ready(fp_profiles)

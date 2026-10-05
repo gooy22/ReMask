@@ -18,6 +18,9 @@ PAGE='1270757506131209'; BM='1476521050987548'; RK='958245207339458'
 class CommonPageTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.tmp=tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        lock=asyncio.Lock()
+        self.enterContext(patch('app.provisioning.advertising_page._PAGE_LOCK',lock))
+        self.enterContext(patch('app.provisioning.page_access_handler._PAGE_LOCK',lock))
         self.state=ProvisioningStateStore(str(Path(self.tmp.name)/'state.sqlite'))
         await self.state.init()
 
@@ -38,6 +41,40 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(a['page_ids'],b['page_ids'])
         self.assertEqual((await AdvertisingPageStore(self.state).get())['page_id'],PAGE)
         self.assertEqual((await self.state.latest_profile_fan_pages('9'))[0]['id'],PAGE)
+
+    async def test_many_jobs_create_one_page_per_real_facebook_profile(self):
+        calls=[]
+        async def create(session,params,snapshot,**kwargs):
+            profile=session.context.profile_id; calls.append(profile)
+            return {'pages':[{'id':'123456789'+profile,'name':'PrgssTeam'}]}
+        contexts=[SimpleNamespace(profile_id=profile,cookies={'c_user':'6150000000000'+profile},pages=[])
+            for profile in ['1','2','3']]
+        with patch('app.provisioning.fan_pages_handler.fan_pages_handler',side_effect=create):
+            results=await asyncio.gather(*[ensure_common_page(SimpleNamespace(context=context),
+                {'policies_accepted':True},self.state,None) for context in contexts for _ in range(3)])
+        self.assertEqual(sorted(calls),['1','2','3'])
+        for index,context in enumerate(contexts):
+            self.assertEqual({result['page_ids'][0] for result in results[index*3:index*3+3]},
+                {'123456789'+context.profile_id})
+
+    async def test_duplicate_local_profiles_of_same_facebook_uid_reuse_page(self):
+        a=SimpleNamespace(profile_id='2',cookies={'c_user':'61594285240608'},pages=[])
+        b=SimpleNamespace(profile_id='5',cookies={'c_user':'61594285240608'},pages=[])
+        await AdvertisingPageStore.for_context(self.state,a).patch(page_id=PAGE,name='PrgssTeam')
+        create=AsyncMock()
+        with patch('app.provisioning.fan_pages_handler.fan_pages_handler',create):
+            result=await ensure_common_page(SimpleNamespace(context=b),{},self.state,None)
+        create.assert_not_awaited(); self.assertEqual(result['page_ids'],[PAGE])
+
+    async def test_existing_profile_page_is_reused_without_cross_profile_owner(self):
+        context=SimpleNamespace(profile_id='8',cookies={'c_user':'61594897075733'},
+            pages=[{'id':'111111111','name':'PrgssTeam'}])
+        await AdvertisingPageStore(self.state).patch(page_id=PAGE,name='PrgssTeam',owner_profile_id='9')
+        create=AsyncMock()
+        with patch('app.provisioning.fan_pages_handler.fan_pages_handler',create):
+            result=await ensure_common_page(SimpleNamespace(context=context),{},self.state,None)
+        self.assertEqual(result['page_ids'],['111111111']); create.assert_not_awaited()
+        self.assertEqual((await AdvertisingPageStore(self.state).get())['page_id'],PAGE)
 
     async def test_existing_brand_page_does_not_require_personal_rk_onboarding_confirm(self):
         await self.state.complete('existing','9','old',ProvisioningStep.FAN_PAGES,
@@ -136,31 +173,56 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
                     provisioning_state=self.state,profile_id='9',item_id='personal',scope_key='personal')
         verify.assert_not_awaited()
 
-    async def test_rk_page_permission_does_not_require_any_owner_bm_or_page_claim(self):
-        await AdvertisingPageStore(self.state).patch(page_id=PAGE,name='PrgssTeam',owner_profile_id='9',
+    async def test_target_bm_access_does_not_require_owner_bm_or_heavy_ads_editor(self):
+        await AdvertisingPageStore(self.state,'8','61594882851656').patch(page_id=PAGE,name='PrgssTeam',owner_profile_id='9',
             owner_business_id='999999999',ownership_phase='PAGE_ADD_CLICK_INTENT')
         await self.state.complete('one','8','one',ProvisioningStep.AD_ACCOUNT,{'business_id':BM,'ad_account_id':'act_'+RK})
-        browser=SimpleNamespace(verify_page_attached=AsyncMock(),add_existing_page=AsyncMock())
+        await self.state.set_running('one','8','one',ProvisioningStep.PAGE_ACCESS)
+        browser=SimpleNamespace(add_existing_page=AsyncMock())
         class Lease:
             async def __aenter__(self): return browser
             async def __aexit__(self,*args): return False
-        proof={'account_scope_verified':True,'data':[{'id':PAGE,'account_id':RK,
-            'ad_account_page_access_verified':True}],'identity_form_verified':False}
         session=SimpleNamespace(context=SimpleNamespace(cookies={'c_user':'61594882851656'}))
         with patch('app.provisioning.page_access_handler.ensure_common_page',new=AsyncMock()), \
-             patch('app.provisioning.page_access_handler.FacebookBusinessBrowser',return_value=Lease()), \
-             patch('app.provisioning.page_access_handler.inspect_browser_pages',new=AsyncMock(return_value=proof)) as inspect:
+             patch('app.provisioning.page_access_handler.FacebookBusinessBrowser',return_value=Lease()) as factory, \
+             patch('app.provisioning.page_access_handler._request_target_page_access',new=AsyncMock(return_value=True)) as share, \
+             patch('app.provisioning.page_access_handler._assign_operator',new=AsyncMock()) as assign, \
+             patch('app.provisioning.page_access_handler.inspect_browser_pages',new=AsyncMock()) as inspect:
             result=await page_access_handler(session,{}, {'business_id':BM,'ad_account_id':'act_'+RK},
                 provisioning_state=self.state,profile_id='8',item_id='one',scope_key='one')
-        self.assertFalse(result['page_shared_to_business'])
+        self.assertTrue(result['page_shared_to_business'])
+        self.assertTrue(result['operator_ads_access_assigned'])
+        self.assertFalse(result['ad_account_page_access_verified'])
         self.assertEqual(result['ad_account_id'],RK)
-        self.assertTrue(result['ad_account_page_access_verified'])
         self.assertEqual(result['identity_verification'],'not_requested')
-        self.assertFalse(inspect.call_args.kwargs['open_identity'])
-        browser.verify_page_attached.assert_not_awaited()
+        inspect.assert_not_awaited()
+        self.assertEqual(share.call_args.args[2],BM)
+        self.assertEqual(assign.call_args.args[2],BM)
+        self.assertEqual(factory.call_args.kwargs['v8_old_space_mb'],256)
         browser.add_existing_page.assert_not_awaited()
-        self.assertEqual((await AdvertisingPageStore(self.state).get())['ownership_phase'],'PAGE_ADD_CLICK_INTENT')
+        self.assertEqual((await AdvertisingPageStore(self.state,'8','61594882851656').get())['ownership_phase'],'PAGE_ADD_CLICK_INTENT')
 
+    async def test_crash_replaces_old_owner_claim_diagnostic_with_current_target_stage(self):
+        await AdvertisingPageStore(self.state).patch(page_id=PAGE,name='PrgssTeam',owner_profile_id='9')
+        await self.state.complete('one','9','one',ProvisioningStep.AD_ACCOUNT,{'business_id':BM,'ad_account_id':RK})
+        await self.state.set_running('one','9','one',ProvisioningStep.PAGE_ACCESS)
+        await self.state.checkpoint('one','9','one',ProvisioningStep.PAGE_ACCESS,
+            {'diagnostic':{'stage':'owner_page_claim_reconciliation','surface':'obsolete'}})
+        browser=SimpleNamespace(page=SimpleNamespace(url='https://business.facebook.com/latest/settings/pages/?business_id='+BM),
+            _diagnostic=AsyncMock(side_effect=RuntimeError('Page crashed')))
+        class Lease:
+            async def __aenter__(self): return browser
+            async def __aexit__(self,*args): return False
+        with patch('app.provisioning.page_access_handler.ensure_common_page',new=AsyncMock()), \
+             patch('app.provisioning.page_access_handler.FacebookBusinessBrowser',return_value=Lease()), \
+             patch('app.provisioning.page_access_handler._request_target_page_access',new=AsyncMock(side_effect=RuntimeError('Page crashed'))):
+            with self.assertRaisesRegex(RuntimeError,'Page crashed'):
+                await page_access_handler(SimpleNamespace(context=SimpleNamespace(cookies={'c_user':'61594882851656'})),{},
+                    {'business_id':BM,'ad_account_id':RK},provisioning_state=self.state,profile_id='9',item_id='one',scope_key='one')
+        diagnostic=(await self.state.step('one',ProvisioningStep.PAGE_ACCESS))['result']['diagnostic']
+        self.assertEqual(diagnostic['stage'],'target_page_access')
+        self.assertNotIn('obsolete',str(diagnostic))
+        self.assertEqual(diagnostic['v8_old_space_mb'],256)
     async def test_pending_target_request_is_not_resent_and_never_uses_owner_claim(self):
         browser=SimpleNamespace(verify_page_attached=AsyncMock(return_value=False),_open_pages_add_action=AsyncMock())
         checkpoint=AsyncMock()

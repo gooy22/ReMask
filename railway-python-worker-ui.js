@@ -175,28 +175,67 @@ function pythonWorkerEnsureRkFanPageActions() {
   });
 }
 
+function pythonWorkerPageTargetPlan(inventory, tab, selected, personalScopes) {
+  const profiles=new Set(); const businesses=new Set(); const accounts=new Set();
+  const profileOf=row=>String((row && (row.profile_id||row.profile||row.profile_name||row.name))||'').trim();
+  for (const row of selected || []) {
+    const profile=profileOf(row); if (!profile) continue;
+    profiles.add(profile);
+    if (tab==='businesses') businesses.add(profile+':'+String(row.id||row.business_id||row.bm_id||''));
+    if (tab==='ad_accounts') accounts.add(profile+':'+String(row.id||row.ad_account_id||row.account_id||'').replace(/^act_/i,''));
+  }
+  const seen=new Set(); const targets=[];
+  for (const row of (inventory && inventory.ad_accounts)||[]) {
+    const profile=profileOf(row), business=String(row.business_id||row.businessId||row.bm_id||'').trim();
+    const account=String(row.id||row.ad_account_id||row.account_id||'').replace(/^act_/i,'').trim();
+    if (!profiles.has(profile)||!/^\d+$/.test(business)||!/^\d+$/.test(account)) continue;
+    if (String((personalScopes||{})[profile]||'')===business) continue;
+    if (tab==='businesses'&&!businesses.has(profile+':'+business)) continue;
+    if (tab==='ad_accounts'&&!accounts.has(profile+':'+account)) continue;
+    const key=profile+':'+business+':'+account; if (seen.has(key)) continue; seen.add(key);
+    targets.push({profile_id:profile,business_id:business,ad_account_id:account,
+      ad_account_name:String(row.name||row.account_name||account)});
+  }
+  return {profiles:Array.from(profiles),targets:targets};
+}
+
 async function pythonWorkerPrepareCommonPage() {
-  const targets=pythonWorkerSelectedAdAccountTargets();
-  if (!targets.length || pythonWorkerUiState.busy || pythonWorkerUiState.workerOnline !== true) return;
+  if (pythonWorkerUiState.busy || pythonWorkerUiState.workerOnline!==true) return;
+  const tab=String(state.activeTab||'');
+  if (!['profiles','businesses','ad_accounts'].includes(tab)) return;
+  const rows=selectedRows(tab)||[]; if (!rows.length) return;
   pythonWorkerUiState.busy=true; pythonWorkerSelectionRefresh();
-  pythonWorkerSetText('pythonPwStatus','Подготавливаю доступ PrgssTeam для '+targets.length+' РК…');
+  pythonWorkerSetText('pythonPwStatus','Подготавливаю одну FP на каждый выбранный FB-профиль…');
   try {
-    const groups=new Map();
-    for (const target of targets) {
-      const profile=target.profile_id;
-      const key='common-page-'+target.business_id+'-'+target.ad_account_id;
-      if (!groups.has(profile)) groups.set(profile,{profile_id:profile,tasks:[]});
-      groups.get(profile).tasks.push({action:'provisioning',idempotency_key:key,payload:{
-        steps:['PROXY_CHECK','PAGE_ACCESS'],scope_key:key,parameters:{PAGE_ACCESS:{
-          existing_target:true,business_id:target.business_id,ad_account_id:target.ad_account_id,
-          ad_account_name:target.ad_account_name}}}});
+    let plan=pythonWorkerPageTargetPlan(state.inventory,tab,rows,{});
+    const scopes={};
+    await pythonWorkerMapLimit(plan.profiles,6,async function(profile) {
+      const saved=await pythonWorkerProfileProvisioningState(profile);
+      scopes[profile]=String((saved && saved.personal_scope_id)||'');
+    });
+    plan=pythonWorkerPageTargetPlan(state.inventory,tab,rows,scopes);
+    const groups=new Map(plan.profiles.map(profile=>[profile,{profile_id:profile,tasks:[]}]));
+    for (const target of plan.targets) {
+      const key='profile-page-'+target.business_id+'-'+target.ad_account_id;
+      groups.get(target.profile_id).tasks.push({action:'provisioning',idempotency_key:key,payload:{
+        steps:['PROXY_CHECK','FAN_PAGES','PAGE_ACCESS'],scope_key:key,parameters:{
+          FAN_PAGES:{common_page:true,page_name:'PrgssTeam',count:1,policies_accepted:true},
+          PAGE_ACCESS:{existing_target:true,business_id:target.business_id,ad_account_id:target.ad_account_id,
+            ad_account_name:target.ad_account_name}}}});
     }
-    const key=pythonWorkerStableKey(targets.map(t=>t.profile_id+':'+t.business_id+':'+t.ad_account_id).sort().join('|'));
-    const data=await pythonWorkerBridge({action:'create',idempotency_key:'workspace-common-page-'+key,profiles:Array.from(groups.values())});
+    for (const [profile,group] of groups) if (!group.tasks.length) {
+      if (tab!=='profiles') { groups.delete(profile); continue; }
+      group.tasks.push({action:'provisioning',idempotency_key:'profile-page-'+profile,payload:{
+        steps:['PROXY_CHECK','FAN_PAGES'],scope_key:'profile-page',
+        parameters:{FAN_PAGES:{common_page:true,page_name:'PrgssTeam',count:1,policies_accepted:true}}}});
+    }
+    if (!groups.size) throw new Error('У выбранных BM нет созданных РК. Личные РК исключены.');
+    const key=pythonWorkerStableKey(Array.from(groups.keys()).sort().join('|')+'|'+plan.targets.map(t=>t.profile_id+':'+t.ad_account_id).sort().join('|'));
+    const data=await pythonWorkerBridge({action:'create',idempotency_key:'profile-pages-'+key,profiles:Array.from(groups.values())});
     const job=data && data.job;
-    if (!job || !job.job_id) throw new Error('Worker не вернул Job для подготовки PrgssTeam.');
-    pythonWorkerClearBatchState();
-    pythonWorkerUiState.jobId=job.job_id; localStorage.setItem('remask_python_worker_job_v1',job.job_id);
+    if (!job || !job.job_id) throw new Error('Worker не вернул Job для подготовки FP.');
+    pythonWorkerClearBatchState(); pythonWorkerUiState.jobId=job.job_id;
+    localStorage.setItem('remask_python_worker_job_v1',job.job_id);
     if (['FAILED','PARTIAL'].includes(String(job.status))) await pythonWorkerBridge({action:'retry_failed',job_id:job.job_id});
     await pythonWorkerPoll();
   } catch(error) {
@@ -206,14 +245,14 @@ async function pythonWorkerPrepareCommonPage() {
 }
 
 function pythonWorkerEnhanceCommonPageMenu() {
-  if (!state || state.activeTab !== 'ad_accounts') return;
+  if (!state || !['businesses','ad_accounts'].includes(state.activeTab)) return;
   const anchor=Array.from(document.querySelectorAll('button,a,[role="menuitem"]')).find(el=>
     /Проверить Assets/.test(String(el.textContent || '')));
   if (!anchor || !anchor.parentNode || anchor.parentNode.querySelector('[data-python-common-page]')) return;
   const action=anchor.cloneNode(true);
   action.removeAttribute('id'); action.removeAttribute('onclick'); action.removeAttribute('data-action');
-  action.setAttribute('data-python-common-page','1'); action.setAttribute('aria-label','Подготовить PrgssTeam');
-  action.textContent='Подготовить PrgssTeam';
+  action.setAttribute('data-python-common-page','1'); action.setAttribute('aria-label','Добавить FP');
+  action.textContent='Добавить FP';
   if (action.tagName==='BUTTON') action.type='button';
   if (action.tagName==='A') action.setAttribute('href','#');
   action.addEventListener('click',function(event){
@@ -954,6 +993,8 @@ function pythonWorkerRenderJob(job) {
         }
         if (accessStep && accessStep.status === 'SUCCESS' && accessStep.result.ad_account_page_access_verified === true) {
           errorTd.textContent += ' · PrgssTeam: рекламный доступ для РК подтверждён';
+        } else if (accessStep && accessStep.status === 'SUCCESS' && accessStep.result.page_shared_to_business === true) {
+          errorTd.textContent += ' · PrgssTeam: рекламный доступ в новом BM подготовлен';
         }
         const fpStep = (item.provisioning_steps || []).find(function(s) { return s.step === 'FAN_PAGES'; });
         const fpDiagnostic = (accessStep && accessStep.result && accessStep.result.diagnostic) || (fpStep && fpStep.result && fpStep.result.browser_diagnostic);
@@ -2412,6 +2453,7 @@ async function pythonWorkerStartAdAccounts(options) {
                 AD_ACCOUNT: {
                   business_id: businessId,
                   use_common_page: true,
+                  page_policies_accepted: true,
                   name: String(cfg.name || '').trim(),
                   currency: String(cfg.currency || '').trim().toUpperCase(),
                   timezone_id: Number(cfg.timezone_id)
@@ -2521,6 +2563,7 @@ async function pythonWorkerStartBusinessAdAccountTargets(targets, configs) {
                 AD_ACCOUNT: {
                   business_id: businessId,
                   use_common_page: true,
+                  page_policies_accepted: true,
                   name: String(cfg.name || '').trim(),
                   currency: String(cfg.currency || '').trim().toUpperCase(),
                   timezone_id: Number(cfg.timezone_id)
@@ -4045,7 +4088,7 @@ async function pythonWorkerOpenAutoModal() {
       if (!acceptedRequest) acceptedRequest = {action:'create', idempotency_key:'workspace-auto-' + nonce,
         profiles:profiles.map(function(profileId) { return {profile_id:String(profileId), tasks:[{action:'provisioning', payload:{
           steps:steps, auto_generate:true, batch_count:n, parameters:{
-            FAN_PAGES:{category:category.value.trim(),page_name:'PrgssTeam',common_page:true}, AD_ACCOUNT:{currency:currency.value.trim().toUpperCase(), timezone_id:Number(timezone.value),use_common_page:true}
+            FAN_PAGES:{category:category.value.trim(),page_name:'PrgssTeam',common_page:true,policies_accepted:true}, AD_ACCOUNT:{currency:currency.value.trim().toUpperCase(), timezone_id:Number(timezone.value),use_common_page:true,page_policies_accepted:true}
           }
         }}]}; })};
       [mode, count, category, currency, timezone].forEach(function(input) { input.disabled = true; });
@@ -4430,13 +4473,13 @@ function pythonWorkerEnhanceProfileThreeDots() {
       const addFp=addBm.cloneNode(true);
       addFp.removeAttribute('id'); addFp.removeAttribute('onclick'); addFp.removeAttribute('data-action');
       addFp.setAttribute('data-python-worker-fp-menu','1');
-      addFp.setAttribute('aria-label','Add FP');
+      addFp.setAttribute('aria-label','Добавить FP');
       if (addFp.tagName === 'A') addFp.setAttribute('href','#');
       if (addFp.tagName === 'BUTTON') addFp.type='button';
-      addFp.textContent='Add FP';
+      addFp.textContent='Добавить FP';
       addFp.addEventListener('click',function(event){
         event.preventDefault(); event.stopPropagation(); event.stopImmediatePropagation();
-        pythonWorkerOpenOwnFanPageModal().catch(function(error){
+        pythonWorkerPrepareCommonPage().catch(function(error){
           pythonWorkerSetText('pythonPwStatus','Add FP: ' + String((error && error.message) || error));
         });
       },true);
