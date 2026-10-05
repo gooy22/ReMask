@@ -216,17 +216,22 @@ async def _ads_only(dialog) -> None:
 
 async def _request_target_page_access(browser, config: dict, business: str, checkpoint, prior: dict) -> bool:
     """Request Ads task access from the target BM; never claim Page ownership."""
-    if await browser.verify_page_attached(business_id=business,page_id=config['page_id']):
+    phase=str(prior.get('phase') or '')
+    if phase=='TARGET_PAGE_ACCESS_OWNER_CONFIRMED':
+        # Durable owner-side Partners-with-access + Ads proof is stronger than
+        # another Business Settings navigation. Continue operator assignment
+        # directly; never re-open relation verification for this saved grant.
         return True
-    if prior.get('phase') in {
+    if phase in {
             'TARGET_PAGE_ACCESS_SUBMITTED',
             'TARGET_PAGE_ACCESS_OWNER_APPROVE_CLICK_INTENT',
             'TARGET_PAGE_ACCESS_OWNER_APPROVED',
-            'TARGET_PAGE_ACCESS_OWNER_CONFIRMED',
         }:
-        # Every owner-side phase belongs to the same already-submitted request.
-        # A retry must reconcile/continue it and must never create a duplicate.
+        # These phases belong to the same already-submitted request. Continue
+        # owner-side reconciliation and never create a duplicate request.
         return False
+    if await browser.verify_page_attached(business_id=business,page_id=config['page_id']):
+        return True
     if prior.get('phase') in {'TARGET_PAGE_ACCESS_CLICK_INTENT',
             'PARTNER_SHARE_CLICK_INTENT','PARTNER_SHARE_SUBMITTED'}:
         raise BrowserBusinessError('PAGE_SHARE_RESULT_UNKNOWN',
