@@ -223,20 +223,70 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
              patch('app.provisioning.page_access_handler.FacebookBusinessBrowser',return_value=Lease()) as factory, \
              patch('app.provisioning.page_access_handler._request_target_page_access',new=AsyncMock(return_value=True)) as share, \
              patch('app.provisioning.page_access_handler._assign_operator',new=AsyncMock()) as assign, \
-             patch('app.provisioning.page_access_handler.inspect_browser_pages',new=AsyncMock()) as inspect:
+             patch('app.provisioning.page_access_handler.inspect_browser_pages',
+                   new=AsyncMock(return_value={'account_scope_verified':False,'data':[]})) as inspect:
             result=await page_access_handler(session,{}, {'business_id':BM,'ad_account_id':'act_'+RK},
                 provisioning_state=self.state,profile_id='8',item_id='one',scope_key='one')
         self.assertTrue(result['page_shared_to_business'])
         self.assertTrue(result['operator_ads_access_assigned'])
+        self.assertEqual(result['operator_assignment'],'performed')
         self.assertFalse(result['ad_account_page_access_verified'])
         self.assertEqual(result['ad_account_id'],RK)
         self.assertEqual(result['identity_verification'],'not_requested')
-        inspect.assert_not_awaited()
+        inspect.assert_awaited_once()
+        self.assertFalse(inspect.call_args.kwargs['open_identity'])
+        self.assertEqual(inspect.call_args.args[1],RK)
+        self.assertEqual(inspect.call_args.args[2],BM)
         self.assertEqual(share.call_args.args[2],BM)
         self.assertEqual(assign.call_args.args[2],BM)
         self.assertEqual(factory.call_args.kwargs['v8_old_space_mb'],256)
         browser.add_existing_page.assert_not_awaited()
         self.assertEqual((await AdvertisingPageStore(self.state,'8','61594882851656').get())['ownership_phase'],'PAGE_ADD_CLICK_INTENT')
+
+    async def test_exact_rk_page_proof_skips_operator_mutation(self):
+        await AdvertisingPageStore(self.state,'8','61594882851656').patch(
+            page_id=PAGE,name='PrgssTeam',owner_profile_id='9')
+        await self.state.complete(
+            'rk-proof','8','rk-proof',ProvisioningStep.AD_ACCOUNT,
+            {'business_id':BM,'ad_account_id':'act_'+RK},
+        )
+        await self.state.set_running(
+            'rk-proof','8','rk-proof',ProvisioningStep.PAGE_ACCESS,
+        )
+        browser=SimpleNamespace(page=SimpleNamespace(url='about:blank'))
+        class Lease:
+            async def __aenter__(self): return browser
+            async def __aexit__(self,*args): return False
+        proof={
+            'account_scope_verified':True,
+            'data':[{'id':PAGE,'account_id':RK,
+                'ad_account_page_access_verified':True,
+                'source':'scoped_private_promotable_pages'}],
+        }
+        session=SimpleNamespace(context=SimpleNamespace(cookies={'c_user':'61594882851656'}))
+        with patch('app.provisioning.page_access_handler.ensure_common_page',new=AsyncMock()), \
+             patch('app.provisioning.page_access_handler.FacebookBusinessBrowser',return_value=Lease()), \
+             patch('app.provisioning.page_access_handler._request_target_page_access',
+                   new=AsyncMock(return_value=True)), \
+             patch('app.provisioning.page_access_handler.inspect_browser_pages',
+                   new=AsyncMock(return_value=proof)) as inspect, \
+             patch('app.provisioning.page_access_handler._assign_operator',
+                   new=AsyncMock()) as assign:
+            result=await page_access_handler(
+                session,{},
+                {'business_id':BM,'ad_account_id':'act_'+RK},
+                provisioning_state=self.state,profile_id='8',
+                item_id='rk-proof',scope_key='rk-proof',
+            )
+        inspect.assert_awaited_once()
+        assign.assert_not_awaited()
+        self.assertTrue(result['page_shared_to_business'])
+        self.assertTrue(result['ad_account_page_access_verified'])
+        self.assertFalse(result['operator_ads_access_assigned'])
+        self.assertEqual(result['operator_assignment'],'not_required')
+        self.assertEqual(result['rk_access_proof']['data'][0]['id'],PAGE)
+        state=await self.state.step('rk-proof',ProvisioningStep.PAGE_ACCESS)
+        self.assertEqual(state['result']['phase'],'TARGET_PAGE_ACCESS_RK_CONFIRMED')
 
     async def test_crash_replaces_old_owner_claim_diagnostic_with_current_target_stage(self):
         await AdvertisingPageStore(self.state).patch(page_id=PAGE,name='PrgssTeam',owner_profile_id='9')
