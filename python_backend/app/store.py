@@ -143,6 +143,7 @@ class JobStore:
             self._recover_legacy_owner_page_approval_stub(con)
             self._recover_owner_page_actor_probe(con)
             self._recover_owner_active_partner_reconciliation(con)
+            self._recover_owner_confirmed_operator_assignment(con)
 
     @staticmethod
     def _recover_legacy_owner_page_approval_stub(con: sqlite3.Connection) -> None:
@@ -421,6 +422,102 @@ class JobStore:
 
             page[retry_marker]=True
             page[retry_marker+'_at']=now
+            con.execute(
+                """UPDATE provisioning_steps
+                   SET result_json=?,updated_at=?
+                   WHERE item_id=? AND step='PAGE_ACCESS'""",
+                (json.dumps(page,separators=(',',':'),ensure_ascii=False),
+                 now,row['item_id']),
+            )
+            con.execute(
+                """UPDATE job_tasks
+                   SET status='QUEUED',error_code=NULL,error_message=NULL,
+                       retryable=0,updated_at=?
+                   WHERE id=? AND status='FAILED'""",
+                (now,row['task_id']),
+            )
+            con.execute(
+                """UPDATE job_items
+                   SET status='QUEUED',error_code=NULL,error_message=NULL,
+                       retryable=0,updated_at=?
+                   WHERE id=? AND status='FAILED'""",
+                (now,row['item_id']),
+            )
+            con.execute(
+                "UPDATE jobs SET status='QUEUED',updated_at=? WHERE id=?",
+                (now,row['job_id']),
+            )
+
+    @staticmethod
+    def _recover_owner_confirmed_operator_assignment(con: sqlite3.Connection) -> None:
+        """Retry one operator-assignment UI failure after owner relation is proven.
+
+        The Page request is already OWNER_CONFIRMED, and exact BUSINESS/RK
+        success checkpoints must match. This retry can only continue assignment;
+        it cannot submit another Page-access request.
+        """
+        if not con.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='provisioning_steps'"
+        ).fetchone():
+            return
+
+        rows=con.execute(
+            """SELECT t.id AS task_id,t.item_id,i.job_id,t.error_code,
+                      p.result_json AS page_result,
+                      b.result_json AS business_result,
+                      a.result_json AS ad_account_result
+               FROM job_tasks t
+               JOIN job_items i ON i.id=t.item_id
+               JOIN provisioning_steps p
+                 ON p.item_id=t.item_id AND p.step='PAGE_ACCESS' AND p.status='FAILED'
+               JOIN provisioning_steps b
+                 ON b.item_id=t.item_id AND b.step='BUSINESS' AND b.status='SUCCESS'
+               JOIN provisioning_steps a
+                 ON a.item_id=t.item_id AND a.step='AD_ACCOUNT' AND a.status='SUCCESS'
+               WHERE t.status='FAILED'
+                 AND i.status='FAILED'
+                 AND t.action='provisioning'
+                 AND t.error_code IN (
+                   'PAGE_SHARE_UI_UNAVAILABLE',
+                   'PAGE_OPERATOR_PAGE_SELECTION_UNAVAILABLE',
+                   'PAGE_OPERATOR_ASSIGNMENT_REQUIRED'
+                 )
+            """
+        ).fetchall()
+
+        now=_now()
+        for row in rows:
+            try:
+                page=json.loads(row['page_result'] or '{}')
+                business=json.loads(row['business_result'] or '{}')
+                account=json.loads(row['ad_account_result'] or '{}')
+            except (TypeError,ValueError,json.JSONDecodeError):
+                continue
+            if not all(isinstance(value,dict) for value in (page,business,account)):
+                continue
+            if str(page.get('phase') or '')!='TARGET_PAGE_ACCESS_OWNER_CONFIRMED':
+                continue
+            if page.get('owner_confirmed_operator_assignment_retry') is True:
+                continue
+
+            page_id=str(page.get('page_id') or '').strip()
+            business_id=str(page.get('business_id') or '').strip()
+            ad_account_id=str(page.get('ad_account_id') or '').strip().removeprefix('act_')
+            bm_id=str(business.get('business_id') or '').strip()
+            rk_business=str(account.get('business_id') or '').strip()
+            rk_id=str(account.get('ad_account_id') or '').strip().removeprefix('act_')
+            if not (
+                page_id.isdigit()
+                and business_id.isdigit()
+                and ad_account_id.isdigit()
+                and bm_id==business_id
+                and rk_business==business_id
+                and rk_id==ad_account_id
+            ):
+                continue
+
+            page['owner_confirmed_operator_assignment_retry']=True
+            page['owner_confirmed_operator_assignment_retry_at']=now
             con.execute(
                 """UPDATE provisioning_steps
                    SET result_json=?,updated_at=?
@@ -865,6 +962,7 @@ class JobStore:
             self._recover_legacy_owner_page_approval_stub(con)
             self._recover_owner_page_actor_probe(con)
             self._recover_owner_active_partner_reconciliation(con)
+            self._recover_owner_confirmed_operator_assignment(con)
         return imported
 
     async def retry_failed(self, job_id: str) -> int:
