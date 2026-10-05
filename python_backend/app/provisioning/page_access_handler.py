@@ -138,7 +138,19 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
                     owner=config['owner_business_id']; page_id=config['page_id']
                     if not await browser.verify_page_attached(business_id=owner,page_id=page_id):
                         if config.get('ownership_phase') in {'PAGE_ADD_CLICK_INTENT','PAGE_ADD_SUBMITTED','PAGE_ADD_RESULT_UNKNOWN'}:
-                            raise BrowserBusinessError('PAGE_ATTACH_RESULT_UNKNOWN','Owner Page claim needs reconciliation',retryable=True)
+                            # Read the owner portfolio's Requests screen before
+                            # deciding whether a saved claim is still pending.
+                            # Never send another ownership request on this path.
+                            requests=browser.page.get_by_text('Requests',exact=True).filter(visible=True)
+                            if await requests.count()==1:
+                                await requests.click(timeout=3000)
+                                await browser.page.wait_for_timeout(1800)
+                                sent=browser.page.get_by_role('tab',name='Sent',exact=True).filter(visible=True)
+                                if await sent.count()==1:
+                                    await sent.click(timeout=3000)
+                                    await browser.page.wait_for_timeout(1000)
+                            diagnostic=await browser._diagnostic('owner_page_claim_reconciliation')
+                            raise BrowserBusinessError('PAGE_ATTACH_RESULT_UNKNOWN','Owner Page claim needs reconciliation',retryable=True,diagnostic=diagnostic)
                         async def owner_checkpoint(patch):
                             if patch.get('phase'): await store.patch(ownership_phase=patch['phase'])
                             await checkpoint(patch)

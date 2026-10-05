@@ -110,3 +110,28 @@ class BusinessWorkspaceDisplayTests(unittest.IsolatedAsyncioTestCase):
         again = subprocess.run(["php", "-r", php], input=json.dumps(result), text=True,
                                capture_output=True, check=True, timeout=5)
         self.assertEqual(json.loads(again.stdout), result)
+
+    async def test_created_rk_survives_older_live_snapshot_without_faking_active(self):
+        source = (Path(__file__).resolve().parents[2] / 'railway-workspace-sync-fix-overlay.php').read_text()
+        start = source.index('function hierarchy_created_accounts_apply_display(')
+        end = source.index('function hierarchy_binding_file(', start)
+        helper = source[start:end]
+        bindings = [
+            {'business_id':'934505709362142','ad_account_id':'act_1152836437079070','account_name':'New RK'},
+            {'business_id':'934505709362142','ad_account_id':'1152836437079070'},
+            {'business_id':'999999999','ad_account_id':'888888888'},
+            {'business_id':'934505709362142','ad_account_id':'bad'}]
+        php = 'function hierarchy_binding_get($profile) { return json_decode(' + repr(json.dumps(bindings)) + ',true); }\n' + helper
+        php += "\n$input=json_decode(file_get_contents('php://stdin'),true); echo json_encode(hierarchy_created_accounts_apply_display('9', $input));"
+        snapshot = {'profile':{'name':'9'},'profiles':[{'name':'9'}],
+                    'businesses':[{'id':'934505709362142','name':'Owner BM'}],
+                    'ad_accounts':[{'id':'111111111','business_id':'934505709362142','account_status':2}]}
+        result = json.loads(subprocess.run(['php','-r',php],input=json.dumps(snapshot),text=True,capture_output=True,check=True,timeout=5).stdout)
+        self.assertEqual(len(result['ad_accounts']),2)
+        self.assertEqual(result['ad_accounts'][0]['account_status'],2)
+        self.assertIsNone(result['ad_accounts'][1]['account_status'])
+        self.assertTrue(result['ad_accounts'][1]['_provisioned_only'])
+        self.assertEqual(result['businesses'][0]['ad_account_count'],2)
+        self.assertEqual(result['profiles'][0]['rk_count'],2)
+        again = json.loads(subprocess.run(['php','-r',php],input=json.dumps(result),text=True,capture_output=True,check=True,timeout=5).stdout)
+        self.assertEqual(again,result)

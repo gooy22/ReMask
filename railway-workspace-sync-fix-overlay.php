@@ -886,6 +886,55 @@ function hierarchy_created_businesses_apply_display(string $profile, array $snap
     return $snapshot;
 }
 
+function hierarchy_created_accounts_apply_display(string $profile, array $snapshot): array
+{
+    // Restore successful CREATE identities after applying an older live
+    // snapshot. A historical binding never establishes current ACTIVE status.
+    $businessNames = [];
+    foreach ((array)($snapshot['businesses'] ?? []) as $row) {
+        if (is_array($row)) $businessNames[(string)($row['id'] ?? '')] = (string)($row['name'] ?? '');
+    }
+    $rows = (array)($snapshot['ad_accounts'] ?? []);
+    $known = [];
+    foreach ($rows as $row) {
+        if (is_array($row)) $known[preg_replace('/^act_/', '', (string)($row['id'] ?? $row['account_id'] ?? ''))] = true;
+    }
+    foreach (hierarchy_binding_get($profile) as $binding) {
+        $business = (string)($binding['business_id'] ?? '');
+        $account = preg_replace('/^act_/', '', (string)($binding['ad_account_id'] ?? ''));
+        if (!preg_match('/^\d{5,30}$/', $business) || !preg_match('/^\d{5,30}$/', $account)
+            || !isset($businessNames[$business]) || isset($known[$account])) continue;
+        $rows[] = ['profile' => $profile, 'id' => $account, 'account_id' => $account,
+            'name' => (string)($binding['account_name'] ?? ('RK ' . $account)),
+            'business_id' => $business, 'business_name' => $businessNames[$business],
+            'account_status' => null, 'disable_reason' => null, 'currency' => '',
+            'timezone_name' => '', 'funding' => null, '_provisioned_only' => true,
+            '_source' => 'python_worker_binding'];
+        $known[$account] = true;
+    }
+    $snapshot['ad_accounts'] = $rows;
+    $snapshot['ad_accounts_count'] = count($rows);
+    $snapshot['businesses_count'] = count($businessNames);
+    foreach ((array)($snapshot['businesses'] ?? []) as $i => $business) {
+        $accounts = array_values(array_filter($rows, static fn($row) =>
+            is_array($row) && (string)($row['business_id'] ?? '') === (string)($business['id'] ?? '')));
+        $snapshot['businesses'][$i]['accounts'] = $accounts;
+        $snapshot['businesses'][$i]['ad_account_count'] = count($accounts);
+    }
+    if (is_array($snapshot['profile'] ?? null)) {
+        $snapshot['profile']['bm_count'] = count($businessNames);
+        $snapshot['profile']['rk_count'] = count($rows);
+        $snapshot['profile']['ad_accounts_count'] = count($rows);
+    }
+    foreach ((array)($snapshot['profiles'] ?? []) as $i => $row) {
+        if ((string)($row['name'] ?? '') !== $profile) continue;
+        $snapshot['profiles'][$i]['bm_count'] = count($businessNames);
+        $snapshot['profiles'][$i]['rk_count'] = count($rows);
+        $snapshot['profiles'][$i]['ad_accounts_count'] = count($rows);
+    }
+    return $snapshot;
+}
+
 function hierarchy_binding_file(): string
 {
     return '/var/lib/remask/workspace-provisioning-bindings.json';
@@ -1251,7 +1300,7 @@ function hierarchy_profile_snapshot(string $profile, ?array $workspaceMeta = nul
 {
     $snapshot = hierarchy_profile_snapshot_base($profile, $workspaceMeta);
     $snapshot = hierarchy_live_snapshot_apply_display($profile, $snapshot);
-    return hierarchy_created_businesses_apply_display($profile, $snapshot);
+    return hierarchy_created_accounts_apply_display($profile, hierarchy_created_businesses_apply_display($profile, $snapshot));
 }
 PHP_WRAPPER;
 
