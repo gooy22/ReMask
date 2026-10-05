@@ -141,6 +141,7 @@ class JobStore:
             self._recover_premature_page_access(con)
             self._recover_common_page_picker_failure(con)
             self._recover_legacy_owner_page_approval_stub(con)
+            self._recover_owner_page_actor_probe(con)
 
     @staticmethod
     def _recover_legacy_owner_page_approval_stub(con: sqlite3.Connection) -> None:
@@ -221,6 +222,99 @@ class JobStore:
             # will skip the already-SUCCESS BUSINESS and AD_ACCOUNT steps, while
             # PAGE_ACCESS resumes from TARGET_PAGE_ACCESS_SUBMITTED and therefore
             # cannot send a second Page request.
+            con.execute(
+                """UPDATE job_tasks
+                   SET status='QUEUED',error_code=NULL,error_message=NULL,
+                       retryable=0,updated_at=?
+                   WHERE id=? AND status='FAILED'""",
+                (now,row['task_id']),
+            )
+            con.execute(
+                """UPDATE job_items
+                   SET status='QUEUED',error_code=NULL,error_message=NULL,
+                       retryable=0,updated_at=?
+                   WHERE id=? AND status='FAILED'""",
+                (now,row['item_id']),
+            )
+            con.execute(
+                "UPDATE jobs SET status='QUEUED',updated_at=? WHERE id=?",
+                (now,row['job_id']),
+            )
+
+    @staticmethod
+    def _recover_owner_page_actor_probe(con: sqlite3.Connection) -> None:
+        """Retry one proven submitted owner-approval failure exactly once.
+
+        This is a diagnostic continuation, not a new Page request. The durable
+        marker survives another failure so restarts cannot create a retry loop.
+        """
+        if not con.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='provisioning_steps'"
+        ).fetchone():
+            return
+
+        rows=con.execute(
+            """SELECT t.id AS task_id,t.item_id,i.job_id,
+                      p.result_json AS page_result,
+                      b.result_json AS business_result,
+                      a.result_json AS ad_account_result
+               FROM job_tasks t
+               JOIN job_items i ON i.id=t.item_id
+               JOIN provisioning_steps p
+                 ON p.item_id=t.item_id AND p.step='PAGE_ACCESS' AND p.status='FAILED'
+               JOIN provisioning_steps b
+                 ON b.item_id=t.item_id AND b.step='BUSINESS' AND b.status='SUCCESS'
+               JOIN provisioning_steps a
+                 ON a.item_id=t.item_id AND a.step='AD_ACCOUNT' AND a.status='SUCCESS'
+               WHERE t.status='FAILED'
+                 AND i.status='FAILED'
+                 AND t.action='provisioning'
+                 AND t.error_code='PAGE_OWNER_APPROVAL_UI_UNAVAILABLE'
+                 AND t.error_message LIKE ?
+            """,
+            ('%exact pending Page access request is not visible%',),
+        ).fetchall()
+
+        now=_now()
+        for row in rows:
+            try:
+                page=json.loads(row['page_result'] or '{}')
+                business=json.loads(row['business_result'] or '{}')
+                account=json.loads(row['ad_account_result'] or '{}')
+            except (TypeError,ValueError,json.JSONDecodeError):
+                continue
+            if not all(isinstance(value,dict) for value in (page,business,account)):
+                continue
+            if page.get('owner_actor_probe_retry') is True:
+                continue
+            if str(page.get('phase') or '')!='TARGET_PAGE_ACCESS_SUBMITTED':
+                continue
+
+            page_id=str(page.get('page_id') or '').strip()
+            business_id=str(page.get('business_id') or '').strip()
+            ad_account_id=str(page.get('ad_account_id') or '').strip().removeprefix('act_')
+            bm_id=str(business.get('business_id') or '').strip()
+            rk_business=str(account.get('business_id') or '').strip()
+            rk_id=str(account.get('ad_account_id') or '').strip().removeprefix('act_')
+            if not (
+                page_id.isdigit()
+                and business_id.isdigit()
+                and ad_account_id.isdigit()
+                and bm_id==business_id
+                and rk_business==business_id
+                and rk_id==ad_account_id
+            ):
+                continue
+
+            page['owner_actor_probe_retry']=True
+            page['owner_actor_probe_retry_at']=now
+            con.execute(
+                """UPDATE provisioning_steps
+                   SET result_json=?,updated_at=?
+                   WHERE item_id=? AND step='PAGE_ACCESS'""",
+                (json.dumps(page,separators=(',',':'),ensure_ascii=False),
+                 now,row['item_id']),
+            )
             con.execute(
                 """UPDATE job_tasks
                    SET status='QUEUED',error_code=NULL,error_message=NULL,
@@ -656,6 +750,7 @@ class JobStore:
             self._recover_premature_page_access(con)
             self._recover_common_page_picker_failure(con)
             self._recover_legacy_owner_page_approval_stub(con)
+            self._recover_owner_page_actor_probe(con)
         return imported
 
     async def retry_failed(self, job_id: str) -> int:
