@@ -7,6 +7,33 @@ from app.facebook_business_browser import BrowserBusinessError, BrowserPreflight
 
 
 class ProfileFpAuthGateTests(unittest.IsolatedAsyncioTestCase):
+    async def test_100_automatic_profiles_enqueue_without_http_browser_preflights(self):
+        request=api.CreateJobRequest(profiles=[{'profile_id':str(i),'tasks':[{
+            'action':'provisioning','payload':{'steps':['PROXY_CHECK','FAN_PAGES','PAGE_ACCESS'],
+                'parameters':{'FAN_PAGES':{'common_page':True}}}}]} for i in range(1,101)])
+        fake=SimpleNamespace(create_job=AsyncMock(return_value=('bulk-100',True)),
+            job_view=AsyncMock(return_value={'status':'QUEUED','items_total':100}))
+        worker=SimpleNamespace(enqueue_job=AsyncMock())
+        with patch.object(api,'store',fake),patch.object(api,'pool',worker), \
+             patch.object(api,'mirror',SimpleNamespace(enabled=False)), \
+             patch.object(api,'_require_fp_auth_ready',new=AsyncMock(side_effect=AssertionError('HTTP browser preflight'))) as preflight:
+            accepted=await api.create_job(request)
+        self.assertEqual(accepted.items_total,100)
+        worker.enqueue_job.assert_awaited_once_with('bulk-100'); preflight.assert_not_awaited()
+
+    async def test_automatic_bulk_retry_does_not_preflight_or_block_other_profiles(self):
+        view={'items':[{'profile_id':str(i),'status':'FAILED','tasks':[{'payload':{
+            'steps':['FAN_PAGES'],'parameters':{'FAN_PAGES':{'common_page':True}}}}]}
+            for i in range(1,101)]}
+        fake=SimpleNamespace(job_view=AsyncMock(return_value=view),retry_failed=AsyncMock(return_value=100))
+        worker=SimpleNamespace(enqueue_job=AsyncMock())
+        with patch.object(api,'store',fake),patch.object(api,'pool',worker), \
+             patch.object(api,'mirror',SimpleNamespace(enabled=False)), \
+             patch.object(api,'_require_fp_auth_ready',new=AsyncMock(side_effect=AssertionError('HTTP browser preflight'))) as preflight:
+            result=await api.retry_failed('bulk-100')
+        self.assertEqual(result.requeued,100); preflight.assert_not_awaited()
+        worker.enqueue_job.assert_awaited_once_with('bulk-100')
+
     async def test_page_policy_consent_rejects_unrelated_failed_job(self):
         fake=SimpleNamespace(job_view=AsyncMock(return_value={'items':[{'error_code':'SESSION_EXPIRED','tasks':[]}]}))
         with patch.object(api,'store',fake):

@@ -864,6 +864,26 @@ async def _require_fp_auth_ready(profile_ids: list[str]) -> None:
             detail='FP_SESSION_NOT_READY: ' + ', '.join(not_ready),
         )
 
+def _automatic_profile_page_tasks(tasks) -> bool:
+    """Automatic Page jobs validate each Facebook session inside the queue.
+
+    A hundred browser preflights cannot fit in the HTTP acceptance request.
+    Native authentication barriers still fail the affected worker item.
+    """
+    found=False
+    for task in tasks:
+        payload=task.get('payload',{}) if isinstance(task,dict) else task.payload
+        if not isinstance(payload,dict):
+            continue
+        if 'FAN_PAGES' not in [str(step).upper() for step in payload.get('steps',[])]:
+            continue
+        found=True
+        params=payload.get('parameters') or {}
+        fp=params.get('FAN_PAGES',params.get('fan_pages',{})) if isinstance(params,dict) else {}
+        if not isinstance(fp,dict) or fp.get('common_page') is not True:
+            return False
+    return found
+
 app=FastAPI(title='ReMask Python Worker',version='0.4.0',lifespan=lifespan)
 
 @app.get('/health',response_model=HealthResponse)
@@ -2930,7 +2950,9 @@ async def profile_provisioning_state(profile_id: str):
 @app.post('/api/v1/jobs',response_model=JobAccepted,dependencies=[Depends(require_key)])
 async def create_job(request: CreateJobRequest) -> JobAccepted:
     fp_profiles=_request_fan_page_profile_ids(request)
-    if fp_profiles:
+    automatic=bool(fp_profiles) and all(_automatic_profile_page_tasks(profile.tasks)
+        for profile in request.profiles if str(profile.profile_id) in fp_profiles)
+    if fp_profiles and not automatic:
         await _require_fp_auth_ready(fp_profiles)
     try:
         job_id,created=await store.create_job(request)
@@ -2995,7 +3017,10 @@ async def retry_failed(job_id: str, consent: dict | None = Body(default=None)) -
                 policies_consent_at=int(time.time()))
 
     fp_profiles=_view_fan_page_retry_profile_ids(current_view)
-    if fp_profiles:
+    automatic=bool(fp_profiles) and all(_automatic_profile_page_tasks(item.get('tasks') or [])
+        for item in current_view.get('items',[]) if str(item.get('profile_id') or '') in fp_profiles
+        and str(item.get('status') or '').upper()=='FAILED')
+    if fp_profiles and not automatic:
         await _require_fp_auth_ready(fp_profiles)
     count=await store.retry_failed(job_id)
     view=await store.job_view(job_id)
