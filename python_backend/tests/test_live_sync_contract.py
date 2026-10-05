@@ -48,6 +48,17 @@ class LiveSyncContractTests(unittest.TestCase):
         self.assertIn('"about:blank"', browser_source)
 
 
+    def test_security_checkpoint_stops_live_sync_without_browser_reopen_loop(self):
+        source=inspect.getsource(api.profile_live_inventory)
+        self.assertIn("attempt == 0 and exc.code == 'SESSION_EXPIRED'",source)
+        self.assertIn("'CHECKPOINT_REQUIRED',\n                            'TWO_FACTOR_REQUIRED',",source)
+        self.assertIn("A security challenge will not disappear by",source)
+        self.assertIn("Continuing into sibling BMs would only repeat the same",source)
+        self.assertNotIn(
+            "and exc.code in {\n                                'CHECKPOINT_REQUIRED',\n                                'SESSION_EXPIRED',",
+            source,
+        )
+
     def test_page_inventory_does_not_block_live_bm_rk_sync(self):
         # The Railway runtime image copies python_backend to /opt/remask-python
         # but applies the PHP overlay separately during the Docker build. Check
