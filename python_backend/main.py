@@ -1480,6 +1480,7 @@ async def profile_live_inventory(
         ) from exc
 
     warnings: list[str] = []
+    personal_scope_id=str(context.cookies.get('c_user') or '').strip()
 
     # REMASK_LIVE_INVENTORY_TOTAL_BUDGET_V1
     # PHP waits 64s and the browser close path itself may need several seconds.
@@ -1528,22 +1529,45 @@ async def profile_live_inventory(
     # An explicit business_ids query is a target scope, not just another hint.
     # This keeps a one-BM Workspace sync from expanding back to every durable
     # BM/RK pair already stored for the profile.
-    requested_business_ids={
+    raw_requested_business_ids={
         value.strip()
         for value in str(business_ids or '').split(',')
         if value.strip().isdigit()
     }
+    requested_business_ids={
+        value for value in raw_requested_business_ids
+        if value != personal_scope_id
+    }
+    if raw_requested_business_ids and not requested_business_ids:
+        raise HTTPException(
+            status_code=422,
+            detail='PERSONAL_SCOPE_NOT_SUPPORTED: sync only accepts added Business Portfolios',
+        )
+    if raw_requested_business_ids != requested_business_ids:
+        warnings.append(
+            'Personal Facebook scope excluded; only added Business Portfolios are synced'
+        )
 
     # Prefer already-confirmed durable BM identities. For a profile that ReMask
     # itself provisioned, forcing a fresh Business Suite HOME discovery first
     # is both redundant and fragile: Meta HOME can take >18s to settle while
     # the exact Business Settings route is directly addressable.
-    confirmed_bindings=await pool.provisioning_state.confirmed_ad_account_bindings_for_profile(
-        clean_profile
-    )
-    confirmed_page_bindings=await pool.provisioning_state.confirmed_business_page_bindings_for_profile(
-        clean_profile
-    )
+    confirmed_bindings=[
+        row for row in await pool.provisioning_state.confirmed_ad_account_bindings_for_profile(
+            clean_profile
+        )
+        if isinstance(row,dict)
+        and str(row.get('business_id') or '').strip().isdigit()
+        and str(row.get('business_id') or '').strip()!=personal_scope_id
+    ]
+    confirmed_page_bindings=[
+        row for row in await pool.provisioning_state.confirmed_business_page_bindings_for_profile(
+            clean_profile
+        )
+        if isinstance(row,dict)
+        and str(row.get('business_id') or '').strip().isdigit()
+        and str(row.get('business_id') or '').strip()!=personal_scope_id
+    ]
     confirmed_fan_pages=await pool.provisioning_state.latest_profile_fan_pages(
         clean_profile
     )
@@ -1590,6 +1614,7 @@ async def profile_live_inventory(
     known_business_ids=set(binding_by_business)
     if (
         latest_business_id.isdigit()
+        and latest_business_id!=personal_scope_id
         and (
             not requested_business_ids
             or latest_business_id in requested_business_ids
@@ -1793,6 +1818,16 @@ async def profile_live_inventory(
             known_accounts_by_business.setdefault(
                 hinted_business_id,set()
             ).add(hinted_account_id)
+
+    # REMASK_NEVER_SYNC_PERSONAL_FACEBOOK_SCOPE_V1
+    # Older durable bindings can contain c_user as a pseudo-BM. Drop it from
+    # every navigation-hint source before the fallback probes are built.
+    if personal_scope_id:
+        known_business_ids.discard(personal_scope_id)
+        known_accounts_by_business.pop(personal_scope_id,None)
+        known_pages_by_business.pop(personal_scope_id,None)
+        binding_by_business.pop(personal_scope_id,None)
+        expected_account_names.pop(personal_scope_id,None)
 
     try:
         stage='profile_session'

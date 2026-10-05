@@ -3394,6 +3394,31 @@ class LiveInventoryBusinessDiscoveryBudgetRegressionTests(unittest.TestCase):
         window = source[max(0, call_pos - 700): call_pos + 700]
         self.assertNotIn("timeout=18.0", window)
 
+    def test_auth_redirect_during_business_discovery_falls_back_to_confirmed_bms(self):
+        main_path = Path(__file__).resolve().parents[1] / "main.py"
+        source = main_path.read_text(encoding="utf-8")
+        call_pos = source.index("browser.snapshot_businesses()")
+        fallback_pos = source.index(
+            "business_suite_auth_redirect_hint_fallback", call_pos
+        )
+        probe_pos = source.index(
+            "business_key=str(business_id)", fallback_pos
+        )
+        self.assertLess(call_pos, fallback_pos)
+        self.assertLess(fallback_pos, probe_pos)
+        self.assertIn("if exc.code not in {", source[fallback_pos - 1000:fallback_pos])
+        self.assertIn("not known_business_ids", source[fallback_pos - 1000:fallback_pos])
+
+    def test_personal_facebook_scope_is_removed_from_all_sync_hint_sources(self):
+        main_path = Path(__file__).resolve().parents[1] / "main.py"
+        source = main_path.read_text(encoding="utf-8")
+        marker = source.index("REMASK_NEVER_SYNC_PERSONAL_FACEBOOK_SCOPE_V1")
+        window = source[marker:marker + 650]
+        self.assertIn("known_business_ids.discard(personal_scope_id)", window)
+        self.assertIn("known_accounts_by_business.pop(personal_scope_id", window)
+        self.assertIn("known_pages_by_business.pop(personal_scope_id", window)
+        self.assertIn("binding_by_business.pop(personal_scope_id", window)
+
 
 class BrowserBusinessInventoryExtractionTests(unittest.TestCase):
     def test_business_inventory_accepts_explicit_business_id_in_generic_viewer(self):
