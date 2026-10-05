@@ -497,7 +497,19 @@ class JobStore:
                 continue
             if str(page.get('phase') or '')!='TARGET_PAGE_ACCESS_OWNER_CONFIRMED':
                 continue
-            if page.get('owner_confirmed_operator_assignment_retry') is True:
+
+            retry_marker=''
+            if page.get('owner_confirmed_operator_assignment_retry') is not True:
+                retry_marker='owner_confirmed_operator_assignment_retry'
+            elif (
+                str(row['error_code'] or '')=='PAGE_OPERATOR_PAGE_SELECTION_UNAVAILABLE'
+                and page.get('operator_exact_asset_route_retry') is not True
+            ):
+                # The previous operator pass failed before any Assign/Save
+                # mutation because the exact Page asset could not be selected.
+                # One retry is safe after adding the read-only exact-asset route.
+                retry_marker='operator_exact_asset_route_retry'
+            else:
                 continue
 
             page_id=str(page.get('page_id') or '').strip()
@@ -516,8 +528,8 @@ class JobStore:
             ):
                 continue
 
-            page['owner_confirmed_operator_assignment_retry']=True
-            page['owner_confirmed_operator_assignment_retry_at']=now
+            page[retry_marker]=True
+            page[retry_marker+'_at']=now
             con.execute(
                 """UPDATE provisioning_steps
                    SET result_json=?,updated_at=?
