@@ -259,6 +259,21 @@ try {
     $base = rtrim((string)(getenv('REMASK_PYTHON_WORKER_URL') ?: 'http://127.0.0.1:8081'),'/');
     $key = (string)(getenv('REMASK_WORKER_API_KEY') ?: '');
     if ($key === '') throw new RuntimeException('PAGE_ACCESS_WORKER_UNAVAILABLE');
+    // Fetch historical Confirm before starting the expensive live browser probe.
+    // A worker/transport interruption cannot erase a completed onboarding step.
+    $savedCtx=stream_context_create(['http'=>['method'=>'GET',
+        'header'=>"Accept: application/json\r\nX-Remask-Worker-Key: ".$key."\r\n",
+        'timeout'=>5,'ignore_errors'=>true,'follow_location'=>0]]);
+    $savedRaw=@file_get_contents($base.'/api/v1/profiles/'.rawurlencode($profile).'/provisioning-state',false,$savedCtx);
+    $savedState=is_string($savedRaw) ? json_decode($savedRaw,true) : null;
+    $confirmations=[];
+    foreach ((array)($savedState['fan_pages'] ?? []) as $page) {
+        if (!is_array($page) || ($page['main_business_confirmed'] ?? null) !== true
+            || !preg_match('/^\d{5,30}$/',(string)($page['id'] ?? ''))
+            || !preg_match('/^\d{5,30}$/',(string)($page['main_business_id'] ?? ''))) continue;
+        $confirmations[]=['id'=>$page['id'],'main_business_id'=>$page['main_business_id'],
+            'main_business_confirmed'=>true,'source'=>'saved_worker_confirmation'];
+    }
     $ctx = stream_context_create(['http'=>['method'=>'GET',
         'header'=>"Accept: application/json\r\nX-Remask-Worker-Key: ".$key."\r\n",
         'timeout'=>82,'ignore_errors'=>true,'follow_location'=>0]]);
@@ -269,6 +284,9 @@ try {
         $known = ['CHECKPOINT_REQUIRED','SESSION_EXPIRED','TWO_FACTOR_REQUIRED','PROFILE_CONTEXT_ERROR','PAGE_ACCESS_INSPECTION_TIMEOUT'];
         $proof = ['diagnostic'=>['code'=>in_array($code,$known,true) ? $code : 'PAGE_ACCESS_RESULT_UNAVAILABLE']];
     }
+    if (!isset($proof['profile_id'])) $proof['profile_id']=$profile;
+    if (!isset($proof['account_id'])) $proof['account_id']=$account;
+    $proof['page_confirmations']=array_merge($confirmations,(array)($proof['page_confirmations'] ?? []));
     MetaEndpoint::ok(RemaskPrivateLaunchCatalog::readiness($catalog,$account,$proof));
 } catch (Throwable $e) { MetaEndpoint::fail($e); }
 READINESS
@@ -292,10 +310,13 @@ async function checkAssetsSelection(){
       ` — ${p.ad_account_page_access_verified===true?'доступ РК подтверждён':'доступ РК не подтверждён'}`).join(' · ');
     const verified=res?.pages?.ad_account_page_access_verified===true;
     const diagnostic=res?.pages?.diagnostic;
+    const reason=diagnostic?.code==='PAGE_ACCESS_MEMORY_LIMIT'?'Проверка доступа РК остановлена: недостаточно памяти для формы Ads Manager.':
+      diagnostic?.code==='PAGE_ACCESS_INSPECTION_TIMEOUT'?'Проверка доступа РК не завершилась за отведённое время.':
+      diagnostic?.code==='PAGE_ACCESS_RESULT_UNAVAILABLE'?'Не удалось получить результат проверки доступа РК.':'';
     block.innerHTML=`<b>${esc(r.name||r.id)}</b><div class="sub">${esc(r.profile)} · ${esc(r.id)}</div>`+
       (res?.error ? `<div class="job-failed">${esc(res.error)}</div>` :
       `<div>FP: ${esc(names||'В сохранённом списке страниц нет.')}</div><div>${pill(verified?'ДОСТУП FP ПОДТВЕРЖДЁН':'ДОСТУП FP НЕ ПОДТВЕРЖДЁН',verified?'ok':'warn')}</div><div>Pixel и медиа: не проверены. Оплата: не проверена.</div>`+
-      (diagnostic?.code?`<div class="sub">${esc(diagnostic.code)}</div>`:'')+
+      (reason?`<div class="sub">${esc(reason)}</div>`:diagnostic?.code?`<div class="sub">${esc(diagnostic.code)}</div>`:'')+
       (diagnostic?`<details><summary>Диагностика проверки</summary><pre>${esc(JSON.stringify(diagnostic,null,2))}</pre></details>`:''));
     body.appendChild(block); progress.textContent=`Загружено ${done}/${total}`; setProgress(done,total);
   });

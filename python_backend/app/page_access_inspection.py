@@ -11,6 +11,7 @@ from urllib.parse import parse_qs, urlsplit
 from .facebook_business_browser import (
     FacebookBusinessBrowser, BrowserBusinessError, _request_graphql_meta,
     _decode_graphql_text, _ads_manager_scope_account_from_request,
+    _cgroup_memory_snapshot_mb,
 )
 from .facebook_page_discovery import _iter_connection_rows, _normalize_page
 from .payment_inspection import account_id, saved_payment_business
@@ -259,7 +260,9 @@ async def inspect_browser_pages(browser: Any, target: str, business: str, *, tim
         # Keep the write barrier until this dedicated browser context closes:
         # the editor can schedule an autosave after the probe has returned.
         for task in list(tasks): task.cancel()
-        if tasks: await asyncio.gather(*list(tasks), return_exceptions=True)
+        if tasks:
+            # A stalled renderer must not extend cancellation past the wall deadline.
+            await asyncio.wait(list(tasks),timeout=.5)
 
 
 async def inspect_profile_pages(resolver: Any, profile: str, target: str) -> dict:
@@ -270,10 +273,29 @@ async def inspect_profile_pages(resolver: Any, profile: str, target: str) -> dic
     progress = {'stage':'opening_browser'}
     async def probe():
         async with FacebookBusinessBrowser(context, v8_old_space_mb=256) as browser:
+            async def memory_guard():
+                while True:
+                    memory = _cgroup_memory_snapshot_mb()
+                    current,limit = memory.get('current_mb',0),memory.get('limit_mb',0)
+                    if limit and current >= max(limit*.85,limit-120):
+                        progress['memory'] = memory
+                        return
+                    await asyncio.sleep(.2)
+            inspection=asyncio.create_task(inspect_browser_pages(browser,target,business,progress=progress))
+            guard=asyncio.create_task(memory_guard())
             try:
-                return await asyncio.wait_for(inspect_browser_pages(browser, target, business, progress=progress),timeout=48)
-            except asyncio.TimeoutError:
-                return unverified_result(profile,target,'PAGE_ACCESS_INSPECTION_TIMEOUT',progress)
+                done,_=await asyncio.wait({inspection,guard},timeout=48,return_when=asyncio.FIRST_COMPLETED)
+                if inspection in done: return inspection.result()
+                code='PAGE_ACCESS_MEMORY_LIMIT' if guard in done else 'PAGE_ACCESS_INSPECTION_TIMEOUT'
+                try:
+                    progress['surface']=str(await asyncio.wait_for(browser.page.locator('body').inner_text(timeout=700),timeout=1))[:1800]
+                except Exception: pass
+                return unverified_result(profile,target,code,progress)
+            finally:
+                for task in (inspection,guard):
+                    if not task.done(): task.cancel()
+                    task.add_done_callback(lambda finished: None if finished.cancelled() else finished.exception())
+                await asyncio.wait({inspection,guard},timeout=.6)
     try:
         result = await asyncio.wait_for(probe(), timeout=65)
     except asyncio.TimeoutError:

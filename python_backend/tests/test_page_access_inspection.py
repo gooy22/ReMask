@@ -120,6 +120,25 @@ class PageAccessBrowserTests(unittest.IsolatedAsyncioTestCase):
 
 
 class PageAccessApiTests(unittest.IsolatedAsyncioTestCase):
+    async def test_memory_pressure_closes_browser_and_never_claims_page_permission(self):
+        from app.page_access_inspection import inspect_profile_pages
+        closed=[]
+        class Browser:
+            page=SimpleNamespace(locator=lambda *_:SimpleNamespace(inner_text=AsyncMock(return_value='Loading Creation')))
+            async def __aenter__(self): return self
+            async def __aexit__(self,*args): closed.append(True)
+        async def stalled_probe(*args,**kwargs): await asyncio.Future()
+        with patch('app.page_access_inspection.saved_payment_business',return_value=BM), \
+             patch('app.page_access_inspection.FacebookBusinessBrowser',return_value=Browser()), \
+             patch('app.page_access_inspection._cgroup_memory_snapshot_mb',return_value={'current_mb':940,'limit_mb':953}), \
+             patch('app.page_access_inspection.inspect_browser_pages',side_effect=stalled_probe):
+            result=await inspect_profile_pages(SimpleNamespace(resolve=AsyncMock(return_value=object())),'9',RK)
+        self.assertEqual(closed,[True])
+        self.assertEqual(result['diagnostic']['code'],'PAGE_ACCESS_MEMORY_LIMIT')
+        self.assertEqual(result['diagnostic']['surface'],'Loading Creation')
+        self.assertFalse(result['ad_account_page_access_verified'])
+        self.assertEqual(result['data'],[])
+
     async def test_interrupted_browser_returns_safe_progress_after_context_close(self):
         from app.page_access_inspection import inspect_profile_pages
         closed=[]
