@@ -528,7 +528,9 @@ RUN set -eux; \
     grep -q "'network_identity' => 'profile_bound'" /var/www/html/classes/MetaEndpoint.php; \
     grep -q "'direct_fallback' => false" /var/www/html/classes/MetaEndpoint.php; \
     ! grep -q 'data-remask-fp-action="1"' /var/www/html/scripts/workspace.js; \
-    ! grep -q 'Добавить FP' /var/www/html/scripts/workspace.js; \
+    grep -q 'function pythonWorkerPageTargetPlan(' /var/www/html/scripts/workspace.js; \
+    grep -q 'async function pythonWorkerPrepareCommonPage()' /var/www/html/scripts/workspace.js; \
+    grep -q 'data-python-common-page' /var/www/html/scripts/workspace.js; \
     ! test -f /var/www/html/ajax/metaPageHelper.php; \
     ! test -f /var/www/html/scripts/page-helper.js; \
     ! grep -q 'page-helper.js' /var/www/html/workspace.php; \
