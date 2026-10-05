@@ -152,7 +152,7 @@ class JobStore:
             payload=json.loads(row['payload_json']); result=json.loads(row['result_json'] or '{}')
             diagnostic=result.get('diagnostic') or {}
             if (payload.get('parameters',{}).get('FAN_PAGES') or {}).get('common_page') is not True: continue
-            if diagnostic.get('stage')!='page_add_submit_missing' or diagnostic.get('result_selected') is not False or result.get('phase'): continue
+            if diagnostic.get('stage')!='page_add_submit_missing' or diagnostic.get('result_selected') is not False or result.get('phase') not in {None,'','PAGE_ADD_NOT_SUBMITTED'}: continue
             con.execute('UPDATE job_tasks SET retryable=1 WHERE id=?',(row['id'],))
             con.execute("UPDATE job_items SET retryable=1 WHERE id=? AND status='FAILED' AND error_code='PAGE_ADD_UI_CHANGED'",(row['item_id'],))
 
@@ -499,7 +499,7 @@ class JobStore:
                         if not isinstance(pstep, dict):
                             continue
                         step = str(pstep.get('step') or '').strip().upper()
-                        if step not in {'PROXY_CHECK','FAN_PAGES','BUSINESS','AD_ACCOUNT','FUNDING'}:
+                        if step not in {'PROXY_CHECK','FAN_PAGES','BUSINESS','AD_ACCOUNT','PAGE_ACCESS','FUNDING'}:
                             continue
                         scope_key = str(pstep.get('scope_key') or 'default').strip() or 'default'
                         presult = pstep.get('result') if isinstance(pstep.get('result'), dict) else None
@@ -552,6 +552,10 @@ class JobStore:
                             )
                 imported += 1
             self._recover_legacy_fp_page_crashes(con)
+            self._recover_common_page_checkpoint_failure(con)
+            self._repair_unstarted_prgssteam_rk_timezone(con)
+            self._recover_premature_page_access(con)
+            self._recover_common_page_picker_failure(con)
         return imported
 
     async def retry_failed(self, job_id: str) -> int:

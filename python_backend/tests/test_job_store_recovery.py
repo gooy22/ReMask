@@ -25,11 +25,13 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
                 (json.dumps({'parameters':{'FAN_PAGES':{'common_page':True}}}),task['id']))
         await self.provisioning_state.set_running(item,'4','default',ProvisioningStep.PAGE_ACCESS)
         await self.provisioning_state.checkpoint(item,'4','default',ProvisioningStep.PAGE_ACCESS,
-            {'diagnostic':{'stage':'page_add_submit_missing','result_selected':False}})
+            {'phase':'PAGE_ADD_NOT_SUBMITTED','diagnostic':{'stage':'page_add_submit_missing','result_selected':False}})
         await self.provisioning_state.fail(item,'4','default',ProvisioningStep.PAGE_ACCESS,'PAGE_ADD_UI_CHANGED','picker')
         await self.store.set_task_failed(task['id'],'PAGE_ADD_UI_CHANGED','Meta Page-add review/submit action was not found.')
         await self.store.finalize_item(item)
+        old=await self.store.job_view(job)
         await self.store.init()
+        await self.store.import_snapshots([old])
         self.assertEqual(await self.store.queued_item_ids(job),[])
         self.assertEqual(await self.store.retry_failed(job),1)
 

@@ -150,6 +150,11 @@ final class RemaskPrivateLaunchCatalog
             }
         }
         $pageStatus = $verified !== [] ? 'VERIFIED' : 'NOT_VERIFIED';
+        $phone='UNKNOWN';
+        if (($proof['profile_id'] ?? '') === $catalog['profile'] && ($proof['account_id'] ?? '') === $target
+            && ($proof['checked_live'] ?? null) === true && ($proof['account_scope_verified'] ?? null) === true
+            && (int)($proof['checked_at'] ?? 0) >= time()-120 && (int)($proof['checked_at'] ?? 0) <= time()+5
+            && in_array($proof['advertiser_phone']['status'] ?? '', ['REQUIRED','VERIFIED'], true)) $phone=$proof['advertiser_phone']['status'];
         return [
             'account_id'=>$funding['id'], 'catalog_only'=>true, 'status'=>'NOT_VERIFIED',
             'pages'=>['status'=>$pageStatus, 'count'=>count($pages), 'data'=>$pages,
@@ -157,6 +162,7 @@ final class RemaskPrivateLaunchCatalog
                       'checked_live'=>($proof['checked_live'] ?? false) === true,
                       'diagnostic'=>$proof['diagnostic'] ?? []],
             'pixels'=>['status'=>'NOT_CHECKED'], 'media'=>['status'=>'NOT_CHECKED'],
+            'advertiser_phone'=>['status'=>$phone],
             'funding'=>['status'=>'NOT_CHECKED', 'funding_verified'=>false],
             'warnings'=>$verified !== [] ? [] : ['Доступ FP для рекламы в выбранном РК не подтверждён.'],
             '_cache'=>$catalog['_cache'],
@@ -310,12 +316,13 @@ async function checkAssetsSelection(){
       ` — ${p.ad_account_page_access_verified===true?'доступ РК подтверждён':'доступ РК не подтверждён'}`).join(' · ');
     const verified=res?.pages?.ad_account_page_access_verified===true;
     const diagnostic=res?.pages?.diagnostic;
+    const phone={REQUIRED:'Meta требует подтверждения номера телефона перед рекламой.',VERIFIED:'Номер телефона уже подтверждён в Meta.',UNKNOWN:'Требование номера телефона не установлено. Отсутствие сообщения не подтверждает возможность публикации.'}[res?.advertiser_phone?.status||'UNKNOWN'];
     const reason=diagnostic?.code==='PAGE_ACCESS_MEMORY_LIMIT'?'Проверка доступа РК остановлена: недостаточно памяти для формы Ads Manager.':
       diagnostic?.code==='PAGE_ACCESS_INSPECTION_TIMEOUT'?'Проверка доступа РК не завершилась за отведённое время.':
       diagnostic?.code==='PAGE_ACCESS_RESULT_UNAVAILABLE'?'Не удалось получить результат проверки доступа РК.':'';
     block.innerHTML=`<b>${esc(r.name||r.id)}</b><div class="sub">${esc(r.profile)} · ${esc(r.id)}</div>`+
       (res?.error ? `<div class="job-failed">${esc(res.error)}</div>` :
-      `<div>FP: ${esc(names||'В сохранённом списке страниц нет.')}</div><div>${pill(verified?'ДОСТУП FP ПОДТВЕРЖДЁН':'ДОСТУП FP НЕ ПОДТВЕРЖДЁН',verified?'ok':'warn')}</div><div>Pixel и медиа: не проверены. Оплата: не проверена.</div>`+
+      `<div>FP: ${esc(names||'В сохранённом списке страниц нет.')}</div><div>${pill(verified?'ДОСТУП FP ПОДТВЕРЖДЁН':'ДОСТУП FP НЕ ПОДТВЕРЖДЁН',verified?'ok':'warn')}</div><div>${esc(phone)}</div><div>Pixel и медиа: не проверены. Оплата: не проверена.</div>`+
       (reason?`<div class="sub">${esc(reason)}</div>`:diagnostic?.code?`<div class="sub">${esc(diagnostic.code)}</div>`:'')+
       (diagnostic?`<details><summary>Диагностика проверки</summary><pre>${esc(JSON.stringify(diagnostic,null,2))}</pre></details>`:''));
     body.appendChild(block); progress.textContent=`Загружено ${done}/${total}`; setProgress(done,total);

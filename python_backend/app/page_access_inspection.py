@@ -17,6 +17,16 @@ from .facebook_page_discovery import _iter_connection_rows, _normalize_page
 from .payment_inspection import account_id, saved_payment_business
 
 
+def advertiser_phone_status(text: str, exact_scope: bool) -> str:
+    if not exact_scope: return 'UNKNOWN'
+    text=' '.join(str(text or '').lower().split())
+    if re.search(r'(?:before you (?:can )?(?:run|publish|start)|to run ads|to publish ads).{0,220}(?:verify|verified).{0,60}(?:phone|number)',text) or re.search(r'(?:прежде чем|перед).{0,60}(?:реклам|оголош).{0,160}(?:подтверд|підтверд).{0,60}(?:телефон|номер)',text):
+        return 'REQUIRED'
+    if re.search(r'phone number[\s:–—-]*(?:verified|confirmed)\b|phone verification[\s:–—-]*complete\b',text):
+        return 'VERIFIED'
+    return 'UNKNOWN'
+
+
 def request_accounts(variables: Any) -> set[str]:
     """Only explicit ad account variables; actor, Page and business IDs do not count."""
     out: set[str] = set()
@@ -212,8 +222,8 @@ async def inspect_browser_pages(browser: Any, target: str, business: str, *, tim
             if pages and observed == {target}: break
             if not opened and observed == {target}:
                 create = page.get_by_role('button',name='Create',exact=True)
-                progress = page.locator('[data-surface*="ads_progress_dialog_modal"]')
-                loading = await progress.count() and await progress.first.is_visible()
+                loading_dialog = page.locator('[data-surface*="ads_progress_dialog_modal"]')
+                loading = await loading_dialog.count() and await loading_dialog.first.is_visible()
                 if not loading and await create.count() == 1 and await create.is_visible():
                     opened = True
                     try:
@@ -241,18 +251,19 @@ async def inspect_browser_pages(browser: Any, target: str, business: str, *, tim
         exact = parsed.hostname in {'adsmanager.facebook.com','business.facebook.com'} and observed == {target} and query.get('act') == [target] and (not query.get('business_id') or query.get('business_id') == [business])
         verified = list(pages.values()) if exact else []
         surface = ''
-        if not verified:
-            try:
-                surface = str(await asyncio.wait_for(page.locator('body').inner_text(timeout=1500),timeout=2))[:1800]
-            except Exception:
-                pass
+        try:
+            surface = str(await asyncio.wait_for(page.locator('body').inner_text(timeout=1500),timeout=2))[:12000]
+        except Exception:
+            pass
+        phone=advertiser_phone_status(surface,exact)
         return {'account_id':target, 'business_id':business, 'checked_live':True,
             'account_scope_verified':exact,
             'status':'VERIFIED' if verified else 'UNVERIFIED',
             'ad_account_page_access_verified':bool(verified), 'data':verified,
+            'advertiser_phone':{'status':phone,'checked_live':exact,'source':'ads_manager_visible_requirement'},
             'checked_at':int(time.time()),
             'diagnostic':{'observed_account_ids':sorted(observed), 'queries':diagnostics,
-                'operations':operations, 'url':str(page.url), 'surface':surface,
+                'operations':operations, 'url':str(page.url), 'surface':re.sub(r'\d{6,}','[id]',surface[:1800]),
                 'editor_steps':editor, 'blocked_writes':blocked,
                 'code':'' if verified else 'PAGE_ACCESS_EVIDENCE_MISSING'}}
     finally:

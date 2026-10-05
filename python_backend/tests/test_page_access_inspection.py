@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from urllib.parse import urlencode
 from unittest.mock import AsyncMock, patch
 
-from app.page_access_inspection import promotable_pages, request_accounts, inspect_browser_pages, allowed_readonly_request
+from app.page_access_inspection import promotable_pages, request_accounts, inspect_browser_pages, allowed_readonly_request,advertiser_phone_status
 
 RK='2279305019588057'
 BM='61594882851656'
@@ -13,6 +13,14 @@ PAGE='1270757506131209'
 
 
 class PageAccessEvidenceTests(unittest.TestCase):
+    def test_phone_requirement_needs_explicit_meta_block_and_exact_rk(self):
+        required='Before you can run ads, an admin needs to add a verified phone number.'
+        self.assertEqual(advertiser_phone_status(required,True),'REQUIRED')
+        self.assertEqual(advertiser_phone_status(required,False),'UNKNOWN')
+        self.assertEqual(advertiser_phone_status('Phone number: Verified',True),'VERIFIED')
+        for text in ['Phone number: Not verified','Verify your phone number','A verified phone number is recommended','Campaigns Create']:
+            self.assertEqual(advertiser_phone_status(text,True),'UNKNOWN')
+
     def test_identity_editor_cannot_save_any_meta_mutation_or_unknown_post(self):
         for friendly, allowed in [('AdsCreatePageIdentityQuery',True),('SaveCampaignMutation',False),('',False)]:
             request=SimpleNamespace(method='POST',url='https://adsmanager.facebook.com/api/graphql/',
