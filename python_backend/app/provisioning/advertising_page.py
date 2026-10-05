@@ -75,10 +75,11 @@ async def ensure_common_page(session: Any, params: dict, state: Any, resolver: A
                     owner_profile_id=owner,owner_business_id='',ownership_phase='',owner_business_confirmed=False)
         if not page.get('page_id'):
             named=[row for row in known.values() if str(row.get('name') or '').casefold()==page['name'].casefold()]
-            if len(named)>1:
-                raise ProvisioningError('COMMON_PAGE_AMBIGUOUS','Several Pages in this Facebook profile have the advertising name')
             if named:
-                selected=named[0]
+                # All candidates come from this profile's managed inventory.
+                # Pick once deterministically and persist the identity so bulk
+                # work never asks the user to choose between same-name Pages.
+                selected=min(named,key=lambda row:int(row['id']))
             else:
                 if params.get('reuse_only') is True:
                     raise ProvisioningError('PROFILE_PAGE_REQUIRED','Select an existing Page for this profile',retryable=True)

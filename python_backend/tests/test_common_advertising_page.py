@@ -86,12 +86,14 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await AdvertisingPageStore(self.state).get())['page_id'],PAGE)
         self.assertFalse((await AdvertisingPageStore(self.state).get())['main_business_confirmed'])
 
-    async def test_ambiguous_name_does_not_pick_an_arbitrary_public_page(self):
+    async def test_same_name_managed_pages_choose_one_stable_identity_without_picker(self):
         await self.state.complete('old','9','old',ProvisioningStep.FAN_PAGES,
             {'pages':[{'id':p,'name':'PrgssTeam'} for p in [PAGE,'999999999']]})
-        with self.assertRaises(ProvisioningError) as exc:
-            await ensure_common_page(SimpleNamespace(context=SimpleNamespace(profile_id='9')),{},self.state,None)
-        self.assertEqual(exc.exception.code,'COMMON_PAGE_AMBIGUOUS')
+        create=AsyncMock()
+        with patch('app.provisioning.fan_pages_handler.fan_pages_handler',create):
+            result=await ensure_common_page(SimpleNamespace(context=SimpleNamespace(profile_id='9')),{},self.state,None)
+        self.assertEqual(result['page_ids'],['999999999']); create.assert_not_awaited()
+        self.assertEqual((await AdvertisingPageStore(self.state).get())['page_id'],'999999999')
 
     async def test_personal_rk_is_rejected_before_any_page_creation_or_permission_change(self):
         with patch('app.provisioning.page_access_handler.ensure_common_page',new=AsyncMock()) as create:
