@@ -1872,6 +1872,11 @@ async function pythonWorkerPoll() {
     });
     const compositeLabel = ['FP','BM','РК'].filter(function(label) { return plannedEntities.has(label); }).join(' → ');
     const isCompositeJob = plannedEntities.size > 1;
+    const isPageAccessJob = plannedEntities.size === 0 && items.some(function(item) {
+      return (Array.isArray(item.tasks) ? item.tasks : []).some(function(task) {
+        return (task.payload?.steps || []).includes('PAGE_ACCESS');
+      });
+    });
     const isConfirmationJob = !isCompositeJob && items.some(function(item) {
       return (Array.isArray(item && item.tasks) ? item.tasks : []).some(function(task) {
         const params = task && task.payload && task.payload.parameters;
@@ -1934,7 +1939,9 @@ async function pythonWorkerPoll() {
       const unconfirmed = await pythonWorkerRefreshSuccessfulProfiles(items);
       pythonWorkerSetText(
         'pythonPwStatus',
-        isConfirmationJob
+        isPageAccessJob
+          ? 'Доступ PrgssTeam в выбранном BM настроен.'
+          : isConfirmationJob
           ? 'Confirm существующей FP в основном BM проверен. Page ID сохранён в Job.'
           : isCompositeJob
           ? 'Создание ' + compositeLabel + ' завершено. ID сохранены в Job.' + (unconfirmed.length ? ' Workspace sync не подтвердил: ' + unconfirmed.join(', ') + '.' : ' Workspace sync завершён.')
@@ -1981,7 +1988,9 @@ async function pythonWorkerPoll() {
           });
       });
       const entityLabel = isCompositeJob ? compositeLabel : (isFanPageJob ? 'FP' : (isAdAccountJob ? 'RK' : 'BM'));
-      const entityFailureLabel = isConfirmationJob
+      const entityFailureLabel = isPageAccessJob
+        ? 'Подготовка доступа PrgssTeam остановлена: '
+        : isConfirmationJob
         ? 'Не удалось проверить Confirm существующей FP: '
         : isCompositeJob
         ? 'Создание ' + compositeLabel + ' завершилось ошибкой: '

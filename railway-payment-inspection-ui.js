@@ -179,7 +179,7 @@ async function showFunding(){
     </details>
     <div id="paymentCardBillingMissing" class="ws-form mt-2"></div>
     <label id="paymentCardRetryField" hidden class="mt-2"><input id="paymentCardRetryConfirmed" type="checkbox"> Разрешаю одну повторную попытку после проверки Meta</label>
-    <div class="mt-3"><button id="paymentCardBind" type="button">Привязать и проверить</button></div>
+    <div class="mt-3"><button id="paymentCardBind" type="button" class="btn btn-primary">Привязать и проверить</button></div>
     <details class="mt-2"><summary>Диагностика</summary>
       <button id="paymentCardPrepare" type="button">Проверить форму Meta</button>
       <button id="paymentCardInspect" type="button">Проверить привязанные карты</button></details>
