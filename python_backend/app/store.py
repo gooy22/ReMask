@@ -140,6 +140,106 @@ class JobStore:
             self._repair_unstarted_prgssteam_rk_timezone(con)
             self._recover_premature_page_access(con)
             self._recover_common_page_picker_failure(con)
+            self._recover_legacy_owner_page_approval_stub(con)
+            self._recover_legacy_owner_page_approval_stub(con)
+
+    @staticmethod
+    def _recover_legacy_owner_page_approval_stub(con: sqlite3.Connection) -> None:
+        """Auto-resume only the pre-owner-approval stub shipped before bd030728.
+
+        The old handler had already submitted the exact Page/BM access request,
+        then deliberately stopped with PAGE_OWNER_APPROVAL_UI_UNAVAILABLE.
+        Requeueing is safe only when durable BUSINESS and AD_ACCOUNT successes
+        match the PAGE_ACCESS checkpoint. New owner-approval failures are left
+        untouched so a deploy can never create an automatic retry loop.
+        """
+        if not con.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='provisioning_steps'"
+        ).fetchone():
+            return
+
+        rows=con.execute(
+            """SELECT t.id AS task_id,t.item_id,i.job_id,t.error_message,
+                      p.result_json AS page_result,
+                      b.result_json AS business_result,
+                      a.result_json AS ad_account_result
+               FROM job_tasks t
+               JOIN job_items i ON i.id=t.item_id
+               JOIN provisioning_steps p
+                 ON p.item_id=t.item_id AND p.step='PAGE_ACCESS' AND p.status='FAILED'
+               JOIN provisioning_steps b
+                 ON b.item_id=t.item_id AND b.step='BUSINESS' AND b.status='SUCCESS'
+               JOIN provisioning_steps a
+                 ON a.item_id=t.item_id AND a.step='AD_ACCOUNT' AND a.status='SUCCESS'
+               WHERE t.status='FAILED'
+                 AND i.status='FAILED'
+                 AND t.action='provisioning'
+                 AND t.error_code='PAGE_OWNER_APPROVAL_UI_UNAVAILABLE'
+                 AND t.error_message LIKE ?
+            """,
+            ('%The existing request needs the Page owner approval surface%',),
+        ).fetchall()
+
+        now=_now()
+        for row in rows:
+            try:
+                page=json.loads(row['page_result'] or '{}')
+                business=json.loads(row['business_result'] or '{}')
+                account=json.loads(row['ad_account_result'] or '{}')
+            except (TypeError,ValueError,json.JSONDecodeError):
+                continue
+            if not all(isinstance(value,dict) for value in (page,business,account)):
+                continue
+
+            # The old stub was reached only after the exact request was sent.
+            # Do not auto-resume a pre-submit or uncertain checkpoint.
+            if str(page.get('phase') or '')!='TARGET_PAGE_ACCESS_SUBMITTED':
+                continue
+
+            page_id=str(page.get('page_id') or '').strip()
+            business_id=str(page.get('business_id') or '').strip()
+            ad_account_id=str(page.get('ad_account_id') or '').strip()
+            if ad_account_id.startswith('act_'):
+                ad_account_id=ad_account_id[4:]
+
+            bm_id=str(business.get('business_id') or '').strip()
+            rk_business=str(account.get('business_id') or '').strip()
+            rk_id=str(account.get('ad_account_id') or '').strip()
+            if rk_id.startswith('act_'):
+                rk_id=rk_id[4:]
+
+            if not (
+                page_id.isdigit()
+                and business_id.isdigit()
+                and ad_account_id.isdigit()
+                and bm_id==business_id
+                and rk_business==business_id
+                and rk_id==ad_account_id
+            ):
+                continue
+
+            # Requeue only the failed provisioning task/item. ProvisioningService
+            # will skip the already-SUCCESS BUSINESS and AD_ACCOUNT steps, while
+            # PAGE_ACCESS resumes from TARGET_PAGE_ACCESS_SUBMITTED and therefore
+            # cannot send a second Page request.
+            con.execute(
+                """UPDATE job_tasks
+                   SET status='QUEUED',error_code=NULL,error_message=NULL,
+                       retryable=0,updated_at=?
+                   WHERE id=? AND status='FAILED'""",
+                (now,row['task_id']),
+            )
+            con.execute(
+                """UPDATE job_items
+                   SET status='QUEUED',error_code=NULL,error_message=NULL,
+                       retryable=0,updated_at=?
+                   WHERE id=? AND status='FAILED'""",
+                (now,row['item_id']),
+            )
+            con.execute(
+                "UPDATE jobs SET status='QUEUED',updated_at=? WHERE id=?",
+                (now,row['job_id']),
+            )
 
     @staticmethod
     def _recover_common_page_picker_failure(con: sqlite3.Connection) -> None:
