@@ -341,6 +341,8 @@ async def _resolve_target_business_name(browser, business: str, recorded: dict |
 async def _wait_owner_access_surface(page, business_name: str, *, timeout_seconds: float=8.0) -> dict:
     """Wait for the Page-access React surface, not just the committed document."""
     expected=' '.join(str(business_name or '').split()).strip()
+    if not callable(getattr(page,'locator',None)):
+        return {'ready':False,'polls':0,'body_excerpt':''}
     deadline=asyncio.get_running_loop().time()+max(0.5,float(timeout_seconds))
     last_text=''
     polls=0
