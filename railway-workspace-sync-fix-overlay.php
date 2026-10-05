@@ -199,11 +199,14 @@ function applySnapshot(s){
     }
   }
 
+  const personalScope=String(s.personal_scope_id||normalizedProfile.personal_scope_id||normalizedProfile.user_id||'');
   const businesses=(Array.isArray(s.businesses)?s.businesses:[])
     .filter(x=>x&&typeof x==='object')
+    .filter(x=>String(x.id||'')!==personalScope&&x.is_personal!==true)
     .map(x=>({...x,profile:String(x.profile||p)}));
   const accounts=(Array.isArray(s.ad_accounts)?s.ad_accounts:[])
     .filter(x=>x&&typeof x==='object')
+    .filter(x=>/^\d{5,30}$/.test(String(x.business_id||''))&&String(x.business_id)!==personalScope&&x.is_personal!==true)
     .map(x=>({...x,profile:String(x.profile||p)}));
 
   state.inventory.profiles=state.inventory.profiles
@@ -595,6 +598,10 @@ $hierarchyHelpers = <<<'PHP_HELPERS'
 // REMASK_HONEST_SYNC_OUTCOME_V1
 function hierarchy_asset_types_snapshot(array $snapshot): array
 {
+    $personalScope = trim((string)($snapshot['personal_scope_id'] ?? $snapshot['profile']['user_id'] ?? ''));
+    $snapshot['businesses'] = array_values(array_filter((array)($snapshot['businesses'] ?? []),
+        static fn($row): bool => is_array($row) && (string)($row['id'] ?? '') !== $personalScope
+            && ($row['is_personal'] ?? false) !== true));
     // A generic Relay asset can be a portfolio or Page, not an ad account.
     // Known object IDs are global; exclude only explicit cross-type collisions.
     $otherIds = [];
@@ -605,13 +612,16 @@ function hierarchy_asset_types_snapshot(array $snapshot): array
             if ($id !== '') $otherIds[$id] = true;
         }
     }
-    $valid = static function ($row) use ($otherIds): bool {
+    $valid = static function ($row) use ($otherIds, $personalScope): bool {
         if (!is_array($row)) return false;
         $id = preg_replace('/^act_/', '', trim((string)($row['id'] ?? $row['account_id'] ?? '')));
-        return $id !== '' && !isset($otherIds[$id]);
+        $business = trim((string)($row['business_id'] ?? ''));
+        return $id !== '' && !isset($otherIds[$id]) && preg_match('/^\d{5,30}$/', $business)
+            && $business !== $personalScope && ($row['is_personal'] ?? false) !== true;
     };
     $snapshot['ad_accounts'] = array_values(array_filter((array)($snapshot['ad_accounts'] ?? []), $valid));
     $snapshot['ad_accounts_count'] = count($snapshot['ad_accounts']);
+    $snapshot['businesses_count'] = count($snapshot['businesses']);
     foreach ((array)($snapshot['businesses'] ?? []) as $i => $business) {
         if (!is_array($business)) continue;
         if (isset($business['accounts'])) $snapshot['businesses'][$i]['accounts'] = array_values(array_filter((array)$business['accounts'], $valid));
@@ -620,10 +630,12 @@ function hierarchy_asset_types_snapshot(array $snapshot): array
     foreach ((array)($snapshot['profiles'] ?? []) as $i => $row) {
         if (!is_array($row) || (string)($row['name'] ?? '') !== (string)($snapshot['profile']['name'] ?? '')) continue;
         $snapshot['profiles'][$i]['rk_count'] = $snapshot['ad_accounts_count'];
+        $snapshot['profiles'][$i]['bm_count'] = $snapshot['businesses_count'];
         $snapshot['profiles'][$i]['ad_accounts_count'] = $snapshot['ad_accounts_count'];
     }
     if (is_array($snapshot['profile'] ?? null)) {
         $snapshot['profile']['rk_count'] = $snapshot['ad_accounts_count'];
+        $snapshot['profile']['bm_count'] = $snapshot['businesses_count'];
         $snapshot['profile']['ad_accounts_count'] = $snapshot['ad_accounts_count'];
     }
     return $snapshot;
@@ -1301,7 +1313,17 @@ function hierarchy_profile_snapshot(string $profile, ?array $workspaceMeta = nul
 {
     $snapshot = hierarchy_profile_snapshot_base($profile, $workspaceMeta);
     $snapshot = hierarchy_live_snapshot_apply_display($profile, $snapshot);
-    return hierarchy_created_accounts_apply_display($profile, hierarchy_created_businesses_apply_display($profile, $snapshot));
+    $snapshot = hierarchy_created_accounts_apply_display($profile, hierarchy_created_businesses_apply_display($profile, $snapshot));
+    $account = MetaEndpoint::accountForName($profile);
+    $scope = trim((string)($account->userId ?? ''));
+    foreach ((array)($account->cookies ?? []) as $cookie) {
+        if (is_array($cookie) && ($cookie['name'] ?? '') === 'c_user') {
+            $scope = trim((string)($cookie['value'] ?? '')); break;
+        }
+    }
+    $snapshot['personal_scope_id'] = $scope;
+    $snapshot['profile']['personal_scope_id'] = $scope;
+    return hierarchy_asset_types_snapshot($snapshot);
 }
 PHP_WRAPPER;
 
@@ -1377,7 +1399,7 @@ $syncProfileReplacement = <<<'PHP'
             $reconciled['pending'] = false;
             $reconciled['sync_complete'] = true;
             $reconciled['sync_reconciled'] = true;
-            MetaEndpoint::ok($reconciled);
+            MetaEndpoint::ok(hierarchy_asset_types_snapshot($reconciled));
         }
 
         MetaEndpoint::ok([
@@ -1764,7 +1786,8 @@ $syncProfileReplacement = <<<'PHP'
             }
         }
 
-        $typedInventory = hierarchy_asset_types_snapshot(['businesses' => $businessRows, 'ad_accounts' => $adAccountRows, 'pages' => $pageRows]);
+        $typedInventory = hierarchy_asset_types_snapshot(['businesses' => $businessRows, 'ad_accounts' => $adAccountRows, 'pages' => $pageRows,
+            'personal_scope_id' => (string)($existingSnapshot['personal_scope_id'] ?? '')]);
         $businessRows = $typedInventory['businesses'];
         $adAccountRows = $typedInventory['ad_accounts'];
         $snapshot = $existingSnapshot;

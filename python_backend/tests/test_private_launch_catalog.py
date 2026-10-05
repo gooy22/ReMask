@@ -59,6 +59,19 @@ class PrivateLaunchCatalogTests(unittest.TestCase):
         legacy = self.catalog({'7':{'ad_account_id':'666666666','business_id':'777777777'}})
         self.assertEqual(len(legacy['ad_accounts']['data']), 2)
 
+    def test_personal_and_unmapped_accounts_are_excluded_from_launch_and_funding(self):
+        self.snapshot['7']['profile']={'user_id':'61594882851656'}
+        self.snapshot['7']['ad_accounts'] += [
+            {'id':'2279305019588057','business_id':'61594882851656'},
+            {'id':'123456789','business_id':''},
+            {'id':'987654321','business_id':'111111111','is_personal':True}]
+        catalog=self.catalog({'7':{'ad_accounts':[
+            {'ad_account_id':'2279305019588057','business_id':'61594882851656'}]}})
+        self.assertEqual([row['account_id'] for row in catalog['ad_accounts']['data']],['333333333'])
+        code='$c=json_decode('+json.dumps(json.dumps(catalog))+',true);'
+        code+='try {RemaskPrivateLaunchCatalog::asset($c,"funding","2279305019588057");echo json_encode(false);}catch(InvalidArgumentException $e){echo json_encode(true);}'
+        self.assertTrue(self.run_php(code))
+
     def test_create_alias_cannot_overwrite_observed_disabled_status_in_either_order(self):
         observed={'id':'act_333333333','business_id':'111111111','account_status':2}
         created={'id':'333333333','business_id':'111111111','_provisioned_only':True}

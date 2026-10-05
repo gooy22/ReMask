@@ -2531,6 +2531,13 @@ class FacebookBusinessBrowser:
             )
         )
         if checkpoint_url:
+            # Commit-level navigation can reach this route before its document
+            # renders. Read the challenge once so an empty title/body does not
+            # conceal what Facebook actually asks the user to confirm.
+            try:
+                await self.page.wait_for_load_state('domcontentloaded', timeout=2500)
+            except Exception:
+                pass
             diagnostic = await self._diagnostic("checkpoint")
             diagnostic["auth_evidence"] = "checkpoint_url"
             diagnostic["checkpoint_path"] = current_path

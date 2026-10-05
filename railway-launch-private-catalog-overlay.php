@@ -17,15 +17,17 @@ final class RemaskPrivateLaunchCatalog
         return preg_match('/^\d{5,30}$/', $id) ? $id : '';
     }
 
-    public static function fromState(string $profile, array $snapshots, array $bindings = [], int $now = 0, array $pageIdentities = []): array {
+    public static function fromState(string $profile, array $snapshots, array $bindings = [], int $now = 0, array $pageIdentities = [], string $personalScope = ''): array {
         $now = $now ?: time();
         $snapshot = is_array($snapshots[$profile] ?? null) ? $snapshots[$profile] : [];
+        $personalScope = self::id($personalScope ?: ($snapshot['personal_scope_id'] ?? $snapshot['profile']['user_id'] ?? ''));
         $accounts = [];
         foreach ((array)($snapshot['ad_accounts'] ?? []) as $row) {
             if (!is_array($row)) continue;
             if (isset($row['profile']) && (string)$row['profile'] !== $profile) continue;
             $id = self::id($row['id'] ?? $row['account_id'] ?? '');
-            if ($id === '') continue;
+            $business = self::id($row['business_id'] ?? '');
+            if ($id === '' || $business === '' || $business === $personalScope || ($row['is_personal'] ?? false) === true) continue;
             $observedStatus = $row['_raw_account_status'] ?? $row['account_status'] ?? null;
             if (isset($accounts[$id]) && ($observedStatus === null || $accounts[$id]['account_status'] !== null)) continue;
             $accounts[$id] = [
@@ -46,7 +48,7 @@ final class RemaskPrivateLaunchCatalog
             $business = self::id($row['business_id'] ?? $businessKey);
             // This file is emitted only after exact worker RK confirmation.
             // Merge identity only: it does not prove funding, ACTIVE or Page access.
-            if ($id === '' || $business === '' || isset($accounts[$id])) continue;
+            if ($id === '' || $business === '' || $business === $personalScope || isset($accounts[$id])) continue;
             $accounts[$id] = [
                 'id'=>'act_'.$id, 'account_id'=>$id,
                 'name'=>trim((string)($row['account_name'] ?? $id)),
@@ -255,10 +257,17 @@ final class RemaskPrivateLaunchCatalog
     }
 
     public static function load(string $profile): array {
+        $account = MetaEndpoint::accountForName($profile);
+        $scope = trim((string)($account->userId ?? ''));
+        foreach ((array)($account->cookies ?? []) as $cookie) {
+            if (is_array($cookie) && ($cookie['name'] ?? '') === 'c_user') {
+                $scope = trim((string)($cookie['value'] ?? '')); break;
+            }
+        }
         return self::fromState($profile,
             self::json('/var/lib/remask/workspace-live-meta-snapshots.json'),
             self::json('/var/lib/remask/workspace-provisioning-bindings.json'), time(),
-            self::json(__DIR__.'/RemaskConfirmedPageIdentities.json'));
+            self::json(__DIR__.'/RemaskConfirmedPageIdentities.json'), $scope);
     }
 
     public static function asset(array $catalog, string $resource, string $accountId = ''): array {

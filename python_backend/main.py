@@ -2940,6 +2940,11 @@ async def profile_live_inventory(
             exc.code,
             exc,
         )
+        if exc.code == 'CHECKPOINT_REQUIRED':
+            diagnostic=exc.diagnostic if isinstance(exc.diagnostic,dict) else {}
+            log.warning('live inventory checkpoint surface profile=%s title=%s body=%s',
+                clean_profile,str(diagnostic.get('title') or '')[:300],
+                str(diagnostic.get('body_excerpt') or '')[:1800])
         raise HTTPException(
             status_code=409 if exc.code in {
                 'CHECKPOINT_REQUIRED',

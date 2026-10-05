@@ -29,6 +29,19 @@ function snapshotPreservation() {
   assert.equal(sandbox.state.inventory.profiles.length,2);
 }
 
+function businessOnlySnapshot() {
+  const sandbox={state:{inventory:{profiles:[],businesses:[],ad_accounts:[]}}};
+  vm.createContext(sandbox);vm.runInContext(applySource,sandbox);
+  sandbox.applySnapshot({profile:{name:'9',user_id:'61594882851656'},sync_complete:true,
+    businesses:[{id:'61594882851656'},{id:'934505709362142'}],ad_accounts:[
+      {id:'2279305019588057',business_id:'61594882851656'},
+      {id:'1152836437079070',business_id:'934505709362142'},
+      {id:'123456789'},
+      {id:'987654321',business_id:'934505709362142',is_personal:true}]});
+  assert.deepEqual(JSON.parse(JSON.stringify(sandbox.state.inventory.businesses)).map(r=>r.id),['934505709362142']);
+  assert.deepEqual(JSON.parse(JSON.stringify(sandbox.state.inventory.ad_accounts)).map(r=>r.id),['1152836437079070']);
+}
+
 async function sessionRefreshOutcome() {
   const refreshOverlay=fs.readFileSync('railway-profile-error-fix-overlay.php','utf8');
   const refresh=refreshOverlay.slice(refreshOverlay.indexOf('async function remaskSessionRefreshRun(){'),
@@ -69,6 +82,7 @@ async function run(activeTab, rows) {
 
 (async()=>{
   snapshotPreservation();
+  businessOnlySnapshot();
   await sessionRefreshOutcome();
   const bm = await run('businesses',[{profile:'8',id:'1632909278268870'}]);
   assert.equal(bm.length,1);
