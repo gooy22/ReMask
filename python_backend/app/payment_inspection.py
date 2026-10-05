@@ -119,6 +119,30 @@ def selected_payment_asset(profile: str, target: str, path: Path = Path('/var/li
     return {}
 
 
+async def resolve_payment_asset(profile: str, target: str, state: Any = None) -> dict[str,str]:
+    """Use exact confirmed CREATE identity before a new RK's first live sync.
+
+    This supplies a navigation target only; the native billing flow must still
+    prove the selected RK before reading or entering payment information.
+    """
+    asset=selected_payment_asset(profile,target)
+    if state is None:
+        return asset
+    matches=[row for row in await state.confirmed_ad_account_bindings_for_profile(profile)
+        if str(row.get('ad_account_id') or '').removeprefix('act_')==target
+        and re.fullmatch(r'\d{5,30}',str(row.get('business_id') or ''))]
+    businesses={str(row['business_id']) for row in matches}
+    if len(businesses)>1:
+        return {}
+    if not businesses:
+        return asset
+    business=next(iter(businesses))
+    if asset and asset.get('business_id')!=business:
+        return {}
+    return asset or {'business_id':business,'business_asset_id':'',
+        'name':str(matches[0].get('account_name') or matches[0].get('name') or target)}
+
+
 async def _resolve_payment_account_name(page: Any, name: str) -> str:
     """Recover a placeholder name only from one rendered RK row with Details.
 
@@ -331,16 +355,18 @@ async def inspect_payment_methods(browser: Any, target: str, *, business_id: str
     return result
 
 
-async def inspect_profile_payment_methods(resolver: Any, profile_id: str, target: str) -> dict[str, Any]:
+async def inspect_profile_payment_methods(resolver: Any, profile_id: str, target: str, *, state: Any = None) -> dict[str, Any]:
     from .session import ProfileSession
 
     target = account_id(target)
     context = await resolver.resolve(profile_id)
+    asset=await resolve_payment_asset(profile_id,target,state)
+    if asset.get('business_id') == str(context.cookies.get('c_user') or ''):
+        raise ValueError('PERSONAL_AD_ACCOUNT_EXCLUDED')
     async with ProfileSession(context) as session:
         browser = await session.facebook_business_browser()
         # Existing browser profile lock/global semaphore limits concurrent load.
         try:
-            asset=selected_payment_asset(profile_id,target)
             result=await asyncio.wait_for(inspect_payment_methods(browser, target,
                 business_id=asset.get('business_id') or saved_payment_business(profile_id,target),asset=asset,fresh_billing_context=True), timeout=65)
             result['diagnostic']={'stage':'payment_methods_observed' if result['account_scope_verified'] else 'payment_account_scope_unverified',

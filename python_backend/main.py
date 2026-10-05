@@ -1259,7 +1259,7 @@ async def profile_payment_methods(profile_id: str, account_id: str):
     if not clean_profile:
         raise HTTPException(status_code=400,detail='profile_id is required')
     try:
-        return await inspect_profile_payment_methods(pool.resolver,clean_profile,account_id)
+        return await inspect_profile_payment_methods(pool.resolver,clean_profile,account_id,state=pool.provisioning_state)
     except ValueError as exc:
         raise HTTPException(status_code=400,detail=str(exc)) from exc
     except ProfileContextError as exc:
@@ -1278,7 +1278,7 @@ async def profile_payment_card_action(profile_id: str, payload: dict = Body(...)
     if not profile or len(profile)>160:
         raise HTTPException(status_code=400,detail='INVALID_PAYMENT_TARGET')
     try:
-        return await profile_payment_card(pool.resolver,profile,payload)
+        return await profile_payment_card(pool.resolver,profile,payload,state=pool.provisioning_state)
     except Exception as exc:
         # Never return/log validation or Playwright messages containing card data.
         target=re.sub(r'^act_', '', str(payload.get('account_id') or ''))

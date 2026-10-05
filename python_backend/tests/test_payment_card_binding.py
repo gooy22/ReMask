@@ -63,6 +63,26 @@ class CardFieldTests(unittest.TestCase):
 
 
 class CardBrowserTests(unittest.IsolatedAsyncioTestCase):
+    async def test_new_created_rk_can_prepare_before_inventory_sync_but_conflicts_are_blocked(self):
+        from app.payment_inspection import resolve_payment_asset
+        state=SimpleNamespace(confirmed_ad_account_bindings_for_profile=AsyncMock(return_value=[
+            {'business_id':'987654321','ad_account_id':'act_'+ID,'account_name':'Created RK'}]))
+        with patch('app.payment_inspection.selected_payment_asset',return_value={}):
+            asset=await resolve_payment_asset('Fixture',ID,state)
+        self.assertEqual(asset,{'business_id':'987654321','business_asset_id':'','name':'Created RK'})
+        state.confirmed_ad_account_bindings_for_profile.assert_awaited_once_with('Fixture')
+        with patch('app.payment_inspection.selected_payment_asset',return_value={'business_id':'555555555'}):
+            self.assertEqual(await resolve_payment_asset('Fixture',ID,state),{})
+
+    async def test_personal_rk_is_blocked_before_any_card_browser_opens(self):
+        from app.payment_card_binding import _profile_payment_card_execute
+        resolver=SimpleNamespace(resolve=AsyncMock(return_value=SimpleNamespace(cookies={'c_user':'987654321'})))
+        with patch('app.payment_card_binding.resolve_payment_asset',AsyncMock(return_value={'business_id':'987654321'})), \
+             patch('app.session.ProfileSession') as session:
+            result=await _profile_payment_card_execute(resolver,'Fixture',{'account_id':ID,'operation':'prepare'})
+        self.assertEqual(result['code'],'PERSONAL_AD_ACCOUNT_EXCLUDED')
+        session.assert_not_called()
+
     async def test_unverified_account_diagnostics_exclude_identity_error_candidate_text_and_card_data(self):
         rows=SimpleNamespace(wait_for=AsyncMock(),count=AsyncMock(return_value=1))
         rows.filter=lambda **kw:rows

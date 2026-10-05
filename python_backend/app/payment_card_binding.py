@@ -15,6 +15,7 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from .facebook_business_browser import BrowserBusinessError
 from .payment_inspection import account_id, payment_summary, inspect_payment_methods, select_settings_payment_tab, selected_payment_pane_text, settings_payment_summary, selected_payment_asset, _resolve_payment_account_name
+from .payment_inspection import resolve_payment_asset
 
 ALLOWED_HOSTS = {'business.facebook.com', 'www.facebook.com', 'adsmanager.facebook.com', 'secure.facebook.com'}
 FIELD_PATTERNS = {
@@ -595,14 +596,16 @@ async def payment_card_flow(browser:Any,target:str,asset:dict[str,str],*,operati
         return {**base,'submitted':submitted,'status':'SUBMITTED_UNVERIFIED' if submitted else 'BLOCKED','code':'CARD_BROWSER_INTERRUPTED'}
 
 
-async def _profile_payment_card_execute(resolver:Any,profile:str,payload:dict[str,Any]) -> dict[str,Any]:
+async def _profile_payment_card_execute(resolver:Any,profile:str,payload:dict[str,Any],state:Any=None) -> dict[str,Any]:
     from .session import ProfileSession
     target=account_id(payload.get('account_id',''));operation=payload.get('operation','')
     if operation not in {'prepare','bind'}:raise ValueError('CARD_OPERATION_INVALID')
-    asset=selected_payment_asset(profile,target)
+    asset=await resolve_payment_asset(profile,target,state)
     base={'profile_id':profile,'account_id':target,'submitted':False,'funding_verified':False}
     if not asset:return {**base,'status':'BLOCKED','code':'PAYMENT_ACCOUNT_BINDING_MISSING'}
     context=await resolver.resolve(profile)
+    if asset.get('business_id')==str(context.cookies.get('c_user') or ''):
+        return {**base,'status':'BLOCKED','code':'PERSONAL_AD_ACCOUNT_EXCLUDED'}
     async with ProfileSession(context) as session:
         browser=await session.facebook_business_browser()
         try:
@@ -625,13 +628,13 @@ async def _profile_payment_card_execute(resolver:Any,profile:str,payload:dict[st
             return {**base,'submitted':None if operation=='bind' else False,'status':'SUBMITTED_UNVERIFIED' if operation=='bind' else 'BLOCKED','code':'CARD_FLOW_TIMEOUT'}
 
 
-async def profile_payment_card(resolver:Any,profile:str,payload:dict[str,Any]) -> dict[str,Any]:
+async def profile_payment_card(resolver:Any,profile:str,payload:dict[str,Any],*,state:Any=None) -> dict[str,Any]:
     target=account_id(payload.get('account_id',''));operation=payload.get('operation','')
     if operation not in {'prepare','bind'}:raise ValueError('CARD_OPERATION_INVALID')
     try:
         # PHP waits 130s. Resolution, browser-slot acquisition, the form and
         # cancellation/cleanup must all fit inside that transport boundary.
-        return await asyncio.wait_for(_profile_payment_card_execute(resolver,profile,payload),timeout=110)
+        return await asyncio.wait_for(_profile_payment_card_execute(resolver,profile,payload,state),timeout=110)
     except asyncio.TimeoutError:
         return {'profile_id':profile,'account_id':target,'submitted':None if operation=='bind' else False,'funding_verified':False,
             'status':'SUBMITTED_UNVERIFIED' if operation=='bind' else 'BLOCKED','code':'CARD_FLOW_TIMEOUT'}
