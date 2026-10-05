@@ -338,50 +338,68 @@ async def _resolve_target_business_name(browser, business: str, recorded: dict |
     }
 
 
-async def _owner_active_partner_ads_access(page, business_name: str) -> dict | None:
+async def _owner_active_partner_ads_access(page, business_name: str, *, diagnostic: dict | None=None) -> dict | None:
     """Prove an exact Business is already an Ads partner on this Page."""
     expected=' '.join(str(business_name or '').split()).strip()
     if not expected:
         return None
-    locator=page.get_by_text(expected,exact=True)
-    count=min(await locator.count(),8)
-    for index in range(count):
-        item=locator.nth(index)
+    trace=diagnostic if diagnostic is not None else {}
+    locators=[('exact_name',page.get_by_text(expected,exact=True))]
+    try:
+        locators.append(('partner_menu',page.get_by_role('button',
+            name='More options for '+expected,exact=True)))
+    except AttributeError:
+        pass
+    for source,locator in locators:
+        count=await locator.count()
+        trace[source+'_count']=count
+        if count!=1:
+            continue
+        item=locator.nth(0)
         if not await item.is_visible():
             continue
         try:
-            evidence=await item.evaluate("""(el, expected) => {
+            evidence=await item.evaluate(r"""(el, expected) => {
                 const norm = value => String(value || '').replace(/\s+/g,' ').trim();
                 let node=el;
                 const ancestors=[];
-                for (let i=0; node && i<10; i++, node=node.parentElement) {
+                for (let i=0; node && i<24; i++, node=node.parentElement) {
                     const text=norm(node.innerText || node.textContent || '');
-                    if (text) ancestors.push(text.slice(0,5000));
+                    const menus=[...node.querySelectorAll('button,[role="button"]')].filter(item =>
+                        /^More options for /i.test(item.getAttribute('aria-label') || '')).length;
+                    if (text) ancestors.push({text,menus});
                 }
                 let row='';
-                for (const text of ancestors) {
-                    if (text.includes(expected) && /(^|\W)Ads(\W|$)/i.test(text) && text.length <= 1200) {
+                for (const {text,menus} of ancestors) {
+                    if (/Partners with access/i.test(text)) break;
+                    if (text.includes(expected) && /(^|\W)Ads(\W|$)/i.test(text)
+                        && text.length <= 1200 && menus <= 1) {
                         row=text;
                         break;
                     }
                 }
-                const section=ancestors.find(text =>
+                const section=ancestors.map(item => item.text).find(text =>
                     /Partners with access/i.test(text) && text.includes(expected)
                 ) || '';
-                return {row,section:section.slice(0,3000)};
+                return {row,section:section.slice(0,3000),ancestors:ancestors.slice(0,16)
+                    .map(item => ({text:item.text.slice(0,350),menus:item.menus}))};
             }""",expected)
-        except Exception:
+        except Exception as exc:
+            trace[source+'_error']=f'{exc.__class__.__name__}: {exc}'[:600]
             continue
         if not isinstance(evidence,dict):
             continue
         row=' '.join(str(evidence.get('row') or '').split())
         section=' '.join(str(evidence.get('section') or '').split())
+        trace[source]={'row':row[:1200],'section_found':bool(section),
+            'ancestors':evidence.get('ancestors') or []}
         if row and section and expected in row and re.search(r'(^|\W)Ads(\W|$)',row,re.I):
             return {
                 'business_name':expected,
                 'row':row[:1200],
                 'section':section[:3000],
                 'source':'page_access_partners_with_ads',
+                'anchor':source,
             }
     return None
 
@@ -407,6 +425,7 @@ async def _approve_owner_page_access(browser, config: dict, business: str, check
     saved_i_user=_saved_i_user_cookie(browser)
     approval_error=None
     owner_relation_proof=None
+    partner_diagnostic={}
     try:
         await _set_i_user(browser,actor)
         await browser._goto('https://www.facebook.com/settings/?tab=profile_access',
@@ -414,7 +433,7 @@ async def _approve_owner_page_access(browser, config: dict, business: str, check
         await browser._assert_authenticated()
 
         owner_relation_proof=await _owner_active_partner_ads_access(
-            browser.page,business_name)
+            browser.page,business_name,diagnostic=partner_diagnostic)
         if owner_relation_proof is not None:
             log.info(
                 'PAGE_OWNER active partner Ads access proven page=%s business=%s name=%s',
@@ -438,6 +457,7 @@ async def _approve_owner_page_access(browser, config: dict, business: str, check
                     page_actor_evidence=actor_evidence.get('page') or {},
                     target_business_name=business_name,
                     target_business_evidence=business_evidence,
+                    partner_access_probe=partner_diagnostic,
                     pending_request_candidates=evidence[:8])
                 log.warning(
                     'PAGE_OWNER pending request missing page=%s business=%s actor=%s source=%s '

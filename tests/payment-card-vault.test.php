@@ -142,7 +142,17 @@ try{
     $duplicate=$vault->add($fixture);expect($card['id']===$duplicate['id'],'Deduplication');
     expect(count($vault->all()['cards'])===1,'Duplicate stored');
     $disk=file_get_contents($directory.'/cards.json');
-    foreach(['4111111111111111','Test Holder','security_code','cvv','cvc'] as $secret)expect(!str_contains($disk,$secret),'Secret on disk');
+    foreach(['4111111111111111','Test Holder'] as $secret)expect(!str_contains($disk,$secret),'Plaintext secret on disk');
+    // Random base64 ciphertext can contain "cvv" or "cvc" by chance.
+    // Check actual JSON keys and decrypted payload instead of those substrings.
+    $stored=json_decode($disk,true,32,JSON_THROW_ON_ERROR);
+    $assertNoSecurityCode=function(array $data)use(&$assertNoSecurityCode):void{
+        foreach($data as $key=>$value){
+            expect(!in_array((string)$key,['security_code','cvv','cvc'],true),'Security-code field on disk');
+            if(is_array($value))$assertNoSecurityCode($value);
+        }
+    };
+    $assertNoSecurityCode($stored);$assertNoSecurityCode($vault->secret($card['id']));
     $public=json_encode($vault->all());expect(!str_contains($public,'encrypted')&&!str_contains($public,'fingerprint')&&!str_contains($public,'4111111111111111'),'Public secret');
     expect($vault->secret($card['id'])['number']==='4111111111111111','Decrypt');
     expect((fileperms($directory.'/key')&0777)===0600,'Key permissions');

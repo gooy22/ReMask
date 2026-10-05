@@ -851,6 +851,13 @@ if __name__ == "__main__":
 
 
 class BrowserQueueAwareTimeoutTests(unittest.TestCase):
+    def test_unset_browser_limit_uses_the_actual_single_browser_default(self) -> None:
+        from app.provisioning.timeouts import browser_queue_waves,browser_step_timeout
+        from app.provisioning.models import ProvisioningStep
+        with patch.dict(os.environ,{'REMASK_WORKER_CONCURRENCY':'8'},clear=True):
+            self.assertEqual(browser_queue_waves(),8)
+            self.assertEqual(browser_step_timeout(ProvisioningStep.AD_ACCOUNT),8*150+120)
+
     def test_default_rk_timeout_covers_browser_queue_waves(self) -> None:
         from unittest.mock import patch
         from app.provisioning.models import ProvisioningStep
@@ -1705,4 +1712,3 @@ class AdAccountRendererCrashRecoveryTests(unittest.TestCase):
             "capture_exception_uncertain_inventory_v2",
             uncertain_tail,
         )
-

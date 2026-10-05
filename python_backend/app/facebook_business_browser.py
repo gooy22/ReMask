@@ -108,6 +108,15 @@ def _cgroup_memory_snapshot_mb() -> dict[str, float]:
                 result[key] = round(int(raw) / (1024 * 1024), 1)
         except Exception:
             continue
+    try:
+        values={key:int(value) for key,value in (line.split() for line in
+            Path('/sys/fs/cgroup/memory.stat').read_text(encoding='utf-8').splitlines())}
+        inactive=max(0,values.get('inactive_file',0))/(1024*1024)
+        result['inactive_file_mb']=round(inactive,1)
+        if 'current_mb' in result:
+            result['working_set_mb']=round(max(0,result['current_mb']-inactive),1)
+    except Exception:
+        pass
     return result
 
 

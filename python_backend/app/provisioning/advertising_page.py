@@ -86,17 +86,25 @@ async def ensure_common_page(session: Any, params: dict, state: Any, resolver: A
                 if params.get('reuse_only') is True:
                     raise ProvisioningError('PROFILE_PAGE_REQUIRED','Select an existing Page for this profile',retryable=True)
                 from .models import ProvisioningStep
-                item='workspace-common-page-'+owner
-                await state.set_running(item,owner,'workspace-common-page',ProvisioningStep.FAN_PAGES)
+                # Local aliases of one c_user share the creation checkpoint too.
+                # A crash after Meta CREATE must remain visible to the next alias.
+                item=str(page.get('creation_item_id') or '')
+                creation_owner=str(page.get('creation_profile_id') or owner)
+                if not item:
+                    legacy_item='workspace-common-page-'+owner
+                    item=legacy_item if await state.step(legacy_item,ProvisioningStep.FAN_PAGES) else (
+                        'workspace-common-page-facebook-'+config.facebook_uid if config.facebook_uid else legacy_item)
+                    page=await config.patch(creation_item_id=item,creation_profile_id=creation_owner)
+                await state.set_running(item,creation_owner,'workspace-common-page',ProvisioningStep.FAN_PAGES)
                 creation={'names':[page['name']],'count':1,'category':params.get('category') or 'Digital creator',
                     'confirm_main_business':False,'require_policy_consent':True,
                     'policies_accepted':page.get('policies_accepted') is True and page.get('policies_name')==page['name']
                         and (page.get('policies_owner_profile_id')==owner or bool(config.facebook_uid
                             and page.get('policies_owner_facebook_uid')==config.facebook_uid))}
                 result=await fan_pages_handler(session,creation,{},provisioning_state=state,
-                    item_id=item,profile_id=owner,scope_key='workspace-common-page')
+                    item_id=item,profile_id=creation_owner,scope_key='workspace-common-page')
                 selected=result['pages'][0]
-                await state.complete(item,owner,'workspace-common-page',ProvisioningStep.FAN_PAGES,result)
+                await state.complete(item,creation_owner,'workspace-common-page',ProvisioningStep.FAN_PAGES,result)
             page=await config.patch(page_id=selected['id'],name=selected['name'],
                 main_business_confirmed=selected.get('main_business_confirmed') is True,
                 main_business_id=str(selected.get('main_business_id') or ''))

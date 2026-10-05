@@ -66,6 +66,40 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
             result=await ensure_common_page(SimpleNamespace(context=b),{},self.state,None)
         create.assert_not_awaited(); self.assertEqual(result['page_ids'],[PAGE])
 
+    async def test_alias_retry_sees_original_page_create_intent_after_failure(self):
+        a=SimpleNamespace(profile_id='2',cookies={'c_user':'61594285240608'},pages=[])
+        b=SimpleNamespace(profile_id='5',cookies={'c_user':'61594285240608'},pages=[])
+        calls=[]
+        async def create(session,params,snapshot,**kwargs):
+            calls.append((kwargs['item_id'],kwargs['profile_id']))
+            if len(calls)==1:
+                await self.state.checkpoint(kwargs['item_id'],kwargs['profile_id'],kwargs['scope_key'],
+                    ProvisioningStep.FAN_PAGES,{'phase':'PAGE_CREATE_CLICK_INTENT',
+                        'active_page_name':'PrgssTeam','active_before_ids':[]})
+                raise ProvisioningError('PAGE_CREATE_RESULT_UNKNOWN','submitted',retryable=True)
+            prior=await self.state.step(kwargs['item_id'],ProvisioningStep.FAN_PAGES)
+            self.assertEqual(prior['result']['phase'],'PAGE_CREATE_CLICK_INTENT')
+            self.assertEqual(prior['profile_id'],'2')
+            return {'pages':[{'id':PAGE,'name':'PrgssTeam','reused':True}]}
+        with patch('app.provisioning.fan_pages_handler.fan_pages_handler',side_effect=create):
+            with self.assertRaises(ProvisioningError):
+                await ensure_common_page(SimpleNamespace(context=a),{},self.state,None)
+            result=await ensure_common_page(SimpleNamespace(context=b),{},self.state,None)
+        self.assertEqual(calls[0],calls[1])
+        self.assertEqual(result['page_ids'],[PAGE])
+        self.assertEqual((await AdvertisingPageStore.for_context(self.state,b).get())['creation_profile_id'],'2')
+
+    async def test_common_page_creation_continues_legacy_local_checkpoint(self):
+        context=SimpleNamespace(profile_id='8',cookies={'c_user':'61594897075733'},pages=[])
+        item='workspace-common-page-8'
+        await self.state.set_running(item,'8','workspace-common-page',ProvisioningStep.FAN_PAGES)
+        await self.state.checkpoint(item,'8','workspace-common-page',ProvisioningStep.FAN_PAGES,
+            {'phase':'PAGE_CREATE_CLICK_INTENT','active_page_name':'PrgssTeam'})
+        create=AsyncMock(return_value={'pages':[{'id':PAGE,'name':'PrgssTeam'}]})
+        with patch('app.provisioning.fan_pages_handler.fan_pages_handler',create):
+            await ensure_common_page(SimpleNamespace(context=context),{},self.state,None)
+        self.assertEqual(create.call_args.kwargs['item_id'],item)
+
     async def test_existing_profile_page_is_reused_without_cross_profile_owner(self):
         context=SimpleNamespace(profile_id='8',cookies={'c_user':'61594897075733'},
             pages=[{'id':'111111111','name':'PrgssTeam'}])
@@ -385,6 +419,26 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(proof)
         self.assertEqual(proof['source'],'page_access_partners_with_ads')
         self.assertIn('Ads',proof['row'])
+
+    async def test_partner_card_uses_exact_native_menu_when_name_is_not_a_separate_element(self):
+        item=SimpleNamespace(is_visible=AsyncMock(return_value=True),evaluate=AsyncMock(return_value={
+            'row':'Orchid Studio a5b1ce0a76 Insights, Ads',
+            'section':'Partners with access Orchid Studio a5b1ce0a76 Insights, Ads'}))
+        empty=SimpleNamespace(count=AsyncMock(return_value=0))
+        menu=SimpleNamespace(count=AsyncMock(return_value=1),nth=lambda index:item)
+        page=SimpleNamespace(get_by_text=lambda *args,**kwargs:empty,
+            get_by_role=lambda role,**kwargs:menu)
+        trace={}
+        proof=await _owner_active_partner_ads_access(page,'Orchid Studio a5b1ce0a76',diagnostic=trace)
+        self.assertEqual(proof['anchor'],'partner_menu')
+        self.assertEqual(trace['exact_name_count'],0)
+        self.assertEqual(trace['partner_menu_count'],1)
+
+    async def test_duplicate_partner_cards_cannot_prove_a_unique_business(self):
+        duplicate=SimpleNamespace(count=AsyncMock(return_value=2))
+        page=SimpleNamespace(get_by_text=lambda *args,**kwargs:duplicate,
+            get_by_role=lambda *args,**kwargs:duplicate)
+        self.assertIsNone(await _owner_active_partner_ads_access(page,'Orchid'))
 
     async def test_owner_reconciliation_accepts_already_active_exact_partner(self):
         browser_context=SimpleNamespace(

@@ -27,6 +27,16 @@ def advertiser_phone_status(text: str, exact_scope: bool) -> str:
     return 'UNKNOWN'
 
 
+def page_inspection_memory_exhausted(memory: dict) -> bool:
+    """Allow reclaimable file cache, while keeping a bound on active memory."""
+    current=float(memory.get('current_mb') or 0)
+    limit=float(memory.get('limit_mb') or 0)
+    if not limit:
+        return False
+    active=float(memory.get('working_set_mb',current))
+    return current>=limit*.98 or active>=max(limit*.94,limit-64)
+
+
 def request_accounts(variables: Any) -> set[str]:
     """Only explicit ad account variables; actor, Page and business IDs do not count."""
     out: set[str] = set()
@@ -294,12 +304,11 @@ async def inspect_profile_pages(resolver: Any, profile: str, target: str, *, sta
     context = await asyncio.wait_for(resolver.resolve(profile), timeout=12)
     progress = {'stage':'opening_browser'}
     async def probe():
-        async with FacebookBusinessBrowser(context, v8_old_space_mb=128) as browser:
+        async with FacebookBusinessBrowser(context, v8_old_space_mb=256) as browser:
             async def memory_guard():
                 while True:
                     memory = _cgroup_memory_snapshot_mb()
-                    current,limit = memory.get('current_mb',0),memory.get('limit_mb',0)
-                    if limit and current >= max(limit*.85,limit-120):
+                    if page_inspection_memory_exhausted(memory):
                         progress['memory'] = memory
                         return
                     await asyncio.sleep(.2)

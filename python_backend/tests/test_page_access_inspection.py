@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from urllib.parse import urlencode
 from unittest.mock import AsyncMock, patch
 
-from app.page_access_inspection import promotable_pages, request_accounts, inspect_browser_pages, allowed_readonly_request,advertiser_phone_status
+from app.page_access_inspection import promotable_pages, request_accounts, inspect_browser_pages, allowed_readonly_request,advertiser_phone_status,page_inspection_memory_exhausted
 
 RK='2279305019588057'
 BM='61594882851656'
@@ -13,6 +13,15 @@ PAGE='1270757506131209'
 
 
 class PageAccessEvidenceTests(unittest.TestCase):
+    def test_memory_guard_allows_loading_below_active_budget_and_reclaimable_cache(self):
+        self.assertFalse(page_inspection_memory_exhausted({'current_mb':861.6,'limit_mb':953.7}))
+        self.assertFalse(page_inspection_memory_exhausted({
+            'current_mb':920,'limit_mb':953.7,'working_set_mb':710,'inactive_file_mb':210}))
+        self.assertTrue(page_inspection_memory_exhausted({'current_mb':940,'limit_mb':953.7}))
+        self.assertTrue(page_inspection_memory_exhausted({
+            'current_mb':945,'limit_mb':953.7,'working_set_mb':710}))
+        self.assertFalse(page_inspection_memory_exhausted({'current_mb':861.6}))
+
     def test_phone_requirement_needs_explicit_meta_block_and_exact_rk(self):
         required='Before you can run ads, an admin needs to add a verified phone number.'
         self.assertEqual(advertiser_phone_status(required,True),'REQUIRED')

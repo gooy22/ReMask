@@ -28,7 +28,8 @@ def _env_int(name: str, default: int) -> int:
 def browser_queue_waves() -> int:
     """Concurrent worker waves competing for the bounded Chromium pool."""
     workers = _env_int("REMASK_WORKER_CONCURRENCY", 30)
-    browsers = _env_int("REMASK_BM_BROWSER_CONCURRENCY", 2)
+    # Match FacebookBusinessBrowser's actual default Chromium pool size.
+    browsers = _env_int("REMASK_BM_BROWSER_CONCURRENCY", 1)
     return max(1, math.ceil(workers / browsers))
 
 
