@@ -103,13 +103,28 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
         raise ProvisioningError('CREATED_BUSINESS_RK_REQUIRED','Page access requires the RK of a created Business Portfolio')
     if existing:
         from .ad_account_handler import _verify_expected_ad_account_in_business
-        verified,evidence=await _verify_expected_ad_account_in_business(session,
-            business_id=business,account_name=str(params.get('ad_account_name') or ''),
-            expected_ad_account_id=account,checks=1)
+        owner_config=await AdvertisingPageStore(state).get()
+        recorded=await state.confirmed_ad_account_bindings_for_profile(profile)
+        owner_created=(profile==owner_config.get('owner_profile_id')
+            and business==owner_config.get('owner_business_id')
+            and any(str(row.get('business_id') or '')==business
+                and _normalize_ad_account_id(row.get('ad_account_id')).removeprefix('act_')==account
+                for row in recorded))
+        # The original creation flow uses this exact durable proof too. A
+        # recovery action on its owner RK must not depend on rediscovery of
+        # the already-created RK just to reconcile a saved Page claim.
+        verified,evidence=(True,[{'source':'recorded_owner_rk_create','business_id':business,
+            'ad_account_id':account}]) if owner_created else await _verify_expected_ad_account_in_business(session,
+                business_id=business,account_name=str(params.get('ad_account_name') or ''),
+                expected_ad_account_id=account,checks=1)
         if not verified:
+            await state.checkpoint(item,profile,scope,ProvisioningStep.PAGE_ACCESS,
+                {'business_id':business,'ad_account_id':account,'diagnostic':{
+                    'stage':'business_rk_relation_unverified','binding_evidence':evidence}})
             raise ProvisioningError('BUSINESS_RK_RELATION_UNVERIFIED','Meta did not confirm this exact RK in the requested Business Portfolio',retryable=True)
         await state.checkpoint(item,profile,scope,ProvisioningStep.PAGE_ACCESS,
-            {'business_id':business,'ad_account_id':account,'inventory_binding_verified':True,'binding_evidence':evidence})
+            {'business_id':business,'ad_account_id':account,'inventory_binding_verified':not owner_created,
+                'created_binding_confirmed':owner_created,'binding_evidence':evidence})
     else:
         rk_state=await state.step(item,ProvisioningStep.AD_ACCOUNT)
         result=(rk_state or {}).get('result') or {}

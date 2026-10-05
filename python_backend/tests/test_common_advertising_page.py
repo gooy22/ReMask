@@ -85,6 +85,7 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls,['RK','PAGE','PAGE'])
 
     async def test_existing_rk_requires_live_exact_business_binding_before_page_mutation(self):
+        await self.state.set_running("existing","9","existing",ProvisioningStep.PAGE_ACCESS)
         with patch('app.provisioning.ad_account_handler._verify_expected_ad_account_in_business',new=AsyncMock(return_value=(False,[]))) as verify, \
              patch('app.provisioning.page_access_handler.ensure_common_page',new=AsyncMock()) as create:
             with self.assertRaises(ProvisioningError) as exc:
@@ -95,6 +96,21 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(verify.call_args.kwargs['business_id'],BM)
         self.assertEqual(verify.call_args.kwargs['expected_ad_account_id'],RK)
         create.assert_not_awaited()
+
+    async def test_owner_created_rk_reconciliation_uses_saved_exact_create_without_false_live_claim(self):
+        await AdvertisingPageStore(self.state).patch(page_id=PAGE,name='PrgssTeam',owner_profile_id='9',owner_business_id=BM)
+        await self.state.complete('original','9','original',ProvisioningStep.AD_ACCOUNT,{'business_id':BM,'ad_account_id':'act_'+RK})
+        await self.state.set_running('recovery','9','recovery',ProvisioningStep.PAGE_ACCESS)
+        with patch('app.provisioning.ad_account_handler._verify_expected_ad_account_in_business',new=AsyncMock()) as verify, \
+             patch('app.provisioning.page_access_handler.ensure_common_page',new=AsyncMock(side_effect=RuntimeError('stop before Page mutation'))):
+            with self.assertRaisesRegex(RuntimeError,'stop before Page mutation'):
+                await page_access_handler(SimpleNamespace(context=SimpleNamespace(cookies={'c_user':'61594882851656'})),
+                    {'existing_target':True,'business_id':BM,'ad_account_id':RK}, {},
+                    provisioning_state=self.state,profile_id='9',item_id='recovery',scope_key='recovery')
+        verify.assert_not_awaited()
+        result=(await self.state.step('recovery',ProvisioningStep.PAGE_ACCESS))['result']
+        self.assertTrue(result['created_binding_confirmed'])
+        self.assertFalse(result['inventory_binding_verified'])
 
     async def test_saved_access_before_rk_runs_rk_first_and_reuses_business(self):
         await self.state.complete('ordered','9','ordered',ProvisioningStep.BUSINESS,{'business_id':BM})

@@ -42,6 +42,16 @@ class PageAccessEvidenceTests(unittest.TestCase):
         self.assertTrue(allowed_readonly_request(SimpleNamespace(method='POST',url='https://graph.facebook.com/',post_data=read_batch)))
         self.assertTrue(allowed_readonly_request(SimpleNamespace(method='POST',url='https://adsmanager.facebook.com/ajax/bulk-route-definitions/',post_data='')))
         self.assertFalse(allowed_readonly_request(SimpleNamespace(method='POST',url='https://adsmanager.facebook.com/ajax/save_campaign/',post_data='')))
+    def test_ads_manager_graph_reads_are_allowed_but_write_batches_are_blocked(self):
+        host='https://adsmanager-graph.facebook.com/'
+        read=SimpleNamespace(method='POST',url=host+'v22.0/act_'+RK,post_data='method=get')
+        self.assertTrue(allowed_readonly_request(read))
+        self.assertFalse(allowed_readonly_request(SimpleNamespace(method='POST',url=read.url,post_data='method=post')))
+        for method,allowed in [('get',True),('post',False),('delete',False)]:
+            req=SimpleNamespace(method='POST',url=host,post_data=urlencode({'method':'post','batch':json.dumps([
+                {'method':'get','relative_url':'act_'+RK}, {'method':method,'relative_url':'act_'+RK+'/campaigns'}])}))
+            self.assertEqual(allowed_readonly_request(req),allowed)
+
     def payload(self, key='promotable_pages', rk=RK):
         return {'data':{'node':{'__typename':'AdAccount','id':rk,
             key:{'edges':[{'node':{'__typename':'Page','id':PAGE,'name':'ReMask Page'}}]}}}}

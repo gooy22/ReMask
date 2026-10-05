@@ -63,7 +63,7 @@ def allowed_readonly_request(request: Any) -> bool:
         return 'query' in friendly
     # Ads Manager's own GET reads can be tunneled through POST. These are
     # observed browser requests, not a separate API/token client.
-    if host == 'graph.facebook.com':
+    if host in {'graph.facebook.com','adsmanager-graph.facebook.com'}:
         batch = body.get('batch') or query.get('batch') or []
         if batch:
             try:
@@ -169,7 +169,7 @@ async def inspect_browser_pages(browser: Any, target: str, business: str, *, tim
                 batch = body.get('batch') or parse_qs(parsed.query).get('batch') or []
                 try: rows = json.loads(batch[0]) if len(batch)==1 else []
                 except (ValueError,TypeError): rows = []
-                blocked.append({'method':str(request.method), 'path':parsed.path[:180],
+                blocked.append({'method':str(request.method), 'host':parsed.hostname, 'path':parsed.path[:180],
                     'operation':str(meta.get('friendly_name') or '')[:180],
                     'method_overrides':body.get('method',[])[:3],
                     'batch_methods':[str(row.get('method') or '')[:12] for row in rows[:10] if isinstance(row,dict)] if isinstance(rows,list) else []})

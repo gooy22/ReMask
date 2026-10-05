@@ -179,7 +179,7 @@ async function pythonWorkerPrepareCommonPage() {
   const targets=pythonWorkerSelectedAdAccountTargets();
   if (!targets.length || pythonWorkerUiState.busy || pythonWorkerUiState.workerOnline !== true) return;
   pythonWorkerUiState.busy=true; pythonWorkerSelectionRefresh();
-  pythonWorkerSetText('pythonPwStatus','Подготавливаю PrgssTeam для '+targets.length+' РК и проверяю выбор страницы в форме рекламы…');
+  pythonWorkerSetText('pythonPwStatus','Подготавливаю доступ PrgssTeam для '+targets.length+' РК…');
   try {
     const groups=new Map();
     for (const target of targets) {
