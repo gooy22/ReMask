@@ -50,20 +50,21 @@ def allowed_readonly_request(request: Any) -> bool:
     method = str(getattr(request,'method','') or '').upper()
     if 'graphql' in str(meta.get('url') or '').lower():
         return 'query' in friendly
-    if method in {'GET','HEAD','OPTIONS'} and (not overrides or set(overrides)=={'GET'}): return True
     # Ads Manager's own GET reads can be tunneled through POST. These are
     # observed browser requests, not a separate API/token client.
     if host == 'graph.facebook.com':
-        if overrides and set(overrides)=={'GET'}: return True
         batch = body.get('batch') or query.get('batch') or []
-        try:
-            rows = json.loads(batch[0]) if len(batch)==1 else None
-        except (ValueError,TypeError):
-            rows = None
-        return bool(isinstance(rows,list) and rows and not overrides
-            and all(isinstance(row,dict) and str(row.get('method') or '').upper()=='GET'
-                and not any(v.upper()!='GET' for v in parse_qs(urlsplit(str(row.get('relative_url') or '')).query).get('method',[]))
-                for row in rows))
+        if batch:
+            try:
+                rows = json.loads(batch[0]) if len(batch)==1 else None
+            except (ValueError,TypeError):
+                rows = None
+            return bool(isinstance(rows,list) and rows and len(set(overrides)) <= 1
+                and all(isinstance(row,dict) and str(row.get('method') or '').upper()=='GET'
+                    and not any(v.upper()!='GET' for v in parse_qs(urlsplit(str(row.get('relative_url') or '')).query).get('method',[]))
+                    for row in rows))
+        return (method in {'GET','HEAD','OPTIONS'} and not overrides) or bool(overrides and set(overrides)=={'GET'})
+    if method in {'GET','HEAD','OPTIONS'} and (not overrides or set(overrides)=={'GET'}): return True
     # This exact POST is Meta's lazy JavaScript route-definition loader;
     # blocking it leaves the objective dialog at "Loading Creation".
     return method == 'POST' and parsed.path == '/ajax/bulk-route-definitions/'
@@ -125,23 +126,42 @@ def response_shape(payload: Any) -> list[str]:
     return sorted(keys)[:100]
 
 
-async def inspect_browser_pages(browser: Any, target: str, business: str, *, timeout: float = 45) -> dict:
+def unverified_result(profile: str, target: str, code: str, diagnostic: dict | None = None) -> dict:
+    return {'profile_id':profile, 'account_id':target, 'checked_live':False,
+        'account_scope_verified':False, 'status':'UNVERIFIED',
+        'ad_account_page_access_verified':False, 'data':[], 'checked_at':int(time.time()),
+        'diagnostic':{**(diagnostic or {}), 'code':code}}
+
+
+async def inspect_browser_pages(browser: Any, target: str, business: str, *, timeout: float = 45, progress: dict | None = None) -> dict:
     page = browser.page
     pages: dict[str, dict] = {}
     observed: set[str] = set()
     diagnostics: list[dict] = []
     operations: list[dict] = []
-    blocked: list[str] = []
+    blocked: list[dict] = []
     editor: list[str] = []
     tasks: set[asyncio.Task] = set()
     deadline = time.monotonic() + timeout
+    progress = progress if progress is not None else {}
+    progress.update({'queries':diagnostics, 'operations':operations, 'blocked_writes':blocked,
+        'editor_steps':editor, 'observed_account_ids':[], 'stage':'navigation'})
 
     async def readonly_route(route, request):
         if allowed_readonly_request(request):
             await route.fallback()
         else:
             meta = _request_graphql_meta(request)
-            if len(blocked) < 12: blocked.append(str(meta.get('friendly_name') or urlsplit(str(request.url)).path)[:180])
+            if len(blocked) < 20:
+                parsed = urlsplit(str(request.url))
+                body = parse_qs(getattr(request,'post_data',None) or '')
+                batch = body.get('batch') or parse_qs(parsed.query).get('batch') or []
+                try: rows = json.loads(batch[0]) if len(batch)==1 else []
+                except (ValueError,TypeError): rows = []
+                blocked.append({'method':str(request.method), 'path':parsed.path[:180],
+                    'operation':str(meta.get('friendly_name') or '')[:180],
+                    'method_overrides':body.get('method',[])[:3],
+                    'batch_methods':[str(row.get('method') or '')[:12] for row in rows[:10] if isinstance(row,dict)] if isinstance(rows,list) else []})
             await route.abort()
 
     await page.route('**/*', readonly_route)
@@ -154,7 +174,9 @@ async def inspect_browser_pages(browser: Any, target: str, business: str, *, tim
             operations.append({'operation':friendly, 'variable_keys':sorted(str(k) for k in variables)[:40],
                 'account_ids':sorted(request_accounts(variables))})
         selected = _ads_manager_scope_account_from_request(meta, business_id=business)
-        if selected: observed.add(selected)
+        if selected:
+            observed.add(selected)
+            progress['observed_account_ids'] = sorted(observed)
 
     async def inspect(response):
         try:
@@ -182,6 +204,7 @@ async def inspect_browser_pages(browser: Any, target: str, business: str, *, tim
     try:
         await browser._goto('https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=' + target +
             '&business_id=' + business, timeout_ms=12000, wait_until='commit', settle_ms=0, attempts=1)
+        progress['stage'] = 'waiting_for_identity_form'
         opened = False
         while time.monotonic() < deadline:
             await browser._assert_authenticated()
@@ -244,8 +267,15 @@ async def inspect_profile_pages(resolver: Any, profile: str, target: str) -> dic
     business = saved_payment_business(profile, target)
     if not business: raise ValueError('RK is absent from this profile inventory')
     context = await asyncio.wait_for(resolver.resolve(profile), timeout=12)
+    progress = {'stage':'opening_browser'}
     async def probe():
         async with FacebookBusinessBrowser(context, v8_old_space_mb=256) as browser:
-            return await inspect_browser_pages(browser, target, business)
-    result = await asyncio.wait_for(probe(), timeout=65)
+            try:
+                return await asyncio.wait_for(inspect_browser_pages(browser, target, business, progress=progress),timeout=48)
+            except asyncio.TimeoutError:
+                return unverified_result(profile,target,'PAGE_ACCESS_INSPECTION_TIMEOUT',progress)
+    try:
+        result = await asyncio.wait_for(probe(), timeout=65)
+    except asyncio.TimeoutError:
+        return unverified_result(profile,target,'PAGE_ACCESS_INSPECTION_TIMEOUT',progress)
     return {'profile_id':profile, **result}

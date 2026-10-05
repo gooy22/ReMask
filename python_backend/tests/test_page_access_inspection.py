@@ -3,6 +3,7 @@ import json
 import unittest
 from types import SimpleNamespace
 from urllib.parse import urlencode
+from unittest.mock import AsyncMock, patch
 
 from app.page_access_inspection import promotable_pages, request_accounts, inspect_browser_pages, allowed_readonly_request
 
@@ -27,6 +28,10 @@ class PageAccessEvidenceTests(unittest.TestCase):
                                ([{'method':'GET','relative_url':'act_'+RK+'?method=delete'}],False),([],False)]:
             req=SimpleNamespace(method='POST',url='https://graph.facebook.com/',post_data=urlencode({'batch':json.dumps(batch)}))
             self.assertEqual(allowed_readonly_request(req),allowed)
+        get_batch=urlencode({'batch':json.dumps([{'method':'POST','relative_url':'act_'+RK+'/campaigns'}])})
+        self.assertFalse(allowed_readonly_request(SimpleNamespace(method='GET',url='https://graph.facebook.com/?'+get_batch,post_data='')))
+        read_batch=urlencode({'method':'POST','batch':json.dumps([{'method':'GET','relative_url':'act_'+RK}])})
+        self.assertTrue(allowed_readonly_request(SimpleNamespace(method='POST',url='https://graph.facebook.com/',post_data=read_batch)))
         self.assertTrue(allowed_readonly_request(SimpleNamespace(method='POST',url='https://adsmanager.facebook.com/ajax/bulk-route-definitions/',post_data='')))
         self.assertFalse(allowed_readonly_request(SimpleNamespace(method='POST',url='https://adsmanager.facebook.com/ajax/save_campaign/',post_data='')))
     def payload(self, key='promotable_pages', rk=RK):
@@ -112,3 +117,50 @@ class PageAccessBrowserTests(unittest.IsolatedAsyncioTestCase):
         result=await self.probe(scoped=False)
         self.assertEqual(result['status'],'UNVERIFIED')
         self.assertEqual(result['data'],[])
+
+
+class PageAccessApiTests(unittest.IsolatedAsyncioTestCase):
+    async def test_interrupted_browser_returns_safe_progress_after_context_close(self):
+        from app.page_access_inspection import inspect_profile_pages
+        closed=[]
+        class Browser:
+            async def __aenter__(self): return self
+            async def __aexit__(self,*args): closed.append(True)
+        async def probe(browser,target,business,**kwargs):
+            kwargs['progress'].update({'stage':'waiting_for_identity_form','editor_steps':['objective_dialog_opened']})
+            raise asyncio.TimeoutError
+        with patch('app.page_access_inspection.saved_payment_business',return_value=BM), \
+             patch('app.page_access_inspection.FacebookBusinessBrowser',return_value=Browser()), \
+             patch('app.page_access_inspection.inspect_browser_pages',side_effect=probe):
+            result=await inspect_profile_pages(SimpleNamespace(resolve=AsyncMock(return_value=object())),'9',RK)
+        self.assertEqual(closed,[True])
+        self.assertEqual(result['diagnostic']['stage'],'waiting_for_identity_form')
+        self.assertEqual(result['diagnostic']['editor_steps'],['objective_dialog_opened'])
+        self.assertEqual(result['diagnostic']['code'],'PAGE_ACCESS_INSPECTION_TIMEOUT')
+        self.assertFalse(result['ad_account_page_access_verified'])
+
+    async def test_saved_confirm_survives_live_timeout_without_claiming_ad_access(self):
+        import main as api
+        state=SimpleNamespace(latest_profile_fan_pages=AsyncMock(return_value=[
+            {'id':PAGE,'main_business_id':BM,'main_business_confirmed':True},
+            {'id':'123456','main_business_id':BM,'main_business_confirmed':False}]))
+        with patch.object(api,'pool',SimpleNamespace(resolver=object(),provisioning_state=state)), \
+             patch('app.page_access_inspection.inspect_profile_pages',AsyncMock(side_effect=asyncio.TimeoutError)):
+            result=await api.profile_page_access('9','act_'+RK)
+        self.assertEqual(result['account_id'],RK)
+        self.assertEqual(result['diagnostic']['code'],'PAGE_ACCESS_INSPECTION_TIMEOUT')
+        self.assertFalse(result['ad_account_page_access_verified'])
+        self.assertFalse(result['checked_live'])
+        self.assertEqual(result['data'],[])
+        self.assertEqual(result['page_confirmations'][0]['id'],PAGE)
+        self.assertEqual(len(result['page_confirmations']),1)
+        state.latest_profile_fan_pages.assert_awaited_once_with('9')
+
+    async def test_invalid_target_cannot_return_confirmation_or_run_browser(self):
+        import main as api
+        inspector=AsyncMock()
+        with patch('app.page_access_inspection.inspect_profile_pages',inspector):
+            with self.assertRaises(api.HTTPException) as caught:
+                await api.profile_page_access('9','not-an-account')
+        self.assertEqual(caught.exception.status_code,400)
+        inspector.assert_not_awaited()

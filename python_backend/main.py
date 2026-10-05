@@ -1160,27 +1160,33 @@ async def profile_preflight(profile_id: str, purpose: str = 'business'):
 
 @app.get('/api/v1/profiles/{profile_id}/page-access',dependencies=[Depends(require_key)])
 async def profile_page_access(profile_id: str, account_id: str):
-    from app.page_access_inspection import inspect_profile_pages
+    from app.page_access_inspection import inspect_profile_pages, unverified_result
+    from app.payment_inspection import account_id as normalize_account
     profile=str(profile_id or '').strip()
     if not profile or len(profile)>160:
         raise HTTPException(status_code=400,detail='INVALID_PROFILE')
     try:
+        account_id=normalize_account(account_id)
         result=await inspect_profile_pages(pool.resolver,profile,account_id)
-        saved=await pool.provisioning_state.latest_profile_fan_pages(profile)
-        result['page_confirmations']=[{
-            'id':str(p.get('id') or ''), 'main_business_id':str(p.get('main_business_id') or ''),
-            'main_business_confirmed':True, 'source':'saved_worker_confirmation',
-        } for p in saved if p.get('main_business_confirmed') is True
-            and str(p.get('id') or '').isdigit() and str(p.get('main_business_id') or '').isdigit()]
-        return result
     except ValueError as exc:
         raise HTTPException(status_code=400,detail='INVALID_PAGE_ACCESS_TARGET') from exc
     except ProfileContextError as exc:
-        raise HTTPException(status_code=422,detail='PROFILE_CONTEXT_ERROR') from exc
+        result=unverified_result(profile,account_id,'PROFILE_CONTEXT_ERROR')
     except asyncio.TimeoutError as exc:
-        raise HTTPException(status_code=504,detail='PAGE_ACCESS_INSPECTION_TIMEOUT') from exc
+        result=unverified_result(profile,account_id,'PAGE_ACCESS_INSPECTION_TIMEOUT')
     except BrowserBusinessError as exc:
-        raise HTTPException(status_code=409,detail=exc.code) from exc
+        result=unverified_result(profile,account_id,exc.code)
+    except Exception as exc:
+        log.warning('Page access inspection interrupted: %s',type(exc).__name__)
+        result=unverified_result(profile,account_id,'PAGE_ACCESS_RESULT_UNAVAILABLE')
+    # Historical successful onboarding Confirm survives an inconclusive live probe.
+    saved=await pool.provisioning_state.latest_profile_fan_pages(profile)
+    result['page_confirmations']=[{
+        'id':str(p.get('id') or ''), 'main_business_id':str(p.get('main_business_id') or ''),
+        'main_business_confirmed':True, 'source':'saved_worker_confirmation',
+    } for p in saved if p.get('main_business_confirmed') is True
+        and str(p.get('id') or '').isdigit() and str(p.get('main_business_id') or '').isdigit()]
+    return result
 
 
 @app.get('/api/v1/profiles/{profile_id}/payment-methods',dependencies=[Depends(require_key)])
