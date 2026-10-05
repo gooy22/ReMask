@@ -387,9 +387,25 @@ class JobStore:
                 continue
             if page.get('owner_actor_live_discovery_retry') is not True:
                 continue
-            if page.get('owner_active_partner_reconciliation_retry') is True:
-                continue
             if str(page.get('phase') or '')!='TARGET_PAGE_ACCESS_SUBMITTED':
+                continue
+
+            retry_marker=''
+            if page.get('owner_active_partner_reconciliation_retry') is not True:
+                retry_marker='owner_active_partner_reconciliation_retry'
+            elif page.get('owner_access_surface_wait_retry') is not True:
+                diagnostic=page.get('diagnostic') if isinstance(page.get('diagnostic'),dict) else {}
+                probe=diagnostic.get('partner_access_probe') if isinstance(diagnostic.get('partner_access_probe'),dict) else {}
+                body=' '.join(str(diagnostic.get('body_excerpt') or '').split())
+                exact_count=int(probe.get('exact_name_count') or 0)
+                menu_count=int(probe.get('partner_menu_count') or 0)
+                # This extra retry is only for the observed React render race:
+                # the submitted request is durable, the previous reconciliation
+                # already ran, and the owner access DOM was effectively empty.
+                if body or exact_count or menu_count:
+                    continue
+                retry_marker='owner_access_surface_wait_retry'
+            else:
                 continue
 
             page_id=str(page.get('page_id') or '').strip()
@@ -408,8 +424,8 @@ class JobStore:
             ):
                 continue
 
-            page['owner_active_partner_reconciliation_retry']=True
-            page['owner_active_partner_reconciliation_retry_at']=now
+            page[retry_marker]=True
+            page[retry_marker+'_at']=now
             con.execute(
                 """UPDATE provisioning_steps
                    SET result_json=?,updated_at=?
