@@ -904,6 +904,7 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
         operator_assignment_performed=False
         rk_access_preverified=False
         rk_access_proof={}
+        rk_scope_observed=False
         async with _PAGE_LOCK:
             config=await store.get()
             config={**config,'target_business_identity':target_business_identity}
@@ -973,8 +974,11 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
                             ),
                             timeout=24,
                         )
-                    rk_access_preverified=(
+                    rk_scope_observed=(
                         rk_access_proof.get('account_scope_verified') is True
+                    )
+                    rk_access_preverified=(
+                        rk_scope_observed
                         and any(
                             str(row.get('id') or '')==str(config['page_id'])
                             and str(row.get('account_id') or '')==account
@@ -1003,18 +1007,24 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
                     raise
                 except Exception as exc:
                     await checkpoint({
-                        'phase':resume_phase if operator_submitted else resume_phase,
+                        'phase':resume_phase,
                         'diagnostic':{
                             'stage':'target_rk_readonly_probe',
                             'error':exc.__class__.__name__,
                             **progress,
                         },
                     })
-                    log.warning(
-                        'PAGE_RK readonly probe inconclusive page=%s business=%s account=%s error=%s',
-                        str(config.get('page_id') or ''),business,account,
-                        exc.__class__.__name__,
-                    )
+                    raise BrowserBusinessError(
+                        'PAGE_RK_ACCESS_RESULT_UNKNOWN',
+                        'Exact RK Page-access probe was inconclusive; operator assignment was not attempted',
+                        retryable=True,
+                        diagnostic={
+                            'page_id':str(config.get('page_id') or ''),
+                            'business_id':business,
+                            'ad_account_id':account,
+                            'probe_error':exc.__class__.__name__,
+                        },
+                    ) from exc
 
                 if rk_access_preverified:
                     if operator_submitted:
@@ -1072,9 +1082,21 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
                         },
                     )
                 else:
-                    # 3) Only a confirmed missing exact-RK proof justifies one
-                    # People/Ads mutation. _assign_operator checkpoints intent
-                    # before the click and SUBMITTED immediately after.
+                    if not rk_scope_observed:
+                        raise BrowserBusinessError(
+                            'PAGE_RK_ACCESS_RESULT_UNKNOWN',
+                            'Exact RK scope was not confirmed; operator assignment was not attempted',
+                            retryable=True,
+                            diagnostic={
+                                'page_id':str(config.get('page_id') or ''),
+                                'business_id':business,
+                                'ad_account_id':account,
+                                'rk_probe':rk_access_proof,
+                            },
+                        )
+                    # 3) Only a confirmed exact-RK scope with the Page absent
+                    # justifies one People/Ads mutation. _assign_operator
+                    # checkpoints intent before the click and SUBMITTED after.
                     async with FacebookBusinessBrowser(
                             session.context,v8_old_space_mb=256) as browser:
                         try:
