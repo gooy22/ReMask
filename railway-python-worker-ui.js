@@ -952,8 +952,8 @@ function pythonWorkerRenderJob(job) {
           }).join('\n');
           trace.appendChild(title); trace.appendChild(pre); errorTd.appendChild(trace);
         }
-        if (accessStep && accessStep.status === 'SUCCESS' && accessStep.result.page_shared_to_business === true) {
-          errorTd.textContent += ' · PrgssTeam: доступ в BM настроен';
+        if (accessStep && accessStep.status === 'SUCCESS' && accessStep.result.ad_account_page_access_verified === true) {
+          errorTd.textContent += ' · PrgssTeam: рекламный доступ для РК подтверждён';
         }
         const fpStep = (item.provisioning_steps || []).find(function(s) { return s.step === 'FAN_PAGES'; });
         const fpDiagnostic = (accessStep && accessStep.result && accessStep.result.diagnostic) || (fpStep && fpStep.result && fpStep.result.browser_diagnostic);

@@ -261,11 +261,6 @@ class ProvisioningService:
                     item_id, profile_id, scope_key, step, result
                 )
                 if step in _MUTATING_BROWSER_STEPS:
-                    if step is ProvisioningStep.BUSINESS and parameters.get('FAN_PAGES',{}).get('common_page') is True:
-                        from .advertising_page import AdvertisingPageStore
-                        config=AdvertisingPageStore(self.state); page=await config.get()
-                        if profile_id==page['owner_profile_id'] and not page.get('owner_business_id'):
-                            await config.patch(owner_business_id=str(result['business_id']))
                     release_browser = getattr(session, "close_business_browser", None)
                     if callable(release_browser):
                         await release_browser()

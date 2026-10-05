@@ -90,7 +90,7 @@ class PageAccessEvidenceTests(unittest.TestCase):
 
 
 class PageAccessBrowserTests(unittest.IsolatedAsyncioTestCase):
-    async def probe(self, scoped=True):
+    async def probe(self, scoped=True, open_identity=False):
         callbacks={}; emitted=[]
         class Page:
             url='about:blank'
@@ -120,7 +120,7 @@ class PageAccessBrowserTests(unittest.IsolatedAsyncioTestCase):
                 callbacks['response'](SimpleNamespace(url=req.url,request=req,text=body))
             async def _assert_authenticated(self): pass
         browser=Browser(); browser.page=page
-        result=await inspect_browser_pages(browser,RK,BM,timeout=.05)
+        result=await inspect_browser_pages(browser,RK,BM,timeout=.05,open_identity=open_identity)
         self.assertEqual(callbacks,{})
         self.assertEqual(len(emitted),1)
         return result
@@ -129,12 +129,18 @@ class PageAccessBrowserTests(unittest.IsolatedAsyncioTestCase):
         result=await self.probe()
         self.assertEqual(result['status'],'VERIFIED')
         self.assertEqual(result['data'][0]['id'],PAGE)
+        self.assertFalse(result['identity_form_verified'])
         self.assertNotIn('cookies',json.dumps(result))
 
     async def test_wrong_selector_cannot_reuse_page_response(self):
         result=await self.probe(scoped=False)
         self.assertEqual(result['status'],'UNVERIFIED')
         self.assertEqual(result['data'],[])
+
+    async def test_scoped_pages_alone_do_not_prove_ad_form_selection(self):
+        result=await self.probe(open_identity=True)
+        self.assertTrue(result['ad_account_page_access_verified'])
+        self.assertFalse(result['identity_form_verified'])
 
 
 class PageAccessApiTests(unittest.IsolatedAsyncioTestCase):

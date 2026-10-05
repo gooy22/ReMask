@@ -9,7 +9,7 @@ from app.provisioning.advertising_page import AdvertisingPageStore,ensure_common
 from app.provisioning.models import ProvisioningError,ProvisioningStep
 from app.provisioning.state import ProvisioningStateStore
 from app.provisioning.service import ProvisioningService
-from app.provisioning.page_access_handler import page_access_handler,_ads_only
+from app.provisioning.page_access_handler import page_access_handler,_ads_only,_request_target_page_access
 from app.facebook_business_browser import BrowserBusinessError
 
 PAGE='1270757506131209'; BM='1476521050987548'; RK='958245207339458'
@@ -136,24 +136,53 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
                     provisioning_state=self.state,profile_id='9',item_id='personal',scope_key='personal')
         verify.assert_not_awaited()
 
-    async def test_native_business_access_does_not_require_ads_editor_verification(self):
-        await AdvertisingPageStore(self.state).patch(page_id=PAGE,name='PrgssTeam',owner_profile_id='9',owner_business_id=BM)
-        await self.state.complete('one','9','one',ProvisioningStep.AD_ACCOUNT,{'business_id':BM,'ad_account_id':'act_'+RK})
-        browser=SimpleNamespace(verify_page_attached=AsyncMock(return_value=True))
-        factory=SimpleNamespace(__aenter__=AsyncMock(return_value=browser),__aexit__=AsyncMock(return_value=False))
+    async def test_rk_page_permission_does_not_require_any_owner_bm_or_page_claim(self):
+        await AdvertisingPageStore(self.state).patch(page_id=PAGE,name='PrgssTeam',owner_profile_id='9',
+            owner_business_id='999999999',ownership_phase='PAGE_ADD_CLICK_INTENT')
+        await self.state.complete('one','8','one',ProvisioningStep.AD_ACCOUNT,{'business_id':BM,'ad_account_id':'act_'+RK})
+        browser=SimpleNamespace(verify_page_attached=AsyncMock(),add_existing_page=AsyncMock())
         class Lease:
             async def __aenter__(self): return browser
             async def __aexit__(self,*args): return False
+        proof={'account_scope_verified':True,'data':[{'id':PAGE,'account_id':RK,
+            'ad_account_page_access_verified':True}],'identity_form_verified':False}
         session=SimpleNamespace(context=SimpleNamespace(cookies={'c_user':'61594882851656'}))
         with patch('app.provisioning.page_access_handler.ensure_common_page',new=AsyncMock()), \
              patch('app.provisioning.page_access_handler.FacebookBusinessBrowser',return_value=Lease()), \
-             patch('app.provisioning.page_access_handler.inspect_browser_pages',new=AsyncMock()) as inspect:
+             patch('app.provisioning.page_access_handler.inspect_browser_pages',new=AsyncMock(return_value=proof)) as inspect:
             result=await page_access_handler(session,{}, {'business_id':BM,'ad_account_id':'act_'+RK},
-                provisioning_state=self.state,profile_id='9',item_id='one',scope_key='one')
-        self.assertTrue(result['page_shared_to_business'])
+                provisioning_state=self.state,profile_id='8',item_id='one',scope_key='one')
+        self.assertFalse(result['page_shared_to_business'])
         self.assertEqual(result['ad_account_id'],RK)
-        self.assertFalse(result['ad_account_page_access_verified'])
-        inspect.assert_not_awaited()
+        self.assertTrue(result['ad_account_page_access_verified'])
+        self.assertEqual(result['identity_verification'],'not_requested')
+        self.assertFalse(inspect.call_args.kwargs['open_identity'])
+        browser.verify_page_attached.assert_not_awaited()
+        browser.add_existing_page.assert_not_awaited()
+        self.assertEqual((await AdvertisingPageStore(self.state).get())['ownership_phase'],'PAGE_ADD_CLICK_INTENT')
+
+    async def test_pending_target_request_is_not_resent_and_never_uses_owner_claim(self):
+        browser=SimpleNamespace(verify_page_attached=AsyncMock(return_value=False),_open_pages_add_action=AsyncMock())
+        checkpoint=AsyncMock()
+        with self.assertRaises(BrowserBusinessError) as caught:
+            await _request_target_page_access(browser,{'page_id':PAGE},BM,checkpoint,
+                {'phase':'TARGET_PAGE_ACCESS_SUBMITTED'})
+        self.assertEqual(caught.exception.code,'PAGE_SHARE_RESULT_UNKNOWN')
+        browser._open_pages_add_action.assert_not_awaited()
+        checkpoint.assert_not_awaited()
+        browser.verify_page_attached.assert_awaited_once_with(business_id=BM,page_id=PAGE)
+
+    async def test_missing_share_option_never_falls_back_to_add_existing_page(self):
+        browser=SimpleNamespace(verify_page_attached=AsyncMock(return_value=False),
+            _open_pages_add_action=AsyncMock(return_value=True),_click_named=AsyncMock(return_value=False),
+            add_existing_page=AsyncMock())
+        with self.assertRaises(BrowserBusinessError) as caught:
+            await _request_target_page_access(browser,{'page_id':PAGE},BM,AsyncMock(),{})
+        self.assertEqual(caught.exception.code,'PAGE_SHARE_UI_UNAVAILABLE')
+        browser._open_pages_add_action.assert_awaited_once_with(BM)
+        self.assertEqual(browser._click_named.call_args.args[0],
+            ('Request shared access to a Facebook Page','Request access to a Page'))
+        browser.add_existing_page.assert_not_awaited()
 
 
 class AdsPermissionTests(unittest.IsolatedAsyncioTestCase):

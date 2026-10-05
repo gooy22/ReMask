@@ -38,45 +38,53 @@ async def _ads_only(dialog) -> None:
     raise BrowserBusinessError('PAGE_SHARE_PERMISSION_UI_CHANGED','Ads permission control is unavailable',retryable=True)
 
 
-async def _share_partner(browser, config: dict, business: str, checkpoint, prior: dict) -> None:
-    page_id=config['page_id']
-    if await browser.verify_page_attached(business_id=business,page_id=page_id): return
-    if prior.get('phase') in {'PARTNER_SHARE_CLICK_INTENT','PARTNER_SHARE_SUBMITTED'}:
-        raise BrowserBusinessError('PAGE_SHARE_RESULT_UNKNOWN','Saved Page-share submission must be reconciled before retry',retryable=True)
-    owner=config['owner_business_id']
-    if not await browser.verify_page_attached(business_id=owner,page_id=page_id):
-        raise BrowserBusinessError('COMMON_PAGE_OWNER_RELATION_MISSING','Owner portfolio does not expose the advertising Page',retryable=True)
-    await _select_page(browser,config['name'])
-    assign=browser.page.get_by_role('button',name=re.compile(r'^Assign partners?$',re.I))
-    if not await _one(assign): raise BrowserBusinessError('PAGE_SHARE_UI_UNAVAILABLE','Assign partner is unavailable',retryable=True)
-    await assign.click(timeout=3000)
-    by_id=browser.page.get_by_text('Business ID',exact=True)
-    if await _one(by_id): await by_id.click(timeout=2500)
-    dialog=browser.page.get_by_role('dialog')
-    if await dialog.count()!=1: raise BrowserBusinessError('PAGE_SHARE_UI_UNAVAILABLE','Partner dialog is not unique',retryable=True)
-    target=dialog.get_by_role('textbox',name=re.compile(r'business.*id',re.I))
-    if await target.count()!=1: target=dialog.get_by_placeholder(re.compile(r'business.*id',re.I))
-    if await target.count()!=1: raise BrowserBusinessError('PAGE_SHARE_UI_UNAVAILABLE','Partner Business ID field is unavailable',retryable=True)
-    await target.fill(business,timeout=3000)
-    advance=dialog.get_by_role('button',name='Next',exact=True)
-    if await _one(advance): await advance.click(timeout=3000)
+async def _request_target_page_access(browser, config: dict, business: str, checkpoint, prior: dict) -> bool:
+    """Request Ads task access from the target BM; never claim Page ownership."""
+    if await browser.verify_page_attached(business_id=business,page_id=config['page_id']):
+        return True
+    if prior.get('phase') in {'TARGET_PAGE_ACCESS_CLICK_INTENT','TARGET_PAGE_ACCESS_SUBMITTED',
+            'PARTNER_SHARE_CLICK_INTENT','PARTNER_SHARE_SUBMITTED'}:
+        raise BrowserBusinessError('PAGE_SHARE_RESULT_UNKNOWN',
+            'The saved target BM access request must be reconciled before another is sent',retryable=True)
+    if not await browser._open_pages_add_action(business):
+        raise BrowserBusinessError('PAGE_SHARE_UI_UNAVAILABLE','Target BM Pages did not expose Add',retryable=True)
+    # This action shares access. Add an existing Page transfers ownership and
+    # must never be substituted when the request option is unavailable.
+    if not await browser._click_named(('Request shared access to a Facebook Page','Request access to a Page')):
+        raise BrowserBusinessError('PAGE_SHARE_UI_UNAVAILABLE','Target BM did not expose Request shared access',retryable=True)
+    if not await browser._fill_page_add_identifier(
+        labels=('Facebook Page name or URL','Facebook Page URL or ID','Page URL or ID','Facebook Page'),
+        value=config['page_id']):
+        raise BrowserBusinessError('PAGE_SHARE_UI_UNAVAILABLE','Shared-access Page field is unavailable',retryable=True)
+    await browser.page.wait_for_timeout(900)
+    if not await browser._click_exact_page_search_name(config['page_id'],config['name']):
+        raise BrowserBusinessError('PAGE_SHARE_PAGE_UNVERIFIED','The exact shared Page search result is not unique',retryable=True)
+    next_button=browser.page.get_by_role('button',name='Next',exact=True).filter(visible=True)
+    if await _one(next_button):
+        await next_button.click(timeout=3000)
+        await browser.page.wait_for_timeout(500)
+    dialog=browser.page.get_by_role('dialog').filter(visible=True)
+    if await dialog.count()!=1:
+        raise BrowserBusinessError('PAGE_SHARE_UI_UNAVAILABLE','Shared-access review dialog is not unique',retryable=True)
     await _ads_only(dialog)
-    submit=dialog.get_by_role('button',name=re.compile(r'^(Assign|Save|Confirm)$',re.I))
-    if not await _one(submit): raise BrowserBusinessError('PAGE_SHARE_UI_UNAVAILABLE','Partner final action is unavailable',retryable=True)
-    await checkpoint({'phase':'PARTNER_SHARE_CLICK_INTENT','page_id':page_id,'business_id':business,'requested_tasks':['ADVERTISE']})
+    submit=dialog.get_by_role('button',name=re.compile(r'^(Request access|Send request)$',re.I))
+    if not await _one(submit) or not await submit.is_enabled():
+        raise BrowserBusinessError('PAGE_SHARE_UI_UNAVAILABLE','Shared-access final request action is unavailable',retryable=True)
+    await checkpoint({'phase':'TARGET_PAGE_ACCESS_CLICK_INTENT','requested_tasks':['ADVERTISE'],
+        'page_id':config['page_id'],'business_id':business})
     await submit.click(timeout=5000)
-    await checkpoint({'phase':'PARTNER_SHARE_SUBMITTED'})
-    if not await browser.verify_page_attached(business_id=business,page_id=page_id):
-        raise BrowserBusinessError('PAGE_SHARE_RESULT_UNKNOWN','Target portfolio Page relation is not confirmed',retryable=True)
-    await checkpoint({'phase':'PARTNER_SHARE_CONFIRMED','page_shared_to_business':True})
+    await checkpoint({'phase':'TARGET_PAGE_ACCESS_SUBMITTED'})
+    return await browser.verify_page_attached(business_id=business,page_id=config['page_id'])
 
 
 async def _assign_operator(browser, config: dict, business: str) -> None:
     # Partner administrators do not automatically receive the Ads task on a Page.
-    if not await browser.verify_page_attached(business_id=business,page_id=config['page_id']): return
+    if not await browser.verify_page_attached(business_id=business,page_id=config['page_id']):
+        raise BrowserBusinessError('PAGE_OPERATOR_ASSIGNMENT_REQUIRED','Target BM Page access is unconfirmed',retryable=True)
     await _select_page(browser,config['name'])
     assign=browser.page.get_by_role('button',name=re.compile(r'^(Assign people|Add people)$',re.I))
-    if not await _one(assign): return
+    if not await _one(assign):
+        raise BrowserBusinessError('PAGE_OPERATOR_ASSIGNMENT_REQUIRED','Target BM people assignment is unavailable',retryable=True)
     await assign.click(timeout=3000)
     dialog=browser.page.get_by_role('dialog')
     if await dialog.count()!=1: raise BrowserBusinessError('PAGE_OPERATOR_ASSIGNMENT_REQUIRED','People assignment dialog is unavailable',retryable=True)
@@ -103,18 +111,15 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
         raise ProvisioningError('CREATED_BUSINESS_RK_REQUIRED','Page access requires the RK of a created Business Portfolio')
     if existing:
         from .ad_account_handler import _verify_expected_ad_account_in_business
-        owner_config=await AdvertisingPageStore(state).get()
         recorded=await state.confirmed_ad_account_bindings_for_profile(profile)
-        owner_created=(profile==owner_config.get('owner_profile_id')
-            and business==owner_config.get('owner_business_id')
-            and any(str(row.get('business_id') or '')==business
+        created_binding=(any(str(row.get('business_id') or '')==business
                 and _normalize_ad_account_id(row.get('ad_account_id')).removeprefix('act_')==account
                 for row in recorded))
         # The original creation flow uses this exact durable proof too. A
-        # recovery action on its owner RK must not depend on rediscovery of
-        # the already-created RK just to reconcile a saved Page claim.
-        verified,evidence=(True,[{'source':'recorded_owner_rk_create','business_id':business,
-            'ad_account_id':account}]) if owner_created else await _verify_expected_ad_account_in_business(session,
+        # recovery action must not depend on rediscovery of the already-created
+        # RK. Live advertising permission is still proved independently below.
+        verified,evidence=(True,[{'source':'recorded_profile_rk_create','business_id':business,
+            'ad_account_id':account}]) if created_binding else await _verify_expected_ad_account_in_business(session,
                 business_id=business,account_name=str(params.get('ad_account_name') or ''),
                 expected_ad_account_id=account,checks=1)
         if not verified:
@@ -123,8 +128,8 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
                     'stage':'business_rk_relation_unverified','binding_evidence':evidence}})
             raise ProvisioningError('BUSINESS_RK_RELATION_UNVERIFIED','Meta did not confirm this exact RK in the requested Business Portfolio',retryable=True)
         await state.checkpoint(item,profile,scope,ProvisioningStep.PAGE_ACCESS,
-            {'business_id':business,'ad_account_id':account,'inventory_binding_verified':not owner_created,
-                'created_binding_confirmed':owner_created,'binding_evidence':evidence})
+            {'business_id':business,'ad_account_id':account,'inventory_binding_verified':not created_binding,
+                'created_binding_confirmed':created_binding,'binding_evidence':evidence})
     else:
         rk_state=await state.step(item,ProvisioningStep.AD_ACCOUNT)
         result=(rk_state or {}).get('result') or {}
@@ -135,68 +140,55 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
     prior=((await state.step(item,ProvisioningStep.PAGE_ACCESS)) or {}).get('result') or {}
     async def checkpoint(patch):
         phase=str(patch.get('phase') or '')
-        if phase.startswith('PARTNER_SHARE_'):
+        if phase.startswith('TARGET_PAGE_ACCESS_'):
             current=await store.get(); grants=current.get('grants') or {}
             await store.patch(grants={**grants,business:{**grants.get(business,{}),**patch}})
         await state.checkpoint(item,profile,scope,ProvisioningStep.PAGE_ACCESS,
             {'page_id':config['page_id'],'business_id':business,'ad_account_id':account,**patch})
     try:
-        async with _PAGE_LOCK:
-            config=await store.get()
-            if not config.get('owner_business_id'):
-                if profile!=config['owner_profile_id']:
-                    raise ProvisioningError('COMMON_PAGE_OWNER_BUSINESS_REQUIRED','First create a BM and RK on the advertising Page owner profile',retryable=True)
-                config=await store.patch(owner_business_id=business)
-            owner_context=session.context if profile==config['owner_profile_id'] else await resolver.resolve(config['owner_profile_id'])
-            async with FacebookBusinessBrowser(owner_context,v8_old_space_mb=256) as browser:
-                try:
-                    owner=config['owner_business_id']; page_id=config['page_id']
-                    if not await browser.verify_page_attached(business_id=owner,page_id=page_id):
-                        if config.get('ownership_phase') in {'PAGE_ADD_CLICK_INTENT','PAGE_ADD_SUBMITTED','PAGE_ADD_RESULT_UNKNOWN'}:
-                            # Read the owner portfolio's Requests screen before
-                            # deciding whether a saved claim is still pending.
-                            # Never send another ownership request on this path.
-                            # One owner-scoped Settings route. Navigation
-                            # never re-sends the saved Page claim.
-                            await browser._goto('https://business.facebook.com/latest/settings/requests/?business_id='+owner,
-                                timeout_ms=12000,wait_until='domcontentloaded',settle_ms=1800,attempts=1)
-                            sent=browser.page.get_by_role('tab',name='Sent',exact=True).filter(visible=True)
-                            if await sent.count()!=1:
-                                sent=browser.page.get_by_role('button',name='Sent',exact=True).filter(visible=True)
-                            if await sent.count()==1:
-                                await sent.click(timeout=3000)
-                                await browser.page.wait_for_timeout(1000)
-                            diagnostic=await browser._diagnostic('owner_page_claim_reconciliation')
-                            raise BrowserBusinessError('PAGE_ATTACH_RESULT_UNKNOWN','Owner Page claim needs reconciliation',retryable=True,diagnostic=diagnostic)
-                        async def owner_checkpoint(patch):
-                            if patch.get('phase'): await store.patch(ownership_phase=patch['phase'])
-                            await checkpoint(patch)
-                        await browser.add_existing_page(business_id=owner,page_id=page_id,page_name=config['name'],before_submit=owner_checkpoint)
-                        await store.patch(ownership_phase='PAGE_ATTACHED')
-                    await store.patch(owner_business_confirmed=True)
-                    if business!=owner:
-                        saved_grant=(config.get('grants') or {}).get(business) or {}
-                        await _share_partner(browser,config,business,checkpoint,saved_grant or prior)
-                except BrowserBusinessError as exc:
-                    exc.diagnostic={**(exc.diagnostic or {}),'surface':str(await browser._body_text())[:1800]}
-                    raise
-        if profile!=config['owner_profile_id']:
-            async with FacebookBusinessBrowser(session.context,v8_old_space_mb=256) as browser:
-                await _assign_operator(browser,config,business)
-        if params.get('verify_identity') is not True:
-            return {'page_id':config['page_id'],'page_name':config['name'],'business_id':business,
-                'ad_account_id':account,'page_shared_to_business':True,'ad_account_page_access_verified':False,
-                'identity_verification':'not_requested','transport':'business_page_advertise_share_ui'}
-        await checkpoint({'phase':'VERIFY_AD_IDENTITY','page_shared_to_business':True})
-        async with FacebookBusinessBrowser(session.context,v8_old_space_mb=128) as browser:
-            proof=await asyncio.wait_for(inspect_browser_pages(browser,account,business),timeout=55)
-        exact=[p for p in proof.get('data',[]) if p.get('id')==config['page_id'] and p.get('ad_account_page_access_verified') is True]
-        if not exact:
-            await checkpoint({'phase':'PAGE_IDENTITY_UNVERIFIED','page_shared_to_business':True,'diagnostic':proof.get('diagnostic') or {}})
-            raise ProvisioningError('PAGE_IDENTITY_UNVERIFIED','Existing Page could not be verified in this RK advertising Identity form',retryable=True)
+        async def probe(*, identity=False):
+            async with FacebookBusinessBrowser(session.context,v8_old_space_mb=128) as browser:
+                return await asyncio.wait_for(inspect_browser_pages(browser,account,business,
+                    timeout=25 if not identity else 45,open_identity=identity),timeout=30 if not identity else 55)
+        def has_access(proof):
+            return proof.get('account_scope_verified') is True and any(
+                row.get('id')==config['page_id'] and row.get('account_id')==account
+                and row.get('ad_account_page_access_verified') is True
+                for row in proof.get('data',[]))
+        # The Page remains on its Facebook owner profile. A scoped RK can
+        # already advertise with it even when it is absent from BM inventory.
+        # Never make a separate owner/main portfolio a prerequisite.
+        proof=await probe()
+        target_relation=False
+        if not has_access(proof):
+            await checkpoint({'phase':'VERIFY_TARGET_PAGE_ACCESS','diagnostic':proof.get('diagnostic') or {}})
+            async with _PAGE_LOCK:
+                config=await store.get()
+                saved_grant=(config.get('grants') or {}).get(business) or {}
+                async with FacebookBusinessBrowser(session.context,v8_old_space_mb=128) as browser:
+                    target_relation=await _request_target_page_access(browser,config,business,checkpoint,saved_grant or prior)
+                    if not target_relation:
+                        raise BrowserBusinessError('TARGET_PAGE_ACCESS_APPROVAL_REQUIRED',
+                            'The target BM requested Ads access; approval belongs to the Facebook Page owner, not a main BM',
+                            retryable=True,diagnostic=await browser._diagnostic('target_page_access_pending'))
+                    await _assign_operator(browser,config,business)
+            proof=await probe()
+        if not has_access(proof):
+            await checkpoint({'phase':'PAGE_ADVERTISING_ACCESS_UNVERIFIED','diagnostic':proof.get('diagnostic') or {}})
+            raise ProvisioningError('PAGE_ADVERTISING_ACCESS_UNVERIFIED',
+                'Meta did not prove advertising access to the exact Page for this created BM RK',retryable=True)
+        if params.get('verify_identity') is True:
+            proof=await probe(identity=True)
+            if not has_access(proof) or proof.get('identity_form_verified') is not True:
+                await checkpoint({'phase':'PAGE_IDENTITY_UNVERIFIED','ad_account_page_access_verified':True,
+                    'diagnostic':proof.get('diagnostic') or {}})
+                raise ProvisioningError('PAGE_IDENTITY_UNVERIFIED',
+                    'RK advertising permission is separate from a verified Page selector in the ad form',retryable=True)
         return {'page_id':config['page_id'],'page_name':config['name'],'business_id':business,
-            'ad_account_id':account,'page_shared_to_business':True,'ad_account_page_access_verified':True,
-            'verification':proof,'transport':'business_page_advertise_share_and_identity_ui'}
+            'ad_account_id':account,'page_shared_to_business':target_relation,
+            'ad_account_page_access_verified':True,
+            'identity_verification':'verified' if params.get('verify_identity') is True else 'not_requested',
+            'verification':proof,'transport':'target_rk_page_advertising_access'}
     except BrowserBusinessError as exc:
         await checkpoint({'last_error_code':exc.code,'diagnostic':{'stage':'page_access',**(exc.diagnostic or {})}})
         raise ProvisioningError(exc.code,str(exc),retryable=exc.retryable) from exc

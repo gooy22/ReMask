@@ -144,7 +144,7 @@ def unverified_result(profile: str, target: str, code: str, diagnostic: dict | N
         'diagnostic':{**(diagnostic or {}), 'code':code}}
 
 
-async def inspect_browser_pages(browser: Any, target: str, business: str, *, timeout: float = 45, progress: dict | None = None) -> dict:
+async def inspect_browser_pages(browser: Any, target: str, business: str, *, timeout: float = 45, progress: dict | None = None, open_identity: bool = True) -> dict:
     page = browser.page
     pages: dict[str, dict] = {}
     observed: set[str] = set()
@@ -219,8 +219,8 @@ async def inspect_browser_pages(browser: Any, target: str, business: str, *, tim
         opened = False
         while time.monotonic() < deadline:
             await browser._assert_authenticated()
-            if pages and observed == {target}: break
-            if not opened and observed == {target}:
+            if not open_identity and pages and observed == {target}: break
+            if open_identity and not opened and observed == {target}:
                 create = page.get_by_role('button',name='Create',exact=True)
                 loading_dialog = page.locator('[data-surface*="ads_progress_dialog_modal"]')
                 loading = await loading_dialog.count() and await loading_dialog.first.is_visible()
@@ -260,6 +260,9 @@ async def inspect_browser_pages(browser: Any, target: str, business: str, *, tim
             'account_scope_verified':exact,
             'status':'VERIFIED' if verified else 'UNVERIFIED',
             'ad_account_page_access_verified':bool(verified), 'data':verified,
+            # Scoped Page permissions do not prove that the ad-level Page
+            # selector was rendered. Keep this separate from RK access.
+            'identity_form_verified':False,
             'advertiser_phone':{'status':phone,'checked_live':exact,'source':'ads_manager_visible_requirement'},
             'checked_at':int(time.time()),
             'diagnostic':{'observed_account_ids':sorted(observed), 'queries':diagnostics,
