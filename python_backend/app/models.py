@@ -35,6 +35,8 @@ class JobAccepted(BaseModel):
 class RetryResponse(BaseModel):
     job_id: str
     requeued: int
+    blocked_profiles: list[str] = Field(default_factory=list)
+    blocked_reason: str = ""
 
 class HealthResponse(BaseModel):
     ok: bool
