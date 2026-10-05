@@ -811,7 +811,7 @@ function pythonWorkerFanPageResult(item) {
   const pages = result.pages || result.created_pages || [];
   return pages.map(function(p) {
     return (p.shared ? 'Общая FP ' : 'FP ') + p.id + ' ' + (p.name || '') +
-      (p.main_business_confirmed ? ' · Confirm OK · основной BM ' + p.main_business_id : ' · Confirm ещё не подтверждён');
+      (p.main_business_confirmed ? ' · Confirm OK · основной BM ' + p.main_business_id : p.shared ? '' : ' · Confirm ещё не подтверждён');
   }).join('; ');
 }
 
@@ -939,12 +939,16 @@ function pythonWorkerRenderJob(job) {
           }
         }
 
+        const accessStep = (item.provisioning_steps || []).find(function(s) { return s.step === 'PAGE_ACCESS'; });
+        if (accessStep && accessStep.status === 'SUCCESS' && accessStep.result.page_shared_to_business === true) {
+          errorTd.textContent += ' · PrgssTeam: доступ в BM настроен';
+        }
         const fpStep = (item.provisioning_steps || []).find(function(s) { return s.step === 'FAN_PAGES'; });
-        const fpDiagnostic = fpStep && fpStep.result && fpStep.result.browser_diagnostic;
+        const fpDiagnostic = (accessStep && accessStep.result && accessStep.result.diagnostic) || (fpStep && fpStep.result && fpStep.result.browser_diagnostic);
         if (itemStatus === 'FAILED' && fpDiagnostic && typeof fpDiagnostic === 'object') {
           const details = document.createElement('details');
           const summary = document.createElement('summary');
-          summary.textContent = 'Диагностика Confirm / FP';
+          summary.textContent = accessStep && accessStep.result.diagnostic ? 'Диагностика доступа FP' : 'Диагностика Confirm / FP';
           const pre = document.createElement('pre');
           const diagnosticText={...fpDiagnostic}; delete diagnosticText.form_preview;
           pre.textContent = JSON.stringify(diagnosticText, null, 2);
