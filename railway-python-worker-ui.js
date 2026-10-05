@@ -940,6 +940,16 @@ function pythonWorkerRenderJob(job) {
         }
 
         const accessStep = (item.provisioning_steps || []).find(function(s) { return s.step === 'PAGE_ACCESS'; });
+        if (itemStatus === 'FAILED') {
+          const trace=document.createElement('details');
+          const title=document.createElement('summary'); title.textContent='Шаги комплекта';
+          const pre=document.createElement('pre');
+          pre.textContent=(item.provisioning_steps || []).map(function(s) {
+            const r=s.result || {};
+            return [s.step,s.status,r.business_id && 'BM '+r.business_id,r.ad_account_id && 'РК '+r.ad_account_id,r.phase,s.error_code].filter(Boolean).join(' · ');
+          }).join('\n');
+          trace.appendChild(title); trace.appendChild(pre); errorTd.appendChild(trace);
+        }
         if (accessStep && accessStep.status === 'SUCCESS' && accessStep.result.page_shared_to_business === true) {
           errorTd.textContent += ' · PrgssTeam: доступ в BM настроен';
         }

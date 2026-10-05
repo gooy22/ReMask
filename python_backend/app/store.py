@@ -138,6 +138,22 @@ class JobStore:
             self._recover_legacy_fp_page_crashes(con)
             self._recover_common_page_checkpoint_failure(con)
             self._repair_unstarted_prgssteam_rk_timezone(con)
+            self._recover_premature_page_access(con)
+
+    @staticmethod
+    def _recover_premature_page_access(con: sqlite3.Connection) -> None:
+        if not con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='provisioning_steps'").fetchone(): return
+        rows=con.execute("SELECT t.id,t.item_id,t.payload_json FROM job_tasks t WHERE t.status='FAILED' "
+            "AND t.action='provisioning' AND t.error_code='CREATED_BUSINESS_RK_REQUIRED' "
+            "AND NOT EXISTS (SELECT 1 FROM provisioning_steps s WHERE s.item_id=t.item_id AND s.step='AD_ACCOUNT')").fetchall()
+        for row in rows:
+            payload=json.loads(row['payload_json']); params=payload.get('parameters') or {}
+            steps=payload.get('steps') or []
+            if 'AD_ACCOUNT' not in steps or (params.get('AD_ACCOUNT') or {}).get('use_common_page') is not True: continue
+            # Only restore manual retry before RK creation ever started. Retain
+            # every Page/BM checkpoint and never enqueue work at startup.
+            con.execute("UPDATE job_tasks SET retryable=1 WHERE id=?",(row['id'],))
+            con.execute("UPDATE job_items SET retryable=1 WHERE id=? AND status='FAILED' AND error_code='CREATED_BUSINESS_RK_REQUIRED'",(row['item_id'],))
 
     @staticmethod
     def _repair_unstarted_prgssteam_rk_timezone(con: sqlite3.Connection) -> None:

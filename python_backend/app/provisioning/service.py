@@ -86,8 +86,11 @@ class ProvisioningService:
             raise ProvisioningError("INVALID_INPUT", "parameters must be an object")
         rk_params=parameters.get('AD_ACCOUNT',parameters.get('ad_account',{}))
         if ProvisioningStep.AD_ACCOUNT in steps and isinstance(rk_params,dict) and rk_params.get('use_common_page') is True:
-            if ProvisioningStep.PAGE_ACCESS not in steps:
-                steps.insert(steps.index(ProvisioningStep.AD_ACCOUNT)+1,ProvisioningStep.PAGE_ACCESS)
+            # Persisted jobs can contain PAGE_ACCESS before AD_ACCOUNT. Always
+            # enforce the dependency, including when resuming that old payload.
+            if ProvisioningStep.PAGE_ACCESS in steps:
+                steps.remove(ProvisioningStep.PAGE_ACCESS)
+            steps.insert(steps.index(ProvisioningStep.AD_ACCOUNT)+1,ProvisioningStep.PAGE_ACCESS)
 
         scope_key = str(
             payload.get("scope_key")

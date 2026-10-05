@@ -96,6 +96,22 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(verify.call_args.kwargs['expected_ad_account_id'],RK)
         create.assert_not_awaited()
 
+    async def test_saved_access_before_rk_runs_rk_first_and_reuses_business(self):
+        await self.state.complete('ordered','9','ordered',ProvisioningStep.BUSINESS,{'business_id':BM})
+        observed=[]
+        async def rk(session,params,snapshot,**kwargs):
+            observed.append('RK'); self.assertEqual(snapshot['business_id'],BM)
+            return {'business_id':BM,'ad_account_id':RK}
+        async def access(session,params,snapshot,**kwargs):
+            observed.append('PAGE'); self.assertEqual(snapshot['ad_account_id'],RK)
+            return {'business_id':BM,'ad_account_id':RK,'page_id':PAGE}
+        with patch('app.provisioning.service.get_handler',side_effect=lambda step:rk if step=='AD_ACCOUNT' else access), \
+             patch('app.provisioning.service._await_profile_mutation_cooldown',new=AsyncMock()):
+            await ProvisioningService(self.state).run(item_id='ordered',profile_id='9',context=SimpleNamespace(),session=SimpleNamespace(),
+                payload={'scope_key':'ordered','steps':['BUSINESS','PAGE_ACCESS','AD_ACCOUNT'],
+                    'parameters':{'AD_ACCOUNT':{'use_common_page':True}}})
+        self.assertEqual(observed,['RK','PAGE'])
+
     async def test_existing_personal_rk_rejected_before_inventory_or_sharing(self):
         with patch('app.provisioning.ad_account_handler._verify_expected_ad_account_in_business',new=AsyncMock()) as verify:
             with self.assertRaises(ProvisioningError):
