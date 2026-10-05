@@ -9,7 +9,7 @@ from app.provisioning.advertising_page import AdvertisingPageStore,ensure_common
 from app.provisioning.models import ProvisioningError,ProvisioningStep
 from app.provisioning.state import ProvisioningStateStore
 from app.provisioning.service import ProvisioningService
-from app.provisioning.page_access_handler import page_access_handler,_ads_only,_request_target_page_access
+from app.provisioning.page_access_handler import page_access_handler,_ads_only,_request_target_page_access,_approve_owner_page_access
 from app.facebook_business_browser import BrowserBusinessError
 
 PAGE='1270757506131209'; BM='1476521050987548'; RK='958245207339458'
@@ -269,6 +269,159 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(await _request_target_page_access(browser,{'page_id':PAGE,'name':'PrgssTeam'},BM,checkpoint,{}))
         self.assertEqual(events,['TARGET_PAGE_ACCESS_CLICK_INTENT','CLICK_CONFIRM','TARGET_PAGE_ACCESS_SUBMITTED'])
         ads.assert_awaited_once_with(dialog)
+
+
+    async def test_owner_approval_switches_to_exact_page_then_restores_user_and_verifies(self):
+        events=[]
+        class Locator:
+            def __init__(self, *, count=0, checked=False, context='', router=None, label=''):
+                self._count=count; self._checked=checked; self._context=context
+                self._router=router; self.label=label; self.first=self
+            async def count(self): return self._count
+            def nth(self,index): return self
+            async def is_visible(self): return self._count>0
+            async def is_enabled(self): return self._count>0
+            async def is_checked(self): return self._checked
+            async def get_attribute(self,name): return 'true' if name=='aria-checked' and self._checked else None
+            async def click(self,**kwargs): events.append('CLICK_'+self.label)
+            async def fill(self,*args,**kwargs): events.append('FILL_'+self.label)
+            async def evaluate(self,*args,**kwargs): return self._context
+            def filter(self,**kwargs): return self
+            def get_by_role(self,role,**kwargs):
+                return self._router(role,kwargs.get('name')) if self._router else Locator()
+
+        review=Locator(count=1,label='REVIEW')
+        next_button=Locator(count=1,label='NEXT')
+        approve=Locator(count=1,label='APPROVE')
+        empty=Locator()
+        def dialog_router(role,name):
+            text=getattr(name,'pattern',str(name or ''))
+            if role=='button' and text=='^Next
+    async def test_ads_sharing_never_silently_accepts_full_control(self):
+        full=SimpleNamespace(is_checked=AsyncMock(return_value=True))
+        locator=SimpleNamespace(all=AsyncMock(return_value=[full]))
+        dialog=SimpleNamespace(get_by_role=lambda *args,**kwargs:locator)
+        with self.assertRaises(BrowserBusinessError) as exc: await _ads_only(dialog)
+        self.assertEqual(exc.exception.code,'PAGE_SHARE_PERMISSION_REVIEW_REQUIRED')
+: return next_button
+            if role=='button' and 'Accept' in text: return approve
+            return empty
+        dialog=Locator(count=1,router=dialog_router)
+        def page_role(role,name=None,**kwargs):
+            text=getattr(name,'pattern',str(name or ''))
+            if role=='dialog': return dialog
+            if role=='button' and 'Review request' in text: return review
+            return empty
+        page=SimpleNamespace(
+            get_by_role=page_role,
+            locator=lambda selector:empty,
+            wait_for_timeout=AsyncMock())
+        browser_context=SimpleNamespace(clear_cookies=AsyncMock(),add_cookies=AsyncMock())
+        browser=SimpleNamespace(
+            page=page,_browser_context=browser_context,
+            context=SimpleNamespace(cookies={'c_user':'100','i_user':'100'},
+                pages=[{'id':PAGE,'profile_id':'777777777'}]),
+            verify_page_attached=AsyncMock(side_effect=[False,True]),
+            _goto=AsyncMock(),_assert_authenticated=AsyncMock(),
+            _diagnostic=AsyncMock(return_value={'stage':'owner'}))
+        checkpoints=[]
+        async def checkpoint(patch): checkpoints.append(patch)
+        self.assertTrue(await _approve_owner_page_access(
+            browser,{'page_id':PAGE,'name':'PrgssTeam'},BM,checkpoint))
+        self.assertEqual(events,['CLICK_REVIEW','CLICK_NEXT','CLICK_APPROVE'])
+        browser._goto.assert_awaited_once_with(
+            'https://www.facebook.com/settings/?tab=profile_access',
+            timeout_ms=12000,wait_until='commit',settle_ms=1100,attempts=1)
+        self.assertEqual(browser_context.add_cookies.await_args_list[0].args[0][0]['value'],'777777777')
+        self.assertEqual(browser_context.add_cookies.await_args_list[-1].args[0][0]['value'],'100')
+        phases=[row.get('phase') for row in checkpoints if row.get('phase')]
+        self.assertEqual(phases,[
+            'TARGET_PAGE_ACCESS_OWNER_APPROVE_CLICK_INTENT',
+            'TARGET_PAGE_ACCESS_OWNER_APPROVED',
+            'TARGET_PAGE_ACCESS_OWNER_CONFIRMED'])
+        browser.verify_page_attached.assert_awaited_with(business_id=BM,page_id=PAGE)
+
+    async def test_owner_approval_never_guesses_between_multiple_pending_requests(self):
+        events=[]
+        class Locator:
+            def __init__(self, items=None, context=''):
+                self.items=items; self.context=context; self.first=self
+            async def count(self): return len(self.items) if self.items is not None else 1
+            def nth(self,index): return self.items[index] if self.items is not None else self
+            async def is_visible(self): return True
+            async def is_enabled(self): return True
+            async def evaluate(self,*args,**kwargs): return self.context
+            async def click(self,**kwargs): events.append('CLICK')
+            def filter(self,**kwargs): return self
+        a=Locator(context='Request from Other Business A')
+        b=Locator(context='Request from Other Business B')
+        reviews=Locator(items=[a,b]); empty=SimpleNamespace(count=AsyncMock(return_value=0))
+        empty.filter=lambda **kwargs:empty
+        def page_role(role,name=None,**kwargs):
+            text=getattr(name,'pattern',str(name or ''))
+            if role=='button' and 'Review request' in text: return reviews
+            if role=='link' and 'Review request' in text: return Locator(items=[])
+            if role=='dialog': return empty
+            return Locator(items=[])
+        page=SimpleNamespace(get_by_role=page_role,wait_for_timeout=AsyncMock())
+        browser_context=SimpleNamespace(clear_cookies=AsyncMock(),add_cookies=AsyncMock())
+        browser=SimpleNamespace(
+            page=page,_browser_context=browser_context,
+            context=SimpleNamespace(cookies={'c_user':'100'},
+                pages=[{'id':PAGE,'profile_id':'777777777'}]),
+            verify_page_attached=AsyncMock(side_effect=[False,False]),
+            _goto=AsyncMock(),_assert_authenticated=AsyncMock(),
+            _diagnostic=AsyncMock(return_value={'stage':'owner'}))
+        with self.assertRaises(BrowserBusinessError) as caught:
+            await _approve_owner_page_access(
+                browser,{'page_id':PAGE,'name':'PrgssTeam'},BM,AsyncMock())
+        self.assertEqual(caught.exception.code,'PAGE_OWNER_REQUEST_AMBIGUOUS')
+        self.assertEqual(events,[])
+
+    async def test_owner_approval_refuses_selected_full_control(self):
+        events=[]
+        class Locator:
+            def __init__(self, *, count=0, checked=False, router=None, label=''):
+                self._count=count; self._checked=checked; self._router=router
+                self.label=label; self.first=self
+            async def count(self): return self._count
+            def nth(self,index): return self
+            async def is_visible(self): return self._count>0
+            async def is_enabled(self): return self._count>0
+            async def is_checked(self): return self._checked
+            async def get_attribute(self,name): return 'true' if self._checked else None
+            async def click(self,**kwargs): events.append('CLICK_'+self.label)
+            async def evaluate(self,*args,**kwargs): return ''
+            def filter(self,**kwargs): return self
+            def get_by_role(self,role,**kwargs):
+                return self._router(role,kwargs.get('name')) if self._router else Locator()
+        review=Locator(count=1,label='REVIEW')
+        full=Locator(count=1,checked=True,label='FULL')
+        empty=Locator()
+        def dialog_router(role,name):
+            text=getattr(name,'pattern',str(name or ''))
+            if role=='checkbox' and 'full control' in text: return full
+            return empty
+        dialog=Locator(count=1,router=dialog_router)
+        def page_role(role,name=None,**kwargs):
+            text=getattr(name,'pattern',str(name or ''))
+            if role=='dialog': return dialog
+            if role=='button' and 'Review request' in text: return review
+            return empty
+        page=SimpleNamespace(get_by_role=page_role,wait_for_timeout=AsyncMock())
+        browser=SimpleNamespace(
+            page=page,
+            _browser_context=SimpleNamespace(clear_cookies=AsyncMock(),add_cookies=AsyncMock()),
+            context=SimpleNamespace(cookies={'c_user':'100'},
+                pages=[{'id':PAGE,'profile_id':'777777777'}]),
+            verify_page_attached=AsyncMock(side_effect=[False,False]),
+            _goto=AsyncMock(),_assert_authenticated=AsyncMock(),
+            _diagnostic=AsyncMock(return_value={'stage':'owner'}))
+        with self.assertRaises(BrowserBusinessError) as caught:
+            await _approve_owner_page_access(
+                browser,{'page_id':PAGE,'name':'PrgssTeam'},BM,AsyncMock())
+        self.assertEqual(caught.exception.code,'PAGE_SHARE_PERMISSION_REVIEW_REQUIRED')
+        self.assertEqual(events,['CLICK_REVIEW'])
 
 
 class AdsPermissionTests(unittest.IsolatedAsyncioTestCase):
