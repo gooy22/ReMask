@@ -144,18 +144,32 @@ class WorkerPool:
                     result=decoded
             except (TypeError,ValueError,json.JSONDecodeError):
                 result={}
+            diagnostic=(
+                result.get('diagnostic')
+                if isinstance(result.get('diagnostic'),dict)
+                else {}
+            )
+            candidates=diagnostic.get('pending_request_candidates')
+            candidate_count=len(candidates) if isinstance(candidates,list) else 0
             log.info(
                 'PAGE_ACCESS durable state job=%s item=%s profile=%s '
-                'item_status=%s item_error=%s page_status=%s page_error=%s '
-                'phase=%s page=%s business=%s ad_account=%s updated_at=%s',
+                'item_status=%s item_error=%s item_message=%s '
+                'page_status=%s page_error=%s page_message=%s '
+                'phase=%s diagnostic_stage=%s diagnostic_url=%s '
+                'pending_candidates=%s page=%s business=%s ad_account=%s updated_at=%s',
                 str(row.get('job_id') or ''),
                 str(row.get('item_id') or ''),
                 str(row.get('profile_id') or ''),
                 str(row.get('item_status') or ''),
                 str(row.get('item_error_code') or ''),
+                str(row.get('item_error_message') or '')[:500],
                 str(row.get('page_status') or ''),
                 str(row.get('page_error_code') or ''),
+                str(row.get('page_error_message') or '')[:500],
                 str(result.get('phase') or ''),
+                str(diagnostic.get('stage') or ''),
+                str(diagnostic.get('url') or '')[:700],
+                candidate_count,
                 str(result.get('page_id') or ''),
                 str(result.get('business_id') or ''),
                 str(result.get('ad_account_id') or ''),
