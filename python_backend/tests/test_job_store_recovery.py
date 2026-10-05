@@ -155,6 +155,57 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.store.item(item))['status'],'FAILED')
         self.assertEqual((await self.store.tasks(item))[0]['status'],'FAILED')
 
+    async def test_live_actor_failure_gets_one_active_partner_reconciliation_retry(self):
+        job,item=self._seed(task_status='FAILED')
+        task=(await self.store.tasks(item))[0]
+        bm='1630095732002500'
+        rk='1123543757207776'
+        page='1324227614109193'
+        await self.provisioning_state.complete(
+            item,'4','default',ProvisioningStep.BUSINESS,{'business_id':bm},
+        )
+        await self.provisioning_state.complete(
+            item,'4','default',ProvisioningStep.AD_ACCOUNT,
+            {'business_id':bm,'ad_account_id':rk},
+        )
+        await self.provisioning_state.set_running(
+            item,'4','default',ProvisioningStep.PAGE_ACCESS,
+        )
+        await self.provisioning_state.checkpoint(
+            item,'4','default',ProvisioningStep.PAGE_ACCESS,
+            {'phase':'TARGET_PAGE_ACCESS_SUBMITTED','page_id':page,
+             'business_id':bm,'ad_account_id':rk,
+             'owner_actor_probe_retry':True,
+             'owner_actor_live_discovery_retry':True},
+        )
+        message='The exact pending Page access request is not visible on Page access settings'
+        await self.provisioning_state.fail(
+            item,'4','default',ProvisioningStep.PAGE_ACCESS,
+            'PAGE_OWNER_APPROVAL_UI_UNAVAILABLE',message,
+        )
+        await self.store.set_task_failed(
+            task['id'],'PAGE_OWNER_APPROVAL_UI_UNAVAILABLE',message,retryable=True,
+        )
+        await self.store.finalize_item(item)
+
+        await self.store.init()
+        self.assertEqual((await self.store.item(item))['status'],'QUEUED')
+        access=await self.provisioning_state.step(item,ProvisioningStep.PAGE_ACCESS)
+        self.assertTrue(access['result']['owner_active_partner_reconciliation_retry'])
+        self.assertEqual(access['result']['phase'],'TARGET_PAGE_ACCESS_SUBMITTED')
+
+        await self.store.set_task_failed(
+            task['id'],'PAGE_OWNER_APPROVAL_UI_UNAVAILABLE',message,retryable=True,
+        )
+        await self.store.finalize_item(item)
+        await self.provisioning_state.fail(
+            item,'4','default',ProvisioningStep.PAGE_ACCESS,
+            'PAGE_OWNER_APPROVAL_UI_UNAVAILABLE',message,
+        )
+        await self.store.init()
+        self.assertEqual((await self.store.item(item))['status'],'FAILED')
+        self.assertEqual((await self.store.tasks(item))[0]['status'],'FAILED')
+
     async def test_legacy_owner_approval_recovery_refuses_unsubmitted_or_mismatched_state(self):
         for suffix,phase,rk_business in (
             ('pre-submit','TARGET_PAGE_ACCESS_CLICK_INTENT','1630095732002500'),
