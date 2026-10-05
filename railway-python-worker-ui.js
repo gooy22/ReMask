@@ -173,6 +173,54 @@ function pythonWorkerEnsureRkFanPageActions() {
   });
 }
 
+async function pythonWorkerPrepareCommonPage() {
+  const targets=pythonWorkerSelectedAdAccountTargets();
+  if (!targets.length || pythonWorkerUiState.busy || pythonWorkerUiState.workerOnline !== true) return;
+  pythonWorkerUiState.busy=true; pythonWorkerSelectionRefresh();
+  pythonWorkerSetText('pythonPwStatus','Подготавливаю PrgssTeam для '+targets.length+' РК и проверяю выбор страницы в форме рекламы…');
+  try {
+    const groups=new Map();
+    for (const target of targets) {
+      const profile=target.profile_id;
+      const key='common-page-'+target.business_id+'-'+target.ad_account_id;
+      if (!groups.has(profile)) groups.set(profile,{profile_id:profile,tasks:[]});
+      groups.get(profile).tasks.push({action:'provisioning',idempotency_key:key,payload:{
+        steps:['PROXY_CHECK','PAGE_ACCESS'],scope_key:key,parameters:{PAGE_ACCESS:{
+          existing_target:true,business_id:target.business_id,ad_account_id:target.ad_account_id,
+          ad_account_name:target.ad_account_name}}}});
+    }
+    const key=pythonWorkerStableKey(targets.map(t=>t.profile_id+':'+t.business_id+':'+t.ad_account_id).sort().join('|'));
+    const data=await pythonWorkerBridge({action:'create',idempotency_key:'workspace-common-page-'+key,profiles:Array.from(groups.values())});
+    const job=data && data.job;
+    if (!job || !job.job_id) throw new Error('Worker не вернул Job для подготовки PrgssTeam.');
+    pythonWorkerClearBatchState();
+    pythonWorkerUiState.jobId=job.job_id; localStorage.setItem('remask_python_worker_job_v1',job.job_id);
+    if (['FAILED','PARTIAL'].includes(String(job.status))) await pythonWorkerBridge({action:'retry_failed',job_id:job.job_id});
+    await pythonWorkerPoll();
+  } catch(error) {
+    pythonWorkerUiState.busy=false; pythonWorkerSelectionRefresh();
+    pythonWorkerSetText('pythonPwStatus',String(error.message || error));
+  }
+}
+
+function pythonWorkerEnhanceCommonPageMenu() {
+  if (!state || state.activeTab !== 'ad_accounts') return;
+  const anchor=Array.from(document.querySelectorAll('button,a,[role="menuitem"]')).find(el=>
+    /Проверить Assets/.test(String(el.textContent || '')));
+  if (!anchor || !anchor.parentNode || anchor.parentNode.querySelector('[data-python-common-page]')) return;
+  const action=anchor.cloneNode(true);
+  action.removeAttribute('id'); action.removeAttribute('onclick'); action.removeAttribute('data-action');
+  action.setAttribute('data-python-common-page','1'); action.setAttribute('aria-label','Подготовить PrgssTeam');
+  action.textContent='Подготовить PrgssTeam';
+  if (action.tagName==='BUTTON') action.type='button';
+  if (action.tagName==='A') action.setAttribute('href','#');
+  action.addEventListener('click',function(event){
+    event.preventDefault(); event.stopPropagation(); event.stopImmediatePropagation();
+    pythonWorkerPrepareCommonPage();
+  },true);
+  anchor.parentNode.insertBefore(action,anchor);
+}
+
 function pythonWorkerEl(id) {
   return document.getElementById(id);
 }
@@ -4491,6 +4539,7 @@ function pythonWorkerInitUi() {
   pythonWorkerSelectionRefresh();
   pythonWorkerEnhanceBmDialog();
   pythonWorkerEnhanceProfileThreeDots();
+  pythonWorkerEnhanceCommonPageMenu();
   pythonWorkerInstallBusinessAddRkInterceptor();
   pythonWorkerHealthCheck().catch(function(){});
   setInterval(function() {
@@ -4500,6 +4549,7 @@ function pythonWorkerInitUi() {
   new MutationObserver(function() {
     pythonWorkerEnhanceBmDialog();
     pythonWorkerEnhanceProfileThreeDots();
+    pythonWorkerEnhanceCommonPageMenu();
   }).observe(document.documentElement, {childList: true, subtree: true});
 
   if (pythonWorkerUiState.batchJobIds.length) {

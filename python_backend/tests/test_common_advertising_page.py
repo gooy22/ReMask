@@ -80,6 +80,26 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
             await service.run(**request)
         self.assertEqual(calls,['RK','PAGE','PAGE'])
 
+    async def test_existing_rk_requires_live_exact_business_binding_before_page_mutation(self):
+        with patch('app.provisioning.ad_account_handler._verify_expected_ad_account_in_business',new=AsyncMock(return_value=(False,[]))) as verify, \
+             patch('app.provisioning.page_access_handler.ensure_common_page',new=AsyncMock()) as create:
+            with self.assertRaises(ProvisioningError) as exc:
+                await page_access_handler(SimpleNamespace(context=SimpleNamespace(cookies={'c_user':'61594882851656'})),
+                    {'existing_target':True,'business_id':BM,'ad_account_id':RK}, {},
+                    provisioning_state=self.state,profile_id='9',item_id='existing',scope_key='existing')
+        self.assertEqual(exc.exception.code,'BUSINESS_RK_RELATION_UNVERIFIED')
+        self.assertEqual(verify.call_args.kwargs['business_id'],BM)
+        self.assertEqual(verify.call_args.kwargs['expected_ad_account_id'],RK)
+        create.assert_not_awaited()
+
+    async def test_existing_personal_rk_rejected_before_inventory_or_sharing(self):
+        with patch('app.provisioning.ad_account_handler._verify_expected_ad_account_in_business',new=AsyncMock()) as verify:
+            with self.assertRaises(ProvisioningError):
+                await page_access_handler(SimpleNamespace(context=SimpleNamespace(cookies={'c_user':BM})),
+                    {'existing_target':True,'business_id':BM,'ad_account_id':RK}, {},
+                    provisioning_state=self.state,profile_id='9',item_id='personal',scope_key='personal')
+        verify.assert_not_awaited()
+
 
 class AdsPermissionTests(unittest.IsolatedAsyncioTestCase):
     async def test_ads_sharing_never_silently_accepts_full_control(self):

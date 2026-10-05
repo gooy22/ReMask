@@ -296,8 +296,15 @@ class ProvisioningService:
 
     async def _run_handler(self, handler, step, session, params, snapshot, **kwargs):
         if step is ProvisioningStep.FAN_PAGES and params.get('common_page') is True:
-            from .advertising_page import ensure_common_page
-            return await ensure_common_page(session,params,self.state,self.profile_resolver)
+            from .advertising_page import ensure_common_page,AdvertisingPageStore
+            try:
+                return await ensure_common_page(session,params,self.state,self.profile_resolver)
+            except ProvisioningError:
+                config=await AdvertisingPageStore(self.state).get()
+                saved=await self.state.step('workspace-common-page-'+config['owner_profile_id'],step)
+                await self.state.checkpoint(kwargs['item_id'],kwargs['profile_id'],kwargs['scope_key'],step,
+                    (saved or {}).get('result') or {})
+                raise
         return await handler(session,params,snapshot,**kwargs)
 
     @staticmethod

@@ -963,6 +963,9 @@ async def fan_pages_handler(
                     ) from exc
 
                 if exc.code != "FAN_PAGE_CREATE_RESULT_UNKNOWN":
+                    await provisioning_state.checkpoint(item_id,profile_id,scope_key,ProvisioningStep.FAN_PAGES,
+                        {'last_error_code':exc.code,'last_error':str(exc)[:2000],
+                         'browser_diagnostic':exc.diagnostic or {}})
                     raise ProvisioningError(
                         exc.code,
                         str(exc),

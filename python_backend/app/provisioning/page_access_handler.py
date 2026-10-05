@@ -94,12 +94,26 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
     resolver=kwargs.get('profile_resolver')
     business=str(snapshot.get('business_id') or '')
     account=str(snapshot.get('ad_account_id') or '')
+    existing=params.get('existing_target') is True
+    if existing:
+        business=str(params.get('business_id') or '')
+        account=str(params.get('ad_account_id') or '')
     if not business.isdigit() or not account.isdigit() or business==session.context.cookies.get('c_user'):
         raise ProvisioningError('CREATED_BUSINESS_RK_REQUIRED','Page access requires the RK of a created Business Portfolio')
-    rk_state=await state.step(item,ProvisioningStep.AD_ACCOUNT)
-    result=(rk_state or {}).get('result') or {}
-    if result.get('business_id')!=business or result.get('ad_account_id')!=account:
-        raise ProvisioningError('CREATED_BUSINESS_RK_REQUIRED','RK creation result does not match this portfolio')
+    if existing:
+        from .ad_account_handler import _verify_expected_ad_account_in_business
+        verified,evidence=await _verify_expected_ad_account_in_business(session,
+            business_id=business,account_name=str(params.get('ad_account_name') or ''),
+            expected_ad_account_id=account,checks=1)
+        if not verified:
+            raise ProvisioningError('BUSINESS_RK_RELATION_UNVERIFIED','Meta did not confirm this exact RK in the requested Business Portfolio',retryable=True)
+        await state.checkpoint(item,profile,scope,ProvisioningStep.PAGE_ACCESS,
+            {'business_id':business,'ad_account_id':account,'inventory_binding_verified':True,'binding_evidence':evidence})
+    else:
+        rk_state=await state.step(item,ProvisioningStep.AD_ACCOUNT)
+        result=(rk_state or {}).get('result') or {}
+        if result.get('business_id')!=business or result.get('ad_account_id')!=account:
+            raise ProvisioningError('CREATED_BUSINESS_RK_REQUIRED','RK creation result does not match this portfolio')
     await ensure_common_page(session,{},state,resolver)
     store=AdvertisingPageStore(state); config=await store.get()
     prior=((await state.step(item,ProvisioningStep.PAGE_ACCESS)) or {}).get('result') or {}
