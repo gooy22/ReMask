@@ -144,7 +144,25 @@ async def _visible_owner_review_requests(page) -> list:
     # Keep this request-specific. Never fall back to a generic Confirm button.
     pattern=re.compile(
         r'^(Review request|Respond to request|Review access request|'
-        r'View request|Review partner request|Respond to access request)
+        r'View request|Review partner request|Respond to access request)$',
+        re.I,
+    )
+    items=[]
+    seen=set()
+    for role in ('button','link'):
+        locator=page.get_by_role(role,name=pattern)
+        for index in range(min(await locator.count(),16)):
+            item=locator.nth(index)
+            if not await item.is_visible() or not await item.is_enabled():
+                continue
+            context=await _owner_request_context(item)
+            fingerprint=context[:700] or f'{role}:{index}'
+            if fingerprint in seen:
+                continue
+            seen.add(fingerprint)
+            items.append(item)
+    return items
+
 
 async def _owner_request_context(item) -> str:
     try:
