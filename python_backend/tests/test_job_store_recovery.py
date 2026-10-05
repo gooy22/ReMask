@@ -237,6 +237,56 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.store.tasks(item))[0]['status'],'FAILED')
 
 
+    async def test_owner_confirmed_operator_failure_retries_once_without_reopening_page_request(self):
+        job,item=self._seed(task_status='FAILED')
+        task=(await self.store.tasks(item))[0]
+        bm='1630095732002500'
+        rk='1123543757207776'
+        page='1324227614109193'
+        await self.provisioning_state.complete(
+            item,'4','default',ProvisioningStep.BUSINESS,{'business_id':bm},
+        )
+        await self.provisioning_state.complete(
+            item,'4','default',ProvisioningStep.AD_ACCOUNT,
+            {'business_id':bm,'ad_account_id':rk},
+        )
+        await self.provisioning_state.set_running(
+            item,'4','default',ProvisioningStep.PAGE_ACCESS,
+        )
+        await self.provisioning_state.checkpoint(
+            item,'4','default',ProvisioningStep.PAGE_ACCESS,
+            {'phase':'TARGET_PAGE_ACCESS_OWNER_CONFIRMED','page_id':page,
+             'business_id':bm,'ad_account_id':rk},
+        )
+        message='The exact Page row is unavailable for operator assignment'
+        await self.provisioning_state.fail(
+            item,'4','default',ProvisioningStep.PAGE_ACCESS,
+            'PAGE_OPERATOR_PAGE_SELECTION_UNAVAILABLE',message,
+        )
+        await self.store.set_task_failed(
+            task['id'],'PAGE_OPERATOR_PAGE_SELECTION_UNAVAILABLE',message,retryable=True,
+        )
+        await self.store.finalize_item(item)
+
+        await self.store.init()
+        self.assertEqual((await self.store.item(item))['status'],'QUEUED')
+        access=await self.provisioning_state.step(item,ProvisioningStep.PAGE_ACCESS)
+        self.assertEqual(access['result']['phase'],'TARGET_PAGE_ACCESS_OWNER_CONFIRMED')
+        self.assertTrue(access['result']['owner_confirmed_operator_assignment_retry'])
+
+        # A second operator failure must not create an automatic restart loop.
+        await self.provisioning_state.fail(
+            item,'4','default',ProvisioningStep.PAGE_ACCESS,
+            'PAGE_OPERATOR_PAGE_SELECTION_UNAVAILABLE',message,
+        )
+        await self.store.set_task_failed(
+            task['id'],'PAGE_OPERATOR_PAGE_SELECTION_UNAVAILABLE',message,retryable=True,
+        )
+        await self.store.finalize_item(item)
+        await self.store.init()
+        self.assertEqual((await self.store.item(item))['status'],'FAILED')
+        self.assertEqual((await self.store.tasks(item))[0]['status'],'FAILED')
+
     async def test_legacy_owner_approval_recovery_refuses_unsubmitted_or_mismatched_state(self):
         for suffix,phase,rk_business in (
             ('pre-submit','TARGET_PAGE_ACCESS_CLICK_INTENT','1630095732002500'),
