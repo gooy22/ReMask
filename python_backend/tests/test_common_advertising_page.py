@@ -9,7 +9,7 @@ from app.provisioning.advertising_page import AdvertisingPageStore,ensure_common
 from app.provisioning.models import ProvisioningError,ProvisioningStep
 from app.provisioning.state import ProvisioningStateStore
 from app.provisioning.service import ProvisioningService
-from app.provisioning.page_access_handler import page_access_handler,_ads_only,_request_target_page_access,_approve_owner_page_access,_resolve_owner_page_actor,_resolve_target_business_name,_owner_active_partner_ads_access,_pick_owner_review_request
+from app.provisioning.page_access_handler import page_access_handler,_ads_only,_request_target_page_access,_approve_owner_page_access,_resolve_owner_page_actor,_resolve_target_business_name,_owner_active_partner_ads_access,_pick_owner_review_request,_select_page
 from app.facebook_business_browser import BrowserBusinessError
 
 PAGE='1270757506131209'; BM='1476521050987548'; RK='958245207339458'
@@ -274,6 +274,36 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
             browser._open_pages_add_action.assert_not_awaited()
             checkpoint.assert_not_awaited()
             browser.verify_page_attached.assert_awaited_once_with(business_id=BM,page_id=PAGE)
+
+    async def test_operator_page_selection_prefers_exact_page_id_row_over_duplicate_name_text(self):
+        clicks=[]
+        class Locator:
+            def __init__(self, rows=None, visible=True, evidence=None, label=''):
+                self.rows=rows; self.visible=visible; self.evidence=evidence or {}
+                self.label=label; self.first=self
+            async def count(self): return len(self.rows) if self.rows is not None else (1 if self.visible else 0)
+            def nth(self,index): return self.rows[index] if self.rows is not None else self
+            async def is_visible(self): return self.visible
+            async def click(self,**kwargs): clicks.append(self.label)
+            async def evaluate(self,*args,**kwargs): return self.evidence
+            def filter(self,**kwargs): return self
+            def get_by_role(self,role,**kwargs):
+                if self.label=='target-row' and role=='button':
+                    return Locator(label='target-button')
+                return Locator(visible=False)
+            def get_by_text(self,*args,**kwargs): return Locator(visible=False)
+
+        wrong=Locator(evidence={'text':'PrgssTeam','links':['?selected_asset_id=999999999'],'id_match':False},label='wrong-row')
+        target=Locator(evidence={'text':'PrgssTeam','links':['?selected_asset_id='+PAGE],'id_match':True},label='target-row')
+        rows=Locator(rows=[wrong,target])
+        page=SimpleNamespace(
+            get_by_role=lambda role,**kwargs: rows if role=='row' else Locator(visible=False),
+            _unused=True,
+        )
+        browser=SimpleNamespace(page=page,_diagnostic=AsyncMock(return_value={'stage':'operator'}))
+        proof=await _select_page(browser,'PrgssTeam',PAGE)
+        self.assertEqual(proof['source'],'row_exact_page_id')
+        self.assertEqual(clicks,['target-button'])
 
     async def test_missing_share_option_never_falls_back_to_add_existing_page(self):
         browser=SimpleNamespace(verify_page_attached=AsyncMock(return_value=False),
