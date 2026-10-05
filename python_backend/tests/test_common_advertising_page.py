@@ -306,7 +306,7 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
                 await page_access_handler(SimpleNamespace(context=SimpleNamespace(cookies={'c_user':'61594882851656'})),{},
                     {'business_id':BM,'ad_account_id':RK},provisioning_state=self.state,profile_id='9',item_id='one',scope_key='one')
         diagnostic=(await self.state.step('one',ProvisioningStep.PAGE_ACCESS))['result']['diagnostic']
-        self.assertEqual(diagnostic['stage'],'target_page_access')
+        self.assertEqual(diagnostic['stage'],'target_page_relation')
         self.assertNotIn('obsolete',str(diagnostic))
         self.assertEqual(diagnostic['v8_old_space_mb'],256)
     async def test_pending_target_request_is_not_resent_and_never_uses_owner_claim(self):
