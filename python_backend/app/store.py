@@ -141,7 +141,6 @@ class JobStore:
             self._recover_premature_page_access(con)
             self._recover_common_page_picker_failure(con)
             self._recover_legacy_owner_page_approval_stub(con)
-            self._recover_legacy_owner_page_approval_stub(con)
 
     @staticmethod
     def _recover_legacy_owner_page_approval_stub(con: sqlite3.Connection) -> None:
@@ -656,6 +655,7 @@ class JobStore:
             self._repair_unstarted_prgssteam_rk_timezone(con)
             self._recover_premature_page_access(con)
             self._recover_common_page_picker_failure(con)
+            self._recover_legacy_owner_page_approval_stub(con)
         return imported
 
     async def retry_failed(self, job_id: str) -> int:
