@@ -350,6 +350,21 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
         )
         await self.store.finalize_item(item)
         await self.store.init()
+        self.assertEqual((await self.store.item(item))['status'],'QUEUED')
+        access=await self.provisioning_state.step(item,ProvisioningStep.PAGE_ACCESS)
+        self.assertTrue(access['result']['operator_owner_confirmed_short_circuit_retry'])
+
+        # The relation short-circuit continuation is the final automatic
+        # navigation recovery for this OWNER_CONFIRMED checkpoint.
+        await self.provisioning_state.fail(
+            item,'4','default',ProvisioningStep.PAGE_ACCESS,
+            'FACEBOOK_NAVIGATION_FAILED',message,
+        )
+        await self.store.set_task_failed(
+            task['id'],'FACEBOOK_NAVIGATION_FAILED',message,retryable=True,
+        )
+        await self.store.finalize_item(item)
+        await self.store.init()
         self.assertEqual((await self.store.item(item))['status'],'FAILED')
         self.assertEqual((await self.store.tasks(item))[0]['status'],'FAILED')
 
