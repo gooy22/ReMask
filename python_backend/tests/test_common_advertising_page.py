@@ -367,6 +367,93 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
         state=await self.state.step('operator-unknown',ProvisioningStep.PAGE_ACCESS)
         self.assertEqual(state['result']['phase'],'TARGET_PAGE_OPERATOR_ASSIGN_SUBMITTED')
 
+    async def test_submitted_operator_checkpoint_preserves_submit_and_never_resaves(self):
+        await AdvertisingPageStore(self.state,'8','61594882851656').patch(
+            page_id=PAGE,name='PrgssTeam',owner_profile_id='9',
+            grants={BM:{'phase':'TARGET_PAGE_OPERATOR_ASSIGN_SUBMITTED'}})
+        await self.state.complete(
+            'operator-checkpoint','8','operator-checkpoint',ProvisioningStep.AD_ACCOUNT,
+            {'business_id':BM,'ad_account_id':'act_'+RK},
+        )
+        await self.state.set_running(
+            'operator-checkpoint','8','operator-checkpoint',ProvisioningStep.PAGE_ACCESS)
+        await self.state.checkpoint(
+            'operator-checkpoint','8','operator-checkpoint',ProvisioningStep.PAGE_ACCESS,
+            {'phase':'TARGET_PAGE_OPERATOR_ASSIGN_SUBMITTED',
+             'page_id':PAGE,'business_id':BM,'ad_account_id':RK},
+        )
+        browser=SimpleNamespace(page=SimpleNamespace(url='about:blank'))
+        class Lease:
+            async def __aenter__(self): return browser
+            async def __aexit__(self,*args): return False
+        session=SimpleNamespace(context=SimpleNamespace(cookies={'c_user':'61594882851656'}))
+        checkpoint_error=BrowserBusinessError(
+            'CHECKPOINT_REQUIRED','Facebook checkpoint',retryable=False,
+            diagnostic={'url':'https://www.facebook.com/checkpoint/123/'})
+        with patch('app.provisioning.page_access_handler.ensure_common_page',new=AsyncMock()), \
+             patch('app.provisioning.page_access_handler.FacebookBusinessBrowser',return_value=Lease()), \
+             patch('app.provisioning.page_access_handler._request_target_page_access',
+                   new=AsyncMock(return_value=True)), \
+             patch('app.provisioning.page_access_handler.inspect_browser_pages',
+                   new=AsyncMock(side_effect=checkpoint_error)), \
+             patch('app.provisioning.page_access_handler._assign_operator',
+                   new=AsyncMock()) as assign:
+            with self.assertRaises(ProvisioningError) as caught:
+                await page_access_handler(
+                    session,{}, {'business_id':BM,'ad_account_id':'act_'+RK},
+                    provisioning_state=self.state,profile_id='8',
+                    item_id='operator-checkpoint',scope_key='operator-checkpoint')
+        self.assertEqual(caught.exception.code,'CHECKPOINT_REQUIRED')
+        assign.assert_not_awaited()
+        state=await self.state.step('operator-checkpoint',ProvisioningStep.PAGE_ACCESS)
+        self.assertEqual(state['result']['phase'],'TARGET_PAGE_OPERATOR_ASSIGN_SUBMITTED')
+        self.assertTrue(state['result']['operator_assignment_may_have_been_submitted'])
+
+    async def test_confirmed_operator_restart_trusts_durable_rk_proof_without_resubmit(self):
+        durable_proof={
+            'account_scope_verified':True,
+            'data':[{'id':PAGE,'account_id':RK,
+                'ad_account_page_access_verified':True}],
+        }
+        await AdvertisingPageStore(self.state,'8','61594882851656').patch(
+            page_id=PAGE,name='PrgssTeam',owner_profile_id='9',
+            grants={BM:{'phase':'TARGET_PAGE_OPERATOR_ASSIGN_CONFIRMED',
+                'rk_access_proof':durable_proof}})
+        await self.state.complete(
+            'operator-confirmed','8','operator-confirmed',ProvisioningStep.AD_ACCOUNT,
+            {'business_id':BM,'ad_account_id':'act_'+RK},
+        )
+        await self.state.set_running(
+            'operator-confirmed','8','operator-confirmed',ProvisioningStep.PAGE_ACCESS)
+        await self.state.checkpoint(
+            'operator-confirmed','8','operator-confirmed',ProvisioningStep.PAGE_ACCESS,
+            {'phase':'TARGET_PAGE_OPERATOR_ASSIGN_CONFIRMED',
+             'page_id':PAGE,'business_id':BM,'ad_account_id':RK,
+             'rk_access_proof':durable_proof},
+        )
+        browser=SimpleNamespace(page=SimpleNamespace(url='about:blank'))
+        class Lease:
+            async def __aenter__(self): return browser
+            async def __aexit__(self,*args): return False
+        session=SimpleNamespace(context=SimpleNamespace(cookies={'c_user':'61594882851656'}))
+        with patch('app.provisioning.page_access_handler.ensure_common_page',new=AsyncMock()), \
+             patch('app.provisioning.page_access_handler.FacebookBusinessBrowser',return_value=Lease()), \
+             patch('app.provisioning.page_access_handler._request_target_page_access',
+                   new=AsyncMock(return_value=True)), \
+             patch('app.provisioning.page_access_handler.inspect_browser_pages',
+                   new=AsyncMock()) as inspect, \
+             patch('app.provisioning.page_access_handler._assign_operator',
+                   new=AsyncMock()) as assign:
+            result=await page_access_handler(
+                session,{}, {'business_id':BM,'ad_account_id':'act_'+RK},
+                provisioning_state=self.state,profile_id='8',
+                item_id='operator-confirmed',scope_key='operator-confirmed')
+        inspect.assert_not_awaited()
+        assign.assert_not_awaited()
+        self.assertTrue(result['operator_ads_access_assigned'])
+        self.assertTrue(result['ad_account_page_access_verified'])
+        self.assertEqual(result['operator_assignment'],'performed')
+
     async def test_crash_replaces_old_owner_claim_diagnostic_with_current_target_stage(self):
         await AdvertisingPageStore(self.state).patch(page_id=PAGE,name='PrgssTeam',owner_profile_id='9')
         await self.state.complete('one','9','one',ProvisioningStep.AD_ACCOUNT,{'business_id':BM,'ad_account_id':RK})
