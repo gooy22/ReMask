@@ -9,7 +9,7 @@ from app.provisioning.advertising_page import AdvertisingPageStore,ensure_common
 from app.provisioning.models import ProvisioningError,ProvisioningStep
 from app.provisioning.state import ProvisioningStateStore
 from app.provisioning.service import ProvisioningService
-from app.provisioning.page_access_handler import page_access_handler,_ads_only,_request_target_page_access,_approve_owner_page_access,_resolve_owner_page_actor,_resolve_target_business_name,_owner_active_partner_ads_access,_pick_owner_review_request,_select_page
+from app.provisioning.page_access_handler import page_access_handler,_ads_only,_request_target_page_access,_approve_owner_page_access,_resolve_owner_page_actor,_resolve_target_business_name,_owner_active_partner_ads_access,_pick_owner_review_request,_select_page,_assign_operator
 from app.facebook_business_browser import BrowserBusinessError
 
 PAGE='1270757506131209'; BM='1476521050987548'; RK='958245207339458'
@@ -304,6 +304,52 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
         proof=await _select_page(browser,'PrgssTeam',PAGE,BM)
         self.assertEqual(proof['source'],'row_exact_page_id')
         self.assertEqual(clicks,['target-button'])
+
+    async def test_preconfirmed_operator_skips_relation_navigation_and_checkpoints_submit(self):
+        events=[]
+        class Locator:
+            def __init__(self,count=0,label=''):
+                self._count=count; self.label=label; self.first=self
+            async def count(self): return self._count
+            async def is_visible(self): return self._count>0
+            async def is_enabled(self): return self._count>0
+            async def click(self,**kwargs): events.append('CLICK_'+self.label)
+            async def check(self,**kwargs): events.append('CHECK_'+self.label)
+            def get_by_role(self,role,**kwargs):
+                pattern=getattr(kwargs.get('name'),'pattern',str(kwargs.get('name') or ''))
+                if role=='checkbox' and 'You' in pattern: return Locator(1,'YOU')
+                if role=='button' and ('Assign' in pattern or 'Save' in pattern): return Locator(1,'SAVE')
+                return Locator()
+        assign=Locator(1,'ASSIGN')
+        dialog=Locator(1,'DIALOG')
+        def page_role(role,**kwargs):
+            pattern=getattr(kwargs.get('name'),'pattern',str(kwargs.get('name') or ''))
+            if role=='dialog': return dialog
+            if role=='button' and ('Assign people' in pattern or 'Add people' in pattern):
+                return assign
+            return Locator()
+        page=SimpleNamespace(get_by_role=page_role,wait_for_timeout=AsyncMock())
+        browser=SimpleNamespace(
+            page=page,
+            verify_page_attached=AsyncMock(side_effect=AssertionError('redundant relation navigation')),
+            _diagnostic=AsyncMock(return_value={'stage':'operator_submitted'}),
+        )
+        patches=[]
+        async def checkpoint(patch): patches.append(patch)
+        with patch('app.provisioning.page_access_handler._select_page',
+                   new=AsyncMock(return_value={'source':'row_exact_page_id'})), \
+             patch('app.provisioning.page_access_handler._ads_only',new=AsyncMock()):
+            await _assign_operator(
+                browser,{'name':'PrgssTeam','page_id':PAGE},BM,checkpoint,
+                relation_preconfirmed=True)
+        browser.verify_page_attached.assert_not_awaited()
+        self.assertEqual(events,['CLICK_ASSIGN','CHECK_YOU','CLICK_SAVE'])
+        self.assertEqual(
+            [row.get('phase') for row in patches],
+            ['TARGET_PAGE_OPERATOR_ASSIGN_CLICK_INTENT',
+             'TARGET_PAGE_OPERATOR_ASSIGN_SUBMITTED'])
+        self.assertEqual(patches[0]['business_id'],BM)
+        self.assertEqual(patches[0]['page_id'],PAGE)
 
     async def test_missing_share_option_never_falls_back_to_add_existing_page(self):
         browser=SimpleNamespace(verify_page_attached=AsyncMock(return_value=False),
