@@ -299,11 +299,25 @@ def _facebook_password(browser) -> str:
     return ''
 
 
-async def _resolve_target_business_name(browser, business: str) -> tuple[str, dict]:
-    """Map one exact Business ID to its live Business Suite display name."""
+async def _resolve_target_business_name(browser, business: str, recorded: dict | None=None) -> tuple[str, dict]:
+    """Resolve the exact created BM identity without requiring an actor-wide selector."""
     business_id=str(business or '').strip()
     if not business_id.isdigit():
         return '',{'source':'invalid_business_id'}
+    recorded=recorded if isinstance(recorded,dict) else {}
+    expected=str(recorded.get('business_name') or '').strip()
+    known=recorded.get('known_business_names') or {}
+    if (str(recorded.get('business_id') or '')==business_id
+            and recorded.get('create_confirmed') is True
+            and recorded.get('source')=='python_worker_confirmed_create'
+            and expected and expected!=business_id):
+        duplicates=[str(key) for key,value in known.items()
+            if str(key)!=business_id and ' '.join(str(value or '').split())==' '.join(expected.split())]
+        if not duplicates:
+            return expected,{'source':'recorded_profile_business_create',
+                'business_id':business_id,'business_name':expected,
+                'profile_id':str(recorded.get('profile_id') or ''),
+                'create_confirmed':True}
     try:
         rows=await asyncio.wait_for(browser.snapshot_businesses(),timeout=24)
     except Exception as exc:
@@ -379,7 +393,8 @@ async def _approve_owner_page_access(browser, config: dict, business: str, check
     if await browser.verify_page_attached(business_id=business,page_id=page_id):
         return True
 
-    business_name,business_evidence=await _resolve_target_business_name(browser,business)
+    business_name,business_evidence=await _resolve_target_business_name(
+        browser,business,config.get('target_business_identity'))
     log.info(
         'PAGE_OWNER business resolved business=%s name=%s source=%s',
         business,business_name,str(business_evidence.get('source') or ''),
@@ -494,9 +509,8 @@ async def _approve_owner_page_access(browser, config: dict, business: str, check
         await _set_i_user(browser,None,restore=saved_i_user)
 
     # Verification runs only after restoring the personal Facebook actor.
-    # Exact owner-side Page access evidence is independently authoritative:
-    # it maps the exact target Business ID to its live name first, then proves
-    # that same name inside this exact Page's Partners-with-access Ads row.
+    # Resolve the exact BM's identity from confirmed CREATE or live inventory,
+    # then prove its current access in this exact Page's owner-side Ads row.
     if owner_relation_proof is not None:
         return True
     if await browser.verify_page_attached(business_id=business,page_id=page_id):
@@ -573,6 +587,9 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
             raise ProvisioningError('CREATED_BUSINESS_RK_REQUIRED','RK creation result does not match this portfolio')
     await ensure_common_page(session,{'page_id':params.get('page_id'),'reuse_only':params.get('reuse_only') is True,'policies_accepted':params.get('policies_accepted') is not False},state,resolver)
     store=AdvertisingPageStore.for_context(state,session.context,profile); config=await store.get()
+    businesses=((await state.confirmed_business_binding_groups()).get(str(profile)) or {}).get('businesses') or {}
+    target_business_identity={**(businesses.get(business) or {}),'profile_id':str(profile),
+        'known_business_names':{key:row.get('business_name') for key,row in businesses.items()}}
     context_pages=[
         {
             'id':str(row.get('id') or ''),
@@ -607,6 +624,7 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
         # campaigns editor is an optional verification, not a sharing dependency.
         async with _PAGE_LOCK:
             config=await store.get()
+            config={**config,'target_business_identity':target_business_identity}
             saved_grant=(config.get('grants') or {}).get(business) or {}
             async with FacebookBusinessBrowser(session.context,v8_old_space_mb=256) as browser:
                 try:

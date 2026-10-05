@@ -310,6 +310,29 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(name,'')
         self.assertEqual(evidence['source'],'ambiguous_business_name')
 
+    async def test_exact_created_bm_name_survives_personal_only_live_selector(self):
+        browser=SimpleNamespace(snapshot_businesses=AsyncMock(return_value={'61594882851656':''}))
+        recorded={'business_id':BM,'business_name':'Orchid Studio a5b1ce0a76',
+            'source':'python_worker_confirmed_create','create_confirmed':True,'profile_id':'9',
+            'known_business_names':{BM:'Orchid Studio a5b1ce0a76'}}
+        name,evidence=await _resolve_target_business_name(browser,BM,recorded)
+        self.assertEqual(name,'Orchid Studio a5b1ce0a76')
+        self.assertEqual(evidence['source'],'recorded_profile_business_create')
+        self.assertEqual(evidence['business_id'],BM)
+        browser.snapshot_businesses.assert_not_awaited()
+
+    async def test_recorded_name_requires_exact_confirmed_creation_and_unique_identity(self):
+        for change in [{'business_id':'999999999'},{'create_confirmed':False},
+                {'source':'unverified_inventory'},
+                {'known_business_names':{BM:'Orchid','999999999':'Orchid'}}]:
+            with self.subTest(change=change):
+                browser=SimpleNamespace(snapshot_businesses=AsyncMock(return_value={'61594882851656':''}))
+                recorded={'business_id':BM,'business_name':'Orchid',
+                    'source':'python_worker_confirmed_create','create_confirmed':True,**change}
+                name,evidence=await _resolve_target_business_name(browser,BM,recorded)
+                self.assertEqual(name,'')
+                browser.snapshot_businesses.assert_awaited_once()
+
     async def test_owner_request_matches_exact_business_including_single_request(self):
         item=SimpleNamespace(evaluate=AsyncMock())
         for context,expected in [
