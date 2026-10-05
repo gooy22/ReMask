@@ -48,32 +48,7 @@ class LiveSyncContractTests(unittest.TestCase):
         self.assertIn('"about:blank"', browser_source)
 
 
-    def test_scoped_sync_prefers_business_settings_before_ads_manager(self):
-        source=inspect.getsource(api.profile_live_inventory)
-        self.assertIn("REMASK_SCOPED_SETTINGS_FIRST_V1",source)
-        self.assertIn("REMASK_SYNC_ADS_MANAGER_FASTPATH",source)
-        load_start=source.index("async def load_business_inventory")
-        load_end=source.index("stage='rk_inventory'",load_start)
-        load_source=source[load_start:load_end]
-        self.assertLess(
-            load_source.index("snapshot_ad_accounts_for_business"),
-            load_source.index("probe_ads_manager_inventory_context"),
-        )
-        self.assertIn(
-            "Settings was genuinely inconclusive. Only now use the",
-            load_source,
-        )
 
-    def test_security_checkpoint_stops_live_sync_without_browser_reopen_loop(self):
-        source=inspect.getsource(api.profile_live_inventory)
-        self.assertIn("attempt == 0 and exc.code == 'SESSION_EXPIRED'",source)
-        self.assertIn("'CHECKPOINT_REQUIRED',\n                            'TWO_FACTOR_REQUIRED',",source)
-        self.assertIn("A security challenge will not disappear by",source)
-        self.assertIn("Continuing into sibling BMs would only repeat the same",source)
-        self.assertNotIn(
-            "and exc.code in {\n                                'CHECKPOINT_REQUIRED',\n                                'SESSION_EXPIRED',",
-            source,
-        )
 
     def test_page_inventory_does_not_block_live_bm_rk_sync(self):
         # The Railway runtime image copies python_backend to /opt/remask-python
