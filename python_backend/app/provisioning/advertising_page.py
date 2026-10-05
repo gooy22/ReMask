@@ -59,7 +59,9 @@ async def ensure_common_page(session: Any, params: dict, state: Any, resolver: A
         config=AdvertisingPageStore.for_context(state,session.context)
         page=await config.get()
         owner=str(session.context.profile_id)
-        if params.get('policies_accepted') is True:
+        # The workspace automatic flow accepts the required Page policies.
+        # Bind this rule to the current Facebook account and exact Page name.
+        if params.get('policies_accepted') is not False:
             page=await config.patch(policies_accepted=True,policies_name=page['name'],
                 policies_owner_profile_id=owner,policies_owner_facebook_uid=config.facebook_uid)
         known={str(row['id']):row for row in [

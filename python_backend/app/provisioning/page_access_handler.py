@@ -42,7 +42,10 @@ async def _request_target_page_access(browser, config: dict, business: str, chec
     """Request Ads task access from the target BM; never claim Page ownership."""
     if await browser.verify_page_attached(business_id=business,page_id=config['page_id']):
         return True
-    if prior.get('phase') in {'TARGET_PAGE_ACCESS_CLICK_INTENT','TARGET_PAGE_ACCESS_SUBMITTED',
+    if prior.get('phase')=='TARGET_PAGE_ACCESS_SUBMITTED':
+        # Continue at the Page owner's approval surface, never send twice.
+        return False
+    if prior.get('phase') in {'TARGET_PAGE_ACCESS_CLICK_INTENT',
             'PARTNER_SHARE_CLICK_INTENT','PARTNER_SHARE_SUBMITTED'}:
         raise BrowserBusinessError('PAGE_SHARE_RESULT_UNKNOWN',
             'The saved target BM access request must be reconciled before another is sent',retryable=True)
@@ -75,8 +78,22 @@ async def _request_target_page_access(browser, config: dict, business: str, chec
     await checkpoint({'phase':'TARGET_PAGE_ACCESS_CLICK_INTENT','requested_tasks':['ADVERTISE'],
         'page_id':config['page_id'],'business_id':business})
     await submit.click(timeout=5000)
-    await checkpoint({'phase':'TARGET_PAGE_ACCESS_SUBMITTED'})
+    await browser.page.wait_for_timeout(1000)
+    await checkpoint({'phase':'TARGET_PAGE_ACCESS_SUBMITTED',
+        'diagnostic':await browser._diagnostic('target_page_access_submit_response')})
     return await browser.verify_page_attached(business_id=business,page_id=config['page_id'])
+
+
+async def _approve_owner_page_access(browser, config: dict, business: str, checkpoint) -> bool:
+    """Continue the exact request from the same Facebook Page owner's session."""
+    await checkpoint({'activity':'APPROVE_TARGET_PAGE_ACCESS'})
+    await browser._goto('https://www.facebook.com/profile.php?id='+config['page_id'],
+        timeout_ms=12000,wait_until='commit',settle_ms=900,attempts=1)
+    await browser._assert_authenticated()
+    diagnostic=await browser._diagnostic('page_owner_access_entry')
+    diagnostic.update(page_id=config['page_id'],business_id=business)
+    raise BrowserBusinessError('PAGE_OWNER_APPROVAL_UI_UNAVAILABLE',
+        'The existing request needs the Page owner approval surface',retryable=True,diagnostic=diagnostic)
 
 
 async def _assign_operator(browser, config: dict, business: str) -> None:
@@ -137,7 +154,7 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
         result=(rk_state or {}).get('result') or {}
         if str(result.get('business_id') or '')!=business or _normalize_ad_account_id(result.get('ad_account_id')).removeprefix('act_')!=account:
             raise ProvisioningError('CREATED_BUSINESS_RK_REQUIRED','RK creation result does not match this portfolio')
-    await ensure_common_page(session,{'page_id':params.get('page_id'),'reuse_only':params.get('reuse_only') is True,'policies_accepted':params.get('policies_accepted') is True},state,resolver)
+    await ensure_common_page(session,{'page_id':params.get('page_id'),'reuse_only':params.get('reuse_only') is True,'policies_accepted':params.get('policies_accepted') is not False},state,resolver)
     store=AdvertisingPageStore.for_context(state,session.context,profile); config=await store.get()
     prior=((await state.step(item,ProvisioningStep.PAGE_ACCESS)) or {}).get('result') or {}
     async def checkpoint(patch):
@@ -159,9 +176,10 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
                 try:
                     target_relation=await _request_target_page_access(browser,config,business,checkpoint,saved_grant or prior)
                     if not target_relation:
+                        target_relation=await _approve_owner_page_access(browser,config,business,checkpoint)
+                    if not target_relation:
                         raise BrowserBusinessError('TARGET_PAGE_ACCESS_APPROVAL_REQUIRED',
-                            'The target BM requested Ads access; approval belongs to the Facebook Page owner, not a main BM',
-                            retryable=True,diagnostic=await browser._diagnostic('target_page_access_pending'))
+                            'Meta has not confirmed the exact Page advertising access after owner approval',retryable=True)
                     await _assign_operator(browser,config,business)
                 except Exception as exc:
                     diagnostic={'stage':'target_page_access','url':str(getattr(browser.page,'url','')),

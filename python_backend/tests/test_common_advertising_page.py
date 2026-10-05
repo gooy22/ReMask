@@ -228,10 +228,8 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
     async def test_pending_target_request_is_not_resent_and_never_uses_owner_claim(self):
         browser=SimpleNamespace(verify_page_attached=AsyncMock(return_value=False),_open_pages_add_action=AsyncMock())
         checkpoint=AsyncMock()
-        with self.assertRaises(BrowserBusinessError) as caught:
-            await _request_target_page_access(browser,{'page_id':PAGE},BM,checkpoint,
-                {'phase':'TARGET_PAGE_ACCESS_SUBMITTED'})
-        self.assertEqual(caught.exception.code,'PAGE_SHARE_RESULT_UNKNOWN')
+        self.assertFalse(await _request_target_page_access(browser,{'page_id':PAGE},BM,checkpoint,
+            {'phase':'TARGET_PAGE_ACCESS_SUBMITTED'}))
         browser._open_pages_add_action.assert_not_awaited()
         checkpoint.assert_not_awaited()
         browser.verify_page_attached.assert_awaited_once_with(business_id=BM,page_id=PAGE)
@@ -264,6 +262,7 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
         page=SimpleNamespace(wait_for_timeout=AsyncMock(),
             get_by_role=lambda role,**kwargs:dialog if role=='dialog' else next_button)
         browser=SimpleNamespace(page=page,verify_page_attached=AsyncMock(side_effect=[False,True]),
+            _diagnostic=AsyncMock(return_value={'stage':'target_page_access_submit_response'}),
             _open_pages_add_action=AsyncMock(return_value=True),_click_named=AsyncMock(return_value=True),
             _fill_page_add_identifier=AsyncMock(return_value=True),_click_exact_page_search_name=AsyncMock(return_value=True))
         with patch('app.provisioning.page_access_handler._ads_only',new=AsyncMock()) as ads:
