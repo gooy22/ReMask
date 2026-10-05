@@ -154,6 +154,18 @@ class JobStore:
             # every Page/BM checkpoint and never enqueue work at startup.
             con.execute("UPDATE job_tasks SET retryable=1 WHERE id=?",(row['id'],))
             con.execute("UPDATE job_items SET retryable=1 WHERE id=? AND status='FAILED' AND error_code='CREATED_BUSINESS_RK_REQUIRED'",(row['item_id'],))
+        rows=con.execute("SELECT t.id,t.item_id,a.result_json AS rk,b.result_json AS bm FROM job_tasks t "
+            "JOIN provisioning_steps a ON a.item_id=t.item_id AND a.step='AD_ACCOUNT' AND a.status='SUCCESS' "
+            "JOIN provisioning_steps b ON b.item_id=t.item_id AND b.step='BUSINESS' AND b.status='SUCCESS' "
+            "WHERE t.status='FAILED' AND t.action='provisioning' AND t.error_code='CREATED_BUSINESS_RK_REQUIRED'").fetchall()
+        for row in rows:
+            rk=json.loads(row['rk']); bm=json.loads(row['bm']); account=str(rk.get('ad_account_id') or '')
+            if not account.startswith('act_') or not account[4:].isdigit(): continue
+            if not str(bm.get('business_id') or '').isdigit() or rk.get('business_id')!=bm.get('business_id'): continue
+            # The exact RK was already created by this item; repair only the
+            # prefix mismatch and leave creation checkpoints untouched.
+            con.execute('UPDATE job_tasks SET retryable=1 WHERE id=?',(row['id'],))
+            con.execute("UPDATE job_items SET retryable=1 WHERE id=? AND status='FAILED' AND error_code='CREATED_BUSINESS_RK_REQUIRED'",(row['item_id'],))
 
     @staticmethod
     def _repair_unstarted_prgssteam_rk_timezone(con: sqlite3.Connection) -> None:

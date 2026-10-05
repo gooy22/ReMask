@@ -122,7 +122,7 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_native_business_access_does_not_require_ads_editor_verification(self):
         await AdvertisingPageStore(self.state).patch(page_id=PAGE,name='PrgssTeam',owner_profile_id='9',owner_business_id=BM)
-        await self.state.complete('one','9','one',ProvisioningStep.AD_ACCOUNT,{'business_id':BM,'ad_account_id':RK})
+        await self.state.complete('one','9','one',ProvisioningStep.AD_ACCOUNT,{'business_id':BM,'ad_account_id':'act_'+RK})
         browser=SimpleNamespace(verify_page_attached=AsyncMock(return_value=True))
         factory=SimpleNamespace(__aenter__=AsyncMock(return_value=browser),__aexit__=AsyncMock(return_value=False))
         class Lease:
@@ -132,9 +132,10 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
         with patch('app.provisioning.page_access_handler.ensure_common_page',new=AsyncMock()), \
              patch('app.provisioning.page_access_handler.FacebookBusinessBrowser',return_value=Lease()), \
              patch('app.provisioning.page_access_handler.inspect_browser_pages',new=AsyncMock()) as inspect:
-            result=await page_access_handler(session,{}, {'business_id':BM,'ad_account_id':RK},
+            result=await page_access_handler(session,{}, {'business_id':BM,'ad_account_id':'act_'+RK},
                 provisioning_state=self.state,profile_id='9',item_id='one',scope_key='one')
         self.assertTrue(result['page_shared_to_business'])
+        self.assertEqual(result['ad_account_id'],RK)
         self.assertFalse(result['ad_account_page_access_verified'])
         inspect.assert_not_awaited()
 

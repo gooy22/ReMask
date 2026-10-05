@@ -8,6 +8,7 @@ from ..facebook_business_browser import FacebookBusinessBrowser, BrowserBusiness
 from ..page_access_inspection import inspect_browser_pages
 from .advertising_page import AdvertisingPageStore, _PAGE_LOCK, ensure_common_page
 from .models import ProvisioningError, ProvisioningStep
+from .ad_account_handler import _normalize_ad_account_id
 
 
 async def _one(locator):
@@ -93,11 +94,11 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
     state=kwargs['provisioning_state']; profile=kwargs['profile_id']; item=kwargs['item_id']; scope=kwargs['scope_key']
     resolver=kwargs.get('profile_resolver')
     business=str(snapshot.get('business_id') or '')
-    account=str(snapshot.get('ad_account_id') or '')
+    account=_normalize_ad_account_id(snapshot.get('ad_account_id')).removeprefix('act_')
     existing=params.get('existing_target') is True
     if existing:
         business=str(params.get('business_id') or '')
-        account=str(params.get('ad_account_id') or '')
+        account=_normalize_ad_account_id(params.get('ad_account_id')).removeprefix('act_')
     if not business.isdigit() or not account.isdigit() or business==session.context.cookies.get('c_user'):
         raise ProvisioningError('CREATED_BUSINESS_RK_REQUIRED','Page access requires the RK of a created Business Portfolio')
     if existing:
@@ -112,7 +113,7 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
     else:
         rk_state=await state.step(item,ProvisioningStep.AD_ACCOUNT)
         result=(rk_state or {}).get('result') or {}
-        if result.get('business_id')!=business or result.get('ad_account_id')!=account:
+        if str(result.get('business_id') or '')!=business or _normalize_ad_account_id(result.get('ad_account_id')).removeprefix('act_')!=account:
             raise ProvisioningError('CREATED_BUSINESS_RK_REQUIRED','RK creation result does not match this portfolio')
     await ensure_common_page(session,{},state,resolver)
     store=AdvertisingPageStore(state); config=await store.get()

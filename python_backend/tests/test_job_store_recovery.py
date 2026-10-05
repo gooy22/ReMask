@@ -18,6 +18,20 @@ from app.session import ProfileContextError, ProfileResolver
 
 
 class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_completed_act_prefix_rk_restores_access_retry_without_recreation(self):
+        job,item=self._seed(task_status='FAILED'); task=(await self.store.tasks(item))[0]
+        await self.provisioning_state.complete(item,'4','default',ProvisioningStep.BUSINESS,{'business_id':'934505709362142'})
+        await self.provisioning_state.complete(item,'4','default',ProvisioningStep.AD_ACCOUNT,
+            {'business_id':'934505709362142','ad_account_id':'act_1152836437079070'})
+        await self.store.set_task_failed(task['id'],'CREATED_BUSINESS_RK_REQUIRED','prefix rejected')
+        await self.store.finalize_item(item)
+        await self.store.init()
+        self.assertEqual(await self.store.queued_item_ids(job),[])
+        self.assertEqual(await self.store.retry_failed(job),1)
+        rk=await self.provisioning_state.step(item,ProvisioningStep.AD_ACCOUNT)
+        self.assertEqual(rk['status'],'SUCCESS')
+        self.assertEqual(rk['result']['ad_account_id'],'act_1152836437079070')
+
     async def test_common_page_missing_checkpoint_repair_preserves_job_and_does_not_enqueue(self):
         job_id,item_id=self._seed(task_status='FAILED')
         task=(await self.store.tasks(item_id))[0]
