@@ -786,7 +786,34 @@ async def _assign_operator(
         raise BrowserBusinessError('PAGE_OPERATOR_ASSIGNMENT_REQUIRED','Current operator is not uniquely identified',retryable=True)
     await person.check(timeout=3000)
     await _ads_only(dialog)
-    submit=dialog.get_by_role('button',name=re.compile(r'^(Assign|Save)
+    submit=dialog.get_by_role(
+        'button',
+        name=re.compile(r'^(Assign|Save)$',re.I),
+    )
+    if not await _one(submit):
+        raise BrowserBusinessError(
+            'PAGE_OPERATOR_ASSIGNMENT_REQUIRED',
+            'Operator Ads assignment is unavailable',
+            retryable=True,
+        )
+    await checkpoint({
+        'phase':'TARGET_PAGE_OPERATOR_ASSIGN_CLICK_INTENT',
+        'requested_tasks':['ADVERTISE'],
+        'page_id':str(config.get('page_id') or ''),
+        'business_id':business,
+        'operator_selection':selection,
+    })
+    await submit.click(timeout=5000)
+    await browser.page.wait_for_timeout(700)
+    await checkpoint({
+        'phase':'TARGET_PAGE_OPERATOR_ASSIGN_SUBMITTED',
+        'requested_tasks':['ADVERTISE'],
+        'page_id':str(config.get('page_id') or ''),
+        'business_id':business,
+        'operator_selection':selection,
+        'diagnostic':await browser._diagnostic('page_operator_assign_submitted'),
+    })
+
 
 async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwargs) -> dict:
     state=kwargs['provisioning_state']; profile=kwargs['profile_id']; item=kwargs['item_id']; scope=kwargs['scope_key']
