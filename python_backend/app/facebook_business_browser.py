@@ -19681,7 +19681,7 @@ timeout_seconds=4.0,
 
             targets = [
                 template.format(business_id=business)
-                for template in self.SETTINGS_PAGES_URLS
+                for template in self.SETTINGS_PAGES_URLS[:1]
             ]
             seen: set[str] = set()
             for target in targets:
@@ -19709,7 +19709,7 @@ timeout_seconds=4.0,
                     return True
 
                 try:
-                    await asyncio.wait_for(observed.wait(), timeout=1.8)
+                    await asyncio.wait_for(observed.wait(), timeout=15.0)
                     return True
                 except asyncio.TimeoutError:
                     pass
@@ -19967,11 +19967,18 @@ timeout_seconds=4.0,
         # Redirects abort the old document before the replacement UI hydrates.
         current = _clean(getattr(self.page, "url", ""))
         if "/settings/pages" in current and business_id in _business_ids_from_text(current):
-            for attempt in range(16):
+            for attempt in range(80):
                 if await self._click_named(self.ADD_NAMES):
                     return True
-                if attempt < 15:
+                if attempt < 79:
                     await self.page.wait_for_timeout(400)
+            # Keep the exact document alive while it hydrates. Alias reloads
+            # restart loading and can prevent Add from ever appearing.
+            if not (await self._body_text(timeout_ms=1000)).strip():
+                raise BrowserBusinessError('PAGE_SETTINGS_LOAD_TIMEOUT',
+                    'Meta Business Settings stayed empty while loading. No Page submit was sent.',
+                    retryable=True,diagnostic=await self._diagnostic('page_settings_loading_timeout'))
+            return False
         for template in self.SETTINGS_PAGES_URLS[:2]:
             try:
                 await self._goto(template.format(business_id=business_id), timeout_ms=9000, attempts=1)
@@ -19981,10 +19988,10 @@ timeout_seconds=4.0,
                 # A migration redirect can abort the old document. Probe the
                 # replacement document, then the next compatible URL.
                 await self._assert_authenticated()
-            for attempt in range(16):
+            for attempt in range(80):
                 if await self._click_named(self.ADD_NAMES):
                     return True
-                if attempt < 15:
+                if attempt < 79:
                     await self.page.wait_for_timeout(400)
         return False
 

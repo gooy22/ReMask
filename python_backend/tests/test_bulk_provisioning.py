@@ -601,6 +601,14 @@ class PageHydrationTests(unittest.IsolatedAsyncioTestCase):
         field.press_sequentially.assert_awaited_once_with('https://www.facebook.com/222222222',delay=15)
         field.press.assert_not_awaited()
 
+    async def test_slow_pages_hydration_does_not_restart_the_document(self):
+        browser=FacebookBusinessBrowser(SimpleNamespace(profile_id='7'))
+        browser.page=SimpleNamespace(url='https://business.facebook.com/latest/settings/pages/?business_id=111111111',wait_for_timeout=AsyncMock())
+        browser._goto=AsyncMock(); browser._click_named=AsyncMock(side_effect=[False]*30+[True])
+        self.assertTrue(await browser._open_pages_add_action('111111111'))
+        browser._goto.assert_not_awaited()
+        self.assertEqual(browser._click_named.await_count,31)
+
     async def test_current_name_url_picker_receives_page_url(self):
         browser=FacebookBusinessBrowser(SimpleNamespace(profile_id='7'))
         browser.page=SimpleNamespace()

@@ -86,3 +86,5 @@ common-page-access-state-in-ui 8a54db10ae3f2bc1e0f3561d95886374292c38f6
 Resume shared Page access after RK creation dependency correction.
 
 Normalize Meta act_ IDs in completed RK Page sharing.
+
+Let Meta Settings hydrate without restarting its document.
