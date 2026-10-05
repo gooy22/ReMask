@@ -341,6 +341,86 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
             'TARGET_PAGE_ACCESS_OWNER_CONFIRMED'])
         browser.verify_page_attached.assert_awaited_with(business_id=BM,page_id=PAGE)
 
+    async def test_owner_approval_falls_back_to_page_asset_actor(self):
+        events=[]
+        class Locator:
+            def __init__(self, *, count=0, router=None, label=''):
+                self._count=count; self._router=router; self.label=label; self.first=self
+            async def count(self): return self._count
+            def nth(self,index): return self
+            async def is_visible(self): return self._count>0
+            async def is_enabled(self): return self._count>0
+            async def is_checked(self): return False
+            async def get_attribute(self,name): return None
+            async def click(self,**kwargs): events.append('CLICK_'+self.label)
+            async def evaluate(self,*args,**kwargs): return ''
+            def filter(self,**kwargs): return self
+            def get_by_role(self,role,**kwargs):
+                return self._router(role,kwargs.get('name')) if self._router else Locator()
+
+        review=Locator(count=1,label='REVIEW')
+        approve=Locator(count=1,label='APPROVE')
+        empty=Locator()
+        dialog=Locator(count=1,router=lambda role,name:
+            approve if role=='button' and 'Accept' in getattr(name,'pattern',str(name or '')) else empty)
+        page=SimpleNamespace(
+            url='https://www.facebook.com/settings/?tab=profile_access',
+            get_by_role=lambda role,**kwargs:dialog if role=='dialog' else empty,
+            locator=lambda selector:empty,
+            wait_for_timeout=AsyncMock())
+        browser=SimpleNamespace(
+            page=page,_browser_context=SimpleNamespace(clear_cookies=AsyncMock(),add_cookies=AsyncMock()),
+            context=SimpleNamespace(cookies={'c_user':'100'},
+                pages=[{'id':PAGE,'profile_id':'777777777'}]),
+            verify_page_attached=AsyncMock(side_effect=[False,True]),
+            _goto=AsyncMock(),_assert_authenticated=AsyncMock(),
+            _diagnostic=AsyncMock(return_value={'stage':'owner'}))
+        with patch('app.provisioning.page_access_handler._pick_owner_review_request',
+                   new=AsyncMock(side_effect=[(None,[]),(review,[{'business_match':None}])])):
+            self.assertTrue(await _approve_owner_page_access(
+                browser,{'page_id':PAGE,'name':'PrgssTeam'},BM,AsyncMock()))
+        actor_values=[call.args[0][0]['value']
+            for call in browser._browser_context.add_cookies.await_args_list]
+        self.assertEqual(actor_values[:2],['777777777',PAGE])
+        self.assertEqual(events,['CLICK_REVIEW','CLICK_APPROVE'])
+        self.assertEqual(browser._goto.await_count,2)
+
+    async def test_owner_approval_polls_exact_relation_after_accept(self):
+        class Locator:
+            def __init__(self, *, count=0, router=None):
+                self._count=count; self._router=router; self.first=self
+            async def count(self): return self._count
+            def nth(self,index): return self
+            async def is_visible(self): return self._count>0
+            async def is_enabled(self): return self._count>0
+            async def is_checked(self): return False
+            async def get_attribute(self,name): return None
+            async def click(self,**kwargs): return None
+            async def evaluate(self,*args,**kwargs): return ''
+            def filter(self,**kwargs): return self
+            def get_by_role(self,role,**kwargs):
+                return self._router(role,kwargs.get('name')) if self._router else Locator()
+        review=Locator(count=1)
+        approve=Locator(count=1)
+        empty=Locator()
+        dialog=Locator(count=1,router=lambda role,name:
+            approve if role=='button' and 'Accept' in getattr(name,'pattern',str(name or '')) else empty)
+        page=SimpleNamespace(url='',get_by_role=lambda role,**kwargs:dialog if role=='dialog' else empty,
+            locator=lambda selector:empty,wait_for_timeout=AsyncMock())
+        browser=SimpleNamespace(page=page,
+            _browser_context=SimpleNamespace(clear_cookies=AsyncMock(),add_cookies=AsyncMock()),
+            context=SimpleNamespace(cookies={'c_user':'100'},pages=[{'id':PAGE,'profile_id':PAGE}]),
+            verify_page_attached=AsyncMock(side_effect=[False,False,False,True]),
+            _goto=AsyncMock(),_assert_authenticated=AsyncMock(),
+            _diagnostic=AsyncMock(return_value={'stage':'owner'}))
+        with patch('app.provisioning.page_access_handler._pick_owner_review_request',
+                   new=AsyncMock(return_value=(review,[{'business_match':None}]))), \
+             patch('app.provisioning.page_access_handler.asyncio.sleep',new=AsyncMock()) as sleep:
+            self.assertTrue(await _approve_owner_page_access(
+                browser,{'page_id':PAGE,'name':'PrgssTeam'},BM,AsyncMock()))
+        self.assertEqual(browser.verify_page_attached.await_count,4)
+        self.assertEqual(sleep.await_count,2)
+
     async def test_owner_approval_never_guesses_between_multiple_pending_requests(self):
         events=[]
         class Locator:
