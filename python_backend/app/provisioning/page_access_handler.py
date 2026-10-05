@@ -18,107 +18,175 @@ async def _one(locator):
     return await locator.count()==1 and await locator.is_visible()
 
 
-async def _select_page(browser, name: str, page_id: str) -> dict:
-    """Select the exact Page row in Business Settings without global-name ambiguity."""
-    page=str(page_id or '').strip()
+async def _wait_business_pages_surface(browser, name: str, *, timeout_seconds: float=7.0) -> dict:
+    """Wait for the target-BM Pages surface to hydrate before selecting an asset."""
     expected=' '.join(str(name or '').split()).strip()
-    if not page.isdigit() or not expected:
-        raise BrowserBusinessError(
-            'PAGE_SHARE_UI_UNAVAILABLE',
-            'Exact Page identity is unavailable for operator assignment',
-            retryable=True,
-            diagnostic={'page_id':page,'page_name':expected},
-        )
-
-    rows=browser.page.get_by_role('row').filter(has_text=expected)
-    candidates=[]
-    exact=[]
-    visible=[]
-    for index in range(min(await rows.count(),20)):
-        row=rows.nth(index)
-        if not await row.is_visible():
-            continue
-        visible.append(row)
+    if browser.page is None or not callable(getattr(browser.page,'locator',None)):
+        return {'ready':False,'polls':0,'body_excerpt':''}
+    deadline=asyncio.get_running_loop().time()+max(0.5,float(timeout_seconds))
+    polls=0
+    last=''
+    while asyncio.get_running_loop().time()<deadline and polls<20:
+        polls+=1
         try:
-            evidence=await row.evaluate("""(el, pageId) => {
-                const clean = value => String(value || '').replace(/\\s+/g,' ').trim();
-                const links=[...el.querySelectorAll('a[href]')].map(a=>a.getAttribute('href')||'');
-                const text=clean(el.innerText || el.textContent || '');
-                const attrs=[
-                    el.getAttribute('data-key')||'',
-                    el.getAttribute('data-testid')||'',
-                    el.getAttribute('aria-label')||'',
-                ];
-                const hay=[text,...links,...attrs].join(' | ');
-                const rx=new RegExp('(^|\\\\D)'+pageId+'(\\\\D|$)');
-                return {text:text.slice(0,1200),links:links.slice(0,12),id_match:rx.test(hay)};
-            }""",page)
+            body=await browser.page.locator('body').inner_text(timeout=1600)
         except Exception:
-            evidence={'text':'','links':[],'id_match':False}
-        row_info={
-            'index':index,
-            'text':str((evidence or {}).get('text') or '')[:1200],
-            'links':list((evidence or {}).get('links') or [])[:12],
-            'id_match':bool((evidence or {}).get('id_match')),
-        }
-        candidates.append(row_info)
-        if row_info['id_match']:
-            exact.append(row)
+            body=''
+        normalized=' '.join(str(body or '').split())
+        if normalized:
+            last=normalized[:5000]
+            if expected and expected in normalized:
+                return {'ready':True,'polls':polls,'body_excerpt':last[:2200],'reason':'page_name'}
+            if re.search(r'Business assets|Pages|Add|Partners|People',normalized,re.I) and polls>=3:
+                return {'ready':True,'polls':polls,'body_excerpt':last[:2200],'reason':'settings_shell'}
+        await asyncio.sleep(0.35)
+    return {'ready':False,'polls':polls,'body_excerpt':last[:2200],'reason':'timeout'}
 
-    target=None
-    source=''
-    if len(exact)==1:
-        target=exact[0]; source='row_exact_page_id'
-    elif len(exact)>1:
+
+async def _select_page(browser, name: str, page_id: str, business: str) -> dict:
+    """Select the exact Page asset in target Business Settings without name guessing."""
+    page=str(page_id or '').strip()
+    bm=str(business or '').strip()
+    expected=' '.join(str(name or '').split()).strip()
+    if not page.isdigit() or not bm.isdigit() or not expected:
         raise BrowserBusinessError(
-            'PAGE_SHARE_UI_UNAVAILABLE',
-            'Multiple Business Settings rows match the exact Page ID',
+            'PAGE_OPERATOR_PAGE_SELECTION_UNAVAILABLE',
+            'Exact Page/Business identity is unavailable for operator assignment',
             retryable=True,
-            diagnostic={'page_id':page,'page_name':expected,'rows':candidates[:10]},
+            diagnostic={'page_id':page,'business_id':bm,'page_name':expected},
         )
-    elif len(visible)==1:
-        # The exact Page/BM relation has already been proven before this stage.
-        # A single visible row with the exact Page name is therefore safe to
-        # select even when Meta omits the Page ID from rendered table markup.
-        target=visible[0]; source='single_exact_name_row'
 
-    if target is not None:
+    surface=await _wait_business_pages_surface(browser,expected)
+
+    async def scan_rows() -> tuple[Any | None,str,list[dict],int,int]:
+        rows=browser.page.get_by_role('row').filter(has_text=expected)
+        candidates=[]; exact=[]; visible=[]
+        for index in range(min(await rows.count(),20)):
+            row=rows.nth(index)
+            if not await row.is_visible():
+                continue
+            visible.append(row)
+            try:
+                evidence=await row.evaluate("""(el, pageId) => {
+                    const clean = value => String(value || '').replace(/\\s+/g,' ').trim();
+                    const links=[...el.querySelectorAll('a[href]')].map(a=>a.getAttribute('href')||'');
+                    const text=clean(el.innerText || el.textContent || '');
+                    const attrs=[
+                        el.getAttribute('data-key')||'',
+                        el.getAttribute('data-testid')||'',
+                        el.getAttribute('aria-label')||'',
+                    ];
+                    const hay=[text,...links,...attrs].join(' | ');
+                    const rx=new RegExp('(^|\\\\D)'+pageId+'(\\\\D|$)');
+                    return {text:text.slice(0,1200),links:links.slice(0,12),id_match:rx.test(hay)};
+                }""",page)
+            except Exception:
+                evidence={'text':'','links':[],'id_match':False}
+            info={
+                'index':index,
+                'text':str((evidence or {}).get('text') or '')[:1200],
+                'links':list((evidence or {}).get('links') or [])[:12],
+                'id_match':bool((evidence or {}).get('id_match')),
+            }
+            candidates.append(info)
+            if info['id_match']:
+                exact.append(row)
+        if len(exact)==1:
+            return exact[0],'row_exact_page_id',candidates,len(visible),len(exact)
+        if len(exact)>1:
+            return None,'ambiguous_page_id_rows',candidates,len(visible),len(exact)
+        if len(visible)==1:
+            return visible[0],'single_exact_name_row',candidates,len(visible),len(exact)
+        return None,'',candidates,len(visible),len(exact)
+
+    async def click_target(target, source: str, candidates: list[dict]) -> dict | None:
+        if target is None:
+            return None
         for role in ('button','link'):
             locator=target.get_by_role(role,name=expected,exact=True)
             if await _one(locator):
                 await locator.click(timeout=3000)
-                return {'source':source,'page_id':page,'page_name':expected,'rows':candidates[:10]}
+                return {'source':source,'page_id':page,'business_id':bm,
+                    'page_name':expected,'rows':candidates[:10],'surface':surface}
         named=target.get_by_text(expected,exact=True)
         if await _one(named):
             await named.click(timeout=3000)
-            return {'source':source,'page_id':page,'page_name':expected,'rows':candidates[:10]}
+            return {'source':source,'page_id':page,'business_id':bm,
+                'page_name':expected,'rows':candidates[:10],'surface':surface}
         try:
             await target.click(timeout=3000)
-            return {'source':source+'_row_click','page_id':page,'page_name':expected,'rows':candidates[:10]}
+            return {'source':source+'_row_click','page_id':page,'business_id':bm,
+                'page_name':expected,'rows':candidates[:10],'surface':surface}
         except Exception:
-            pass
+            return None
 
-    # Last safe fallback: exactly one global interactive control with the exact
-    # name. Never click one of several duplicate text nodes.
+    target,source,candidates,visible_count,exact_count=await scan_rows()
+    selected=await click_target(target,source,candidates)
+    if selected is not None:
+        return selected
+    if source=='ambiguous_page_id_rows':
+        raise BrowserBusinessError(
+            'PAGE_OPERATOR_PAGE_SELECTION_UNAVAILABLE',
+            'Multiple Business Settings rows match the exact Page ID',
+            retryable=True,
+            diagnostic={'page_id':page,'business_id':bm,'page_name':expected,
+                'matching_rows':candidates[:10],'surface':surface},
+        )
+
+    # Read-only direct asset route: use only the generic selected_asset_id that
+    # Meta already uses across Business Settings. No asset-type value is guessed.
+    base=FacebookBusinessBrowser.SETTINGS_PAGES_URL.format(business_id=bm)
+    direct=base+'&selected_asset_id='+page
+    try:
+        await browser._goto(direct,timeout_ms=9000,wait_until='commit',settle_ms=900,attempts=1)
+        await browser._assert_authenticated()
+        direct_surface=await _wait_business_pages_surface(browser,expected,timeout_seconds=6.0)
+        current=str(getattr(browser.page,'url',''))
+        exact_route=(
+            '/settings/pages' in current
+            and ('business_id='+bm) in current
+            and ('selected_asset_id='+page) in current
+        )
+        if exact_route:
+            named=browser.page.get_by_text(expected,exact=True)
+            assign=browser.page.get_by_role('button',
+                name=re.compile(r'^(Assign people|Add people)$',re.I))
+            if (await named.count() and any([
+                    await named.nth(i).is_visible()
+                    for i in range(min(await named.count(),8))
+                ])) or await _one(assign):
+                return {'source':'direct_selected_asset_id','page_id':page,
+                    'business_id':bm,'page_name':expected,'rows':candidates[:10],
+                    'surface':surface,'direct_surface':direct_surface,'url':current[:700]}
+    except BrowserBusinessError:
+        raise
+    except Exception:
+        pass
+
+    # Last safe fallback: one unique interactive control with the exact name.
     for role in ('button','link'):
         locator=browser.page.get_by_role(role,name=expected,exact=True)
         if await _one(locator):
             await locator.click(timeout=3000)
-            return {'source':'unique_global_'+role,'page_id':page,'page_name':expected,'rows':candidates[:10]}
+            return {'source':'unique_global_'+role,'page_id':page,'business_id':bm,
+                'page_name':expected,'rows':candidates[:10],'surface':surface}
 
     diagnostic=await browser._diagnostic('operator_exact_page_entry_missing')
     diagnostic.update({
-        'page_id':page,
-        'page_name':expected,
+        'page_id':page,'business_id':bm,'page_name':expected,
         'matching_rows':candidates[:10],
-        'visible_name_rows':len(visible),
-        'exact_id_rows':len(exact),
+        'visible_name_rows':visible_count,'exact_id_rows':exact_count,
+        'business_pages_surface':surface,
     })
+    log.warning(
+        'PAGE_OPERATOR exact Page unavailable page=%s business=%s url=%s rows=%s surface=%s',
+        page,bm,str(diagnostic.get('url') or '')[:700],
+        str(candidates[:6])[:3000],str(surface)[:2600],
+    )
     raise BrowserBusinessError(
         'PAGE_OPERATOR_PAGE_SELECTION_UNAVAILABLE',
-        'The exact Page row is unavailable for operator assignment',
-        retryable=True,
-        diagnostic=diagnostic,
+        'The exact Page row/detail is unavailable for operator assignment',
+        retryable=True,diagnostic=diagnostic,
     )
 
 
@@ -687,7 +755,7 @@ async def _assign_operator(
         business_id=business,page_id=config['page_id'])
     if not verified and not relation_preconfirmed:
         raise BrowserBusinessError('PAGE_OPERATOR_ASSIGNMENT_REQUIRED','Target BM Page access is unconfirmed',retryable=True)
-    selection=await _select_page(browser,config['name'],config['page_id'])
+    selection=await _select_page(browser,config['name'],config['page_id'],business)
     log.info(
         'PAGE_OPERATOR exact Page selected page=%s business=%s source=%s',
         str(config.get('page_id') or ''),business,str(selection.get('source') or ''),
