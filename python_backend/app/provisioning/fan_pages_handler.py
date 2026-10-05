@@ -143,7 +143,7 @@ def _target_names(params: dict[str, Any]) -> list[str]:
             )
         return names
 
-    base_name = _clean(params.get("base_name") or params.get("name") or "ReMask Page")
+    base_name = _clean(params.get("base_name") or params.get("name") or "PrgssTeam")
     if not base_name:
         raise ProvisioningError(
             "INVALID_INPUT",

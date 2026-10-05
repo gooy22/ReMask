@@ -167,51 +167,10 @@ function pythonWorkerSelectedAdAccountTargets() {
 }
 
 function pythonWorkerEnsureRkFanPageActions() {
-  const actionsButton = document.getElementById('workspaceActions');
-  if (!actionsButton || !actionsButton.parentElement) return;
-
-  const targets = pythonWorkerSelectedAdAccountTargets();
-  const active = Boolean(
-    state &&
-    String(state.activeTab || '') === 'ad_accounts' &&
-    targets.length
-  );
-
-  // FP fast path: one visible action only. The old Create/Attach split forced
-  // operators to fill or choose a Page per RK and made bulk work slower.
-  for (const legacyId of ['pythonRkCreateFp', 'pythonRkAttachFp']) {
-    const legacy = document.getElementById(legacyId);
-    if (legacy) legacy.remove();
-  }
-
-  let autoBtn = document.getElementById('pythonRkAutoFp');
-  if (!autoBtn) {
-    autoBtn = document.createElement('button');
-    autoBtn.id = 'pythonRkAutoFp';
-    autoBtn.type = 'button';
-    autoBtn.className = 'btn btn-secondary';
-    autoBtn.addEventListener('click', function(event) {
-      event.preventDefault();
-      event.stopPropagation();
-      pythonWorkerStartAutoRkFanPages().catch(function(error) {
-        pythonWorkerSetText(
-          'pythonPwStatus',
-          'FP авто: ' + String((error && error.message) || error)
-        );
-      });
-    });
-    actionsButton.parentElement.insertBefore(autoBtn, actionsButton);
-  }
-
-  autoBtn.style.display = active ? '' : 'none';
-  autoBtn.disabled =
-    !active ||
-    pythonWorkerUiState.busy ||
-    pythonWorkerUiState.fpResolving ||
-    pythonWorkerUiState.workerOnline !== true;
-  autoBtn.textContent = active
-    ? 'FP авто (' + targets.length + ')'
-    : 'FP авто';
+  // RK creation prepares the shared Page automatically; no separate FP toolbar.
+  ['pythonRkCreateFp','pythonRkAttachFp','pythonRkAutoFp'].forEach(function(id) {
+    const button=document.getElementById(id); if(button)button.remove();
+  });
 }
 
 function pythonWorkerEl(id) {
@@ -803,7 +762,7 @@ function pythonWorkerFanPageResult(item) {
   if (!result) return '';
   const pages = result.pages || result.created_pages || [];
   return pages.map(function(p) {
-    return 'FP ' + p.id + ' ' + (p.name || '') +
+    return (p.shared ? 'Общая FP ' : 'FP ') + p.id + ' ' + (p.name || '') +
       (p.main_business_confirmed ? ' · Confirm OK · основной BM ' + p.main_business_id : ' · Confirm ещё не подтверждён');
   }).join('; ');
 }
@@ -2279,13 +2238,16 @@ async function pythonWorkerLoadBusinesses(profileId, csrfRetried) {
     throw new Error(errorText);
   }
 
-  const businesses = Array.isArray(data.businesses) ? data.businesses.slice() : [];
+  let businesses = Array.isArray(data.businesses) ? data.businesses.slice() : [];
 
   try {
     const persisted = await pythonWorkerProfileProvisioningState(profileId);
+    const personalScopeId=String((persisted && persisted.personal_scope_id)||'').trim();
+    if(personalScopeId)businesses=businesses.filter(function(b){return String(b.id||'')!==personalScopeId;});
     const persistedBusinessId = String((persisted && persisted.business_id) || '').trim();
     if (
       /^\d+$/.test(persistedBusinessId) &&
+      persistedBusinessId !== personalScopeId &&
       !businesses.some(function(item) {
         return String((item && item.id) || '').trim() === persistedBusinessId;
       })
@@ -2360,6 +2322,7 @@ async function pythonWorkerStartAdAccounts(options) {
               parameters: {
                 AD_ACCOUNT: {
                   business_id: businessId,
+                  use_common_page: true,
                   name: String(cfg.name || '').trim(),
                   currency: String(cfg.currency || '').trim().toUpperCase(),
                   timezone_id: Number(cfg.timezone_id)
@@ -2468,6 +2431,7 @@ async function pythonWorkerStartBusinessAdAccountTargets(targets, configs) {
               parameters: {
                 AD_ACCOUNT: {
                   business_id: businessId,
+                  use_common_page: true,
                   name: String(cfg.name || '').trim(),
                   currency: String(cfg.currency || '').trim().toUpperCase(),
                   timezone_id: Number(cfg.timezone_id)
@@ -3937,7 +3901,7 @@ async function pythonWorkerOpenAutoModal() {
   head.append(title, close);
   const body = document.createElement('div'); body.className = 'pwbm-body';
   const note = document.createElement('div'); note.className = 'pwbm-note';
-  note.textContent = 'Каждый комплект: FP → Confirm в основном BM → отдельный BM → РК. Названия и адрес для формы сохраняются при Retry. Лимиты и проверки Meta действуют.';
+  note.textContent = 'Одна общая FP PrgssTeam. Каждый комплект: отдельный BM → его РК → доступ к PrgssTeam → проверка выбора FP в форме рекламы. Страница создаётся один раз на профиле 9 и используется повторно.';
   body.appendChild(note);
   function field(label, input) {
     const holder = document.createElement('label'); holder.className = 'pwbm-field';
@@ -3977,7 +3941,7 @@ async function pythonWorkerOpenAutoModal() {
     const valid = Number.isInteger(n) && n >= 1 && n <= 20 && total <= 500 && category.value.trim()
       && (!rk || (/^[A-Z]{3}$/.test(currency.value.trim().toUpperCase()) && Number.isInteger(Number(timezone.value)) && Number(timezone.value) >= 0 && timezone.value.trim()));
     create.disabled = pythonWorkerUiState.busy || !valid;
-    status.textContent = valid ? 'Будет создано: FP ' + total + ', BM ' + (Number(mode.value) >= 3 ? total : 0) + ', РК ' + (rk ? total : 0) + '.'
+    status.textContent = valid ? 'Общая FP: PrgssTeam. BM: ' + (Number(mode.value) >= 3 ? total : 0) + ', РК этих BM: ' + (rk ? total : 0) + '. Доступ к FP проверяется автоматически.'
       : 'Нужны категория, число комплектов 1–20 и параметры РК. Всего не больше 500 комплектов.';
   }
   [mode, count, category, currency, timezone].forEach(function(input) { input.addEventListener('input', refresh); input.addEventListener('change', refresh); });
@@ -3992,7 +3956,7 @@ async function pythonWorkerOpenAutoModal() {
       if (!acceptedRequest) acceptedRequest = {action:'create', idempotency_key:'workspace-auto-' + nonce,
         profiles:profiles.map(function(profileId) { return {profile_id:String(profileId), tasks:[{action:'provisioning', payload:{
           steps:steps, auto_generate:true, batch_count:n, parameters:{
-            FAN_PAGES:{category:category.value.trim()}, AD_ACCOUNT:{currency:currency.value.trim().toUpperCase(), timezone_id:Number(timezone.value)}
+            FAN_PAGES:{category:category.value.trim(),page_name:'PrgssTeam',common_page:true}, AD_ACCOUNT:{currency:currency.value.trim().toUpperCase(), timezone_id:Number(timezone.value),use_common_page:true}
           }
         }}]}; })};
       [mode, count, category, currency, timezone].forEach(function(input) { input.disabled = true; });
@@ -4170,7 +4134,7 @@ async function pythonWorkerOpenOwnFanPageModal() {
     nameField.className = 'pwbm-field';
     const baseName = document.createElement('input');
     baseName.type = 'text';
-    baseName.value = 'ReMask Page';
+    baseName.value = 'PrgssTeam';
     baseName.placeholder = 'Базовое название Page';
     const count = document.createElement('input');
     count.type = 'number';

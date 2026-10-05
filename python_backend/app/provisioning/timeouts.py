@@ -53,6 +53,8 @@ def browser_step_timeout(step: ProvisioningStep) -> float:
             return max(60.0, min(explicit, 7200.0))
         return min(7200.0, max(300.0, waves * 180.0 + 120.0))
 
+    if step is ProvisioningStep.PAGE_ACCESS:
+        return min(7200.0,max(420.0,waves*210.0+180.0))
     if step is ProvisioningStep.AD_ACCOUNT:
         explicit = _env_float("REMASK_AD_ACCOUNT_STEP_TIMEOUT")
         if explicit is not None:
@@ -81,6 +83,7 @@ def browser_provisioning_hard_timeout(
             ProvisioningStep.FAN_PAGES,
             ProvisioningStep.BUSINESS,
             ProvisioningStep.AD_ACCOUNT,
+            ProvisioningStep.PAGE_ACCESS,
         }:
             normalized.add(step)
 

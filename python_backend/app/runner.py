@@ -92,11 +92,11 @@ class WorkerPool:
         self.profile_locks: defaultdict[str,asyncio.Lock]=defaultdict(asyncio.Lock)
         self.registry=TaskRegistry()
         self.provisioning_state=ProvisioningStateStore(str(store.path))
-        self.provisioning=ProvisioningService(self.provisioning_state)
         self.router=TransparentPostRouter()
         self.registry.register('proxy_check',_proxy_check)
         self.registry.register('transparent_post',self.router.execute)
         self.resolver=ProfileResolver(os.getenv('REMASK_PROFILE_RESOLVER_URL'),os.getenv('REMASK_INTERNAL_KEY'))
+        self.provisioning=ProvisioningService(self.provisioning_state,profile_resolver=self.resolver)
         self._workers: list[asyncio.Task[None]]=[]
         self._created_businesses_lock = asyncio.Lock()
 
@@ -280,12 +280,17 @@ class WorkerPool:
                                 fan_pages_guarded='FAN_PAGES' in normalized_steps
                                 business_guarded='BUSINESS' in normalized_steps
                                 ad_account_guarded='AD_ACCOUNT' in normalized_steps
+                                access_guarded='PAGE_ACCESS' in normalized_steps
+                                rk_params=(payload.get('parameters') or {}).get('AD_ACCOUNT',{})
+                                if ad_account_guarded and isinstance(rk_params,dict) and rk_params.get('use_common_page') is True:
+                                    access_guarded=True
+                                    if 'PAGE_ACCESS' not in normalized_steps: normalized_steps.append('PAGE_ACCESS')
 
-                                if fan_pages_guarded or business_guarded or ad_account_guarded:
+                                if fan_pages_guarded or business_guarded or ad_account_guarded or access_guarded:
                                     browser_steps=[
                                         value
                                         for value in normalized_steps
-                                        if value in {'FAN_PAGES','BUSINESS','AD_ACCOUNT'}
+                                        if value in {'FAN_PAGES','BUSINESS','AD_ACCOUNT','PAGE_ACCESS'}
                                     ]
                                     hard_timeout=browser_provisioning_hard_timeout(
                                         browser_steps
@@ -295,6 +300,7 @@ class WorkerPool:
                                             fan_pages_guarded,
                                             business_guarded,
                                             ad_account_guarded,
+                                            access_guarded,
                                         ) if enabled
                                     )
                                     if guarded_count > 1:
@@ -305,9 +311,13 @@ class WorkerPool:
                                                 ('FAN_PAGES',fan_pages_guarded),
                                                 ('BUSINESS',business_guarded),
                                                 ('AD_ACCOUNT',ad_account_guarded),
+                                                ('PAGE_ACCESS',access_guarded),
                                             )
                                             if enabled
                                         )
+                                    elif access_guarded:
+                                        watchdog_code='PAGE_ACCESS_HARD_TIMEOUT'
+                                        watchdog_label='PAGE_ACCESS'
                                     elif fan_pages_guarded:
                                         watchdog_code='ADD_FP_HARD_TIMEOUT'
                                         watchdog_label='FAN_PAGES'

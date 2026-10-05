@@ -10,6 +10,7 @@ class ProvisioningStep(str, Enum):
     FAN_PAGES = "FAN_PAGES"
     BUSINESS = "BUSINESS"
     AD_ACCOUNT = "AD_ACCOUNT"
+    PAGE_ACCESS = "PAGE_ACCESS"
     FUNDING = "FUNDING"
 
 

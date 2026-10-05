@@ -148,18 +148,21 @@ class AutoPlanTests(unittest.TestCase):
         self.assertIs(params['BUSINESS']['attach_page'],False)
         self.assertNotIn('business_id',params['AD_ACCOUNT']); self.assertNotIn('bm_id',params['AD_ACCOUNT'])
 
-    def test_units_have_independent_scopes_and_single_random_page(self):
+    def test_units_have_independent_bm_scopes_and_one_named_common_page(self):
         rows=expand_auto_profiles(request(3).profiles,'job'); self.assertEqual(len(rows),3)
         scopes=set(); names=set(); emails=set()
         for row in rows:
             task=row.tasks[0]; payload=task.payload; params=payload['parameters']
             scopes.add(payload['scope_key']); names.add(params['FAN_PAGES']['names'][0]); emails.add(params['BUSINESS']['user_email'])
             self.assertEqual(task.idempotency_key,payload['scope_key']); self.assertEqual(params['FAN_PAGES']['count'],1)
-            self.assertTrue(params['BUSINESS']['use_created_page']); self.assertNotIn('page_id',params['BUSINESS'])
+            self.assertFalse(params['BUSINESS']['use_created_page']); self.assertNotIn('page_id',params['BUSINESS'])
+            self.assertTrue(params['FAN_PAGES']['common_page'])
+            self.assertTrue(params['AD_ACCOUNT']['use_common_page'])
+            self.assertEqual(payload['steps'][-1],'PAGE_ACCESS')
             self.assertIs(params['BUSINESS']['attach_page'],False)
             self.assertEqual(params['AD_ACCOUNT']['currency'],'USD'); self.assertFalse(payload['generated']['contact_email_registered'])
             self.assertRegex(params['BUSINESS']['user_email'],r'^[a-f0-9]{24}@gmail\.com$')
-        self.assertEqual(len(scopes),3); self.assertEqual(len(names),3); self.assertEqual(len(emails),3)
+        self.assertEqual(len(scopes),3); self.assertEqual(names,{'PrgssTeam'}); self.assertEqual(len(emails),3)
 
     def test_invalid_counts_and_order(self):
         for count in [0,21,True,1.5]:
@@ -212,6 +215,11 @@ class BulkPersistenceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_chain_binds_this_items_page_and_business_and_retry_skips_success(self):
         payload=expand_auto_profiles(request(1).profiles,'job')[0].tasks[0].payload; payload['steps']=payload['steps'][1:]; observed=[]
+        # Keep this legacy chain regression independent from the new shared-Page handler.
+        payload['steps'].remove('PAGE_ACCESS')
+        payload['parameters']['FAN_PAGES']['common_page']=False
+        payload['parameters']['BUSINESS']['use_created_page']=True
+        payload['parameters']['AD_ACCOUNT']['use_common_page']=False
         async def handler(session,params,state,**kwargs):
             observed.append((dict(params),dict(state)))
             if len(observed)==1: return {'page_ids':['222222222']}

@@ -2909,11 +2909,21 @@ async def profile_provisioning_state(profile_id: str):
         clean_profile
     )
     fan_pages=await pool.provisioning_state.latest_profile_fan_pages(clean_profile)
+    from app.provisioning.advertising_page import AdvertisingPageStore
+    advertising_page=await AdvertisingPageStore(pool.provisioning_state).get()
+    personal_scope_id=''
+    try:
+        profile_context=await asyncio.wait_for(pool.resolver.resolve(clean_profile),timeout=3)
+        personal_scope_id=str(profile_context.cookies.get('c_user') or '')
+    except (asyncio.TimeoutError,ProfileContextError):
+        pass
     return {
         'ok':True,
         **entities,
         'ad_account_bindings':ad_account_bindings,
         'fan_pages':fan_pages,
+        'advertising_page':advertising_page,
+        'personal_scope_id':personal_scope_id,
     }
 
 @app.post('/api/v1/jobs',response_model=JobAccepted,dependencies=[Depends(require_key)])

@@ -272,7 +272,7 @@ async def inspect_profile_pages(resolver: Any, profile: str, target: str) -> dic
     context = await asyncio.wait_for(resolver.resolve(profile), timeout=12)
     progress = {'stage':'opening_browser'}
     async def probe():
-        async with FacebookBusinessBrowser(context, v8_old_space_mb=256) as browser:
+        async with FacebookBusinessBrowser(context, v8_old_space_mb=128) as browser:
             async def memory_guard():
                 while True:
                     memory = _cgroup_memory_snapshot_mb()

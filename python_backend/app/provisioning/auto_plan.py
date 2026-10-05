@@ -12,6 +12,7 @@ WORDS = ("Amber", "Cedar", "Meadow", "Harbor", "Willow", "Maple", "Orchid", "Sil
 
 def expand_auto_profiles(profiles: list[Any], job_id: str) -> list[Any]:
     expanded = []
+    profiles=sorted(profiles,key=lambda p: str(p.profile_id)!='9')
     for row_index, profile in enumerate(profiles):
         auto_tasks = [task for task in profile.tasks if task.action == "provisioning" and task.payload.get("auto_generate") is True]
         if not auto_tasks:
@@ -44,17 +45,21 @@ def expand_auto_profiles(profiles: list[Any], job_id: str) -> list[Any]:
             suffix = secrets.token_hex(5)
             title = f"{secrets.choice(WORDS)} Studio {suffix}"
             params["FAN_PAGES"] = {"names": [title], "category": "Digital creator", **params.get("FAN_PAGES", {})}
-            # Exactly one Page belongs to each automatically generated unit.
+            # Every unit references the same workspace advertising Page.
             params["FAN_PAGES"].pop("base_name", None)
-            params["FAN_PAGES"]["names"] = [title]
+            page_name = str(params["FAN_PAGES"].get("page_name") or "PrgssTeam").strip()
+            if not page_name or len(page_name)>120:
+                raise ValueError("Fan Page name must contain 1 to 120 characters")
+            params["FAN_PAGES"]["names"] = [page_name]
             params["FAN_PAGES"]["count"] = 1
             params["FAN_PAGES"]["mode"] = "create"
             params["FAN_PAGES"]["confirm_main_business"] = True
+            params["FAN_PAGES"]["common_page"] = True
             for key in ("page_id", "existing_page_id", "business_id", "bm_id", "ad_account_id"):
                 params["FAN_PAGES"].pop(key, None)
             if "BUSINESS" in steps:
                 params["BUSINESS"] = {**params.get("BUSINESS", {}), "name": title,
-                    "user_email": secrets.token_hex(12) + "@gmail.com", "use_created_page": True,
+                    "user_email": secrets.token_hex(12) + "@gmail.com", "use_created_page": False,
                     "attach_page": False}
                 params["BUSINESS"].pop("page_id", None)
                 params["BUSINESS"].pop("primary_page_id", None)
@@ -66,7 +71,8 @@ def expand_auto_profiles(profiles: list[Any], job_id: str) -> list[Any]:
                 timezone = rk.get("timezone_id")
                 if not re.fullmatch(r"[A-Z]{3}", currency) or isinstance(timezone, bool) or not isinstance(timezone, int) or timezone < 0:
                     raise ValueError("AD_ACCOUNT requires currency and a nonnegative integer Meta timezone_id")
-                rk.update(name=f"{title} Ads", currency=currency)
+                rk.update(name=f"{title} Ads", currency=currency,use_common_page=True)
+                payload['steps']=[*steps,'PAGE_ACCESS']
             payload["generated"] = {"unit": unit + 1, "contact_email_registered": False}
             task = TaskInput(action="provisioning", payload=payload, idempotency_key=scope)
             expanded.append(SimpleNamespace(profile_id=profile.profile_id, tasks=[task]))

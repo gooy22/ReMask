@@ -6,6 +6,7 @@ from .fan_pages_handler import fan_pages_handler
 from .business_handler import business_handler
 from .ad_account_handler import ad_account_handler
 from .funding_handler import funding_handler
+from .page_access_handler import page_access_handler
 
 Handler = Callable[..., Awaitable[dict[str, Any]]]
 
@@ -14,6 +15,7 @@ PROVISIONING_HANDLERS: dict[str, Handler] = {
     "BUSINESS": business_handler,
     "AD_ACCOUNT": ad_account_handler,
     "FUNDING": funding_handler,
+    "PAGE_ACCESS": page_access_handler,
 }
 
 

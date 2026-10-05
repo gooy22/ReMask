@@ -811,6 +811,8 @@ async def ad_account_handler(
         )
 
     rk_name = _clean(params.get("name") or params.get("rk_name"))
+    if params.get('use_common_page') is True and business_id==_clean((getattr(context,'cookies',{}) or {}).get('c_user')):
+        raise ProvisioningError('CREATED_BUSINESS_REQUIRED','Choose a created Business Portfolio; the personal Facebook scope cannot be used for this RK',retryable=False)
     if not rk_name:
         raise ProvisioningError(
             "INVALID_INPUT",
@@ -2861,4 +2863,3 @@ async def ad_account_handler(
         "post_create_verified": True,
         "post_create_verification": post_evidence,
     }
-

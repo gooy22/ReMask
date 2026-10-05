@@ -21,6 +21,7 @@ _MUTATING_BROWSER_STEPS = {
     ProvisioningStep.FAN_PAGES,
     ProvisioningStep.BUSINESS,
     ProvisioningStep.AD_ACCOUNT,
+    ProvisioningStep.PAGE_ACCESS,
 }
 _PROFILE_MUTATION_LAST_FINISHED: dict[str, float] = {}
 _PROFILE_MUTATION_COOLDOWN_SECONDS = max(
@@ -63,9 +64,11 @@ class ProvisioningService:
         self,
         state: ProvisioningStateStore,
         transport: ProvisioningTransport | None = None,
+        profile_resolver: Any = None,
     ) -> None:
         self.state = state
         self.transport = transport or ProvisioningTransport()
+        self.profile_resolver = profile_resolver
 
     async def run(
         self,
@@ -81,6 +84,10 @@ class ProvisioningService:
         parameters = payload.get("parameters") or {}
         if not isinstance(parameters, dict):
             raise ProvisioningError("INVALID_INPUT", "parameters must be an object")
+        rk_params=parameters.get('AD_ACCOUNT',parameters.get('ad_account',{}))
+        if ProvisioningStep.AD_ACCOUNT in steps and isinstance(rk_params,dict) and rk_params.get('use_common_page') is True:
+            if ProvisioningStep.PAGE_ACCESS not in steps:
+                steps.insert(steps.index(ProvisioningStep.AD_ACCOUNT)+1,ProvisioningStep.PAGE_ACCESS)
 
         scope_key = str(
             payload.get("scope_key")
@@ -177,6 +184,8 @@ class ProvisioningService:
                         await _await_profile_mutation_cooldown(profile_id)
                         step_timeout = browser_step_timeout(step)
                         timeout_code = (
+                            "PAGE_ACCESS_TIMEOUT"
+                            if step is ProvisioningStep.PAGE_ACCESS else
                             "FAN_PAGES_TIMEOUT"
                             if step is ProvisioningStep.FAN_PAGES
                             else "BUSINESS_TIMEOUT"
@@ -184,6 +193,8 @@ class ProvisioningService:
                             else "AD_ACCOUNT_TIMEOUT"
                         )
                         timeout_label = (
+                            "Facebook advertising Page access watchdog"
+                            if step is ProvisioningStep.PAGE_ACCESS else
                             "Facebook Fan Page total queue/runtime watchdog"
                             if step is ProvisioningStep.FAN_PAGES
                             else "Meta Business total queue/runtime watchdog"
@@ -194,7 +205,7 @@ class ProvisioningService:
                         try:
                             try:
                                 result = await asyncio.wait_for(
-                                    handler(
+                                    self._run_handler(handler, step,
                                         session,
                                         step_params,
                                         state,
@@ -205,6 +216,7 @@ class ProvisioningService:
                                         profile_id=profile_id,
                                         scope_key=scope_key,
                                         step_state=prior,
+                                        profile_resolver=self.profile_resolver,
                                     ),
                                     timeout=step_timeout,
                                 )
@@ -246,6 +258,11 @@ class ProvisioningService:
                     item_id, profile_id, scope_key, step, result
                 )
                 if step in _MUTATING_BROWSER_STEPS:
+                    if step is ProvisioningStep.BUSINESS and parameters.get('FAN_PAGES',{}).get('common_page') is True:
+                        from .advertising_page import AdvertisingPageStore
+                        config=AdvertisingPageStore(self.state); page=await config.get()
+                        if profile_id==page['owner_profile_id'] and not page.get('owner_business_id'):
+                            await config.patch(owner_business_id=str(result['business_id']))
                     release_browser = getattr(session, "close_business_browser", None)
                     if callable(release_browser):
                         await release_browser()
@@ -276,6 +293,12 @@ class ProvisioningService:
             "steps": completed,
             "state": final_state.as_dict(),
         }
+
+    async def _run_handler(self, handler, step, session, params, snapshot, **kwargs):
+        if step is ProvisioningStep.FAN_PAGES and params.get('common_page') is True:
+            from .advertising_page import ensure_common_page
+            return await ensure_common_page(session,params,self.state,self.profile_resolver)
+        return await handler(session,params,snapshot,**kwargs)
 
     @staticmethod
     def _parse_steps(raw: Any) -> list[ProvisioningStep]:
