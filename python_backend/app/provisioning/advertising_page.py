@@ -60,7 +60,9 @@ async def ensure_common_page(session: Any, params: dict, state: Any, resolver: A
                     from .models import ProvisioningStep
                     await state.set_running('workspace-common-page-'+owner,owner,'workspace-common-page',ProvisioningStep.FAN_PAGES)
                     creation={'names':[page['name']],'count':1,'category':params.get('category') or 'Digital creator',
-                         'confirm_main_business':True}
+                         'confirm_main_business':True,'require_policy_consent':True,
+                         'policies_accepted':page.get('policies_accepted') is True and page.get('policies_name')==page['name']
+                             and page.get('policies_owner_profile_id')==owner}
                     if known: creation.update(mode='confirm_existing',existing_page_id=known[0]['id'],page_name=known[0]['name'])
                     result=await fan_pages_handler(owner_session,creation, {},
                         provisioning_state=state,item_id='workspace-common-page-'+owner,

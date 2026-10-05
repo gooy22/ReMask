@@ -18,6 +18,23 @@ from app.session import ProfileContextError, ProfileResolver
 
 
 class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_common_page_missing_checkpoint_repair_preserves_job_and_does_not_enqueue(self):
+        job_id,item_id=self._seed(task_status='FAILED')
+        task=(await self.store.tasks(item_id))[0]
+        with self.store._connect() as con:
+            con.execute('UPDATE job_tasks SET payload_json=? WHERE id=?',
+                (json.dumps({'steps':['FAN_PAGES'],'parameters':{'FAN_PAGES':{'common_page':True}}}),task['id']))
+        await self.store.set_task_failed(task['id'],'TASK_FAILED',
+            'cannot checkpoint FAN_PAGES: step row does not exist for item workspace-common-page-9')
+        await self.store.finalize_item(item_id)
+        await self.store.init()
+        view=await self.store.job_view(job_id)
+        self.assertEqual(view['id'],job_id)
+        self.assertEqual(view['status'],'FAILED')
+        self.assertTrue(view['items'][0]['retryable'])
+        self.assertEqual(await self.store.queued_item_ids(job_id),[])
+        self.assertEqual(await self.store.retry_failed(job_id),1)
+
     async def test_legacy_fp_crash_restores_same_job_retry_and_preserves_submit_intent(self):
         job_id, item_id = self._seed(task_status='FAILED')
         task = (await self.store.tasks(item_id))[0]

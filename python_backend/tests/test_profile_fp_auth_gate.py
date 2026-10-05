@@ -7,6 +7,28 @@ from app.facebook_business_browser import BrowserBusinessError, BrowserPreflight
 
 
 class ProfileFpAuthGateTests(unittest.IsolatedAsyncioTestCase):
+    async def test_page_policy_consent_rejects_unrelated_failed_job(self):
+        fake=SimpleNamespace(job_view=AsyncMock(return_value={'items':[{'error_code':'SESSION_EXPIRED','tasks':[]}]}))
+        with patch.object(api,'store',fake):
+            with self.assertRaises(api.HTTPException) as failure:
+                await api.retry_failed('saved-job',{'consent_page_policies':True})
+        self.assertEqual(failure.exception.status_code,409)
+
+    async def test_page_policy_consent_is_bound_to_exact_reviewed_common_page(self):
+        view={'items':[{'error_code':'PAGE_POLICIES_CONFIRMATION_REQUIRED','tasks':[{
+            'payload':{'steps':['FAN_PAGES'],'parameters':{'FAN_PAGES':{'common_page':True}}}}]}]}
+        fake=SimpleNamespace(job_view=AsyncMock(return_value=view),retry_failed=AsyncMock(return_value=1))
+        worker=SimpleNamespace(provisioning_state=object(),enqueue_job=AsyncMock())
+        page_store=SimpleNamespace(get=AsyncMock(return_value={'name':'PrgssTeam','owner_profile_id':'9'}),patch=AsyncMock())
+        with patch.object(api,'store',fake),patch.object(api,'pool',worker),patch.object(api,'mirror',SimpleNamespace(enabled=False)), \
+             patch.object(api,'_require_fp_auth_ready',new=AsyncMock()), \
+             patch('app.provisioning.advertising_page.AdvertisingPageStore',return_value=page_store):
+            result=await api.retry_failed('saved-job',{'consent_page_policies':True})
+        self.assertEqual(result.requeued,1)
+        self.assertEqual(page_store.patch.call_args.kwargs['policies_name'],'PrgssTeam')
+        self.assertEqual(page_store.patch.call_args.kwargs['policies_owner_profile_id'],'9')
+        worker.enqueue_job.assert_awaited_once_with('saved-job')
+
     async def test_page_auth_failure_overrides_missing_bm_create_surface(self):
         for code in BROWSER_TERMINAL_ACCESS_CODES:
             with self.subTest(code=code):

@@ -4353,38 +4353,19 @@ class FacebookBusinessBrowser:
             except Exception:
                 return False
 
-        await self.page.wait_for_timeout(700)
-
-        try:
-            options = self.page.get_by_role("option")
-            count = min(await options.count(), 20)
-            exact = None
-            fallback = None
-            for index in range(count):
-                option = options.nth(index)
-                if not await option.is_visible():
-                    continue
-                if fallback is None:
-                    fallback = option
-                text = _clean(await option.inner_text())
-                if _clean(category).casefold() in text.casefold():
-                    exact = option
-                    break
-            chosen = exact or fallback
-            if chosen is not None:
-                await chosen.click()
+        # Category suggestions arrive through Meta's remote typeahead. A key
+        # press without a real suggestion is not a selected category.
+        deadline=time.monotonic()+8
+        while time.monotonic()<deadline:
+            exact=self.page.get_by_role("option",name=re.compile(rf"^\s*{re.escape(_clean(category))}\s*$",re.I))
+            if await exact.count()!=1:
+                exact=self.page.get_by_text(_clean(category),exact=True)
+            if await exact.count()==1 and await exact.is_visible():
+                await exact.click(timeout=3000)
                 await self.page.wait_for_timeout(350)
                 return True
-        except Exception:
-            pass
-
-        try:
-            await field.press("ArrowDown")
-            await field.press("Enter")
-            await self.page.wait_for_timeout(350)
-            return True
-        except Exception:
-            return False
+            await self.page.wait_for_timeout(250)
+        return False
 
     async def _fan_page_snapshot(self) -> list[dict[str, Any]]:
         try:
@@ -4402,6 +4383,8 @@ class FacebookBusinessBrowser:
         bio: str = "",
         before_pages: list[dict[str, Any]] | None = None,
         before_submit: CheckpointCallback | None = None,
+        require_policy_consent: bool = False,
+        policies_accepted: bool = False,
     ) -> dict[str, Any]:
         """Create one Facebook Page through Meta's own profile-bound UI."""
         name = _clean(page_name)
@@ -4529,6 +4512,19 @@ class FacebookBusinessBrowser:
             )
 
         await self.page.wait_for_timeout(500)
+
+        if require_policy_consent and not policies_accepted:
+            diag=await self._diagnostic('fan_page_policies_confirmation')
+            diag.update(page_name=name,category=category_name,profile_id=self.profile_id)
+            try:
+                import base64
+                preview=await self.page.screenshot(type='jpeg',quality=65,timeout=3000)
+                if len(preview)<750000:
+                    diag['form_preview']='data:image/jpeg;base64,'+base64.b64encode(preview).decode('ascii')
+            except Exception: pass
+            raise BrowserBusinessError('PAGE_POLICIES_CONFIRMATION_REQUIRED',
+                'Создание PrgssTeam требует подтверждения правил Meta для страниц. Форма подготовлена, Create Page не нажата.',
+                retryable=True,diagnostic=diag)
 
         async def mark_submit_intent() -> None:
             if before_submit is not None:

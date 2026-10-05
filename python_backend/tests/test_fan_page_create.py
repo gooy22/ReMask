@@ -67,6 +67,35 @@ class FanPageProvisioningStructureTests(unittest.TestCase):
 
 
 class FanPageProvisioningRuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_shared_page_policy_review_stops_before_create_callback(self):
+        browser=FacebookBusinessBrowser(SimpleNamespace(profile_id='9'))
+        browser.page=SimpleNamespace(wait_for_timeout=AsyncMock(),screenshot=AsyncMock(return_value=b'preview'))
+        browser._goto=AsyncMock()
+        browser._fill_first=AsyncMock(return_value=True)
+        browser._fill_fan_page_category=AsyncMock(return_value=True)
+        browser._diagnostic=AsyncMock(return_value={'body_excerpt':'By creating a Page, you agree to the Pages policies'})
+        browser._click_named_single_attempt=AsyncMock()
+        submit=AsyncMock()
+        with self.assertRaises(BrowserBusinessError) as exc:
+            await browser.create_fan_page(page_name='PrgssTeam',category='Digital creator',before_pages=[],
+                before_submit=submit,require_policy_consent=True)
+        self.assertEqual(exc.exception.code,'PAGE_POLICIES_CONFIRMATION_REQUIRED')
+        self.assertEqual(exc.exception.diagnostic['page_name'],'PrgssTeam')
+        self.assertTrue(exc.exception.diagnostic['form_preview'].startswith('data:image/jpeg;base64,'))
+        submit.assert_not_awaited()
+        browser._click_named_single_attempt.assert_not_awaited()
+
+    async def test_category_requires_actual_suggestion_instead_of_unconfirmed_keys(self):
+        field=SimpleNamespace(is_visible=AsyncMock(return_value=True),is_editable=AsyncMock(return_value=True),fill=AsyncMock())
+        inputs=SimpleNamespace(count=AsyncMock(return_value=1),nth=lambda index:field)
+        absent=SimpleNamespace(count=AsyncMock(return_value=0))
+        page=SimpleNamespace(get_by_label=lambda pattern:inputs,get_by_placeholder=lambda pattern:inputs,
+            get_by_role=lambda *args,**kwargs:absent,get_by_text=lambda *args,**kwargs:absent,wait_for_timeout=AsyncMock())
+        browser=FacebookBusinessBrowser(SimpleNamespace(profile_id='9')); browser.page=page
+        with patch('app.facebook_business_browser.time.monotonic',side_effect=[0,0,9]):
+            self.assertFalse(await browser._fill_fan_page_category('Digital creator'))
+        field.fill.assert_awaited_once_with('Digital creator')
+
     async def test_creation_reuses_supplied_inventory_without_loading_pages_again(self):
         browser = FacebookBusinessBrowser(SimpleNamespace(profile_id='9'))
         browser._fan_page_snapshot = AsyncMock(side_effect=RuntimeError('Page crashed'))

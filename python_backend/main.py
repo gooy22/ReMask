@@ -2968,10 +2968,21 @@ async def get_job(job_id: str):
     return view
 
 @app.post('/api/v1/jobs/{job_id}/retry-failed',response_model=RetryResponse,dependencies=[Depends(require_key)])
-async def retry_failed(job_id: str) -> RetryResponse:
+async def retry_failed(job_id: str, consent: dict | None = Body(default=None)) -> RetryResponse:
     current_view=await store.job_view(job_id)
     if not current_view:
         raise HTTPException(status_code=404,detail='job not found')
+    if isinstance(consent,dict) and consent.get('consent_page_policies') is True:
+        eligible=any(item.get('error_code')=='PAGE_POLICIES_CONFIRMATION_REQUIRED' and
+            any(((task.get('payload') or {}).get('parameters',{}).get('FAN_PAGES') or {}).get('common_page') is True
+                for task in item.get('tasks',[])) for item in current_view.get('items',[]))
+        if not eligible:
+            raise HTTPException(status_code=409,detail='PAGE_POLICY_REVIEW_JOB_REQUIRED')
+        from app.provisioning.advertising_page import AdvertisingPageStore
+        page_store=AdvertisingPageStore(pool.provisioning_state)
+        page=await page_store.get()
+        await page_store.patch(policies_accepted=True,policies_name=page['name'],
+            policies_owner_profile_id=page['owner_profile_id'],policies_consent_at=int(time.time()))
     fp_profiles=_view_fan_page_retry_profile_ids(current_view)
     if fp_profiles:
         await _require_fp_auth_ready(fp_profiles)

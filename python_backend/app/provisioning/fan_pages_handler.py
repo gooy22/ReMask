@@ -922,6 +922,8 @@ async def fan_pages_handler(
                         bio=bio,
                         before_pages=current_pages,
                         before_submit=before_submit,
+                        **({'require_policy_consent':True,'policies_accepted':params.get('policies_accepted') is True}
+                           if params.get('require_policy_consent') is True else {}),
                     )
                 break
 

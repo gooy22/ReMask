@@ -305,7 +305,9 @@ try {
     }
 
     if ($action === 'retry' || $action === 'retry_failed') {
-        $result = rmx_pwj_worker_request('POST', '/api/v1/jobs/' . rawurlencode($jobId) . '/retry-failed');
+        $consent = ($input['consent_page_policies'] ?? false) === true
+            ? ['consent_page_policies'=>true] : null;
+        $result = rmx_pwj_worker_request('POST', '/api/v1/jobs/' . rawurlencode($jobId) . '/retry-failed', $consent, 120);
         rmx_pwj_out(['ok'=>true,'result'=>$result]);
     }
 

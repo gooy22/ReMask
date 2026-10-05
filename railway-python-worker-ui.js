@@ -946,13 +946,28 @@ function pythonWorkerRenderJob(job) {
           const summary = document.createElement('summary');
           summary.textContent = 'Диагностика Confirm / FP';
           const pre = document.createElement('pre');
-          pre.textContent = JSON.stringify(fpDiagnostic, null, 2);
+          const diagnosticText={...fpDiagnostic}; delete diagnosticText.form_preview;
+          pre.textContent = JSON.stringify(diagnosticText, null, 2);
           pre.style.whiteSpace = 'pre-wrap';
           pre.style.maxHeight = '360px';
           pre.style.overflow = 'auto';
           details.appendChild(summary);
           details.appendChild(pre);
           errorTd.appendChild(details);
+          if (fpDiagnostic.stage === 'fan_page_policies_confirmation') {
+            const notice=document.createElement('div');
+            notice.textContent='PrgssTeam · профиль 9 · Digital creator. Создание страницы означает принятие правил Meta для страниц, групп и мероприятий.';
+            errorTd.appendChild(notice);
+            if (/^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(fpDiagnostic.form_preview || '') && fpDiagnostic.form_preview.length<1000000) {
+              const preview=document.createElement('img'); preview.src=fpDiagnostic.form_preview;
+              preview.alt='Подготовленная форма Meta: PrgssTeam'; preview.style.maxWidth='100%';
+              errorTd.appendChild(preview);
+            }
+            const accept=document.createElement('button'); accept.type='button'; accept.className='btn btn-primary';
+            accept.textContent='Принять правила Meta и продолжить';
+            accept.addEventListener('click',function(){pythonWorkerRetryFailed({consent_page_policies:true});});
+            errorTd.appendChild(accept);
+          }
         }
 
         tr.appendChild(profileTd);
@@ -2017,7 +2032,7 @@ async function pythonWorkerPoll() {
 
 window.pythonWorkerStartBusiness = pythonWorkerStartBusiness;
 
-async function pythonWorkerRetryFailed() {
+async function pythonWorkerRetryFailed(options) {
   const batchIds = Array.isArray(pythonWorkerUiState.batchJobIds)
     ? pythonWorkerUiState.batchJobIds.slice()
     : [];
@@ -2121,7 +2136,8 @@ async function pythonWorkerRetryFailed() {
     pythonWorkerSetText('pythonPwStatus', 'Повторно ставлю FAILED JobItem в очередь...');
     const data = await pythonWorkerBridge({
       action: 'retry_failed',
-      job_id: pythonWorkerUiState.jobId
+      job_id: pythonWorkerUiState.jobId,
+      ...(options && options.consent_page_policies === true ? {consent_page_policies:true} : {})
     });
 
     const requeued = Number((data && data.result && data.result.requeued) || 0);
