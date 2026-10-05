@@ -2265,19 +2265,11 @@ async def profile_live_inventory(
                         return settings_inventory
                     except BrowserBusinessError as exc:
                         last_error=exc
-                        if (
-                            attempt == 0
-                            and exc.code in {
-                                'CHECKPOINT_REQUIRED',
-                                'SESSION_EXPIRED',
-                                'TWO_FACTOR_REQUIRED',
-                            }
-                        ):
+                        if attempt == 0 and exc.code == 'SESSION_EXPIRED':
                             log.warning(
-                                'live inventory profile=%s business=%s auth redirect=%s; reopening profile browser once',
+                                'live inventory profile=%s business=%s session expired; reopening profile browser once',
                                 clean_profile,
                                 business_id,
-                                exc.code,
                             )
                             try:
                                 await browser.close()
@@ -2293,6 +2285,14 @@ async def profile_live_inventory(
                                 timeout=browser_reopen_timeout,
                             )
                             continue
+                        if exc.code in {
+                            'CHECKPOINT_REQUIRED',
+                            'TWO_FACTOR_REQUIRED',
+                        }:
+                            # A security challenge will not disappear by
+                            # reopening the same cookie-bound browser. Stop
+                            # immediately instead of hammering Meta.
+                            raise
                         raise
                 if last_error is not None:
                     raise last_error
@@ -2384,12 +2384,19 @@ async def profile_live_inventory(
                         detail='LIVE_INVENTORY_TIMEOUT:rk_inventory',
                     ) from exc
                 except BrowserBusinessError as exc:
+                    if exc.code in {
+                        'CHECKPOINT_REQUIRED',
+                        'TWO_FACTOR_REQUIRED',
+                    }:
+                        # Preserve the last confirmed Workspace snapshot and
+                        # propagate the exact auth barrier to the sync caller.
+                        # Continuing into sibling BMs would only repeat the same
+                        # account-level checkpoint.
+                        raise
                     row['ad_accounts_source']=(
                         'business_auth_blocked'
                         if exc.code in {
-                            'CHECKPOINT_REQUIRED',
                             'SESSION_EXPIRED',
-                            'TWO_FACTOR_REQUIRED',
                         }
                         else 'browser_error'
                     )
@@ -2398,9 +2405,7 @@ async def profile_live_inventory(
                     if isinstance(getattr(exc, 'diagnostic', None), dict):
                         row['browser_error_diagnostic']=exc.diagnostic
                     row['auth_blocked']=exc.code in {
-                        'CHECKPOINT_REQUIRED',
                         'SESSION_EXPIRED',
-                        'TWO_FACTOR_REQUIRED',
                     }
                     warnings.append(
                         f'BM {business_id}: {exc.code}'
