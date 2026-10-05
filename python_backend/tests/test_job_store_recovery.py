@@ -302,6 +302,57 @@ class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.store.item(item))['status'],'FAILED')
         self.assertEqual((await self.store.tasks(item))[0]['status'],'FAILED')
 
+    async def test_legacy_preconfirmed_navigation_failure_retries_once_then_stops(self):
+        job,item=self._seed(task_status='FAILED')
+        task=(await self.store.tasks(item))[0]
+        bm='1630095732002500'
+        rk='1123543757207776'
+        page='1324227614109193'
+        await self.provisioning_state.complete(
+            item,'4','default',ProvisioningStep.BUSINESS,{'business_id':bm},
+        )
+        await self.provisioning_state.complete(
+            item,'4','default',ProvisioningStep.AD_ACCOUNT,
+            {'business_id':bm,'ad_account_id':rk},
+        )
+        await self.provisioning_state.set_running(
+            item,'4','default',ProvisioningStep.PAGE_ACCESS,
+        )
+        await self.provisioning_state.checkpoint(
+            item,'4','default',ProvisioningStep.PAGE_ACCESS,
+            {'phase':'TARGET_PAGE_ACCESS_OWNER_CONFIRMED','page_id':page,
+             'business_id':bm,'ad_account_id':rk,
+             'owner_confirmed_operator_assignment_retry':True,
+             'operator_exact_asset_route_retry':True},
+        )
+        message='Meta Business Settings navigation failed before operator selection'
+        await self.provisioning_state.fail(
+            item,'4','default',ProvisioningStep.PAGE_ACCESS,
+            'FACEBOOK_NAVIGATION_FAILED',message,
+        )
+        await self.store.set_task_failed(
+            task['id'],'FACEBOOK_NAVIGATION_FAILED',message,retryable=True,
+        )
+        await self.store.finalize_item(item)
+
+        await self.store.init()
+        self.assertEqual((await self.store.item(item))['status'],'QUEUED')
+        access=await self.provisioning_state.step(item,ProvisioningStep.PAGE_ACCESS)
+        self.assertTrue(access['result']['operator_preconfirmed_navigation_retry'])
+        self.assertEqual(access['result']['phase'],'TARGET_PAGE_ACCESS_OWNER_CONFIRMED')
+
+        await self.provisioning_state.fail(
+            item,'4','default',ProvisioningStep.PAGE_ACCESS,
+            'FACEBOOK_NAVIGATION_FAILED',message,
+        )
+        await self.store.set_task_failed(
+            task['id'],'FACEBOOK_NAVIGATION_FAILED',message,retryable=True,
+        )
+        await self.store.finalize_item(item)
+        await self.store.init()
+        self.assertEqual((await self.store.item(item))['status'],'FAILED')
+        self.assertEqual((await self.store.tasks(item))[0]['status'],'FAILED')
+
     async def test_legacy_owner_approval_recovery_refuses_unsubmitted_or_mismatched_state(self):
         for suffix,phase,rk_business in (
             ('pre-submit','TARGET_PAGE_ACCESS_CLICK_INTENT','1630095732002500'),
