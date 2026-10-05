@@ -509,6 +509,38 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
             browser._open_pages_add_action.assert_not_awaited()
             checkpoint.assert_not_awaited()
 
+    async def test_operator_page_selection_never_navigates_selected_asset_route(self):
+        class Locator:
+            def __init__(self, rows=None, visible=False):
+                self.rows=rows
+                self.visible=visible
+                self.first=self
+            async def count(self):
+                return len(self.rows) if self.rows is not None else (1 if self.visible else 0)
+            def nth(self,index): return self.rows[index]
+            async def is_visible(self): return self.visible
+            def filter(self,**kwargs): return self
+            def get_by_role(self,*args,**kwargs): return Locator()
+            def get_by_text(self,*args,**kwargs): return Locator()
+
+        rows=Locator(rows=[])
+        page=SimpleNamespace(
+            get_by_role=lambda role,**kwargs: rows if role=='row' else Locator(),
+            get_by_text=lambda *args,**kwargs: Locator(),
+            locator=lambda *args,**kwargs: SimpleNamespace(
+                inner_text=AsyncMock(return_value='Business assets Pages')),
+            url='https://business.facebook.com/latest/settings/pages/?business_id='+BM,
+        )
+        browser=SimpleNamespace(
+            page=page,
+            _goto=AsyncMock(side_effect=AssertionError('selected_asset_id navigation forbidden')),
+            _diagnostic=AsyncMock(return_value={'stage':'operator'}),
+        )
+        with self.assertRaises(BrowserBusinessError) as caught:
+            await _select_page(browser,'PrgssTeam',PAGE,BM)
+        self.assertEqual(caught.exception.code,'PAGE_OPERATOR_PAGE_SELECTION_UNAVAILABLE')
+        browser._goto.assert_not_awaited()
+
     async def test_operator_page_selection_prefers_exact_page_id_row_over_duplicate_name_text(self):
         clicks=[]
         class Locator:
