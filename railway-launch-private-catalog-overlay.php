@@ -110,10 +110,15 @@ final class RemaskPrivateLaunchCatalog
         ];
     }
 
-    public static function readiness(array $catalog, string $accountId, array $proof = []): array {
-        $funding = self::asset($catalog, 'funding', $accountId);
+    public static function readiness(
+        array $catalog,
+        string $accountId,
+        array $proof = [],
+        array $paymentProof = []
+    ): array {
+        $fundingAsset = self::asset($catalog, 'funding', $accountId);
         $pages = (array)($catalog['pages']['data'] ?? []);
-        $target = self::id($funding['id']);
+        $target = self::id($fundingAsset['id']);
         $verified = [];
         if (($proof['profile_id'] ?? '') === $catalog['profile'] && ($proof['account_id'] ?? '') === $target
             && ($proof['checked_live'] ?? null) === true && ($proof['account_scope_verified'] ?? null) === true
@@ -134,6 +139,7 @@ final class RemaskPrivateLaunchCatalog
         foreach ($verified as $id => $row) {
             if (!in_array($id, array_column($pages,'id'), true)) $pages[] = $row;
         }
+
         // Saved onboarding Confirm remains distinct from live RK permissions.
         if (($proof['profile_id'] ?? '') === $catalog['profile'] && ($proof['account_id'] ?? '') === $target) {
             foreach ((array)($proof['page_confirmations'] ?? []) as $confirmation) {
@@ -149,22 +155,95 @@ final class RemaskPrivateLaunchCatalog
                 unset($page);
             }
         }
+
         $pageStatus = $verified !== [] ? 'VERIFIED' : 'NOT_VERIFIED';
         $phone='UNKNOWN';
         if (($proof['profile_id'] ?? '') === $catalog['profile'] && ($proof['account_id'] ?? '') === $target
             && ($proof['checked_live'] ?? null) === true && ($proof['account_scope_verified'] ?? null) === true
             && (int)($proof['checked_at'] ?? 0) >= time()-120 && (int)($proof['checked_at'] ?? 0) <= time()+5
-            && in_array($proof['advertiser_phone']['status'] ?? '', ['REQUIRED','VERIFIED'], true)) $phone=$proof['advertiser_phone']['status'];
+            && in_array($proof['advertiser_phone']['status'] ?? '', ['REQUIRED','VERIFIED'], true)) {
+            $phone=$proof['advertiser_phone']['status'];
+        }
+
+        // Payment proof is accepted only from a fresh worker call made for this
+        // exact profile/RK in this request. Never promote a cached vault state,
+        // funding ID or success toast into live linkage.
+        $paymentSources=[
+            'private_facebook_billing_ui',
+            'private_facebook_selected_rk_payment_tab',
+        ];
+        $paymentExact=(
+            ($paymentProof['profile_id'] ?? '') === $catalog['profile']
+            && ($paymentProof['account_id'] ?? '') === $target
+            && ($paymentProof['checked_live'] ?? null) === true
+            && ($paymentProof['account_scope_verified'] ?? null) === true
+            && in_array($paymentProof['source'] ?? '', $paymentSources, true)
+        );
+        $paymentMethods=[];
+        if ($paymentExact) {
+            foreach ((array)($paymentProof['payment_methods'] ?? []) as $method) {
+                if (!is_array($method)) continue;
+                $type=trim((string)($method['type'] ?? ''));
+                $last4=trim((string)($method['last4'] ?? ''));
+                if ($type==='' || strlen($type)>40 || !preg_match('/^\d{4}$/D',$last4)) continue;
+                $paymentMethods[]=[
+                    'type'=>preg_replace('/[^A-Za-z ]/','',$type),
+                    'last4'=>$last4,
+                    'linkage_status'=>'OBSERVED',
+                ];
+                if (count($paymentMethods)>=10) break;
+            }
+        }
+        $paymentVerification=$paymentExact
+            ? (string)($paymentProof['verification_status'] ?? 'UNVERIFIED')
+            : 'NOT_CHECKED';
+        if (!in_array($paymentVerification,['LINKED','NONE','UNVERIFIED'],true)) {
+            $paymentVerification=$paymentExact ? 'UNVERIFIED' : 'NOT_CHECKED';
+        }
+        if ($paymentVerification==='LINKED'
+            && (($paymentProof['card_linked'] ?? null)!==true || $paymentMethods===[])) {
+            $paymentVerification='UNVERIFIED';
+        }
+        if ($paymentVerification==='NONE'
+            && (($paymentProof['card_linked'] ?? null)!==false || $paymentMethods!==[])) {
+            $paymentVerification='UNVERIFIED';
+        }
+        $paymentDiagnostic=[];
+        $rawPaymentDiagnostic=is_array($paymentProof['diagnostic'] ?? null)
+            ? $paymentProof['diagnostic'] : [];
+        foreach (['code','stage','path','masked_method_count','ui_preview_unavailable'] as $key) {
+            $value=$rawPaymentDiagnostic[$key] ?? null;
+            if (is_string($value) && strlen($value)<=160) $paymentDiagnostic[$key]=$value;
+            elseif (is_int($value) && $value>=0 && $value<=100) $paymentDiagnostic[$key]=$value;
+        }
+        $payment=[
+            'status'=>$paymentVerification,
+            'verification_status'=>$paymentVerification,
+            'card_linked'=>$paymentVerification==='LINKED' ? true
+                : ($paymentVerification==='NONE' ? false : null),
+            'payment_methods'=>$paymentMethods,
+            'account_scope_verified'=>$paymentExact,
+            'checked_live'=>$paymentExact,
+            'source'=>$paymentExact ? (string)$paymentProof['source'] : '',
+            // A visible linked card is not proof that a charge/funding source
+            // assignment was financially verified.
+            'funding_verified'=>false,
+            'diagnostic'=>$paymentDiagnostic,
+        ];
+
+        $warnings=[];
+        if ($verified===[]) $warnings[]='Доступ FP для рекламы в выбранном РК не подтверждён.';
+        if ($paymentVerification!=='LINKED') $warnings[]='Привязка карты в выбранном РК не подтверждена live-проверкой Meta.';
         return [
-            'account_id'=>$funding['id'], 'catalog_only'=>true, 'status'=>'NOT_VERIFIED',
+            'account_id'=>$fundingAsset['id'], 'catalog_only'=>true, 'status'=>'NOT_VERIFIED',
             'pages'=>['status'=>$pageStatus, 'count'=>count($pages), 'data'=>$pages,
                       'ad_account_page_access_verified'=>$verified !== [],
                       'checked_live'=>($proof['checked_live'] ?? false) === true,
                       'diagnostic'=>$proof['diagnostic'] ?? []],
             'pixels'=>['status'=>'NOT_CHECKED'], 'media'=>['status'=>'NOT_CHECKED'],
             'advertiser_phone'=>['status'=>$phone],
-            'funding'=>['status'=>'NOT_CHECKED', 'funding_verified'=>false],
-            'warnings'=>$verified !== [] ? [] : ['Доступ FP для рекламы в выбранном РК не подтверждён.'],
+            'funding'=>$payment,
+            'warnings'=>$warnings,
             '_cache'=>$catalog['_cache'],
         ];
     }
@@ -265,8 +344,8 @@ try {
     $base = rtrim((string)(getenv('REMASK_PYTHON_WORKER_URL') ?: 'http://127.0.0.1:8081'),'/');
     $key = (string)(getenv('REMASK_WORKER_API_KEY') ?: '');
     if ($key === '') throw new RuntimeException('PAGE_ACCESS_WORKER_UNAVAILABLE');
+
     // Fetch historical Confirm before starting the expensive live browser probe.
-    // A worker/transport interruption cannot erase a completed onboarding step.
     $savedCtx=stream_context_create(['http'=>['method'=>'GET',
         'header'=>"Accept: application/json\r\nX-Remask-Worker-Key: ".$key."\r\n",
         'timeout'=>5,'ignore_errors'=>true,'follow_location'=>0]]);
@@ -280,6 +359,7 @@ try {
         $confirmations[]=['id'=>$page['id'],'main_business_id'=>$page['main_business_id'],
             'main_business_confirmed'=>true,'source'=>'saved_worker_confirmation'];
     }
+
     $ctx = stream_context_create(['http'=>['method'=>'GET',
         'header'=>"Accept: application/json\r\nX-Remask-Worker-Key: ".$key."\r\n",
         'timeout'=>82,'ignore_errors'=>true,'follow_location'=>0]]);
@@ -293,20 +373,60 @@ try {
     if (!isset($proof['profile_id'])) $proof['profile_id']=$profile;
     if (!isset($proof['account_id'])) $proof['account_id']=$account;
     $proof['page_confirmations']=array_merge($confirmations,(array)($proof['page_confirmations'] ?? []));
-    MetaEndpoint::ok(RemaskPrivateLaunchCatalog::readiness($catalog,$account,$proof));
+
+    // Payment inspection is expensive and uses the same single Chromium slot.
+    // Run it only when this RK already has at least one live-proven Page.
+    $pageReady=false;
+    if (($proof['profile_id'] ?? '')===$profile && ($proof['account_id'] ?? '')===$account
+        && ($proof['checked_live'] ?? null)===true && ($proof['account_scope_verified'] ?? null)===true
+        && ($proof['status'] ?? '')==='VERIFIED') {
+        foreach ((array)($proof['data'] ?? []) as $row) {
+            if (is_array($row) && ($row['account_id'] ?? '')===$account
+                && ($row['ad_account_page_access_verified'] ?? null)===true
+                && ($row['source'] ?? '')==='scoped_private_promotable_pages') {
+                $pageReady=true; break;
+            }
+        }
+    }
+
+    $paymentProof=['diagnostic'=>['code'=>$pageReady
+        ? 'PAYMENT_RESULT_UNAVAILABLE'
+        : 'PAYMENT_SKIPPED_PAGE_ACCESS_UNVERIFIED']];
+    if ($pageReady) {
+        $paymentCtx=stream_context_create(['http'=>['method'=>'GET',
+            'header'=>"Accept: application/json\r\nX-Remask-Worker-Key: ".$key."\r\n",
+            'timeout'=>72,'ignore_errors'=>true,'follow_location'=>0]]);
+        $paymentRaw=@file_get_contents(
+            $base.'/api/v1/profiles/'.rawurlencode($profile).'/payment-methods?account_id='.rawurlencode($account),
+            false,$paymentCtx
+        );
+        $decoded=is_string($paymentRaw) ? json_decode($paymentRaw,true) : null;
+        if (is_array($decoded)
+            && ($decoded['profile_id'] ?? '')===$profile
+            && ($decoded['account_id'] ?? '')===$account) {
+            $paymentProof=$decoded;
+        } else {
+            $code=is_array($decoded) ? (string)($decoded['detail'] ?? '') : '';
+            $known=['CHECKPOINT_REQUIRED','SESSION_EXPIRED','TWO_FACTOR_REQUIRED',
+                'PROFILE_CONTEXT_ERROR','PAYMENT_INSPECTION_TIMEOUT','PAYMENT_BROWSER_CRASHED',
+                'PAYMENT_UI_UNAVAILABLE'];
+            $paymentProof=['diagnostic'=>['code'=>in_array($code,$known,true)
+                ? $code : 'PAYMENT_RESULT_UNAVAILABLE']];
+        }
+    }
+
+    MetaEndpoint::ok(RemaskPrivateLaunchCatalog::readiness(
+        $catalog,$account,$proof,$paymentProof
+    ));
 } catch (Throwable $e) { MetaEndpoint::fail($e); }
 READINESS
 );
 $workspacePath=$root.'/scripts/workspace.js';
 $workspace=file_get_contents($workspacePath);
-$start=is_string($workspace) ? strpos($workspace,'async function checkAssetsSelection(){') : false;
-$end=$start!==false ? strpos($workspace,'async function showFunding(){',$start) : false;
-if ($start===false || $end===false) throw new RuntimeException('Assets readiness UI boundary missing');
-$workspace=substr_replace($workspace, <<<'READINESS_UI'
-async function checkAssetsSelection(){
+$start=is_string($workspace) ? strpos($workspace,'async function checkAssetsSelection(){
   const rows=selectedRows('ad_accounts');
   if(!rows.length)return;
-  openModal(`Assets — ${rows.length} РК`,`<div class="ws-muted mb-2">Проверка доступа FP в выбранном РК через FB-сессию профиля.</div><div id="assetReadinessProgress">Проверка Meta…</div><div id="assetReadinessRows"></div>`,'',null);
+  openModal(`Assets — ${rows.length} РК`,`<div class="ws-muted mb-2">Проверка доступа FP и live-состояния оплаты в выбранном РК через FB-сессию профиля.</div><div id="assetReadinessProgress">Проверка Meta…</div><div id="assetReadinessRows"></div>`,'',null);
   const body=$('assetReadinessRows'), progress=$('assetReadinessProgress');
   await concurrent(rows,1,async r=>apiJson('ajax/metaAssetReadiness.php',post({profile:r.profile,account_id:r.id})),(done,total,res,idx)=>{
     const r=rows[idx], block=document.createElement('div');
@@ -316,18 +436,31 @@ async function checkAssetsSelection(){
       ` — ${p.ad_account_page_access_verified===true?'доступ РК подтверждён':'доступ РК не подтверждён'}`).join(' · ');
     const verified=res?.pages?.ad_account_page_access_verified===true;
     const diagnostic=res?.pages?.diagnostic;
+    const funding=res?.funding||{status:'NOT_CHECKED'};
+    const methods=(funding.payment_methods||[]).map(m=>`${m.type} •••• ${m.last4}`).join(', ');
+    const paymentText=funding.status==='LINKED'
+      ? 'Карта присутствует у выбранного РК'+(methods?' — '+methods:'')+'. Платёжная/charge verification не подтверждена.'
+      : funding.status==='NONE'
+        ? 'Meta live подтверждает отсутствие payment methods у выбранного РК.'
+        : funding.diagnostic?.code==='PAYMENT_SKIPPED_PAGE_ACCESS_UNVERIFIED'
+          ? 'Оплата не проверялась: сначала нужен подтверждённый доступ FP в этом РК.'
+          : funding.diagnostic?.code==='CHECKPOINT_REQUIRED'
+            ? 'Оплата не проверена: Meta требует проверку Facebook-аккаунта.'
+            : 'Платёжная привязка выбранного РК live не подтверждена.';
     const phone={REQUIRED:'Meta требует подтверждения номера телефона перед рекламой.',VERIFIED:'Номер телефона уже подтверждён в Meta.',UNKNOWN:'Требование номера телефона не установлено. Отсутствие сообщения не подтверждает возможность публикации.'}[res?.advertiser_phone?.status||'UNKNOWN'];
     const reason=diagnostic?.code==='PAGE_ACCESS_MEMORY_LIMIT'?'Проверка доступа РК остановлена: недостаточно памяти для формы Ads Manager.':
       diagnostic?.code==='PAGE_ACCESS_INSPECTION_TIMEOUT'?'Проверка доступа РК не завершилась за отведённое время.':
+      diagnostic?.code==='CHECKPOINT_REQUIRED'?'Meta требует проверку Facebook-аккаунта.':
       diagnostic?.code==='PAGE_ACCESS_RESULT_UNAVAILABLE'?'Не удалось получить результат проверки доступа РК.':'';
     block.innerHTML=`<b>${esc(r.name||r.id)}</b><div class="sub">${esc(r.profile)} · ${esc(r.id)}</div>`+
       (res?.error ? `<div class="job-failed">${esc(res.error)}</div>` :
-      `<div>FP: ${esc(names||'В сохранённом списке страниц нет.')}</div><div>${pill(verified?'ДОСТУП FP ПОДТВЕРЖДЁН':'ДОСТУП FP НЕ ПОДТВЕРЖДЁН',verified?'ok':'warn')}</div><div>${esc(phone)}</div><div>Pixel и медиа: не проверены. Оплата: не проверена.</div>`+
+      `<div>FP: ${esc(names||'В сохранённом списке страниц нет.')}</div><div>${pill(verified?'ДОСТУП FP ПОДТВЕРЖДЁН':'ДОСТУП FP НЕ ПОДТВЕРЖДЁН',verified?'ok':'warn')}</div><div>${esc(phone)}</div><div>Оплата: ${esc(paymentText)}</div><div>Pixel и медиа: не проверены.</div>`+
       (reason?`<div class="sub">${esc(reason)}</div>`:diagnostic?.code?`<div class="sub">${esc(diagnostic.code)}</div>`:'')+
+      (funding.diagnostic?.code?`<div class="sub">Payment: ${esc(funding.diagnostic.code)}</div>`:'')+
       (diagnostic?`<details><summary>Диагностика проверки</summary><pre>${esc(JSON.stringify(diagnostic,null,2))}</pre></details>`:''));
     body.appendChild(block); progress.textContent=`Загружено ${done}/${total}`; setProgress(done,total);
   });
-  progress.textContent='Проверка FP завершена. Для проверки карты используй «Funding / карта».';
+  progress.textContent='Проверка FP и оплаты завершена.';
 }
 
 READINESS_UI
