@@ -1857,16 +1857,7 @@ async def profile_live_inventory(
             # Historical BM->RK bindings are hints, not the authoritative full
             # profile inventory. Use this direct fast path only for an explicit
             # scoped request; full profile Sync performs live BM discovery first.
-            # REMASK_SCOPED_SETTINGS_FIRST_V1
-            # Ads Manager can trigger an account-level checkpoint even while
-            # Business Suite Settings remains readable. Keep the historical
-            # fast-path opt-in only; normal Sync verifies BM/RK via Settings first.
-            if (
-                known_accounts_by_business
-                and requested_business_ids
-                and str(os.getenv('REMASK_SYNC_ADS_MANAGER_FASTPATH','0')).strip().lower()
-                    in {'1','true','yes'}
-            ):
+            if known_accounts_by_business and requested_business_ids:
                 stage='confirmed_hint_revalidation'
                 fast_started=time.monotonic()
                 for hinted_business_id,expected_ids in sorted(
@@ -2195,30 +2186,6 @@ async def profile_live_inventory(
                 last_error=None
                 for attempt in range(2):
                     try:
-                        # REMASK_SCOPED_SETTINGS_FIRST_V1
-                        # Verify the exact BM/RK in Business Suite Settings before
-                        # touching Ads Manager. Profile 9 demonstrated that Ads
-                        # Manager can checkpoint an otherwise readable Business
-                        # Suite session.
-                        rk_settings_timeout=budget(16.0)
-                        settings_inventory=await hard_deadline(
-                            browser.snapshot_ad_accounts_for_business(
-                                business_id=str(business_id),
-                                timeout_seconds=8.0,
-                                expected_account_name=expected_account_names.get(str(business_id),''),
-                            ),
-                            rk_settings_timeout,
-                        )
-                        if (
-                            settings_inventory.get('ready')
-                            or settings_inventory.get('confirmed_empty')
-                            or bool(settings_inventory.get('accounts'))
-                        ):
-                            settings_inventory['ads_manager_diagnostic']={}
-                            return settings_inventory
-
-                        # Settings was genuinely inconclusive. Only now use the
-                        # selected-account Ads Manager probe as a fallback.
                         try:
                             rk_ads_timeout=budget(12.0)
                             ads_probe=await hard_deadline(
@@ -2237,7 +2204,7 @@ async def profile_live_inventory(
                         except asyncio.TimeoutError:
                             log.warning(
                                 'live inventory profile=%s business=%s Ads Manager '
-                                'fallback scope probe timed out; releasing browser lease',
+                                'scope probe timed out; releasing browser lease',
                                 clean_profile,
                                 business_id,
                             )
@@ -2262,6 +2229,8 @@ async def profile_live_inventory(
                                     'confirmed_empty':False,
                                     'accounts':confirmed_accounts,
                                     'accounts_count':len(confirmed_accounts),
+                                    # This probe confirms a selected RK, not the
+                                    # complete Business Settings account list.
                                     'accounts_partial':True,
                                     'source':str(
                                         ads_probe.get('confirmation_source')
@@ -2283,15 +2252,32 @@ async def profile_live_inventory(
                                     'ads_manager_diagnostic':ads_probe,
                                 }
 
+                        rk_settings_timeout=budget(16.0)
+                        settings_inventory=await hard_deadline(
+                            browser.snapshot_ad_accounts_for_business(
+                                business_id=str(business_id),
+                                timeout_seconds=8.0,
+                                expected_account_name=expected_account_names.get(str(business_id),''),
+                            ),
+                            rk_settings_timeout,
+                        )
                         settings_inventory['ads_manager_diagnostic']=ads_probe
                         return settings_inventory
                     except BrowserBusinessError as exc:
                         last_error=exc
-                        if attempt == 0 and exc.code == 'SESSION_EXPIRED':
+                        if (
+                            attempt == 0
+                            and exc.code in {
+                                'CHECKPOINT_REQUIRED',
+                                'SESSION_EXPIRED',
+                                'TWO_FACTOR_REQUIRED',
+                            }
+                        ):
                             log.warning(
-                                'live inventory profile=%s business=%s session expired; reopening profile browser once',
+                                'live inventory profile=%s business=%s auth redirect=%s; reopening profile browser once',
                                 clean_profile,
                                 business_id,
+                                exc.code,
                             )
                             try:
                                 await browser.close()
@@ -2307,14 +2293,6 @@ async def profile_live_inventory(
                                 timeout=browser_reopen_timeout,
                             )
                             continue
-                        if exc.code in {
-                            'CHECKPOINT_REQUIRED',
-                            'TWO_FACTOR_REQUIRED',
-                        }:
-                            # A security challenge will not disappear by
-                            # reopening the same cookie-bound browser. Stop
-                            # immediately instead of hammering Meta.
-                            raise
                         raise
                 if last_error is not None:
                     raise last_error
@@ -2406,19 +2384,12 @@ async def profile_live_inventory(
                         detail='LIVE_INVENTORY_TIMEOUT:rk_inventory',
                     ) from exc
                 except BrowserBusinessError as exc:
-                    if exc.code in {
-                        'CHECKPOINT_REQUIRED',
-                        'TWO_FACTOR_REQUIRED',
-                    }:
-                        # Preserve the last confirmed Workspace snapshot and
-                        # propagate the exact auth barrier to the sync caller.
-                        # Continuing into sibling BMs would only repeat the same
-                        # account-level checkpoint.
-                        raise
                     row['ad_accounts_source']=(
                         'business_auth_blocked'
                         if exc.code in {
+                            'CHECKPOINT_REQUIRED',
                             'SESSION_EXPIRED',
+                            'TWO_FACTOR_REQUIRED',
                         }
                         else 'browser_error'
                     )
@@ -2427,7 +2398,9 @@ async def profile_live_inventory(
                     if isinstance(getattr(exc, 'diagnostic', None), dict):
                         row['browser_error_diagnostic']=exc.diagnostic
                     row['auth_blocked']=exc.code in {
+                        'CHECKPOINT_REQUIRED',
                         'SESSION_EXPIRED',
+                        'TWO_FACTOR_REQUIRED',
                     }
                     warnings.append(
                         f'BM {business_id}: {exc.code}'
