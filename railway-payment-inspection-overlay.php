@@ -60,9 +60,9 @@ function hierarchy_canonical_account_snapshot(string $profile, array $snapshot):
 }
 
 CANONICAL;
-$needle = '    return hierarchy_created_businesses_apply_display($profile, $snapshot);';
+$needle = '    return hierarchy_created_accounts_apply_display($profile, hierarchy_created_businesses_apply_display($profile, $snapshot));';
 if (substr_count($php, $needle) !== 1) throw new RuntimeException('Canonical snapshot boundary missing');
-$php = str_replace($needle, '    return hierarchy_canonical_account_snapshot($profile, hierarchy_created_businesses_apply_display($profile, $snapshot));', $php);
+$php = str_replace($needle, '    return hierarchy_canonical_account_snapshot($profile, hierarchy_created_accounts_apply_display($profile, hierarchy_created_businesses_apply_display($profile, $snapshot)));', $php);
 $php .= $helper;
 $start = strpos($php, "    if (\$action === 'funding_status') {");
 $end = strpos($php, "    if (\$action === 'set_delivery_status') {", $start === false ? 0 : $start);
