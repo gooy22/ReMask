@@ -367,7 +367,7 @@ async def _wait_owner_access_surface(page, business_name: str, *, timeout_second
                 # The access shell itself is enough to run exact structured
                 # locators even when the target request/card is absent.
                 return {'ready':True,'polls':polls,'body_excerpt':last_text[:2400]}
-        await page.wait_for_timeout(400)
+        await asyncio.sleep(0.4)
     return {'ready':False,'polls':polls,'body_excerpt':last_text[:2400]}
 
 
