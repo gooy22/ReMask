@@ -18,6 +18,128 @@ from app.session import ProfileContextError, ProfileResolver
 
 
 class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_legacy_owner_approval_stub_auto_resumes_exact_submitted_request(self):
+        job,item=self._seed(task_status='FAILED')
+        task=(await self.store.tasks(item))[0]
+        bm='1630095732002500'
+        rk='1123543757207776'
+        page='1324227614109193'
+        with self.store._connect() as con:
+            con.execute(
+                'UPDATE job_tasks SET payload_json=? WHERE id=?',
+                (json.dumps({
+                    'steps':['BUSINESS','AD_ACCOUNT','PAGE_ACCESS'],
+                    'parameters':{'AD_ACCOUNT':{'use_common_page':True}},
+                }),task['id']),
+            )
+        await self.provisioning_state.complete(
+            item,'4','default',ProvisioningStep.BUSINESS,
+            {'business_id':bm},
+        )
+        await self.provisioning_state.complete(
+            item,'4','default',ProvisioningStep.AD_ACCOUNT,
+            {'business_id':bm,'ad_account_id':rk},
+        )
+        await self.provisioning_state.set_running(
+            item,'4','default',ProvisioningStep.PAGE_ACCESS,
+        )
+        await self.provisioning_state.checkpoint(
+            item,'4','default',ProvisioningStep.PAGE_ACCESS,
+            {
+                'phase':'TARGET_PAGE_ACCESS_SUBMITTED',
+                'page_id':page,
+                'business_id':bm,
+                'ad_account_id':rk,
+            },
+        )
+        old_message='The existing request needs the Page owner approval surface'
+        await self.provisioning_state.fail(
+            item,'4','default',ProvisioningStep.PAGE_ACCESS,
+            'PAGE_OWNER_APPROVAL_UI_UNAVAILABLE',old_message,
+        )
+        await self.store.set_task_failed(
+            task['id'],'PAGE_OWNER_APPROVAL_UI_UNAVAILABLE',old_message,
+            retryable=True,
+        )
+        await self.store.finalize_item(item)
+        old_view=await self.store.job_view(job)
+        self.assertEqual(old_view['status'],'FAILED')
+
+        # Local startup migration requeues the old stub.
+        await self.store.init()
+        self.assertEqual((await self.store.item(item))['status'],'QUEUED')
+        self.assertEqual((await self.store.tasks(item))[0]['status'],'QUEUED')
+
+        # Persistent mirror import must not resurrect the obsolete FAILED state.
+        await self.store.import_snapshots([old_view])
+        view=await self.store.job_view(job)
+        self.assertEqual(view['status'],'QUEUED')
+        self.assertEqual(view['items'][0]['status'],'QUEUED')
+        self.assertEqual(view['items'][0]['tasks'][0]['status'],'QUEUED')
+
+        # The remote entities and submitted request checkpoint are preserved.
+        business=await self.provisioning_state.step(item,ProvisioningStep.BUSINESS)
+        account=await self.provisioning_state.step(item,ProvisioningStep.AD_ACCOUNT)
+        access=await self.provisioning_state.step(item,ProvisioningStep.PAGE_ACCESS)
+        self.assertEqual(business['status'],'SUCCESS')
+        self.assertEqual(account['status'],'SUCCESS')
+        self.assertEqual(account['result']['ad_account_id'],rk)
+        self.assertEqual(access['status'],'FAILED')
+        self.assertEqual(access['result']['phase'],'TARGET_PAGE_ACCESS_SUBMITTED')
+        self.assertEqual(access['result']['page_id'],page)
+
+    async def test_legacy_owner_approval_recovery_refuses_unsubmitted_or_mismatched_state(self):
+        for suffix,phase,rk_business in (
+            ('pre-submit','TARGET_PAGE_ACCESS_CLICK_INTENT','1630095732002500'),
+            ('wrong-rk','TARGET_PAGE_ACCESS_SUBMITTED','999999999999999'),
+        ):
+            now=int(time.time())
+            job='job-owner-'+suffix
+            item='item-owner-'+suffix
+            task='task-owner-'+suffix
+            bm='1630095732002500'
+            rk='1123543757207776'
+            page='1324227614109193'
+            with self.store._connect() as con:
+                con.execute(
+                    'INSERT INTO jobs(id,status,idempotency_key,created_at,updated_at) VALUES(?,?,?,?,?)',
+                    (job,'FAILED','idem-'+suffix,now,now),
+                )
+                con.execute(
+                    'INSERT INTO job_items(id,job_id,profile_id,status,error_code,error_message,retryable,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)',
+                    (item,job,'4','FAILED','PAGE_OWNER_APPROVAL_UI_UNAVAILABLE',
+                     'The existing request needs the Page owner approval surface',1,now,now),
+                )
+                con.execute(
+                    'INSERT INTO job_tasks(id,item_id,position,action,payload_json,idempotency_key,status,error_code,error_message,retryable,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
+                    (task,item,0,'provisioning','{}','idem-task-'+suffix,'FAILED',
+                     'PAGE_OWNER_APPROVAL_UI_UNAVAILABLE',
+                     'The existing request needs the Page owner approval surface',1,now,now),
+                )
+            await self.provisioning_state.complete(
+                item,'4','default',ProvisioningStep.BUSINESS,{'business_id':bm},
+            )
+            await self.provisioning_state.complete(
+                item,'4','default',ProvisioningStep.AD_ACCOUNT,
+                {'business_id':rk_business,'ad_account_id':rk},
+            )
+            await self.provisioning_state.set_running(
+                item,'4','default',ProvisioningStep.PAGE_ACCESS,
+            )
+            await self.provisioning_state.checkpoint(
+                item,'4','default',ProvisioningStep.PAGE_ACCESS,
+                {'phase':phase,'page_id':page,'business_id':bm,'ad_account_id':rk},
+            )
+            await self.provisioning_state.fail(
+                item,'4','default',ProvisioningStep.PAGE_ACCESS,
+                'PAGE_OWNER_APPROVAL_UI_UNAVAILABLE',
+                'The existing request needs the Page owner approval surface',
+            )
+
+        await self.store.init()
+        self.assertEqual((await self.store.item('item-owner-pre-submit'))['status'],'FAILED')
+        self.assertEqual((await self.store.item('item-owner-wrong-rk'))['status'],'FAILED')
+
     async def test_exact_common_page_picker_failure_can_resume_without_submit(self):
         job,item=self._seed(task_status='FAILED'); task=(await self.store.tasks(item))[0]
         with self.store._connect() as con:
