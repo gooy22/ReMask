@@ -338,6 +338,38 @@ async def _resolve_target_business_name(browser, business: str, recorded: dict |
     }
 
 
+async def _wait_owner_access_surface(page, business_name: str, *, timeout_seconds: float=8.0) -> dict:
+    """Wait for the Page-access React surface, not just the committed document."""
+    expected=' '.join(str(business_name or '').split()).strip()
+    deadline=asyncio.get_running_loop().time()+max(0.5,float(timeout_seconds))
+    last_text=''
+    polls=0
+    while asyncio.get_running_loop().time()<deadline:
+        polls+=1
+        try:
+            text=await page.locator('body').inner_text(timeout=1800)
+        except Exception:
+            text=''
+        normalized=' '.join(str(text or '').split())
+        if normalized:
+            last_text=normalized[:5000]
+            has_access_shell=bool(re.search(
+                r'Manage and view access|People with Facebook access|People with task access|Partners with access',
+                normalized,re.I))
+            has_business=bool(expected and expected in normalized)
+            has_request=bool(re.search(
+                r'Review request|Respond to request|Review access request|View request',
+                normalized,re.I))
+            if has_access_shell and (has_business or has_request):
+                return {'ready':True,'polls':polls,'body_excerpt':last_text[:2400]}
+            if has_access_shell and polls>=3:
+                # The access shell itself is enough to run exact structured
+                # locators even when the target request/card is absent.
+                return {'ready':True,'polls':polls,'body_excerpt':last_text[:2400]}
+        await page.wait_for_timeout(400)
+    return {'ready':False,'polls':polls,'body_excerpt':last_text[:2400]}
+
+
 async def _owner_active_partner_ads_access(page, business_name: str, *, diagnostic: dict | None=None) -> dict | None:
     """Prove an exact Business is already an Ads partner on this Page."""
     expected=' '.join(str(business_name or '').split()).strip()
@@ -431,6 +463,10 @@ async def _approve_owner_page_access(browser, config: dict, business: str, check
         await browser._goto('https://www.facebook.com/settings/?tab=profile_access',
             timeout_ms=12000,wait_until='commit',settle_ms=1100,attempts=1)
         await browser._assert_authenticated()
+        surface=await _wait_owner_access_surface(browser.page,business_name)
+        partner_diagnostic['surface_ready']=surface.get('ready') is True
+        partner_diagnostic['surface_polls']=int(surface.get('polls') or 0)
+        partner_diagnostic['surface_body_excerpt']=str(surface.get('body_excerpt') or '')[:2400]
 
         owner_relation_proof=await _owner_active_partner_ads_access(
             browser.page,business_name,diagnostic=partner_diagnostic)
@@ -461,11 +497,12 @@ async def _approve_owner_page_access(browser, config: dict, business: str, check
                     pending_request_candidates=evidence[:8])
                 log.warning(
                     'PAGE_OWNER pending request missing page=%s business=%s actor=%s source=%s '
-                    'business_name=%s url=%s body=%s',
+                    'business_name=%s url=%s body=%s partner_probe=%s',
                     page_id,business,actor,str(actor_evidence.get('source') or ''),
                     business_name,
                     str(diagnostic.get('url') or '')[:700],
                     str(diagnostic.get('body_excerpt') or '')[:2400],
+                    str(partner_diagnostic)[:3500],
                 )
                 code='PAGE_OWNER_REQUEST_AMBIGUOUS' if len(evidence)>1 else 'PAGE_OWNER_APPROVAL_UI_UNAVAILABLE'
                 message=('Multiple Page access requests are visible and the target Business cannot be uniquely proven'
