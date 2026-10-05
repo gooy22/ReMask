@@ -516,9 +516,16 @@ class JobStore:
             ):
                 # Legacy operator flow re-navigated verify_page_attached even
                 # after OWNER_CONFIRMED and could fail before Page selection.
-                # New code skips that redundant navigation and checkpoints any
-                # future Assign/Save intent before mutation.
                 retry_marker='operator_preconfirmed_navigation_retry'
+            elif (
+                str(row['error_code'] or '')=='FACEBOOK_NAVIGATION_FAILED'
+                and page.get('operator_owner_confirmed_short_circuit_retry') is not True
+            ):
+                # A second legacy navigation remained in
+                # _request_target_page_access before the OWNER_CONFIRMED phase
+                # check. New code short-circuits the durable owner proof before
+                # any relation navigation. Allow exactly one continuation.
+                retry_marker='operator_owner_confirmed_short_circuit_retry'
             else:
                 continue
 
