@@ -335,6 +335,12 @@ async def _setup_control(page: Any, label: str, observed_default: str = '') -> A
 
 async def _setup_choice(page: Any, label: str, choice: str, search: str, observed_default: str = '', *, picker_scope: Any = None) -> bool:
     picker_scope=picker_scope if picker_scope is not None else page
+    if re.search(r'Time zone|Timezone|Часовой пояс|Часовий пояс',label,re.I):
+        from .payment_timezone_picker import choose_payment_timezone
+        selected, diagnostic = await choose_payment_timezone(page, picker_scope)
+        picker_scope._remask_timezone_diagnostic = diagnostic
+        logging.getLogger('remask.payment_card').info('billing timezone selection diagnostic=%s',diagnostic)
+        return selected
     pattern=re.compile(choice,re.I)
     control=await _setup_control(page,label,observed_default)
     if control is None:
@@ -404,6 +410,9 @@ async def _wait_setup_match(page: Any, label: str, choice: str, search: str, obs
 
 async def _setup_selected(scope: Any, label: str, choice: str, search: str, observed_default: str = '') -> bool:
     """Final read only proof after all dependent pickers have been changed."""
+    if re.search(r'Time zone|Timezone|Часовой пояс|Часовий пояс',label,re.I):
+        from .payment_timezone_picker import payment_timezone_selected
+        return await payment_timezone_selected(scope)
     pattern=re.compile(choice,re.I)
     control=await _setup_control(scope,label,observed_default)
     if control is None:
@@ -483,7 +492,8 @@ async def configure_payment_account(browser: Any, setup: dict[str,str]) -> dict[
     for key,label,choice,search,default in choices:
         if not await _setup_choice(scope,label,choice,search,default,picker_scope=page):
             await _payment_surface(browser,'billing_setup_control_missing')
-            return {'status':'BLOCKED','code':'PAYMENT_ACCOUNT_SETUP_CONTROL_MISSING','missing_fields':[key]}
+            return {'status':'BLOCKED','code':'PAYMENT_ACCOUNT_SETUP_CONTROL_MISSING','missing_fields':[key],
+                'setup_diagnostic':getattr(page,'_remask_timezone_diagnostic',{}) if key=='timezone' else {}}
     for key,label,choice,search,default in choices:
         if not await _setup_selected(scope,label,choice,search,default):
             return {'status':'BLOCKED','code':'PAYMENT_ACCOUNT_SETUP_CONTROL_MISSING','missing_fields':[key]}
