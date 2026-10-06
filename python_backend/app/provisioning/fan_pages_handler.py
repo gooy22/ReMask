@@ -246,6 +246,18 @@ async def _fresh_page_inventory(session: Any) -> list[dict[str, Any]]:
         raise AssertionError("Page inventory loop must return or raise")
 
 
+async def _fresh_promotable_page_inventory(session: Any) -> list[dict[str, Any]]:
+    """Positive-only Page recovery through Ads Manager's live promotable list."""
+    async with FacebookBusinessBrowser(
+        session.context,
+        timeout_seconds=60,
+    ) as browser:
+        rows = await browser.discover_promotable_pages_from_ads_manager(
+            timeout_seconds=8.0,
+        )
+        return _normalize_pages(rows)
+
+
 async def _reconcile_uncertain_page(
     session: Any,
     *,
@@ -257,6 +269,7 @@ async def _reconcile_uncertain_page(
     authoritative_absent = 0
     html_checked = False
     private_discovery_checked = False
+    ads_manager_checked = False
     target_seen = False
 
     async def check_initial_html(facebook_web: Any, attempt: int) -> dict[str, Any] | None:
@@ -326,6 +339,62 @@ async def _reconcile_uncertain_page(
                     "message": _clean(exc)[:500],
                 }
             )
+
+        # REMASK_FP_ADS_MANAGER_POSITIVE_RECOVERY_V1
+        # Ads Manager's promotable Page list is a strong positive signal and is
+        # independent from the flaky facebook.com/Your-Pages SPA. It is NOT a
+        # complete actor-admin inventory, so an empty result never proves
+        # absence and never authorizes another CREATE.
+        if not ads_manager_checked:
+            ads_manager_checked = True
+            try:
+                ads_rows = await _fresh_promotable_page_inventory(session)
+                ads_found = _find_created_page(
+                    ads_rows,
+                    page_name=page_name,
+                    before_ids=before_ids,
+                )
+                target_seen = target_seen or any(
+                    _clean(row.get("name")).casefold()
+                    == _clean(page_name).casefold()
+                    for row in ads_rows
+                )
+                diagnostics.append(
+                    {
+                        "attempt": attempt + 1,
+                        "source": "ads_manager_promotable_pages",
+                        "result": "ok",
+                        "count": len(ads_rows),
+                        "ids": [row["id"] for row in ads_rows[:30]],
+                    }
+                )
+                if ads_found:
+                    return ads_found, False, diagnostics
+            except BrowserBusinessError as exc:
+                diagnostics.append(
+                    {
+                        "attempt": attempt + 1,
+                        "source": "ads_manager_promotable_pages",
+                        "result": "unavailable",
+                        "code": exc.code,
+                        "message": str(exc)[:500],
+                    }
+                )
+                if (
+                    exc.code in _AUTH_RECOVERY_CODES
+                    or exc.code == "FACEBOOK_TEMPORARILY_BLOCKED"
+                ):
+                    return None, False, diagnostics
+            except Exception as exc:
+                diagnostics.append(
+                    {
+                        "attempt": attempt + 1,
+                        "source": "ads_manager_promotable_pages",
+                        "result": "unavailable",
+                        "code": exc.__class__.__name__,
+                        "message": _clean(exc)[:500],
+                    }
+                )
 
         # Require complete actor-admin responses for absence. Partial lists and
         # multiple same-name Pages must not authorize another CREATE.
