@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from app.facebook_business_browser import BrowserBusinessError
-from app.payment_card_binding import _open_card_form, _resolve_payment_account_name, _selected_account_disabled, _payment_surface, _setup_control, _unique_visible, card_values, configure_payment_account, field_kind, form_action_guard, missing_card_fields, payment_account_setup_required, payment_card_flow, profile_payment_card, selected_payment_asset
+from app.payment_card_binding import _open_card_form, _resolve_payment_account_name, _selected_account_disabled, _payment_surface, _setup_control, _unique_visible, card_brand_aliases, card_values, configure_payment_account, field_kind, form_action_guard, missing_card_fields, payment_account_setup_required, payment_card_flow, profile_payment_card, selected_payment_asset
 from app.payment_inspection import settings_payment_summary, select_settings_payment_tab
 
 ID='123456789'
@@ -41,6 +41,13 @@ class CardFieldTests(unittest.TestCase):
         self.assertEqual(field_kind('Name on card'),'holder')
         self.assertEqual(field_kind('MM/YY'),'expiry')
         self.assertEqual(field_kind('Account number'),'')
+
+    def test_card_brand_aliases_match_meta_mask_labels(self):
+        self.assertEqual(card_brand_aliases('4111111111111111'), {'visa'})
+        self.assertEqual(card_brand_aliases('5555555555554444'), {'mastercard'})
+        self.assertEqual(card_brand_aliases('378282246310005'), {'amex','americanexpress'})
+        self.assertEqual(card_brand_aliases('6011111111111117'), {'discover'})
+        self.assertEqual(card_brand_aliases('3530111333300000'), set())
 
     def test_unknown_required_missing_billing_or_ambiguous_card_fields_block(self):
         fields=[{'kind':k,'required':True,'type':'text'} for k in ('number','expiry','cvv','holder')]
