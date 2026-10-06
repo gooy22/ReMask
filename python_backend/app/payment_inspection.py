@@ -119,6 +119,23 @@ def selected_payment_asset(profile: str, target: str, path: Path = Path('/var/li
     return {}
 
 
+def _merge_payment_asset(asset: dict[str,str], hinted: dict[str,str], *,
+                         business_id: str = '', confirmed_name: str = '',
+                         target: str = '') -> dict[str,str]:
+    """Merge trusted ownership with fresh Workspace navigation labels.
+
+    Workspace alias/name can be newer than the durable live snapshot, but they
+    never prove identity: the browser still confirms the canonical RK inside
+    the requested BM before payment UI is read or mutated.
+    """
+    business=business_id or asset.get('business_id') or hinted.get('business_id','')
+    return {
+        'business_id':business,
+        'business_asset_id':hinted.get('business_asset_id') or asset.get('business_asset_id',''),
+        'name':hinted.get('name') or confirmed_name or asset.get('name') or target,
+    }
+
+
 async def resolve_payment_asset(profile: str, target: str, state: Any = None,
                                 hint: dict[str,Any] | None = None) -> dict[str,str]:
     """Resolve the selected RK's BM from saved evidence or a workspace hint.
@@ -139,7 +156,7 @@ async def resolve_payment_asset(profile: str, target: str, state: Any = None,
     asset=selected_payment_asset(profile,target)
     if state is None:
         if asset and hinted and asset.get('business_id')!=hinted['business_id']:return {}
-        return {**hinted,**asset,'name':asset.get('name') or hinted.get('name','')} if hinted else asset
+        return _merge_payment_asset(asset,hinted,target=target) if hinted else asset
     matches=[row for row in await state.confirmed_ad_account_bindings_for_profile(profile)
         if str(row.get('ad_account_id') or '').removeprefix('act_')==target
         and re.fullmatch(r'\d{5,30}',str(row.get('business_id') or ''))]
@@ -148,16 +165,16 @@ async def resolve_payment_asset(profile: str, target: str, state: Any = None,
         return {}
     if not businesses:
         if asset and hinted and asset.get('business_id')!=hinted['business_id']:return {}
-        return {**hinted,**asset,'name':asset.get('name') or hinted.get('name','')} if hinted else asset
+        return _merge_payment_asset(asset,hinted,target=target) if hinted else asset
     business=next(iter(businesses))
     if asset and asset.get('business_id')!=business:
         return {}
     if hinted and hinted['business_id']!=business:return {}
     confirmed_name=str(matches[0].get('account_name') or matches[0].get('name') or '')
-    if asset:
-        return {**asset,'name':asset.get('name') or confirmed_name or hinted.get('name') or target}
-    return {**hinted,'business_id':business,'business_asset_id':hinted.get('business_asset_id',''),
-        'name':confirmed_name or hinted.get('name') or target}
+    if asset or hinted:
+        return _merge_payment_asset(asset,hinted,business_id=business,
+            confirmed_name=confirmed_name,target=target)
+    return {'business_id':business,'business_asset_id':'','name':confirmed_name or target}
 
 
 async def _resolve_payment_account_name(page: Any, name: str) -> str:
