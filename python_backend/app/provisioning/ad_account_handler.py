@@ -1452,10 +1452,11 @@ async def ad_account_handler(
                 retryable=True,
             )
 
-    # Legacy Add RK still enforces 1 BM = 1 RK. Prepare may explicitly opt into
-    # multiple RK, but only after repeated exact-Business inventory reads prove
-    # that this slot's stable target name is absent. A CREATE never proceeds on
-    # an unavailable or ambiguous inventory transport.
+    # Read-only preflight enforces the 1 BM = 1 RK invariant.
+    # That invariant remains the default for legacy Add RK. Prepare may
+    # explicitly opt into multiple RK only after repeated exact-Business
+    # inventory reads prove that this slot's stable target name is absent.
+    # A CREATE never proceeds on unavailable or ambiguous inventory evidence.
     found_id, inventory_before = await _reconcile_existing(
         session,
         business_id=business_id,
