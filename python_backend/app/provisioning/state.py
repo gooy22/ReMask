@@ -376,6 +376,7 @@ class ProvisioningStateStore:
         business_id: str,
         *,
         exclude_item_id: str = "",
+        account_name: str = "",
     ) -> dict[str, Any]:
         """
         Return the newest confirmed or uncertain AD_ACCOUNT checkpoint for a
@@ -387,6 +388,7 @@ class ProvisioningStateStore:
             profile_id,
             business_id,
             exclude_item_id,
+            str(account_name or "").strip(),
         )
 
     def _latest_ad_account_resume_for_business_sync(
@@ -394,6 +396,7 @@ class ProvisioningStateStore:
         profile_id: str,
         business_id: str,
         exclude_item_id: str,
+        account_name: str = "",
     ) -> dict[str, Any]:
         profile = str(profile_id or "").strip()
         business = str(business_id or "").strip()
@@ -442,6 +445,15 @@ class ProvisioningStateStore:
 
             if str(result.get("business_id") or "").strip() != business:
                 continue
+
+            if account_name:
+                stored_name = str(
+                    result.get("account_name")
+                    or result.get("name")
+                    or ""
+                ).strip()
+                if stored_name.casefold() != account_name.casefold():
+                    continue
 
             raw_id = str(result.get("ad_account_id") or "").strip()
             numeric_id = raw_id[4:] if raw_id.lower().startswith("act_") else raw_id
