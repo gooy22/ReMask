@@ -185,6 +185,25 @@ try{
     $result=$vault->reconcile($card['id'],'Fixture','123456789',$expected,$proof);
     expect($result['status']==='LINKED'&&$result['submitted']===false&&$result['funding_verified']===false,'Read-only positive proof not reconciled');
     expect($vault->linkedBinding($card['id'],'Fixture','123456789')['checked_live']===true,'Live proof not retained');
+    // Meta renders Amex as "American Express"; vault aliases must still prove
+    // the exact saved card. Discover must not be collapsed to generic "Card".
+    $amex=$vault->add(['number'=>'378282246310005','month'=>12,'year'=>2099,'holder'=>'Amex Fixture']);
+    expect($amex['brand']==='Amex','Amex brand detection');
+    $vault->begin($amex['id'],'Amex profile','223456789');
+    $vault->finish($amex['id'],'Amex profile','223456789','SUBMITTED_UNVERIFIED');
+    $amexExpected=$vault->binding($amex['id'],'Amex profile','223456789');
+    $amexProof=['profile_id'=>'Amex profile','account_id'=>'223456789','account_scope_verified'=>true,'checked_live'=>true,
+        'source'=>'private_facebook_billing_ui','verification_status'=>'LINKED','payment_methods'=>[['type'=>'American Express','last4'=>'0005']]];
+    expect($vault->reconcile($amex['id'],'Amex profile','223456789',$amexExpected,$amexProof)['status']==='LINKED','Amex alias was not reconciled');
+
+    $discover=$vault->add(['number'=>'6011111111111117','month'=>12,'year'=>2099,'holder'=>'Discover Fixture']);
+    expect($discover['brand']==='Discover','Discover brand detection');
+    $vault->begin($discover['id'],'Discover profile','323456789');
+    $vault->finish($discover['id'],'Discover profile','323456789','SUBMITTED_UNVERIFIED');
+    $discoverExpected=$vault->binding($discover['id'],'Discover profile','323456789');
+    $discoverProof=['profile_id'=>'Discover profile','account_id'=>'323456789','account_scope_verified'=>true,'checked_live'=>true,
+        'source'=>'private_facebook_billing_ui','verification_status'=>'LINKED','payment_methods'=>[['type'=>'Discover','last4'=>'1117']]];
+    expect($vault->reconcile($discover['id'],'Discover profile','323456789',$discoverExpected,$discoverProof)['status']==='LINKED','Discover live proof was not reconciled');
     $vault->finish($card['id'],'Fixture','123456789','SUBMITTED_UNVERIFIED',['code'=>'CARD_LINK_NOT_VERIFIED','submitted'=>null,'number'=>'4111111111111111','cvv'=>'123']);
     $state=$vault->binding($card['id'],'Fixture','123456789');expect($state['last_result_code']==='CARD_LINK_NOT_VERIFIED'&&$state['submitted']===null,'Safe result metadata lost');
     expect(!str_contains(file_get_contents($directory.'/cards.json'),'4111111111111111'),'Raw result stored');
