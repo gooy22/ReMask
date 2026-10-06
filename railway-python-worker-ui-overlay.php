@@ -304,6 +304,10 @@ if ($php === false || $js === false || $addon === false) {
     throw new RuntimeException('Python worker UI runtime inputs are missing.');
 }
 
+// Keep the legacy prefix for the cookie/payment overlays; vary the URL for
+// every worker UI change so session-recovery actions cannot remain cached.
+$workerUiRevision = '20261004-python-worker-ui-v219-worker-' . substr(hash('sha256', $addon), 0, 12);
+
 if (strpos($php, 'REMASK_PYTHON_WORKER_PANEL_V1') === false) {
     $panel = <<<'HTML'
 <!-- REMASK_PYTHON_WORKER_PANEL_V1 -->
@@ -381,7 +385,7 @@ HTML;
 
     $php = preg_replace(
         '#scripts/workspace\.js(?:\?[^"\']*)?#',
-        'scripts/workspace.js?v=20261004-python-worker-ui-v219',
+        'scripts/workspace.js?v=' . $workerUiRevision,
         $php,
         1,
         $scriptCount
@@ -403,7 +407,7 @@ if ($workerPos === false) {
 
 $php = preg_replace(
     '#scripts/workspace\.js(?:\?[^"\']*)?#',
-    'scripts/workspace.js?v=20261004-python-worker-ui-v219',
+    'scripts/workspace.js?v=' . $workerUiRevision,
     $php,
     1
 ) ?? $php;

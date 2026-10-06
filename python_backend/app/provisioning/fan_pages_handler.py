@@ -273,6 +273,9 @@ async def _reconcile_uncertain_page(
                     "result": "unavailable",
                     "code": exc.code,
                     "message": str(exc)[:500],
+                    "auth_evidence": (exc.diagnostic or {}).get("auth_evidence")
+                        if (exc.diagnostic or {}).get("auth_evidence") in
+                        {"checkpoint_url", "login_url", "two_factor_body"} else "",
                 }
             )
             if exc.code in _AUTH_RECOVERY_CODES or exc.code == "FACEBOOK_TEMPORARILY_BLOCKED":
@@ -384,13 +387,20 @@ async def _record_reconciliation(provisioning_state: Any, item_id: str, profile_
                                  scope_key: str, diagnostics: list[dict[str, Any]]) -> None:
     summary = [{key: row[key] for key in ("attempt", "source", "result", "code", "count", "inventory_complete")
                 if key in row} for row in diagnostics]
-    await provisioning_state.checkpoint(item_id, profile_id, scope_key, ProvisioningStep.FAN_PAGES,
-        {"reconciliation": diagnostics, "activity": "FAN_PAGE_RECONCILIATION", "activity_at": int(time.time())})
-    # Common Pages use a separate durable item from the bulk job. Log that
-    # actual item here; bulk final-state logging cannot see its checkpoint.
-    log.info("fan page reconciliation profile=%s item=%s checks=%s", profile_id, item_id, json.dumps(summary))
     terminal = next((row for row in diagnostics if row.get("code") in
         _AUTH_RECOVERY_CODES | {"FACEBOOK_TEMPORARILY_BLOCKED"}), None)
+    checkpoint = {"reconciliation": diagnostics, "activity": "FAN_PAGE_RECONCILIATION",
+        "activity_at": int(time.time()), "auth_required": bool(terminal),
+        "auth_error_code": terminal["code"] if terminal else ""}
+    if terminal:
+        evidence = terminal.get("auth_evidence") or ""
+        route = "/checkpoint" if evidence == "checkpoint_url" else "/login" if evidence == "login_url" else ""
+        checkpoint["browser_diagnostic"] = {"stage": "profile_auth_blocked",
+            "auth_evidence": evidence, "url": "https://www.facebook.com" + route if route else ""}
+    # Preserve phase, active Page name and pre-submit inventory. Session
+    # recovery resumes the same uncertain CREATE and must reconcile it first.
+    await provisioning_state.checkpoint(item_id, profile_id, scope_key, ProvisioningStep.FAN_PAGES, checkpoint)
+    log.info("fan page reconciliation profile=%s item=%s checks=%s", profile_id, item_id, json.dumps(summary))
     if terminal:
         raise ProvisioningError(terminal["code"],
             "Facebook Page verification requires the profile session to be restored; the pending CREATE was retained.",

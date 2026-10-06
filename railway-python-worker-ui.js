@@ -345,6 +345,17 @@ function pythonWorkerItemCanRetry(item) {
   });
 }
 
+function pythonWorkerItemNeedsSessionRestore(item) {
+  if (!item || String(item.status || '').toUpperCase() !== 'FAILED') return false;
+  const codes = [item.error_code].concat((Array.isArray(item.tasks) ? item.tasks : [])
+    .filter(function(task) { return task && String(task.status || '').toUpperCase() === 'FAILED'; })
+    .map(function(task) { return task.error_code; }));
+  return codes.some(function(code) {
+    return ['CHECKPOINT_REQUIRED', 'SESSION_EXPIRED', 'TWO_FACTOR_REQUIRED']
+      .indexOf(String(code || '').trim().toUpperCase()) !== -1;
+  });
+}
+
 function pythonWorkerFailureDetails(item) {
   const parts = [];
   if (item && /^[a-zA-Z0-9_-]{1,80}$/.test(String(item.worker_job_id || ''))) {
@@ -377,7 +388,8 @@ function pythonWorkerFailureDetails(item) {
   }
   if (result.phase === 'CREATE_NOT_SUBMITTED') parts.push('CREATE не отправлен');
   else if (result.phase === 'CREATE_SENT') parts.push('CREATE отправлен; результат требует проверки');
-  if (!pythonWorkerItemCanRetry(item)) parts.push('Повтор недоступен');
+  if (pythonWorkerItemNeedsSessionRestore(item)) parts.push('Ожидает восстановления Facebook-сессии');
+  else if (!pythonWorkerItemCanRetry(item)) parts.push('Повтор недоступен');
   return parts;
 }
 
@@ -434,6 +446,16 @@ function pythonWorkerSelectionRefresh() {
     retry.textContent = hasTerminalBatchFailure
       ? 'Retry Failed batch'
       : 'Retry Failed';
+  }
+
+  const restore = pythonWorkerEl('pythonProvisionRestoreSession');
+  if (restore) {
+    const items = pythonWorkerUiState.job && Array.isArray(pythonWorkerUiState.job.items)
+      ? pythonWorkerUiState.job.items : [];
+    const needsSession = items.some(pythonWorkerItemNeedsSessionRestore);
+    restore.hidden = !needsSession;
+    restore.disabled = pythonWorkerUiState.busy || !needsSession ||
+      (!pythonWorkerUiState.jobId && !(pythonWorkerUiState.batchJobIds || []).length);
   }
 
   pythonWorkerEnsureRkFanPageActions();
@@ -2046,10 +2068,13 @@ async function pythonWorkerPoll() {
           return item && String(item.status || '').toUpperCase() === 'FAILED';
         })
         .map(function(item) {
-          const retryLabel = item.retryable === true
-            ? 'RETRYABLE'
-            : 'NO AUTO-RETRY';
-          return [item.profile_id, item.error_code, retryLabel, item.error_message]
+          const needsSession = pythonWorkerItemNeedsSessionRestore(item);
+          const retryLabel = needsSession ? 'НУЖНО ВОССТАНОВИТЬ СЕССИЮ' :
+            item.retryable === true ? 'RETRYABLE' : 'NO AUTO-RETRY';
+          const message = needsSession
+            ? 'Пройдите проверку Facebook в этом профиле через его прокси, обновите cookies в ReMask и нажмите «Проверить сессию и продолжить». Сохранённое создание FP будет сначала проверено.'
+            : item.error_message;
+          return [item.profile_id, item.error_code, retryLabel, message]
             .filter(Boolean)
             .join(': ');
         });
@@ -2100,6 +2125,10 @@ async function pythonWorkerPoll() {
 window.pythonWorkerStartBusiness = pythonWorkerStartBusiness;
 
 async function pythonWorkerRetryFailed(options) {
+  const restoreSession = options && options.check_restored_session === true;
+  const canResume = function(item) {
+    return pythonWorkerItemCanRetry(item) || (restoreSession && pythonWorkerItemNeedsSessionRestore(item));
+  };
   const batchIds = Array.isArray(pythonWorkerUiState.batchJobIds)
     ? pythonWorkerUiState.batchJobIds.slice()
     : [];
@@ -2117,15 +2146,17 @@ async function pythonWorkerRetryFailed(options) {
     try {
       let requeued = 0;
       const retryErrors = [];
+      const blockedProfiles = new Set();
 
       await pythonWorkerMapLimit(batchIds, 4, async function(jobId) {
         try {
-          // Read saved Job state only. Never probe Facebook or requeue a
-          // non-retryable sibling just because another batch item failed.
+          // Ordinary Retry ignores terminal auth failures. The separate
+          // session-recovery action asks the backend for a fresh Page/BM
+          // preflight before it can requeue the saved Job.
           const current = await pythonWorkerBridge({action: 'status', job_id: jobId});
           const items = current && current.job && Array.isArray(current.job.items)
             ? current.job.items : [];
-          if (!items.some(pythonWorkerItemCanRetry)) return;
+          if (!items.some(canResume)) return;
           const data = await pythonWorkerBridge({
             action: 'retry_failed',
             job_id: jobId
@@ -2133,6 +2164,8 @@ async function pythonWorkerRetryFailed(options) {
           requeued += Number(
             (data && data.result && data.result.requeued) || 0
           );
+          ((data && data.result && data.result.blocked_profiles) || [])
+            .forEach(function(profile) { blockedProfiles.add(String(profile)); });
         } catch (error) {
           retryErrors.push(
             jobId + ': ' + String((error && error.message) || error)
@@ -2148,7 +2181,9 @@ async function pythonWorkerRetryFailed(options) {
           retryErrors.length
             ? 'Retry Failed batch: ничего не поставлено в очередь. ' +
               retryErrors.join(' · ')
-            : 'Retry Failed batch: нет retryable FAILED элементов.'
+            : blockedProfiles.size
+              ? 'Facebook-сессия ещё не восстановлена: профили ' + Array.from(blockedProfiles).join(', ') + '. Задачи сохранены.'
+              : 'Retry Failed batch: нет доступных для продолжения FAILED элементов.'
         );
         return;
       }
@@ -2158,6 +2193,7 @@ async function pythonWorkerRetryFailed(options) {
       pythonWorkerSetText(
         'pythonPwStatus',
         'Retry Failed batch: возвращено в очередь ' + requeued +
+          (blockedProfiles.size ? ' · требуется восстановление Facebook: ' + Array.from(blockedProfiles).join(', ') : '') +
           (retryErrors.length
             ? ' · ошибки отдельных Jobs: ' + retryErrors.join(' · ')
             : '.')
@@ -2193,14 +2229,16 @@ async function pythonWorkerRetryFailed(options) {
     const currentItems = pythonWorkerUiState.job && Array.isArray(pythonWorkerUiState.job.items)
       ? pythonWorkerUiState.job.items
       : [];
-    if (!currentItems.some(pythonWorkerItemCanRetry)) {
+    if (!currentItems.some(canResume)) {
       pythonWorkerUiState.busy = false;
       pythonWorkerSelectionRefresh();
       pythonWorkerSetText('pythonPwStatus', 'Retry недоступен: нет retryable FAILED элементов. Сохранённый Job не изменён.');
       return;
     }
 
-    pythonWorkerSetText('pythonPwStatus', 'Повторно ставлю FAILED JobItem в очередь...');
+    pythonWorkerSetText('pythonPwStatus', restoreSession
+      ? 'Проверяю восстановленную Facebook-сессию перед продолжением сохранённой задачи...'
+      : 'Повторно ставлю FAILED JobItem в очередь...');
     const data = await pythonWorkerBridge({
       action: 'retry_failed',
       job_id: pythonWorkerUiState.jobId,
@@ -2212,7 +2250,10 @@ async function pythonWorkerRetryFailed(options) {
     if (requeued <= 0) {
       pythonWorkerUiState.busy = false;
       pythonWorkerSelectionRefresh();
-      pythonWorkerSetText('pythonPwStatus', 'Нет FAILED элементов для повторного запуска.');
+      const blocked = (data && data.result && data.result.blocked_profiles) || [];
+      pythonWorkerSetText('pythonPwStatus', blocked.length
+        ? 'Facebook-сессия ещё не восстановлена: профили ' + blocked.join(', ') + '. Задача сохранена.'
+        : 'Нет FAILED элементов для повторного запуска.');
       return;
     }
 
@@ -4576,6 +4617,19 @@ function pythonWorkerInitUi() {
   }
   const addRk = pythonWorkerEl('pythonProvisionAdAccount');
   const retry = pythonWorkerEl('pythonProvisionRetry');
+  if (retry && !pythonWorkerEl('pythonProvisionRestoreSession')) {
+    const restore = document.createElement('button');
+    restore.id = 'pythonProvisionRestoreSession'; restore.type = 'button';
+    restore.className = retry.className; restore.hidden = true;
+    restore.textContent = 'Проверить сессию и продолжить';
+    restore.addEventListener('click', function(event) {
+      event.preventDefault();
+      pythonWorkerRetryFailed({check_restored_session:true}).catch(function(error) {
+        pythonWorkerSetText('pythonPwStatus', String((error && error.message) || error));
+      });
+    });
+    retry.insertAdjacentElement('afterend', restore);
+  }
 
   if (start) {
     start.addEventListener('click', function(event) {

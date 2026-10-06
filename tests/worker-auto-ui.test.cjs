@@ -235,6 +235,9 @@ vm.createContext(sandbox); vm.runInContext(source.slice(start,end), sandbox);
   // exercises the actual button refresh and bridge calls, including a mixed
   // batch whose checkpoint sibling must never receive retry_failed.
   const retryButton={disabled:false};
+  const restoreButton={disabled:false,hidden:true};
+  const retryMessages=[];
+  let resumeReply={requeued:1};
   const checkpoint={status:'FAILED',error_code:'CHECKPOINT_REQUIRED',retryable:true,
     tasks:[{status:'FAILED',retryable:true}],
     provisioning_steps:[{status:'FAILED',result:{phase:'CREATE_NOT_SUBMITTED',cookies:'must not render',url:'https://example.test/?token=secret'}}]};
@@ -246,11 +249,12 @@ vm.createContext(sandbox); vm.runInContext(source.slice(start,end), sandbox);
   const jobs={checkpoint:{items:[checkpoint]},temporary:{items:[temporary]},
     permanent:{items:[permanent]},success:{items:[{status:'SUCCESS',retryable:true}]}};
   const rb={pythonWorkerUiState:rs,document:{querySelectorAll:()=>[]},
-    pythonWorkerSelectedProfiles:()=>[],pythonWorkerEl:id=>id==='pythonProvisionRetry'?retryButton:null,
-    pythonWorkerEnsureRkFanPageActions(){},pythonWorkerSetText(){},pythonWorkerPersistBatchState(){},
+    pythonWorkerSelectedProfiles:()=>[],pythonWorkerEl:id=>id==='pythonProvisionRetry'?retryButton:
+      id==='pythonProvisionRestoreSession'?restoreButton:null,
+    pythonWorkerEnsureRkFanPageActions(){},pythonWorkerSetText:(id,text)=>retryMessages.push(text),pythonWorkerPersistBatchState(){},
     async pythonWorkerMapLimit(items,limit,fn){for(const item of items)await fn(item);},
     async pythonWorkerBridge(payload){calls.push(payload);return payload.action==='status'
-      ?{job:jobs[payload.job_id]}:{result:{requeued:1}};},
+      ?{job:jobs[payload.job_id]}:{result:resumeReply};},
     async pythonWorkerPollAdAccountBatch(){},async pythonWorkerPoll(){}};
   vm.createContext(rb);
   const authStart=source.indexOf('function pythonWorkerIsProfileAuthBlockedCode(');
@@ -261,6 +265,8 @@ vm.createContext(sandbox); vm.runInContext(source.slice(start,end), sandbox);
   vm.runInContext(source.slice(retryStart,source.indexOf('\nfunction pythonWorkerSetBmDialogStatus',retryStart)),rb);
   rb.pythonWorkerSelectionRefresh();
   assert.equal(retryButton.disabled,true,'a checkpoint-only batch must disable retry despite stale true flags');
+  assert.equal(restoreButton.hidden,false);
+  assert.equal(restoreButton.disabled,false,'session recovery must remain available while ordinary Retry stays disabled');
   rs.job.items=[permanent]; rb.pythonWorkerSelectionRefresh(); assert.equal(retryButton.disabled,true);
   rs.job.items=[checkpoint,temporary]; rb.pythonWorkerSelectionRefresh(); assert.equal(retryButton.disabled,false);
   rs.busy=true; rb.pythonWorkerSelectionRefresh(); assert.equal(retryButton.disabled,true); rs.busy=false;
@@ -274,9 +280,31 @@ vm.createContext(sandbox); vm.runInContext(source.slice(start,end), sandbox);
   rs.batchJobIds=[];rs.jobId='checkpoint';rs.busy=false;rs.job={items:[checkpoint]};calls.length=0;
   await rb.pythonWorkerRetryFailed();assert.equal(calls.length,0,'a direct call must also guard a blocked single Job');
   const details=Array.from(rb.pythonWorkerFailureDetails({...checkpoint,worker_job_id:'saved-job'}));
-  assert.deepEqual(details,['Job saved-job','CREATE не отправлен','Повтор недоступен']);
+  assert.deepEqual(details,['Job saved-job','CREATE не отправлен','Ожидает восстановления Facebook-сессии']);
   assert.equal(details.join(' ').includes('secret'),false);
-  console.log('Auto/BM/FP interface and checkpoint-safe single/mixed batch retries passed.');
+  // Session recovery invokes the saved Job endpoint. The backend proves
+  // authentication afresh; a blocked reply must not invent a new CREATE Job.
+  calls.length=0;resumeReply={requeued:0,blocked_profiles:['10']};
+  await rb.pythonWorkerRetryFailed({check_restored_session:true});
+  assert.deepEqual(calls.map(p=>p.action),['retry_failed']);
+  assert.equal(calls[0].job_id,'checkpoint');
+  assert.equal(rs.jobId,'checkpoint');
+  assert.equal(rs.busy,false);
+  assert.ok(retryMessages.at(-1).includes('10')&&retryMessages.at(-1).includes('Задача сохранена'));
+  rb.pythonWorkerSelectionRefresh();
+  assert.equal(retryButton.disabled,true);
+  assert.equal(restoreButton.disabled,false);
+  calls.length=0;resumeReply={requeued:1,blocked_profiles:[]};
+  await rb.pythonWorkerRetryFailed({check_restored_session:true});
+  assert.deepEqual(calls.map(p=>p.action),['retry_failed']);
+  assert.equal(calls[0].job_id,'checkpoint');
+  assert.equal(rs.busy,true);
+  rs.busy=false;rs.batchJobIds=['checkpoint','temporary','permanent','success'];rs.jobId='';
+  calls.length=0;
+  await rb.pythonWorkerRetryFailed({check_restored_session:true});
+  assert.deepEqual(calls.filter(p=>p.action==='retry_failed').map(p=>p.job_id),['checkpoint','temporary']);
+  assert.equal(calls.some(p=>p.action==='create'||p.action==='preflight'),false);
+  console.log('Auto/BM/FP interface, checkpoint-safe retries and verified-session recovery passed.');
 })().catch(error=>{console.error(error);process.exitCode=1;});
 
 
@@ -284,7 +312,7 @@ vm.createContext(sandbox); vm.runInContext(source.slice(start,end), sandbox);
 {
   const detailsStart = source.indexOf('function pythonWorkerFailureDetails(item)');
   const detailsEnd = source.indexOf('function pythonWorkerSelectionRefresh()', detailsStart);
-  const detailsSandbox = {pythonWorkerItemCanRetry:()=>true};
+  const detailsSandbox = {pythonWorkerItemCanRetry:()=>true,pythonWorkerItemNeedsSessionRestore:()=>false};
   vm.createContext(detailsSandbox);
   vm.runInContext(source.slice(detailsStart, detailsEnd), detailsSandbox);
   const details = detailsSandbox.pythonWorkerFailureDetails({
@@ -306,4 +334,37 @@ vm.createContext(sandbox); vm.runInContext(source.slice(start,end), sandbox);
     }}]
   });
   assert.ok(!invalid.some(value=>value.includes('secret')));
+}
+
+// Bind the real init handler: a returning page gets one recovery button and
+// its click requests saved-job recovery, without launching a new job.
+{
+  const nodes=new Map();const calls=[];let prevented=0;
+  const retry={className:'btn',addEventListener(){},insertAdjacentElement(where,node){
+    assert.equal(where,'afterend');nodes.set(node.id,node);
+  }};
+  nodes.set('pythonProvisionRetry',retry);
+  const init={
+    pythonWorkerEl:id=>nodes.get(id)||null,
+    document:{documentElement:{},addEventListener(){},createElement:()=>({
+      addEventListener(kind,callback){assert.equal(kind,'click');this.onClick=callback;}
+    })},
+    pythonWorkerUiState:{batchJobIds:[],jobId:''},
+    async pythonWorkerRetryFailed(options){calls.push(options);},
+    pythonWorkerSelectionRefresh(){},pythonWorkerEnhanceBmDialog(){},
+    pythonWorkerEnhanceProfileThreeDots(){},pythonWorkerEnhanceCommonPageMenu(){},
+    pythonWorkerInstallBusinessAddRkInterceptor(){},async pythonWorkerHealthCheck(){},
+    setInterval(){},MutationObserver:class {observe(){}}
+  };
+  vm.createContext(init);
+  const begin=source.indexOf('function pythonWorkerInitUi()');
+  vm.runInContext(source.slice(begin,source.indexOf("\nif (document.readyState",begin)),init);
+  init.pythonWorkerInitUi();init.pythonWorkerInitUi();
+  assert.equal(nodes.size,2);
+  const button=nodes.get('pythonProvisionRestoreSession');
+  assert.equal(button.textContent,'Проверить сессию и продолжить');
+  button.onClick({preventDefault(){prevented++;}});
+  assert.equal(prevented,1);
+  assert.equal(calls.length,1);
+  assert.equal(calls[0].check_restored_session,true);
 }

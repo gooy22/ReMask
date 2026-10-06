@@ -34,6 +34,60 @@ class ProfileFpAuthGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.requeued,100); preflight.assert_not_awaited()
         worker.enqueue_job.assert_awaited_once_with('bulk-100')
 
+
+    async def test_pending_page_auth_retry_checks_the_page_surface_before_requeue(self):
+        pending={'phase':'PAGE_CREATE_CLICK_INTENT','active_page_name':'PrgssTeam','active_before_ids':['123456']}
+        view={'items':[{'profile_id':'10','status':'FAILED','error_code':'CHECKPOINT_REQUIRED','retryable':False,
+            'tasks':[{'status':'FAILED','error_code':'CHECKPOINT_REQUIRED','payload':{
+                'steps':['FAN_PAGES','BUSINESS','AD_ACCOUNT'],
+                'parameters':{'FAN_PAGES':{'common_page':True}}}}],
+            'provisioning_steps':[{'step':'FAN_PAGES','result':pending}]}]}
+        for ready in (False,True):
+            with self.subTest(restored=ready):
+                fake=SimpleNamespace(job_view=AsyncMock(return_value=view),retry_failed=AsyncMock(return_value=int(ready)))
+                worker=SimpleNamespace(enqueue_job=AsyncMock())
+                state={'facebook_session_ready':ready,'auth_blocked':not ready,
+                    'auth_error_code':'' if ready else 'CHECKPOINT_REQUIRED'}
+                with patch.object(api,'store',fake),patch.object(api,'pool',worker), \
+                     patch.object(api,'mirror',SimpleNamespace(enabled=False)), \
+                     patch.object(api,'profile_preflight',AsyncMock(return_value=state)) as preflight, \
+                     patch.dict(api._FP_AUTH_GATE_CACHE,{},clear=True):
+                    result=await api.retry_failed('saved-page-job')
+                preflight.assert_awaited_once_with('10',purpose='fan_pages')
+                fake.retry_failed.assert_awaited_once_with('saved-page-job',excluded_profile_ids=set() if ready else {'10'})
+                self.assertEqual(result.requeued,int(ready))
+                self.assertEqual(result.blocked_profiles,[] if ready else ['10'])
+                if ready:worker.enqueue_job.assert_awaited_once_with('saved-page-job')
+                else:worker.enqueue_job.assert_not_awaited()
+                self.assertEqual(pending,{'phase':'PAGE_CREATE_CLICK_INTENT','active_page_name':'PrgssTeam','active_before_ids':['123456']})
+
+    async def test_bulk_auth_retry_uses_the_failed_stage_not_the_original_fp_payload(self):
+        item={'profile_id':'10','status':'FAILED','error_code':'CHECKPOINT_REQUIRED',
+            'tasks':[{'status':'FAILED','error_code':'CHECKPOINT_REQUIRED','payload':{
+                'steps':['FAN_PAGES','BUSINESS','AD_ACCOUNT'],
+                'parameters':{'FAN_PAGES':{'common_page':True}}}}],
+            'provisioning_steps':[{'step':'FAN_PAGES','status':'SUCCESS'},
+                {'step':'BUSINESS','status':'FAILED'}]}
+        view={'items':[item]}
+        fake=SimpleNamespace(job_view=AsyncMock(return_value=view),retry_failed=AsyncMock(return_value=0))
+        with patch.object(api,'store',fake),patch.object(api,'pool',SimpleNamespace(enqueue_job=AsyncMock())), \
+             patch.object(api,'mirror',SimpleNamespace(enabled=False)), \
+             patch.object(api,'profile_preflight',AsyncMock(return_value={
+                 'facebook_session_ready':False,'auth_blocked':True,
+                 'auth_error_code':'CHECKPOINT_REQUIRED'})) as preflight:
+            result=await api.retry_failed('saved-bulk-job')
+        preflight.assert_awaited_once_with('10',purpose='business')
+        self.assertEqual(result.blocked_profiles,['10'])
+        fake.retry_failed.assert_awaited_once_with('saved-bulk-job',excluded_profile_ids={'10'})
+
+    async def test_business_auth_retry_keeps_business_surface_preflight(self):
+        with patch.object(api,'profile_preflight',AsyncMock(return_value={
+                'facebook_session_ready':True,'auth_blocked':False})) as preflight:
+            ready,blocked=await api._partition_auth_retry_profiles(['10'])
+        preflight.assert_awaited_once_with('10',purpose='business')
+        self.assertEqual(ready,{'10'})
+        self.assertEqual(blocked,{})
+
     async def test_page_policy_consent_rejects_unrelated_failed_job(self):
         fake=SimpleNamespace(job_view=AsyncMock(return_value={'items':[{'error_code':'SESSION_EXPIRED','tasks':[]}]}))
         with patch.object(api,'store',fake):

@@ -884,15 +884,41 @@ def _view_terminal_auth_retry_profile_ids(view: dict[str, Any]) -> list[str]:
     return out
 
 
+def _view_fan_page_auth_retry_profile_ids(view: dict[str, Any]) -> set[str]:
+    page_profiles=set(_view_fan_page_retry_profile_ids(view))
+    out:set[str]=set()
+    for item in view.get('items') or []:
+        profile=str(item.get('profile_id') or '').strip()
+        if profile not in page_profiles:
+            continue
+        failed_steps={
+            str(row.get('step') or '').strip().upper()
+            for row in item.get('provisioning_steps') or []
+            if isinstance(row,dict) and str(row.get('status') or '').upper()=='FAILED'
+        }
+        # A bulk payload still contains FP after it has completed. Probe the
+        # Business surface when the actual failure is now BM/RK. Legacy jobs
+        # without per-step status retain their Page-oriented preflight.
+        if not failed_steps or 'FAN_PAGES' in failed_steps:
+            out.add(profile)
+    return out
+
+
 async def _partition_auth_retry_profiles(
     profile_ids: list[str],
+    *,
+    fan_page_profile_ids: set[str] | None = None,
 ) -> tuple[set[str], dict[str,str]]:
     """Preflight only terminal-auth failures before requeueing the same Job."""
     if not profile_ids:
         return set(),{}
+    page_profiles=fan_page_profile_ids or set()
     async def check(profile_id: str):
         try:
-            state=await profile_preflight(profile_id,purpose='business')
+            purpose='fan_pages' if profile_id in page_profiles else 'business'
+            state=await profile_preflight(profile_id,purpose=purpose)
+            if purpose=='fan_pages':
+                _remember_fp_auth_gate(profile_id,state)
             code=str(state.get('auth_error_code') or '').strip().upper()
             ready=state.get('facebook_session_ready') is True and not bool(state.get('auth_blocked'))
             return profile_id,ready,code or ('SESSION_NOT_READY' if not ready else '')
@@ -3164,10 +3190,12 @@ async def retry_failed(job_id: str, consent: dict | None = Body(default=None)) -
     # proves that the profile session is usable again. Blocked profiles stay
     # FAILED while healthy profiles from the same bulk Job can continue.
     auth_retry_profiles=_view_terminal_auth_retry_profile_ids(current_view)
-    _auth_ready,auth_blocked=await _partition_auth_retry_profiles(auth_retry_profiles)
+    fp_profiles=_view_fan_page_retry_profile_ids(current_view)
+    _auth_ready,auth_blocked=await _partition_auth_retry_profiles(
+        auth_retry_profiles,fan_page_profile_ids=_view_fan_page_auth_retry_profile_ids(current_view),
+    )
     excluded_profiles=set(auth_blocked)
 
-    fp_profiles=_view_fan_page_retry_profile_ids(current_view)
     fp_profiles_for_gate=[
         profile for profile in fp_profiles
         if profile not in excluded_profiles

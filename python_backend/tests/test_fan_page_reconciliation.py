@@ -118,7 +118,8 @@ class ReconciliationTests(unittest.IsolatedAsyncioTestCase):
         state = SimpleNamespace(checkpoint=AsyncMock())
         session = self.session()
         with patch('app.provisioning.fan_pages_handler._fresh_page_inventory',
-                   AsyncMock(side_effect=BrowserBusinessError('CHECKPOINT_REQUIRED', 'challenge'))) as inventory:
+                   AsyncMock(side_effect=BrowserBusinessError('CHECKPOINT_REQUIRED', 'challenge',
+                       diagnostic={'auth_evidence':'checkpoint_url','url':'https://www.facebook.com/checkpoint/?secret=fixture','body_excerpt':'private challenge'}))) as inventory:
             with self.assertRaises(ProvisioningError) as caught:
                 await fan_pages_handler(session, {'names':['PrgssTeam']}, {}, provisioning_state=state,
                     item_id='workspace-common-page-facebook-123', profile_id='10', scope_key='workspace-common-page',
@@ -130,7 +131,23 @@ class ReconciliationTests(unittest.IsolatedAsyncioTestCase):
         session.facebook_web.assert_not_awaited()
         saved = state.checkpoint.await_args.args[-1]
         self.assertEqual(saved['reconciliation'][0]['code'], 'CHECKPOINT_REQUIRED')
+        self.assertTrue(saved['auth_required'])
+        self.assertEqual(saved['auth_error_code'],'CHECKPOINT_REQUIRED')
+        self.assertEqual(saved['browser_diagnostic']['url'],'https://www.facebook.com/checkpoint')
+        self.assertEqual(saved['browser_diagnostic']['auth_evidence'],'checkpoint_url')
+        self.assertNotIn('secret',str(saved))
+        self.assertNotIn('private challenge',str(saved))
         self.assertNotIn('phase', saved)
+
+    async def test_reconciliation_after_session_restore_clears_the_auth_marker(self):
+        state=SimpleNamespace(checkpoint=AsyncMock())
+        from app.provisioning.fan_pages_handler import _record_reconciliation
+        await _record_reconciliation(state,'saved-item','10','workspace-common-page',[
+            {'source':'your_pages','result':'ok','count':1}])
+        saved=state.checkpoint.await_args.args[-1]
+        self.assertFalse(saved['auth_required'])
+        self.assertEqual(saved['auth_error_code'],'')
+        self.assertNotIn('phase',saved)
 
     async def test_failed_reconciliation_is_saved_under_common_page_item(self):
         state = SimpleNamespace(checkpoint=AsyncMock())
