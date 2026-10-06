@@ -119,15 +119,27 @@ def selected_payment_asset(profile: str, target: str, path: Path = Path('/var/li
     return {}
 
 
-async def resolve_payment_asset(profile: str, target: str, state: Any = None) -> dict[str,str]:
-    """Use exact confirmed CREATE identity before a new RK's first live sync.
+async def resolve_payment_asset(profile: str, target: str, state: Any = None,
+                                hint: dict[str,Any] | None = None) -> dict[str,str]:
+    """Resolve the selected RK's BM from saved evidence or a workspace hint.
 
-    This supplies a navigation target only; the native billing flow must still
-    prove the selected RK before reading or entering payment information.
+    A hint only selects where to navigate. The native billing flow still has to
+    prove the exact BM and RK in Meta before reading or entering card details.
     """
+    hinted: dict[str,str] = {}
+    if hint is not None:
+        if not isinstance(hint,dict):return {}
+        business=str(hint.get('business_id') or '').strip()
+        alias=str(hint.get('business_asset_id') or '').strip()
+        name=str(hint.get('name') or '').strip()
+        if (not re.fullmatch(r'\d{5,30}',business)
+                or (alias and not re.fullmatch(r'\d{5,30}',alias))
+                or len(name)>160):return {}
+        hinted={'business_id':business,'business_asset_id':alias,'name':name}
     asset=selected_payment_asset(profile,target)
     if state is None:
-        return asset
+        if asset and hinted and asset.get('business_id')!=hinted['business_id']:return {}
+        return {**hinted,**asset,'name':asset.get('name') or hinted.get('name','')} if hinted else asset
     matches=[row for row in await state.confirmed_ad_account_bindings_for_profile(profile)
         if str(row.get('ad_account_id') or '').removeprefix('act_')==target
         and re.fullmatch(r'\d{5,30}',str(row.get('business_id') or ''))]
@@ -135,12 +147,17 @@ async def resolve_payment_asset(profile: str, target: str, state: Any = None) ->
     if len(businesses)>1:
         return {}
     if not businesses:
-        return asset
+        if asset and hinted and asset.get('business_id')!=hinted['business_id']:return {}
+        return {**hinted,**asset,'name':asset.get('name') or hinted.get('name','')} if hinted else asset
     business=next(iter(businesses))
     if asset and asset.get('business_id')!=business:
         return {}
-    return asset or {'business_id':business,'business_asset_id':'',
-        'name':str(matches[0].get('account_name') or matches[0].get('name') or target)}
+    if hinted and hinted['business_id']!=business:return {}
+    confirmed_name=str(matches[0].get('account_name') or matches[0].get('name') or '')
+    if asset:
+        return {**asset,'name':asset.get('name') or confirmed_name or hinted.get('name') or target}
+    return {**hinted,'business_id':business,'business_asset_id':hinted.get('business_asset_id',''),
+        'name':confirmed_name or hinted.get('name') or target}
 
 
 async def _resolve_payment_account_name(page: Any, name: str) -> str:
@@ -355,12 +372,13 @@ async def inspect_payment_methods(browser: Any, target: str, *, business_id: str
     return result
 
 
-async def inspect_profile_payment_methods(resolver: Any, profile_id: str, target: str, *, state: Any = None) -> dict[str, Any]:
+async def inspect_profile_payment_methods(resolver: Any, profile_id: str, target: str, *, state: Any = None,
+                                          asset_hint: dict[str,Any] | None = None) -> dict[str, Any]:
     from .session import ProfileSession
 
     target = account_id(target)
     context = await resolver.resolve(profile_id)
-    asset=await resolve_payment_asset(profile_id,target,state)
+    asset=await resolve_payment_asset(profile_id,target,state,asset_hint)
     if asset.get('business_id') == str(context.cookies.get('c_user') or ''):
         raise ValueError('PERSONAL_AD_ACCOUNT_EXCLUDED')
     async with ProfileSession(context) as session:

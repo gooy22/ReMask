@@ -19,7 +19,7 @@ def payment_route():
     tree=ast.parse((Path(__file__).resolve().parents[1]/'main.py').read_text())
     route=next(node for node in tree.body if isinstance(node,ast.AsyncFunctionDef) and node.name=='profile_payment_card_action')
     route.decorator_list=[]
-    namespace={'Body':lambda *args:None,'HTTPException':HTTPException,'pool':SimpleNamespace(resolver=None),
+    namespace={'Body':lambda *args:None,'HTTPException':HTTPException,'pool':SimpleNamespace(resolver=None,provisioning_state=None),
         're':re,'BrowserBusinessError':BrowserBusinessError,'ProfileContextError':ContextFailure}
     exec(compile(ast.Module(body=[route],type_ignores=[]),'main.py','exec'),namespace)
     return namespace[route.name]

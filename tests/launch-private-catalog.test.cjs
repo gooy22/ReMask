@@ -28,7 +28,9 @@ console.log('Private Launch catalog and funding truth checks passed');
 
 (async()=>{
   const overlay=fs.readFileSync(path.join(__dirname,'..','railway-launch-private-catalog-overlay.php'),'utf8');
-  assert.match(overlay,/\/payment-methods\?account_id=/);
+  assert.match(overlay,/\/payment-methods\?'\.http_build_query\(\$paymentQuery/);
+  assert.match(overlay,/'business_id'=>self::id\(\$account\['business_id'\]/);
+  assert.match(overlay,/'account_name'=>trim\(\(string\)\(\$account\['name'\]/);
   assert.match(overlay,/private_facebook_billing_ui/);
   assert.match(overlay,/private_facebook_selected_rk_payment_tab/);
   assert.match(overlay,/'funding_verified'=>false/);

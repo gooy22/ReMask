@@ -279,7 +279,8 @@ final class RemaskPrivateLaunchCatalog
                 if ($id === '' || $account['account_id'] !== $id) continue;
                 // No live payment proof is present in the identity mirror.
                 return ['id'=>'act_'.$id, 'account_status'=>$account['account_status'],
-                        'currency'=>$account['currency'], 'funding_verified'=>false,
+                        'currency'=>$account['currency'], 'business_id'=>self::id($account['business_id'] ?? ''),
+                        'account_name'=>trim((string)($account['name'] ?? '')),'funding_verified'=>false,
                         'verification_status'=>'NOT_CHECKED', '_cache'=>$catalog['_cache']];
             }
             throw new InvalidArgumentException('Selected RK is absent from this profile catalog.');
@@ -348,7 +349,7 @@ try {
     MetaEndpoint::accountForName($profile);
     $catalog = RemaskPrivateLaunchCatalog::load($profile);
     $account = preg_replace('/^act_/', '', trim((string)($input['account_id'] ?? '')));
-    RemaskPrivateLaunchCatalog::asset($catalog,'funding',$account);
+    $fundingAsset=RemaskPrivateLaunchCatalog::asset($catalog,'funding',$account);
     if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
     $base = rtrim((string)(getenv('REMASK_PYTHON_WORKER_URL') ?: 'http://127.0.0.1:8081'),'/');
     $key = (string)(getenv('REMASK_WORKER_API_KEY') ?: '');
@@ -405,8 +406,13 @@ try {
         $paymentCtx=stream_context_create(['http'=>['method'=>'GET',
             'header'=>"Accept: application/json\r\nX-Remask-Worker-Key: ".$key."\r\n",
             'timeout'=>72,'ignore_errors'=>true,'follow_location'=>0]]);
+        $paymentQuery=['account_id'=>$account];
+        if(preg_match('/^\d{5,30}$/D',(string)($fundingAsset['business_id'] ?? '')))
+            $paymentQuery['business_id']=$fundingAsset['business_id'];
+        if(trim((string)($fundingAsset['account_name'] ?? ''))!=='')
+            $paymentQuery['account_name']=$fundingAsset['account_name'];
         $paymentRaw=@file_get_contents(
-            $base.'/api/v1/profiles/'.rawurlencode($profile).'/payment-methods?account_id='.rawurlencode($account),
+            $base.'/api/v1/profiles/'.rawurlencode($profile).'/payment-methods?'.http_build_query($paymentQuery,'','&',PHP_QUERY_RFC3986),
             false,$paymentCtx
         );
         $decoded=is_string($paymentRaw) ? json_decode($paymentRaw,true) : null;

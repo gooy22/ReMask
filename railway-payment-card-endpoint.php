@@ -24,13 +24,23 @@ function card_worker(string $profile,array $payload): array {
     if(!is_array($result)||!isset($result['status']))throw new RuntimeException('CARD_WORKER_RESULT_UNKNOWN');
     return $result;
 }
-function card_worker_inspect(string $profile,string $account): array {
+function card_asset_hint(array $input): array {
+    if(!array_intersect(['business_id','business_asset_id','account_name'],array_keys($input)))return [];
+    $business=trim((string)($input['business_id']??''));
+    $alias=trim((string)($input['business_asset_id']??''));
+    $name=trim((string)($input['account_name']??''));
+    if(!preg_match('/^\d{5,30}$/D',$business)||($alias!==''&&!preg_match('/^\d{5,30}$/D',$alias))||strlen($name)>160||preg_match('/[\x00-\x1f]/',$name))throw new InvalidArgumentException('PAYMENT_ACCOUNT_BINDING_MISSING');
+    return ['business_id'=>$business,'business_asset_id'=>$alias,'name'=>$name];
+}
+function card_worker_inspect(string $profile,string $account,array $assetHint=[]): array {
     $base=rtrim((string)(getenv('REMASK_PYTHON_WORKER_URL')?:'http://127.0.0.1:8081'),'/');
     $key=(string)(getenv('REMASK_WORKER_API_KEY')?:'');
     if($key==='')throw new RuntimeException('CARD_WORKER_KEY_UNAVAILABLE');
     $context=stream_context_create(['http'=>['method'=>'GET','header'=>"Accept: application/json\r\nX-Remask-Worker-Key: ".$key."\r\n",
         'timeout'=>100,'ignore_errors'=>true,'follow_location'=>0]]);
-    $raw=@file_get_contents($base.'/api/v1/profiles/'.rawurlencode($profile).'/payment-methods?account_id='.rawurlencode($account),false,$context);
+    $query=['account_id'=>$account];
+    if($assetHint){$query['business_id']=$assetHint['business_id'];if($assetHint['business_asset_id']!=='')$query['business_asset_id']=$assetHint['business_asset_id'];if($assetHint['name']!=='')$query['account_name']=$assetHint['name'];}
+    $raw=@file_get_contents($base.'/api/v1/profiles/'.rawurlencode($profile).'/payment-methods?'.http_build_query($query,'','&',PHP_QUERY_RFC3986),false,$context);
     if($raw===false)throw new RuntimeException('CARD_WORKER_RESULT_UNKNOWN');
     $result=json_decode($raw,true);
     // The inspection route returns a deliberately sanitized code for auth gates.
@@ -60,6 +70,7 @@ try {
     if(!in_array($action,['prepare','bind','reconcile'],true))throw new InvalidArgumentException('CARD_ACTION_INVALID');
     $profile=trim((string)($input['profile']??''));$account=preg_replace('/^act_/','',trim((string)($input['account_id']??'')));
     if($profile===''||strlen($profile)>160||!preg_match('/^\d{5,30}$/D',$account))throw new InvalidArgumentException('INVALID_PAYMENT_TARGET');
+    $assetHint=card_asset_hint($input);
     // The worker is the source of truth for payment targets. Its resolver
     // accepts both synced inventory and an exact confirmed RK creation, while
     // rejecting personal or ambiguous accounts. Requiring the PHP-side launch
@@ -69,11 +80,16 @@ try {
         if(!preg_match('/^card_[a-f0-9]{24}$/D',$id))throw new InvalidArgumentException('CARD_NOT_FOUND');
         $expected=$vault->binding($id,$profile,$account);
         if(is_array($expected)&&$expected['status']==='IN_PROGRESS'&&time()-(strtotime((string)$expected['updated_at'])?:time())<180)throw new InvalidArgumentException('CARD_BINDING_IN_PROGRESS');
-        $funding=card_worker_inspect($profile,$account);
+        $funding=card_worker_inspect($profile,$account,$assetHint);
         $result=$vault->reconcile($id,$profile,$account,$expected,$funding);
         card_out(['ok'=>true,'data'=>['result'=>['profile_id'=>$profile,'account_id'=>$account]+$result]]);
     }
     $payload=['operation'=>$action,'account_id'=>$account];$id='';$attemptId=null;
+    if($assetHint){
+        // Navigation hint from the selected Workspace row. The worker still
+        // proves the exact RK inside Meta before touching card fields.
+        $payload['asset_hint']=$assetHint;
+    }
     if($action==='prepare'&&!empty($input['card_id'])&&!preg_match('/^card_[a-f0-9]{24}$/D',(string)$input['card_id']))throw new InvalidArgumentException('CARD_NOT_FOUND');
     $setupFields=['setup_country','setup_currency','setup_timezone','setup_country_mode'];
     if (array_intersect($setupFields,array_keys($input)) && !isset($input['setup_country'],$input['setup_currency'],$input['setup_timezone'])) throw new InvalidArgumentException('PAYMENT_SETUP_INVALID');
@@ -94,7 +110,7 @@ try {
         $reviewed=($input['retry_confirmed']??'')==='1';
         if($reviewed){
             $expected=$vault->binding($id,$profile,$account);
-            $funding=card_worker_inspect($profile,$account);
+            $funding=card_worker_inspect($profile,$account,$assetHint);
             $secret=$vault->secret($id);
             $binding=$vault->beginReviewed($id,$profile,$account,(string)($input['retry_review']??''),$expected,$funding);
         }else{

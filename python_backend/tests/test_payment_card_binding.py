@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from app.facebook_business_browser import BrowserBusinessError
-from app.payment_card_binding import _open_card_form, _resolve_payment_account_name, _selected_account_disabled, _payment_surface, _unique_visible, card_values, configure_payment_account, field_kind, form_action_guard, missing_card_fields, payment_account_setup_required, payment_card_flow, profile_payment_card, selected_payment_asset
+from app.payment_card_binding import _open_card_form, _resolve_payment_account_name, _selected_account_disabled, _payment_surface, _setup_control, _unique_visible, card_values, configure_payment_account, field_kind, form_action_guard, missing_card_fields, payment_account_setup_required, payment_card_flow, profile_payment_card, selected_payment_asset
 from app.payment_inspection import settings_payment_summary, select_settings_payment_tab
 
 ID='123456789'
@@ -63,6 +63,20 @@ class CardFieldTests(unittest.TestCase):
 
 
 class CardBrowserTests(unittest.IsolatedAsyncioTestCase):
+    async def test_timezone_setup_resolves_current_city_button_by_accessible_name(self):
+        empty=SimpleNamespace(count=AsyncMock(return_value=0))
+        empty.filter=lambda **kwargs:empty
+        current=SimpleNamespace(count=AsyncMock(return_value=1))
+        current.filter=lambda **kwargs:current
+        def get_by_role(role,name):
+            if role=='button' and name.fullmatch('Los Angeles, America (GMT-07:00)'):
+                return current
+            return empty
+        page=SimpleNamespace(get_by_role=get_by_role,
+            get_by_text=lambda *args,**kwargs: (_ for _ in ()).throw(AssertionError('text fallback must not run')))
+        control=await _setup_control(page,r'Time zone|Timezone|Часовой пояс|Часовий пояс','Los Angeles, America (GMT-07:00)')
+        self.assertIs(control,current)
+
     async def test_new_created_rk_can_prepare_before_inventory_sync_but_conflicts_are_blocked(self):
         from app.payment_inspection import resolve_payment_asset
         state=SimpleNamespace(confirmed_ad_account_bindings_for_profile=AsyncMock(return_value=[
@@ -71,8 +85,23 @@ class CardBrowserTests(unittest.IsolatedAsyncioTestCase):
             asset=await resolve_payment_asset('Fixture',ID,state)
         self.assertEqual(asset,{'business_id':'987654321','business_asset_id':'','name':'Created RK'})
         state.confirmed_ad_account_bindings_for_profile.assert_awaited_once_with('Fixture')
+        with patch('app.payment_inspection.selected_payment_asset',return_value={'business_id':'987654321','business_asset_id':'','name':''}):
+            merged=await resolve_payment_asset('Fixture',ID,None,{'business_id':'987654321','name':'Workspace RK'})
+        self.assertEqual(merged['name'],'Workspace RK')
+        with patch('app.payment_inspection.selected_payment_asset',return_value={'business_id':'987654321','business_asset_id':'','name':''}):
+            merged_confirmed=await resolve_payment_asset('Fixture',ID,state,{'business_id':'987654321','name':'Workspace RK'})
+        self.assertEqual(merged_confirmed['name'],'Created RK')
         with patch('app.payment_inspection.selected_payment_asset',return_value={'business_id':'555555555'}):
             self.assertEqual(await resolve_payment_asset('Fixture',ID,state),{})
+        state.confirmed_ad_account_bindings_for_profile=AsyncMock(return_value=[])
+        with patch('app.payment_inspection.selected_payment_asset',return_value={}):
+            hinted=await resolve_payment_asset('Fixture',ID,state,{'business_id':'222222222','name':'Workspace RK'})
+            self.assertEqual(hinted,{'business_id':'222222222','business_asset_id':'','name':'Workspace RK'})
+            self.assertEqual(await resolve_payment_asset('Fixture',ID,state,{'business_id':'bad'}),{})
+        state.confirmed_ad_account_bindings_for_profile=AsyncMock(return_value=[
+            {'business_id':'987654321','ad_account_id':'act_'+ID}])
+        with patch('app.payment_inspection.selected_payment_asset',return_value={}):
+            self.assertEqual(await resolve_payment_asset('Fixture',ID,state,{'business_id':'222222222'}),{})
 
     async def test_personal_rk_is_blocked_before_any_card_browser_opens(self):
         from app.payment_card_binding import _profile_payment_card_execute
@@ -263,7 +292,7 @@ class CardBrowserTests(unittest.IsolatedAsyncioTestCase):
     def browser(self,body='Payment methods'):
         save=SimpleNamespace(is_enabled=AsyncMock(return_value=True),click=AsyncMock())
         page=SimpleNamespace(url='https://business.facebook.com/billing_hub/payment_settings?asset_id='+ID,
-            locator=lambda _:SimpleNamespace(inner_text=AsyncMock(return_value=body)),wait_for_timeout=AsyncMock())
+            locator=lambda _:SimpleNamespace(inner_text=AsyncMock(return_value=body)),wait_for_timeout=AsyncMock(),evaluate=AsyncMock(return_value=False),frames=[])
         return SimpleNamespace(profile_id='Fixture',page=page,_assert_authenticated=AsyncMock()),save
 
     def fields(self):
@@ -283,6 +312,17 @@ class CardBrowserTests(unittest.IsolatedAsyncioTestCase):
             result=await payment_card_flow(browser,ID,{},operation='bind',card=CARD,cvv='123')
         self.assertFalse(result['submitted']);save.click.assert_not_awaited()
 
+    async def test_auth_block_reports_only_verified_facebook_route(self):
+        browser,save=self.browser()
+        error=BrowserBusinessError('CHECKPOINT_REQUIRED','checkpoint',diagnostic={
+            'auth_evidence':'checkpoint_url','checkpoint_path':'/checkpoint/123?next=secret'})
+        with patch('app.payment_card_binding._open_card_form',AsyncMock(side_effect=error)):
+            result=await payment_card_flow(browser,ID,{},operation='prepare')
+        self.assertEqual(result['code'],'CHECKPOINT_REQUIRED')
+        self.assertEqual(result['diagnostic'],{'auth_evidence':'checkpoint_url','facebook_route':'/checkpoint'})
+        self.assertNotIn('secret',str(result))
+        save.click.assert_not_awaited()
+
     async def test_financial_action_or_unaccepted_terms_stops_before_secret_entry(self):
         for body,checkbox in [('Verification charge',False),('Payment methods',True)]:
             browser,save=self.browser(body);fields=self.fields()
@@ -292,6 +332,18 @@ class CardBrowserTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result['status'],'ACTION_REQUIRED');save.click.assert_not_awaited()
             for field in fields:
                 if 'control' in field:field['control'].fill.assert_not_awaited()
+
+    async def test_background_financial_help_does_not_block_card_form(self):
+        browser,save=self.browser('Help: verification charge')
+        fields=self.fields();fields[0]['control'].evaluate=AsyncMock(return_value='Payment methods\nSave')
+        with patch('app.payment_card_binding._open_card_form',AsyncMock(return_value={'status':'FORM_READY','_fields':fields})),patch('app.payment_card_binding._unique_visible',AsyncMock(return_value=save)):
+            result=await payment_card_flow(browser,ID,{},operation='bind',card=CARD,cvv='123')
+        self.assertEqual(result['status'],'SUBMITTED_UNVERIFIED');save.click.assert_awaited_once()
+        fields[0]['control'].evaluate.return_value='Verification charge\nSave'
+        browser,save=self.browser('Help: verification charge')
+        with patch('app.payment_card_binding._open_card_form',AsyncMock(return_value={'status':'FORM_READY','_fields':fields})),patch('app.payment_card_binding._unique_visible',AsyncMock(return_value=save)):
+            result=await payment_card_flow(browser,ID,{},operation='bind',card=CARD,cvv='123')
+        self.assertEqual(result['code'],'PAYMENT_FINANCIAL_ACTION_REQUIRED');save.click.assert_not_awaited()
 
     async def test_save_once_and_only_exact_masked_scope_can_confirm_linkage(self):
         for body,expected in [(ID+'\nPayment methods\nVisa •••• 1111','LINKED'),('Payment method added','SUBMITTED_UNVERIFIED')]:
@@ -307,6 +359,23 @@ class CardBrowserTests(unittest.IsolatedAsyncioTestCase):
             result=await payment_card_flow(browser,ID,{},operation='bind',card=CARD,cvv='123')
         self.assertEqual(result['status'],'SUBMITTED_UNVERIFIED');self.assertTrue(result['submitted']);save.click.assert_awaited_once()
         self.assertNotIn(CARD['number'],json.dumps(result));self.assertNotIn('cvv fixture',json.dumps(result))
+
+    async def test_background_verification_text_is_not_a_bank_challenge(self):
+        browser,save=self.browser(ID+' Payment methods Help: verification code and one-time password')
+        with patch('app.payment_card_binding._open_card_form',AsyncMock(return_value={'status':'FORM_READY','_fields':self.fields()})),patch('app.payment_card_binding._unique_visible',AsyncMock(return_value=save)):
+            result=await payment_card_flow(browser,ID,{},operation='bind',card=CARD,cvv='123')
+        self.assertEqual(result['status'],'SUBMITTED_UNVERIFIED')
+        self.assertEqual(result['code'],'CARD_LINK_NOT_VERIFIED');save.click.assert_awaited_once()
+
+    async def test_visible_challenge_is_detected_before_settings_navigation(self):
+        browser,save=self.browser('Verification code')
+        browser.page.evaluate.return_value=True
+        browser.page.url='https://business.facebook.com/latest/settings/ad_accounts/'
+        browser._read_selected_ad_account_identity=AsyncMock()
+        with patch('app.payment_card_binding._open_card_form',AsyncMock(return_value={'status':'FORM_READY','_fields':self.fields()})),patch('app.payment_card_binding._unique_visible',AsyncMock(return_value=save)):
+            result=await payment_card_flow(browser,ID,{},operation='bind',card=CARD,cvv='123')
+        self.assertEqual(result['code'],'CARD_BANK_CONFIRMATION_REQUIRED')
+        browser._read_selected_ad_account_identity.assert_not_awaited();save.click.assert_awaited_once()
 
     async def test_billing_save_waits_for_mask_without_settings_fallback_or_replay(self):
         browser,save=self.browser(ID+' Payment methods Loading');fields=self.fields()

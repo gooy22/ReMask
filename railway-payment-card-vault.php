@@ -68,8 +68,14 @@ final class RemaskPaymentCardVault {
     private static function publicCard(array $row): array {
         return array_intersect_key($row,array_flip(['id','last4','brand','month','year','label','created_at']));
     }
+    private static function bindingState(array $row): array {
+        // A gate observed before Save needs a new user action, not reconciliation
+        // of a submission that never happened. Include legacy stored results.
+        if(($row['status']??'')==='ACTION_REQUIRED'&&($row['submitted']??null)===false)$row['status']='BLOCKED';
+        return $row;
+    }
     public function all(): array {
-        return $this->locked(static fn(array &$data) => ['cards'=>array_values(array_map([self::class,'publicCard'],$data['cards'])), 'bindings'=>array_values($data['bindings'])]);
+        return $this->locked(static fn(array &$data) => ['cards'=>array_values(array_map([self::class,'publicCard'],$data['cards'])), 'bindings'=>array_values(array_map([self::class,'bindingState'],$data['bindings']))]);
     }
     public function add(array $input): array {
         $card=self::normalize($input); $fingerprint=hash_hmac('sha256',$card['number'],$this->key);
@@ -165,6 +171,7 @@ final class RemaskPaymentCardVault {
             if(!isset($data['cards'][$id]))throw new InvalidArgumentException('CARD_NOT_FOUND');
             $key=hash('sha256',$profile.'|'.$account);
             $old=$data['bindings'][$key]??null;
+            if(is_array($old))$old=self::bindingState($old);
             if(is_array($old)&&in_array($old['status'],['IN_PROGRESS','SUBMITTED_UNVERIFIED','ACTION_REQUIRED'],true))throw new InvalidArgumentException('CARD_BINDING_RECONCILE_REQUIRED');
             if(is_array($old)&&$old['card_id']===$id&&$old['status']==='LINKED')return $old;
             $row=['card_id'=>$id,'profile'=>$profile,'account_id'=>$account,'last4'=>$data['cards'][$id]['last4'],'status'=>'IN_PROGRESS','updated_at'=>gmdate('c'),'attempt_id'=>bin2hex(random_bytes(12))];
@@ -200,6 +207,16 @@ final class RemaskPaymentCardVault {
             }
             if(!$observed){
                 $result=['status'=>'SUBMITTED_UNVERIFIED','code'=>$scope&&($funding['verification_status']??'')==='NONE'?'CARD_RECONCILE_NO_METHOD':'CARD_RECONCILE_UNVERIFIED','submitted'=>false,'funding_verified'=>false,'funding'=>$funding];
+                // Fresh evidence for this exact RK supersedes a cached link.
+                // Keep the original attempt time and submission metadata: this
+                // read does not submit anything or unlock an automatic retry.
+                if(is_array($current)&&$current['status']==='LINKED'&&$scope&&
+                    (self::exactEmpty($profile,$account,$funding)||($funding['verification_status']??'')==='LINKED')){
+                    $current['status']='SUBMITTED_UNVERIFIED';
+                    $current['checked_live']=false;
+                    $current['last_result_code']=$result['code'];
+                    $data['bindings'][$key]=$current;
+                }
                 if(self::reviewable($current)&&self::exactEmpty($profile,$account,$funding))$result['retry_review']=$this->retryReview($current);
                 return $result;
             }
@@ -210,10 +227,13 @@ final class RemaskPaymentCardVault {
     }
     public function finish(string $id,string $profile,string $account,string $status,array $result=[],?string $attemptId=null): void {
         if(!in_array($status,['LINKED','BLOCKED','FAILED','SUBMITTED_UNVERIFIED','ACTION_REQUIRED'],true))$status='SUBMITTED_UNVERIFIED';
+        // Only explicit evidence that Save was not attempted allows a new bind.
+        if(in_array($status,['BLOCKED','FAILED'],true)&&($result['submitted']??null)!==false)$status='SUBMITTED_UNVERIFIED';
+        $status=self::bindingState(['status'=>$status,'submitted'=>$result['submitted']??null])['status'];
         $this->locked(static function(array &$data)use($id,$profile,$account,$status,$result,$attemptId){
             $key=hash('sha256',$profile.'|'.$account);$row=$data['bindings'][$key]??null;
             if(!is_array($row)||$row['card_id']!==$id)throw new RuntimeException('CARD_BINDING_SCOPE_MISMATCH');
-            if($attemptId!==null&&($row['attempt_id']??null)!==$attemptId)throw new InvalidArgumentException('CARD_BINDING_CHANGED');
+            if($attemptId!==null&&(($row['attempt_id']??null)!==$attemptId||$row['status']!=='IN_PROGRESS'))throw new InvalidArgumentException('CARD_BINDING_CHANGED');
             $data['bindings'][$key]['status']=$status;$data['bindings'][$key]['updated_at']=gmdate('c');
             if(preg_match('/^[A-Z0-9_]{1,64}$/D',(string)($result['code']??'')))$data['bindings'][$key]['last_result_code']=$result['code'];
             if(array_key_exists('submitted',$result)&&in_array($result['submitted'],[true,false,null],true))$data['bindings'][$key]['submitted']=$result['submitted'];

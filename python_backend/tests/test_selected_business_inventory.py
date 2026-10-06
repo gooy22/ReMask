@@ -36,7 +36,7 @@ class SelectedBusinessInventoryTests(unittest.IsolatedAsyncioTestCase):
         )})
         store.confirmed_ad_account_bindings_for_profile.return_value=list(bindings)
         store.latest_profile_entities=AsyncMock(return_value={})
-        pool=SimpleNamespace(resolver=SimpleNamespace(resolve=AsyncMock(return_value=SimpleNamespace(pages=[]))),
+        pool=SimpleNamespace(resolver=SimpleNamespace(resolve=AsyncMock(return_value=SimpleNamespace(pages=[],cookies={}))),
                              provisioning_state=store)
         browser=SimpleNamespace(
             snapshot_businesses=AsyncMock(side_effect=WrongInventorySurface()),

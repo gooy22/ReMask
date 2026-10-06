@@ -228,6 +228,53 @@ try{
     $data=json_decode(file_get_contents($path),true);$data['bindings'][$key]['updated_at']=gmdate('c',time()-240);file_put_contents($path,json_encode($data));
     $old=$vault->binding($card['id'],'Other profile','123456789');
     expect(!isset($vault->reconcile($card['id'],'Other profile','123456789',$old,$empty)['retry_review']),'Bank action was made retryable');
+    // Pre-submit Meta gates remain actionable; bank/unknown submissions do not.
+    $pre=$vault->begin($card['id'],'Before save','123456789');
+    $vault->finish($card['id'],'Before save','123456789','ACTION_REQUIRED',
+        ['code'=>'PAYMENT_ACCOUNT_SETUP_REQUIRED','submitted'=>false],$pre['attempt_id']);
+    expect($vault->binding($card['id'],'Before save','123456789')['status']==='BLOCKED','Pre-submit gate stranded target');
+    $next=$vault->begin($card['id'],'Before save','123456789');
+    expect($next['attempt_id']!==$pre['attempt_id'],'Pre-submit continuation reused attempt');
+    $vault->finish($card['id'],'Before save','123456789','ACTION_REQUIRED',
+        ['code'=>'CARD_BANK_CONFIRMATION_REQUIRED','submitted'=>true],$next['attempt_id']);
+    rejected(fn()=>$vault->begin($card['id'],'Before save','123456789'),'CARD_BINDING_RECONCILE_REQUIRED');
+    rejected(fn()=>$vault->finish($card['id'],'Before save','123456789','LINKED',[],$next['attempt_id']),'CARD_BINDING_CHANGED');
+    // Old stored pre-submit ACTION_REQUIRED rows also survive an upgrade.
+    $legacyKey=hash('sha256','Before save|123456789');
+    $data=json_decode(file_get_contents($path),true);$data['bindings'][$legacyKey]['submitted']=false;file_put_contents($path,json_encode($data));
+    $visible=array_values(array_filter($vault->all()['bindings'],fn($b)=>$b['profile']==='Before save'))[0];
+    expect($visible['status']==='BLOCKED','Legacy pre-submit gate stayed pending in UI');
+    expect($vault->begin($card['id'],'Before save','123456789')['status']==='IN_PROGRESS','Legacy pre-submit gate blocked continuation');
+    foreach([true,null,'missing'] as $submission){
+        $profile='Inconsistent '.json_encode($submission);
+        $attempt=$vault->begin($card['id'],$profile,'123456789');
+        $metadata=$submission==='missing'?[]:['submitted'=>$submission];
+        $vault->finish($card['id'],$profile,'123456789','BLOCKED',$metadata,$attempt['attempt_id']);
+        expect($vault->binding($card['id'],$profile,'123456789')['status']==='SUBMITTED_UNVERIFIED','Uncertain failure released retry');
+        rejected(fn()=>$vault->begin($card['id'],$profile,'123456789'),'CARD_BINDING_RECONCILE_REQUIRED');
+    }
+    // A conclusive live check must invalidate a previously cached LINKED row.
+    $vault->begin($card['id'],'Stale link','123456789');
+    $vault->finish($card['id'],'Stale link','123456789','LINKED',['submitted'=>true]);
+    $staleKey=hash('sha256','Stale link|123456789');
+    $data=json_decode(file_get_contents($path),true);$data['bindings'][$staleKey]['updated_at']=gmdate('c',time()-240);file_put_contents($path,json_encode($data));
+    $stale=$vault->binding($card['id'],'Stale link','123456789');
+    $missing=array_replace($empty,['profile_id'=>'Stale link']);
+    $uncertain=array_replace($missing,['verification_status'=>'UNVERIFIED']);
+    $vault->reconcile($card['id'],'Stale link','123456789',$stale,$uncertain);
+    expect($vault->linkedBinding($card['id'],'Stale link','123456789')!==null,'Inconclusive check erased previous proof');
+    $checked=$vault->reconcile($card['id'],'Stale link','123456789',$stale,$missing);
+    expect($vault->linkedBinding($card['id'],'Stale link','123456789')===null,'Fresh absence left cached LINKED');
+    $changed=$vault->binding($card['id'],'Stale link','123456789');
+    expect($changed['submitted']===true&&$changed['updated_at']===$stale['updated_at'],'Read-only check rewrote attempt history');
+    expect(isset($checked['retry_review']),'Confirmed stale absence cannot be reviewed');
+    rejected(fn()=>$vault->begin($card['id'],'Stale link','123456789'),'CARD_BINDING_RECONCILE_REQUIRED');
+    expect($vault->beginReviewed($card['id'],'Stale link','123456789',$checked['retry_review']['token'],$changed,$missing)['status']==='IN_PROGRESS','Stale link review is not bound to persisted state');
+    $vault->finish($card['id'],'Stale link','123456789','LINKED');
+    $stale=$vault->binding($card['id'],'Stale link','123456789');
+    $other=array_replace($proof,['profile_id'=>'Stale link','payment_methods'=>[['type'=>'Visa','last4'=>'2222']]]);
+    $checked=$vault->reconcile($card['id'],'Stale link','123456789',$stale,$other);
+    expect($vault->linkedBinding($card['id'],'Stale link','123456789')===null&&!isset($checked['retry_review']),'Different live card left stale link or allowed repeat');
     $data=json_decode(file_get_contents($directory.'/cards.json'),true);$bytes=base64_decode($data['cards'][$card['id']]['encrypted']);$bytes[30]=chr(ord($bytes[30])^1);
     $data['cards'][$card['id']]['encrypted']=base64_encode($bytes);file_put_contents($directory.'/cards.json',json_encode($data));
     try{$vault->secret($card['id']);throw new RuntimeException('Tamper accepted');}catch(RuntimeException $e){expect($e->getMessage()==='CARD_DECRYPTION_FAILED','Authenticated encryption');}

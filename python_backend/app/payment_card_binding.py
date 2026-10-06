@@ -46,6 +46,20 @@ def form_action_guard(text: str, fields: list[dict[str,Any]]) -> str:
     return ''
 
 
+async def active_card_form_text(page: Any, fields: list[dict[str,Any]]) -> str:
+    """Read the visible card form rather than unrelated page help or menus."""
+    field=next((f for f in fields if f.get('kind')=='number' and f.get('control') is not None),None)
+    if field:
+        try:
+            text=await field['control'].evaluate("""el => {
+              const scope=el.closest('[role="dialog"],[role="alertdialog"],form');
+              return scope && scope.getClientRects().length ? scope.innerText : '';
+            }""")
+            if isinstance(text,str) and text.strip():return text
+        except Exception:pass
+    return await page.locator('body').inner_text(timeout=3000)
+
+
 def field_kind(label: str, autocomplete: str = '') -> str:
     if autocomplete in AUTOCOMPLETE:
         return AUTOCOMPLETE[autocomplete]
@@ -202,7 +216,7 @@ async def _open_card_form(browser: Any, target: str, asset: dict[str,str], billi
                 await _payment_surface(browser,'card_account_availability_unverified')
                 return {**setup_observed,**availability,'fields':_safe_fields(fields)}
             fields=await _form_fields(page)
-            text=await page.locator('body').inner_text(timeout=3000)
+            text=await active_card_form_text(page,fields)
             guard=form_action_guard(text,fields)
             if guard:return {**setup_observed,'status':'ACTION_REQUIRED','code':guard,'fields':_safe_fields(fields)}
             return {**setup_observed,'card_availability':availability['card_availability'],'status':'FORM_READY','code':'CARD_FORM_READY','fields':_safe_fields(fields),'_fields':fields}
@@ -216,7 +230,7 @@ async def _open_card_form(browser: Any, target: str, asset: dict[str,str], billi
             # The Billing dialog mounts after the Add control has responded.
             # Continue the bounded observation, without another click.
             continue
-        body=await page.locator('body').inner_text(timeout=3000)
+        body=await active_card_form_text(page,fields)
         guard=form_action_guard(body,fields)
         if guard:return {**setup_observed,'status':'ACTION_REQUIRED','code':guard}
         await next_button.click(timeout=3000)
@@ -279,23 +293,31 @@ async def _setup_control(page: Any, label: str, observed_default: str = '') -> A
         controls=page.get_by_role(role,name=re.compile(label,re.I)).filter(visible=True)
         if await controls.count()==1:
             return controls
-    else:
-        label_node=page.get_by_text(re.compile(r'^(?:'+label+r')$',re.I)).filter(visible=True)
-        control=None
-        if await label_node.count()==1:
-            for parent in ('..','../..'):
-                container=label_node.locator(parent)
-                # Meta's combobox has no accessible name: its visible label
-                # is a child of the control itself. Descendant-only lookup
-                # skips that parent and then finds both country and currency.
-                if await container.evaluate("e=>e.matches('select,[role=\"combobox\"],[role=\"button\"],button')"):
-                    control=container;break
-                candidates=container.locator('select,[role="combobox"],[role="button"],button').filter(visible=True)
-                if await candidates.count()==1:control=candidates;break
-        if control is None and observed_default:
-            candidate=page.get_by_text(observed_default,exact=True).filter(visible=True)
-            if await candidate.count()==1:control=candidate
-        return control
+    # In Meta's current Billing wizard the timezone control is often a button
+    # named only for its selected city (for example, "Los Angeles, America …"),
+    # with no "Time zone" label in its accessible name. Resolve that exact
+    # visible button before falling back to a text locator; clicking a text node
+    # can miss the button handler and leave the old timezone selected.
+    if observed_default:
+        current=page.get_by_role('button',name=re.compile(r'^'+re.escape(observed_default)+r'$',re.I)).filter(visible=True)
+        if await current.count()==1:
+            return current
+    label_node=page.get_by_text(re.compile(r'^(?:'+label+r')$',re.I)).filter(visible=True)
+    control=None
+    if await label_node.count()==1:
+        for parent in ('..','../..'):
+            container=label_node.locator(parent)
+            # Meta's combobox has no accessible name: its visible label
+            # is a child of the control itself. Descendant-only lookup
+            # skips that parent and then finds both country and currency.
+            if await container.evaluate("e=>e.matches('select,[role=\"combobox\"],[role=\"button\"],button')"):
+                control=container;break
+            candidates=container.locator('select,[role="combobox"],[role="button"],button').filter(visible=True)
+            if await candidates.count()==1:control=candidates;break
+    if control is None and observed_default:
+        candidate=page.get_by_text(observed_default,exact=True).filter(visible=True)
+        if await candidate.count()==1:control=candidate
+    return control
 
 
 async def _setup_choice(page: Any, label: str, choice: str, search: str, observed_default: str = '', *, picker_scope: Any = None) -> bool:
@@ -493,6 +515,38 @@ async def _selected_account_disabled(page: Any, name: str) -> bool:
     return False
 
 
+async def bank_challenge_visible(page: Any) -> bool:
+    """Observe an actionable challenge, never infer one from background help text.
+
+    Return only a boolean; challenge text, OTPs and card fields stay in the browser.
+    """
+    script = r"""() => {
+      const visible=e=>!!e.getClientRects().length && getComputedStyle(e).visibility!=='hidden';
+      const challenge=/3d[ -]?secure|verify (?:your )?card|verification code|one[ -]time (?:code|password)|bank.{0,40}authentication|подтверд.{0,40}банк|код подтверждения|код підтвердження/i;
+      const action=/verify|authenticate|confirm|submit|continue|подтверд|підтверд|продолж|продовж/i;
+      return Array.from(document.querySelectorAll('[role="dialog"],[role="alertdialog"],form')).some(scope=>{
+        if(!visible(scope)||!challenge.test(scope.innerText||''))return false;
+        return Array.from(scope.querySelectorAll('input,button,[role="button"]')).some(e=>{
+          if(!visible(e)||e.disabled)return false;
+          if(e.tagName==='INPUT')return !['hidden','button','submit','checkbox','radio'].includes(e.type)
+            && !/^cc-/.test(e.autocomplete||'')
+            && !/cvv|cvc|card number|security code/i.test([e.name,e.id,e.getAttribute('aria-label')].join(' '));
+          return action.test(e.innerText||e.getAttribute('aria-label')||'');
+        });
+      });
+    }"""
+    if await page.evaluate(script) is True:
+        return True
+    # Issuer challenges may be hosted in a visible cross-origin iframe.
+    for frame in getattr(page, 'frames', []):
+        if frame == getattr(page, 'main_frame', None):continue
+        try:
+            element=await frame.frame_element()
+            if await element.is_visible() and await frame.evaluate(script) is True:return True
+        except Exception:continue
+    return False
+
+
 def card_values(card: dict[str,Any],cvv: str) -> dict[str,str]:
     number=re.sub(r'[\s-]','',str(card.get('number') or ''))
     if not re.fullmatch(r'\d{12,19}',number) or not re.fullmatch(r'\d{3,4}',cvv):
@@ -532,7 +586,7 @@ async def payment_card_flow(browser:Any,target:str,asset:dict[str,str],*,operati
         missing=missing_card_fields(fields,values)
         if missing:return {**base,'status':'BLOCKED','code':'CARD_BILLING_FIELDS_REQUIRED','missing_fields':missing}
         page=browser.page
-        body=await page.locator('body').inner_text(timeout=3000)
+        body=await active_card_form_text(page,fields)
         guard=form_action_guard(body,fields)
         if guard:return {**base,'status':'ACTION_REQUIRED','code':guard}
         for field in fields:
@@ -560,10 +614,12 @@ async def payment_card_flow(browser:Any,target:str,asset:dict[str,str],*,operati
               const text=document.body?.innerText||'';
               const masked=new RegExp('(?:[•*·●xX]{2,}|ending\\\\s+in|ends\\\\s+in)\\\\s*'+last4+'(?![0-9])','i').test(text);
               const alert=Array.from(document.querySelectorAll('[role="alert"]')).some(e=>e.getClientRects().length&&e.innerText.trim());
-              return masked || alert || /3d secure|verify (?:your )?card|verification code|bank.*authentication/i.test(text);
+              return masked || alert;
             }""",arg=values['number'][-4:],timeout=12000)
         except Exception:pass
         await browser._assert_authenticated()
+        if await bank_challenge_visible(page):
+            return {**base,'submitted':True,'status':'ACTION_REQUIRED','code':'CARD_BANK_CONFIRMATION_REQUIRED'}
         body=await page.locator('body').inner_text(timeout=3000)
         funding=payment_summary(target,str(page.url),body)
         parsed=urlsplit(str(page.url))
@@ -575,8 +631,6 @@ async def payment_card_flow(browser:Any,target:str,asset:dict[str,str],*,operati
         number=values['number'];brands={'visa'} if number.startswith('4') else {'mastercard'} if re.match(r'^(5[1-5]|2[2-7])',number) else {'amex','americanexpress'} if re.match(r'^3[47]',number) else set()
         linked=funding['account_scope_verified'] and any(m['last4']==number[-4:] and re.sub(r'[^a-z]','',m['type'].casefold()) in brands for m in funding['payment_methods'])
         if linked:return {**base,'submitted':True,'status':'LINKED','code':'CARD_LINK_OBSERVED','funding':funding}
-        if re.search(r'3d secure|verify (?:your )?card|verification code|one.time|bank.*authentication|подтверд.*банк',body,re.I):
-            return {**base,'submitted':True,'status':'ACTION_REQUIRED','code':'CARD_BANK_CONFIRMATION_REQUIRED'}
         # A success toast alone is not proof of linkage to this RK. No automatic resubmission.
         alerts=[]
         try:alerts=await page.get_by_role('alert').filter(visible=True).all_text_contents()
@@ -585,7 +639,13 @@ async def payment_card_flow(browser:Any,target:str,asset:dict[str,str],*,operati
         return {**base,'submitted':True,'status':'SUBMITTED_UNVERIFIED','code':'CARD_META_REJECTED' if rejected else 'CARD_LINK_NOT_VERIFIED','funding':funding,
             'diagnostic':{'stage':'card_save_observed','path':parsed.path,'account_scope_verified':funding['account_scope_verified'],'masked_method_count':len(funding['payment_methods']),'validation_error_observed':rejected}}
     except BrowserBusinessError as exc:
-        return {**base,'submitted':submitted,'status':'SUBMITTED_UNVERIFIED' if submitted else 'BLOCKED','code':exc.code}
+        result={**base,'submitted':submitted,'status':'SUBMITTED_UNVERIFIED' if submitted else 'BLOCKED','code':exc.code}
+        evidence=str((exc.diagnostic or {}).get('auth_evidence') or '')
+        if evidence=='checkpoint_url' and exc.code=='CHECKPOINT_REQUIRED':
+            result['diagnostic']={'auth_evidence':evidence,'facebook_route':'/checkpoint'}
+        elif evidence=='login_url' and exc.code=='SESSION_EXPIRED':
+            result['diagnostic']={'auth_evidence':evidence,'facebook_route':'/login'}
+        return result
     except Exception as exc:
         # Playwright exception messages can contain filled secrets. Never stringify them.
         # Only classify the error in memory; stack locations contain no values.
@@ -600,7 +660,7 @@ async def _profile_payment_card_execute(resolver:Any,profile:str,payload:dict[st
     from .session import ProfileSession
     target=account_id(payload.get('account_id',''));operation=payload.get('operation','')
     if operation not in {'prepare','bind'}:raise ValueError('CARD_OPERATION_INVALID')
-    asset=await resolve_payment_asset(profile,target,state)
+    asset=await resolve_payment_asset(profile,target,state,payload.get('asset_hint'))
     base={'profile_id':profile,'account_id':target,'submitted':False,'funding_verified':False}
     if not asset:return {**base,'status':'BLOCKED','code':'PAYMENT_ACCOUNT_BINDING_MISSING'}
     context=await resolver.resolve(profile)

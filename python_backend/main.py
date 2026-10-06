@@ -1252,14 +1252,22 @@ async def profile_page_access(profile_id: str, account_id: str):
 
 
 @app.get('/api/v1/profiles/{profile_id}/payment-methods',dependencies=[Depends(require_key)])
-async def profile_payment_methods(profile_id: str, account_id: str):
+async def profile_payment_methods(profile_id: str, account_id: str, business_id: str = '',
+                                 business_asset_id: str = '', account_name: str = ''):
     from app.payment_inspection import inspect_profile_payment_methods
 
     clean_profile=str(profile_id or '').strip()
     if not clean_profile:
         raise HTTPException(status_code=400,detail='profile_id is required')
+    asset_hint=None
+    if business_id or business_asset_id or account_name:
+        if (not re.fullmatch(r'\d{5,30}',business_id)
+                or (business_asset_id and not re.fullmatch(r'\d{5,30}',business_asset_id))
+                or len(account_name)>160 or re.search(r'[\x00-\x1f]',account_name)):
+            raise HTTPException(status_code=400,detail='PAYMENT_ACCOUNT_BINDING_MISSING')
+        asset_hint={'business_id':business_id,'business_asset_id':business_asset_id,'name':account_name}
     try:
-        return await inspect_profile_payment_methods(pool.resolver,clean_profile,account_id,state=pool.provisioning_state)
+        return await inspect_profile_payment_methods(pool.resolver,clean_profile,account_id,state=pool.provisioning_state,asset_hint=asset_hint)
     except ValueError as exc:
         raise HTTPException(status_code=400,detail=str(exc)) from exc
     except ProfileContextError as exc:

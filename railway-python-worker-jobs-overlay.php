@@ -139,11 +139,22 @@ try {
         if ($profileId === '' || strlen($profileId) > 160 || !preg_match('/^\d{5,30}$/', $accountId)) {
             rmx_pwj_out(['ok'=>false,'error'=>'INVALID_PAYMENT_TARGET'], 400);
         }
-        require_once __DIR__ . '/../classes/RemaskPrivateLaunchCatalog.php';
-        RemaskPrivateLaunchCatalog::asset(RemaskPrivateLaunchCatalog::load($profileId), 'funding', $accountId);
+        $businessId=trim((string)($input['business_id']??''));
+        $businessAssetId=trim((string)($input['business_asset_id']??''));
+        $accountName=trim((string)($input['account_name']??''));
+        if(($businessId!==''||$businessAssetId!==''||$accountName!=='')
+            &&(!preg_match('/^\d{5,30}$/D',$businessId)
+                ||($businessAssetId!==''&&!preg_match('/^\d{5,30}$/D',$businessAssetId))
+                ||strlen($accountName)>160||preg_match('/[\x00-\x1f]/',$accountName))) {
+            rmx_pwj_out(['ok'=>false,'error'=>'PAYMENT_ACCOUNT_BINDING_MISSING'],400);
+        }
+        $query=['account_id'=>$accountId];
+        if($businessId!=='')$query['business_id']=$businessId;
+        if($businessAssetId!=='')$query['business_asset_id']=$businessAssetId;
+        if($accountName!=='')$query['account_name']=$accountName;
         $result = rmx_pwj_worker_request(
             'GET',
-            '/api/v1/profiles/' . rawurlencode($profileId) . '/payment-methods?account_id=' . rawurlencode($accountId),
+            '/api/v1/profiles/' . rawurlencode($profileId) . '/payment-methods?' . http_build_query($query,'','&',PHP_QUERY_RFC3986),
             null,
             130
         );

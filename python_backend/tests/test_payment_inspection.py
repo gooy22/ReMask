@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from app.facebook_business_browser import BrowserBusinessError
-from app.payment_inspection import account_id, inspect_payment_methods, payment_summary, saved_payment_business
+from app.payment_inspection import account_id, inspect_payment_methods, inspect_profile_payment_methods, payment_summary, saved_payment_business
 
 ID = "123456789"
 URL = "https://business.facebook.com/billing_hub/payment_settings?asset_id=" + ID
@@ -79,6 +79,26 @@ class PaymentSummaryTests(unittest.TestCase):
 
 
 class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
+    async def test_live_payment_inspection_receives_workspace_bm_hint(self):
+        asset={'business_id':'987654321','business_asset_id':'','name':'Fixture RK'}
+        browser=SimpleNamespace(page=SimpleNamespace(url=URL,frames=[],screenshot=AsyncMock(return_value=b'preview')))
+        resolver=SimpleNamespace(resolve=AsyncMock(return_value=SimpleNamespace(cookies={})))
+        class Session:
+            async def __aenter__(self):return self
+            async def __aexit__(self,*args):return None
+            async def facebook_business_browser(self):return browser
+        state=object()
+        observed={'account_id':ID,'account_scope_verified':False,'verification_status':'UNVERIFIED','payment_methods':[]}
+        with patch('app.session.ProfileSession',return_value=Session()), \
+             patch('app.payment_inspection.resolve_payment_asset',AsyncMock(return_value=asset)) as resolve, \
+             patch('app.payment_inspection.inspect_payment_methods',AsyncMock(return_value=observed)) as inspect:
+            result=await inspect_profile_payment_methods(resolver,'Fixture',ID,state=state,
+                asset_hint={'business_id':'987654321','business_asset_id':'','name':'Fixture RK'})
+        resolve.assert_awaited_once_with('Fixture',ID,state,{'business_id':'987654321','business_asset_id':'','name':'Fixture RK'})
+        inspect.assert_awaited_once()
+        self.assertEqual(inspect.await_args.kwargs['business_id'],'987654321')
+        self.assertEqual(result['account_id'],ID)
+
     def browser(self, links):
         menu=SimpleNamespace(count=AsyncMock(return_value=0),is_visible=AsyncMock(return_value=False),click=AsyncMock())
         page=SimpleNamespace(url=URL,evaluate=AsyncMock(return_value=links),wait_for_function=AsyncMock(),
