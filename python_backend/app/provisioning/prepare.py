@@ -109,24 +109,72 @@ class PrepareService:
     ) -> None:
         trace.append({"action": action, "phase": phase, **extra})
 
-    async def _business_inventory(self, profile_id: str) -> list[dict[str, Any]]:
+    async def _business_inventory(
+        self,
+        profile_id: str,
+        context: Any = None,
+    ) -> list[dict[str, Any]]:
         groups = await self.state.confirmed_business_binding_groups()
         businesses = ((groups.get(profile_id) or {}).get("businesses") or {})
-        rows = [
-            dict(value)
-            for value in businesses.values()
-            if isinstance(value, dict)
-            and str(value.get("business_id") or "").isdigit()
-        ]
-        rows.sort(key=lambda row: int(row.get("updated_at") or 0), reverse=True)
+
+        merged: dict[str, dict[str, Any]] = {}
+        for value in businesses.values():
+            if not isinstance(value, dict):
+                continue
+            business_id = str(value.get("business_id") or "").strip()
+            if not business_id.isdigit():
+                continue
+            merged[business_id] = dict(value)
+
+        live_updated_at = int(
+            getattr(context, "inventory_updated_at", 0) or 0
+        ) if context is not None else 0
+        for value in (getattr(context, "businesses", None) or []):
+            if not isinstance(value, dict):
+                continue
+            business_id = str(
+                value.get("business_id") or value.get("id") or ""
+            ).strip()
+            if not business_id.isdigit():
+                continue
+            previous = merged.get(business_id) or {}
+            merged[business_id] = {
+                **previous,
+                "business_id": business_id,
+                "business_name": str(
+                    value.get("business_name")
+                    or value.get("name")
+                    or previous.get("business_name")
+                    or business_id
+                ).strip(),
+                "source": str(
+                    value.get("source")
+                    or "workspace_last_confirmed_live"
+                ).strip(),
+                "updated_at": max(
+                    int(previous.get("updated_at") or 0),
+                    live_updated_at,
+                ),
+                "live_inventory_confirmed": True,
+            }
+
+        rows = list(merged.values())
+        rows.sort(
+            key=lambda row: (
+                bool(row.get("live_inventory_confirmed")),
+                int(row.get("updated_at") or 0),
+            ),
+            reverse=True,
+        )
         return rows
 
     async def _choose_business(
         self,
         profile_id: str,
         preferred: str,
+        context: Any = None,
     ) -> dict[str, Any] | None:
-        rows = await self._business_inventory(profile_id)
+        rows = await self._business_inventory(profile_id, context)
         if preferred:
             return next(
                 (
@@ -137,6 +185,72 @@ class PrepareService:
                 None,
             )
         return rows[0] if rows else None
+
+    async def _ad_account_inventory(
+        self,
+        profile_id: str,
+        business_id: str,
+        context: Any = None,
+    ) -> list[dict[str, Any]]:
+        durable = await self.state.confirmed_ad_accounts_for_profile(
+            profile_id,
+            business_id,
+        )
+        merged: dict[str, dict[str, Any]] = {
+            str(row.get("ad_account_id") or ""): dict(row)
+            for row in durable
+            if isinstance(row, dict)
+            and str(row.get("ad_account_id") or "").isdigit()
+        }
+
+        live_updated_at = int(
+            getattr(context, "inventory_updated_at", 0) or 0
+        ) if context is not None else 0
+        for value in (getattr(context, "ad_accounts", None) or []):
+            if not isinstance(value, dict):
+                continue
+            bound_business = str(value.get("business_id") or "").strip()
+            account_id = str(
+                value.get("ad_account_id")
+                or value.get("account_id")
+                or value.get("id")
+                or ""
+            ).removeprefix("act_").strip()
+            if bound_business != business_id or not account_id.isdigit():
+                continue
+            previous = merged.get(account_id) or {}
+            merged[account_id] = {
+                **previous,
+                "business_id": business_id,
+                "ad_account_id": account_id,
+                "account_name": str(
+                    value.get("account_name")
+                    or value.get("name")
+                    or previous.get("account_name")
+                    or account_id
+                ).strip(),
+                "scope_key": str(previous.get("scope_key") or ""),
+                "updated_at": max(
+                    int(previous.get("updated_at") or 0),
+                    live_updated_at,
+                ),
+                "source": str(
+                    value.get("source")
+                    or "workspace_last_confirmed_live"
+                ).strip(),
+                "live_inventory_confirmed": True,
+            }
+
+        rows = list(merged.values())
+        rows.sort(
+            key=lambda row: (
+                bool(row.get("live_inventory_confirmed")),
+                int(row.get("updated_at") or 0),
+                str(row.get("ad_account_id") or ""),
+            ),
+            reverse=True,
+        )
+        return rows
 
     async def _run_provisioning(
         self,
@@ -245,6 +359,7 @@ class PrepareService:
         business = await self._choose_business(
             profile_id,
             desired.preferred_business_id,
+            context,
         )
         if desired.preferred_business_id and business is None:
             self._trace(
@@ -279,7 +394,7 @@ class PrepareService:
             business_id = str(
                 ((result.get("state") or {}).get("business_id") or "")
             ).strip()
-            business = await self._choose_business(profile_id, business_id)
+            business = await self._choose_business(profile_id, business_id, context)
             self._trace(
                 trace,
                 "BUSINESS",
@@ -317,9 +432,10 @@ class PrepareService:
             )
 
         existing_accounts = (
-            await self.state.confirmed_ad_accounts_for_profile(
+            await self._ad_account_inventory(
                 profile_id,
                 business_id,
+                context,
             )
             if business_id
             else []
@@ -384,9 +500,10 @@ class PrepareService:
             ad_account_id = str(
                 ((result.get("state") or {}).get("ad_account_id") or "")
             ).removeprefix("act_").strip()
-            current = await self.state.confirmed_ad_accounts_for_profile(
+            current = await self._ad_account_inventory(
                 profile_id,
                 business_id,
+                context,
             )
             confirmed = any(
                 str(row.get("ad_account_id") or "") == ad_account_id
@@ -415,9 +532,10 @@ class PrepareService:
             )
             existing_accounts = current
 
-        accounts = await self.state.confirmed_ad_accounts_for_profile(
+        accounts = await self._ad_account_inventory(
             profile_id,
             business_id,
+            context,
         )
         accounts = accounts[: desired.ad_accounts]
 
