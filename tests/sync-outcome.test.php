@@ -26,6 +26,8 @@ foreach (['CHECKPOINT_REQUIRED','TWO_FACTOR_REQUIRED','SESSION_EXPIRED'] as $cod
     ]);
     check(!$result['complete'] && $result['kind'] === $code);
     check(str_contains($result['error'], '987654321'));
+    check(str_contains($result['error'], 'Facebook'));
+    check(!str_contains($result['error'], 'ReMask session'));
 }
 $result = hierarchy_private_sync_outcome(['live_ready'=>false,'businesses'=>[]]);
 check(!$result['complete'] && $result['kind'] === 'PRIVATE_INCONCLUSIVE');

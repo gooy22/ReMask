@@ -12,6 +12,8 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+from .facebook_ad_account_identity import details_candidate
+
 def _now() -> int:
     return int(time.time())
 
@@ -823,6 +825,25 @@ class JobStore:
     async def job_view(self, job_id: str) -> dict[str, Any] | None:
         return await asyncio.to_thread(self._job_view_sync, job_id)
 
+
+    def _rk_details_recovery_available(self, con, item_id: str, profile_id: str) -> bool:
+        row = con.execute(
+            "SELECT result_json FROM provisioning_steps "
+            "WHERE item_id=? AND profile_id=? AND step='AD_ACCOUNT'",
+            (item_id, profile_id),
+        ).fetchone()
+        if not row or not row["result_json"]:
+            return False
+        try:
+            result = json.loads(row["result_json"])
+        except (ValueError, TypeError):
+            return False
+        if not isinstance(result, dict):
+            return False
+        return bool(details_candidate(result,
+            business_id=str(result.get("business_id") or ""),
+            account_name=str(result.get("account_name") or result.get("name") or "")))
+
     def _job_view_sync(self, job_id: str) -> dict[str, Any] | None:
         with self._connect() as con:
             job=con.execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone()
@@ -841,6 +862,21 @@ class JobStore:
                         t['result']=json.loads(t['result_json'])
                     t.pop('result_json',None)
                     tasks.append(t)
+                # Expose a manual verification retry for the legacy false-quota
+                # failure. This read-only view never queues work or alters IDs.
+                details_recovery = (
+                    item.get('status') == 'FAILED'
+                    and any(task.get('status') == 'FAILED' and
+                        task.get('error_code') == 'META_AD_ACCOUNT_CREATE_UNAVAILABLE' for task in tasks)
+                    and self._rk_details_recovery_available(con, item['id'], item['profile_id'])
+                )
+                if details_recovery:
+                    item['retryable'] = True
+                    item['recovery_mode'] = 'verify_created_ad_account'
+                    for task in tasks:
+                        if task.get('status') == 'FAILED' and task.get('error_code') == 'META_AD_ACCOUNT_CREATE_UNAVAILABLE':
+                            task['retryable'] = True
+                            task['recovery_mode'] = 'verify_created_ad_account'
                 item['tasks']=tasks
                 provisioning_steps=[]
                 for pr in con.execute(
@@ -1010,23 +1046,21 @@ class JobStore:
         excluded=set(excluded_profile_ids)
         with self._connect() as con:
             rows=con.execute(
-                """SELECT id,profile_id FROM job_items
-                   WHERE job_id=? AND status='FAILED'
-                     AND (
-                       retryable=1
-                       OR error_code IN (
-                         'CHECKPOINT_REQUIRED',
-                         'SESSION_EXPIRED',
-                         'TWO_FACTOR_REQUIRED',
-                         'PAGE_ADD_UI_CHANGED'
-                       )
-                     )""",
-                (job_id,),
+                "SELECT id,profile_id,retryable,error_code FROM job_items "
+                "WHERE job_id=? AND status='FAILED'", (job_id,),
             ).fetchall()
+            recovery_ids = {
+                str(row['id']) for row in rows
+                if row['error_code'] == 'META_AD_ACCOUNT_CREATE_UNAVAILABLE'
+                and self._rk_details_recovery_available(con, row['id'], row['profile_id'])
+            }
             ids=[
                 str(row['id'])
                 for row in rows
                 if str(row['profile_id'] or '') not in excluded
+                and (bool(row['retryable']) or str(row['id']) in recovery_ids or row['error_code'] in {
+                    'CHECKPOINT_REQUIRED', 'SESSION_EXPIRED', 'TWO_FACTOR_REQUIRED', 'PAGE_ADD_UI_CHANGED',
+                })
             ]
             for item_id in ids:
                 con.execute(
@@ -1045,8 +1079,9 @@ class JobStore:
                              'TWO_FACTOR_REQUIRED',
                              'PAGE_ADD_UI_CHANGED'
                            )
+                           OR (error_code='META_AD_ACCOUNT_CREATE_UNAVAILABLE' AND ?=1)
                          )""",
-                    (now,item_id),
+                    (now,item_id,1 if item_id in recovery_ids else 0),
                 )
             if ids:
                 con.execute(

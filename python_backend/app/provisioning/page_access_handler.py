@@ -12,6 +12,7 @@ from .advertising_page import AdvertisingPageStore, _PAGE_LOCK, ensure_common_pa
 from .models import ProvisioningError, ProvisioningStep
 from .ad_account_handler import _normalize_ad_account_id
 from .page_full_control import ensure_existing_page_full_control
+from .ad_account_full_control import ensure_ad_account_full_control
 
 log=logging.getLogger('remask.page_access')
 
@@ -808,6 +809,9 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
     business=str(snapshot.get('business_id') or '')
     account=_normalize_ad_account_id(snapshot.get('ad_account_id')).removeprefix('act_')
     existing=params.get('existing_target') is True
+    rk_state=await state.step(item,ProvisioningStep.AD_ACCOUNT)
+    rk_result=(rk_state or {}).get('result') or {}
+    rk_name=str(params.get('ad_account_name') or rk_result.get('account_name') or rk_result.get('name') or '')
     if existing:
         business=str(params.get('business_id') or '')
         account=_normalize_ad_account_id(params.get('ad_account_id')).removeprefix('act_')
@@ -869,7 +873,7 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
         if patch.get('page_owned_by_business') is True and patch.get('access_mode')=='existing_page_full_control':
             await store.patch(owner_business_id=business,owner_business_confirmed=True,
                 ownership_phase='PAGE_OWNERSHIP_CONFIRMED')
-        if phase.startswith('TARGET_PAGE_ACCESS_') or phase.startswith('TARGET_PAGE_OPERATOR_'):
+        if phase.startswith('TARGET_PAGE_ACCESS_') or phase.startswith('TARGET_PAGE_OPERATOR_') or patch.get('rk_operator_assignment_phase'):
             current=await store.get(); grants=current.get('grants') or {}
             await store.patch(grants={**grants,business:{**grants.get(business,{}),**patch}})
         await state.checkpoint(item,profile,scope,ProvisioningStep.PAGE_ACCESS,
@@ -886,6 +890,8 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
                 try:
                     full_access=await ensure_existing_page_full_control(
                         browser,config,business,checkpoint,resume_state)
+                    rk_full_access=await ensure_ad_account_full_control(
+                        browser,business,account,rk_name,checkpoint,resume_state)
                 except Exception as exc:
                     diagnostic={'stage':'existing_page_full_control',
                         'url':str(getattr(browser.page,'url','')),
@@ -906,7 +912,7 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
             'ad_account_id':account,'page_shared_to_business':True,
             'operator_ads_access_assigned':True,'operator_assignment':'performed',
             'ad_account_page_access_verified':False,'identity_verification':'not_requested',
-            'rk_access_proof':{},**full_access}
+            'rk_access_proof':{},**full_access,**rk_full_access}
         # Ads Manager / ad-form identity verification is explicitly opt-in.
         # Normal provisioning must not enter that surface.
         if params.get('verify_identity') is not True:

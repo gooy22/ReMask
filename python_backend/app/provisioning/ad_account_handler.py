@@ -9,6 +9,7 @@ from typing import Any
 
 from fb_worker import AuthenticationError, ProxyError, RemoteRequestError
 
+from ..facebook_ad_account_identity import details_candidate
 from ..facebook_ad_account_create import (
     AdAccountMutationError,
     _normalize_ad_account_id,
@@ -57,6 +58,8 @@ def _compact_browser_diagnostic(value: Any) -> dict[str, Any]:
             "right_pane_snapshot",
             "submit_attempts",
             "graphql_candidates",
+            "final_capture_armed",
+            "create_may_have_been_sent",
         )
         if key in diagnostic
     }
@@ -955,6 +958,57 @@ async def ad_account_handler(
             "transport": "business_settings_ui_capture_reconciliation",
         }
 
+
+    async def confirm_observed_details(saved: dict[str, Any]) -> dict[str, Any] | None:
+        candidate = details_candidate(
+            saved, business_id=business_id, account_name=rk_name,
+        )
+        if not candidate:
+            return None
+        verified, evidence = await _verify_expected_ad_account_in_business(
+            session, business_id=business_id, account_name=rk_name,
+            expected_ad_account_id=candidate, checks=2, delay_seconds=0.25,
+        )
+        await provisioning_state.checkpoint(
+            item_id, profile_id, scope_key, ProvisioningStep.AD_ACCOUNT,
+            {
+                "phase": "CREATE_CONFIRMED" if verified else "CREATE_RESULT_UNKNOWN",
+                "resume_from": "DONE" if verified else "RECONCILE_CREATE",
+                "business_id": business_id, "account_name": rk_name,
+                "currency": currency, "timezone_id": timezone_id,
+                "ad_account_id": candidate if verified else "",
+                "create_response_ad_account_id": candidate,
+                "post_create_verification": evidence,
+                "browser_diagnostic": saved.get("browser_diagnostic") or {},
+                "capture_failures": saved.get("capture_failures") or [],
+                "transport": "business_settings_live_details_reconciliation",
+            },
+        )
+        if not verified:
+            raise ProvisioningError(
+                "AD_ACCOUNT_CREATE_RESULT_UNKNOWN",
+                "The exact named RK appeared after CREATE, but fresh Business "
+                "Settings verification is inconclusive. CREATE will not be repeated.",
+                retryable=True,
+            )
+        await provisioning_state.remember_entity(
+            profile_id, scope_key, ProvisioningStep.AD_ACCOUNT,
+            {"ad_account_id": candidate},
+        )
+        log.info("[%s] AD_ACCOUNT recovered exact live details business=%s account=%s",
+                 profile_id, business_id, candidate)
+        return {
+            "ad_account_id": candidate, "business_id": business_id,
+            "name": rk_name, "currency": currency, "timezone_id": timezone_id,
+            "recovered_after_capture_ui_details": True,
+            "transport": "business_settings_live_details_reconciliation",
+            "post_create_verification": evidence,
+        }
+
+    details_recovered = await confirm_observed_details(checkpoint)
+    if details_recovered:
+        return details_recovered
+
     checkpoint_id = _normalize_ad_account_id(
         checkpoint.get("ad_account_id")
         or checkpoint.get("create_response_ad_account_id")
@@ -1748,6 +1802,7 @@ async def ad_account_handler(
                         account_name=rk_name,
                         currency=currency,
                         timezone_id=timezone_id,
+                        checkpoint=browser_checkpoint,
                     )
 
             captured_request = await asyncio.wait_for(
@@ -1906,6 +1961,16 @@ async def ad_account_handler(
                 )
             except Exception:
                 pass
+
+            # A saved success dialog is not required when the actual account
+            # details are already visible. Reconcile that canonical ID live
+            # before retrying or reporting Meta's quota for a second CREATE.
+            details_recovered = await confirm_observed_details({
+                "browser_diagnostic": browser_diag,
+                "capture_failures": capture_failures[-3:],
+            })
+            if details_recovered:
+                return details_recovered
 
             safe_retry = (
                 bool(exc.retryable)

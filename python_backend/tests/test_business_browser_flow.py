@@ -1364,6 +1364,7 @@ class BrowserAdAccountUiReconcileTests(unittest.IsolatedAsyncioTestCase):
             SimpleNamespace(profile_id="profile-rk-ui-reconcile")
         )
         browser.page = SimpleNamespace(
+            url="https://business.facebook.com/latest/settings/ad_accounts?business_id=555666777888999",
             evaluate=AsyncMock(
                 return_value=[
                     {
@@ -2875,6 +2876,7 @@ class BrowserAdAccountStateMachineTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_verify_ad_account_inventory_empty_from_business_settings(self):
         class _Page:
+            url="https://business.facebook.com/latest/settings/ad_accounts?business_id=1056638030476027"
             async def wait_for_timeout(self, ms):
                 return None
 
@@ -2965,7 +2967,7 @@ class BrowserAdAccountStateMachineTests(unittest.IsolatedAsyncioTestCase):
             result["source"],
             "business_settings_ui_structural_consensus",
         )
-        self.assertEqual(browser.page.evaluate_calls, 3)
+        self.assertEqual(browser.page.evaluate_calls, 4)
         self.assertEqual(len(result["attempts"]), 1)
         self.assertTrue(
             result["attempts"][0]["structural_first"]["global_loading"]

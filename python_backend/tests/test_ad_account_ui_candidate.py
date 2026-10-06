@@ -8,7 +8,7 @@ from app.facebook_business_browser import FacebookBusinessBrowser
 class AdAccountUiCandidateTests(unittest.IsolatedAsyncioTestCase):
     async def reconcile(self, text, ids, href='', account_ids=None):
         browser = FacebookBusinessBrowser(SimpleNamespace(profile_id='fixture', cookies={'c_user':'61594897075733'}))
-        browser.page = SimpleNamespace(evaluate=AsyncMock(return_value=[{
+        browser.page = SimpleNamespace(url='https://business.facebook.com/latest/settings/ad_accounts?business_id=1632909278268870', evaluate=AsyncMock(return_value=[{
             'text':text, 'ids':ids, 'href':href, 'account_ids':account_ids or [], 'x':700, 'y':320,
         }]))
         return await browser._reconcile_created_ad_account_from_ui(

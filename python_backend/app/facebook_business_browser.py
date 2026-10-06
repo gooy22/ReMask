@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, unquote, unquote_plus, urlencode, urlsplit
 
 
 from .facebook_fan_page_create import FAN_PAGE_CREATE_NAMES
+from .facebook_ad_account_identity import ad_account_route, read_ad_account_identity
 
 CheckpointCallback = Callable[[dict[str, Any]], Awaitable[None]]
 
@@ -10923,8 +10924,14 @@ class FacebookBusinessBrowser:
 
         business = _digits(business_id)
         expected = _clean(account_name)
-        if not business or not expected:
+        if not business or not expected or not ad_account_route(self.page.url, business):
             return {"confirmed": False}
+
+        exact = await read_ad_account_identity(
+            self.page, business_id=business, account_name=expected,
+        )
+        if exact.get("confirmed"):
+            return exact
 
         try:
             rows = await self.page.evaluate(
@@ -11696,6 +11703,18 @@ class FacebookBusinessBrowser:
                 pass
             return result
 
+        async def visible_inventory_result() -> dict[str, Any]:
+            identity = await read_ad_account_identity(
+                self.page, business_id=business, account_name=expected,
+            )
+            if identity.get("confirmed"):
+                canonical = _normalize_ad_account_id(identity.get("ad_account_id"))
+                if expected_id and canonical != expected_id:
+                    return {**identity, "confirmed": False,
+                            "reason": "expected_id_is_not_canonical_account_id"}
+                return identity
+            return identity
+
         try:
             targets = [
                 template.format(business_id=business)
@@ -11742,7 +11761,11 @@ class FacebookBusinessBrowser:
                         result = found_future.result()
                         return await finish_result(result)
 
-                    if empty_observations > empty_before:
+                    visible_identity = await visible_inventory_result()
+                    if visible_identity.get("confirmed"):
+                        return await finish_result(visible_identity)
+
+                    if empty_observations > empty_before and not visible_identity.get("nonempty"):
                         # Do not burn the whole timeout on a page that already
                         # proved an explicit empty Ad Accounts collection.
                         continue
@@ -11797,10 +11820,14 @@ class FacebookBusinessBrowser:
             # RK IDs. One such snapshot is authoritative for a pre-submit
             # inventory check. Ambiguous post-submit paths still require
             # repeated/independent evidence in ad_account_handler.
-            confirmed_empty = empty_observations >= 1
+            visible_identity = await visible_inventory_result()
+            if visible_identity.get("confirmed"):
+                return await finish_result(visible_identity)
+            confirmed_empty = empty_observations >= 1 and not visible_identity.get("nonempty")
             return {
                 "confirmed": False,
                 "confirmed_empty": confirmed_empty,
+                "ui_identity": visible_identity,
                 "business_id": business,
                 "account_name": expected,
                 "source": "business_settings_graphql_inventory",
@@ -13313,7 +13340,16 @@ class FacebookBusinessBrowser:
                         "empty_marker": matched_marker,
                     }
                 )
-                if matched_marker:
+                visible_inventory = await read_ad_account_identity(
+                    self.page, business_id=business, account_name="",
+                )
+                if visible_inventory.get("nonempty"):
+                    return {
+                        "confirmed_empty": False, "business_id": business,
+                        "source": "business_settings_visible_inventory",
+                        "ui_identity": visible_inventory, "attempts": attempts,
+                    }
+                if matched_marker and ad_account_route(self.page.url, business):
                     return {
                         "confirmed_empty": True,
                         "business_id": business,
@@ -18032,6 +18068,7 @@ timeout_seconds=4.0,
         account_name: str,
         currency: str = "USD",
         timezone_id: int = 1,
+        checkpoint: CheckpointCallback | None = None,
     ) -> dict[str, Any]:
         """Capture the exact current Add-RK GraphQL request without sending it.
 
@@ -18314,12 +18351,19 @@ timeout_seconds=4.0,
                 capture_final_armed = True
                 self._ad_account_final_capture_armed = True
                 self._mark_ad_account_phase("CAPTURE_FINAL_ARMED")
+                if checkpoint is not None:
+                    await checkpoint({
+                        "phase": "CREATE_CLICK_INTENT", "resume_from": "RECONCILE_CREATE",
+                        "business_id": business, "account_name": name,
+                        "activity": "AD_ACCOUNT_CAPTURE_FINAL_INTENT",
+                        "final_capture_armed": True,
+                    })
                 final_meta = await self._click_ad_account_final_interactive()
                 final_clicked = bool(final_meta.get("clicked"))
                 final_attempted = bool(
                     final_meta.get("attempted") or final_clicked
                 )
-                if not final_clicked:
+                if not final_clicked and not final_attempted:
                     fallback = (
                         await self._click_ad_account_form_action_by_visible_text(
                             "final"
@@ -18347,7 +18391,10 @@ timeout_seconds=4.0,
                     }
                 )
 
-                if final_clicked:
+                if final_attempted:
+                    # A dispatched click can finish even after Playwright times out.
+                    # Observe this attempt only; a second final click is forbidden.
+                    self._ad_account_create_sent = True
                     try:
                         await asyncio.wait_for(
                             asyncio.shield(captured),
@@ -18362,10 +18409,15 @@ timeout_seconds=4.0,
                     # transport shape that is not matched by the private
                     # GraphQL interceptor. Never click CREATE again if the same
                     # browser session already proves success in Meta's UI.
-                    ui_created = await self._reconcile_created_ad_account_from_ui(
-                        business_id=business,
-                        account_name=name,
-                    )
+                    observe_deadline = time.monotonic() + 4.0
+                    ui_created: dict[str, Any] = {}
+                    while time.monotonic() < observe_deadline:
+                        ui_created = await self._reconcile_created_ad_account_from_ui(
+                            business_id=business, account_name=name,
+                        )
+                        if ui_created.get("confirmed"):
+                            break
+                        await self.page.wait_for_timeout(150)
                     if bool(ui_created.get("confirmed")):
                         created_id = _clean(ui_created.get("ad_account_id"))
                         if created_id:
@@ -18382,12 +18434,9 @@ timeout_seconds=4.0,
                                 "ui_reconcile": ui_created,
                             }
 
-                    if blocked_unclassified_create:
-                        # The safety gate already intercepted a strong unknown
-                        # mutation. Do not click the irreversible CTA again in
-                        # this browser pass; reconciliation decides whether a
-                        # clean recapture is safe.
-                        break
+                    # Unknown transport or delayed hydration never justifies
+                    # repeating CREATE. Fresh inventory decides the result.
+                    break
 
                 if not final_clicked:
                     break
@@ -18410,6 +18459,8 @@ timeout_seconds=4.0,
                     diag["blocked_unclassified_create"] = bool(
                         blocked_unclassified_create
                     )
+                    diag["final_capture_armed"] = self._ad_account_final_capture_armed
+                    diag["create_may_have_been_sent"] = self._ad_account_create_sent
                     diag["ui_state"] = await self._ad_account_ui_state()
                     diag["ui_trace"] = self._ad_account_ui_trace[-16:]
                     raise BrowserBusinessError(

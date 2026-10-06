@@ -15,6 +15,7 @@ from app.mirror import MirrorError, SnapshotMirror
 from app.models import CreateJobRequest, HealthResponse, JobAccepted, RetryResponse
 from app.runner import WorkerPool
 from app.session import ProfileContextError, ProfileSession, ProxyCheckError
+from app.session_auth_refresh import refresh_saved_auth_context
 from app.store import JobStore
 from app.facebook_business_browser import BROWSER_TERMINAL_ACCESS_CODES, BrowserBusinessError, FacebookBusinessBrowser
 from app.facebook_page_discovery import PageDiscoveryError, list_pages_via_private_graphql
@@ -2382,6 +2383,22 @@ async def profile_live_inventory(
                                 profile_session._business_browser=None
                             except Exception:
                                 pass
+                            # Re-resolve the same profile after an auth failure.
+                            # Reopening Chromium alone repeats the original cookies.
+                            try:
+                                saved_session_changed=await asyncio.wait_for(
+                                    refresh_saved_auth_context(pool.resolver, profile_session.context),
+                                    timeout=budget(5.0),
+                                )
+                                log.info(
+                                    'live inventory profile=%s saved_session_reloaded=%s',
+                                    clean_profile, saved_session_changed,
+                                )
+                            except Exception as refresh_exc:
+                                log.warning(
+                                    'live inventory profile=%s saved_session_reload unavailable=%s',
+                                    clean_profile, type(refresh_exc).__name__,
+                                )
                             browser_reopen_timeout=budget(18.0)
                             browser=await asyncio.wait_for(
                                 profile_session.facebook_business_browser(),

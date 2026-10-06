@@ -18,6 +18,69 @@ from app.session import ProfileContextError, ProfileResolver
 
 
 class JobStoreRecoveryTests(unittest.IsolatedAsyncioTestCase):
+
+    async def _seed_quota_details(self, *, candidate=True, wrong_business=False):
+        job,item=self._seed(task_status='FAILED')
+        task=(await self.store.tasks(item))[0]
+        bm='1109354271000001'; rk='1383676627000001'; name='Amber Studio fixture Ads'
+        controls=[
+            name+' 1 person 0 people 0 partners Details [tag=TR role=row x=336 y=185]',
+            name+' [tag=DIV role=heading x=693 y=173]',
+            rk+' [tag=A role=link x=714 y=194]',
+        ] if candidate else []
+        await self.provisioning_state.complete(item,'4','default',ProvisioningStep.BUSINESS,{'business_id':bm})
+        await self.provisioning_state.set_running(item,'4','default',ProvisioningStep.AD_ACCOUNT)
+        await self.provisioning_state.checkpoint(item,'4','default',ProvisioningStep.AD_ACCOUNT,{
+            'phase':'CREATE_NOT_SUBMITTED','business_id':bm,'account_name':name,
+            'browser_diagnostic':{'ui_state':{
+                'state':'BLOCKED','url':'https://business.facebook.com/latest/settings/ad_accounts?business_id='+
+                    ('999999999' if wrong_business else bm),'controls':controls}},
+        })
+        await self.provisioning_state.fail(item,'4','default',ProvisioningStep.AD_ACCOUNT,
+            'META_AD_ACCOUNT_CREATE_UNAVAILABLE','maximum number of ad accounts')
+        await self.store.set_task_failed(task['id'],'META_AD_ACCOUNT_CREATE_UNAVAILABLE',
+            'maximum number of ad accounts',retryable=False)
+        await self.store.finalize_item(item)
+        return job,item
+
+    async def test_false_quota_view_offers_manual_verification_without_queuing_or_altering_checkpoint(self):
+        job,item=await self._seed_quota_details()
+        saved=(await self.provisioning_state.step(item,ProvisioningStep.AD_ACCOUNT))['result']
+        await self.store.init()
+        view=await self.store.job_view(job)
+        self.assertEqual(view['items'][0]['status'],'FAILED')
+        self.assertTrue(view['items'][0]['retryable'])
+        self.assertEqual(view['items'][0]['recovery_mode'],'verify_created_ad_account')
+        self.assertTrue(view['items'][0]['tasks'][0]['retryable'])
+        self.assertEqual(await self.store.queue_count(),0)
+        self.assertEqual((await self.provisioning_state.step(item,ProvisioningStep.AD_ACCOUNT))['result'],saved)
+        with self.store._connect() as con:
+            self.assertEqual(con.execute('SELECT retryable FROM job_items WHERE id=?',(item,)).fetchone()['retryable'],0)
+
+    async def test_explicit_false_quota_retry_preserves_business_and_candidate_for_read_only_reconciliation(self):
+        job,item=await self._seed_quota_details()
+        saved=(await self.provisioning_state.step(item,ProvisioningStep.AD_ACCOUNT))['result']
+        self.assertEqual(await self.store.retry_failed(job),1)
+        self.assertEqual((await self.store.tasks(item))[0]['status'],'QUEUED')
+        self.assertEqual((await self.provisioning_state.step(item,ProvisioningStep.BUSINESS))['status'],'SUCCESS')
+        self.assertEqual((await self.provisioning_state.step(item,ProvisioningStep.AD_ACCOUNT))['result'],saved)
+
+    async def test_genuine_meta_quota_without_created_details_remains_terminal(self):
+        job,item=await self._seed_quota_details(candidate=False)
+        self.assertFalse((await self.store.job_view(job))['items'][0]['retryable'])
+        self.assertEqual(await self.store.retry_failed(job),0)
+        self.assertEqual((await self.store.item(item))['status'],'FAILED')
+
+    async def test_wrong_portfolio_details_do_not_enable_quota_retry(self):
+        job,item=await self._seed_quota_details(wrong_business=True)
+        self.assertFalse((await self.store.job_view(job))['items'][0]['retryable'])
+        self.assertEqual(await self.store.retry_failed(job),0)
+
+    async def test_false_quota_recovery_respects_excluded_profiles(self):
+        job,item=await self._seed_quota_details()
+        self.assertEqual(await self.store.retry_failed(job,excluded_profile_ids={'4'}),0)
+        self.assertEqual((await self.store.item(item))['status'],'FAILED')
+
     async def test_legacy_owner_approval_stub_auto_resumes_exact_submitted_request(self):
         job,item=self._seed(task_status='FAILED')
         task=(await self.store.tasks(item))[0]

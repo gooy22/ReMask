@@ -663,7 +663,7 @@ function hierarchy_private_sync_outcome(array $inventory): array
         return [
             'complete' => false,
             'kind' => $code,
-            'error' => $code . ': ReMask session was redirected while verifying added BM(s): ' . implode(', ', $targets),
+            'error' => $code . ': Facebook redirected this profile to login or verification while checking BM(s): ' . implode(', ', $targets) . '. Restore the Facebook session for this profile with fresh cookies, then repeat Sync.',
         ];
     }
     $complete = ($inventory['live_ready'] ?? false) === true;
