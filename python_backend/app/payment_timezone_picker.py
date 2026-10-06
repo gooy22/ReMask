@@ -156,7 +156,7 @@ async def choose_payment_timezone(scope: Any, page: Any, *, wait_seconds: float 
                 try:
                     await page.locator(f'[{OPTION}="{options[0]["key"]}"]').click(timeout=3000)
                 except Exception as exc:
-                    return False, {**diagnostic, "reason": "timezone_option_click_failed", "error_type": type(exc).__name__}
+                    diagnostic["selection_error_type"] = type(exc).__name__
                 # A click alone is not proof. Re-resolve the closed city button.
                 confirm_deadline = time.monotonic() + 3.0
                 while time.monotonic() < confirm_deadline:
@@ -165,7 +165,10 @@ async def choose_payment_timezone(scope: Any, page: Any, *, wait_seconds: float 
                     await asyncio.sleep(0.2)
                 return False, {**diagnostic, "reason": "timezone_value_unchanged"}
             if len(options) > 1:
-                return False, {**diagnostic, "reason": "timezone_option_not_unique"}
+                # Hydration can briefly leave the old and new option mounted.
+                # Wait for one exact row; never choose the first duplicate.
+                await asyncio.sleep(0.2)
+                continue
             search = await _new_picker_search(page)
             aliases = diagnostic["searches"]
             if search is not None and (not aliases or (len(aliases) == 1 and time.monotonic() - searched_at > 1.8)):
@@ -175,7 +178,7 @@ async def choose_payment_timezone(scope: Any, page: Any, *, wait_seconds: float 
                 aliases.append(query)
                 searched_at = time.monotonic()
             await asyncio.sleep(0.2)
-        return False, {**diagnostic, "reason": "timezone_option_missing"}
+        return False, {**diagnostic, "reason": "timezone_option_not_unique" if diagnostic.get("candidate_count", 0) > 1 else "timezone_option_missing"}
     finally:
         for marker in (BEFORE, OPTION):
             try:

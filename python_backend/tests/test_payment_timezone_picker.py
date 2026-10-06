@@ -133,10 +133,24 @@ class MetaTimezoneChromiumTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_two_city_choices_block_before_any_option_or_next_click(self):
         scope = await self.picker_fixture(duplicate=True)
-        selected, diagnostic = await choose_payment_timezone(scope, self.page)
+        selected, diagnostic = await choose_payment_timezone(scope, self.page, wait_seconds=1.0)
         self.assertFalse(selected, diagnostic)
         self.assertEqual(diagnostic["reason"], "timezone_option_not_unique")
         self.assertEqual(await self.page.evaluate("[window.picks,window.nexts]"), [0, 0])
+
+    async def test_transition_timeout_after_city_click_observes_selected_value_without_replay(self):
+        scope = await self.picker_fixture()
+        from playwright.async_api import Locator, TimeoutError as PlaywrightTimeoutError
+        original_click = Locator.click
+        async def click_then_timeout(locator, **kwargs):
+            option = await locator.get_attribute("data-remask-timezone-option")
+            await original_click(locator, **kwargs)
+            if option is not None:
+                raise PlaywrightTimeoutError("Fixture post-click transition timeout")
+        with patch.object(Locator, "click", new=click_then_timeout):
+            selected, diagnostic = await choose_payment_timezone(scope, self.page)
+        self.assertTrue(selected, diagnostic)
+        self.assertEqual(await self.page.evaluate("[window.opens,window.picks]"), [1, 1])
 
     async def test_option_click_without_changed_value_stops_before_next(self):
         await self.picker_fixture(stuck=True)
