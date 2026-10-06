@@ -454,6 +454,7 @@ class PrepareService:
         for slot in range(len(existing_accounts) + 1, desired.ad_accounts + 1):
             rk_params = deepcopy(base_rk)
             rk_params["business_id"] = business_id
+            rk_params["allow_multiple_in_business"] = True
             rk_params.pop("bm_id", None)
             rk_params.pop("ad_account_id", None)
             rk_params.setdefault("name", f"ReMask {profile_id} RK {slot}")
