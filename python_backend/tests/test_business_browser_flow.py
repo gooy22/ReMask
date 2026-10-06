@@ -54,6 +54,16 @@ class LiveInventoryCancellationRegressionTests(unittest.TestCase):
         self.assertIn("final_act_ids[0] in expected_accounts", source)
 
 
+class FanPageCategorySelectionRegressionTests(unittest.TestCase):
+    def test_category_picker_keeps_locale_tolerant_option_fallback(self) -> None:
+        source = inspect.getsource(FacebookBusinessBrowser._fill_fan_page_category)
+        self.assertIn("REMASK_FAN_PAGE_CATEGORY_TYPEAHEAD_COMPAT_V2", source)
+        self.assertIn("fallback = None", source)
+        self.assertIn("chosen = exact or fallback", source)
+        self.assertIn('await field.press("ArrowDown")', source)
+        self.assertIn('await field.press("Enter")', source)
+        self.assertNotIn('get_by_text(_clean(category),exact=True)', source)
+
 class PrivateBusinessSelectorTextTests(unittest.TestCase):
     def test_selector_serialized_state_extracts_first_level_business(self):
         html = """
