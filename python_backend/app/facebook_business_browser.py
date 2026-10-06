@@ -4865,211 +4865,247 @@ class FacebookBusinessBrowser:
                 'Создание PrgssTeam требует подтверждения правил Meta для страниц. Форма подготовлена, Create Page не нажата.',
                 retryable=True,diagnostic=diag)
 
-        async def mark_submit_intent() -> None:
-            if before_submit is not None:
-                await before_submit(
-                    {
-                        "phase": "PAGE_CREATE_CLICK_INTENT",
-                        "page_name": name,
-                        "category": category_name,
-                        "before_ids": sorted(before_ids),
-                        "current_url": _clean(getattr(self.page, "url", "")),
-                    }
+        from .facebook_fan_page_create import FanPageCreateCapture
+
+        cookies = getattr(self.context, "cookies", None)
+        actor_id = _digits(cookies.get("c_user")) if isinstance(cookies, dict) else ""
+        async with FanPageCreateCapture(
+            self.page, actor_id=actor_id, page_name=name, before_ids=before_ids,
+            request_meta=_request_graphql_meta, decode=_decode_graphql_text,
+        ) as capture:
+            async def mark_submit_intent() -> None:
+                if before_submit is not None:
+                    await before_submit(
+                        {
+                            "phase": "PAGE_CREATE_CLICK_INTENT",
+                            "page_name": name,
+                            "category": category_name,
+                            "before_ids": sorted(before_ids),
+                            "current_url": _clean(getattr(self.page, "url", "")),
+                        }
+                    )
+                capture.armed = True
+
+            def captured_result() -> dict[str, Any] | None:
+                confirmed = capture.page_result
+                if not confirmed:
+                    return None
+                rows = [row for row in before_pages
+                        if isinstance(row, dict) and _digits(row.get("id")) != confirmed["id"]]
+                rows.append({**confirmed, "ownership_verified": True,
+                             "ownership_source": "scoped_page_create_response"})
+                self.context.pages = rows
+                return {
+                    "page_id": confirmed["id"], "name": name, "category": category_name,
+                    "reused": False, "before_ids": sorted(before_ids),
+                    "after_ids": sorted(before_ids | {confirmed["id"]}),
+                    "transport": "facebook_pages_ui_create_response",
+                }
+
+            click_meta = {"found": False, "attempted": False, "clicked": False}
+            for _submit_probe in range(9):
+                click_meta = await self._click_named_single_attempt(
+                    self.FAN_PAGE_CREATE_NAMES,
+                    roles=("button",),
+                    before_click=mark_submit_intent,
+                    click_timeout_ms=5000,
+                    trial_timeout_ms=750,
+                )
+                if bool(click_meta.get("found")) and not click_meta.get("actionability_failed"):
+                    break
+                await self._assert_authenticated(body_timeout_ms=1200)
+                await self.page.wait_for_timeout(350)
+
+            if not bool(click_meta.get("found")):
+                diag = await self._diagnostic("fan_page_create_submit_missing")
+                diag["click_meta"] = click_meta
+                raise BrowserBusinessError(
+                    "FAN_PAGE_CREATE_UI_CHANGED",
+                    "Facebook Page creation form was filled but Create Page was not found.",
+                    retryable=True,
+                    diagnostic=diag,
                 )
 
-        click_meta = {"found": False, "attempted": False, "clicked": False}
-        for _submit_probe in range(9):
-            click_meta = await self._click_named_single_attempt(
-                self.FAN_PAGE_CREATE_NAMES,
-                roles=("button",),
-                before_click=mark_submit_intent,
-                click_timeout_ms=5000,
-                trial_timeout_ms=750,
-            )
-            if bool(click_meta.get("found")) and not click_meta.get("actionability_failed"):
-                break
-            await self._assert_authenticated(body_timeout_ms=1200)
-            await self.page.wait_for_timeout(350)
+            if click_meta.get("actionability_failed"):
+                diag = await self._diagnostic("fan_page_create_submit_not_actionable")
+                diag.update(click_meta=click_meta, safe_before_submit=True)
+                raise BrowserBusinessError(
+                    "FAN_PAGE_CREATE_UI_CHANGED",
+                    "Create Page remained covered or unstable; no CREATE click was sent.",
+                    retryable=True,
+                    diagnostic=diag,
+                )
 
-        if not bool(click_meta.get("found")):
-            diag = await self._diagnostic("fan_page_create_submit_missing")
-            diag["click_meta"] = click_meta
-            raise BrowserBusinessError(
-                "FAN_PAGE_CREATE_UI_CHANGED",
-                "Facebook Page creation form was filled but Create Page was not found.",
-                retryable=True,
-                diagnostic=diag,
-            )
+            # REMASK_FP_CLICK_ERROR_READ_ONLY_CONFIRMATION_V1
+            # A click timeout/context transition is not a negative CREATE result.
+            # Keep this authenticated lease alive and run the same read-only
+            # confirmation used after a successful click. Never click again.
+            click_diagnostic: dict[str, Any] = {
+                "stage": "fan_page_final_click_unknown",
+                "url": _clean(getattr(self.page, "url", "")),
+                "click_meta": click_meta,
+                "before_ids": sorted(before_ids),
+                "page_name": name,
+            }
+            if click_meta.get("error"):
+                try:
+                    observed = await asyncio.wait_for(
+                        self._diagnostic("fan_page_final_click_unknown"),
+                        timeout=4.0,
+                    )
+                    click_diagnostic.update(observed)
+                except Exception:
+                    pass
 
-        if click_meta.get("actionability_failed"):
-            diag = await self._diagnostic("fan_page_create_submit_not_actionable")
-            diag.update(click_meta=click_meta, safe_before_submit=True)
-            raise BrowserBusinessError(
-                "FAN_PAGE_CREATE_UI_CHANGED",
-                "Create Page remained covered or unstable; no CREATE click was sent.",
-                retryable=True,
-                diagnostic=diag,
-            )
-
-        # REMASK_FP_CLICK_ERROR_READ_ONLY_CONFIRMATION_V1
-        # A click timeout/context transition is not a negative CREATE result.
-        # Keep this authenticated lease alive and run the same read-only
-        # confirmation used after a successful click. Never click again.
-        click_diagnostic: dict[str, Any] = {
-            "stage": "fan_page_final_click_unknown",
-            "url": _clean(getattr(self.page, "url", "")),
-            "click_meta": click_meta,
-            "before_ids": sorted(before_ids),
-            "page_name": name,
-        }
-        if click_meta.get("error"):
             try:
-                observed = await asyncio.wait_for(
-                    self._diagnostic("fan_page_final_click_unknown"),
-                    timeout=4.0,
-                )
-                click_diagnostic.update(observed)
+                await self.page.wait_for_timeout(1400)
             except Exception:
                 pass
 
-        try:
-            await self.page.wait_for_timeout(1400)
-        except Exception:
-            pass
-
-        # Check an auth redirect before navigating away from the result.
-        # Preserve real auth failures; a closed/crashed document remains an
-        # uncertain CREATE and falls through to read-only reconciliation.
-        try:
-            await self._assert_authenticated(body_timeout_ms=1200)
-        except BrowserBusinessError as exc:
-            if exc.code in {
-                "CHECKPOINT_REQUIRED", "SESSION_EXPIRED",
-                "TWO_FACTOR_REQUIRED", "FACEBOOK_TEMPORARILY_BLOCKED",
-            }:
-                raise
-        except Exception:
-            pass
-
-        try:
-            body = (await self._body_text()).casefold()
-        except Exception:
-            body = ""
-        reject_markers = (
-            "couldn't create page",
-            "could not create page",
-            "unable to create page",
-            "page creation failed",
-            "не удалось создать страницу",
-            "не вдалося створити сторінку",
-            "seite konnte nicht erstellt werden",
-            "seite kann nicht erstellt werden",
-            "impossible de créer la page",
-            "nous n’avons pas pu créer votre page",
-            "nous n'avons pas pu créer votre page",
-            "không thể tạo trang",
-            "không tạo được trang",
-            "पेज नहीं बनाया जा सका",
-            "पेज नहीं बना सके",
-            "पेज नहीं बनाया जा सकता",
-            "পেজ তৈরি করা যায়নি",
-            "পেজ তৈরি করতে পারিনি",
-        )
-        if any(marker in body for marker in reject_markers):
-            diag = await self._diagnostic("fan_page_create_rejected")
-            raise BrowserBusinessError(
-                "FAN_PAGE_CREATE_REJECTED",
-                "Facebook explicitly rejected Page creation.",
-                retryable=False,
-                diagnostic=diag,
-            )
-
-        successful_inventory_reads = 0
-        last_pages: list[dict[str, Any]] = []
-        confirmation_checks: list[dict[str, Any]] = []
-        for attempt in range(4):
+            # Check an auth redirect before navigating away from the result.
+            # Preserve real auth failures; a closed/crashed document remains an
+            # uncertain CREATE and falls through to read-only reconciliation.
             try:
-                after_pages = await self.discover_managed_pages(fast=True, navigation_timeout_ms=9000)
-                successful_inventory_reads += 1
-                last_pages = after_pages
+                await self._assert_authenticated(body_timeout_ms=1200)
             except BrowserBusinessError as exc:
                 if exc.code in {
                     "CHECKPOINT_REQUIRED", "SESSION_EXPIRED",
                     "TWO_FACTOR_REQUIRED", "FACEBOOK_TEMPORARILY_BLOCKED",
                 }:
                     raise
-                confirmation_checks.append({
-                    "attempt": attempt + 1, "code": exc.code,
-                })
-                after_pages = []
-            except Exception as exc:
-                confirmation_checks.append({
-                    "attempt": attempt + 1, "code": exc.__class__.__name__,
-                })
-                after_pages = []
+            except Exception:
+                pass
 
-            after_ids = {
-                _digits(row.get("id"))
-                for row in after_pages
-                if isinstance(row, dict) and _digits(row.get("id"))
-            }
-            new_ids = sorted(after_ids - before_ids)
-            exact_new = [
-                row
-                for row in after_pages
-                if isinstance(row, dict)
-                and _digits(row.get("id")) in new_ids
-                and _clean(row.get("name")).casefold() == name.casefold()
-            ]
+            try:
+                body = (await self._body_text()).casefold()
+            except Exception:
+                body = ""
+            reject_markers = (
+                "couldn't create page",
+                "could not create page",
+                "unable to create page",
+                "page creation failed",
+                "не удалось создать страницу",
+                "не вдалося створити сторінку",
+                "seite konnte nicht erstellt werden",
+                "seite kann nicht erstellt werden",
+                "impossible de créer la page",
+                "nous n’avons pas pu créer votre page",
+                "nous n'avons pas pu créer votre page",
+                "không thể tạo trang",
+                "không tạo được trang",
+                "पेज नहीं बनाया जा सका",
+                "पेज नहीं बना सके",
+                "पेज नहीं बनाया जा सकता",
+                "পেজ তৈরি করা যায়নি",
+                "পেজ তৈরি করতে পারিনি",
+            )
+            if any(marker in body for marker in reject_markers):
+                diag = await self._diagnostic("fan_page_create_rejected")
+                raise BrowserBusinessError(
+                    "FAN_PAGE_CREATE_REJECTED",
+                    "Facebook explicitly rejected Page creation.",
+                    retryable=False,
+                    diagnostic=diag,
+                )
 
-            if len(exact_new) == 1:
-                self.context.pages = after_pages
-                page_id = _digits(exact_new[0].get("id"))
-                return {
-                    "page_id": page_id,
-                    "name": name,
-                    "category": category_name,
-                    "reused": False,
-                    "before_ids": sorted(before_ids),
-                    "after_ids": sorted(after_ids),
-                    "transport": (
-                        "facebook_pages_ui_click_error_inventory_diff"
-                        if click_meta.get("error")
-                        else "facebook_pages_ui_inventory_diff"
-                    ),
-                }
+            await capture.drain()
+            confirmed_result = captured_result()
+            if confirmed_result:
+                return confirmed_result
 
-            if attempt < 3:
-                await asyncio.sleep(1.5 + (0.5 * attempt))
+            successful_inventory_reads = 0
+            last_pages: list[dict[str, Any]] = []
+            confirmation_checks: list[dict[str, Any]] = []
+            for attempt in range(4):
+                try:
+                    after_pages = await self.discover_managed_pages(fast=True, navigation_timeout_ms=9000)
+                    successful_inventory_reads += 1
+                    last_pages = after_pages
+                except BrowserBusinessError as exc:
+                    if exc.code in {
+                        "CHECKPOINT_REQUIRED", "SESSION_EXPIRED",
+                        "TWO_FACTOR_REQUIRED", "FACEBOOK_TEMPORARILY_BLOCKED",
+                    }:
+                        raise
+                    confirmation_checks.append({
+                        "attempt": attempt + 1, "code": exc.code,
+                    })
+                    after_pages = []
+                except Exception as exc:
+                    confirmation_checks.append({
+                        "attempt": attempt + 1, "code": exc.__class__.__name__,
+                    })
+                    after_pages = []
 
-        raise BrowserBusinessError(
-            "FAN_PAGE_CREATE_RESULT_UNKNOWN",
-            (
-                "Create Page was clicked, but the managed-Page inventory did "
-                "not expose one definitive new Page ID. Reconciliation is "
-                "required before another CREATE."
-            ),
-            retryable=True,
-            diagnostic={
-                **(click_diagnostic if click_meta.get("error") else {}),
-                "stage": (
-                    "fan_page_final_click_unknown"
-                    if click_meta.get("error")
-                    else "fan_page_inventory_unconfirmed"
-                ),
-                "url": click_diagnostic["url"],
-                "click_meta": click_meta,
-                "confirmation_checks": confirmation_checks,
-                "page_name": name,
-                "before_ids": sorted(before_ids),
-                "successful_inventory_reads": successful_inventory_reads,
-                "last_ids": sorted(
+                await capture.drain()
+                confirmed_result = captured_result()
+                if confirmed_result:
+                    return confirmed_result
+
+                after_ids = {
                     _digits(row.get("id"))
-                    for row in last_pages
+                    for row in after_pages
                     if isinstance(row, dict) and _digits(row.get("id"))
+                }
+                new_ids = sorted(after_ids - before_ids)
+                exact_new = [
+                    row
+                    for row in after_pages
+                    if isinstance(row, dict)
+                    and _digits(row.get("id")) in new_ids
+                    and _clean(row.get("name")).casefold() == name.casefold()
+                ]
+
+                if len(exact_new) == 1:
+                    self.context.pages = after_pages
+                    page_id = _digits(exact_new[0].get("id"))
+                    return {
+                        "page_id": page_id,
+                        "name": name,
+                        "category": category_name,
+                        "reused": False,
+                        "before_ids": sorted(before_ids),
+                        "after_ids": sorted(after_ids),
+                        "transport": (
+                            "facebook_pages_ui_click_error_inventory_diff"
+                            if click_meta.get("error")
+                            else "facebook_pages_ui_inventory_diff"
+                        ),
+                    }
+
+                if attempt < 3:
+                    await asyncio.sleep(1.5 + (0.5 * attempt))
+
+            raise BrowserBusinessError(
+                "FAN_PAGE_CREATE_RESULT_UNKNOWN",
+                (
+                    "Create Page was clicked, but the managed-Page inventory did "
+                    "not expose one definitive new Page ID. Reconciliation is "
+                    "required before another CREATE."
                 ),
-            },
-        )
+                retryable=True,
+                diagnostic={
+                    **(click_diagnostic if click_meta.get("error") else {}),
+                    "stage": (
+                        "fan_page_final_click_unknown"
+                        if click_meta.get("error")
+                        else "fan_page_inventory_unconfirmed"
+                    ),
+                    "url": click_diagnostic["url"],
+                    "click_meta": click_meta,
+                    "confirmation_checks": confirmation_checks,
+                    "create_response_checks": capture.diagnostics[-8:],
+                    "page_name": name,
+                    "before_ids": sorted(before_ids),
+                    "successful_inventory_reads": successful_inventory_reads,
+                    "last_ids": sorted(
+                        _digits(row.get("id"))
+                        for row in last_pages
+                        if isinstance(row, dict) and _digits(row.get("id"))
+                    ),
+                },
+            )
 
     async def revalidate_known_business_pages(
         self,
