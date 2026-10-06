@@ -344,6 +344,64 @@ class PreparePlannerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["reason"], "PAYMENT_UNCONFIRMED")
         self.assertFalse(result["ready_to_launch"])
 
+        for account in accounts:
+            await self.state.set_payment_link_state(
+                self.profile_id,
+                account,
+                True,
+                source="test_linked",
+            )
+
+        ready = await service.run(
+            item_id="prepare-item-ready",
+            profile_id=self.profile_id,
+            context=self.context,
+            session=self.session,
+            payload={
+                "desired": {
+                    "ad_accounts": 2,
+                    "payment": True,
+                    "page_access": True,
+                },
+                "parameters": {
+                    "AD_ACCOUNT": {
+                        "currency": "USD",
+                        "timezone_id": 1,
+                    }
+                },
+            },
+        )
+        self.assertEqual(ready["status"], "READY_TO_LAUNCH")
+        self.assertTrue(ready["ready_to_launch"])
+
+        await self.state.set_payment_link_state(
+            self.profile_id,
+            accounts[1],
+            False,
+            source="test_live_absence",
+        )
+        cleared = await service.run(
+            item_id="prepare-item-cleared",
+            profile_id=self.profile_id,
+            context=self.context,
+            session=self.session,
+            payload={
+                "desired": {
+                    "ad_accounts": 2,
+                    "payment": True,
+                    "page_access": True,
+                },
+                "parameters": {
+                    "AD_ACCOUNT": {
+                        "currency": "USD",
+                        "timezone_id": 1,
+                    }
+                },
+            },
+        )
+        self.assertEqual(cleared["status"], "PAYMENT_REQUIRED")
+        self.assertFalse(cleared["ready_to_launch"])
+
 
 if __name__ == "__main__":
     unittest.main()
