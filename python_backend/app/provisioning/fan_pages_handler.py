@@ -1038,32 +1038,94 @@ async def fan_pages_handler(
             previous_result = previous_uncertain["result"]
             await provisioning_state.checkpoint(
                 item_id, profile_id, scope_key, ProvisioningStep.FAN_PAGES,
-                {"phase": "PAGE_CREATE_RESULT_UNKNOWN", "target_names": names,
-                 "created_pages": created_pages, "active_page_name": page_name,
+                {"phase": "PAGE_CREATE_RESULT_UNKNOWN", "resume_from": "RECONCILE_CREATE",
+                 "target_names": names, "created_pages": created_pages,
+                 "active_page_name": page_name,
                  "active_before_ids": previous_result.get("active_before_ids") or [],
                  "recovered_from_item_id": previous_uncertain["item_id"]},
             )
-            found, _, diagnostics = await _reconcile_uncertain_page(
+            found, proven_absent, diagnostics = await _reconcile_uncertain_page(
                 session, page_name=page_name,
                 before_ids={_clean(value) for value in previous_result.get("active_before_ids") or []},
             )
             await _record_reconciliation(provisioning_state, item_id, profile_id, scope_key, diagnostics)
-            if not found:
+            if found:
+                created_pages.append({"id": found["id"], "name": page_name,
+                                      "category": category, "reused": True})
+                completed_names.add(page_name.casefold())
+                await provisioning_state.checkpoint(
+                    item_id, profile_id, scope_key, ProvisioningStep.FAN_PAGES,
+                    {"phase": "PAGE_CREATED", "resume_from": "CREATE_NEXT",
+                     "created_pages": created_pages, "active_page_name": "",
+                     "active_before_ids": [], "reconciliation": diagnostics,
+                     "activity": "FAN_PAGE_CROSS_JOB_RECOVERED",
+                     "activity_at": int(time.time())},
+                )
+                continue
+
+            if proven_absent:
+                # REMASK_FP_CROSS_JOB_UNCERTAINTY_CLEAR_V1
+                # Repeated complete actor-admin inventory proves the older
+                # ambiguous CREATE did not land. Tombstone the *original*
+                # uncertain row as well as the current row; otherwise a later
+                # Job can scan past the current safe state and resurrect the
+                # same historical CLICK_INTENT forever.
+                previous_scope = _clean(previous_uncertain.get("scope_key"))
+                if previous_scope:
+                    try:
+                        await provisioning_state.checkpoint(
+                            previous_uncertain["item_id"],
+                            profile_id,
+                            previous_scope,
+                            ProvisioningStep.FAN_PAGES,
+                            {
+                                "phase": "CREATE_NOT_SUBMITTED",
+                                "resume_from": "CREATE_NEXT",
+                                "active_page_name": "",
+                                "active_before_ids": [],
+                                "reconciliation": diagnostics,
+                                "activity": "FAN_PAGE_CROSS_JOB_UNCERTAINTY_TOMBSTONED",
+                                "activity_at": int(time.time()),
+                            },
+                        )
+                    except Exception as exc:
+                        log.warning(
+                            "fan page prior uncertainty tombstone failed profile=%s item=%s error=%s",
+                            profile_id,
+                            previous_uncertain["item_id"],
+                            _clean(exc)[:500],
+                        )
+                await provisioning_state.checkpoint(
+                    item_id,
+                    profile_id,
+                    scope_key,
+                    ProvisioningStep.FAN_PAGES,
+                    {
+                        "phase": "CREATE_NOT_SUBMITTED",
+                        "resume_from": "CREATE_NEXT",
+                        "target_names": names,
+                        "created_pages": created_pages,
+                        "active_page_name": "",
+                        "active_before_ids": [],
+                        "reconciliation": diagnostics,
+                        "recovered_from_item_id": previous_uncertain["item_id"],
+                        "activity": "FAN_PAGE_CROSS_JOB_UNCERTAINTY_CLEARED",
+                        "activity_at": int(time.time()),
+                    },
+                )
+                log.info(
+                    "fan page stale cross-job uncertainty cleared profile=%s page=%s prior_item=%s",
+                    profile_id,
+                    page_name,
+                    previous_uncertain["item_id"],
+                )
+            else:
                 raise ProvisioningError(
                     "PAGE_CREATE_RESULT_UNKNOWN",
                     f"Previous Page CREATE for {page_name!r} remains unconfirmed; another Job must not repeat it."
                     + _reconciliation_failure_detail(diagnostics),
                     retryable=True,
                 )
-            created_pages.append({"id": found["id"], "name": page_name,
-                                  "category": category, "reused": True})
-            completed_names.add(page_name.casefold())
-            await provisioning_state.checkpoint(
-                item_id, profile_id, scope_key, ProvisioningStep.FAN_PAGES,
-                {"phase": "PAGE_CREATED", "created_pages": created_pages,
-                 "active_page_name": "", "reconciliation": diagnostics},
-            )
-            continue
 
         create_result: dict[str, Any] | None = None
 
