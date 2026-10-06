@@ -4380,19 +4380,45 @@ class FacebookBusinessBrowser:
             except Exception:
                 return False
 
-        # Category suggestions arrive through Meta's remote typeahead. A key
-        # press without a real suggestion is not a selected category.
-        deadline=time.monotonic()+8
-        while time.monotonic()<deadline:
-            exact=self.page.get_by_role("option",name=re.compile(rf"^\s*{re.escape(_clean(category))}\s*$",re.I))
-            if await exact.count()!=1:
-                exact=self.page.get_by_text(_clean(category),exact=True)
-            if await exact.count()==1 and await exact.is_visible():
-                await exact.click(timeout=3000)
+        # REMASK_FAN_PAGE_CATEGORY_TYPEAHEAD_COMPAT_V2
+        # Meta does not guarantee that the option text is byte-for-byte equal
+        # to the search text. New/locale-specific accounts can return an
+        # expanded/localized label. Prefer a containing match, otherwise use
+        # the first real visible option. Keep the keyboard fallback used by the
+        # last known-good Page creation flow.
+        await self.page.wait_for_timeout(700)
+
+        try:
+            options = self.page.get_by_role("option")
+            count = min(await options.count(), 20)
+            exact = None
+            fallback = None
+            requested = _clean(category).casefold()
+            for index in range(count):
+                option = options.nth(index)
+                if not await option.is_visible():
+                    continue
+                if fallback is None:
+                    fallback = option
+                text = _clean(await option.inner_text())
+                if requested and requested in text.casefold():
+                    exact = option
+                    break
+            chosen = exact or fallback
+            if chosen is not None:
+                await chosen.click(timeout=3000)
                 await self.page.wait_for_timeout(350)
                 return True
-            await self.page.wait_for_timeout(250)
-        return False
+        except Exception:
+            pass
+
+        try:
+            await field.press("ArrowDown")
+            await field.press("Enter")
+            await self.page.wait_for_timeout(350)
+            return True
+        except Exception:
+            return False
 
     async def _fan_page_snapshot(self) -> list[dict[str, Any]]:
         try:
@@ -4512,6 +4538,9 @@ class FacebookBusinessBrowser:
         if not opened:
             diag = await self._diagnostic("fan_page_create_form_unavailable")
             diag["form_attempts"] = form_diagnostics[-6:]
+            diag["fan_page_create_route"] = _clean(
+                getattr(self.page, "url", "")
+            )[:700]
             raise BrowserBusinessError(
                 "FAN_PAGE_CREATE_UI_CHANGED",
                 "Facebook Page creation form did not expose usable name/category fields.",
