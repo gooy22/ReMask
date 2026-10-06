@@ -13,7 +13,7 @@ from typing import Any, Awaitable, Callable
 from .mirror import MirrorError, SnapshotMirror
 from .provisioning import PrepareService, ProvisioningError, ProvisioningService, ProvisioningStateStore
 from .provisioning.models import ProvisioningStep
-from .provisioning.timeouts import browser_provisioning_hard_timeout
+from .provisioning.timeouts import browser_provisioning_hard_timeout, prepare_hard_timeout
 from .router import RoutePolicyError, TransparentPostRouter
 from .session import ProfileResolver, ProfileSession, ProfileContextError, ProxyCheckError
 from .store import JobStore
@@ -452,9 +452,8 @@ class WorkerPool:
                             action=str(task['action'])
                             if action=='prepare':
                                 payload=task['payload']
-                                hard_timeout=browser_provisioning_hard_timeout(
-                                    ['FAN_PAGES','BUSINESS','AD_ACCOUNT','PAGE_ACCESS']
-                                )
+                                desired=(payload.get('desired') or {}) if isinstance(payload,dict) else {}
+                                hard_timeout=prepare_hard_timeout(desired.get('ad_accounts',2))
                                 result=await _await_with_hard_watchdog(
                                     self.prepare.run(
                                         item_id=item_id,
