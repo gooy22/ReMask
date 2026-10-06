@@ -6969,6 +6969,27 @@ class FacebookBusinessBrowser:
                 if business_id not in output or (business_name and not output[business_id]):
                     output[business_id] = business_name
 
+            # REMASK_AUTH_HOME_EMPTY_BUSINESS_GATE_V1
+            # A Business-login landing reached only after an authenticated
+            # Business Suite Home is not a global Facebook logout. When the
+            # Home selector itself exposed no candidates and no BM evidence,
+            # the combined signals are strong enough to confirm an empty BM
+            # inventory without touching any previous non-empty snapshot.
+            selector_candidates = (
+                selector_probe.get("candidates")
+                if isinstance(selector_probe, dict)
+                else None
+            )
+            business_inventory_confirmed_empty = bool(
+                business_login_gate
+                and authenticated_home_loaded
+                and isinstance(selector_candidates, list)
+                and len(selector_candidates) == 0
+                and not bool(selector_probe.get("clicked"))
+                and not network_rows
+                and not dom_output
+            )
+
             self._last_business_inventory_diagnostic = {
                 "stage": "complete",
                 "source": (
@@ -6990,6 +7011,7 @@ class FacebookBusinessBrowser:
                 "selector_probe": selector_probe,
                 "authenticated_home_loaded": authenticated_home_loaded,
                 "business_login_gate": business_login_gate,
+                "business_inventory_confirmed_empty": business_inventory_confirmed_empty,
                 "overview_attempt": overview_attempt,
                 "ads_manager_attempt": ads_manager_attempt,
                 "overview_attempt": overview_attempt,
