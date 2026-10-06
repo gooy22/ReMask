@@ -6619,6 +6619,19 @@ class FacebookBusinessBrowser:
             }
 
         selector_opened = False
+        authenticated_home_loaded = False
+        business_login_gate = False
+
+        def is_business_login_gate_after_authenticated_home(exc: BaseException) -> bool:
+            if not authenticated_home_loaded or not isinstance(exc, BrowserBusinessError):
+                return False
+            diagnostic = exc.diagnostic if isinstance(exc.diagnostic, dict) else {}
+            return (
+                exc.code == "SESSION_EXPIRED"
+                and str(diagnostic.get("login_path") or "").rstrip("/")
+                    == "/business/loginpage"
+            )
+
         stage_started = time.monotonic()
         self._last_business_inventory_diagnostic = {
             "source": "in_progress",
@@ -6633,10 +6646,12 @@ class FacebookBusinessBrowser:
                 self.HOME_URL,
                 timeout_seconds=6.0,
             )
+            authenticated_home_loaded = True
             self._last_business_inventory_diagnostic.update({
                 "stage": "home_loaded",
                 "home_ms": int((time.monotonic() - stage_started) * 1000),
                 "home_attempt": home_attempt,
+                "authenticated_home_loaded": True,
                 "url": _clean(getattr(self.page, "url", ""))[:700],
             })
             await self.page.wait_for_timeout(700)
@@ -6843,8 +6858,30 @@ class FacebookBusinessBrowser:
                             break
                         await self.page.wait_for_timeout(250)
                     await collect_dom_businesses_bounded()
-                except BrowserBusinessError:
-                    raise
+                except BrowserBusinessError as exc:
+                    if is_business_login_gate_after_authenticated_home(exc):
+                        business_login_gate = True
+                        diagnostic = (
+                            exc.diagnostic
+                            if isinstance(exc.diagnostic, dict)
+                            else {}
+                        )
+                        overview_attempt = {
+                            "loaded": False,
+                            "error": "BUSINESS_LOGIN_GATE_AFTER_AUTHENTICATED_HOME",
+                            "url": _clean(getattr(self.page, "url", ""))[:700],
+                        }
+                        self._last_business_inventory_diagnostic.update({
+                            "stage": "overview_business_login_gate",
+                            "authenticated_home_loaded": True,
+                            "business_login_gate": True,
+                            "login_path": str(
+                                diagnostic.get("login_path") or ""
+                            )[:120],
+                            "overview_attempt": overview_attempt,
+                        })
+                    else:
+                        raise
                 except Exception as exc:
                     overview_attempt = {
                         "loaded": False,
@@ -6862,6 +6899,7 @@ class FacebookBusinessBrowser:
                 not network_rows
                 and not dom_output
                 and not bool(overview_attempt.get("loaded"))
+                and not business_login_gate
             ):
                 self._last_business_inventory_diagnostic.update({
                     "stage": "ads_manager_bootstrap",
@@ -6882,8 +6920,30 @@ class FacebookBusinessBrowser:
                             break
                         await self.page.wait_for_timeout(200)
                     await collect_dom_businesses_bounded()
-                except BrowserBusinessError:
-                    raise
+                except BrowserBusinessError as exc:
+                    if is_business_login_gate_after_authenticated_home(exc):
+                        business_login_gate = True
+                        diagnostic = (
+                            exc.diagnostic
+                            if isinstance(exc.diagnostic, dict)
+                            else {}
+                        )
+                        ads_manager_attempt = {
+                            "loaded": False,
+                            "error": "BUSINESS_LOGIN_GATE_AFTER_AUTHENTICATED_HOME",
+                            "url": _clean(getattr(self.page, "url", ""))[:700],
+                        }
+                        self._last_business_inventory_diagnostic.update({
+                            "stage": "ads_manager_business_login_gate",
+                            "authenticated_home_loaded": True,
+                            "business_login_gate": True,
+                            "login_path": str(
+                                diagnostic.get("login_path") or ""
+                            )[:120],
+                            "ads_manager_attempt": ads_manager_attempt,
+                        })
+                    else:
+                        raise
                 except Exception as exc:
                     ads_manager_attempt = {
                         "loaded": False,
@@ -6892,8 +6952,10 @@ class FacebookBusinessBrowser:
                         )[:500],
                     }
 
-            # Final fallback for whichever surface is currently mounted.
-            await collect_dom_businesses_bounded()
+            # Never parse the Business login gate as inventory. Keep only
+            # evidence already observed on the authenticated Home surface.
+            if not business_login_gate:
+                await collect_dom_businesses_bounded()
 
             if response_tasks:
                 await _settle_tasks_bounded(
@@ -6915,13 +6977,20 @@ class FacebookBusinessBrowser:
                     else (
                         "business_suite_live_dom_or_relay_state"
                         if dom_output
-                        else "none"
+                        else (
+                            "business_suite_authenticated_home_business_gate"
+                            if business_login_gate
+                            else "none"
+                        )
                     )
                 ),
                 "network_businesses": len(network_rows),
                 "dom_businesses": len(dom_output),
                 "queries": query_diagnostics[-24:],
                 "selector_probe": selector_probe,
+                "authenticated_home_loaded": authenticated_home_loaded,
+                "business_login_gate": business_login_gate,
+                "overview_attempt": overview_attempt,
                 "ads_manager_attempt": ads_manager_attempt,
                 "overview_attempt": overview_attempt,
                 "url": _clean(getattr(self.page, "url", ""))[:700],
