@@ -388,7 +388,7 @@ function pythonWorkerSelectionRefresh() {
   const auto = pythonWorkerEl('pythonProvisionAuto');
   if (auto) {
     auto.disabled = pythonWorkerUiState.busy || profiles.length === 0 || pythonWorkerUiState.workerOnline !== true;
-    auto.textContent = profiles.length ? 'Auto FP → BM → RK (' + profiles.length + ')' : 'Auto FP → BM → RK';
+    auto.textContent = profiles.length ? 'Prepare (' + profiles.length + ')' : 'Prepare';
   }
 
   if (start) {
@@ -4009,108 +4009,182 @@ window.pythonWorkerStartAdAccounts = pythonWorkerStartAdAccounts;
 
 
 async function pythonWorkerOpenAutoModal() {
-  const pendingKey = 'remask_python_worker_auto_pending_v1';
+  const pendingKey = 'remask_python_worker_prepare_pending_v1';
   let acceptedRequest = null;
   try {
     const saved = JSON.parse(localStorage.getItem(pendingKey) || 'null');
-    if (saved && saved.action === 'create' && /^workspace-auto-/.test(saved.idempotency_key)
+    if (saved && saved.action === 'create' && /^workspace-prepare-/.test(saved.idempotency_key)
       && Array.isArray(saved.profiles) && saved.profiles.length
-      && saved.profiles.every(function(row) { return row && row.profile_id && Array.isArray(row.tasks)
-        && row.tasks.length === 1 && row.tasks[0].payload && row.tasks[0].payload.auto_generate === true; })) acceptedRequest = saved;
+      && saved.profiles.every(function(row) {
+        const task = row && Array.isArray(row.tasks) && row.tasks.length === 1 ? row.tasks[0] : null;
+        return !!(row && row.profile_id && task && task.action === 'prepare'
+          && task.payload && task.payload.desired);
+      })) acceptedRequest = saved;
   } catch (_) {}
-  const profiles = acceptedRequest ? acceptedRequest.profiles.map(function(row) { return String(row.profile_id); }) : pythonWorkerSelectedProfiles();
+
+  const profiles = acceptedRequest
+    ? acceptedRequest.profiles.map(function(row) { return String(row.profile_id); })
+    : pythonWorkerSelectedProfiles();
   if (!profiles.length || pythonWorkerUiState.busy) return;
   if (pythonWorkerUiState.workerOnline !== true) throw new Error('Worker ещё не READY.');
+
   pythonWorkerEnsureBmModalStyle();
   pythonWorkerCloseOwnBmModal();
+
   const modal = document.createElement('div');
   modal.id = 'pythonWorkerBmModal';
   const card = document.createElement('div'); card.className = 'pwbm-card';
   const head = document.createElement('div'); head.className = 'pwbm-head';
   const title = document.createElement('div'); title.className = 'pwbm-title';
-  title.textContent = 'Автоматическое создание · ' + profiles.length + ' проф.';
+  title.textContent = 'Prepare · ' + profiles.length + ' проф.';
   const close = document.createElement('button'); close.type = 'button'; close.className = 'pwbm-close'; close.textContent = '×';
   close.addEventListener('click', pythonWorkerCloseOwnBmModal);
   head.append(title, close);
+
   const body = document.createElement('div'); body.className = 'pwbm-body';
   const note = document.createElement('div'); note.className = 'pwbm-note';
-  note.textContent = 'Одна FP PrgssTeam на каждый FB-аккаунт. Все его новые BM и РК используют эту же страницу. Система сама найдёт или создаст FP и подготовит доступ; выбирать страницы для каждого профиля не требуется.';
+  note.textContent = 'Цель задаётся один раз: FP → BM → нужное число РК. Prepare проверяет подтверждённое состояние и создаёт только недостающее. Payment остаётся отдельным readiness-gate перед Launch.';
   body.appendChild(note);
+
   function field(label, input) {
     const holder = document.createElement('label'); holder.className = 'pwbm-field';
     const text = document.createElement('span'); text.textContent = label;
     holder.append(text, input); body.appendChild(holder); return input;
   }
-  const mode = document.createElement('select');
-  [['2','Только FP'],['3','FP → BM'],['4','FP → BM → РК']].forEach(function(pair) {
-    const option = document.createElement('option'); option.value = pair[0]; option.textContent = pair[1]; mode.appendChild(option);
+
+  const count = document.createElement('input');
+  count.type = 'number'; count.min = '1'; count.max = '20'; count.value = '2';
+  field('РК на каждый профиль (1–20)', count);
+
+  const category = document.createElement('input');
+  category.value = 'Digital creator';
+  field('Категория FP', category);
+
+  const currency = document.createElement('input');
+  currency.value = 'USD'; currency.maxLength = 3;
+  field('Валюта РК', currency);
+
+  const timezone = document.createElement('select');
+  [['137','Киев (Europe/Kyiv)'],['474','UTC'],['1','Лос-Анджелес (America/Los_Angeles)']].forEach(function(pair) {
+    const option = document.createElement('option');
+    option.value = pair[0]; option.textContent = pair[1]; timezone.appendChild(option);
   });
-  mode.value = '4'; field('Что создать', mode);
-  const count = document.createElement('input'); count.type = 'number'; count.min = '1'; count.max = '20'; count.value = '1';
-  field('Комплектов на каждый профиль (1–20)', count);
-  const category = document.createElement('input'); category.value = 'Digital creator'; field('Категория FP', category);
-  const currency = document.createElement('input'); currency.value = 'USD'; currency.maxLength = 3; field('Валюта РК', currency);
-  const timezone = document.createElement('select'); [['137','Киев (Europe/Kyiv)'],['474','UTC'],['1','Лос-Анджелес (America/Los_Angeles)']].forEach(function(pair){const option=document.createElement('option');option.value=pair[0];option.textContent=pair[1];timezone.appendChild(option);}); timezone.value='137'; field('Часовой пояс РК', timezone);
+  timezone.value = '137';
+  field('Часовой пояс РК', timezone);
+
   const footer = document.createElement('div'); footer.className = 'pwbm-footer';
   const status = document.createElement('div'); status.className = 'pwbm-status';
   const actions = document.createElement('div'); actions.className = 'pwbm-actions';
   const cancel = document.createElement('button'); cancel.type = 'button'; cancel.className = 'btn btn-secondary'; cancel.textContent = 'Отмена';
   cancel.addEventListener('click', pythonWorkerCloseOwnBmModal);
-  const create = document.createElement('button'); create.type = 'button'; create.className = 'btn btn-primary'; create.textContent = 'Запустить';
+  const create = document.createElement('button'); create.type = 'button'; create.className = 'btn btn-primary'; create.textContent = 'Prepare';
   actions.append(cancel, create); footer.append(status, actions); card.append(head, body, footer); modal.appendChild(card); document.body.appendChild(modal);
+
   if (acceptedRequest) {
-    const template = acceptedRequest.profiles[0].tasks[0].payload;
-    mode.value = String(template.steps.length); count.value = String(template.batch_count);
-    category.value = template.parameters.FAN_PAGES.category;
-    currency.value = template.parameters.AD_ACCOUNT.currency;
-    timezone.value = String(template.parameters.AD_ACCOUNT.timezone_id);
-    [mode, count, category, currency, timezone].forEach(function(input) { input.disabled = true; });
+    const task = acceptedRequest.profiles[0].tasks[0];
+    const desired = task.payload.desired || {};
+    const params = task.payload.parameters || {};
+    count.value = String(desired.ad_accounts || 2);
+    category.value = String((params.FAN_PAGES || {}).category || 'Digital creator');
+    currency.value = String((params.AD_ACCOUNT || {}).currency || 'USD');
+    timezone.value = String((params.AD_ACCOUNT || {}).timezone_id || 137);
+    [count, category, currency, timezone].forEach(function(input) { input.disabled = true; });
     create.textContent = 'Повторить отправку';
-    note.textContent = 'Восстанавливаем отправку прежнего запроса для профилей ' + profiles.join(', ') + '. Ключ Job и параметры сохранены; повтор не создаёт новый пакет.';
+    note.textContent = 'Восстанавливаем прежний Prepare-запрос для профилей ' + profiles.join(', ') + '. Ключ и desired state сохранены; повторная отправка не меняет план.';
   }
+
   function refresh() {
-    const n = Number(count.value); const total = profiles.length * n; const rk = mode.value === '4';
-    currency.disabled = timezone.disabled = !rk || !!acceptedRequest;
-    const valid = Number.isInteger(n) && n >= 1 && n <= 20 && total <= 500 && category.value.trim()
-      && (!rk || (/^[A-Z]{3}$/.test(currency.value.trim().toUpperCase()) && Number.isInteger(Number(timezone.value)) && Number(timezone.value) >= 0 && timezone.value.trim()));
+    const n = Number(count.value);
+    const totalRk = profiles.length * n;
+    const valid = Number.isInteger(n) && n >= 1 && n <= 20 && totalRk <= 10000
+      && category.value.trim()
+      && /^[A-Z]{3}$/.test(currency.value.trim().toUpperCase())
+      && Number.isInteger(Number(timezone.value)) && Number(timezone.value) >= 0
+      && timezone.value.trim();
     create.disabled = pythonWorkerUiState.busy || !valid;
-    status.textContent = valid ? 'FP каждого профиля: PrgssTeam. BM: ' + (Number(mode.value) >= 3 ? total : 0) + ', РК этих BM: ' + (rk ? total : 0) + '. Доступ к FP настраивается автоматически.'
-      : 'Нужны категория, число комплектов 1–20 и параметры РК. Всего не больше 500 комплектов.';
+    status.textContent = valid
+      ? 'Цель: ' + profiles.length + ' проф., 1 FP + 1 BM + ' + n + ' РК на профиль. Всего РК: ' + totalRk + '. Создаются только недостающие объекты.'
+      : 'Нужны категория, 1–20 РК на профиль, валюта и часовой пояс.';
   }
-  [mode, count, category, currency, timezone].forEach(function(input) { input.addEventListener('input', refresh); input.addEventListener('change', refresh); });
+
+  [count, category, currency, timezone].forEach(function(input) {
+    input.addEventListener('input', refresh);
+    input.addEventListener('change', refresh);
+  });
+
   const random = new Uint32Array(4); crypto.getRandomValues(random);
   const nonce = Array.from(random, function(x) { return x.toString(16); }).join('-');
+
   create.addEventListener('click', async function() {
     if (create.disabled) return;
-    const steps = ['PROXY_CHECK','FAN_PAGES','BUSINESS','AD_ACCOUNT'].slice(0, Number(mode.value));
     const n = Number(count.value);
     pythonWorkerUiState.busy = true; refresh(); pythonWorkerSelectionRefresh();
     try {
-      if (!acceptedRequest) acceptedRequest = {action:'create', idempotency_key:'workspace-auto-' + nonce,
-        profiles:profiles.map(function(profileId) { return {profile_id:String(profileId), tasks:[{action:'provisioning', payload:{
-          steps:steps, auto_generate:true, batch_count:n, parameters:{
-            FAN_PAGES:{category:category.value.trim(),page_name:'PrgssTeam',common_page:true,policies_accepted:true}, AD_ACCOUNT:{currency:currency.value.trim().toUpperCase(), timezone_id:Number(timezone.value),use_common_page:true,page_policies_accepted:true}
-          }
-        }}]}; })};
-      [mode, count, category, currency, timezone].forEach(function(input) { input.disabled = true; });
+      if (!acceptedRequest) {
+        acceptedRequest = {
+          action: 'create',
+          idempotency_key: 'workspace-prepare-' + nonce,
+          profiles: profiles.map(function(profileId) {
+            const profile = String(profileId);
+            const scope = 'prepare:' + profile;
+            return {
+              profile_id: profile,
+              tasks: [{
+                action: 'prepare',
+                idempotency_key: scope,
+                payload: {
+                  scope_key: scope,
+                  desired: {
+                    fan_page: true,
+                    business: true,
+                    ad_accounts: n,
+                    page_access: true,
+                    payment: true
+                  },
+                  parameters: {
+                    FAN_PAGES: {
+                      category: category.value.trim(),
+                      page_name: 'PrgssTeam',
+                      common_page: true,
+                      policies_accepted: true
+                    },
+                    AD_ACCOUNT: {
+                      currency: currency.value.trim().toUpperCase(),
+                      timezone_id: Number(timezone.value),
+                      use_common_page: true,
+                      page_policies_accepted: true
+                    }
+                  }
+                }
+              }]
+            };
+          })
+        };
+      }
+
+      [count, category, currency, timezone].forEach(function(input) { input.disabled = true; });
       localStorage.setItem(pendingKey, JSON.stringify(acceptedRequest));
       const data = await pythonWorkerBridge(acceptedRequest);
       const jobId = String((data && data.job && data.job.job_id) || '').trim();
       if (!jobId) throw new Error('Worker did not return job_id.');
+
       pythonWorkerClearBatchState();
       pythonWorkerUiState.jobId = jobId; pythonWorkerUiState.job = null;
       localStorage.setItem('remask_python_worker_job_v1', jobId);
       localStorage.removeItem(pendingKey);
       pythonWorkerSetText('pythonPwJob', 'Job: ' + jobId);
-      pythonWorkerSetText('pythonPwStatus', 'Автоматическое создание: ' + (profiles.length * n) + ' комплектов.');
+      pythonWorkerSetText('pythonPwStatus', 'Prepare: ' + profiles.length + ' проф., target ' + n + ' РК/профиль.');
       pythonWorkerCloseOwnBmModal();
-      pythonWorkerPoll().catch(function(error) { pythonWorkerSetText('pythonPwStatus', 'Ошибка polling: ' + String(error.message || error)); });
+      pythonWorkerPoll().catch(function(error) {
+        pythonWorkerSetText('pythonPwStatus', 'Ошибка polling: ' + String(error.message || error));
+      });
     } catch (error) {
       pythonWorkerUiState.busy = false; refresh(); pythonWorkerSelectionRefresh();
       create.textContent = 'Повторить отправку';
-      status.textContent = 'Ошибка: ' + String(error.message || error) + '. Повторная отправка использует тот же ключ Job.';
+      status.textContent = 'Ошибка: ' + String(error.message || error) + '. Повторная отправка использует тот же Prepare Job.';
     }
   });
+
   refresh();
 }
 
