@@ -704,7 +704,18 @@ async def profile_payment_card(resolver:Any,profile:str,payload:dict[str,Any],*,
     try:
         # PHP waits 130s. Resolution, browser-slot acquisition, the form and
         # cancellation/cleanup must all fit inside that transport boundary.
-        return await asyncio.wait_for(_profile_payment_card_execute(resolver,profile,payload,state),timeout=110)
+        result=await asyncio.wait_for(_profile_payment_card_execute(resolver,profile,payload,state),timeout=110)
+        logging.getLogger('remask.payment_card').info(
+            'payment card result profile=%s account=%s operation=%s status=%s code=%s submitted=%s',
+            profile,target,operation,str(result.get('status') or '')[:40],
+            str(result.get('code') or '')[:80],result.get('submitted'),
+        )
+        return result
     except asyncio.TimeoutError:
-        return {'profile_id':profile,'account_id':target,'submitted':None if operation=='bind' else False,'funding_verified':False,
+        result={'profile_id':profile,'account_id':target,'submitted':None if operation=='bind' else False,'funding_verified':False,
             'status':'SUBMITTED_UNVERIFIED' if operation=='bind' else 'BLOCKED','code':'CARD_FLOW_TIMEOUT'}
+        logging.getLogger('remask.payment_card').info(
+            'payment card result profile=%s account=%s operation=%s status=%s code=%s submitted=%s',
+            profile,target,operation,result['status'],result['code'],result['submitted'],
+        )
+        return result
