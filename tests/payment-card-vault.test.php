@@ -185,6 +185,22 @@ try{
     $result=$vault->reconcile($card['id'],'Fixture','123456789',$expected,$proof);
     expect($result['status']==='LINKED'&&$result['submitted']===false&&$result['funding_verified']===false,'Read-only positive proof not reconciled');
     expect($vault->linkedBinding($card['id'],'Fixture','123456789')['checked_live']===true,'Live proof not retained');
+    $vault->finish($card['id'],'Fixture','123456789','SUBMITTED_UNVERIFIED',['code'=>'CARD_LINK_NOT_VERIFIED','submitted'=>null,'number'=>'4111111111111111','cvv'=>'123']);
+    $state=$vault->binding($card['id'],'Fixture','123456789');expect($state['last_result_code']==='CARD_LINK_NOT_VERIFIED'&&$state['submitted']===null,'Safe result metadata lost');
+    expect(!str_contains(file_get_contents($directory.'/cards.json'),'4111111111111111'),'Raw result stored');
+    rejected(fn()=>$vault->begin($card['id'],'Fixture','123456789'),'CARD_BINDING_RECONCILE_REQUIRED');
+    $vault->finish($card['id'],'Fixture','123456789','LINKED');
+    expect($vault->linkedBinding($card['id'],'Fixture','123456789')['status']==='LINKED','No-CVV linked lookup');
+    expect($vault->linkedBinding($card['id'],'Other profile','123456789')===null,'No-CVV lookup crossed profile');
+    expect($vault->linkedBinding($card['id'],'Fixture','987654321')===null,'No-CVV lookup crossed account');
+    expect($vault->begin($card['id'],'Fixture','123456789')['status']==='LINKED','Idempotent linkage');
+    expect($vault->begin($card['id'],'Other profile','123456789')['status']==='IN_PROGRESS','Profile scope');
+    expect($vault->linkedBinding($card['id'],'Other profile','123456789')===null,'In-progress binding treated as linked');
+    $saved=$vault->updateBilling($card['id'],['address'=>'Fixture Street','city'=>'Fixture City']);
+    expect($saved['id']===$card['id']&&count($vault->all()['cards'])===1,'Billing update duplicated card');
+    expect($vault->secret($card['id'])['number']==='4111111111111111','Billing update changed PAN');
+    expect($vault->missingBilling($card['id'],[['kind'=>'holder','required'=>false],['kind'=>'postal_code','required'=>true],['kind'=>'cvv','required'=>true]])===['postal_code'],'Billing preflight leaked or invented fields');
+    foreach(['cvv','number','month'] as $forbidden)rejected(fn()=>$vault->updateBilling($card['id'],[$forbidden=>'fixture']),'CARD_BILLING_PATCH_INVALID');
     // Meta renders Amex as "American Express"; vault aliases must still prove
     // the exact saved card. Discover must not be collapsed to generic "Card".
     $amex=$vault->add(['number'=>'378282246310005','month'=>12,'year'=>2099,'holder'=>'Amex Fixture']);
@@ -204,22 +220,6 @@ try{
     $discoverProof=['profile_id'=>'Discover profile','account_id'=>'323456789','account_scope_verified'=>true,'checked_live'=>true,
         'source'=>'private_facebook_billing_ui','verification_status'=>'LINKED','payment_methods'=>[['type'=>'Discover','last4'=>'1117']]];
     expect($vault->reconcile($discover['id'],'Discover profile','323456789',$discoverExpected,$discoverProof)['status']==='LINKED','Discover live proof was not reconciled');
-    $vault->finish($card['id'],'Fixture','123456789','SUBMITTED_UNVERIFIED',['code'=>'CARD_LINK_NOT_VERIFIED','submitted'=>null,'number'=>'4111111111111111','cvv'=>'123']);
-    $state=$vault->binding($card['id'],'Fixture','123456789');expect($state['last_result_code']==='CARD_LINK_NOT_VERIFIED'&&$state['submitted']===null,'Safe result metadata lost');
-    expect(!str_contains(file_get_contents($directory.'/cards.json'),'4111111111111111'),'Raw result stored');
-    rejected(fn()=>$vault->begin($card['id'],'Fixture','123456789'),'CARD_BINDING_RECONCILE_REQUIRED');
-    $vault->finish($card['id'],'Fixture','123456789','LINKED');
-    expect($vault->linkedBinding($card['id'],'Fixture','123456789')['status']==='LINKED','No-CVV linked lookup');
-    expect($vault->linkedBinding($card['id'],'Other profile','123456789')===null,'No-CVV lookup crossed profile');
-    expect($vault->linkedBinding($card['id'],'Fixture','987654321')===null,'No-CVV lookup crossed account');
-    expect($vault->begin($card['id'],'Fixture','123456789')['status']==='LINKED','Idempotent linkage');
-    expect($vault->begin($card['id'],'Other profile','123456789')['status']==='IN_PROGRESS','Profile scope');
-    expect($vault->linkedBinding($card['id'],'Other profile','123456789')===null,'In-progress binding treated as linked');
-    $saved=$vault->updateBilling($card['id'],['address'=>'Fixture Street','city'=>'Fixture City']);
-    expect($saved['id']===$card['id']&&count($vault->all()['cards'])===1,'Billing update duplicated card');
-    expect($vault->secret($card['id'])['number']==='4111111111111111','Billing update changed PAN');
-    expect($vault->missingBilling($card['id'],[['kind'=>'holder','required'=>false],['kind'=>'postal_code','required'=>true],['kind'=>'cvv','required'=>true]])===['postal_code'],'Billing preflight leaked or invented fields');
-    foreach(['cvv','number','month'] as $forbidden)rejected(fn()=>$vault->updateBilling($card['id'],[$forbidden=>'fixture']),'CARD_BILLING_PATCH_INVALID');
     $vault->finish($card['id'],'Other profile','123456789','SUBMITTED_UNVERIFIED');
     $key=hash('sha256','Other profile|123456789');$path=$directory.'/cards.json';
     $data=json_decode(file_get_contents($path),true);$data['bindings'][$key]['updated_at']=gmdate('c',time()-240);file_put_contents($path,json_encode($data));
