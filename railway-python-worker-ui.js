@@ -857,14 +857,30 @@ function pythonWorkerFanPageResult(item) {
   }).join('; ');
 }
 
+function pythonWorkerPrepareResult(item) {
+  const tasks = Array.isArray(item && item.tasks) ? item.tasks : [];
+  const task = tasks.find(function(row) {
+    return row && String(row.action || '').toLowerCase() === 'prepare'
+      && row.result && typeof row.result === 'object';
+  });
+  return task ? task.result : null;
+}
+
 function pythonWorkerRenderJob(job) {
   pythonWorkerUiState.job = job;
   const items = Array.isArray(job && job.items) ? job.items : [];
   const counts = {QUEUED: 0, RUNNING: 0, SUCCESS: 0, FAILED: 0};
+  const prepareCounts = {READY: 0, RETRY: 0, MANUAL: 0, PAYMENT: 0};
 
   for (const item of items) {
     const status = String((item && item.status) || 'QUEUED').toUpperCase();
     if (Object.prototype.hasOwnProperty.call(counts, status)) counts[status]++;
+    const prepare = pythonWorkerPrepareResult(item);
+    const prepareStatus = String((prepare && prepare.status) || '').toUpperCase();
+    if (prepareStatus === 'READY_TO_LAUNCH') prepareCounts.READY++;
+    else if (prepareStatus === 'RETRY') prepareCounts.RETRY++;
+    else if (prepareStatus === 'MANUAL_REQUIRED') prepareCounts.MANUAL++;
+    else if (prepareStatus === 'PAYMENT_REQUIRED') prepareCounts.PAYMENT++;
   }
 
   const total = items.length;
@@ -881,9 +897,16 @@ function pythonWorkerRenderJob(job) {
   const bar = pythonWorkerEl('pythonPwProgress');
   if (bar) bar.style.width = progress + '%';
 
+  const prepareTotal = prepareCounts.READY + prepareCounts.RETRY + prepareCounts.MANUAL + prepareCounts.PAYMENT;
+  const prepareSummary = prepareTotal
+    ? ' · Prepare: READY ' + prepareCounts.READY
+      + ' / RETRY ' + prepareCounts.RETRY
+      + ' / MANUAL ' + prepareCounts.MANUAL
+      + ' / PAYMENT ' + prepareCounts.PAYMENT
+    : '';
   pythonWorkerSetText(
     'pythonPwStatus',
-    'Status: ' + String((job && job.status) || 'UNKNOWN') + ' · ' + done + '/' + total + ' завершено · ' + progress + '%'
+    'Status: ' + String((job && job.status) || 'UNKNOWN') + ' · ' + done + '/' + total + ' завершено · ' + progress + '%' + prepareSummary
   );
 
   const body = pythonWorkerEl('pythonPwRows');
@@ -921,6 +944,7 @@ function pythonWorkerRenderJob(job) {
 
         const businessTelemetry = pythonWorkerBusinessTelemetry(item);
         const fanPageResult = pythonWorkerFanPageResult(item);
+        const prepareResult = pythonWorkerPrepareResult(item);
 
         if (errorParts.length) {
           if (fanPageResult) errorParts.unshift(fanPageResult);
@@ -932,7 +956,43 @@ function pythonWorkerRenderJob(job) {
         } else {
           const adAccountResult = pythonWorkerAdAccountResult(item);
           const businessResult = pythonWorkerBusinessResult(item);
-          if (adAccountResult) {
+          if (prepareResult) {
+            const actual = prepareResult.actual && typeof prepareResult.actual === 'object'
+              ? prepareResult.actual : {};
+            const desired = prepareResult.desired && typeof prepareResult.desired === 'object'
+              ? prepareResult.desired : {};
+            const accounts = Array.isArray(actual.ad_accounts) ? actual.ad_accounts : [];
+            const resultParts = [
+              String(prepareResult.status || 'PREPARED')
+            ];
+            if (actual.page_id) resultParts.push('FP ' + actual.page_id);
+            if (actual.business_id) resultParts.push('BM ' + actual.business_id);
+            resultParts.push('РК ' + accounts.length + '/' + String(desired.ad_accounts || accounts.length));
+            if (prepareResult.reason) resultParts.push(String(prepareResult.reason));
+            errorTd.className = 'pw-result';
+            errorTd.textContent = resultParts.join(' · ');
+
+            const traceRows = Array.isArray(prepareResult.trace) ? prepareResult.trace : [];
+            if (traceRows.length) {
+              const trace = document.createElement('details');
+              const traceTitle = document.createElement('summary');
+              traceTitle.textContent = 'Prepare trace';
+              const pre = document.createElement('pre');
+              pre.textContent = traceRows.map(function(row) {
+                return [
+                  row.action,
+                  row.phase,
+                  row.status,
+                  row.slot != null ? 'slot ' + row.slot : '',
+                  row.business_id ? 'BM ' + row.business_id : '',
+                  row.ad_account_id ? 'РК ' + row.ad_account_id : ''
+                ].filter(Boolean).join(' · ');
+              }).join('\n');
+              trace.appendChild(traceTitle);
+              trace.appendChild(pre);
+              errorTd.appendChild(trace);
+            }
+          } else if (adAccountResult) {
             const resultParts = [
               'RK ' + adAccountResult.ad_account_id
             ];
