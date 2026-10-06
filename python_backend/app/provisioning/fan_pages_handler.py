@@ -225,9 +225,23 @@ async def _fresh_page_inventory(session: Any) -> list[dict[str, Any]]:
         # flaky Your-Pages SPA never hydrated. That is NOT authoritative proof
         # of an empty account. Preserve the error so uncertain CREATE recovery
         # can keep duplicate protection enabled.
-        rows = await browser.discover_managed_pages(fast=True, navigation_timeout_ms=9000)
-        session.context.pages = rows
-        return _normalize_pages(rows)
+        # A fresh Chromium lease can return an unhydrated Your-Pages shell.
+        # Retry only this read in the same lease so its Relay state is warm.
+        # Neither failure nor an empty UI list proves a CREATE was absent.
+        for attempt in range(2):
+            try:
+                rows = await browser.discover_managed_pages(
+                    fast=True, navigation_timeout_ms=9000,
+                )
+                session.context.pages = rows
+                return _normalize_pages(rows)
+            except BrowserBusinessError as exc:
+                if attempt == 1 or exc.code not in {
+                    "FAN_PAGES_NOT_DISCOVERED", "FACEBOOK_NAVIGATION_FAILED",
+                }:
+                    raise
+                await browser.page.wait_for_timeout(750)
+        raise AssertionError("Page inventory loop must return or raise")
 
 
 async def _reconcile_uncertain_page(
@@ -1098,6 +1112,17 @@ async def fan_pages_handler(
                         str(exc),
                         retryable=bool(exc.retryable),
                     ) from exc
+
+                diagnostic = exc.diagnostic if isinstance(exc.diagnostic, dict) else {}
+                click = diagnostic.get("click_meta") or {}
+                log.info(
+                    "fan page submit uncertain profile=%s item=%s stage=%s "
+                    "click_attempted=%s click_error_class=%s confirmation=%s",
+                    profile_id, item_id, diagnostic.get("stage", ""),
+                    click.get("attempted", False),
+                    _clean(click.get("error")).split(":", 1)[0][:100],
+                    json.dumps(diagnostic.get("confirmation_checks") or []),
+                )
 
                 await provisioning_state.checkpoint(
                     item_id,

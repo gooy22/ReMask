@@ -341,7 +341,9 @@ class FanPageProvisioningRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 )
 
         self.assertEqual(caught.exception.code, "FAN_PAGES_NOT_DISCOVERED")
-        browser.discover_managed_pages.assert_awaited_once_with(fast=True, navigation_timeout_ms=9000)
+        self.assertEqual(browser.discover_managed_pages.await_count, 2)
+        browser.discover_managed_pages.assert_awaited_with(fast=True, navigation_timeout_ms=9000)
+        browser.page.wait_for_timeout.assert_awaited_once_with(750)
 
     async def test_uncertain_create_keeps_duplicate_guard_when_inventory_unavailable(self) -> None:
         unavailable = BrowserBusinessError(

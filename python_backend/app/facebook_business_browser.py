@@ -4899,25 +4899,43 @@ class FacebookBusinessBrowser:
                 diagnostic=diag,
             )
 
+        # REMASK_FP_CLICK_ERROR_READ_ONLY_CONFIRMATION_V1
+        # A click timeout/context transition is not a negative CREATE result.
+        # Keep this authenticated lease alive and run the same read-only
+        # confirmation used after a successful click. Never click again.
+        click_diagnostic: dict[str, Any] = {
+            "stage": "fan_page_final_click_unknown",
+            "url": _clean(getattr(self.page, "url", "")),
+            "click_meta": click_meta,
+            "before_ids": sorted(before_ids),
+            "page_name": name,
+        }
         if click_meta.get("error"):
-            raise BrowserBusinessError(
-                "FAN_PAGE_CREATE_RESULT_UNKNOWN",
-                (
-                    "Create Page click was attempted, but Playwright lost a "
-                    "definitive final state. Reconciliation is required before "
-                    "another CREATE. " + _clean(click_meta.get("error"))
-                ),
-                retryable=True,
-                diagnostic={
-                    "stage": "fan_page_final_click_unknown",
-                    "click_meta": click_meta,
-                    "before_ids": sorted(before_ids),
-                    "page_name": name,
-                },
-            )
+            try:
+                observed = await asyncio.wait_for(
+                    self._diagnostic("fan_page_final_click_unknown"),
+                    timeout=4.0,
+                )
+                click_diagnostic.update(observed)
+            except Exception:
+                pass
 
         try:
             await self.page.wait_for_timeout(1400)
+        except Exception:
+            pass
+
+        # Check an auth redirect before navigating away from the result.
+        # Preserve real auth failures; a closed/crashed document remains an
+        # uncertain CREATE and falls through to read-only reconciliation.
+        try:
+            await self._assert_authenticated(body_timeout_ms=1200)
+        except BrowserBusinessError as exc:
+            if exc.code in {
+                "CHECKPOINT_REQUIRED", "SESSION_EXPIRED",
+                "TWO_FACTOR_REQUIRED", "FACEBOOK_TEMPORARILY_BLOCKED",
+            }:
+                raise
         except Exception:
             pass
 
@@ -4956,14 +4974,26 @@ class FacebookBusinessBrowser:
 
         successful_inventory_reads = 0
         last_pages: list[dict[str, Any]] = []
+        confirmation_checks: list[dict[str, Any]] = []
         for attempt in range(4):
             try:
                 after_pages = await self.discover_managed_pages(fast=True, navigation_timeout_ms=9000)
                 successful_inventory_reads += 1
                 last_pages = after_pages
             except BrowserBusinessError as exc:
-                if exc.code != "FAN_PAGES_NOT_DISCOVERED" and attempt >= 3:
+                if exc.code in {
+                    "CHECKPOINT_REQUIRED", "SESSION_EXPIRED",
+                    "TWO_FACTOR_REQUIRED", "FACEBOOK_TEMPORARILY_BLOCKED",
+                }:
                     raise
+                confirmation_checks.append({
+                    "attempt": attempt + 1, "code": exc.code,
+                })
+                after_pages = []
+            except Exception as exc:
+                confirmation_checks.append({
+                    "attempt": attempt + 1, "code": exc.__class__.__name__,
+                })
                 after_pages = []
 
             after_ids = {
@@ -4990,7 +5020,11 @@ class FacebookBusinessBrowser:
                     "reused": False,
                     "before_ids": sorted(before_ids),
                     "after_ids": sorted(after_ids),
-                    "transport": "facebook_pages_ui_inventory_diff",
+                    "transport": (
+                        "facebook_pages_ui_click_error_inventory_diff"
+                        if click_meta.get("error")
+                        else "facebook_pages_ui_inventory_diff"
+                    ),
                 }
 
             if attempt < 3:
@@ -5005,7 +5039,15 @@ class FacebookBusinessBrowser:
             ),
             retryable=True,
             diagnostic={
-                "stage": "fan_page_inventory_unconfirmed",
+                **(click_diagnostic if click_meta.get("error") else {}),
+                "stage": (
+                    "fan_page_final_click_unknown"
+                    if click_meta.get("error")
+                    else "fan_page_inventory_unconfirmed"
+                ),
+                "url": click_diagnostic["url"],
+                "click_meta": click_meta,
+                "confirmation_checks": confirmation_checks,
                 "page_name": name,
                 "before_ids": sorted(before_ids),
                 "successful_inventory_reads": successful_inventory_reads,
