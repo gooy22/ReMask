@@ -217,7 +217,7 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
             page_id=PAGE,name='PrgssTeam',owner_profile_id='8',
             grants={BM:prior or {}})
         await self.state.complete(item,'8',item,ProvisioningStep.AD_ACCOUNT,
-            {'business_id':BM,'ad_account_id':'act_'+RK})
+            {'business_id':BM,'ad_account_id':'act_'+RK,'account_name':'Fixture Ads'})
         await self.state.set_running(item,'8',item,ProvisioningStep.PAGE_ACCESS)
         browser=SimpleNamespace(page=SimpleNamespace(url='about:blank'),
             _diagnostic=AsyncMock(return_value={}))
@@ -239,6 +239,7 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
         with patch('app.provisioning.page_access_handler.ensure_common_page',new=AsyncMock()), \
              patch('app.provisioning.page_access_handler.FacebookBusinessBrowser',return_value=Lease()) as factory, \
              patch('app.provisioning.page_access_handler.ensure_existing_page_full_control',new=AsyncMock(side_effect=full)) as access, \
+             patch('app.provisioning.page_access_handler.ensure_ad_account_full_control',new=AsyncMock(return_value={'rk_operator_full_control_verified':True})) as rk_access, \
              patch('app.provisioning.page_access_handler._request_target_page_access',new=AsyncMock()) as partial, \
              patch('app.provisioning.page_access_handler.inspect_browser_pages',new=AsyncMock()) as inspect:
             result=await page_access_handler(session,{}, {'business_id':BM,'ad_account_id':'act_'+RK},
@@ -247,12 +248,15 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
         partial.assert_not_awaited()
         inspect.assert_not_awaited()
         access.assert_awaited_once()
+        rk_access.assert_awaited_once()
+        self.assertEqual(rk_access.await_args.args[1:4],(BM,RK,'Fixture Ads'))
         return result
 
     async def test_target_bm_uses_existing_page_and_proves_full_operator_control(self):
         result=await self._full_access_handler_fixture()
         self.assertTrue(result['page_owned_by_business'])
         self.assertTrue(result['operator_full_control_verified'])
+        self.assertTrue(result['rk_operator_full_control_verified'])
         self.assertEqual(result['transport'],'existing_page_full_control')
         self.assertFalse(result['ad_account_page_access_verified'])
         self.assertEqual(result['ad_account_id'],RK)
