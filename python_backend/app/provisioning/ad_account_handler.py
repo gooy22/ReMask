@@ -657,6 +657,7 @@ async def _prove_empty_after_uncertainty(
     graph_required_checks: int = 3,
     browser_required_checks: int = 3,
     delay_seconds: float = 1.5,
+    allow_multiple_in_business: bool = False,
 ) -> tuple[str, bool, dict[str, Any]]:
     """Resolve an ambiguous CREATE without allowing an endless duplicate lock.
 
@@ -666,6 +667,14 @@ async def _prove_empty_after_uncertainty(
 
     Finding any RK wins immediately and returns its ID.
     """
+    if allow_multiple_in_business:
+        return await _prove_target_absent_after_uncertainty(
+            session,
+            business_id=business_id,
+            account_name=account_name,
+            required_checks=browser_required_checks,
+            delay_seconds=delay_seconds,
+        )
     # Ignore legacy token inventory, including restored diagnostics. It must
     # never shorten the independent browser proof required before another CREATE.
     graph_evidence: list[dict[str, Any]] = []
@@ -1370,6 +1379,7 @@ async def ad_account_handler(
                 session,
                 business_id=business_id,
                 account_name=rk_name,
+            allow_multiple_in_business=allow_multiple_in_business,
             )
         )
         if proof_found_id:
@@ -1442,10 +1452,10 @@ async def ad_account_handler(
                 retryable=True,
             )
 
-    # Read-only preflight enforces the 1 BM = 1 RK invariant. A CREATE must
-    # never proceed merely because one inventory transport is unavailable:
-    # fall back to Meta Business Settings inventory first so mass jobs cannot
-    # create a second RK when Graph permissions/cache are temporarily missing.
+    # Legacy Add RK still enforces 1 BM = 1 RK. Prepare may explicitly opt into
+    # multiple RK, but only after repeated exact-Business inventory reads prove
+    # that this slot's stable target name is absent. A CREATE never proceeds on
+    # an unavailable or ambiguous inventory transport.
     found_id, inventory_before = await _reconcile_existing(
         session,
         business_id=business_id,
@@ -1821,6 +1831,7 @@ async def ad_account_handler(
                 session,
                 business_id=business_id,
                 account_name=rk_name,
+            allow_multiple_in_business=allow_multiple_in_business,
             )
         )
         if found_id:
@@ -2202,6 +2213,7 @@ async def ad_account_handler(
                         session,
                         business_id=business_id,
                         account_name=rk_name,
+                    allow_multiple_in_business=allow_multiple_in_business,
                     )
                 )
                 if proof_found_id:
@@ -2428,6 +2440,7 @@ async def ad_account_handler(
                     session,
                     business_id=business_id,
                     account_name=rk_name,
+                allow_multiple_in_business=allow_multiple_in_business,
                 )
             )
 
