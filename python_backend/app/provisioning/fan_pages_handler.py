@@ -8,7 +8,8 @@ from typing import Any
 
 from ..facebook_business_browser import BrowserBusinessError, FacebookBusinessBrowser
 from ..facebook_page_discovery import (
-    PageDiscoveryError, discover_pages_from_browser_html, list_pages_via_private_graphql,
+    PageDiscoveryError, discover_current_list_pages_docid_by_marker,
+    discover_pages_from_browser_html, list_pages_via_private_graphql,
 )
 from .models import ProvisioningError, ProvisioningStep
 
@@ -254,6 +255,7 @@ async def _reconcile_uncertain_page(
     diagnostics: list[dict[str, Any]] = []
     authoritative_absent = 0
     html_checked = False
+    private_discovery_checked = False
     target_seen = False
 
     for attempt in range(max(1, checks)):
@@ -307,7 +309,29 @@ async def _reconcile_uncertain_page(
         facebook_web = None
         try:
             facebook_web = await session.facebook_web()
-            private_result = await list_pages_via_private_graphql(facebook_web)
+            try:
+                private_result = await list_pages_via_private_graphql(facebook_web)
+            except PageDiscoveryError:
+                # Configured candidates can become stale too. Repeating the
+                # same failed document never repairs a pending CREATE. Learn
+                # one current read-only query from authenticated HTML, once per
+                # reconciliation, with a strict budget; never replay CREATE.
+                if private_discovery_checked:
+                    raise
+                private_discovery_checked = True
+                try:
+                    discovered = await asyncio.wait_for(
+                        discover_current_list_pages_docid_by_marker(
+                            facebook_web, max_entries=2, per_entry_timeout=2.2,
+                        ), timeout=5.0,
+                    )
+                except Exception:
+                    discovered = None
+                if discovered is None:
+                    raise
+                log.info("fan page read query refreshed profile=%s doc_id=%s",
+                         _clean(getattr(session.context, "profile_id", "")), discovered.doc_id)
+                private_result = await list_pages_via_private_graphql(facebook_web)
             private_rows = _normalize_pages(private_result.pages)
             private_found = _find_created_page(
                 private_rows,
