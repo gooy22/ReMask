@@ -1759,9 +1759,12 @@ class FacebookBusinessBrowser:
     FAN_PAGE_CREATE_NAMES = (
         "Create Page",
         "Create page",
+        "Create",
         "Создать Страницу",
         "Создать страницу",
+        "Создать",
         "Створити сторінку",
+        "Створити",
         "Créer une Page",
         "Créer la Page",
         "Seite erstellen",
@@ -2421,8 +2424,40 @@ class FacebookBusinessBrowser:
                             continue
             return False
 
+        # Prefer Meta's stable cookie-banner hooks before localized text.
+        # Firefox/Mozilla's Facebook consent rule and Meta's legacy/current
+        # markup use these attributes across locales.
+        clicked = False
         chosen = "minimal"
-        clicked = await click_named(minimal_names)
+        for selector, choice in (
+            ('[data-cookiebanner="accept_only_essential_button"]', "minimal"),
+            ('[data-testid="cookie-policy-dialog-reject-button"]', "minimal"),
+            ('[data-cookiebanner="reject_button"]', "minimal"),
+            ('[data-cookiebanner="accept_button"]', "allow_all"),
+            ('[data-testid="cookie-policy-dialog-accept-button"]', "allow_all"),
+        ):
+            try:
+                candidates = self.page.locator(selector)
+                count = min(await candidates.count(), 4)
+            except Exception:
+                count = 0
+            for index in range(count):
+                try:
+                    candidate = candidates.nth(index)
+                    if not await candidate.is_visible():
+                        continue
+                    await candidate.click(timeout=3500)
+                    clicked = True
+                    chosen = choice
+                    break
+                except Exception:
+                    continue
+            if clicked:
+                break
+
+        if not clicked:
+            chosen = "minimal"
+            clicked = await click_named(minimal_names)
         if not clicked:
             chosen = "allow_all"
             clicked = await click_named(allow_all_names)
@@ -4521,45 +4556,71 @@ class FacebookBusinessBrowser:
             except Exception:
                 return False
 
-        # REMASK_FAN_PAGE_CATEGORY_TYPEAHEAD_COMPAT_V2
-        # Meta does not guarantee that the option text is byte-for-byte equal
-        # to the search text. New/locale-specific accounts can return an
-        # expanded/localized label. Prefer a containing match, otherwise use
-        # the first real visible option. Keep the keyboard fallback used by the
-        # last known-good Page creation flow.
-        await self.page.wait_for_timeout(700)
+        # REMASK_FAN_PAGE_CATEGORY_TYPEAHEAD_COMPAT_V3
+        # A typed query is not a selected Page category. Wait for a real Meta
+        # typeahead option, then click one. Never report success merely because
+        # ArrowDown/Enter was sent: that left Create Page disabled on fresh
+        # profiles and was misreported as a missing submit control.
+        deadline = time.monotonic() + 8.0
+        requested = _clean(category).casefold()
+        while time.monotonic() < deadline:
+            try:
+                options = self.page.get_by_role("option")
+                count = min(await options.count(), 20)
+                exact = None
+                fallback = None
+                for index in range(count):
+                    option = options.nth(index)
+                    if not await option.is_visible():
+                        continue
+                    if fallback is None:
+                        fallback = option
+                    text = _clean(await option.inner_text())
+                    if requested and requested in text.casefold():
+                        exact = option
+                        break
+                chosen = exact or fallback
+                if chosen is not None:
+                    await chosen.click(timeout=3000)
+                    await self.page.wait_for_timeout(450)
+                    return True
+            except Exception:
+                pass
+            await self.page.wait_for_timeout(250)
 
+        # One final keyboard attempt is allowed only if it produces observable
+        # selection state. This preserves compatibility with virtualized
+        # typeaheads while eliminating the previous unconditional True.
         try:
-            options = self.page.get_by_role("option")
-            count = min(await options.count(), 20)
-            exact = None
-            fallback = None
-            requested = _clean(category).casefold()
-            for index in range(count):
-                option = options.nth(index)
-                if not await option.is_visible():
-                    continue
-                if fallback is None:
-                    fallback = option
-                text = _clean(await option.inner_text())
-                if requested and requested in text.casefold():
-                    exact = option
-                    break
-            chosen = exact or fallback
-            if chosen is not None:
-                await chosen.click(timeout=3000)
-                await self.page.wait_for_timeout(350)
-                return True
+            before_value = _clean(await field.input_value())
         except Exception:
-            pass
-
+            before_value = ""
         try:
             await field.press("ArrowDown")
             await field.press("Enter")
-            await self.page.wait_for_timeout(350)
-            return True
+            await self.page.wait_for_timeout(450)
         except Exception:
             return False
+
+        try:
+            expanded = _clean(await field.get_attribute("aria-expanded")).lower()
+            value_after = _clean(await field.input_value())
+            if expanded in {"false", ""} and value_after:
+                # Selection may keep the query text; require an enabled create
+                # control as the second proof before accepting keyboard commit.
+                for create_name in self.FAN_PAGE_CREATE_NAMES:
+                    pattern = re.compile(
+                        rf"^\s*{re.escape(create_name)}\s*$",
+                        re.IGNORECASE,
+                    )
+                    controls = self.page.get_by_role("button", name=pattern)
+                    for index in range(min(await controls.count(), 4)):
+                        control = controls.nth(index)
+                        if await control.is_visible() and await control.is_enabled():
+                            return True
+        except Exception:
+            pass
+        return False
 
     async def _fan_page_snapshot(self) -> list[dict[str, Any]]:
         try:
@@ -4741,12 +4802,17 @@ class FacebookBusinessBrowser:
                     }
                 )
 
-        click_meta = await self._click_named_single_attempt(
-            self.FAN_PAGE_CREATE_NAMES,
-            roles=("button",),
-            before_click=mark_submit_intent,
-            click_timeout_ms=5000,
-        )
+        click_meta = {"found": False, "attempted": False, "clicked": False}
+        for _submit_probe in range(9):
+            click_meta = await self._click_named_single_attempt(
+                self.FAN_PAGE_CREATE_NAMES,
+                roles=("button",),
+                before_click=mark_submit_intent,
+                click_timeout_ms=5000,
+            )
+            if bool(click_meta.get("found")):
+                break
+            await self.page.wait_for_timeout(350)
 
         if not bool(click_meta.get("found")):
             diag = await self._diagnostic("fan_page_create_submit_missing")
