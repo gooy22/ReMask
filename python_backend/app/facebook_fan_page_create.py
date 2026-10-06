@@ -6,6 +6,25 @@ from typing import Any, Callable
 from urllib.parse import parse_qs, urlsplit
 
 
+FAN_PAGE_CREATE_NAMES = (
+    "Create Page",
+    "Create page",
+    "Create",
+    "Создать Страницу",
+    "Создать страницу",
+    "Создать",
+    "Створити сторінку",
+    "Створити",
+    "Créer une Page",
+    "Créer la Page",
+    "Seite erstellen",
+    "পৃষ্ঠা তৈরি করুন",
+    "Tạo Trang",
+    "Tạo trang",
+    "पेज बनाएँ",
+    "पेज बनाएं",
+)
+
 def confirmed_created_page(
     request_meta: dict[str, Any], payload: Any, *, actor_id: str,
     page_name: str, before_ids: set[str],
@@ -119,6 +138,26 @@ def fan_page_click_never_resolved(click_meta: Any, *, allowed_names: tuple[str, 
         r"""- waiting for get_by_role\(["']button["'],.*\)(?:\.first|\.nth\(\d+\))""",
         lines[2],
     ))
+
+
+def fan_page_pending_never_submitted(checkpoint: Any) -> bool:
+    """Accept original, name-scoped evidence only; copied history uses the same rule."""
+    if not isinstance(checkpoint, dict):
+        return False
+    name = str(checkpoint.get("active_page_name") or "").strip()
+    diagnostic = checkpoint.get("browser_diagnostic")
+    return bool(
+        str(checkpoint.get("phase") or "").upper() in {
+            "PAGE_CREATE_CLICK_INTENT", "PAGE_CREATE_RESULT_UNKNOWN",
+        }
+        and name
+        and isinstance(diagnostic, dict)
+        and str(diagnostic.get("page_name") or "").strip() == name
+        and diagnostic.get("stage") == "fan_page_final_click_unknown"
+        and fan_page_click_never_resolved(
+            diagnostic.get("click_meta"), allowed_names=FAN_PAGE_CREATE_NAMES,
+        )
+    )
 
 
 class FanPageCreateCapture:

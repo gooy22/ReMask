@@ -7,7 +7,7 @@ import time
 from typing import Any
 
 from ..facebook_business_browser import BrowserBusinessError, FacebookBusinessBrowser
-from ..facebook_fan_page_create import fan_page_click_never_resolved
+from ..facebook_fan_page_create import fan_page_pending_never_submitted, fan_page_click_never_resolved
 from ..facebook_page_discovery import (
     PageDiscoveryError, discover_current_list_pages_docid_by_marker,
     discover_pages_from_browser_html, list_pages_via_private_graphql,
@@ -794,15 +794,7 @@ async def fan_pages_handler(
 
     saved_diag = checkpoint.get("browser_diagnostic")
     saved_diag = saved_diag if isinstance(saved_diag, dict) else {}
-    if (
-        prior_phase in {"PAGE_CREATE_CLICK_INTENT", "PAGE_CREATE_RESULT_UNKNOWN"}
-        and active_name
-        and _clean(saved_diag.get("page_name")) == active_name
-        and saved_diag.get("stage") == "fan_page_final_click_unknown"
-        and fan_page_click_never_resolved(
-            saved_diag.get("click_meta"), allowed_names=FacebookBusinessBrowser.FAN_PAGE_CREATE_NAMES,
-        )
-    ):
+    if fan_page_pending_never_submitted(checkpoint):
         await provisioning_state.checkpoint(
             item_id, profile_id, scope_key, ProvisioningStep.FAN_PAGES,
             {"phase": "CREATE_NOT_SUBMITTED", "resume_from": "CREATE_NEXT",

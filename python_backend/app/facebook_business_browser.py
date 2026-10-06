@@ -12,6 +12,8 @@ from typing import Any, Awaitable, Callable
 from urllib.parse import parse_qs, unquote, unquote_plus, urlencode, urlsplit
 
 
+from .facebook_fan_page_create import FAN_PAGE_CREATE_NAMES
+
 CheckpointCallback = Callable[[dict[str, Any]], Awaitable[None]]
 
 
@@ -1756,24 +1758,7 @@ class FacebookBusinessBrowser:
         "https://www.facebook.com/pages/create",
         "https://www.facebook.com/pages/creation/",
     )
-    FAN_PAGE_CREATE_NAMES = (
-        "Create Page",
-        "Create page",
-        "Create",
-        "Создать Страницу",
-        "Создать страницу",
-        "Создать",
-        "Створити сторінку",
-        "Створити",
-        "Créer une Page",
-        "Créer la Page",
-        "Seite erstellen",
-        "পৃষ্ঠা তৈরি করুন",
-        "Tạo Trang",
-        "Tạo trang",
-        "पेज बनाएँ",
-        "पेज बनाएं",
-    )
+    FAN_PAGE_CREATE_NAMES = FAN_PAGE_CREATE_NAMES
     SETTINGS_AD_ACCOUNTS_URLS = (
         # Exact migrated Business Settings route observed on current profiles.
         "https://business.facebook.com/latest/settings/ad_accounts/?nav_ref=bm_settings_redirect_migration&bm_redirect_migration=true&business_id={business_id}",

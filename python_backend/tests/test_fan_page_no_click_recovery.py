@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from app.facebook_business_browser import BrowserBusinessError, FacebookBusinessBrowser
-from app.facebook_fan_page_create import fan_page_click_never_resolved
+from app.facebook_fan_page_create import fan_page_click_never_resolved, fan_page_pending_never_submitted
 from app.provisioning.fan_pages_handler import fan_pages_handler
 from app.provisioning.models import ProvisioningError, ProvisioningStep
 from app.provisioning.state import ProvisioningStateStore
@@ -55,6 +55,12 @@ class FanPageNoClickTests(unittest.IsolatedAsyncioTestCase):
                 "browser_diagnostic": {"stage": "fan_page_final_click_unknown", "page_name": "PrgssTeam",
                                        "click_meta": click_meta()},
             })
+            # Failed bulk Jobs retain independent copies of the common checkpoint.
+            original = await state.step("common", ProvisioningStep.FAN_PAGES)
+            for item in ("old-bulk-1", "old-bulk-2"):
+                await state.set_running(item, "13", "common-page", ProvisioningStep.FAN_PAGES)
+                await state.checkpoint(item, "13", "common-page", ProvisioningStep.FAN_PAGES,
+                                       copy.deepcopy(original["result"]))
             browser = AsyncMock()
             browser.__aenter__.return_value = browser
             browser.__aexit__.return_value = False
@@ -84,6 +90,7 @@ class FanPageNoClickTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as tmp:
             state = ProvisioningStateStore(tmp + "/state.sqlite")
             await state.init()
+            await state.set_running("new", "fixture", "default", ProvisioningStep.FAN_PAGES)
             browser = AsyncMock()
             browser.__aenter__.return_value = browser
             browser.__aexit__.return_value = False
@@ -107,6 +114,39 @@ class FanPageNoClickTests(unittest.IsolatedAsyncioTestCase):
             current = await state.step("new", ProvisioningStep.FAN_PAGES)
             self.assertEqual(current["result"]["phase"], "CREATE_NOT_SUBMITTED")
             self.assertEqual(current["result"]["browser_diagnostic"], {})
+
+
+    async def test_cross_job_history_skips_only_proven_unsubmitted_attempts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = ProvisioningStateStore(tmp + "/state.sqlite")
+            await state.init()
+            pending = {"phase": "PAGE_CREATE_RESULT_UNKNOWN", "active_page_name": "PrgssTeam",
+                       "browser_diagnostic": {"stage": "fan_page_final_click_unknown",
+                                              "page_name": "PrgssTeam", "click_meta": click_meta()}}
+            for item in ("real-unknown", "copied-no-click"):
+                await state.set_running(item, "fixture", "default", ProvisioningStep.FAN_PAGES)
+            ambiguous = copy.deepcopy(pending)
+            ambiguous["browser_diagnostic"]["click_meta"]["error"] += "  - click action done\\n"
+            await state.checkpoint("real-unknown", "fixture", "default", ProvisioningStep.FAN_PAGES, ambiguous)
+            await state.checkpoint("copied-no-click", "fixture", "default", ProvisioningStep.FAN_PAGES, pending)
+            found = await state.latest_uncertain_fan_page("fixture", "PrgssTeam", exclude_item_id="new")
+            self.assertEqual(found["item_id"], "real-unknown")
+            self.assertEqual(await state.latest_uncertain_fan_page(
+                "fixture", "PrgssTeam", exclude_item_id="real-unknown"), {})
+            retained = await state.step("copied-no-click", ProvisioningStep.FAN_PAGES)
+            self.assertEqual(retained["result"], pending)
+
+    def test_stale_or_unscoped_saved_proof_does_not_release_pending_create(self):
+        pending = {"phase": "PAGE_CREATE_RESULT_UNKNOWN", "active_page_name": "PrgssTeam",
+                   "browser_diagnostic": {"stage": "fan_page_final_click_unknown",
+                                          "page_name": "PrgssTeam", "click_meta": click_meta()}}
+        self.assertTrue(fan_page_pending_never_submitted(pending))
+        for key, value in (("stage", "unrelated"), ("page_name", "another-page"),
+                           ("page_name", "")):
+            with self.subTest(key=key, value=value):
+                candidate = copy.deepcopy(pending)
+                candidate["browser_diagnostic"][key] = value
+                self.assertFalse(fan_page_pending_never_submitted(candidate))
 
     async def test_real_chromium_button_removed_after_intent_never_dispatches_click(self):
         executable = next((path for name in ("google-chrome", "chromium", "chromium-browser")

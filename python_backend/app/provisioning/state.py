@@ -10,6 +10,8 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+from ..facebook_fan_page_create import fan_page_pending_never_submitted
+
 from .models import ENTITY_RESULT_KEYS, ProvisioningSnapshot, ProvisioningStep
 
 
@@ -676,6 +678,8 @@ class ProvisioningStateStore:
             if not isinstance(result, dict):
                 continue
             if str(result.get("active_page_name") or "").strip().casefold() != page_name.strip().casefold():
+                continue
+            if fan_page_pending_never_submitted(result):
                 continue
             if str(result.get("phase") or "").upper() in {"PAGE_CREATE_CLICK_INTENT", "PAGE_CREATE_RESULT_UNKNOWN"}:
                 return {"item_id": str(row["item_id"]), "result": result}
