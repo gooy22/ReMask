@@ -105,7 +105,8 @@ class WorkerPool:
         await self.provisioning_state.init()
         await self._restore_workspace_bindings()
         recovered=await self.store.recover()
-        await self._log_recent_page_access_state()
+        if str(os.getenv('REMASK_STARTUP_STATE_AUDIT','0')).strip().lower() in {'1','true','yes','on'}:
+            await self._log_recent_page_access_state()
         for item_id in recovered:
             await self.queue.put(item_id)
         self._workers=[
