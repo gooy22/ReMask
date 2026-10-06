@@ -144,10 +144,11 @@ async function bindPaymentCard(rows,card,cvv,container,reviews={}){
       const response=await apiJson('ajax/paymentCards.php',post({action:'bind',card_id:card.id,...(cvv?{cvv}:{}),
       ...(review?{retry_confirmed:'1',retry_review:review.token}:{}),profile:r.profile,account_id:r.id,...paymentAssetHint(r),...paymentSetupPayload()}));
       const result=response?.result||{};
-      if(result.status==='SUBMITTED_UNVERIFIED'&&result.submitted===true){
-        // A successful click is not proof the card was saved to this exact RK.
-        // Re-read Meta immediately; continue the batch only if the masked card
-        // is now visible in the requested account's live payment methods.
+      if(result.status==='SUBMITTED_UNVERIFIED'&&result.submitted!==false){
+        // Save may have been observed or the browser may have timed out after
+        // an unknown boundary. Never advance to another RK on either case.
+        // One read-only exact-RK reconciliation may prove linkage; only that
+        // positive proof is strong enough to continue the selected batch.
         try{
           const checked=await apiJson('ajax/paymentCards.php',post({action:'reconcile',card_id:card.id,
             profile:r.profile,account_id:r.id,...paymentAssetHint(r)}));
@@ -157,7 +158,7 @@ async function bindPaymentCard(rows,card,cvv,container,reviews={}){
         }catch(_){stopAfterUncertain=true;return response;}
       }
       if(result.status==='ACTION_REQUIRED'||
-        (result.submitted===true&&result.status!=='LINKED'))stopAfterUncertain=true;
+        (result.submitted!==false&&result.status!=='LINKED'))stopAfterUncertain=true;
       return response;
     }catch(e){stopAfterUncertain=true;return {error:e.message};}
   },(d,t,res,idx)=>{
