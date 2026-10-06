@@ -238,7 +238,7 @@ sed -ri "s/<VirtualHost \*:[0-9]+>/<VirtualHost *:80>/" /etc/apache2/sites-avail
 
 exec apache2-foreground 2> >(
   while IFS= read -r line; do
-    if [[ "$line" == *"[notice]"* ]]; then
+    if [[ "$line" == *":notice]"* ]]; then
       printf '%s\n' "$line"
     else
       printf '%s\n' "$line" >&2
