@@ -42,7 +42,8 @@ class FanPageCreateResponseTests(unittest.TestCase):
             {"input": {"actor_id": ACTOR, "name": "Other"}},
             {"input": {"actor_id": ACTOR, "name": NAME, "page_name": "Other"}},
             {"url": "https://facebook.com.example.org/api/graphql/"},
-            {"friendly_name": "PagesAdminQuery"}, {"method": "GET"}, {"body_decodable": False},
+            {"friendly_name": "PagesAdminQuery"}, {"friendly_name": "PageDraftCreateMutation"},
+            {"friendly_name": "PageCreatePreviewMutation"}, {"method": "GET"}, {"body_decodable": False},
         ]
         for change in mutations:
             with self.subTest(change=change):
@@ -62,6 +63,11 @@ class FanPageCreateResponseTests(unittest.TestCase):
         for response in responses:
             with self.subTest(response=response):
                 self.assertIsNone(confirm(response=response))
+
+    def test_draft_envelopes_and_recommended_pages_are_not_creation_proof(self):
+        node = payload()["data"]["page_create"]["page"]
+        self.assertIsNone(confirm(response={"data": {"page_draft_create": {"page": node}}}))
+        self.assertIsNone(confirm(response={"data": {"page_create": {"page": None, "suggestion": node}}}))
 
     def test_user_business_wrapper_ids_and_baseline_pages_are_rejected(self):
         for typename in ("User", "Business", "PageCreatePayload", ""):

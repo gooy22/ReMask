@@ -25,6 +25,7 @@ def confirmed_created_page(
         and "graphql" in route.path.lower()
         and request_meta.get("method") == "POST"
         and all(word in operation for word in ("page", "create", "mutation"))
+        and not any(word in operation for word in ("draft", "preview", "suggest", "delete", "update"))
         and request_meta.get("body_decodable") is True
     ):
         return None
@@ -77,8 +78,17 @@ def confirmed_created_page(
         for key, result in data.items():
             # A viewer/profile/list branch inside a mutation is not CREATE
             # evidence. Require an explicit Page-create result envelope.
-            if re.search(r"page.*create|create.*page", str(key), re.I):
-                collect(result)
+            if not re.fullmatch(r"page_?create|create_?page", str(key), re.I):
+                continue
+            primary = result.get("page") if isinstance(result, dict) else None
+            if not isinstance(primary, dict) or not (
+                primary.get("__typename") == "Page"
+                and str(primary.get("name") or "").strip() == page_name
+                and str(primary.get("id") or "").strip().isdigit()
+                and str(primary["id"]).strip() not in before_ids
+            ):
+                continue
+            collect(result)
     if len(pages) != 1:
         return None
     page_id, name = next(iter(pages.items()))
