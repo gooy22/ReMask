@@ -137,7 +137,20 @@ class ExistingPageFullControlChromiumTests(unittest.IsolatedAsyncioTestCase):
     async def checkpoint(self,patch_value):
         self.patches.append(patch_value)
     async def run_flow(self,prior=None,config=None):
-        return await ensure_existing_page_full_control(self.browser,config or CONFIG,BM,self.checkpoint,prior or {})
+        # The production network gate uses continue_ after persisting its
+        # checkpoint. Mock that transport boundary, so real Chromium exercises
+        # the gate and response while every mutation stays inside the fixture.
+        from playwright.async_api import Route
+        async def fixture_transport(route,*args,**kwargs):
+            if "/api/graphql/" in route.request.url:
+                self.assertTrue(any(row.get("phase")=="TARGET_PAGE_ACCESS_FULL_ADD_SUBMITTED"
+                    and row.get("network_gate")=="before_meta_send" for row in self.patches))
+                await route.fulfill(content_type="application/json",
+                    body='{"data":{"claim_page":{"success":true}}}')
+            else:
+                await route.abort()
+        with patch.object(Route,"continue_",fixture_transport):
+            return await ensure_existing_page_full_control(self.browser,config or CONFIG,BM,self.checkpoint,prior or {})
     async def counts(self):
         return await self.page.evaluate("({claims:window.claims,assigns:window.assigns,partial:window.partialRequests})")
 
