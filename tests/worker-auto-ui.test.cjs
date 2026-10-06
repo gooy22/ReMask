@@ -131,14 +131,14 @@ vm.createContext(sandbox); vm.runInContext(source.slice(start,end), sandbox);
 (async()=>{
   await sandbox.pythonWorkerOpenAutoModal();
   const inputs = elements.filter(el=>el.tag==='input');
-  const create = elements.find(el=>el.textContent==='Запустить');
+  const create = elements.find(el=>el.textContent==='Prepare');
   const summary = elements.find(el=>el.className==='pwbm-status');
-  assert.equal(create.disabled,false); assert.match(summary.textContent,/PrgssTeam\. BM: 2, РК этих BM: 2/);
+  assert.equal(create.disabled,false); assert.match(summary.textContent,/2 проф\., 1 FP \+ 1 BM \+ 2 РК на профиль\. Всего РК: 4/);
   inputs[0].value='21'; inputs[0].events.input(); assert.equal(create.disabled,true);
-  inputs[0].value='2'; inputs[0].events.input(); assert.match(summary.textContent,/PrgssTeam\. BM: 4, РК этих BM: 4/);
+  inputs[0].value='2'; inputs[0].events.input(); assert.match(summary.textContent,/Всего РК: 4/);
   await create.events.click(); assert.equal(state.busy,false); assert.equal(create.textContent,'Повторить отправку');
   assert.equal(inputs.every(el=>el.disabled),true);
-  assert.ok(storage.has('remask_python_worker_auto_pending_v1'));
+  assert.ok(storage.has('remask_python_worker_prepare_pending_v1'));
   elements.length=0;
   sandbox.pythonWorkerSelectedProfiles=()=>['99'];
   await sandbox.pythonWorkerOpenAutoModal();
@@ -146,11 +146,11 @@ vm.createContext(sandbox); vm.runInContext(source.slice(start,end), sandbox);
   assert.ok(restored); assert.ok(elements.some(el=>/профилей 7, 8/.test(el.textContent||'')));
   assert.equal(elements.filter(el=>el.tag==='input')[0].value,'2');
   await restored.events.click(); assert.equal(state.jobId,'saved-job');
-  assert.equal(storage.has('remask_python_worker_auto_pending_v1'),false);
+  assert.equal(storage.has('remask_python_worker_prepare_pending_v1'),false);
   assert.deepEqual(captured[0],captured[1], 'lost response retry must not change the accepted Job');
   assert.equal(captured[0].profiles.length,2);
-  assert.equal(captured[0].profiles[0].tasks[0].payload.batch_count,2);
-  assert.deepEqual(captured[0].profiles[0].tasks[0].payload.steps,['PROXY_CHECK','FAN_PAGES','BUSINESS','AD_ACCOUNT']);
+  assert.equal(captured[0].profiles[0].tasks[0].action,'prepare');\n  assert.equal(captured[0].profiles[0].tasks[0].payload.desired.ad_accounts,2);\n  assert.equal(captured[0].profiles[0].tasks[0].payload.desired.payment,true);\n  assert.equal(captured[0].profiles[0].tasks[0].payload.auto_generate,undefined);\n  assert.equal(captured[0].profiles[0].tasks[0].payload.batch_count,undefined);
+  assert.equal(captured[0].profiles[0].tasks[0].payload.scope_key,'prepare:7');\n  assert.equal(captured[0].profiles[0].tasks[0].idempotency_key,'prepare:7');\n  assert.equal(captured[0].profiles[1].tasks[0].payload.scope_key,'prepare:8');
   // Independent BM: an empty optional Page must not block submission or
   // turn different explicit CREATE requests into the same empty-Page scope.
   const bmStart=source.indexOf('async function pythonWorkerStartBusiness(');
