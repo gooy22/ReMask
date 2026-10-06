@@ -503,8 +503,44 @@ async def list_pages_via_private_graphql(
             )
 
     if not candidates:
+        # REMASK_LIST_PAGES_BUNDLE_SELF_HEAL_V1
+        # Modern Facebook frequently leaves the persisted-query doc_id only in
+        # a loaded JS bundle, not in the initial HTML/headers inspected by the
+        # fast marker probe above. Escalate once to bounded persisted-query
+        # discovery before declaring the authoritative Page inventory
+        # unavailable. A recovered candidate is persisted by upsert_candidate,
+        # so subsequent reconciliations take the fast path.
+        try:
+            discovered = await asyncio.wait_for(
+                discover_current_list_pages_docid(
+                    session,
+                    max_scripts=8,
+                ),
+                timeout=8.0,
+            )
+        except asyncio.TimeoutError:
+            discovered = None
+            diagnostics.append(
+                "runtime LIST_PAGES bundle discovery timed out"
+            )
+        except Exception as exc:
+            discovered = None
+            diagnostics.append(
+                "runtime LIST_PAGES bundle discovery failed: "
+                + str(exc)[:300]
+            )
+
+        if discovered is not None:
+            candidates = [discovered]
+            diagnostics.append(
+                "runtime LIST_PAGES bundle candidate recovered "
+                f"doc_id={discovered.doc_id}"
+            )
+
+    if not candidates:
         raise PageDiscoveryError(
-            "No LIST_PAGES doc_id candidates configured after fast runtime discovery"
+            "No LIST_PAGES doc_id candidates configured after runtime discovery. "
+            + " || ".join(diagnostics[-6:])
         )
 
     # Bootstrap only once we actually have a query worth sending.
