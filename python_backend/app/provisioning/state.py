@@ -663,11 +663,19 @@ class ProvisioningStateStore:
         return await asyncio.to_thread(self._latest_uncertain_fan_page_sync, profile_id, page_name, exclude_item_id)
 
     def _latest_uncertain_fan_page_sync(self, profile_id: str, page_name: str, exclude_item_id: str) -> dict[str, Any]:
+        # REMASK_FP_UNCERTAIN_TOMBSTONE_V1
+        # This is a newest-state lookup, not a search for *any* historical
+        # uncertainty. Once a newer same-name row proves CREATE_NOT_SUBMITTED
+        # (or confirms PAGE_CREATED), older CLICK_INTENT/RESULT_UNKNOWN rows are
+        # superseded and must never be resurrected on a later Job.
         with self._connect() as con:
             rows = con.execute(
-                "SELECT item_id,result_json FROM provisioning_steps WHERE profile_id=? AND step=? AND result_json IS NOT NULL ORDER BY updated_at DESC LIMIT 250",
+                "SELECT item_id,scope_key,status,result_json,error_code,updated_at "
+                "FROM provisioning_steps WHERE profile_id=? AND step=? "
+                "AND result_json IS NOT NULL ORDER BY updated_at DESC LIMIT 250",
                 (profile_id, ProvisioningStep.FAN_PAGES.value),
             ).fetchall()
+        target = page_name.strip().casefold()
         for row in rows:
             if str(row["item_id"]) == exclude_item_id:
                 continue
@@ -677,12 +685,46 @@ class ProvisioningStateStore:
                 continue
             if not isinstance(result, dict):
                 continue
-            if str(result.get("active_page_name") or "").strip().casefold() != page_name.strip().casefold():
+            active = str(result.get("active_page_name") or "").strip().casefold()
+            result_pages = [
+                *(result.get("pages") if isinstance(result.get("pages"), list) else []),
+                *(result.get("created_pages") if isinstance(result.get("created_pages"), list) else []),
+            ]
+            confirmed_same_name = any(
+                isinstance(page, dict)
+                and str(page.get("name") or "").strip().casefold() == target
+                and str(page.get("id") or page.get("page_id") or "").strip().isdigit()
+                for page in result_pages
+            )
+            if active != target and not confirmed_same_name:
                 continue
+
+            phase = str(result.get("phase") or "").strip().upper()
+            resume_from = str(result.get("resume_from") or "").strip().upper()
+
+            if confirmed_same_name or phase in {"PAGE_CREATED", "CREATE_NOT_SUBMITTED"}:
+                return {}
+
             if fan_page_pending_never_submitted(result):
-                continue
-            if str(result.get("phase") or "").upper() in {"PAGE_CREATE_CLICK_INTENT", "PAGE_CREATE_RESULT_UNKNOWN"}:
-                return {"item_id": str(row["item_id"]), "result": result}
+                return {}
+
+            uncertain = (
+                phase in {"PAGE_CREATE_CLICK_INTENT", "PAGE_CREATE_RESULT_UNKNOWN"}
+                or resume_from == "RECONCILE_CREATE"
+            )
+            if uncertain and active == target:
+                return {
+                    "item_id": str(row["item_id"]),
+                    "scope_key": str(row["scope_key"] or ""),
+                    "status": str(row["status"] or ""),
+                    "error_code": str(row["error_code"] or ""),
+                    "updated_at": int(row["updated_at"] or 0),
+                    "result": result,
+                }
+
+            # The newest same-name row has a non-uncertain terminal state. Do
+            # not keep scanning into older history and revive a stale guard.
+            return {}
         return {}
 
     async def latest_profile_fan_pages(
