@@ -258,6 +258,28 @@ async def _reconcile_uncertain_page(
     private_discovery_checked = False
     target_seen = False
 
+    async def check_initial_html(facebook_web: Any, attempt: int) -> dict[str, Any] | None:
+        nonlocal html_checked, target_seen
+        if facebook_web is None or html_checked:
+            return None
+        html_checked = True
+        try:
+            html_result = await asyncio.wait_for(
+                discover_pages_from_browser_html(facebook_web), timeout=15.0,
+            )
+            html_rows = _normalize_pages(html_result.pages)
+            target_seen = target_seen or any(
+                _clean(row.get("name")).casefold() == _clean(page_name).casefold()
+                for row in html_rows
+            )
+            diagnostics.append({"attempt": attempt, "source": "facebook_browser_pages_html",
+                "result": "ok", "count": len(html_rows), "ids": [row["id"] for row in html_rows[:30]]})
+            return _find_created_page(html_rows, page_name=page_name, before_ids=before_ids)
+        except Exception as exc:
+            diagnostics.append({"attempt": attempt, "source": "facebook_browser_pages_html",
+                "result": "unavailable", "code": exc.__class__.__name__})
+            return None
+
     for attempt in range(max(1, checks)):
         try:
             rows = await _fresh_page_inventory(session)
@@ -312,6 +334,11 @@ async def _reconcile_uncertain_page(
             try:
                 private_result = await list_pages_via_private_graphql(facebook_web)
             except PageDiscoveryError:
+                # Positive initial-HTML evidence is cheaper than query learning.
+                # Reuse it first and avoid loading the same surfaces twice.
+                html_found = await check_initial_html(facebook_web, attempt + 1)
+                if html_found:
+                    return html_found, False, diagnostics
                 # Configured candidates can become stale too. Repeating the
                 # same failed document never repairs a pending CREATE. Learn
                 # one current read-only query from authenticated HTML, once per
@@ -384,28 +411,9 @@ async def _reconcile_uncertain_page(
                 }
             )
 
-        # Recover positive ownership evidence from initial authenticated HTML
-        # when the Your-Pages SPA or persisted query is unavailable. This is
-        # read-only, uses the same cookies/proxy, and never establishes absence.
-        if facebook_web is not None and not html_checked:
-            html_checked = True
-            try:
-                html_result = await asyncio.wait_for(
-                    discover_pages_from_browser_html(facebook_web), timeout=15.0,
-                )
-                html_rows = _normalize_pages(html_result.pages)
-                html_found = _find_created_page(html_rows, page_name=page_name, before_ids=before_ids)
-                target_seen = target_seen or any(
-                    _clean(row.get("name")).casefold() == _clean(page_name).casefold()
-                    for row in html_rows
-                )
-                diagnostics.append({"attempt": attempt + 1, "source": "facebook_browser_pages_html",
-                    "result": "ok", "count": len(html_rows), "ids": [row["id"] for row in html_rows[:30]]})
-                if html_found:
-                    return html_found, False, diagnostics
-            except Exception as exc:
-                diagnostics.append({"attempt": attempt + 1, "source": "facebook_browser_pages_html",
-                    "result": "unavailable", "code": exc.__class__.__name__})
+        html_found = await check_initial_html(facebook_web, attempt + 1)
+        if html_found:
+            return html_found, False, diagnostics
 
         if authoritative_absent >= 2 and not target_seen:
             return None, True, diagnostics
