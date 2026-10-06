@@ -52,6 +52,9 @@ vm.createContext(sandbox);vm.runInContext(fs.readFileSync('railway-payment-inspe
   const countryMessage=sandbox.paymentCardMessage({code:'CARD_FORM_READY',billing_setup_observed:{country_label:'Bangladesh',country_preserved:true,country_reason:'meta_control_locked',saved:false}});
   assert.ok(countryMessage.includes('Bangladesh'));assert.ok(countryMessage.includes('заблокировано Meta'));assert.ok(countryMessage.includes('пока не подтверждено'));
   assert.ok(sandbox.paymentCardMessage({code:'CARD_FORM_READY',card_availability:'only_this_account'}).includes('Только этот РК'));
+  assert.ok(sandbox.paymentCardMessage({code:'PAYMENT_UI_UNAVAILABLE'}).includes('Billing / Payments'));
+  assert.ok(sandbox.paymentCardMessage({code:'PERSONAL_AD_ACCOUNT_EXCLUDED'}).includes('внутри BM'));
+  assert.ok(sandbox.paymentCardMessage({code:'INVALID_PAYMENT_TARGET'}).includes('проверку идентификатора'));
   const linkedMessage=sandbox.paymentCardMessage({code:'CARD_LINK_OBSERVED'});
   assert.ok(linkedMessage.includes('только привязка'));
   assert.ok(linkedMessage.includes('не проверялись'));
