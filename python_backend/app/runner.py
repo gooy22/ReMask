@@ -139,6 +139,7 @@ class WorkerPool:
 
     async def _log_recent_fan_page_state(self) -> None:
         """Read existing pending CREATE diagnostics; do not contact Facebook."""
+        from .facebook_fan_page_create import fan_page_pending_never_submitted
         def read_rows() -> list[dict[str, Any]]:
             with self.provisioning_state._connect() as con:
                 rows = con.execute(
@@ -174,11 +175,12 @@ class WorkerPool:
             log.info(
                 'FAN_PAGES pending diagnostic profile=%s item=%s phase=%s '
                 'click_attempted=%s click_clicked=%s click_error=%s '
-                'stage=%s reconciliation=%s updated_at=%s',
+                'stage=%s no_click_proven=%s reconciliation=%s updated_at=%s',
                 row['profile_id'], row['item_id'], result['phase'],
                 click.get('attempted'), click.get('clicked'),
                 _fan_page_error_summary(click.get('error')),
-                diag.get('stage', ''), json.dumps(safe_checks), row['updated_at'],
+                diag.get('stage', ''), fan_page_pending_never_submitted(result),
+                json.dumps(safe_checks), row['updated_at'],
             )
 
     async def _log_recent_page_access_state(self) -> None:
