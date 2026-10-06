@@ -156,7 +156,8 @@ class ReconciliationTests(unittest.IsolatedAsyncioTestCase):
                 {
                     "phase": "CREATE_NOT_SUBMITTED",
                     "resume_from": "CREATE_NEXT",
-                    "active_page_name": "PrgssTeam",
+                    "tombstone_page_name": "PrgssTeam",
+                    "active_page_name": "",
                     "active_before_ids": [],
                 },
             )
@@ -264,6 +265,7 @@ class ReconciliationTests(unittest.IsolatedAsyncioTestCase):
             old = await state.step("old-item", ProvisioningStep.FAN_PAGES)
             self.assertEqual(old["result"]["phase"], "CREATE_NOT_SUBMITTED")
             self.assertEqual(old["result"]["active_page_name"], "")
+            self.assertEqual(old["result"]["tombstone_page_name"], "PrgssTeam")
             self.assertEqual(
                 old["result"]["activity"],
                 "FAN_PAGE_CROSS_JOB_UNCERTAINTY_TOMBSTONED",
