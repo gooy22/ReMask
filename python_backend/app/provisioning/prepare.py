@@ -540,6 +540,90 @@ class PrepareService:
         )
         accounts = accounts[: desired.ad_accounts]
 
+        if desired.require_page_access:
+            for row in accounts:
+                account_id = str(row.get("ad_account_id") or "").strip()
+                access_confirmed = await self.state.page_access_confirmed(
+                    profile_id,
+                    business_id,
+                    account_id,
+                )
+                if access_confirmed:
+                    self._trace(
+                        trace,
+                        "PAGE_ACCESS",
+                        "PRECHECK",
+                        status="CONFIRMED",
+                        ad_account_id=account_id,
+                    )
+                    continue
+
+                self._trace(
+                    trace,
+                    "PAGE_ACCESS",
+                    "PRECHECK",
+                    status="MISSING",
+                    ad_account_id=account_id,
+                )
+                access_scope = f"{base_scope}:access:{account_id}"
+                access_params = {
+                    **parameters["PAGE_ACCESS"],
+                    "existing_target": True,
+                    "business_id": business_id,
+                    "ad_account_id": account_id,
+                    "ad_account_name": str(
+                        row.get("account_name") or ""
+                    ).strip(),
+                    "policies_accepted": True,
+                }
+                self._trace(
+                    trace,
+                    "PAGE_ACCESS",
+                    "EXECUTE",
+                    ad_account_id=account_id,
+                )
+                await self._run_provisioning(
+                    child_item_id=f"{item_id}:prepare:access:{account_id}",
+                    profile_id=profile_id,
+                    context=context,
+                    session=session,
+                    scope_key=access_scope,
+                    steps=["PAGE_ACCESS"],
+                    parameters={"PAGE_ACCESS": access_params},
+                    idempotency_key=access_scope,
+                )
+                access_confirmed = await self.state.page_access_confirmed(
+                    profile_id,
+                    business_id,
+                    account_id,
+                )
+                self._trace(
+                    trace,
+                    "PAGE_ACCESS",
+                    "VERIFY",
+                    status=(
+                        "CONFIRMED"
+                        if access_confirmed
+                        else "INCONCLUSIVE"
+                    ),
+                    ad_account_id=account_id,
+                )
+                if not access_confirmed:
+                    raise ProvisioningError(
+                        "PREPARE_PAGE_ACCESS_UNCONFIRMED",
+                        (
+                            "Prepare could not confirm Page access for RK "
+                            f"{account_id}"
+                        ),
+                        retryable=True,
+                    )
+                self._trace(
+                    trace,
+                    "PAGE_ACCESS",
+                    "COMMIT",
+                    ad_account_id=account_id,
+                )
+
         readiness: list[dict[str, Any]] = []
         access_ready = True
         payment_ready = True
