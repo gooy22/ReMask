@@ -150,6 +150,7 @@ class PreparePlannerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(kwargs["payload"]["steps"], ["AD_ACCOUNT"])
             params = kwargs["payload"]["parameters"]["AD_ACCOUNT"]
             self.assertEqual(params["business_id"], self.business_id)
+            self.assertIs(params["allow_multiple_in_business"], True)
             self.assertTrue(kwargs["item_id"].endswith(":prepare:rk:2"))
             account = "222222222222222"
             await self.state.complete(
