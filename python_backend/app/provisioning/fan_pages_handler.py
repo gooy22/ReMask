@@ -6,6 +6,7 @@ import time
 from typing import Any
 
 from ..facebook_business_browser import BrowserBusinessError, FacebookBusinessBrowser
+from ..facebook_page_discovery import PageDiscoveryError, list_pages_via_private_graphql
 from .models import ProvisioningError, ProvisioningStep
 
 
@@ -232,7 +233,7 @@ async def _reconcile_uncertain_page(
     checks: int = 3,
 ) -> tuple[dict[str, Any] | None, bool, list[dict[str, Any]]]:
     diagnostics: list[dict[str, Any]] = []
-    conclusive_absent = 0
+    authoritative_absent = 0
 
     for attempt in range(max(1, checks)):
         try:
@@ -245,6 +246,7 @@ async def _reconcile_uncertain_page(
             diagnostics.append(
                 {
                     "attempt": attempt + 1,
+                    "source": "your_pages",
                     "result": "ok",
                     "count": len(rows),
                     "ids": [row["id"] for row in rows[:30]],
@@ -252,14 +254,11 @@ async def _reconcile_uncertain_page(
             )
             if found:
                 return found, False, diagnostics
-            # Reaching this line means discover_managed_pages() actually
-            # returned a parseable inventory. Only such a successful read may
-            # count toward an absence proof after an ambiguous CREATE.
-            conclusive_absent += 1
         except BrowserBusinessError as exc:
             diagnostics.append(
                 {
                     "attempt": attempt + 1,
+                    "source": "your_pages",
                     "result": "unavailable",
                     "code": exc.code,
                     "message": str(exc)[:500],
@@ -269,6 +268,61 @@ async def _reconcile_uncertain_page(
             diagnostics.append(
                 {
                     "attempt": attempt + 1,
+                    "source": "your_pages",
+                    "result": "unavailable",
+                    "code": exc.__class__.__name__,
+                    "message": _clean(exc)[:500],
+                }
+            )
+
+        # REMASK_FP_UNCERTAIN_PRIVATE_LIST_PAGES_V1
+        # Your-Pages is a flaky SPA and an empty/partial render is not proof
+        # that CREATE did not land. The private LIST_PAGES query is different:
+        # its contract treats a successful data response as the authoritative
+        # set of Pages administered by the current actor, including an explicit
+        # empty set. Use repeated successful private reads to either recover the
+        # new Page or clear a stale submit-intent without risking a duplicate.
+        try:
+            facebook_web = await session.facebook_web()
+            private_result = await list_pages_via_private_graphql(facebook_web)
+            private_rows = _normalize_pages(private_result.pages)
+            private_found = _find_created_page(
+                private_rows,
+                page_name=page_name,
+                before_ids=before_ids,
+            )
+            diagnostics.append(
+                {
+                    "attempt": attempt + 1,
+                    "source": _clean(private_result.source)
+                    or "facebook_web_graphql",
+                    "result": "ok",
+                    "count": len(private_rows),
+                    "ids": [row["id"] for row in private_rows[:30]],
+                    "diagnostics": list(private_result.diagnostics or [])[-6:],
+                }
+            )
+            if private_found:
+                return private_found, False, diagnostics
+
+            authoritative_absent += 1
+            if authoritative_absent >= 2:
+                return None, True, diagnostics
+        except PageDiscoveryError as exc:
+            diagnostics.append(
+                {
+                    "attempt": attempt + 1,
+                    "source": "facebook_web_graphql",
+                    "result": "unavailable",
+                    "code": "PRIVATE_LIST_PAGES_UNAVAILABLE",
+                    "message": str(exc)[:500],
+                }
+            )
+        except Exception as exc:
+            diagnostics.append(
+                {
+                    "attempt": attempt + 1,
+                    "source": "facebook_web_graphql",
                     "result": "unavailable",
                     "code": exc.__class__.__name__,
                     "message": _clean(exc)[:500],
@@ -278,9 +332,8 @@ async def _reconcile_uncertain_page(
         if attempt < checks - 1:
             await asyncio.sleep(1.5)
 
-    # A parseable list is not a complete inventory: a freshly created Page
-    # may still be missing due to hydration or propagation. It cannot authorize
-    # a second irreversible CREATE. Positive exact-name evidence can recover.
+    # UI-only absence remains non-authoritative. Without at least two successful
+    # private LIST_PAGES reads, preserve duplicate protection.
     return None, False, diagnostics
 
 
