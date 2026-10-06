@@ -533,9 +533,16 @@ class WorkerPool:
                         item_id,ProvisioningStep.PAGE_ACCESS
                     )
                     page_result=(page_state or {}).get('result') or {}
+                    fan_state=await self.provisioning_state.step(
+                        item_id,ProvisioningStep.FAN_PAGES
+                    )
+                    fan_result=(fan_state or {}).get('result') or {}
+                    fan_diag=fan_result.get('browser_diagnostic') or {}
+                    fan_controls=fan_diag.get('visible_controls') or []
                     log.info(
                         'worker item finalized job=%s item=%s profile=%s '
-                        'status=%s error=%s page_status=%s page_error=%s phase=%s',
+                        'status=%s error=%s page_status=%s page_error=%s phase=%s '
+                        'fan_phase=%s fan_diag_stage=%s fan_diag_url=%s fan_controls=%s',
                         str((current or {}).get('job_id') or ''),
                         item_id,
                         profile_id,
@@ -544,6 +551,19 @@ class WorkerPool:
                         str((page_state or {}).get('status') or ''),
                         str((page_state or {}).get('error_code') or ''),
                         str(page_result.get('phase') or ''),
+                        str(fan_result.get('phase') or ''),
+                        str(fan_diag.get('stage') or ''),
+                        str(fan_diag.get('url') or '')[:500],
+                        [
+                            {
+                                'tag': str(row.get('tag') or '')[:20],
+                                'role': str(row.get('role') or '')[:40],
+                                'text': str(row.get('text') or '')[:120],
+                                'aria': str(row.get('aria') or '')[:120],
+                            }
+                            for row in fan_controls[:12]
+                            if isinstance(row,dict)
+                        ],
                     )
                 except Exception as exc:
                     log.warning('worker item final state logging failed item=%s: %s',item_id,exc)
