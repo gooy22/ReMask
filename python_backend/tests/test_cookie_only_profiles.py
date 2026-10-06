@@ -253,6 +253,16 @@ echo json_encode(['token'=>$saved->token,'cookies'=>$saved->cookies,'proxy'=>$sa
         docker=(ROOT/'Dockerfile').read_text()
         stage=self.root/'build-sources'
         stage.mkdir()
+        # Mirror test sources copied by Docker before executing its RUN steps.
+        # Railway overlays are staged below, but the vault build contract lives
+        # under tests/ and must be present at the same relative /tmp path.
+        for line in docker.splitlines():
+            copied_test=re.fullmatch(r'COPY (tests/[^ ;]+) /tmp/([^ ;]+)',line.strip())
+            if copied_test:
+                source,target=copied_test.groups()
+                destination=stage/target
+                destination.parent.mkdir(parents=True,exist_ok=True)
+                shutil.copyfile(ROOT/source,destination)
         for source in ROOT.glob('railway-*'):
             if source.is_file():
                 body=source.read_text().replace('/tmp/',str(stage)+'/').replace('/var/www/html',str(self.root))
