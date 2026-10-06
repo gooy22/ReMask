@@ -6813,12 +6813,56 @@ class FacebookBusinessBrowser:
                         output[business_id] = business_name
                 return output
 
-            # HOME is not deterministic for Page-pinned sessions. If it
-            # emits no live Business selector traffic, open Ads Manager with no
-            # business/account hint. Meta chooses the current live scope and
-            # emits the same NorthStar selector requests used as BM evidence.
-            ads_manager_attempt: dict[str, Any] = {}
+            # REMASK_BUSINESS_DISCOVERY_OVERVIEW_FIRST_V1
+            # HOME is not deterministic for Page-pinned sessions. Prefer the
+            # lighter Business overview before Ads Manager: the latter is a
+            # heavy SPA and used to consume the whole endpoint budget before
+            # Overview could provide BM/empty-inventory evidence.
+            overview_attempt: dict[str, Any] = {}
             if not network_rows and not dom_output:
+                self._last_business_inventory_diagnostic.update({
+                    "stage": "overview_navigation",
+                    "selector_probe": selector_probe,
+                    "network_businesses": len(network_rows),
+                    "dom_businesses": len(dom_output),
+                    "queries": query_diagnostics[-24:],
+                    "url": _clean(getattr(self.page, "url", ""))[:700],
+                })
+                try:
+                    overview_attempt = await navigate_inventory_surface(
+                        self.OVERVIEW_URL,
+                        timeout_seconds=4.0,
+                    )
+                    self._last_business_inventory_diagnostic.update({
+                        "stage": "overview_loaded",
+                        "overview_attempt": overview_attempt,
+                    })
+                    overview_deadline = time.monotonic() + 1.5
+                    while time.monotonic() < overview_deadline:
+                        if network_rows:
+                            break
+                        await self.page.wait_for_timeout(250)
+                    await collect_dom_businesses_bounded()
+                except BrowserBusinessError:
+                    raise
+                except Exception as exc:
+                    overview_attempt = {
+                        "loaded": False,
+                        "error": f"{exc.__class__.__name__}: {_clean(exc)}"[:500],
+                    }
+
+            # REMASK_BUSINESS_DISCOVERY_ADS_LAST_RESORT_V1
+            # Ads Manager remains a recovery surface, but only when Overview
+            # itself failed to load. A successfully authenticated Overview with
+            # no BM evidence must be allowed to finish as an inconclusive (or,
+            # when its selector query proves zero rows, confirmed-empty) result
+            # instead of timing out in a second heavy SPA.
+            ads_manager_attempt: dict[str, Any] = {}
+            if (
+                not network_rows
+                and not dom_output
+                and not bool(overview_attempt.get("loaded"))
+            ):
                 self._last_business_inventory_diagnostic.update({
                     "stage": "ads_manager_bootstrap",
                     "selector_probe": selector_probe,
@@ -6832,7 +6876,7 @@ class FacebookBusinessBrowser:
                         self.ADS_MANAGER_URL,
                         timeout_seconds=6.0,
                     )
-                    bootstrap_deadline = time.monotonic() + 3.0
+                    bootstrap_deadline = time.monotonic() + 1.5
                     while time.monotonic() < bootstrap_deadline:
                         if network_rows:
                             break
@@ -6846,41 +6890,6 @@ class FacebookBusinessBrowser:
                         "error": (
                             f"{exc.__class__.__name__}: {_clean(exc)}"
                         )[:500],
-                    }
-
-            # Final live fallback: Business overview.
-            overview_attempt: dict[str, Any] = {}
-            if not network_rows and not dom_output:
-                self._last_business_inventory_diagnostic.update({
-                    "stage": "overview_navigation",
-                    "selector_probe": selector_probe,
-                    "network_businesses": len(network_rows),
-                    "dom_businesses": len(dom_output),
-                    "queries": query_diagnostics[-24:],
-                    "url": _clean(getattr(self.page, "url", ""))[:700],
-                })
-                overview_started = time.monotonic()
-                try:
-                    overview_attempt = await navigate_inventory_surface(
-                        self.OVERVIEW_URL,
-                        timeout_seconds=5.0,
-                    )
-                    self._last_business_inventory_diagnostic.update({
-                        "stage": "overview_loaded",
-                        "overview_attempt": overview_attempt,
-                    })
-                    overview_deadline = time.monotonic() + 3.5
-                    while time.monotonic() < overview_deadline:
-                        if network_rows:
-                            break
-                        await self.page.wait_for_timeout(300)
-                    await collect_dom_businesses_bounded()
-                except BrowserBusinessError:
-                    raise
-                except Exception as exc:
-                    overview_attempt = {
-                        "loaded": False,
-                        "error": f"{exc.__class__.__name__}: {_clean(exc)}"[:500],
                     }
 
             # Final fallback for whichever surface is currently mounted.
