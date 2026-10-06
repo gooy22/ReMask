@@ -132,6 +132,148 @@ class ReconciliationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(saved['reconciliation'][0]['code'], 'CHECKPOINT_REQUIRED')
         self.assertNotIn('phase', saved)
 
+    async def test_newer_tombstone_supersedes_older_uncertain_page(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = ProvisioningStateStore(tmp + "/state.sqlite3")
+            await state.init()
+            await state.set_running(
+                "old-item", "10", "old-scope", ProvisioningStep.FAN_PAGES,
+            )
+            await state.checkpoint(
+                "old-item", "10", "old-scope", ProvisioningStep.FAN_PAGES,
+                {
+                    "phase": "PAGE_CREATE_RESULT_UNKNOWN",
+                    "resume_from": "RECONCILE_CREATE",
+                    "active_page_name": "PrgssTeam",
+                    "active_before_ids": [],
+                },
+            )
+            await state.set_running(
+                "new-item", "10", "new-scope", ProvisioningStep.FAN_PAGES,
+            )
+            await state.checkpoint(
+                "new-item", "10", "new-scope", ProvisioningStep.FAN_PAGES,
+                {
+                    "phase": "CREATE_NOT_SUBMITTED",
+                    "resume_from": "CREATE_NEXT",
+                    "active_page_name": "PrgssTeam",
+                    "active_before_ids": [],
+                },
+            )
+
+            pending = await state.latest_uncertain_fan_page(
+                "10", "PrgssTeam", exclude_item_id="another-item",
+            )
+            self.assertEqual(pending, {})
+            gc.collect()
+
+    async def test_cross_job_authoritative_absence_clears_old_guard_and_allows_create(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = ProvisioningStateStore(tmp + "/state.sqlite3")
+            await state.init()
+            await state.set_running(
+                "old-item", "10", "old-scope", ProvisioningStep.FAN_PAGES,
+            )
+            await state.checkpoint(
+                "old-item", "10", "old-scope", ProvisioningStep.FAN_PAGES,
+                {
+                    "phase": "PAGE_CREATE_RESULT_UNKNOWN",
+                    "resume_from": "RECONCILE_CREATE",
+                    "target_names": ["PrgssTeam"],
+                    "active_page_name": "PrgssTeam",
+                    "active_before_ids": [],
+                },
+            )
+            await state.set_running(
+                "new-item", "10", "new-scope", ProvisioningStep.FAN_PAGES,
+            )
+
+            session = SimpleNamespace(
+                context=SimpleNamespace(
+                    profile_id="10",
+                    pages=[],
+                    cookies={"c_user": "123"},
+                ),
+                facebook_web=AsyncMock(return_value=object()),
+            )
+
+            class _FakeBrowser:
+                FAN_PAGE_CREATE_NAMES = ("Create Page",)
+
+                def __init__(self, *args, **kwargs):
+                    pass
+
+                async def __aenter__(self):
+                    return self
+
+                async def __aexit__(self, *args):
+                    return None
+
+                async def create_fan_page(self, **kwargs):
+                    callback = kwargs.get("before_submit")
+                    if callback is not None:
+                        await callback({
+                            "before_ids": [],
+                            "phase": "PAGE_CREATE_CLICK_INTENT",
+                        })
+                    return {
+                        "page_id": "987654321",
+                        "name": "PrgssTeam",
+                        "category": "Digital creator",
+                        "reused": False,
+                    }
+
+            absence_diag = [
+                {
+                    "attempt": 1,
+                    "source": "facebook_web_graphql",
+                    "result": "ok",
+                    "count": 0,
+                    "inventory_complete": True,
+                },
+                {
+                    "attempt": 2,
+                    "source": "facebook_web_graphql",
+                    "result": "ok",
+                    "count": 0,
+                    "inventory_complete": True,
+                },
+            ]
+
+            with patch(
+                "app.provisioning.fan_pages_handler._fresh_page_inventory",
+                AsyncMock(return_value=[]),
+            ), patch(
+                "app.provisioning.fan_pages_handler._reconcile_uncertain_page",
+                AsyncMock(return_value=(None, True, absence_diag)),
+            ), patch(
+                "app.provisioning.fan_pages_handler.FacebookBusinessBrowser",
+                _FakeBrowser,
+            ):
+                result = await fan_pages_handler(
+                    session,
+                    {"names": ["PrgssTeam"]},
+                    {},
+                    provisioning_state=state,
+                    item_id="new-item",
+                    profile_id="10",
+                    scope_key="new-scope",
+                )
+
+            self.assertEqual(result["pages"][0]["id"], "987654321")
+            old = await state.step("old-item", ProvisioningStep.FAN_PAGES)
+            self.assertEqual(old["result"]["phase"], "CREATE_NOT_SUBMITTED")
+            self.assertEqual(old["result"]["active_page_name"], "")
+            self.assertEqual(
+                old["result"]["activity"],
+                "FAN_PAGE_CROSS_JOB_UNCERTAINTY_TOMBSTONED",
+            )
+            pending = await state.latest_uncertain_fan_page(
+                "10", "PrgssTeam", exclude_item_id="another-item",
+            )
+            self.assertEqual(pending, {})
+            gc.collect()
+
     async def test_failed_reconciliation_is_saved_under_common_page_item(self):
         state = SimpleNamespace(checkpoint=AsyncMock())
         diagnostics = [{'attempt':1,'source':'your_pages','result':'unavailable','code':'FAN_PAGES_NOT_DISCOVERED'}]
