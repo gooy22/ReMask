@@ -1245,6 +1245,100 @@ class ProvisioningStateStore:
 
         return output
 
+    async def page_access_confirmed(
+        self,
+        profile_id: str,
+        business_id: str,
+        ad_account_id: str,
+    ) -> bool:
+        return await asyncio.to_thread(
+            self._page_access_confirmed_sync,
+            str(profile_id or "").strip(),
+            str(business_id or "").strip(),
+            str(ad_account_id or "").removeprefix("act_").strip(),
+        )
+
+    def _page_access_confirmed_sync(
+        self,
+        profile_id: str,
+        business_id: str,
+        ad_account_id: str,
+    ) -> bool:
+        if not profile_id or not business_id.isdigit() or not ad_account_id.isdigit():
+            return False
+        with self._connect() as con:
+            rows = con.execute(
+                """
+                SELECT status,result_json
+                FROM provisioning_steps
+                WHERE profile_id=? AND step=? AND result_json IS NOT NULL
+                ORDER BY updated_at DESC
+                LIMIT 5000
+                """,
+                (profile_id, ProvisioningStep.PAGE_ACCESS.value),
+            ).fetchall()
+        for row in rows:
+            if str(row["status"] or "").upper() != "SUCCESS":
+                continue
+            try:
+                result = json.loads(str(row["result_json"] or "{}"))
+            except (json.JSONDecodeError, ValueError, TypeError):
+                continue
+            if not isinstance(result, dict):
+                continue
+            account = str(result.get("ad_account_id") or "").removeprefix("act_").strip()
+            if (
+                str(result.get("business_id") or "").strip() == business_id
+                and account == ad_account_id
+                and result.get("page_shared_to_business") is True
+                and result.get("operator_ads_access_assigned") is True
+            ):
+                return True
+        return False
+
+    async def funding_confirmed(
+        self,
+        profile_id: str,
+        ad_account_id: str,
+    ) -> bool:
+        return await asyncio.to_thread(
+            self._funding_confirmed_sync,
+            str(profile_id or "").strip(),
+            str(ad_account_id or "").removeprefix("act_").strip(),
+        )
+
+    def _funding_confirmed_sync(
+        self,
+        profile_id: str,
+        ad_account_id: str,
+    ) -> bool:
+        if not profile_id or not ad_account_id.isdigit():
+            return False
+        with self._connect() as con:
+            rows = con.execute(
+                """
+                SELECT status,result_json
+                FROM provisioning_steps
+                WHERE profile_id=? AND step=? AND result_json IS NOT NULL
+                ORDER BY updated_at DESC
+                LIMIT 5000
+                """,
+                (profile_id, ProvisioningStep.FUNDING.value),
+            ).fetchall()
+        for row in rows:
+            if str(row["status"] or "").upper() != "SUCCESS":
+                continue
+            try:
+                result = json.loads(str(row["result_json"] or "{}"))
+            except (json.JSONDecodeError, ValueError, TypeError):
+                continue
+            if not isinstance(result, dict):
+                continue
+            account = str(result.get("ad_account_id") or "").removeprefix("act_").strip()
+            if account == ad_account_id and result.get("funding_verified") is True:
+                return True
+        return False
+
     async def confirmed_ad_account_binding_groups(
         self,
     ) -> dict[str, dict[str, Any]]:
