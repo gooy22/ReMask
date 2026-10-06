@@ -385,7 +385,7 @@ RUN set -eux; \
     grep -q 'REMASK_HISTORICAL_HINTS_ARE_FALLBACK_ONLY_V1' /opt/remask-python/main.py; \
     grep -q 'REMASK_STALE_HINT_ROWS_EXCLUDED_V1' /opt/remask-python/main.py; \
     grep -q 'REMASK_FULL_PROFILE_DISCOVERY_BUDGET_V1' /opt/remask-python/main.py; \
-    grep -q 'REMASK_DISCOVERY_TIMEOUT_HINT_FALLBACK_V1' /opt/remask-python/main.py; \
+    grep -q 'REMASK_DISCOVERY_TIMEOUT_HINT_FALLBACK_V2' /opt/remask-python/main.py; \
     grep -q 'async def reopen_inventory_browser' /opt/remask-python/main.py; \
     grep -q 'ads_manager_scope_timeout' /opt/remask-python/main.py; \
     grep -q 'business_inventory_confirmed_empty' /opt/remask-python/main.py; \
