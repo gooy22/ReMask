@@ -20120,7 +20120,7 @@ timeout_seconds=4.0,
             business_name=name,
         )
 
-    async def verify_page_attached(self, *, business_id: str, page_id: str) -> bool:
+    async def verify_page_attached(self, *, business_id: str, page_id: str, require_owned: bool = False) -> bool:
         """Live-confirm that one exact Page is attached to one exact Business.
 
         REMASK_PAGE_ATTACH_LIVE_VERIFY_V2
@@ -20129,7 +20129,9 @@ timeout_seconds=4.0,
         GraphQL traffic on the exact Business Pages route and use DOM as a
         second independent proof.
         """
-        from .facebook_page_discovery import business_page_relation_proven, browser_business_page_relation_proven
+        from .facebook_page_discovery import business_page_relation_proven, browser_business_page_relation_proven, business_page_owned_proven, browser_business_page_owned_proven
+        relation_proven = business_page_owned_proven if require_owned else business_page_relation_proven
+        document_proven = browser_business_page_owned_proven if require_owned else browser_business_page_relation_proven
         business = _digits(business_id)
         page = _digits(page_id)
         if not business or not page:
@@ -20186,7 +20188,7 @@ timeout_seconds=4.0,
                     return
 
                 raw = await response.text()
-                page_present = business_page_relation_proven(_decode_graphql_text(raw), business, page,
+                page_present = relation_proven(_decode_graphql_text(raw), business, page,
                     request_scoped=business in request_business_ids)
                 diagnostics.append({
                     "friendly_name": friendly[:180],
@@ -20246,7 +20248,7 @@ timeout_seconds=4.0,
                     content = await self.page.content()
                 except Exception:
                     content = ""
-                if browser_business_page_relation_proven(content, business, page):
+                if document_proven(content, business, page):
                     return True
 
                 try:
@@ -20737,7 +20739,9 @@ timeout_seconds=4.0,
         page_id: str,
         page_name: str = "",
         before_submit: CheckpointCallback | None = None,
+        require_owned: bool = False,
     ) -> BrowserPageResult:
+        from .facebook_page_search import page_lookup_url
         business = _digits(business_id)
         page = _digits(page_id)
         if not business or not page:
@@ -20747,7 +20751,7 @@ timeout_seconds=4.0,
                 retryable=False,
             )
 
-        if await self.verify_page_attached(business_id=business, page_id=page):
+        if await self.verify_page_attached(business_id=business, page_id=page, **({'require_owned': True} if require_owned else {})):
             return BrowserPageResult(
                 business_id=business,
                 page_id=page,
@@ -20794,6 +20798,8 @@ timeout_seconds=4.0,
                 "Facebook-Seite",
             ),
             value=page,
+            lookup_override=page_lookup_url(
+                getattr(self.context, 'pages', None) or [], page) if require_owned else '',
         )
 
         if not page_filled:
@@ -20920,13 +20926,19 @@ timeout_seconds=4.0,
                         result_selected = True
                         await self.page.wait_for_timeout(350)
                         break
-                    if await self._click_unique_page_add_result(
+                    if not require_owned and await self._click_unique_page_add_result(
                         page_id=page,
+                        **({'require_owned': True} if require_owned else {}),
                     ):
                         result_selected = True
                         await self.page.wait_for_timeout(350)
                         break
                     await self.page.wait_for_timeout(350)
+
+            if require_owned and not result_selected:
+                raise BrowserBusinessError("PAGE_ADD_PAGE_UNVERIFIED",
+                    "The exact existing Page search result could not be selected; no ownership action was sent",
+                    retryable=True,diagnostic=getattr(self,"_last_page_search_diagnostic",{}) or {})
 
             sent = False
             clicked_any = False
@@ -21033,6 +21045,10 @@ timeout_seconds=4.0,
                     await self.page.wait_for_timeout(700)
                     if gate_future.done():
                         sent = gate_future.exception() is None
+                        break
+                    if require_owned:
+                        # One final ownership action per attempt. Observe/verify
+                        # the same action even if Meta used a new mutation name.
                         break
                     continue
 
@@ -21265,7 +21281,7 @@ timeout_seconds=4.0,
 
         await self.page.wait_for_timeout(1500)
 
-        if not await self.verify_page_attached(business_id=business, page_id=page):
+        if not await self.verify_page_attached(business_id=business, page_id=page, **({'require_owned': True} if require_owned else {})):
             diag = await self._diagnostic("page_attach_unconfirmed")
             diag["page_surface"] = await self._page_add_surface_state(
                 page_id=page,

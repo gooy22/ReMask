@@ -344,6 +344,56 @@ def business_page_relation_proven(payload: Any, business_id: str, page_id: str, 
     return walk(payload)
 
 
+
+def business_page_owned_proven(payload: Any, business_id: str, page_id: str, *, request_scoped: bool = False) -> bool:
+    """Require ownership, not merely client/partner access, for this exact BM/Page."""
+    business, page = str(business_id), str(page_id)
+    connections = {"owned_pages", "client_pages", "business_assets", "page_assets", "bizkit_business_assets"}
+    def walk(value, scoped=False):
+        if isinstance(value, list):
+            return any(walk(child, scoped) for child in value)
+        if not isinstance(value, dict):
+            return False
+        object_id = str(value.get("id") or "")
+        business_node = "business" in str(value.get("__typename") or "").lower() or any(key in value for key in connections)
+        if business_node and object_id and object_id != business:
+            return False
+        local = scoped or (business_node and object_id == business)
+        for key, child in value.items():
+            if key in connections and (local or request_scoped):
+                for row in _iter_connection_rows(child):
+                    asset = row.get("asset") if isinstance(row.get("asset"), dict) else row
+                    if str(asset.get("id") or asset.get("page_id") or "") != page:
+                        continue
+                    kind = str(asset.get("__typename") or asset.get("asset_type") or asset.get("type") or "").lower()
+                    if key not in {"owned_pages", "client_pages", "page_assets"} and "page" not in kind:
+                        continue
+                    owner = asset.get("owning_business") or asset.get("owner_business") or asset.get("business_owner")
+                    owner_id = str((owner or {}).get("id") or "") if isinstance(owner, dict) else ""
+                    if owner_id and owner_id != business:
+                        continue
+                    if asset.get("is_owned") is False or row.get("is_owned") is False:
+                        continue
+                    if key == "owned_pages" or owner_id == business or (
+                        key != "client_pages" and (asset.get("is_owned") is True or row.get("is_owned") is True)):
+                        return True
+            if walk(child, local):
+                return True
+        return False
+    return walk(payload)
+
+
+def browser_business_page_owned_proven(document: str, business_id: str, page_id: str) -> bool:
+    for text in _browser_source_variants(document):
+        for match in re.finditer(r'<script\b[^>]*>(.*?)</script\s*>', text, re.I | re.S):
+            try:
+                payload = json.loads(match.group(1).strip())
+            except ValueError:
+                continue
+            if business_page_owned_proven(payload, business_id, page_id):
+                return True
+    return False
+
 def browser_business_page_relation_proven(document: str, business_id: str, page_id: str) -> bool:
     for text in _browser_source_variants(document):
         for match in re.finditer(r'<script\b[^>]*>(.*?)</script\s*>', text, re.I | re.S):

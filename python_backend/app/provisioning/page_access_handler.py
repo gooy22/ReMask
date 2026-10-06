@@ -11,6 +11,7 @@ from ..facebook_page_search import page_lookup_url
 from .advertising_page import AdvertisingPageStore, _PAGE_LOCK, ensure_common_page
 from .models import ProvisioningError, ProvisioningStep
 from .ad_account_handler import _normalize_ad_account_id
+from .page_full_control import ensure_existing_page_full_control
 
 log=logging.getLogger('remask.page_access')
 
@@ -865,47 +866,33 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
     prior=((await state.step(item,ProvisioningStep.PAGE_ACCESS)) or {}).get('result') or {}
     async def checkpoint(patch):
         phase=str(patch.get('phase') or '')
+        if patch.get('page_owned_by_business') is True and patch.get('access_mode')=='existing_page_full_control':
+            await store.patch(owner_business_id=business,owner_business_confirmed=True,
+                ownership_phase='PAGE_OWNERSHIP_CONFIRMED')
         if phase.startswith('TARGET_PAGE_ACCESS_') or phase.startswith('TARGET_PAGE_OPERATOR_'):
             current=await store.get(); grants=current.get('grants') or {}
             await store.patch(grants={**grants,business:{**grants.get(business,{}),**patch}})
         await state.checkpoint(item,profile,scope,ProvisioningStep.PAGE_ACCESS,
             {'page_id':config['page_id'],'business_id':business,'ad_account_id':account,**patch})
     await checkpoint({'diagnostic':{'stage':'target_page_access_start','business_id':business,
-        'ad_account_id':account,'owner_bm_required':False}})
+        'ad_account_id':account,'owner_bm_required':True,'access_mode':'existing_page_full_control'}})
     try:
-        # Prepare access in lightweight Business Settings first. Loading the
-        # campaigns editor is an optional verification, not a sharing dependency.
-        operator_assignment_performed=False
-        rk_access_preverified=False
-        rk_access_proof={}
-        rk_scope_observed=False
         async with _PAGE_LOCK:
             config=await store.get()
             config={**config,'target_business_identity':target_business_identity}
             saved_grant=(config.get('grants') or {}).get(business) or {}
             resume_state={**saved_grant,**prior}
-            resume_phase=str(resume_state.get('phase') or '')
-
-            # 1) Establish/reconcile the Page -> target BM relation.
             async with FacebookBusinessBrowser(session.context,v8_old_space_mb=256) as browser:
                 try:
-                    target_relation=await _request_target_page_access(
+                    full_access=await ensure_existing_page_full_control(
                         browser,config,business,checkpoint,resume_state)
-                    if not target_relation:
-                        target_relation=await _approve_owner_page_access(
-                            browser,config,business,checkpoint)
-                    if not target_relation:
-                        raise BrowserBusinessError(
-                            'TARGET_PAGE_ACCESS_APPROVAL_REQUIRED',
-                            'Meta has not confirmed the exact Page advertising access after owner approval',
-                            retryable=True,
-                        )
                 except Exception as exc:
-                    diagnostic={'stage':'target_page_relation','url':str(getattr(browser.page,'url','')),
+                    diagnostic={'stage':'existing_page_full_control',
+                        'url':str(getattr(browser.page,'url','')),
                         'memory':_cgroup_memory_snapshot_mb(),'v8_old_space_mb':256}
                     try:
                         diagnostic.update(await asyncio.wait_for(
-                            browser._diagnostic('target_page_relation'),timeout=3))
+                            browser._diagnostic('existing_page_full_control'),timeout=3))
                     except Exception:
                         pass
                     if isinstance(exc,BrowserBusinessError):
@@ -913,81 +900,13 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
                     else:
                         await checkpoint({'diagnostic':diagnostic})
                     raise
-
-            # 2) Ordinary provisioning must not enter Ads Manager or an RK
-            # identity surface just to continue PAGE_ACCESS. Those extra probes
-            # caused a real Facebook checkpoint while Business Settings itself
-            # was still usable.
-            if resume_phase=='TARGET_PAGE_OPERATOR_ASSIGN_CONFIRMED':
-                operator_assignment_performed=True
-                rk_access_preverified=True
-                rk_access_proof=resume_state.get('rk_access_proof') or {
-                    'source':'durable_operator_assignment_confirmation',
-                    'account_scope_verified':True,
-                }
-            elif resume_phase=='TARGET_PAGE_ACCESS_RK_CONFIRMED':
-                rk_access_preverified=True
-                rk_access_proof=resume_state.get('rk_access_proof') or {
-                    'source':'durable_rk_page_access_confirmation',
-                    'account_scope_verified':True,
-                }
-            elif resume_phase in {
-                'TARGET_PAGE_OPERATOR_ASSIGN_CLICK_INTENT',
-                'TARGET_PAGE_OPERATOR_ASSIGN_SUBMITTED',
-            }:
-                # The previous Assign/Save may already have reached Meta. Do not
-                # press it again and do not open Ads Manager to reconcile it.
-                raise BrowserBusinessError(
-                    'PAGE_OPERATOR_ASSIGN_RESULT_UNKNOWN',
-                    'Operator Ads assignment may already have been submitted; automatic resubmission is blocked',
-                    retryable=True,
-                    diagnostic={
-                        'phase':resume_phase,
-                        'page_id':str(config.get('page_id') or ''),
-                        'business_id':business,
-                        'ad_account_id':account,
-                    },
-                )
-            else:
-                async with FacebookBusinessBrowser(
-                        session.context,v8_old_space_mb=256) as browser:
-                    try:
-                        await _assign_operator(
-                            browser,config,business,checkpoint,
-                            relation_preconfirmed=True)
-                        operator_assignment_performed=True
-                    except Exception as exc:
-                        diagnostic={
-                            'stage':'target_page_operator_assignment',
-                            'url':str(getattr(browser.page,'url','')),
-                            'memory':_cgroup_memory_snapshot_mb(),
-                            'v8_old_space_mb':256,
-                        }
-                        try:
-                            diagnostic.update(await asyncio.wait_for(
-                                browser._diagnostic(
-                                    'target_page_operator_assignment'),
-                                timeout=3,
-                            ))
-                        except Exception:
-                            pass
-                        if isinstance(exc,BrowserBusinessError):
-                            exc.diagnostic={
-                                **diagnostic,
-                                **(exc.diagnostic or {}),
-                            }
-                        else:
-                            await checkpoint({'diagnostic':diagnostic})
-                        raise
-
+            await store.patch(owner_business_id=business,owner_business_confirmed=True,
+                ownership_phase='PAGE_OWNERSHIP_CONFIRMED')
         result={'page_id':config['page_id'],'page_name':config['name'],'business_id':business,
             'ad_account_id':account,'page_shared_to_business':True,
-            'operator_ads_access_assigned':operator_assignment_performed,
-            'operator_assignment':'performed' if operator_assignment_performed else 'not_required',
-            'ad_account_page_access_verified':rk_access_preverified,
-            'identity_verification':'not_requested',
-            'transport':'target_business_page_advertising_access',
-            'rk_access_proof':rk_access_proof if rk_access_preverified else {}}
+            'operator_ads_access_assigned':True,'operator_assignment':'performed',
+            'ad_account_page_access_verified':False,'identity_verification':'not_requested',
+            'rk_access_proof':{},**full_access}
         # Ads Manager / ad-form identity verification is explicitly opt-in.
         # Normal provisioning must not enter that surface.
         if params.get('verify_identity') is not True:
