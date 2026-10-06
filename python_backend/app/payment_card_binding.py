@@ -737,6 +737,17 @@ async def profile_payment_card(resolver:Any,profile:str,payload:dict[str,Any],*,
         # PHP waits 130s. Resolution, browser-slot acquisition, the form and
         # cancellation/cleanup must all fit inside that transport boundary.
         result=await asyncio.wait_for(_profile_payment_card_execute(resolver,profile,payload,state),timeout=110)
+        funding=result.get('funding') if isinstance(result.get('funding'),dict) else {}
+        if (
+            state is not None
+            and operation=='bind'
+            and result.get('status')=='LINKED'
+            and funding.get('account_scope_verified') is True
+            and hasattr(state,'set_payment_link_state')
+        ):
+            await state.set_payment_link_state(
+                profile,target,True,source='card_link_observed'
+            )
         logging.getLogger('remask.payment_card').info(
             'payment card result profile=%s account=%s operation=%s status=%s code=%s submitted=%s',
             profile,target,operation,str(result.get('status') or '')[:40],
