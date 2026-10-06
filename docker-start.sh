@@ -107,7 +107,7 @@ session.cookie_httponly = 1
 session.cookie_samesite = Lax
 EOF
 
-echo "[ui-session] configured save_path=$REMASK_PHP_SESSION_DIR persistent=1" >&2
+echo "[ui-session] configured save_path=$REMASK_PHP_SESSION_DIR persistent=1"
 
 if [ "${REMASK_JOB_EXECUTION_MODE:-browser}" = "background" ] && [ -f "$ROOT/bin/remask-worker.php" ]; then
   (
@@ -124,7 +124,7 @@ if [ "$USE_EXTERNAL_PYTHON_WORKER" != "1" ]; then
   (
     cd /opt/remask-python
     exec /opt/remask-venv/bin/uvicorn main:app --host 127.0.0.1 --port "$PYTHON_WORKER_PORT" --workers 1
-  ) > >(tee -a "$DATA_DIR/python-worker.log") 2> >(tee -a "$DATA_DIR/python-worker.log" >&2) &
+  ) > >(tee -a "$DATA_DIR/python-worker.log") 2> >(tee -a "$DATA_DIR/python-worker.log" >&1) &
   PYTHON_WORKER_PID="$!"
   echo "$PYTHON_WORKER_PID" > "$DATA_DIR/python-worker.pid"
 
@@ -212,7 +212,7 @@ PY
       (
         cd /opt/remask-python
         exec /opt/remask-venv/bin/uvicorn main:app --host 127.0.0.1 --port "$PYTHON_WORKER_PORT" --workers 1
-      ) > >(tee -a "$DATA_DIR/python-worker.log") 2> >(tee -a "$DATA_DIR/python-worker.log" >&2) &
+      ) > >(tee -a "$DATA_DIR/python-worker.log") 2> >(tee -a "$DATA_DIR/python-worker.log" >&1) &
       echo "$!" > "$DATA_DIR/python-worker.pid"
       FAIL_COUNT=0
       sleep 5
