@@ -547,6 +547,16 @@ async def bank_challenge_visible(page: Any) -> bool:
     return False
 
 
+def card_brand_aliases(number: str) -> set[str]:
+    """Canonical masked-brand aliases used only to prove the submitted card."""
+    digits=re.sub(r'\D','',number)
+    if digits.startswith('4'):return {'visa'}
+    if re.match(r'^(?:5[1-5]|2(?:2[2-9]|[3-6]\d|7[01]))',digits):return {'mastercard'}
+    if re.match(r'^3[47]',digits):return {'amex','americanexpress'}
+    if re.match(r'^(?:6011|65|64[4-9]|622(?:12[6-9]|1[3-9]\d|[2-8]\d{2}|9[01]\d|92[0-5]))',digits):return {'discover'}
+    return set()
+
+
 def card_values(card: dict[str,Any],cvv: str) -> dict[str,str]:
     number=re.sub(r'[\s-]','',str(card.get('number') or ''))
     if not re.fullmatch(r'\d{12,19}',number) or not re.fullmatch(r'\d{3,4}',cvv):
@@ -628,7 +638,7 @@ async def payment_card_flow(browser:Any,target:str,asset:dict[str,str],*,operati
             await select_settings_payment_tab(browser)
             pane=await selected_payment_pane_text(browser,asset['name'])
             funding=settings_payment_summary(target,str(page.url),pane,asset=asset,identity=identity)
-        number=values['number'];brands={'visa'} if number.startswith('4') else {'mastercard'} if re.match(r'^(5[1-5]|2[2-7])',number) else {'amex','americanexpress'} if re.match(r'^3[47]',number) else set()
+        number=values['number'];brands=card_brand_aliases(number)
         linked=funding['account_scope_verified'] and any(m['last4']==number[-4:] and re.sub(r'[^a-z]','',m['type'].casefold()) in brands for m in funding['payment_methods'])
         if linked:return {**base,'submitted':True,'status':'LINKED','code':'CARD_LINK_OBSERVED','funding':funding}
         # A success toast alone is not proof of linkage to this RK. No automatic resubmission.
