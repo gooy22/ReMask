@@ -95,6 +95,32 @@ def confirmed_created_page(
     return {"id": page_id, "name": name}
 
 
+def fan_page_click_never_resolved(click_meta: Any, *, allowed_names: tuple[str, ...]) -> bool:
+    """Prove no click from a complete Playwright locator-resolution timeout."""
+    if not isinstance(click_meta, dict) or not (
+        click_meta.get("found") is True
+        and click_meta.get("attempted") is True
+        and click_meta.get("clicked") is False
+        and click_meta.get("role") == "button"
+        and click_meta.get("name") in allowed_names
+    ):
+        return False
+    error = str(click_meta.get("error") or "")
+    # The old recorder capped errors at 500 chars. Never interpret a possibly
+    # truncated call log: later lines could contain a dispatched click.
+    if not error or len(error) >= 500:
+        return False
+    lines = [line.strip() for line in error.splitlines() if line.strip()]
+    if len(lines) != 3 or not re.fullmatch(
+        r"TimeoutError: Locator\.click: Timeout \d+ms exceeded\.", lines[0],
+    ) or lines[1] != "Call log:":
+        return False
+    return bool(re.fullmatch(
+        r"""- waiting for get_by_role\(["']button["'],.*\)(?:\.first|\.nth\(\d+\))""",
+        lines[2],
+    ))
+
+
 class FanPageCreateCapture:
     """Observe Meta's own UI request; never send or replay a mutation."""
 

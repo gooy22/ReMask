@@ -7,6 +7,7 @@ import time
 from typing import Any
 
 from ..facebook_business_browser import BrowserBusinessError, FacebookBusinessBrowser
+from ..facebook_fan_page_create import fan_page_click_never_resolved
 from ..facebook_page_discovery import (
     PageDiscoveryError, discover_current_list_pages_docid_by_marker,
     discover_pages_from_browser_html, list_pages_via_private_graphql,
@@ -791,6 +792,26 @@ async def fan_pages_handler(
     ).upper()
     active_name = _clean(checkpoint.get("active_page_name"))
 
+    saved_diag = checkpoint.get("browser_diagnostic")
+    saved_diag = saved_diag if isinstance(saved_diag, dict) else {}
+    if (
+        prior_phase in {"PAGE_CREATE_CLICK_INTENT", "PAGE_CREATE_RESULT_UNKNOWN"}
+        and active_name
+        and fan_page_click_never_resolved(
+            saved_diag.get("click_meta"), allowed_names=FacebookBusinessBrowser.FAN_PAGE_CREATE_NAMES,
+        )
+    ):
+        await provisioning_state.checkpoint(
+            item_id, profile_id, scope_key, ProvisioningStep.FAN_PAGES,
+            {"phase": "CREATE_NOT_SUBMITTED", "resume_from": "CREATE_NEXT",
+             "active_page_name": "", "active_before_ids": [], "browser_diagnostic": {},
+             "pre_submit_diagnostic": saved_diag, "recovery_reason": "LOCATOR_NEVER_RESOLVED",
+             "activity": "FAN_PAGE_NO_CLICK_RECOVERED", "activity_at": int(time.time())},
+        )
+        log.info("fan page no-click checkpoint recovered profile=%s item=%s", profile_id, item_id)
+        prior_phase = "CREATE_NOT_SUBMITTED"
+        active_name = ""
+
     if (
         prior_phase in {"PAGE_CREATE_CLICK_INTENT", "PAGE_CREATE_RESULT_UNKNOWN"}
         and active_name
@@ -1070,6 +1091,7 @@ async def fan_pages_handler(
                     {
                         "phase": "PAGE_CREATE_CLICK_INTENT",
                         "resume_from": "RECONCILE_CREATE",
+                        "browser_diagnostic": {},
                         "target_names": names,
                         "created_pages": created_pages,
                         "active_index": index,
@@ -1099,6 +1121,24 @@ async def fan_pages_handler(
                 break
 
             except BrowserBusinessError as exc:
+                diagnostic = exc.diagnostic if isinstance(exc.diagnostic, dict) else {}
+                if exc.code == "FAN_PAGE_CREATE_NOT_SUBMITTED" and fan_page_click_never_resolved(
+                    diagnostic.get("click_meta"), allowed_names=FacebookBusinessBrowser.FAN_PAGE_CREATE_NAMES,
+                ):
+                    await provisioning_state.checkpoint(
+                        item_id, profile_id, scope_key, ProvisioningStep.FAN_PAGES,
+                        {"phase": "CREATE_NOT_SUBMITTED", "resume_from": "CREATE_NEXT",
+                         "active_page_name": "", "active_before_ids": [], "browser_diagnostic": {},
+                         "pre_submit_diagnostic": diagnostic, "recovery_reason": "LOCATOR_NEVER_RESOLVED",
+                         "activity": "FAN_PAGE_NO_CLICK_RECOVERED", "activity_at": int(time.time())},
+                    )
+                    if create_attempt < 2:
+                        continue
+                    raise ProvisioningError(
+                        "FAN_PAGE_CREATE_UI_CHANGED",
+                        "Create Page kept disappearing before the final click; no CREATE was submitted.",
+                        retryable=True,
+                    ) from exc
                 if exc.code in {
                     "SESSION_EXPIRED",
                     "CHECKPOINT_REQUIRED",

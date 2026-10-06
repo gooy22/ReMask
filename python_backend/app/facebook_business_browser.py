@@ -4865,7 +4865,7 @@ class FacebookBusinessBrowser:
                 'Создание PrgssTeam требует подтверждения правил Meta для страниц. Форма подготовлена, Create Page не нажата.',
                 retryable=True,diagnostic=diag)
 
-        from .facebook_fan_page_create import FanPageCreateCapture
+        from .facebook_fan_page_create import FanPageCreateCapture, fan_page_click_never_resolved
 
         cookies = getattr(self.context, "cookies", None)
         actor_id = _digits(cookies.get("c_user")) if isinstance(cookies, dict) else ""
@@ -4924,6 +4924,15 @@ class FacebookBusinessBrowser:
                     "Facebook Page creation form was filled but Create Page was not found.",
                     retryable=True,
                     diagnostic=diag,
+                )
+
+            if fan_page_click_never_resolved(click_meta, allowed_names=self.FAN_PAGE_CREATE_NAMES):
+                raise BrowserBusinessError(
+                    "FAN_PAGE_CREATE_NOT_SUBMITTED",
+                    "Create Page disappeared before Playwright could resolve it; no final click was sent.",
+                    retryable=True,
+                    diagnostic={"stage": "fan_page_submit_locator_missing", "click_meta": click_meta,
+                                "safe_before_submit": True},
                 )
 
             if click_meta.get("actionability_failed"):
