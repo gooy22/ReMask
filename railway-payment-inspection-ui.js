@@ -33,7 +33,7 @@ function remaskClearPaymentSecrets(){
 }
 
 function paymentCardMessage(result){
-  const names={number:'номер карты',cvv:'CVV',holder:'имя владельца',expiry:'срок действия',month:'месяц',year:'год',country:'страна',address:'платёжный адрес',city:'город',region:'область / штат',postal_code:'индекс',unknown_required_field:'дополнительное поле Meta'};
+  const names={number:'номер карты',cvv:'CVV',holder:'имя владельца',expiry:'срок действия',month:'месяц',year:'год',country:'страна',currency:'валюта',timezone:'часовой пояс',address:'платёжный адрес',city:'город',region:'область / штат',postal_code:'индекс',unknown_required_field:'дополнительное поле Meta'};
   const messages={
     CARD_FORM_READY:'Форма Meta доступна для выбранного РК.',
     CARD_LINK_OBSERVED:'Meta показывает карту у выбранного РК. Проверена только привязка: платёж и подтверждение банка не проверялись.',

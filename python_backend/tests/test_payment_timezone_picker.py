@@ -101,6 +101,19 @@ class MetaTimezoneChromiumTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(selected, diagnostic)
         self.assertTrue(await payment_timezone_selected(scope))
 
+    async def test_multiline_city_and_region_are_one_timezone_identity(self):
+        await self.page.set_content("""
+            <div role="dialog" id="setup">
+              <button id="zone" onclick="document.getElementById('popup').hidden=false">Los Angeles, America (GMT-07:00)</button>
+            </div>
+            <div id="popup" role="listbox" hidden><button role="option"
+              onclick="document.getElementById('zone').innerHTML=this.innerHTML;document.getElementById('popup').hidden=true">
+              Kyiv<br>Europe (GMT+03:00)</button></div>""")
+        scope = self.page.locator("#setup")
+        selected, diagnostic = await choose_payment_timezone(scope, self.page)
+        self.assertTrue(selected, diagnostic)
+        self.assertTrue(await payment_timezone_selected(scope))
+
     async def test_native_iana_value_is_selected_when_option_label_has_offset_prefix(self):
         await self.page.set_content("""
             <label>Time zone<select id="zone">

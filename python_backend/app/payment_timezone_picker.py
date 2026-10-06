@@ -41,7 +41,7 @@ def _selected(info: dict) -> bool:
         return False
     values = [clean_label(line) for line in str(info.get("text") or "").splitlines()]
     values = [line for line in values if line and not ZONE_LABEL.fullmatch(line)]
-    return bool(values) and all(kyiv_label(line) for line in values)
+    return bool(values) and kyiv_label(" ".join(values))
 
 
 async def _timezone_control(scope: Any) -> tuple[Any, dict]:
