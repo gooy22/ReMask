@@ -797,6 +797,8 @@ async def fan_pages_handler(
     if (
         prior_phase in {"PAGE_CREATE_CLICK_INTENT", "PAGE_CREATE_RESULT_UNKNOWN"}
         and active_name
+        and _clean(saved_diag.get("page_name")) == active_name
+        and saved_diag.get("stage") == "fan_page_final_click_unknown"
         and fan_page_click_never_resolved(
             saved_diag.get("click_meta"), allowed_names=FacebookBusinessBrowser.FAN_PAGE_CREATE_NAMES,
         )

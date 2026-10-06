@@ -52,7 +52,8 @@ class FanPageNoClickTests(unittest.IsolatedAsyncioTestCase):
             await state.checkpoint("common", "13", "common-page", ProvisioningStep.FAN_PAGES, {
                 "phase": "PAGE_CREATE_RESULT_UNKNOWN", "active_page_name": "PrgssTeam",
                 "active_before_ids": [], "target_names": ["PrgssTeam"],
-                "browser_diagnostic": {"stage": "fan_page_final_click_unknown", "click_meta": click_meta()},
+                "browser_diagnostic": {"stage": "fan_page_final_click_unknown", "page_name": "PrgssTeam",
+                                       "click_meta": click_meta()},
             })
             browser = AsyncMock()
             browser.__aenter__.return_value = browser

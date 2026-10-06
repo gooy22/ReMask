@@ -4932,7 +4932,7 @@ class FacebookBusinessBrowser:
                     "Create Page disappeared before Playwright could resolve it; no final click was sent.",
                     retryable=True,
                     diagnostic={"stage": "fan_page_submit_locator_missing", "click_meta": click_meta,
-                                "safe_before_submit": True},
+                                "page_name": name, "safe_before_submit": True},
                 )
 
             if click_meta.get("actionability_failed"):
