@@ -2514,6 +2514,7 @@ class FacebookBusinessBrowser:
         settle_ms: int = 900,
         attempts: int = 2,
         auth_body_timeout_ms: int = 1500,
+        _relaunch_allowed: bool = True,
     ) -> str:
         if self.page is None:
             await self.open()
@@ -2611,22 +2612,75 @@ class FacebookBusinessBrowser:
                     or "target page, context or browser has been closed" in lower
                 )
 
-                if page_crashed and attempt == 0:
-                    # Safe at navigation boundaries: release the crashed
-                    # Chromium process and open a fresh low-memory context.
+                if page_crashed and _relaunch_allowed:
+                    # REMASK_NAV_RELAUNCH_RETRY_V1
+                    # A caller may intentionally request attempts=1. The old
+                    # for-loop relaunched Chromium and then exhausted that one
+                    # iteration without ever retrying the requested URL. Make
+                    # the fresh-context retry explicit and allow it exactly
+                    # once, independent of the caller's normal retry budget.
+                    crashed_url = _clean(getattr(self.page, "url", ""))
                     await self.close()
                     await asyncio.sleep(0.25)
                     await self.open()
-                    continue
+                    try:
+                        return await self._goto(
+                            url,
+                            timeout_ms=navigation_timeout,
+                            wait_until=navigation_wait_until,
+                            settle_ms=navigation_settle_ms,
+                            attempts=1,
+                            auth_body_timeout_ms=auth_body_timeout_ms,
+                            _relaunch_allowed=False,
+                        )
+                    except BrowserBusinessError as retry_exc:
+                        if retry_exc.code != "FACEBOOK_NAVIGATION_FAILED":
+                            raise
+                        retry_diag = (
+                            dict(retry_exc.diagnostic)
+                            if isinstance(retry_exc.diagnostic, dict)
+                            else {}
+                        )
+                        retry_diag.update(
+                            {
+                                "stage": "navigation_relaunch_failed",
+                                "requested_url": _clean(url)[:700],
+                                "crashed_url": crashed_url[:700],
+                                "initial_error": text[:1200],
+                                "retry_error": str(retry_exc)[:1200],
+                                "chromium_relaunched": True,
+                            }
+                        )
+                        raise BrowserBusinessError(
+                            "FACEBOOK_NAVIGATION_FAILED",
+                            (
+                                "Facebook navigation failed after Chromium "
+                                f"relaunch: {retry_exc}"
+                            ),
+                            retryable=True,
+                            diagnostic=retry_diag,
+                        ) from retry_exc
 
+                diagnostic: dict[str, Any] = {}
                 try:
-                    await self._diagnostic("navigation_error")
+                    diagnostic = await self._diagnostic("navigation_error")
                 except Exception:
-                    pass
+                    diagnostic = {}
+                if isinstance(diagnostic, dict):
+                    diagnostic.update(
+                        {
+                            "requested_url": _clean(url)[:700],
+                            "navigation_error": text[:1200],
+                            "chromium_relaunch_allowed": bool(
+                                _relaunch_allowed
+                            ),
+                        }
+                    )
                 raise BrowserBusinessError(
                     "FACEBOOK_NAVIGATION_FAILED",
                     f"Facebook navigation failed: {text}",
                     retryable=True,
+                    diagnostic=diagnostic,
                 ) from exc
 
         raise BrowserBusinessError(
