@@ -171,10 +171,11 @@ class MetaTimezoneChromiumTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.page.locator("#background").input_value(), "unchanged")
         self.assertEqual(await self.page.evaluate("window.opens"), 1)
 
-    async def full_binding_fixture(self, target, *, observed=None):
+    async def full_binding_fixture(self, target, *, observed=None, rendered_after_save=None):
         url = f"https://business.facebook.com/latest/settings/ad_accounts/?business_id={BUSINESS}"
         html = f"""
             <div role="row"><button>Fixture RK</button><a>Details</a></div>
+            <div id="visible-account">Selected ad account: {target}</div>
             <button id="add" onclick="document.getElementById('setup').hidden=false;window.adds++">Add payment method</button>
             <input id="background" placeholder="Search accounts" value="unchanged">
             <div role="dialog" id="setup" hidden><h2>Select location and currency</h2>
@@ -198,7 +199,7 @@ class MetaTimezoneChromiumTests(unittest.IsolatedAsyncioTestCase):
               <label><input type="radio" name="availability" id="all" checked>All accounts in this business portfolio</label>
               <button type="button" onclick="window.saves++;window.boundAccount='{target}';window.onlySelected=document.getElementById('only').checked;
                 const last4=document.getElementById('pan').value.slice(-4);
-                document.getElementById('card').remove();document.getElementById('methods').textContent='Payment methods Visa •••• '+last4">Save</button>
+                document.getElementById('visible-account').textContent='Selected ad account: {rendered_after_save or target}';document.getElementById('card').remove();document.getElementById('methods').textContent='Payment methods Visa •••• '+last4">Save</button>
             </form>
             <div id="methods"></div><script>window.adds=0;window.opens=0;window.saves=0;window.settings=[];</script>
         """
@@ -232,6 +233,17 @@ class MetaTimezoneChromiumTests(unittest.IsolatedAsyncioTestCase):
             await self.page.unroute(f"https://business.facebook.com/latest/settings/ad_accounts/?business_id={BUSINESS}")
         self.assertEqual(saved, targets)
         self.assertNotIn("123456791", saved)
+
+    async def test_save_without_visible_exact_rk_proof_remains_unverified_and_is_not_replayed(self):
+        browser = await self.full_binding_fixture("123456789", rendered_after_save="123456790")
+        with patch("app.payment_card_binding.select_settings_payment_tab", AsyncMock(return_value=True)):
+            result = await payment_card_flow(browser, "123456789",
+                {"business_id": BUSINESS, "name": "Fixture RK"},
+                operation="bind", card=CARD, cvv="123", billing_setup=SETUP)
+        self.assertEqual(result["status"], "SUBMITTED_UNVERIFIED", result)
+        self.assertEqual(result["code"], "CARD_LINK_NOT_VERIFIED")
+        self.assertTrue(result["submitted"])
+        self.assertEqual(await self.page.evaluate("window.saves"), 1)
 
     async def test_wrong_canonical_rk_stops_before_setup_card_fields_and_save(self):
         browser = await self.full_binding_fixture("123456789", observed="123456790")
