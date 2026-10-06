@@ -4,6 +4,8 @@ import asyncio
 import json
 import logging
 import os
+import re
+from urllib.parse import urlsplit
 from pathlib import Path
 from collections import defaultdict
 from typing import Any, Awaitable, Callable
@@ -18,6 +20,24 @@ from .store import JobStore
 
 log=logging.getLogger('remask.python_worker')
 Handler=Callable[[ProfileSession,dict[str,Any]],Awaitable[dict[str,Any]]]
+
+
+def _fan_page_error_summary(value: Any) -> str:
+    """Keep the failure reason, never credentials or URL query values."""
+    text = str(value or "")[:2500]
+    def clean_url(match: Any) -> str:
+        try:
+            parsed = urlsplit(match.group(0))
+            return f"{parsed.scheme}://{parsed.hostname or ''}{parsed.path}"
+        except ValueError:
+            return "[redacted-url]"
+    text = re.sub(r"https?://[^\s<>\"']+", clean_url, text)
+    text = re.sub(r"(?im)\b(?:cookie|authorization)\s*:\s*[^\r\n]+", "[redacted]", text)
+    text = re.sub(
+        r"(?i)\b(?:xs|fb_dtsg|jazoest|lsd|access_token|token)[\"']?\s*[:=]\s*[\"']?[^&\s,;\"'>]+",
+        "[redacted]", text,
+    )
+    return text[:700]
 
 class TaskRegistry:
     def __init__(self) -> None:
@@ -107,6 +127,8 @@ class WorkerPool:
         recovered=await self.store.recover()
         if str(os.getenv('REMASK_STARTUP_STATE_AUDIT','0')).strip().lower() in {'1','true','yes','on'}:
             await self._log_recent_page_access_state()
+        if str(os.getenv('REMASK_FAN_PAGE_STATE_AUDIT','0')).strip().lower() in {'1','true','yes','on'}:
+            await self._log_recent_fan_page_state()
         for item_id in recovered:
             await self.queue.put(item_id)
         self._workers=[
@@ -114,6 +136,50 @@ class WorkerPool:
             for i in range(self.concurrency)
         ]
         log.info('worker pool started concurrency=%d recovered=%d',self.concurrency,len(recovered))
+
+    async def _log_recent_fan_page_state(self) -> None:
+        """Read existing pending CREATE diagnostics; do not contact Facebook."""
+        def read_rows() -> list[dict[str, Any]]:
+            with self.provisioning_state._connect() as con:
+                rows = con.execute(
+                    """SELECT item_id,profile_id,status,error_code,result_json,updated_at
+                       FROM provisioning_steps WHERE step='FAN_PAGES'
+                       ORDER BY updated_at DESC LIMIT 50"""
+                ).fetchall()
+                return [dict(row) for row in rows]
+        try:
+            rows = await asyncio.to_thread(read_rows)
+        except Exception as exc:
+            log.warning('FAN_PAGES state audit unavailable type=%s', exc.__class__.__name__)
+            return
+        for row in rows:
+            try:
+                result = json.loads(row.get('result_json') or '{}')
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(result, dict) or result.get('phase') not in {
+                'PAGE_CREATE_CLICK_INTENT', 'PAGE_CREATE_RESULT_UNKNOWN',
+            }:
+                continue
+            diag = result.get('browser_diagnostic')
+            diag = diag if isinstance(diag, dict) else {}
+            click = diag.get('click_meta')
+            click = click if isinstance(click, dict) else {}
+            checks = result.get('reconciliation') or []
+            safe_checks = [
+                {key: _fan_page_error_summary(check.get(key))
+                 for key in ('source', 'code', 'message') if check.get(key)}
+                for check in checks[-8:] if isinstance(check, dict)
+            ] if isinstance(checks, list) else []
+            log.info(
+                'FAN_PAGES pending diagnostic profile=%s item=%s phase=%s '
+                'click_attempted=%s click_clicked=%s click_error=%s '
+                'stage=%s reconciliation=%s updated_at=%s',
+                row['profile_id'], row['item_id'], result['phase'],
+                click.get('attempted'), click.get('clicked'),
+                _fan_page_error_summary(click.get('error')),
+                diag.get('stage', ''), json.dumps(safe_checks), row['updated_at'],
+            )
 
     async def _log_recent_page_access_state(self) -> None:
         """Emit durable PAGE_ACCESS state so recovery outcomes are observable."""
