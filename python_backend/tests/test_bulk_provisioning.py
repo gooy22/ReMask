@@ -610,17 +610,39 @@ class PageHydrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(browser._click_named.await_count,31)
 
     async def test_page_autocomplete_portal_uses_exact_saved_name_and_id(self):
-        browser=FacebookBusinessBrowser(SimpleNamespace(profile_id='9'))
-        field=SimpleNamespace(count=AsyncMock(return_value=1),input_value=AsyncMock(return_value='https://www.facebook.com/1324227614109193'))
-        result=SimpleNamespace(count=AsyncMock(return_value=1),click=AsyncMock())
-        field.filter=lambda **kw:field; result.filter=lambda **kw:result
-        browser.page=SimpleNamespace(get_by_placeholder=lambda *a,**k:field,get_by_text=lambda *a,**k:result)
-        self.assertTrue(await browser._click_exact_page_search_name('1324227614109193','PrgssTeam'))
-        result.click.assert_awaited_once()
-        result.count.return_value=2
-        self.assertFalse(await browser._click_exact_page_search_name('1324227614109193','PrgssTeam'))
-        field.input_value.return_value='https://www.facebook.com/999999999'
-        self.assertFalse(await browser._click_exact_page_search_name('1324227614109193','PrgssTeam'))
+        # Use a real portal: a fake text-count locator cannot prove that the
+        # selectable row, rather than an unrelated heading, was clicked.
+        import shutil
+        executable = next((path for name in ("google-chrome", "chromium", "chromium-browser")
+                           if (path := shutil.which(name))), None)
+        if not executable:
+            self.skipTest("No local Chromium installed")
+        from playwright.async_api import async_playwright
+        async with async_playwright() as playwright:
+            chromium = await playwright.chromium.launch(
+                executable_path=executable, headless=True, args=["--no-sandbox"])
+            try:
+                page = await chromium.new_page()
+                await page.route("**/*", lambda route: route.abort())
+                await page.set_content(
+                    '<input placeholder="Facebook Page name or URL" aria-controls="portal">'
+                    '<div role="listbox" id="portal">'
+                    '<button onclick="window.clicks++">PrgssTeam</button></div>'
+                    '<script>window.clicks=0;</script>')
+                browser = FacebookBusinessBrowser(SimpleNamespace(profile_id="9"))
+                browser.page = page
+                field = page.get_by_placeholder("Facebook Page name or URL", exact=True)
+                await field.fill("https://www.facebook.com/1324227614109193")
+                self.assertTrue(await browser._click_exact_page_search_name("1324227614109193", "PrgssTeam"))
+                self.assertEqual(await page.evaluate("window.clicks"), 1)
+                await page.locator("#portal").evaluate(
+                    "(el) => el.insertAdjacentHTML('beforeend','<button>PrgssTeam</button>')")
+                self.assertFalse(await browser._click_exact_page_search_name("1324227614109193", "PrgssTeam"))
+                await field.fill("https://www.facebook.com/999999999")
+                self.assertFalse(await browser._click_exact_page_search_name("1324227614109193", "PrgssTeam"))
+                self.assertEqual(await page.evaluate("window.clicks"), 1)
+            finally:
+                await chromium.close()
 
     async def test_current_name_url_picker_receives_page_url(self):
         browser=FacebookBusinessBrowser(SimpleNamespace(profile_id='7'))
