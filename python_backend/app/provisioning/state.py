@@ -144,6 +144,15 @@ class ProvisioningStateStore:
 
                 CREATE INDEX IF NOT EXISTS idx_provisioning_steps_profile
                     ON provisioning_steps(profile_id, scope_key, updated_at);
+
+                CREATE TABLE IF NOT EXISTS profile_payment_readiness (
+                    profile_id TEXT NOT NULL,
+                    ad_account_id TEXT NOT NULL,
+                    linked_verified INTEGER NOT NULL,
+                    source TEXT NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    PRIMARY KEY(profile_id, ad_account_id)
+                );
                 """
             )
             con.execute(
@@ -1308,6 +1317,80 @@ class ProvisioningStateStore:
                 return True
         return False
 
+    async def set_payment_link_state(
+        self,
+        profile_id: str,
+        ad_account_id: str,
+        linked_verified: bool,
+        *,
+        source: str,
+    ) -> None:
+        await asyncio.to_thread(
+            self._set_payment_link_state_sync,
+            str(profile_id or "").strip(),
+            str(ad_account_id or "").removeprefix("act_").strip(),
+            bool(linked_verified),
+            str(source or "").strip()[:120] or "payment_observation",
+        )
+
+    def _set_payment_link_state_sync(
+        self,
+        profile_id: str,
+        ad_account_id: str,
+        linked_verified: bool,
+        source: str,
+    ) -> None:
+        if not profile_id or not ad_account_id.isdigit():
+            return
+        with self._connect() as con:
+            con.execute(
+                """
+                INSERT INTO profile_payment_readiness(
+                    profile_id,ad_account_id,linked_verified,source,updated_at
+                ) VALUES(?,?,?,?,?)
+                ON CONFLICT(profile_id,ad_account_id) DO UPDATE SET
+                    linked_verified=excluded.linked_verified,
+                    source=excluded.source,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    profile_id,
+                    ad_account_id,
+                    1 if linked_verified else 0,
+                    source,
+                    _now(),
+                ),
+            )
+
+    async def payment_link_confirmed(
+        self,
+        profile_id: str,
+        ad_account_id: str,
+    ) -> bool:
+        return await asyncio.to_thread(
+            self._payment_link_confirmed_sync,
+            str(profile_id or "").strip(),
+            str(ad_account_id or "").removeprefix("act_").strip(),
+        )
+
+    def _payment_link_confirmed_sync(
+        self,
+        profile_id: str,
+        ad_account_id: str,
+    ) -> bool:
+        if not profile_id or not ad_account_id.isdigit():
+            return False
+        with self._connect() as con:
+            row = con.execute(
+                """
+                SELECT linked_verified
+                FROM profile_payment_readiness
+                WHERE profile_id=? AND ad_account_id=?
+                """,
+                (profile_id, ad_account_id),
+            ).fetchone()
+        return bool(row and int(row["linked_verified"] or 0) == 1)
+
     async def funding_confirmed(
         self,
         profile_id: str,
@@ -1326,6 +1409,8 @@ class ProvisioningStateStore:
     ) -> bool:
         if not profile_id or not ad_account_id.isdigit():
             return False
+        if self._payment_link_confirmed_sync(profile_id, ad_account_id):
+            return True
         with self._connect() as con:
             rows = con.execute(
                 """
