@@ -45,7 +45,9 @@ function card_worker_inspect(string $profile,string $account,array $assetHint=[]
     $result=json_decode($raw,true);
     // The inspection route returns a deliberately sanitized code for auth gates.
     // Preserve only known codes; arbitrary response bodies never reach the UI.
-    $known=['SESSION_EXPIRED','CHECKPOINT_REQUIRED','TWO_FACTOR_REQUIRED','PROFILE_CONTEXT_ERROR','PAYMENT_INSPECTION_TIMEOUT','PAYMENT_BROWSER_CRASHED'];
+    $known=['SESSION_EXPIRED','CHECKPOINT_REQUIRED','TWO_FACTOR_REQUIRED','PROFILE_CONTEXT_ERROR',
+        'PAYMENT_INSPECTION_TIMEOUT','PAYMENT_BROWSER_CRASHED','PAYMENT_UI_UNAVAILABLE',
+        'PAYMENT_ACCOUNT_BINDING_MISSING','PERSONAL_AD_ACCOUNT_EXCLUDED','INVALID_PAYMENT_TARGET'];
     if(is_array($result)&&is_string($result['detail']??null)&&in_array($result['detail'],$known,true))throw new RuntimeException($result['detail']);
     if(!is_array($result)||($result['profile_id']??'')!==$profile||($result['account_id']??'')!==$account)throw new RuntimeException('CARD_WORKER_RESULT_UNKNOWN');
     return $result;
@@ -140,7 +142,7 @@ try {
 }catch(Throwable $e){
     // Raw request bodies, browser errors, PAN and CVV must never reach logs.
     $message=$e->getMessage();
-    $code=preg_match('/^(?:CARD|PAYMENT|PROFILE|INVALID|PRIVATE_LAUNCH|SESSION|CHECKPOINT|TWO_FACTOR)_[A-Z0-9_]{1,80}$/D',$message)
+    $code=preg_match('/^(?:CARD|PAYMENT|PROFILE|PERSONAL|INVALID|PRIVATE_LAUNCH|SESSION|CHECKPOINT|TWO_FACTOR)_[A-Z0-9_]{1,80}$/D',$message)
         ? $message : 'CARD_OPERATION_FAILED';
     error_log(sprintf('[payment-card] operation=%s profile=%s account=%s exception=%s code=%s',
         preg_replace('/[^A-Za-z0-9_.-]/','_', (string)($input['action']??'')),
