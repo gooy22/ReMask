@@ -137,10 +137,10 @@ async def choose_payment_timezone(scope: Any, page: Any, *, wait_seconds: float 
     try:
         # Only inputs/choices that appear after opening this control belong to
         # the picker. A persistent Billing account search is never a fallback.
-        await page.locator('input,textarea,[contenteditable="true"],button,[role="button"],[role="option"],[role="menuitem"],[role="radio"]').evaluate_all(
-            "(els,attr)=>els.filter(e=>e.getClientRects().length).forEach(e=>e.setAttribute(attr,'1'))", BEFORE)
-        await page.get_by_text(CITY).evaluate_all(
-            "(els,attr)=>els.filter(e=>e.getClientRects().length).forEach(e=>e.setAttribute(attr,'1'))", BEFORE)
+        await page.locator('input,textarea,[contenteditable="true"],button,[role="button"],[role="option"],[role="menuitem"],[role="radio"]').filter(visible=True).evaluate_all(
+            "(els,attr)=>els.forEach(e=>e.setAttribute(attr,'1'))", BEFORE)
+        await page.get_by_text(CITY).filter(visible=True).evaluate_all(
+            "(els,attr)=>els.forEach(e=>e.setAttribute(attr,'1'))", BEFORE)
         try:
             await control.click(timeout=5000)
         except Exception as exc:

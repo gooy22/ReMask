@@ -104,10 +104,10 @@ class MetaTimezoneChromiumTests(unittest.IsolatedAsyncioTestCase):
     async def test_multiline_city_and_region_are_one_timezone_identity(self):
         await self.page.set_content("""
             <div role="dialog" id="setup">
-              <button id="zone" onclick="document.getElementById('popup').hidden=false">Los Angeles, America (GMT-07:00)</button>
+              <button id="zone" onclick="document.getElementById('popup').style.visibility='visible'">Los Angeles, America (GMT-07:00)</button>
             </div>
-            <div id="popup" role="listbox" hidden><button role="option"
-              onclick="document.getElementById('zone').innerHTML=this.innerHTML;document.getElementById('popup').hidden=true">
+            <div id="popup" role="listbox" style="visibility:hidden"><button role="option"
+              onclick="document.getElementById('zone').innerHTML=this.innerHTML;document.getElementById('popup').style.visibility='hidden'">
               Kyiv<br>Europe (GMT+03:00)</button></div>""")
         scope = self.page.locator("#setup")
         selected, diagnostic = await choose_payment_timezone(scope, self.page)
