@@ -187,3 +187,39 @@ class SelectedBusinessInventoryTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(result['live_ready'])
                 self.assertTrue(result['businesses'][0]['ad_accounts_partial'])
                 self.assertEqual(result['businesses'][0]['ad_accounts_count'],1)
+
+    async def test_personal_scope_discovery_cannot_hide_the_known_real_business(self):
+        pool,browser,factory=self.fixtures()
+        pool.resolver.resolve.return_value=SimpleNamespace(pages=[],cookies={'c_user':'61594848550001'})
+        pool.provisioning_state.latest_profile_entities.return_value={'business_id':'1109354271000001'}
+        browser.snapshot_businesses.side_effect=None
+        browser.snapshot_businesses.return_value={'61594848550001':'Personal profile'}
+        browser._last_business_inventory_diagnostic={'stage':'complete','queries':[]}
+        with patch.object(api,'pool',pool),patch.object(api,'ProfileSession',factory):
+            with self.assertRaises(InventoryProbeReached):
+                await api.profile_live_inventory('fixture-new')
+        self.assertEqual(browser.probe_ads_manager_inventory_context.await_args.kwargs['business_id'],
+                         '1109354271000001')
+
+    async def test_uncertain_checkpoint_name_is_passed_for_fresh_details_verification(self):
+        pool,browser,factory=self.fixtures()
+        pool.provisioning_state.ad_account_name_hints_for_profile=AsyncMock(return_value={
+            '1109354271000001':'Amber Studio fixture Ads'})
+        browser.probe_ads_manager_inventory_context.side_effect=None
+        browser.probe_ads_manager_inventory_context.return_value={'confirmed':False}
+        browser.snapshot_ad_accounts_for_business=AsyncMock(side_effect=InventoryProbeReached())
+        with patch.object(api,'pool',pool),patch.object(api,'ProfileSession',factory):
+            with self.assertRaises(InventoryProbeReached):
+                await api.profile_live_inventory('fixture-new',business_ids='1109354271000001')
+        args=browser.snapshot_ad_accounts_for_business.await_args.kwargs
+        self.assertEqual(args['business_id'],'1109354271000001')
+        self.assertEqual(args['expected_account_name'],'Amber Studio fixture Ads')
+        self.assertEqual(args['timeout_seconds'],12.0)
+
+    def test_personal_scope_and_request_metadata_do_not_prove_an_empty_inventory(self):
+        self.assertFalse(api._business_inventory_confirmed_empty({
+            'stage':'complete','rejected_personal_scope_ids':['61594848550001'],
+            'business_inventory_confirmed_empty':True,'queries':[]}))
+        self.assertFalse(api._business_inventory_confirmed_empty({
+            'stage':'complete','queries':[{'phase':'selector_request',
+            'friendly_name':'NorthStarBusinessUnifiedScopingSelectorQuery','live_business_ids':[]}]}))

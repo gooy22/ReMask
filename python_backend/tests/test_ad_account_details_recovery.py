@@ -256,6 +256,48 @@ class AdAccountDetailsChromiumTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.page.evaluate("window.saves"),0)
 
 
+    async def test_native_business_discovery_filters_personal_scope_from_requests_responses_and_dom(self):
+        payload={"data":{"viewer":{"business_id":UID},"businesses":{"nodes":[
+            {"__typename":"Business","id":BM,"name":"Fixture business"}]}}}
+        html='<html><body><a href="/latest/home?business_id='+UID+'">Personal profile</a>'+ \
+            '<a href="/latest/home?business_id='+BM+'">Fixture business</a>'+ \
+            '<script>fetch("/api/graphql/",{method:"POST",body:new URLSearchParams('+json.dumps({
+                "fb_api_req_friendly_name":"NorthStarBusinessUnifiedScopingSelectorQuery",
+                "variables":json.dumps({"firstLevelScopeId":UID,"businessId":UID})})+ \
+            ')}).then(r=>r.json())</script></body></html>'
+        await self.page.unroute("**/*")
+        async def fixture_route(route):
+            if "graphql" in route.request.url:
+                await route.fulfill(status=200,content_type="application/json",body=json.dumps(payload))
+            elif route.request.is_navigation_request():
+                await route.fulfill(status=200,content_type="text/html",body=html)
+            else:
+                await route.abort()
+        await self.page.route("**/*",fixture_route)
+        businesses=await self.browser.snapshot_businesses()
+        self.assertEqual(businesses,{BM:"Fixture business"})
+        self.assertEqual(self.browser._last_business_inventory_diagnostic["rejected_personal_scope_ids"],[UID])
+
+    async def test_native_snapshot_recovers_cold_details_without_a_graphql_inventory(self):
+        await self.fixture(wizard=False)
+        html=await self.page.content()
+        await self.page.unroute("**/*")
+        async def fixture_route(route):
+            if route.request.is_navigation_request():
+                await route.fulfill(status=200,content_type="text/html",body=html)
+            else:
+                await route.abort()
+        await self.page.route("**/*",fixture_route)
+        self.browser._activate_ad_account_settings_section=AsyncMock(return_value=False)
+        result=await self.browser.snapshot_ad_accounts_for_business(
+            business_id=BM,timeout_seconds=5.0,expected_account_name=NAME)
+        self.assertTrue(result["ready"])
+        self.assertFalse(result["confirmed_empty"])
+        self.assertTrue(result["accounts_partial"])
+        self.assertEqual(result["accounts"][0]["id"],"act_"+RK)
+        self.assertEqual(result["accounts"][0]["business_id"],BM)
+        self.assertEqual(result["source"],"business_settings_details_live_inventory")
+
 class CreatedDetailsResumeTests(unittest.IsolatedAsyncioTestCase):
     async def run_saved(self, *, verified):
         saved={"phase":"CREATE_NOT_SUBMITTED","business_id":BM,"account_name":NAME,

@@ -6664,6 +6664,16 @@ class FacebookBusinessBrowser:
         if self.page is None:
             await self.open()
 
+        personal_scope_id = _digits((getattr(self.context, "cookies", {}) or {}).get("c_user"))
+        rejected_personal_scope_ids: set[str] = set()
+
+        def portfolio_candidate(value: Any) -> str:
+            candidate = _digits(value)
+            if candidate and personal_scope_id and candidate == personal_scope_id:
+                rejected_personal_scope_ids.add(candidate)
+                return ""
+            return candidate
+
         network_rows: dict[str, str] = {}
         query_diagnostics: list[dict[str, Any]] = []
         response_tasks: set[asyncio.Task[Any]] = set()
@@ -6671,7 +6681,8 @@ class FacebookBusinessBrowser:
         def inspect_request(request: Any) -> None:
             try:
                 meta = _request_graphql_meta(request)
-                live_business_ids = _business_ids_from_private_selector_request(meta)
+                live_business_ids = {candidate for value in _business_ids_from_private_selector_request(meta)
+                    if (candidate := portfolio_candidate(value))}
                 if not live_business_ids:
                     return
                 for business_id in sorted(live_business_ids):
@@ -6894,7 +6905,7 @@ class FacebookBusinessBrowser:
                     del query_diagnostics[:-24]
 
                 for row in rows:
-                    business_id = _digits(row.get("id"))
+                    business_id = portfolio_candidate(row.get("id"))
                     if not business_id:
                         continue
                     business_name = _clean(row.get("name"))
@@ -6908,8 +6919,9 @@ class FacebookBusinessBrowser:
                 # viewer payload while keeping the exact target business_id in
                 # read-only query variables. That explicit key is private
                 # Business Suite evidence too; use it as an ID-only fallback.
-                for business_id in request_business_ids:
-                    network_rows.setdefault(business_id, "")
+                for value in request_business_ids:
+                    if business_id := portfolio_candidate(value):
+                        network_rows.setdefault(business_id, "")
             except Exception as exc:
                 query_diagnostics.append(
                     {
@@ -6957,7 +6969,10 @@ class FacebookBusinessBrowser:
                     continue
                 href = str(row.get("href") or "")
                 text = _clean(row.get("text"))
-                for business_id in _business_ids_from_text(href):
+                for value in _business_ids_from_text(href):
+                    business_id = portfolio_candidate(value)
+                    if not business_id:
+                        continue
                     if (
                         business_id not in dom_output
                         or (text and not dom_output[business_id])
@@ -6968,10 +6983,9 @@ class FacebookBusinessBrowser:
                 content = await self.page.content()
             except Exception:
                 content = ""
-            for business_id in _business_ids_from_text(content):
-                dom_output.setdefault(business_id, "")
-            for business_id in _business_ids_from_private_selector_text(content):
-                dom_output.setdefault(business_id, "")
+            for value in (_business_ids_from_text(content) | _business_ids_from_private_selector_text(content)):
+                if business_id := portfolio_candidate(value):
+                    dom_output.setdefault(business_id, "")
             return len(dom_output) - before
 
         async def collect_dom_businesses_bounded() -> int:
@@ -7390,10 +7404,12 @@ class FacebookBusinessBrowser:
                 and not bool(selector_probe.get("clicked"))
                 and not network_rows
                 and not dom_output
+                and not rejected_personal_scope_ids
             )
 
             self._last_business_inventory_diagnostic = {
                 "stage": "complete",
+                "rejected_personal_scope_ids": sorted(rejected_personal_scope_ids),
                 "source": (
                     "business_suite_private_graphql"
                     if network_rows
@@ -12165,7 +12181,11 @@ class FacebookBusinessBrowser:
         self.page.on("request", on_request)
         self.page.on("response", on_response)
         attempts: list[dict[str, Any]] = []
-        deadline = time.monotonic() + max(3.0, float(timeout_seconds))
+        overall_deadline = time.monotonic() + max(3.0, float(timeout_seconds))
+        # Reserve a bounded Details check instead of consuming the whole
+        # snapshot on a Relay query that may never hydrate.
+        deadline = overall_deadline - (3.5 if expected_account_name else 0.0)
+        deadline = max(time.monotonic() + 0.1, deadline)
         self._last_ad_account_section_diagnostic = {
             "stage": "inventory_start",
             "business_id": business,
@@ -12537,7 +12557,8 @@ class FacebookBusinessBrowser:
             if expected_account_name:
                 try:
                     recovered_selected = await asyncio.wait_for(
-                        self._recover_selected_ad_account_inventory(business, expected_account_name, accounts), timeout=6.5,
+                        self._recover_selected_ad_account_inventory(business, expected_account_name, accounts),
+                        timeout=max(0.1, min(6.5, overall_deadline - time.monotonic())),
                     )
                 except Exception as exc:
                     diagnostics.append({'source':'selected_account_recovery','error':type(exc).__name__})

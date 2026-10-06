@@ -1377,6 +1377,8 @@ def _business_inventory_confirmed_empty(diagnostic: object) -> bool:
     """Return True only when live Meta inventory explicitly observed zero BMs."""
     if not isinstance(diagnostic,dict):
         return False
+    if diagnostic.get('rejected_personal_scope_ids'):
+        return False
     if str(diagnostic.get('stage') or '') != 'complete':
         return False
     if diagnostic.get('business_inventory_confirmed_empty') is True:
@@ -1386,6 +1388,8 @@ def _business_inventory_confirmed_empty(diagnostic: object) -> bool:
         return False
     for row in queries:
         if not isinstance(row,dict):
+            continue
+        if row.get('phase') == 'selector_request':
             continue
         friendly=str(row.get('friendly_name') or '').casefold()
         if not friendly:
@@ -1620,6 +1624,13 @@ async def profile_live_inventory(
         )
     }
     expected_account_names=_sync_expected_account_names(clean_profile,confirmed_bindings)
+    name_hint_reader=getattr(pool.provisioning_state,'ad_account_name_hints_for_profile',None)
+    if callable(name_hint_reader):
+        checkpoint_names=await name_hint_reader(clean_profile)
+        if isinstance(checkpoint_names,dict):
+            for business,name in checkpoint_names.items():
+                if str(business).isdigit() and str(business)!=personal_scope_id and isinstance(name,str) and name.strip() and len(name)<=200:
+                    expected_account_names.setdefault(str(business),name.strip())
     latest_business_id=str(
         (latest_entities or {}).get('business_id') or ''
     ).strip()
@@ -2111,6 +2122,14 @@ async def profile_live_inventory(
                         '_last_business_inventory_diagnostic',
                         {},
                     )
+                    # Personal NorthStar scopes can arrive from request metadata
+                    # even when historical hints were already filtered.
+                    if personal_scope_id and personal_scope_id in business_map:
+                        business_map=dict(business_map)
+                        business_map.pop(personal_scope_id,None)
+                        business_diag={**(business_diag or {}),
+                            'rejected_personal_scope_ids':[personal_scope_id]}
+                        log.warning('live inventory profile=%s excluded personal Facebook scope from Business discovery',clean_profile)
                     discovery_source=str(
                         (business_diag or {}).get('source')
                         or 'business_suite_private_inventory'
@@ -2272,7 +2291,7 @@ async def profile_live_inventory(
                     # the authoritative settings inventory and canonical ID.
                     settings=await hard_deadline(
                         browser.snapshot_ad_accounts_for_business(
-                            business_id=business_key, timeout_seconds=8.0,
+                            business_id=business_key, timeout_seconds=12.0 if expected_account_names.get(business_key) else 8.0,
                             expected_account_name=expected_account_names.get(business_key,''),
                         ), budget(16.0),
                     )
@@ -2352,7 +2371,7 @@ async def profile_live_inventory(
                         settings_inventory=await hard_deadline(
                             browser.snapshot_ad_accounts_for_business(
                                 business_id=str(business_id),
-                                timeout_seconds=8.0,
+                                timeout_seconds=12.0 if expected_account_names.get(str(business_id)) else 8.0,
                                 expected_account_name=expected_account_names.get(str(business_id),''),
                             ),
                             rk_settings_timeout,

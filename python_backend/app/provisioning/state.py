@@ -521,6 +521,31 @@ class ProvisioningStateStore:
 
         return {}
 
+    async def ad_account_name_hints_for_profile(self, profile_id: str) -> dict[str, str]:
+        """Names from checkpoints are read-only lookup hints, never inventory proof."""
+        return await asyncio.to_thread(self._ad_account_name_hints_for_profile_sync, profile_id)
+
+    def _ad_account_name_hints_for_profile_sync(self, profile_id: str) -> dict[str, str]:
+        with self._connect() as con:
+            rows = con.execute(
+                "SELECT result_json FROM provisioning_steps WHERE profile_id=? AND step=? "
+                "AND result_json IS NOT NULL ORDER BY updated_at DESC,rowid DESC LIMIT 250",
+                (str(profile_id), ProvisioningStep.AD_ACCOUNT.value),
+            ).fetchall()
+        names: dict[str, str] = {}
+        for row in rows:
+            try:
+                result = json.loads(str(row["result_json"] or "{}"))
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(result, dict):
+                continue
+            business = str(result.get("business_id") or "").strip()
+            name = str(result.get("account_name") or result.get("name") or "").strip()
+            if business.isdigit() and name and len(name) <= 200:
+                names.setdefault(business, name)
+        return names
+
     async def latest_profile_entities(
         self,
         profile_id: str,
