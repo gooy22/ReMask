@@ -3394,6 +3394,24 @@ class LiveInventoryBusinessDiscoveryBudgetRegressionTests(unittest.TestCase):
         window = source[max(0, call_pos - 700): call_pos + 700]
         self.assertNotIn("timeout=18.0", window)
 
+    def test_business_discovery_timeout_without_hints_is_nonfatal(self):
+        main_path = Path(__file__).resolve().parents[1] / "main.py"
+        source = main_path.read_text(encoding="utf-8")
+        marker = source.index("REMASK_DISCOVERY_TIMEOUT_HINT_FALLBACK_V2")
+        window = source[marker:marker + 1500]
+        self.assertIn(
+            "business_suite_discovery_timeout_inconclusive",
+            window,
+        )
+        self.assertIn(
+            "business_inventory_confirmed_empty=False",
+            window,
+        )
+        self.assertNotIn(
+            "LIVE_INVENTORY_TIMEOUT:business_discovery",
+            window,
+        )
+
     def test_auth_redirect_during_business_discovery_falls_back_to_confirmed_bms(self):
         main_path = Path(__file__).resolve().parents[1] / "main.py"
         source = main_path.read_text(encoding="utf-8")
@@ -3668,13 +3686,21 @@ class BrowserLiveInventoryNavigationRegressionTests(unittest.TestCase):
 
 
 class BrowserBusinessDiscoveryBootstrapRegressionTests(unittest.TestCase):
-    def test_business_discovery_has_ads_manager_bootstrap_without_hints(self):
+    def test_business_discovery_prefers_overview_before_heavy_ads_fallback(self):
         source = inspect.getsource(
             FacebookBusinessBrowser.snapshot_businesses
         )
+        overview_pos = source.index('"stage": "overview_navigation"')
+        ads_pos = source.index('"stage": "ads_manager_bootstrap"')
+        self.assertLess(overview_pos, ads_pos)
+        self.assertIn("REMASK_BUSINESS_DISCOVERY_OVERVIEW_FIRST_V1", source)
+        self.assertIn("REMASK_BUSINESS_DISCOVERY_ADS_LAST_RESORT_V1", source)
         self.assertIn("self.ADS_MANAGER_URL", source)
-        self.assertIn('"stage": "ads_manager_bootstrap"', source)
         self.assertIn("timeout_seconds=6.0", source)
+        self.assertIn(
+            'and not bool(overview_attempt.get("loaded"))',
+            source,
+        )
         self.assertNotIn("await self._goto(self.HOME_URL)", source)
 
 
