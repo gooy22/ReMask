@@ -22,6 +22,25 @@ class LiveSyncContractTests(unittest.TestCase):
                 {"10001"},
             )
         )
+    def test_authenticated_home_business_gate_can_prove_empty_inventory(self):
+        self.assertTrue(api._business_inventory_confirmed_empty({
+            "stage": "complete",
+            "business_inventory_confirmed_empty": True,
+            "queries": [],
+        }))
+        self.assertFalse(api._business_inventory_confirmed_empty({
+            "stage": "overview_business_login_gate",
+            "business_inventory_confirmed_empty": True,
+            "queries": [],
+        }))
+
+        source = inspect.getsource(FacebookBusinessBrowser.snapshot_businesses)
+        self.assertIn("REMASK_AUTH_HOME_EMPTY_BUSINESS_GATE_V1", source)
+        self.assertIn("authenticated_home_loaded", source)
+        self.assertIn("business_login_gate", source)
+        self.assertIn("BUSINESS_LOGIN_GATE_AFTER_AUTHENTICATED_HOME", source)
+        self.assertIn("and not business_login_gate", source)
+
     def test_known_page_hints_are_revalidated_before_global_discovery(self):
         signature = inspect.signature(api.profile_live_inventory)
         self.assertIn("page_hints", signature.parameters)
