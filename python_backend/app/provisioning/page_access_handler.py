@@ -1,4 +1,4 @@
-"""Prepare one shared Page after the RK creation checkpoint, then prove Identity."""
+"""Add the existing Page and prove full profile control after the RK checkpoint."""
 from __future__ import annotations
 import asyncio
 import logging

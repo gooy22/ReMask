@@ -74,7 +74,7 @@ Add an existing Page</button><button onclick="window.partialRequests++">Request 
  <input role="combobox" aria-controls="results" placeholder="Facebook Page name or URL" oninput="search()">
  <div role="listbox" id="results" hidden>
  <button role="option" data-page-id="__PAGE__" onclick="selectPage()">
- <span>PrgssTeam</span><a href="https://www.facebook.com/profile.php?id=__ACTOR__">Page profile</a></button></div>
+ <span>PrgssTeam</span><a onclick="event.preventDefault()" href="https://www.facebook.com/profile.php?id=__ACTOR__">Page profile</a></button></div>
  <button id="next" hidden onclick="reviewPage()">Next</button></div>
  <div id="review" hidden><h2>Add Page to business portfolio</h2>
  <label><input type="checkbox">I agree to the terms</label><button onclick="claim()">Add Page</button></div>
@@ -143,7 +143,16 @@ class ExistingPageFullControlChromiumTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_partial_partner_access_is_upgraded_via_existing_page_and_full_control(self):
         await self.fixture()
-        result=await self.run_flow({"phase":"TARGET_PAGE_ACCESS_OWNER_CONFIRMED"})
+        try:
+            result=await self.run_flow({"phase":"TARGET_PAGE_ACCESS_OWNER_CONFIRMED"})
+        except BrowserBusinessError as exc:
+            self.fail(str(exc)+" FIXTURE "+str({
+                "url":self.page.url,
+                "body":await self.page.locator("body").inner_text(),
+                "state":await self.page.evaluate("({owned:window.owned,claims:window.claims,find:document.getElementById('find')?.hidden,review:document.getElementById('review')?.hidden,next:document.getElementById('next')?.hidden})"),
+                "selection":getattr(self.browser,"_last_page_search_diagnostic",{}),
+                "checkpoints":self.patches,"errors":self.js_errors,
+            }))
         self.assertTrue(result["page_owned_by_business"])
         self.assertTrue(result["operator_full_control_verified"])
         self.assertEqual(await self.counts(),{"claims":1,"assigns":1,"partial":0})
@@ -254,3 +263,9 @@ class ExistingPageFullControlChromiumTests(unittest.IsolatedAsyncioTestCase):
             business_id=BM,page_id=PAGE,require_owned=True)
         self.assertTrue(result)
         self.assertIn("business_id="+BM,self.page.url)
+
+    async def test_pending_assignment_of_another_page_cannot_block_this_exact_page(self):
+        await self.fixture(owned=True)
+        await self.run_flow({"phase":"TARGET_PAGE_OPERATOR_FULL_ASSIGN_SUBMITTED","access_mode":MODE,
+            "page_id":"111111111","business_id":BM})
+        self.assertEqual(await self.counts(),{"claims":0,"assigns":1,"partial":0})

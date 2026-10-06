@@ -133,7 +133,9 @@ async def ensure_existing_page_full_control(browser, config, business, checkpoin
     if not uid.isdigit():
         raise BrowserBusinessError("PAGE_OPERATOR_IDENTITY_UNAVAILABLE",
             "The authenticated operator's exact identity is unavailable",retryable=True)
-    full_prior = prior.get("access_mode")==MODE
+    full_prior = (prior.get("access_mode")==MODE
+        and str(prior.get("page_id") or page_id)==page_id
+        and str(prior.get("business_id") or business)==business)
     log.info("PAGE_FULL_CONTROL start page=%s business=%s phase=%s mode=%s",
         page_id,business,str(prior.get("phase") or ""),MODE)
     owned = await browser.verify_page_attached(
