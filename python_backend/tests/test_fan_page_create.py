@@ -58,10 +58,10 @@ class FanPageProvisioningStructureTests(unittest.TestCase):
         source = inspect.getsource(FacebookBusinessBrowser.create_fan_page)
         for marker in (
             "seite konnte nicht erstellt werden",
-            "impossible de creer la page",
-            "khong th? t?o trang",
-            "??? ???? ????? ?? ???",
-            "??? ???? ??? ??????",
+            "impossible de créer la page",
+            "không thể tạo trang",
+            "पेज नहीं बनाया जा सका",
+            "পেজ তৈরি করা যায়নি",
         ):
             self.assertIn(marker, source)
 
