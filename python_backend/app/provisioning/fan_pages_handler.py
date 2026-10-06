@@ -1117,11 +1117,12 @@ async def fan_pages_handler(
                 click = diagnostic.get("click_meta") or {}
                 log.info(
                     "fan page submit uncertain profile=%s item=%s stage=%s "
-                    "click_attempted=%s click_error_class=%s confirmation=%s",
+                    "click_attempted=%s click_error_class=%s confirmation=%s create_response=%s",
                     profile_id, item_id, diagnostic.get("stage", ""),
                     click.get("attempted", False),
                     _clean(click.get("error")).split(":", 1)[0][:100],
                     json.dumps(diagnostic.get("confirmation_checks") or []),
+                    json.dumps(diagnostic.get("create_response_checks") or []),
                 )
 
                 await provisioning_state.checkpoint(

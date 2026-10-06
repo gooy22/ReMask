@@ -144,15 +144,21 @@ class FanPageCreateCapture:
             if len(raw) > 2_000_000:
                 self.diagnostics.append({"result": "response_too_large"})
                 return
+            payload = self.decode(raw)
             page = confirmed_created_page(
-                meta, self.decode(raw), actor_id=self.actor_id,
+                meta, payload, actor_id=self.actor_id,
                 page_name=self.page_name, before_ids=self.before_ids,
             )
             if page:
                 self.results[page["id"]] = page
                 self.diagnostics.append({"result": "confirmed", "page_id": page["id"]})
             else:
-                self.diagnostics.append({"result": "unconfirmed"})
+                chunks = payload if isinstance(payload, list) else [payload]
+                roots = sorted({str(key) for chunk in chunks if isinstance(chunk, dict)
+                                and isinstance(chunk.get("data"), dict) for key in chunk["data"]})
+                self.diagnostics.append({"result": "unconfirmed",
+                    "operation": str(meta.get("friendly_name") or "")[:120],
+                    "response_roots": ",".join(roots[:12])[:300]})
         except Exception as exc:
             self.diagnostics.append({"result": "unavailable", "code": exc.__class__.__name__})
 
