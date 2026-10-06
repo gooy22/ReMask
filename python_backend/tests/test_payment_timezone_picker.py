@@ -174,6 +174,7 @@ class MetaTimezoneChromiumTests(unittest.IsolatedAsyncioTestCase):
     async def full_binding_fixture(self, target, *, observed=None, rendered_after_save=None):
         url = f"https://business.facebook.com/latest/settings/ad_accounts/?business_id={BUSINESS}"
         html = f"""
+            <meta charset="utf-8">
             <div role="row"><button>Fixture RK</button><a>Details</a></div>
             <div id="visible-account">Selected ad account: {target}</div>
             <button id="add" onclick="document.getElementById('setup').hidden=false;window.adds++">Add payment method</button>
@@ -203,7 +204,7 @@ class MetaTimezoneChromiumTests(unittest.IsolatedAsyncioTestCase):
             </form>
             <div id="methods"></div><script>window.adds=0;window.opens=0;window.saves=0;window.settings=[];</script>
         """
-        await self.page.route(url, lambda route: route.fulfill(status=200, content_type="text/html", body=html))
+        await self.page.route(url, lambda route: route.fulfill(status=200, content_type="text/html; charset=utf-8", body=html))
         async def goto(address, **kwargs):
             await self.page.goto(address, wait_until="domcontentloaded")
         return SimpleNamespace(page=self.page, profile_id="fixture", _goto=goto,
