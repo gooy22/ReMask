@@ -196,6 +196,11 @@ vm.createContext(sandbox);vm.runInContext(fs.readFileSync('railway-payment-inspe
   assert.deepEqual(requests.map(r=>r.body.action),['bind','reconcile'],
     'an unverified Meta submission must be rechecked once and stop the remaining batch');
   assert.ok(uncertainBatch.children.some(child=>String(child.textContent||'').includes('пакет остановлен')));
+  requests=[];bindResult={status:'SUBMITTED_UNVERIFIED',code:'CARD_FLOW_TIMEOUT',submitted:null};reviewResult=null;
+  const unknownBoundaryBatch=element();await sandbox.bindPaymentCard(ten.slice(0,3),card,'123',unknownBoundaryBatch);
+  assert.deepEqual(requests.map(r=>r.body.action),['bind','reconcile'],
+    'an unknown Save boundary must be reconciled once and stop the remaining batch');
+  assert.ok(unknownBoundaryBatch.children.some(child=>String(child.textContent||'').includes('пакет остановлен')));
   sandbox.paymentCardResumeWrite(rows,card.id);
   const persisted=[...resumeLocalStorage.values()][0];
   assert.ok(!persisted.includes('4111111111111111'));assert.ok(!persisted.includes('cvv'));
