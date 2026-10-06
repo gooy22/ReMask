@@ -686,6 +686,9 @@ class ProvisioningStateStore:
             if not isinstance(result, dict):
                 continue
             active = str(result.get("active_page_name") or "").strip().casefold()
+            tombstone = str(
+                result.get("tombstone_page_name") or ""
+            ).strip().casefold()
             result_pages = [
                 *(result.get("pages") if isinstance(result.get("pages"), list) else []),
                 *(result.get("created_pages") if isinstance(result.get("created_pages"), list) else []),
@@ -696,13 +699,15 @@ class ProvisioningStateStore:
                 and str(page.get("id") or page.get("page_id") or "").strip().isdigit()
                 for page in result_pages
             )
-            if active != target and not confirmed_same_name:
+            if active != target and tombstone != target and not confirmed_same_name:
                 continue
 
             phase = str(result.get("phase") or "").strip().upper()
             resume_from = str(result.get("resume_from") or "").strip().upper()
 
-            if confirmed_same_name or phase in {"PAGE_CREATED", "CREATE_NOT_SUBMITTED"}:
+            if confirmed_same_name or (
+                phase == "CREATE_NOT_SUBMITTED" and tombstone == target
+            ) or phase == "PAGE_CREATED":
                 return {}
 
             if fan_page_pending_never_submitted(result):
