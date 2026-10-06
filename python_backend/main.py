@@ -2159,20 +2159,23 @@ async def profile_live_inventory(
                         await browser.close()
                     except Exception:
                         pass
-                    # REMASK_DISCOVERY_TIMEOUT_HINT_FALLBACK_V1
-                    # A timed-out selector must not erase the ability to
-                    # revalidate known candidates. The browser object can reopen
-                    # itself on the next probe after close().
+                    # REMASK_DISCOVERY_TIMEOUT_HINT_FALLBACK_V2
+                    # Discovery is read-only. A cold/changed Meta selector must
+                    # not turn the whole profile Sync into HTTP 504. Revalidate
+                    # known BMs when available; otherwise return an inconclusive
+                    # live result and preserve the last confirmed Workspace
+                    # snapshot. Never claim an empty inventory from a timeout.
+                    business_inventory_confirmed_empty=False
                     if known_business_ids:
                         warnings.append(
                             'Business discovery timed out; checking known BM hints live'
                         )
                         discovery_source='business_suite_discovery_timeout_hint_fallback'
                     else:
-                        raise HTTPException(
-                            status_code=504,
-                            detail='LIVE_INVENTORY_TIMEOUT:business_discovery',
-                        ) from exc
+                        warnings.append(
+                            'Business discovery timed out; live BM/RK state was not changed'
+                        )
+                        discovery_source='business_suite_discovery_timeout_inconclusive'
                 except BrowserBusinessError as exc:
                     # A redirect while loading the aggregate Business Suite
                     # selector must not abort the profile sync before we have
