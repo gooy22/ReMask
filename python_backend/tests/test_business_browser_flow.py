@@ -94,7 +94,7 @@ class FanPageCategorySelectionRegressionTests(unittest.TestCase):
         source = inspect.getsource(FacebookBusinessBrowser.create_fan_page)
         self.assertIn("for _submit_probe in range(9)", source)
         self.assertIn("self.FAN_PAGE_CREATE_NAMES", source)
-        self.assertIn('"Create"', repr(FacebookBusinessBrowser.FAN_PAGE_CREATE_NAMES))
+        self.assertIn("Create", FacebookBusinessBrowser.FAN_PAGE_CREATE_NAMES)
 
 class PrivateBusinessSelectorTextTests(unittest.TestCase):
     def test_selector_serialized_state_extracts_first_level_business(self):
