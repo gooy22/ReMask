@@ -92,12 +92,14 @@ class CardBrowserTests(unittest.IsolatedAsyncioTestCase):
             asset=await resolve_payment_asset('Fixture',ID,state)
         self.assertEqual(asset,{'business_id':'987654321','business_asset_id':'','name':'Created RK'})
         state.confirmed_ad_account_bindings_for_profile.assert_awaited_once_with('Fixture')
-        with patch('app.payment_inspection.selected_payment_asset',return_value={'business_id':'987654321','business_asset_id':'','name':''}):
-            merged=await resolve_payment_asset('Fixture',ID,None,{'business_id':'987654321','name':'Workspace RK'})
+        with patch('app.payment_inspection.selected_payment_asset',return_value={'business_id':'987654321','business_asset_id':'111111111','name':'Old snapshot RK'}):
+            merged=await resolve_payment_asset('Fixture',ID,None,{'business_id':'987654321','business_asset_id':'222222222','name':'Workspace RK'})
         self.assertEqual(merged['name'],'Workspace RK')
-        with patch('app.payment_inspection.selected_payment_asset',return_value={'business_id':'987654321','business_asset_id':'','name':''}):
-            merged_confirmed=await resolve_payment_asset('Fixture',ID,state,{'business_id':'987654321','name':'Workspace RK'})
-        self.assertEqual(merged_confirmed['name'],'Created RK')
+        self.assertEqual(merged['business_asset_id'],'222222222')
+        with patch('app.payment_inspection.selected_payment_asset',return_value={'business_id':'987654321','business_asset_id':'111111111','name':'Old snapshot RK'}):
+            merged_confirmed=await resolve_payment_asset('Fixture',ID,state,{'business_id':'987654321','business_asset_id':'222222222','name':'Workspace RK'})
+        self.assertEqual(merged_confirmed['name'],'Workspace RK')
+        self.assertEqual(merged_confirmed['business_asset_id'],'222222222')
         with patch('app.payment_inspection.selected_payment_asset',return_value={'business_id':'555555555'}):
             self.assertEqual(await resolve_payment_asset('Fixture',ID,state),{})
         state.confirmed_ad_account_bindings_for_profile=AsyncMock(return_value=[])
