@@ -65,6 +65,8 @@ class FacebookCookieConsentRegressionTests(unittest.TestCase):
         self.assertIn("user_cookie_choice", helper)
         self.assertIn("Decline optional cookies", helper)
         self.assertIn("Only allow essential cookies", helper)
+        self.assertIn('data-cookiebanner="accept_only_essential_button"', helper)
+        self.assertIn('data-cookiebanner="accept_button"', helper)
         self.assertIn("FACEBOOK_COOKIE_CONSENT_REQUIRED", helper)
         self.assertIn(
             "await self._resolve_facebook_cookie_consent(return_url=url)",
@@ -78,12 +80,21 @@ class FacebookCookieConsentRegressionTests(unittest.TestCase):
 class FanPageCategorySelectionRegressionTests(unittest.TestCase):
     def test_category_picker_keeps_locale_tolerant_option_fallback(self) -> None:
         source = inspect.getsource(FacebookBusinessBrowser._fill_fan_page_category)
-        self.assertIn("REMASK_FAN_PAGE_CATEGORY_TYPEAHEAD_COMPAT_V2", source)
+        self.assertIn("REMASK_FAN_PAGE_CATEGORY_TYPEAHEAD_COMPAT_V3", source)
+        self.assertIn("deadline = time.monotonic() + 8.0", source)
         self.assertIn("fallback = None", source)
         self.assertIn("chosen = exact or fallback", source)
         self.assertIn('await field.press("ArrowDown")', source)
         self.assertIn('await field.press("Enter")', source)
+        self.assertIn("if await control.is_visible() and await control.is_enabled()", source)
+        self.assertIn("return False", source)
         self.assertNotIn('get_by_text(_clean(category),exact=True)', source)
+
+    def test_fan_page_submit_waits_for_enabled_create_control(self) -> None:
+        source = inspect.getsource(FacebookBusinessBrowser.create_fan_page)
+        self.assertIn("for _submit_probe in range(9)", source)
+        self.assertIn("self.FAN_PAGE_CREATE_NAMES", source)
+        self.assertIn('"Create"', repr(FacebookBusinessBrowser.FAN_PAGE_CREATE_NAMES))
 
 class PrivateBusinessSelectorTextTests(unittest.TestCase):
     def test_selector_serialized_state_extracts_first_level_business(self):
