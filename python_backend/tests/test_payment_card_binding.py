@@ -199,6 +199,26 @@ class CardBrowserTests(unittest.IsolatedAsyncioTestCase):
             result=await configure_payment_account(browser,setup)
         self.assertEqual(result['code'],'PAYMENT_TERMS_CONFIRMATION_REQUIRED');choice.assert_not_awaited()
 
+    async def test_preexisting_mask_collision_blocks_before_card_fields_or_save(self):
+        controls=[]
+        fields=[]
+        for kind in ('number','expiry','cvv','holder'):
+            control=SimpleNamespace(fill=AsyncMock())
+            controls.append(control)
+            fields.append({'kind':kind,'required':kind in {'number','expiry','cvv'},'type':'text','tag':'input','control':control})
+        prepared={'status':'FORM_READY','code':'CARD_FORM_READY','fields':[],
+            '_fields':fields,'_preexisting_methods':[{'type':'Visa','last4':'1111'}]}
+        browser=SimpleNamespace(profile_id='Fixture',page=SimpleNamespace())
+        with patch('app.payment_card_binding._open_card_form',AsyncMock(return_value=prepared)), \
+             patch('app.payment_card_binding._unique_visible',AsyncMock()) as save:
+            result=await payment_card_flow(browser,ID,{'business_id':'987654321','name':'Fixture RK'},
+                operation='bind',card=CARD,cvv='123')
+        self.assertEqual(result['status'],'BLOCKED')
+        self.assertEqual(result['code'],'CARD_MASK_COLLISION_PREEXISTING')
+        self.assertFalse(result['submitted'])
+        save.assert_not_awaited()
+        for control in controls:control.fill.assert_not_awaited()
+
     async def test_initial_billing_setup_stops_before_fields_or_next_confirmation(self):
         rows=SimpleNamespace(wait_for=AsyncMock(),count=AsyncMock(return_value=1),inner_text=AsyncMock(return_value='Fixture RK\nActive'))
         rows.filter=lambda **kw:rows
