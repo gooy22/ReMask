@@ -27,6 +27,7 @@ class PageDiscoveryResult:
     source: str
     candidate: DocIdCandidate | None = None
     diagnostics: list[str] = field(default_factory=list)
+    inventory_complete: bool = False
 
 
 def _clean(value: Any) -> str:
@@ -263,6 +264,54 @@ def _errors(payload: dict[str, Any]) -> list[Any]:
     return []
 
 
+def _private_page_inventory_complete(payload: dict[str, Any], actor_id: str) -> bool:
+    """Only a fully read actor-admin connection can establish absence."""
+    if _errors(payload):
+        return False
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return False
+
+    def valid_page(row: Any) -> bool:
+        if _normalize_page(row) is None:
+            return False
+        typename = _clean(row.get("__typename") or row.get("type")).lower()
+        return not typename or ("page" in typename and "business" not in typename)
+
+    def complete(value: Any) -> bool:
+        if isinstance(value, list):
+            return all(valid_page(row) for row in value)
+        if not isinstance(value, dict):
+            return False
+        page_info = value.get("page_info") or value.get("pageInfo")
+        if not isinstance(page_info, dict) or (
+            page_info.get("has_next_page", page_info.get("hasNextPage")) is not False
+        ):
+            return False
+        if "edges" in value:
+            edges = value["edges"]
+            return isinstance(edges, list) and all(
+                isinstance(edge, dict) and valid_page(edge.get("node"))
+                for edge in edges
+            )
+        nodes = value.get("nodes")
+        return isinstance(nodes, list) and all(valid_page(row) for row in nodes)
+
+    def walk(value: Any) -> bool:
+        if isinstance(value, list):
+            return any(walk(child) for child in value)
+        if not isinstance(value, dict):
+            return False
+        identity = _clean(value.get("id"))
+        if identity and identity != actor_id:
+            return False
+        if "pages_can_administer" in value:
+            return complete(value["pages_can_administer"])
+        return any(walk(child) for child in value.values())
+
+    return walk(data)
+
+
 def business_page_relation_proven(payload: Any, business_id: str, page_id: str, *, request_scoped: bool = False) -> bool:
     """Confirm an exact asset relationship; unrelated Page occurrences fail."""
     business, page = str(business_id), str(page_id)
@@ -457,6 +506,7 @@ async def list_pages_via_private_graphql(
             continue
 
         pages = _extract_known_page_lists(response)
+        inventory_complete = _private_page_inventory_complete(response, actor_id)
 
         if pages:
             record_result(
@@ -470,6 +520,7 @@ async def list_pages_via_private_graphql(
                 source="facebook_web_graphql",
                 candidate=candidate,
                 diagnostics=diagnostics,
+                inventory_complete=inventory_complete,
             )
 
         if _errors(response) and _looks_stale(response):
@@ -487,9 +538,9 @@ async def list_pages_via_private_graphql(
             diagnostics.append(reason)
             continue
 
-        # This query successfully executed and authoritatively returned no
-        # administered Pages. Since this is a read-only operation, preserve the
-        # result instead of inventing IDs from unrelated response objects.
+        # A generic data object, a null connection or a paginated response is
+        # not proof of absence. Preserve it for Sync, but expose completeness
+        # separately so CREATE reconciliation cannot release a duplicate guard.
         if isinstance(response.get("data"), dict):
             record_result(
                 "LIST_PAGES",
@@ -502,6 +553,7 @@ async def list_pages_via_private_graphql(
                 source="facebook_web_graphql",
                 candidate=candidate,
                 diagnostics=diagnostics,
+                inventory_complete=inventory_complete,
             )
 
         diagnostics.append(

@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 from typing import Any
 
 from ..facebook_business_browser import BrowserBusinessError, FacebookBusinessBrowser
-from ..facebook_page_discovery import PageDiscoveryError, list_pages_via_private_graphql
+from ..facebook_page_discovery import (
+    PageDiscoveryError, discover_pages_from_browser_html, list_pages_via_private_graphql,
+)
 from .models import ProvisioningError, ProvisioningStep
+
+log = logging.getLogger("remask.python_worker")
 
 
 def _clean(value: Any) -> str:
@@ -234,6 +239,8 @@ async def _reconcile_uncertain_page(
 ) -> tuple[dict[str, Any] | None, bool, list[dict[str, Any]]]:
     diagnostics: list[dict[str, Any]] = []
     authoritative_absent = 0
+    html_checked = False
+    target_seen = False
 
     for attempt in range(max(1, checks)):
         try:
@@ -242,6 +249,10 @@ async def _reconcile_uncertain_page(
                 rows,
                 page_name=page_name,
                 before_ids=before_ids,
+            )
+            target_seen = target_seen or any(
+                _clean(row.get("name")).casefold() == _clean(page_name).casefold()
+                for row in rows
             )
             diagnostics.append(
                 {
@@ -264,6 +275,8 @@ async def _reconcile_uncertain_page(
                     "message": str(exc)[:500],
                 }
             )
+            if exc.code in _AUTH_RECOVERY_CODES or exc.code == "FACEBOOK_TEMPORARILY_BLOCKED":
+                return None, False, diagnostics
         except Exception as exc:
             diagnostics.append(
                 {
@@ -275,13 +288,9 @@ async def _reconcile_uncertain_page(
                 }
             )
 
-        # REMASK_FP_UNCERTAIN_PRIVATE_LIST_PAGES_V1
-        # Your-Pages is a flaky SPA and an empty/partial render is not proof
-        # that CREATE did not land. The private LIST_PAGES query is different:
-        # its contract treats a successful data response as the authoritative
-        # set of Pages administered by the current actor, including an explicit
-        # empty set. Use repeated successful private reads to either recover the
-        # new Page or clear a stale submit-intent without risking a duplicate.
+        # Require complete actor-admin responses for absence. Partial lists and
+        # multiple same-name Pages must not authorize another CREATE.
+        facebook_web = None
         try:
             facebook_web = await session.facebook_web()
             private_result = await list_pages_via_private_graphql(facebook_web)
@@ -298,6 +307,7 @@ async def _reconcile_uncertain_page(
                     or "facebook_web_graphql",
                     "result": "ok",
                     "count": len(private_rows),
+                    "inventory_complete": getattr(private_result, "inventory_complete", False) is True,
                     "ids": [row["id"] for row in private_rows[:30]],
                     "diagnostics": list(private_result.diagnostics or [])[-6:],
                 }
@@ -305,10 +315,16 @@ async def _reconcile_uncertain_page(
             if private_found:
                 return private_found, False, diagnostics
 
-            authoritative_absent += 1
-            if authoritative_absent >= 2:
-                return None, True, diagnostics
+            target_seen = target_seen or any(
+                _clean(row.get("name")).casefold() == _clean(page_name).casefold()
+                for row in private_rows
+            )
+            if getattr(private_result, "inventory_complete", False) is True and not target_seen:
+                authoritative_absent += 1
+            else:
+                authoritative_absent = 0
         except PageDiscoveryError as exc:
+            authoritative_absent = 0
             diagnostics.append(
                 {
                     "attempt": attempt + 1,
@@ -319,6 +335,7 @@ async def _reconcile_uncertain_page(
                 }
             )
         except Exception as exc:
+            authoritative_absent = 0
             diagnostics.append(
                 {
                     "attempt": attempt + 1,
@@ -329,12 +346,63 @@ async def _reconcile_uncertain_page(
                 }
             )
 
+        # Recover positive ownership evidence from initial authenticated HTML
+        # when the Your-Pages SPA or persisted query is unavailable. This is
+        # read-only, uses the same cookies/proxy, and never establishes absence.
+        if facebook_web is not None and not html_checked:
+            html_checked = True
+            try:
+                html_result = await asyncio.wait_for(
+                    discover_pages_from_browser_html(facebook_web), timeout=15.0,
+                )
+                html_rows = _normalize_pages(html_result.pages)
+                html_found = _find_created_page(html_rows, page_name=page_name, before_ids=before_ids)
+                target_seen = target_seen or any(
+                    _clean(row.get("name")).casefold() == _clean(page_name).casefold()
+                    for row in html_rows
+                )
+                diagnostics.append({"attempt": attempt + 1, "source": "facebook_browser_pages_html",
+                    "result": "ok", "count": len(html_rows), "ids": [row["id"] for row in html_rows[:30]]})
+                if html_found:
+                    return html_found, False, diagnostics
+            except Exception as exc:
+                diagnostics.append({"attempt": attempt + 1, "source": "facebook_browser_pages_html",
+                    "result": "unavailable", "code": exc.__class__.__name__})
+
+        if authoritative_absent >= 2 and not target_seen:
+            return None, True, diagnostics
+
         if attempt < checks - 1:
             await asyncio.sleep(1.5)
 
     # UI-only absence remains non-authoritative. Without at least two successful
     # private LIST_PAGES reads, preserve duplicate protection.
     return None, False, diagnostics
+
+
+async def _record_reconciliation(provisioning_state: Any, item_id: str, profile_id: str,
+                                 scope_key: str, diagnostics: list[dict[str, Any]]) -> None:
+    summary = [{key: row[key] for key in ("attempt", "source", "result", "code", "count", "inventory_complete")
+                if key in row} for row in diagnostics]
+    await provisioning_state.checkpoint(item_id, profile_id, scope_key, ProvisioningStep.FAN_PAGES,
+        {"reconciliation": diagnostics, "activity": "FAN_PAGE_RECONCILIATION", "activity_at": int(time.time())})
+    # Common Pages use a separate durable item from the bulk job. Log that
+    # actual item here; bulk final-state logging cannot see its checkpoint.
+    log.info("fan page reconciliation profile=%s item=%s checks=%s", profile_id, item_id, json.dumps(summary))
+    terminal = next((row for row in diagnostics if row.get("code") in
+        _AUTH_RECOVERY_CODES | {"FACEBOOK_TEMPORARILY_BLOCKED"}), None)
+    if terminal:
+        raise ProvisioningError(terminal["code"],
+            "Facebook Page verification requires the profile session to be restored; the pending CREATE was retained.",
+            retryable=terminal["code"] in _AUTH_RECOVERY_CODES)
+
+
+def _reconciliation_failure_detail(diagnostics: list[dict[str, Any]]) -> str:
+    reasons = list(dict.fromkeys(
+        f"{row.get('source', 'inventory')}:{row.get('code') or ('INCOMPLETE' if row.get('inventory_complete') is False else row.get('result', 'UNKNOWN'))}"
+        for row in diagnostics
+    ))
+    return " Verification: " + "; ".join(reasons[:6]) if reasons else ""
 
 
 async def _attach_page_to_business(
@@ -692,6 +760,7 @@ async def fan_pages_handler(
             page_name=active_name,
             before_ids=before_ids,
         )
+        await _record_reconciliation(provisioning_state, item_id, profile_id, scope_key, diagnostics)
         if found:
             created_pages.append(
                 {
@@ -748,6 +817,7 @@ async def fan_pages_handler(
                     f"Previous Create Page for {active_name!r} may have reached "
                     "Facebook. Fresh Page inventory is still inconclusive, so "
                     "ReMask will not risk a duplicate."
+                    + _reconciliation_failure_detail(diagnostics)
                 ),
                 retryable=True,
             )
@@ -916,10 +986,12 @@ async def fan_pages_handler(
                 session, page_name=page_name,
                 before_ids={_clean(value) for value in previous_result.get("active_before_ids") or []},
             )
+            await _record_reconciliation(provisioning_state, item_id, profile_id, scope_key, diagnostics)
             if not found:
                 raise ProvisioningError(
                     "PAGE_CREATE_RESULT_UNKNOWN",
-                    f"Previous Page CREATE for {page_name!r} remains unconfirmed; another Job must not repeat it.",
+                    f"Previous Page CREATE for {page_name!r} remains unconfirmed; another Job must not repeat it."
+                    + _reconciliation_failure_detail(diagnostics),
                     retryable=True,
                 )
             created_pages.append({"id": found["id"], "name": page_name,
@@ -1058,6 +1130,7 @@ async def fan_pages_handler(
                     page_name=page_name,
                     before_ids=before_ids,
                 )
+                await _record_reconciliation(provisioning_state, item_id, profile_id, scope_key, diagnostics)
                 if found:
                     create_result = {
                         "page_id": found["id"],
@@ -1093,6 +1166,7 @@ async def fan_pages_handler(
                     (
                         f"Create Page for {page_name!r} has an ambiguous final "
                         "state. ReMask kept duplicate protection enabled."
+                        + _reconciliation_failure_detail(diagnostics)
                     ),
                     retryable=True,
                 ) from exc

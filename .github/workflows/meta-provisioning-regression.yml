@@ -1,7 +1,7 @@
 name: Meta provisioning regressions
 on:
   push:
-    branches: [main, fix/private-launch-catalog]
+    branches: [main, fix/private-launch-catalog, 'fix/fan-page-*']
     paths:
       - 'python_backend/**'
       - 'railway-python-worker-ui.js'

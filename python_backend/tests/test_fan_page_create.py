@@ -58,10 +58,10 @@ class FanPageProvisioningStructureTests(unittest.TestCase):
         source = inspect.getsource(FacebookBusinessBrowser.create_fan_page)
         for marker in (
             "seite konnte nicht erstellt werden",
-            "impossible de créer la page",
-            "không thể tạo trang",
-            "पेज नहीं बनाया जा सका",
-            "পেজ তৈরি করা যায়নি",
+            "impossible de creer la page",
+            "khong th? t?o trang",
+            "??? ???? ????? ?? ???",
+            "??? ???? ??? ??????",
         ):
             self.assertIn(marker, source)
 
@@ -517,6 +517,7 @@ class FanPageProvisioningRuntimeTests(unittest.IsolatedAsyncioTestCase):
             pages=[],
             source="facebook_web_graphql",
             diagnostics=[],
+            inventory_complete=True,
         )
         with patch(
             "app.provisioning.fan_pages_handler._fresh_page_inventory",

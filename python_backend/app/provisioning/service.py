@@ -301,9 +301,16 @@ class ProvisioningService:
                 return await ensure_common_page(session,params,self.state,self.profile_resolver)
             except ProvisioningError:
                 config=await AdvertisingPageStore.for_context(self.state,session.context).get()
-                saved=await self.state.step('workspace-common-page-'+config['owner_profile_id'],step)
+                creation_item=str(config.get('creation_item_id') or '')
+                legacy_item='workspace-common-page-'+str(config['owner_profile_id'])
+                if not creation_item:
+                    creation_item=('workspace-common-page-facebook-'+str(config.get('owner_facebook_uid'))
+                        if config.get('owner_facebook_uid') else legacy_item)
+                saved=await self.state.step(creation_item,step)
+                if saved is None and creation_item != legacy_item:
+                    saved=await self.state.step(legacy_item,step)
                 await self.state.checkpoint(kwargs['item_id'],kwargs['profile_id'],kwargs['scope_key'],step,
-                    (saved or {}).get('result') or {})
+                    {**((saved or {}).get('result') or {}),'common_page_creation_item_id':creation_item})
                 raise
         return await handler(session,params,snapshot,**kwargs)
 
