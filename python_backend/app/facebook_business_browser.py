@@ -20723,16 +20723,12 @@ timeout_seconds=4.0,
         }
 
     async def _click_exact_page_search_name(self, page_id: str, page_name: str) -> bool:
-        # Meta renders this autocomplete outside the dialog in a portal.
-        # Require the exact ID search and one exact saved Page name, never
-        # choose a generic first suggestion or a similarly named Page.
-        field=self.page.get_by_placeholder('Facebook Page name or URL',exact=True).filter(visible=True)
-        if await field.count()!=1: return False
-        if (await field.input_value()).strip()!=f'https://www.facebook.com/{page_id}': return False
-        result=self.page.get_by_text(page_name,exact=True).filter(visible=True)
-        if await result.count()!=1: return False
-        await result.click(timeout=3000)
-        return True
+        from .facebook_page_search import click_exact_page_search_result
+        selected, diagnostic = await click_exact_page_search_result(
+            self.page, getattr(self.context, "pages", None) or [], str(page_id), str(page_name),
+        )
+        self._last_page_search_diagnostic = diagnostic
+        return selected
 
     async def add_existing_page(
         self,

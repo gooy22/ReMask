@@ -7,6 +7,7 @@ from typing import Any
 
 from ..facebook_business_browser import FacebookBusinessBrowser, BrowserBusinessError, _cgroup_memory_snapshot_mb
 from ..page_access_inspection import inspect_browser_pages
+from ..facebook_page_search import page_lookup_url
 from .advertising_page import AdvertisingPageStore, _PAGE_LOCK, ensure_common_page
 from .models import ProvisioningError, ProvisioningStep
 from .ad_account_handler import _normalize_ad_account_id
@@ -217,11 +218,18 @@ async def _request_target_page_access(browser, config: dict, business: str, chec
         raise BrowserBusinessError('PAGE_SHARE_UI_UNAVAILABLE','Target BM did not expose Request shared access',retryable=True)
     if not await browser._fill_page_add_identifier(
         labels=('Facebook Page name or URL','Facebook Page URL or ID','Page URL or ID','Facebook Page'),
-        value=config['page_id']):
+        value=config['page_id'],
+        lookup_override=page_lookup_url(
+            getattr(getattr(browser,'context',None),'pages',None) or [], config['page_id'])):
         raise BrowserBusinessError('PAGE_SHARE_UI_UNAVAILABLE','Shared-access Page field is unavailable',retryable=True)
     await browser.page.wait_for_timeout(900)
     if not await browser._click_exact_page_search_name(config['page_id'],config['name']):
-        raise BrowserBusinessError('PAGE_SHARE_PAGE_UNVERIFIED','The exact shared Page search result is not unique',retryable=True)
+        selection=getattr(browser,'_last_page_search_diagnostic',{}) or {}
+        log.warning('PAGE_SHARE Page selection page=%s business=%s selection=%s',
+            config['page_id'],business,str(selection)[:3500])
+        raise BrowserBusinessError('PAGE_SHARE_PAGE_UNVERIFIED',
+            'The exact shared Page search result could not be selected: '+str(selection.get('reason') or 'unverified'),
+            retryable=True,diagnostic={'stage':'shared_page_search','page_search':selection})
     next_button=browser.page.get_by_role('button',name='Next',exact=True).filter(visible=True)
     if await _one(next_button):
         await next_button.click(timeout=3000)
