@@ -54,6 +54,27 @@ class LiveInventoryCancellationRegressionTests(unittest.TestCase):
         self.assertIn("final_act_ids[0] in expected_accounts", source)
 
 
+class FacebookCookieConsentRegressionTests(unittest.TestCase):
+    def test_navigation_resolves_cookie_choice_before_auth_and_ui_probe(self) -> None:
+        helper = inspect.getsource(
+            FacebookBusinessBrowser._resolve_facebook_cookie_consent
+        )
+        goto = inspect.getsource(FacebookBusinessBrowser._goto)
+        self.assertIn("REMASK_FACEBOOK_COOKIE_CONSENT_INTERSTITIAL_V1", helper)
+        self.assertIn("/privacy/consent", helper)
+        self.assertIn("user_cookie_choice", helper)
+        self.assertIn("Decline optional cookies", helper)
+        self.assertIn("Only allow essential cookies", helper)
+        self.assertIn("FACEBOOK_COOKIE_CONSENT_REQUIRED", helper)
+        self.assertIn(
+            "await self._resolve_facebook_cookie_consent(return_url=url)",
+            goto,
+        )
+        self.assertLess(
+            goto.index("await self._resolve_facebook_cookie_consent(return_url=url)"),
+            goto.index("await self._assert_authenticated("),
+        )
+
 class FanPageCategorySelectionRegressionTests(unittest.TestCase):
     def test_category_picker_keeps_locale_tolerant_option_fallback(self) -> None:
         source = inspect.getsource(FacebookBusinessBrowser._fill_fan_page_category)
