@@ -72,7 +72,9 @@ INSPECT);
             expect(!str_contains(json_encode($request),'fixture-forbidden'),'CVV passed to inspection');
         }
         $before=file_get_contents($path);
-        foreach(['SESSION_EXPIRED','CHECKPOINT_REQUIRED','TWO_FACTOR_REQUIRED','PROFILE_CONTEXT_ERROR','PAYMENT_INSPECTION_TIMEOUT','PAYMENT_BROWSER_CRASHED','sensitive fixture message','SESSION_EXPIRED sensitive fixture message'] as $detail){
+        foreach(['SESSION_EXPIRED','CHECKPOINT_REQUIRED','TWO_FACTOR_REQUIRED','PROFILE_CONTEXT_ERROR','PAYMENT_INSPECTION_TIMEOUT','PAYMENT_BROWSER_CRASHED',
+            'PAYMENT_UI_UNAVAILABLE','PAYMENT_ACCOUNT_BINDING_MISSING','PERSONAL_AD_ACCOUNT_EXCLUDED','INVALID_PAYMENT_TARGET',
+            'sensitive fixture message','SESSION_EXPIRED sensitive fixture message'] as $detail){
             file_put_contents($root.'/funding.json',json_encode(['detail'=>$detail]));
             $output=[];$exit=0;exec(escapeshellarg(PHP_BINARY).' '.escapeshellarg($root.'/inspect.php').' '.escapeshellarg($root).' '.escapeshellarg($c['id']),$output,$exit);
             expect($exit===0,'Inspection error endpoint fixture failed');$response=json_decode(implode("\n",$output),true);
