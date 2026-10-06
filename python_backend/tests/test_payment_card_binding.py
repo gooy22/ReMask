@@ -124,6 +124,7 @@ class CardBrowserTests(unittest.IsolatedAsyncioTestCase):
     async def test_unverified_account_diagnostics_exclude_identity_error_candidate_text_and_card_data(self):
         rows=SimpleNamespace(wait_for=AsyncMock(),count=AsyncMock(return_value=1))
         rows.filter=lambda **kw:rows
+        rows.first=rows
         page=SimpleNamespace(url='https://business.facebook.com/latest/settings/ad_accounts/?business_id=987654321',
             get_by_role=lambda *a,**kw:rows)
         browser=SimpleNamespace(page=page,profile_id='Fixture',_goto=AsyncMock(),
@@ -222,6 +223,7 @@ class CardBrowserTests(unittest.IsolatedAsyncioTestCase):
     async def test_initial_billing_setup_stops_before_fields_or_next_confirmation(self):
         rows=SimpleNamespace(wait_for=AsyncMock(),count=AsyncMock(return_value=1),inner_text=AsyncMock(return_value='Fixture RK\nActive'))
         rows.filter=lambda **kw:rows
+        rows.first=rows
         add=SimpleNamespace(click=AsyncMock(),is_enabled=AsyncMock(return_value=True))
         page=SimpleNamespace(url='https://business.facebook.com/latest/settings/ad_accounts/?business_id=987654321',
             get_by_role=lambda *a,**kw:SimpleNamespace(filter=lambda **kw:rows),wait_for_timeout=AsyncMock(),
@@ -285,6 +287,7 @@ class CardBrowserTests(unittest.IsolatedAsyncioTestCase):
     async def test_billing_fallback_never_adds_to_unverified_account(self):
         rows=SimpleNamespace(wait_for=AsyncMock(),count=AsyncMock(return_value=1),inner_text=AsyncMock(return_value='Fixture RK Active'))
         rows.filter=lambda **kw:rows
+        rows.first=rows
         page=SimpleNamespace(url='https://business.facebook.com/latest/settings/ad_accounts/?business_id=987654321',
             get_by_role=lambda *a,**kw:SimpleNamespace(filter=lambda **kw:rows))
         browser=SimpleNamespace(page=page,profile_id='Fixture',_goto=AsyncMock(),
@@ -298,6 +301,7 @@ class CardBrowserTests(unittest.IsolatedAsyncioTestCase):
     async def test_disabled_exact_account_stops_before_payment_navigation_or_entry(self):
         rows=SimpleNamespace(wait_for=AsyncMock(),count=AsyncMock(return_value=1),inner_text=AsyncMock(return_value='Fixture RK\nDisabled\nDisabled\n--'))
         rows.filter=lambda **kw:rows
+        rows.first=rows
         page=SimpleNamespace(url='https://business.facebook.com/latest/settings/ad_accounts/?business_id=987654321',get_by_role=lambda *a,**kw:SimpleNamespace(filter=lambda **kw:rows))
         browser=SimpleNamespace(page=page,profile_id='Fixture',_goto=AsyncMock(),SETTINGS_AD_ACCOUNTS_URLS=['https://business.facebook.com/latest/settings/ad_accounts/?business_id={business_id}'],_read_selected_ad_account_identity=AsyncMock(return_value={'confirmed':True,'ad_account_id':ID}))
         with patch('app.payment_card_binding.select_settings_payment_tab',AsyncMock()) as tab,patch('app.payment_card_binding.inspect_payment_methods',AsyncMock()) as inspect:
@@ -776,6 +780,40 @@ class RealCardSelectorTests(unittest.IsolatedAsyncioTestCase):
                 await page.set_content('<div role="row"><button>Fixture RK<br>Active</button><button>Other RK<br>Disabled</button></div>')
                 self.assertFalse(await _selected_account_disabled(page,'Fixture RK'))
             finally:await browser.close()
+
+
+    async def test_card_form_handles_nested_and_hidden_rows_only_after_exact_id_proof(self):
+        executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)
+        if not executable:self.skipTest('No local Chromium installed')
+        from playwright.async_api import async_playwright
+        async with async_playwright() as playwright:
+            chromium=await playwright.chromium.launch(executable_path=executable,headless=True,args=['--no-sandbox'])
+            try:
+                page=await chromium.new_page()
+                url='https://business.facebook.com/latest/settings/ad_accounts/?business_id=987654321'
+                html='''<div role="row"><div role="row"><button>Fixture RK<br>Active</button><a href="#">Details</a></div></div>
+                  <div role="row" style="display:none">Fixture RK</div>
+                  <button id="add" onclick="this.dataset.clicks=Number(this.dataset.clicks||0)+1;document.getElementById('form').hidden=false">Add payment method</button>
+                  <form id="form" hidden><label>Card number<input autocomplete="cc-number"></label>
+                    <label>Expiry<input autocomplete="cc-exp"></label><label>CVV<input autocomplete="cc-csc"></label></form>'''
+                await page.route(url,lambda route:route.fulfill(status=200,content_type='text/html',body=html))
+                async def goto(url,**kwargs):await page.goto(url,wait_until='domcontentloaded')
+                identity=AsyncMock()
+                browser=SimpleNamespace(page=page,profile_id='Fixture',_goto=goto,_assert_authenticated=AsyncMock(),
+                    SETTINGS_AD_ACCOUNTS_URLS=[url],_read_selected_ad_account_identity=identity)
+                for observed in (ID,'987654320'):
+                    identity.return_value={'confirmed':True,'ad_account_id':observed}
+                    with patch('app.payment_card_binding.select_settings_payment_tab',AsyncMock()):
+                        result=await payment_card_flow(browser,ID,{'business_id':'987654321','name':'Fixture RK'},operation='prepare')
+                    self.assertFalse(result['submitted'])
+                    self.assertEqual(await page.locator('input').evaluate_all('(es)=>es.map(e=>e.value)'),['','',''])
+                    if observed==ID:
+                        self.assertEqual(result['status'],'FORM_READY')
+                        self.assertEqual(await page.locator('#add').get_attribute('data-clicks'),'1')
+                    else:
+                        self.assertEqual(result['code'],'PAYMENT_ACCOUNT_SCOPE_UNVERIFIED')
+                        self.assertIsNone(await page.locator('#add').get_attribute('data-clicks'))
+            finally:await chromium.close()
 
     async def test_payment_tab_waits_for_lazy_add_method_control(self):
         executable=next((path for name in ('google-chrome','chromium','chromium-browser') if (path:=shutil.which(name))),None)

@@ -137,7 +137,11 @@ async def _open_card_form(browser: Any, target: str, asset: dict[str,str], billi
         if not name:return {'status':'BLOCKED','code':'PAYMENT_ACCOUNT_ROW_MISSING'}
         asset['name']=name
     try:
-        await page.get_by_role('row').filter(has_text=name).wait_for(state='visible',timeout=6000)
+        # This is only a hydration signal, not account identity proof. Meta
+        # renders nested rows and hidden copies of the same RK; waiting on the
+        # whole collection raises a strict-mode error even when it is visible.
+        # The selected pane below must still prove the exact canonical RK ID.
+        await page.get_by_role('row').filter(has_text=name).filter(visible=True).first.wait_for(state='visible',timeout=6000)
     except Exception:
         return {'status':'BLOCKED','code':'PAYMENT_ACCOUNT_ROW_MISSING'}
     identity=await browser._read_selected_ad_account_identity(business_id=business,account_name=name)
