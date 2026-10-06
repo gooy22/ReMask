@@ -11,7 +11,7 @@ from collections import defaultdict
 from typing import Any, Awaitable, Callable
 
 from .mirror import MirrorError, SnapshotMirror
-from .provisioning import ProvisioningError, ProvisioningService, ProvisioningStateStore
+from .provisioning import PrepareService, ProvisioningError, ProvisioningService, ProvisioningStateStore
 from .provisioning.models import ProvisioningStep
 from .provisioning.timeouts import browser_provisioning_hard_timeout
 from .router import RoutePolicyError, TransparentPostRouter
@@ -118,6 +118,7 @@ class WorkerPool:
         self.registry.register('transparent_post',self.router.execute)
         self.resolver=ProfileResolver(os.getenv('REMASK_PROFILE_RESOLVER_URL'),os.getenv('REMASK_INTERNAL_KEY'))
         self.provisioning=ProvisioningService(self.provisioning_state,profile_resolver=self.resolver)
+        self.prepare=PrepareService(self.provisioning_state,self.provisioning)
         self._workers: list[asyncio.Task[None]]=[]
         self._created_businesses_lock = asyncio.Lock()
 
@@ -449,7 +450,28 @@ class WorkerPool:
                         await self.store.set_task_running(task['id'])
                         try:
                             action=str(task['action'])
-                            if action=='provisioning':
+                            if action=='prepare':
+                                payload=task['payload']
+                                hard_timeout=browser_provisioning_hard_timeout(
+                                    ['FAN_PAGES','BUSINESS','AD_ACCOUNT','PAGE_ACCESS']
+                                )
+                                result=await _await_with_hard_watchdog(
+                                    self.prepare.run(
+                                        item_id=item_id,
+                                        profile_id=profile_id,
+                                        context=context,
+                                        session=session,
+                                        payload=payload,
+                                        task_idempotency_key=task.get('idempotency_key'),
+                                    ),
+                                    timeout_seconds=hard_timeout,
+                                    code='PREPARE_HARD_TIMEOUT',
+                                    message=(
+                                        'Prepare desired-state pipeline exceeded '
+                                        f'{int(hard_timeout)}s total runtime.'
+                                    ),
+                                )
+                            elif action=='provisioning':
                                 payload=task['payload']
                                 raw_steps=payload.get('steps') if isinstance(payload,dict) else None
                                 normalized_steps=[
