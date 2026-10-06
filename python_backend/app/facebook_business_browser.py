@@ -4884,9 +4884,11 @@ class FacebookBusinessBrowser:
                 roles=("button",),
                 before_click=mark_submit_intent,
                 click_timeout_ms=5000,
+                trial_timeout_ms=750,
             )
-            if bool(click_meta.get("found")):
+            if bool(click_meta.get("found")) and not click_meta.get("actionability_failed"):
                 break
+            await self._assert_authenticated(body_timeout_ms=1200)
             await self.page.wait_for_timeout(350)
 
         if not bool(click_meta.get("found")):
@@ -4895,6 +4897,16 @@ class FacebookBusinessBrowser:
             raise BrowserBusinessError(
                 "FAN_PAGE_CREATE_UI_CHANGED",
                 "Facebook Page creation form was filled but Create Page was not found.",
+                retryable=True,
+                diagnostic=diag,
+            )
+
+        if click_meta.get("actionability_failed"):
+            diag = await self._diagnostic("fan_page_create_submit_not_actionable")
+            diag.update(click_meta=click_meta, safe_before_submit=True)
+            raise BrowserBusinessError(
+                "FAN_PAGE_CREATE_UI_CHANGED",
+                "Create Page remained covered or unstable; no CREATE click was sent.",
                 retryable=True,
                 diagnostic=diag,
             )
@@ -19273,6 +19285,7 @@ timeout_seconds=4.0,
         roles: tuple[str, ...] = ("button", "link", "menuitem"),
         before_click: Callable[[], Awaitable[None]] | None = None,
         click_timeout_ms: int = 2500,
+        trial_timeout_ms: int | None = None,
     ) -> dict[str, Any]:
         """Attempt at most one irreversible click.
 
@@ -19315,6 +19328,18 @@ timeout_seconds=4.0,
                         "role": role,
                         "index": index,
                     }
+                    # Optional readiness probe sends no click. Persist the
+                    # irreversible intent only after overlays/animation settle.
+                    if trial_timeout_ms is not None:
+                        try:
+                            await item.click(
+                                trial=True,
+                                timeout=max(250, min(int(trial_timeout_ms), 2500)),
+                            )
+                        except Exception as exc:
+                            meta["actionability_failed"] = True
+                            meta["error"] = f"{exc.__class__.__name__}: {exc}"[:500]
+                            return meta
                     try:
                         if before_click is not None:
                             await before_click()

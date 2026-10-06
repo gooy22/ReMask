@@ -128,6 +128,55 @@ class FanPageSubmitRecoveryTests(unittest.IsolatedAsyncioTestCase):
         browser.discover_managed_pages.assert_awaited_once()
         browser._click_named_single_attempt.assert_awaited_once()
 
+    async def test_unactionable_submit_never_writes_intent_or_checks_created_inventory(self):
+        browser = self.browser()
+        browser._click_named_single_attempt = AsyncMock(return_value={
+            "found": True, "attempted": False, "clicked": False,
+            "actionability_failed": True, "error": "TimeoutError: overlay intercepts pointer events",
+        })
+        browser._diagnostic.return_value = {"stage": "fan_page_create_submit_not_actionable"}
+        browser.discover_managed_pages = AsyncMock()
+        submit = AsyncMock()
+        with self.assertRaises(BrowserBusinessError) as caught:
+            await self.create(browser, submit)
+        self.assertEqual(caught.exception.code, "FAN_PAGE_CREATE_UI_CHANGED")
+        self.assertTrue(caught.exception.diagnostic["safe_before_submit"])
+        self.assertEqual(browser._click_named_single_attempt.await_count, 9)
+        submit.assert_not_awaited()
+        browser.discover_managed_pages.assert_not_awaited()
+
+    async def test_real_chromium_actionability_probe_sends_no_click_and_no_intent(self):
+        executable = next((path for name in ("google-chrome", "chromium", "chromium-browser")
+                           if (path := shutil.which(name))), None)
+        if not executable:
+            self.skipTest("No local Chromium installed")
+        from playwright.async_api import async_playwright
+        async with async_playwright() as playwright:
+            chromium = await playwright.chromium.launch(
+                executable_path=executable, headless=True, args=["--no-sandbox"])
+            try:
+                page = await chromium.new_page()
+                await page.set_content('''<button onclick="window.submits++">Create Page</button>
+                    <div id="overlay" style="position:fixed;inset:0;background:white"></div>
+                    <script>window.submits=0;</script>''')
+                browser = FacebookBusinessBrowser(SimpleNamespace(profile_id="13"))
+                browser.page = page
+                submit = AsyncMock()
+                meta = await browser._click_named_single_attempt(
+                    ("Create Page",), roles=("button",), before_click=submit, trial_timeout_ms=300)
+                self.assertTrue(meta['actionability_failed'])
+                self.assertFalse(meta['attempted'])
+                self.assertEqual(await page.evaluate('window.submits'), 0)
+                submit.assert_not_awaited()
+                await page.locator('#overlay').evaluate('(el) => el.remove()')
+                meta = await browser._click_named_single_attempt(
+                    ("Create Page",), roles=("button",), before_click=submit, trial_timeout_ms=750)
+                self.assertTrue(meta['clicked'])
+                self.assertEqual(await page.evaluate('window.submits'), 1)
+                submit.assert_awaited_once()
+            finally:
+                await chromium.close()
+
     async def test_saved_attempt_inventory_warms_same_lease(self):
         browser = AsyncMock()
         browser.__aenter__.return_value = browser
