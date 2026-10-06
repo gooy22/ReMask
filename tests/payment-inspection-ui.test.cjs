@@ -55,6 +55,7 @@ vm.createContext(sandbox);vm.runInContext(fs.readFileSync('railway-payment-inspe
   assert.ok(sandbox.paymentCardMessage({code:'PAYMENT_UI_UNAVAILABLE'}).includes('Billing / Payments'));
   assert.ok(sandbox.paymentCardMessage({code:'PERSONAL_AD_ACCOUNT_EXCLUDED'}).includes('внутри BM'));
   assert.ok(sandbox.paymentCardMessage({code:'INVALID_PAYMENT_TARGET'}).includes('проверку идентификатора'));
+  assert.ok(sandbox.paymentCardMessage({code:'CARD_MASK_COLLISION_PREEXISTING'}).includes('Save не нажат'));
   const linkedMessage=sandbox.paymentCardMessage({code:'CARD_LINK_OBSERVED'});
   assert.ok(linkedMessage.includes('только привязка'));
   assert.ok(linkedMessage.includes('не проверялись'));
