@@ -432,7 +432,7 @@ class PageHydrationTests(unittest.IsolatedAsyncioTestCase):
         browser=FacebookBusinessBrowser(SimpleNamespace(profile_id='7',pages=[]))
         browser.page=SimpleNamespace(url='https://www.facebook.com/pages/create',wait_for_timeout=AsyncMock())
         browser._fan_page_snapshot=AsyncMock(return_value=[]); browser._goto=AsyncMock()
-        browser._fill_first=AsyncMock(return_value=True); browser._fill_fan_page_category=AsyncMock(return_value=True)
+        browser._fill_fan_page_name=AsyncMock(return_value=True); browser._fill_fan_page_category=AsyncMock(return_value=True)
         browser._click_named_single_attempt=AsyncMock(return_value={'found':True}); browser._body_text=AsyncMock(return_value='')
         browser.discover_managed_pages=AsyncMock(return_value=[{'id':'222222222','name':'Other Page','ownership_verified':True}])
         with patch('app.facebook_business_browser.asyncio.sleep',new=AsyncMock()):
@@ -444,7 +444,7 @@ class PageHydrationTests(unittest.IsolatedAsyncioTestCase):
         context=SimpleNamespace(profile_id='7',pages=[]); browser=FacebookBusinessBrowser(context)
         browser.page=SimpleNamespace(url='https://www.facebook.com/pages/create',wait_for_timeout=AsyncMock())
         browser._fan_page_snapshot=AsyncMock(return_value=[]); browser._goto=AsyncMock()
-        browser._fill_first=AsyncMock(return_value=True); browser._fill_fan_page_category=AsyncMock(return_value=True)
+        browser._fill_fan_page_name=AsyncMock(return_value=True); browser._fill_fan_page_category=AsyncMock(return_value=True)
         browser._click_named_single_attempt=AsyncMock(return_value={'found':True}); browser._body_text=AsyncMock(return_value='')
         row={'id':'1289628847574478','name':'Requested Page','profile_id':'61594993341059','ownership_verified':True}
         browser.discover_managed_pages=AsyncMock(return_value=[row])
