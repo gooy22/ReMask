@@ -372,7 +372,7 @@ class FanPageProvisioningRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(proven_absent)
         self.assertEqual(inventory.await_count, 3)
         self.assertEqual(session.facebook_web.await_count, 3)
-        self.assertEqual(len(diagnostics), 6)
+        self.assertEqual(len(diagnostics), 7)
         your_pages = [
             row for row in diagnostics
             if row.get("source") == "your_pages"
@@ -466,7 +466,7 @@ class FanPageProvisioningRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(proven_absent)
         self.assertEqual(inventory.await_count, 3)
         self.assertEqual(session.facebook_web.await_count, 3)
-        self.assertEqual(len(diagnostics), 6)
+        self.assertEqual(len(diagnostics), 7)
 
     async def test_private_page_inventory_recovers_uncertain_create(self) -> None:
         session = SimpleNamespace(
