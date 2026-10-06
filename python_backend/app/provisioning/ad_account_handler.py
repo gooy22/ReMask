@@ -1379,7 +1379,7 @@ async def ad_account_handler(
                 session,
                 business_id=business_id,
                 account_name=rk_name,
-            allow_multiple_in_business=allow_multiple_in_business,
+                allow_multiple_in_business=allow_multiple_in_business,
             )
         )
         if proof_found_id:
@@ -1831,7 +1831,7 @@ async def ad_account_handler(
                 session,
                 business_id=business_id,
                 account_name=rk_name,
-            allow_multiple_in_business=allow_multiple_in_business,
+                allow_multiple_in_business=allow_multiple_in_business,
             )
         )
         if found_id:
@@ -2213,7 +2213,7 @@ async def ad_account_handler(
                         session,
                         business_id=business_id,
                         account_name=rk_name,
-                    allow_multiple_in_business=allow_multiple_in_business,
+                        allow_multiple_in_business=allow_multiple_in_business,
                     )
                 )
                 if proof_found_id:
@@ -2440,7 +2440,7 @@ async def ad_account_handler(
                     session,
                     business_id=business_id,
                     account_name=rk_name,
-                allow_multiple_in_business=allow_multiple_in_business,
+                    allow_multiple_in_business=allow_multiple_in_business,
                 )
             )
 
