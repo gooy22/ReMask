@@ -168,7 +168,8 @@ async def _open_card_form(browser: Any, target: str, asset: dict[str,str], billi
         preexisting_methods=masked_payment_methods(await selected_payment_pane_text(browser,name))
     except Exception:
         preexisting_methods=[]
-    add=await _unique_visible(page,'button',r'^(Add payment method|Добавить способ оплаты|Додати спосіб оплати)    if add is None:
+    add=await _unique_visible(page,'button',r'^(Add payment method|Добавить способ оплаты|Додати спосіб оплати)$')
+    if add is None:
         add=await _unique_visible(page,'link',r'^(Add payment method|Добавить способ оплаты|Додати спосіб оплати)$')
     if add is None:
         more=await _unique_visible(page,'button',r'^(More|Ещё|Еще|Більше)$')
@@ -189,7 +190,8 @@ async def _open_card_form(browser: Any, target: str, asset: dict[str,str], billi
         if not funding['account_scope_verified']:
             return {'status':'BLOCKED','code':'PAYMENT_ACCOUNT_SCOPE_UNVERIFIED'}
         preexisting_methods=list(funding.get('payment_methods') or [])
-        add=await _unique_visible(page,'button',r'^(Add payment method|Добавить способ оплаты|Додати спосіб оплати)        if add is None:
+        add=await _unique_visible(page,'button',r'^(Add payment method|Добавить способ оплаты|Додати спосіб оплати)$')
+        if add is None:
             return {'status':'BLOCKED','code':'PAYMENT_ADD_CONTROL_MISSING'}
     try:
         await add.click(timeout=4000)
