@@ -214,6 +214,60 @@ class PreparePlannerTests(unittest.IsolatedAsyncioTestCase):
             {"111111111111111", "222222222222222"},
         )
 
+    async def test_last_confirmed_workspace_inventory_suppresses_duplicate_create(self):
+        self.context.businesses = [
+            {
+                "business_id": self.business_id,
+                "name": "Live BM",
+                "source": "workspace_last_confirmed_live",
+            }
+        ]
+        self.context.ad_accounts = [
+            {
+                "business_id": self.business_id,
+                "ad_account_id": "111111111111111",
+                "name": "Live RK 1",
+                "source": "workspace_last_confirmed_live",
+            },
+            {
+                "business_id": self.business_id,
+                "ad_account_id": "222222222222222",
+                "name": "Live RK 2",
+                "source": "workspace_last_confirmed_live",
+            },
+        ]
+        self.context.inventory_updated_at = 123456789
+
+        provisioning = SimpleNamespace(run=AsyncMock())
+        service = PrepareService(self.state, provisioning)
+        result = await service.run(
+            item_id="prepare-item",
+            profile_id=self.profile_id,
+            context=self.context,
+            session=self.session,
+            payload={
+                "desired": {
+                    "ad_accounts": 2,
+                    "payment": False,
+                    "page_access": False,
+                },
+                "parameters": {
+                    "AD_ACCOUNT": {
+                        "currency": "USD",
+                        "timezone_id": 1,
+                    }
+                },
+            },
+        )
+
+        provisioning.run.assert_not_awaited()
+        self.assertEqual(result["status"], "READY_TO_LAUNCH")
+        self.assertEqual(result["actual"]["business_id"], self.business_id)
+        self.assertEqual(
+            {row["ad_account_id"] for row in result["actual"]["ad_accounts"]},
+            {"111111111111111", "222222222222222"},
+        )
+
     async def test_payment_is_a_readiness_gate_not_a_duplicate_create_trigger(self):
         await self._confirmed_business()
         accounts = ["111111111111111", "222222222222222"]
