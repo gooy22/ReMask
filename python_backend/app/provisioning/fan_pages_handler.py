@@ -798,6 +798,7 @@ async def fan_pages_handler(
         await provisioning_state.checkpoint(
             item_id, profile_id, scope_key, ProvisioningStep.FAN_PAGES,
             {"phase": "CREATE_NOT_SUBMITTED", "resume_from": "CREATE_NEXT",
+             "tombstone_page_name": active_name,
              "active_page_name": "", "active_before_ids": [], "browser_diagnostic": {},
              "pre_submit_diagnostic": saved_diag, "recovery_reason": "LOCATOR_NEVER_RESOLVED",
              "activity": "FAN_PAGE_NO_CLICK_RECOVERED", "activity_at": int(time.time())},
@@ -864,6 +865,7 @@ async def fan_pages_handler(
                     "resume_from": "CREATE_NEXT",
                     "target_names": names,
                     "created_pages": created_pages,
+                    "tombstone_page_name": active_name,
                     "active_page_name": "",
                     "active_before_ids": [],
                     "reconciliation": diagnostics,
@@ -1081,6 +1083,7 @@ async def fan_pages_handler(
                             {
                                 "phase": "CREATE_NOT_SUBMITTED",
                                 "resume_from": "CREATE_NEXT",
+                                "tombstone_page_name": page_name,
                                 "active_page_name": "",
                                 "active_before_ids": [],
                                 "reconciliation": diagnostics,
@@ -1105,6 +1108,7 @@ async def fan_pages_handler(
                         "resume_from": "CREATE_NEXT",
                         "target_names": names,
                         "created_pages": created_pages,
+                        "tombstone_page_name": page_name,
                         "active_page_name": "",
                         "active_before_ids": [],
                         "reconciliation": diagnostics,
@@ -1184,6 +1188,7 @@ async def fan_pages_handler(
                     await provisioning_state.checkpoint(
                         item_id, profile_id, scope_key, ProvisioningStep.FAN_PAGES,
                         {"phase": "CREATE_NOT_SUBMITTED", "resume_from": "CREATE_NEXT",
+                         "tombstone_page_name": page_name,
                          "active_page_name": "", "active_before_ids": [], "browser_diagnostic": {},
                          "pre_submit_diagnostic": diagnostic, "recovery_reason": "LOCATOR_NEVER_RESOLVED",
                          "activity": "FAN_PAGE_NO_CLICK_RECOVERED", "activity_at": int(time.time())},
@@ -1306,6 +1311,7 @@ async def fan_pages_handler(
                             "resume_from": "CREATE_NEXT",
                             "target_names": names,
                             "created_pages": created_pages,
+                            "tombstone_page_name": page_name,
                             "active_page_name": "",
                             "active_before_ids": [],
                             "reconciliation": diagnostics,
