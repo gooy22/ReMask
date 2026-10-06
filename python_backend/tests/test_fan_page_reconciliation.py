@@ -90,6 +90,33 @@ class ReconciliationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(diagnostics[-1]['source'], 'facebook_browser_pages_html')
         web.fetch_text.assert_awaited_once()
 
+    async def test_ads_manager_positive_probe_recovers_page_when_your_pages_is_unavailable(self):
+        with patch(
+            'app.provisioning.fan_pages_handler._fresh_page_inventory',
+            AsyncMock(side_effect=BrowserBusinessError(
+                'FAN_PAGES_NOT_DISCOVERED', 'Your Pages did not hydrate'
+            )),
+        ), patch(
+            'app.provisioning.fan_pages_handler._fresh_promotable_page_inventory',
+            AsyncMock(return_value=[
+                {'id': '123456789', 'name': 'PrgssTeam'},
+            ]),
+        ) as ads_probe:
+            found, absent, diagnostics = await _reconcile_uncertain_page(
+                self.session(),
+                page_name='PrgssTeam',
+                before_ids=set(),
+            )
+
+        self.assertEqual(found['id'], '123456789')
+        self.assertFalse(absent)
+        self.assertTrue(any(
+            row.get('source') == 'ads_manager_promotable_pages'
+            and row.get('result') == 'ok'
+            for row in diagnostics
+        ))
+        ads_probe.assert_awaited_once()
+
     async def test_partial_private_inventory_never_releases_guard(self):
         result = SimpleNamespace(pages=[], source='facebook_web_graphql', diagnostics=[], inventory_complete=False)
         with patch('app.provisioning.fan_pages_handler._fresh_page_inventory', AsyncMock(return_value=[])), \
