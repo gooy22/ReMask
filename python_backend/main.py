@@ -1377,6 +1377,8 @@ def _business_inventory_confirmed_empty(diagnostic: object) -> bool:
         return False
     if str(diagnostic.get('stage') or '') != 'complete':
         return False
+    if diagnostic.get('business_inventory_confirmed_empty') is True:
+        return True
     queries=diagnostic.get('queries')
     if not isinstance(queries,list):
         return False
