@@ -4541,64 +4541,102 @@ class FacebookBusinessBrowser:
 
         return False
 
+    async def _fan_page_input(self, labels: tuple[str, ...]) -> Any:
+        """Resolve a visible editable field by its semantic label, never position."""
+        if self.page is None:
+            return None
+        for label in labels:
+            pattern = re.compile(re.escape(label), re.IGNORECASE)
+            for getter in (self.page.get_by_label, self.page.get_by_placeholder):
+                try:
+                    matches = getter(pattern)
+                    for index in range(min(await matches.count(), 8)):
+                        candidate = matches.nth(index)
+                        if await candidate.is_visible() and await candidate.is_editable():
+                            return candidate
+                except Exception:
+                    pass
+            # Some Meta forms render a required marker inside an unbound label.
+            nearby_pattern = re.compile(
+                rf"^\s*{re.escape(label)}\s*(?:\*|\((?:required|обязательно|обов['’]язково)\))?\s*$",
+                re.IGNORECASE,
+            )
+            try:
+                nodes = self.page.get_by_text(nearby_pattern)
+                for index in range(min(await nodes.count(), 8)):
+                    node = nodes.nth(index)
+                    if not await node.is_visible():
+                        continue
+                    candidates = node.locator(
+                        'xpath=ancestor::*[.//input and not(self::body)][1]//input'
+                    )
+                    editable = []
+                    for input_index in range(min(await candidates.count(), 8)):
+                        candidate = candidates.nth(input_index)
+                        if await candidate.is_visible() and await candidate.is_editable():
+                            kind = _clean(await candidate.get_attribute("type")).lower()
+                            if kind not in {"hidden", "checkbox", "radio", "submit", "button"}:
+                                editable.append(candidate)
+                    if len(editable) == 1:
+                        return editable[0]
+            except Exception:
+                pass
+        try:
+            inputs = self.page.locator(
+                'input:visible, [role="combobox"]:visible, [contenteditable="true"]:visible'
+            )
+            for index in range(min(await inputs.count(), 24)):
+                candidate = inputs.nth(index)
+                if not await candidate.is_visible() or not await candidate.is_editable():
+                    continue
+                key = " ".join(
+                    _clean(await candidate.get_attribute(attr))
+                    for attr in ("name", "id", "placeholder", "aria-label")
+                ).casefold()
+                if any(token.casefold() in key for token in labels):
+                    return candidate
+        except Exception:
+            pass
+        return None
+
+    async def _fill_fan_page_name(self, name: str) -> bool:
+        labels = (
+            "Page name", "Название Страницы", "Название страницы",
+            "Назва сторінки", "Seitenname", "Nom de la Page", "Nom de la page",
+            "পেজের নাম", "Tên Trang", "Tên trang", "पेज का नाम",
+        )
+        # DOMContentLoaded does not imply that Meta's React fields have hydrated.
+        # This bounded wait only fills the name; it never submits or reloads.
+        for attempt in range(21):
+            field = await self._fan_page_input(labels)
+            if field is not None:
+                try:
+                    await field.fill(name, timeout=3500)
+                    return True
+                except Exception:
+                    pass
+            if attempt == 20:
+                break
+            await self._assert_authenticated(body_timeout_ms=500)
+            await self.page.wait_for_timeout(400)
+        return False
+
     async def _fill_fan_page_category(self, category: str) -> bool:
         if self.page is None or not _clean(category):
             return False
-
         labels = (
-            "Category",
-            "Categories",
-            "Категория",
-            "Категорія",
-            "Kategorie",
-            "Catégorie",
-            "বিভাগ",
-            "Danh mục",
-            "श्रेणी",
+            "Category", "Categories", "Категория", "Категорія", "Kategorie",
+            "Catégorie", "বিভাগ", "Danh mục", "श्रेणी",
         )
         field = None
-
-        for label in labels:
-            pattern = re.compile(re.escape(label), re.IGNORECASE)
-            for getter in (
-                lambda: self.page.get_by_label(pattern),
-                lambda: self.page.get_by_placeholder(pattern),
-            ):
-                try:
-                    locator = getter()
-                    for index in range(min(await locator.count(), 8)):
-                        candidate = locator.nth(index)
-                        if await candidate.is_visible() and await candidate.is_editable():
-                            field = candidate
-                            break
-                except Exception:
-                    continue
-                if field is not None:
-                    break
+        for attempt in range(11):
+            field = await self._fan_page_input(labels)
             if field is not None:
                 break
-
-        if field is None:
-            try:
-                inputs = self.page.locator(
-                    'input:visible, [role="combobox"]:visible, [contenteditable="true"]:visible'
-                )
-                for index in range(min(await inputs.count(), 24)):
-                    candidate = inputs.nth(index)
-                    if not await candidate.is_visible():
-                        continue
-                    key = " ".join(
-                        _clean(await candidate.get_attribute(attr))
-                        for attr in ("name", "id", "placeholder", "aria-label", "role")
-                    ).casefold()
-                    if any(token.casefold() in key for token in labels):
-                        field = candidate
-                        break
-            except Exception:
-                field = None
-
-        if field is None:
-            return False
+            if attempt == 10:
+                return False
+            await self._assert_authenticated(body_timeout_ms=500)
+            await self.page.wait_for_timeout(400)
 
         try:
             await field.fill(_clean(category))
@@ -4751,24 +4789,7 @@ class FacebookBusinessBrowser:
         for target in self.FAN_PAGE_CREATE_URLS:
             try:
                 await self._goto(target)
-                name_filled = await self._fill_first(
-                    labels=(
-                        "Page name",
-                        "Page Name",
-                        "Название Страницы",
-                        "Название страницы",
-                        "Назва сторінки",
-                        "Seitenname",
-                        "Nom de la Page",
-                        "Nom de la page",
-                        "পেজের নাম",
-                        "Tên Trang",
-                        "Tên trang",
-                        "पेज का नाम",
-                    ),
-                    value=name,
-                    fill_timeout_ms=3500,
-                )
+                name_filled = await self._fill_fan_page_name(name)
                 category_filled = await self._fill_fan_page_category(category_name)
                 form_diagnostics.append(
                     {

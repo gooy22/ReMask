@@ -71,7 +71,7 @@ class FanPageProvisioningRuntimeTests(unittest.IsolatedAsyncioTestCase):
         browser=FacebookBusinessBrowser(SimpleNamespace(profile_id='9'))
         browser.page=SimpleNamespace(wait_for_timeout=AsyncMock(),screenshot=AsyncMock(return_value=b'preview'))
         browser._goto=AsyncMock()
-        browser._fill_first=AsyncMock(return_value=True)
+        browser._fill_fan_page_name=AsyncMock(return_value=True)
         browser._fill_fan_page_category=AsyncMock(return_value=True)
         browser._diagnostic=AsyncMock(return_value={'body_excerpt':'By creating a Page, you agree to the Pages policies'})
         browser._click_named_single_attempt=AsyncMock()
