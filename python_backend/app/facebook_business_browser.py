@@ -2331,6 +2331,145 @@ class FacebookBusinessBrowser:
 
             self._release_semaphore()
 
+    async def _resolve_facebook_cookie_consent(
+        self,
+        *,
+        return_url: str = "",
+    ) -> bool:
+        """Resolve Facebook's profile cookie-choice interstitial before UI probes."""
+        if self.page is None:
+            return False
+
+        current_url = _clean(getattr(self.page, "url", ""))
+        try:
+            parsed = urlsplit(current_url)
+            path = _clean(parsed.path).lower().rstrip("/")
+            query = parse_qs(parsed.query or "")
+        except Exception:
+            path = ""
+            query = {}
+
+        is_cookie_choice = (
+            path == "/privacy/consent"
+            and any(
+                "user_cookie_choice" in _clean(value).lower()
+                for value in query.get("flow", [])
+            )
+        )
+        if not is_cookie_choice:
+            return False
+
+        # REMASK_FACEBOOK_COOKIE_CONSENT_INTERSTITIAL_V1
+        # Prefer the least-permissive action when Meta exposes one. Exact text
+        # varies by locale/account, so keep a compact multilingual set. Only
+        # fall back to "allow all" when no essential/decline action exists.
+        minimal_names = (
+            "Decline optional cookies",
+            "Reject optional cookies",
+            "Only allow essential cookies",
+            "Allow essential cookies only",
+            "Only allow necessary cookies",
+            "Разрешить только обязательные файлы cookie",
+            "Отклонить необязательные файлы cookie",
+            "Дозволити лише обов’язкові файли cookie",
+            "Дозволити лише обов'язкові файли cookie",
+            "Відхилити необов’язкові файли cookie",
+            "Vain välttämättömät evästeet",
+            "Nur erforderliche Cookies zulassen",
+            "Refuser les cookies facultatifs",
+            "Chỉ cho phép cookie thiết yếu",
+            "Từ chối cookie không bắt buộc",
+            "केवल आवश्यक कुकीज़ की अनुमति दें",
+            "वैकल्पिक कुकीज़ अस्वीकार करें",
+            "শুধু প্রয়োজনীয় কুকিজের অনুমতি দিন",
+            "ঐচ্ছিক কুকিজ প্রত্যাখ্যান করুন",
+        )
+        allow_all_names = (
+            "Allow all cookies",
+            "Accept all cookies",
+            "Разрешить все файлы cookie",
+            "Принять все файлы cookie",
+            "Дозволити всі файли cookie",
+            "Прийняти всі файли cookie",
+            "Alle Cookies zulassen",
+            "Tout autoriser",
+            "Cho phép tất cả cookie",
+            "सभी कुकीज़ की अनुमति दें",
+            "সব কুকিজের অনুমতি দিন",
+        )
+
+        async def click_named(names: tuple[str, ...]) -> bool:
+            for name in names:
+                pattern = re.compile(rf"^\s*{re.escape(name)}\s*$", re.I)
+                for getter in (
+                    lambda p=pattern: self.page.get_by_role("button", name=p),
+                    lambda p=pattern: self.page.get_by_text(p),
+                ):
+                    try:
+                        locator = getter()
+                        count = min(await locator.count(), 4)
+                    except Exception:
+                        count = 0
+                    for index in range(count):
+                        try:
+                            candidate = locator.nth(index)
+                            if not await candidate.is_visible():
+                                continue
+                            await candidate.click(timeout=3500)
+                            return True
+                        except Exception:
+                            continue
+            return False
+
+        chosen = "minimal"
+        clicked = await click_named(minimal_names)
+        if not clicked:
+            chosen = "allow_all"
+            clicked = await click_named(allow_all_names)
+
+        if not clicked:
+            diag = await self._diagnostic("facebook_cookie_consent_unresolved")
+            diag.update({
+                "consent_url": current_url[:700],
+                "return_url": _clean(return_url)[:700],
+            })
+            raise BrowserBusinessError(
+                "FACEBOOK_COOKIE_CONSENT_REQUIRED",
+                "Facebook cookie/privacy choice blocked the requested Page surface.",
+                retryable=True,
+                diagnostic=diag,
+            )
+
+        try:
+            await self.page.wait_for_timeout(700)
+        except Exception:
+            pass
+
+        # Meta may return to its own continuation URL or leave the consent
+        # document mounted. Re-open the original read-only destination once so
+        # callers see the intended form/surface.
+        if return_url:
+            try:
+                current_after = _clean(getattr(self.page, "url", ""))
+                after_path = _clean(urlsplit(current_after).path).lower().rstrip("/")
+            except Exception:
+                after_path = ""
+            if after_path == "/privacy/consent":
+                await self.page.goto(
+                    return_url,
+                    wait_until="domcontentloaded",
+                    timeout=min(max(3000, int(self.timeout_ms)), 15000),
+                )
+                await self.page.wait_for_timeout(600)
+
+        self._last_selector_diagnostic = {
+            **(self._last_selector_diagnostic or {}),
+            "facebook_cookie_consent_resolved": True,
+            "facebook_cookie_consent_choice": chosen,
+            "facebook_cookie_consent_return_url": _clean(return_url)[:700],
+        }
+        return True
+
     async def _goto(
         self,
         url: str,
@@ -2362,6 +2501,7 @@ class FacebookBusinessBrowser:
                 )
                 if navigation_settle_ms:
                     await self.page.wait_for_timeout(navigation_settle_ms)
+                await self._resolve_facebook_cookie_consent(return_url=url)
                 await self._assert_authenticated(
                     body_timeout_ms=max(
                         100,
@@ -2393,6 +2533,7 @@ class FacebookBusinessBrowser:
                     # ready yet.
                     try:
                         await asyncio.sleep(0.45)
+                        await self._resolve_facebook_cookie_consent(return_url=url)
                         await self._assert_authenticated(
                             body_timeout_ms=max(
                                 100,
@@ -4541,6 +4682,12 @@ class FacebookBusinessBrowser:
             diag["fan_page_create_route"] = _clean(
                 getattr(self.page, "url", "")
             )[:700]
+            try:
+                diag["fan_page_create_body_excerpt"] = _clean(
+                    await self._body_text(timeout_ms=1200)
+                )[:1200]
+            except Exception:
+                diag["fan_page_create_body_excerpt"] = ""
             raise BrowserBusinessError(
                 "FAN_PAGE_CREATE_UI_CHANGED",
                 "Facebook Page creation form did not expose usable name/category fields.",
