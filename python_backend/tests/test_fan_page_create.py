@@ -349,12 +349,18 @@ class FanPageProvisioningRuntimeTests(unittest.IsolatedAsyncioTestCase):
             "Your Pages did not hydrate",
             retryable=False,
         )
+        session = SimpleNamespace(
+            context=SimpleNamespace(profile_id="4"),
+            facebook_web=AsyncMock(
+                side_effect=RuntimeError("private inventory unavailable")
+            ),
+        )
         with patch(
             "app.provisioning.fan_pages_handler._fresh_page_inventory",
             new=AsyncMock(side_effect=unavailable),
         ) as inventory:
             found, proven_absent, diagnostics = await _reconcile_uncertain_page(
-                SimpleNamespace(context=SimpleNamespace(profile_id="4")),
+                session,
                 page_name="Brand Page 1",
                 before_ids=set(),
                 checks=3,
@@ -363,14 +369,20 @@ class FanPageProvisioningRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(found)
         self.assertFalse(proven_absent)
         self.assertEqual(inventory.await_count, 3)
-        self.assertEqual(len(diagnostics), 3)
+        self.assertEqual(session.facebook_web.await_count, 3)
+        self.assertEqual(len(diagnostics), 6)
+        your_pages = [
+            row for row in diagnostics
+            if row.get("source") == "your_pages"
+        ]
+        self.assertEqual(len(your_pages), 3)
         self.assertTrue(
-            all(row.get("result") == "unavailable" for row in diagnostics)
+            all(row.get("result") == "unavailable" for row in your_pages)
         )
         self.assertTrue(
             all(
                 row.get("code") == "FAN_PAGES_NOT_DISCOVERED"
-                for row in diagnostics
+                for row in your_pages
             )
         )
 
@@ -430,13 +442,19 @@ class FanPageProvisioningRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["pages"][0]["reused"])
         browser.create_fan_page.assert_not_awaited()
 
-    async def test_empty_page_lists_do_not_authorize_duplicate_create(self) -> None:
+    async def test_empty_ui_page_lists_alone_do_not_authorize_duplicate_create(self) -> None:
+        session = SimpleNamespace(
+            context=SimpleNamespace(profile_id="4"),
+            facebook_web=AsyncMock(
+                side_effect=RuntimeError("private inventory unavailable")
+            ),
+        )
         with patch(
             "app.provisioning.fan_pages_handler._fresh_page_inventory",
             new=AsyncMock(return_value=[]),
         ) as inventory:
             found, proven_absent, diagnostics = await _reconcile_uncertain_page(
-                SimpleNamespace(context=SimpleNamespace(profile_id="4")),
+                session,
                 page_name="Brand Page 1",
                 before_ids=set(),
                 checks=3,
@@ -445,7 +463,90 @@ class FanPageProvisioningRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(found)
         self.assertFalse(proven_absent)
         self.assertEqual(inventory.await_count, 3)
-        self.assertEqual(len(diagnostics), 3)
+        self.assertEqual(session.facebook_web.await_count, 3)
+        self.assertEqual(len(diagnostics), 6)
+
+    async def test_private_page_inventory_recovers_uncertain_create(self) -> None:
+        session = SimpleNamespace(
+            context=SimpleNamespace(profile_id="4"),
+            facebook_web=AsyncMock(return_value=object()),
+        )
+        private_result = SimpleNamespace(
+            pages=[
+                {"id": "9999999999", "name": "Brand Page 1"}
+            ],
+            source="facebook_web_graphql",
+            diagnostics=[],
+        )
+        with patch(
+            "app.provisioning.fan_pages_handler._fresh_page_inventory",
+            new=AsyncMock(side_effect=BrowserBusinessError(
+                "FAN_PAGES_NOT_DISCOVERED",
+                "Your Pages did not hydrate",
+                retryable=False,
+            )),
+        ), patch(
+            "app.provisioning.fan_pages_handler.list_pages_via_private_graphql",
+            new=AsyncMock(return_value=private_result),
+        ) as private_inventory:
+            found, proven_absent, diagnostics = await _reconcile_uncertain_page(
+                session,
+                page_name="Brand Page 1",
+                before_ids=set(),
+                checks=3,
+            )
+
+        self.assertIsNotNone(found)
+        self.assertEqual(found["id"], "9999999999")
+        self.assertFalse(proven_absent)
+        self.assertEqual(private_inventory.await_count, 1)
+        self.assertTrue(
+            any(
+                row.get("source") == "facebook_web_graphql"
+                and row.get("result") == "ok"
+                for row in diagnostics
+            )
+        )
+
+    async def test_two_authoritative_private_absence_reads_clear_stale_guard(self) -> None:
+        session = SimpleNamespace(
+            context=SimpleNamespace(profile_id="4"),
+            facebook_web=AsyncMock(return_value=object()),
+        )
+        private_result = SimpleNamespace(
+            pages=[],
+            source="facebook_web_graphql",
+            diagnostics=[],
+        )
+        with patch(
+            "app.provisioning.fan_pages_handler._fresh_page_inventory",
+            new=AsyncMock(return_value=[]),
+        ) as ui_inventory, patch(
+            "app.provisioning.fan_pages_handler.list_pages_via_private_graphql",
+            new=AsyncMock(return_value=private_result),
+        ) as private_inventory, patch(
+            "app.provisioning.fan_pages_handler.asyncio.sleep",
+            new=AsyncMock(),
+        ):
+            found, proven_absent, diagnostics = await _reconcile_uncertain_page(
+                session,
+                page_name="Brand Page 1",
+                before_ids=set(),
+                checks=3,
+            )
+
+        self.assertIsNone(found)
+        self.assertTrue(proven_absent)
+        self.assertEqual(ui_inventory.await_count, 2)
+        self.assertEqual(private_inventory.await_count, 2)
+        self.assertEqual(session.facebook_web.await_count, 2)
+        self.assertTrue(
+            all(
+                row.get("result") == "ok"
+                for row in diagnostics
+                if row.get("source") == "facebook_web_graphql"
+            )
+        )
 
     async def test_handler_reuses_worker_confirmed_page_before_browser_create(self) -> None:
         state = SimpleNamespace(
