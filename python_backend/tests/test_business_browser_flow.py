@@ -3903,6 +3903,59 @@ class BrowserNavigationRecoveryTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(browser.page.goto_calls, 1)
 
+    async def test_page_crash_relaunch_retries_even_with_attempts_one(self):
+        class _CrashedPage:
+            url = "about:blank"
+
+            async def goto(self, *args, **kwargs):
+                raise Exception(
+                    "TargetClosedError: Target page, context or browser has been closed"
+                )
+
+        class _HealthyPage:
+            def __init__(self):
+                self.url = "about:blank"
+                self.goto_calls = 0
+
+            async def goto(self, url, *args, **kwargs):
+                self.goto_calls += 1
+                self.url = url
+                return None
+
+            async def wait_for_timeout(self, *args, **kwargs):
+                return None
+
+        browser = FacebookBusinessBrowser(
+            SimpleNamespace(profile_id="profile-nav-relaunch")
+        )
+        browser.page = _CrashedPage()
+        healthy = _HealthyPage()
+
+        async def fake_close():
+            browser.page = None
+
+        async def fake_open():
+            browser.page = healthy
+
+        browser.close = AsyncMock(side_effect=fake_close)
+        browser.open = AsyncMock(side_effect=fake_open)
+        browser._resolve_facebook_cookie_consent = AsyncMock(return_value=False)
+        browser._assert_authenticated = AsyncMock(return_value=None)
+
+        url = await browser._goto(
+            "https://business.facebook.com/latest/home",
+            attempts=1,
+            settle_ms=0,
+        )
+
+        self.assertEqual(
+            url,
+            "https://business.facebook.com/latest/home",
+        )
+        browser.close.assert_awaited_once()
+        browser.open.assert_awaited_once()
+        self.assertEqual(healthy.goto_calls, 1)
+
     async def test_err_aborted_retries_once_when_no_facebook_surface_exists(self):
         class _Page:
             def __init__(self):
