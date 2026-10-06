@@ -10,10 +10,10 @@ from app.facebook_business_browser import FacebookBusinessBrowser, BrowserBusine
 from app.facebook_page_discovery import business_page_owned_proven, browser_business_page_owned_proven
 from app.provisioning.page_full_control import ensure_existing_page_full_control, _operator_full_proof, MODE
 
-PAGE="1323505007517351"
-ACTOR="61595183909581"
-BM="991479610630943"
-UID="61594596674774"
+PAGE="1323505007000001"
+ACTOR="61595183900001"
+BM="991479610600001"
+UID="615945966700001"
 URL="https://business.facebook.com/latest/settings/pages/?business_id="+BM
 CONFIG={"page_id":PAGE,"name":"PrgssTeam"}
 
@@ -85,7 +85,7 @@ Add an existing Page</button><button onclick="window.partialRequests++">Request 
 <div role="dialog" aria-label="Assign people" id="assign-dialog" hidden>
  <label><input type="checkbox">You</label>__DUPLICATE__
  <label><input id="full-control" type="checkbox" __DISABLED__>Full control (Everything)</label>
- <label><input type="checkbox">Ads</label><button onclick="save()">Assign</button>
+ <label><input id="ads-control" type="checkbox">Ads</label><button onclick="save()">Assign</button>
 </div>
 <script>renderPeople();</script>
 """
@@ -175,7 +175,7 @@ class ExistingPageFullControlChromiumTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("TARGET_PAGE_OPERATOR_FULL_ASSIGN_CLICK_INTENT",phases)
         self.assertEqual(phases[-1],"TARGET_PAGE_OPERATOR_FULL_ASSIGN_CONFIRMED")
         self.assertEqual(self.browser.verify_page_attached.await_count,3)
-        self.assertFalse(await self.page.get_by_role("checkbox",name="Ads",exact=True).is_checked())
+        self.assertFalse(await self.page.locator("#ads-control").is_checked())
     async def test_already_owned_page_still_upgrades_partial_profile(self):
         await self.fixture(owned=True)
         await self.run_flow()
@@ -282,3 +282,24 @@ class ExistingPageFullControlChromiumTests(unittest.IsolatedAsyncioTestCase):
         await self.run_flow({"phase":"TARGET_PAGE_OPERATOR_FULL_ASSIGN_SUBMITTED","access_mode":MODE,
             "page_id":"111111111","business_id":BM})
         self.assertEqual(await self.counts(),{"claims":0,"assigns":1,"partial":0})
+
+    async def test_empty_resolver_inventory_refreshes_exact_asset_and_actor_before_claim(self):
+        await self.fixture()
+        live=self.context.pages[0]
+        self.context.pages=[]
+        self.browser.discover_managed_pages=AsyncMock(return_value=[live])
+        await self.run_flow()
+        self.browser.discover_managed_pages.assert_awaited_once_with(fast=True,navigation_timeout_ms=9000)
+        self.assertEqual(self.context.pages,[live])
+        self.assertEqual(await self.page.get_by_placeholder("Facebook Page name or URL").input_value(),
+            "https://www.facebook.com/profile.php?id="+ACTOR)
+        self.assertEqual(await self.counts(),{"claims":1,"assigns":1,"partial":0})
+    async def test_unmanaged_same_name_page_never_supplies_actor_or_claim_identity(self):
+        await self.fixture()
+        self.context.pages=[]
+        self.browser.discover_managed_pages=AsyncMock(return_value=[
+            {"id":PAGE,"profile_id":ACTOR,"name":"PrgssTeam","ownership_verified":False}])
+        with self.assertRaises(BrowserBusinessError) as caught:
+            await self.run_flow()
+        self.assertEqual(caught.exception.code,"PAGE_ADD_IDENTITY_UNVERIFIED")
+        self.assertEqual(await self.counts(),{"claims":0,"assigns":0,"partial":0})

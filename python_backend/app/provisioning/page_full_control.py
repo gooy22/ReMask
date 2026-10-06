@@ -126,6 +126,31 @@ async def _approve_existing_request(browser, config, business, checkpoint):
         business_id=business, page_id=config["page_id"], require_owned=True)
 
 
+
+async def _prepare_page_lookup(browser, config):
+    """Refresh the exact asset/actor pair when a resolver supplied no Page inventory."""
+    from ..facebook_page_search import owned_page_actor
+    page_id = str(config["page_id"])
+    if owned_page_actor(getattr(browser.context,"pages",None),page_id):
+        return config
+    rows = await asyncio.wait_for(browser.discover_managed_pages(
+        fast=True,navigation_timeout_ms=9000),timeout=24)
+    exact = [row for row in rows if isinstance(row,dict)
+        and str(row.get("id") or row.get("page_id") or "")==page_id
+        and row.get("ownership_verified") is True]
+    if len(exact)!=1:
+        raise BrowserBusinessError("PAGE_ADD_IDENTITY_UNVERIFIED",
+            "The exact existing Page is not uniquely proven in the profile's live managed inventory; no add was sent",
+            retryable=True)
+    live = exact[0]
+    browser.context.pages = [
+        row for row in (getattr(browser.context,"pages",None) or [])
+        if isinstance(row,dict) and str(row.get("id") or row.get("page_id") or "")!=page_id
+    ]+[live]
+    log.info("PAGE_FULL_CONTROL lookup refreshed page=%s actor=%s source=%s",
+        page_id,str(live.get("profile_id") or ""),str(live.get("ownership_source") or live.get("source") or ""))
+    return {**config,"name":str(live.get("name") or config["name"])}
+
 async def ensure_existing_page_full_control(browser, config, business, checkpoint, prior):
     from .page_access_handler import _select_page, _one
     page_id = str(config["page_id"])
@@ -155,6 +180,7 @@ async def ensure_existing_page_full_control(browser, config, business, checkpoin
             if "OWNER_APPROVE" not in phase:
                 owned = await _approve_existing_request(browser,config,business,checkpoint)
         else:
+            config = await _prepare_page_lookup(browser,config)
             async def before_submit(patch):
                 mapped = {"PAGE_ADD_CLICK_INTENT":"TARGET_PAGE_ACCESS_FULL_ADD_CLICK_INTENT",
                     "PAGE_ADD_SUBMITTED":"TARGET_PAGE_ACCESS_FULL_ADD_SUBMITTED",
@@ -243,4 +269,5 @@ async def ensure_existing_page_full_control(browser, config, business, checkpoin
     log.info("PAGE_FULL_CONTROL operator proven page=%s business=%s operator=%s source=%s",
         page_id,business,uid,proof["source"])
     return {"page_owned_by_business":True,"operator_full_control_verified":True,
+        "page_name":config["name"],"owner_business_id":business,
         "operator_full_control_proof":proof,"transport":MODE}

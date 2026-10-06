@@ -901,7 +901,7 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
                         await checkpoint({'diagnostic':diagnostic})
                     raise
             await store.patch(owner_business_id=business,owner_business_confirmed=True,
-                ownership_phase='PAGE_OWNERSHIP_CONFIRMED')
+                ownership_phase='PAGE_OWNERSHIP_CONFIRMED',name=full_access.get('page_name') or config['name'])
         result={'page_id':config['page_id'],'page_name':config['name'],'business_id':business,
             'ad_account_id':account,'page_shared_to_business':True,
             'operator_ads_access_assigned':True,'operator_assignment':'performed',
