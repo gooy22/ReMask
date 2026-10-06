@@ -89,6 +89,47 @@ class PreparePlannerTests(unittest.IsolatedAsyncioTestCase):
             },
         )
 
+    async def test_multi_rk_resume_is_scoped_to_target_account_name(self):
+        await self.state.complete(
+            "rk-one",
+            self.profile_id,
+            "rk:1",
+            ProvisioningStep.AD_ACCOUNT,
+            {
+                "business_id": self.business_id,
+                "ad_account_id": "111111111111111",
+                "account_name": "ReMask 7 RK 1",
+            },
+        )
+        await self.state.complete(
+            "rk-two",
+            self.profile_id,
+            "rk:2",
+            ProvisioningStep.AD_ACCOUNT,
+            {
+                "business_id": self.business_id,
+                "ad_account_id": "222222222222222",
+                "account_name": "ReMask 7 RK 2",
+            },
+        )
+
+        second = await self.state.latest_ad_account_resume_for_business(
+            self.profile_id,
+            self.business_id,
+            account_name="ReMask 7 RK 2",
+        )
+        missing = await self.state.latest_ad_account_resume_for_business(
+            self.profile_id,
+            self.business_id,
+            account_name="ReMask 7 RK 3",
+        )
+
+        self.assertEqual(
+            second["result"]["ad_account_id"],
+            "222222222222222",
+        )
+        self.assertEqual(missing, {})
+
     async def test_multi_rk_inventory_preserves_two_accounts_under_one_business(self):
         await self._confirmed_business()
         await self._confirmed_rk("rk-one", "rk:1", "111111111111111")
