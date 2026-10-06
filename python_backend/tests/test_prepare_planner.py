@@ -182,6 +182,58 @@ class PreparePlannerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["ready_to_launch"])
         self.assertEqual(len(result["actual"]["ad_accounts"]), 2)
 
+    async def test_prepare_repairs_missing_page_access_for_existing_rk(self):
+        await self._confirmed_business()
+        account = "111111111111111"
+        await self._confirmed_rk("rk-one", "rk:1", account)
+
+        async def run_side_effect(**kwargs):
+            self.assertEqual(kwargs["payload"]["steps"], ["PAGE_ACCESS"])
+            params = kwargs["payload"]["parameters"]["PAGE_ACCESS"]
+            self.assertIs(params["existing_target"], True)
+            self.assertEqual(params["business_id"], self.business_id)
+            self.assertEqual(params["ad_account_id"], account)
+            await self.state.complete(
+                kwargs["item_id"],
+                self.profile_id,
+                kwargs["payload"]["scope_key"],
+                ProvisioningStep.PAGE_ACCESS,
+                {
+                    "page_id": "1289628847574478",
+                    "business_id": self.business_id,
+                    "ad_account_id": account,
+                    "page_shared_to_business": True,
+                    "operator_ads_access_assigned": True,
+                },
+            )
+            return {"state": {"business_id": self.business_id, "ad_account_id": account}}
+
+        provisioning = SimpleNamespace(run=AsyncMock(side_effect=run_side_effect))
+        service = PrepareService(self.state, provisioning)
+        result = await service.run(
+            item_id="prepare-item",
+            profile_id=self.profile_id,
+            context=self.context,
+            session=self.session,
+            payload={
+                "desired": {
+                    "ad_accounts": 1,
+                    "payment": False,
+                    "page_access": True,
+                },
+                "parameters": {
+                    "AD_ACCOUNT": {
+                        "currency": "USD",
+                        "timezone_id": 1,
+                    }
+                },
+            },
+        )
+
+        self.assertEqual(provisioning.run.await_count, 1)
+        self.assertEqual(result["status"], "READY_TO_LAUNCH")
+        self.assertTrue(result["actual"]["ad_accounts"][0]["page_access_confirmed"])
+
     async def test_prepare_creates_only_missing_second_rk(self):
         await self._confirmed_business()
         await self._confirmed_rk("rk-one", "rk:1", "111111111111111")
