@@ -81,7 +81,9 @@ $js = file_get_contents($path);
 $start = strpos($js, 'async function showFunding(){');
 $end = strpos($js, 'function annotateDeliveryRows(', $start === false ? 0 : $start);
 if ($start === false || $end === false) throw new RuntimeException('Funding UI boundary missing');
-$js = substr_replace($js, file_get_contents('/tmp/railway-payment-inspection-ui.js') . "\n", $start, $end - $start);
+$cardUi = file_get_contents('/tmp/railway-payment-inspection-ui.js');
+if (!is_string($cardUi) || $cardUi === '') throw new RuntimeException('Card UI missing');
+$js = substr_replace($js, $cardUi . "\n", $start, $end - $start);
 $js = preg_replace('/function fundingStatusValue\(f\)\{[^\n]+\}/', <<<'STATUS'
 function fundingStatusValue(f){ if(!f)return 'NOT LOADED'; if(f.funding_verified===true && f.checked_live===true && f.account_scope_verified===true)return 'READY'; if(f.verification_status==='LINKED' && f.card_linked===true && f.account_scope_verified===true)return 'LINKED'; if(f.verification_status==='NONE' && f.account_scope_verified===true)return 'NONE'; return 'UNKNOWN'; }
 STATUS, $js, 1, $count);
@@ -98,7 +100,10 @@ foreach (['accounts.php', 'workspace.php'] as $name) {
     $html = file_get_contents($path);
     // These pages use custom modals; Bootstrap JS requires absent jQuery.
     $html = str_replace('<script src="styles/bootstrap.min.js"></script>', '', $html);
-    $html = str_replace('python-worker-ui-v219-cookie-only-v1', 'python-worker-ui-v219-cookie-only-v1-payment-cards-v10', $html);
+    // The workspace bundle is cached by browsers. Every card UI change must
+    // produce a new URL, including deployments that leave the worker UI version
+    // unchanged. A content hash also stays stable across identical builds.
+    $html = str_replace('python-worker-ui-v219-cookie-only-v1', 'python-worker-ui-v219-cookie-only-v1-payment-cards-' . substr(hash('sha256', $cardUi), 0, 12), $html);
     file_put_contents($path, $html);
 }
 fwrite(STDERR, "[private-payment] profile browser inspection and canonical RK display installed\n");

@@ -57,6 +57,9 @@ jobs:
       - name: Private payment inspection interface
         run: node tests/payment-inspection-ui.test.cjs
 
+      - name: Card UI installation and browser cache invalidation
+        run: php tests/payment-inspection-install.test.php
+
       - name: TXT account import interface
         run: node tests/cookie-txt-import-ui.test.cjs
 
