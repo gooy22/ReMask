@@ -50,7 +50,7 @@ function renderPeople(){
 }
 function search(){document.getElementById('results').hidden=false;}
 function selectPage(){document.getElementById('results').hidden=true;document.getElementById('next').hidden=false;}
-function next(){document.getElementById('find').hidden=true;document.getElementById('review').hidden=false;}
+function reviewPage(){document.getElementById('find').hidden=true;document.getElementById('review').hidden=false;}
 async function claim(){
  window.claims++;
  await fetch('/api/graphql/',{method:'POST',body:new URLSearchParams({
@@ -75,7 +75,7 @@ Add an existing Page</button><button onclick="window.partialRequests++">Request 
  <div role="listbox" id="results" hidden>
  <button role="option" data-page-id="__PAGE__" onclick="selectPage()">
  <span>PrgssTeam</span><a href="https://www.facebook.com/profile.php?id=__ACTOR__">Page profile</a></button></div>
- <button id="next" hidden onclick="next()">Next</button></div>
+ <button id="next" hidden onclick="reviewPage()">Next</button></div>
  <div id="review" hidden><h2>Add Page to business portfolio</h2>
  <label><input type="checkbox">I agree to the terms</label><button onclick="claim()">Add Page</button></div>
 </div>
@@ -100,6 +100,8 @@ class ExistingPageFullControlChromiumTests(unittest.IsolatedAsyncioTestCase):
         self.pw=await async_playwright().start()
         self.chromium=await self.pw.chromium.launch(executable_path=executable,headless=True,args=["--no-sandbox"])
         self.page=await self.chromium.new_page()
+        self.js_errors=[]
+        self.page.on('pageerror',lambda error:self.js_errors.append(str(error)))
         self.context=SimpleNamespace(profile_id="13",cookies={"c_user":UID},pages=[
             {"id":PAGE,"profile_id":ACTOR,"name":"PrgssTeam","ownership_verified":True}])
         self.browser=FacebookBusinessBrowser(self.context)
@@ -110,6 +112,7 @@ class ExistingPageFullControlChromiumTests(unittest.IsolatedAsyncioTestCase):
         if hasattr(self,"chromium"):
             await self.chromium.close()
             await self.pw.stop()
+            self.assertEqual(self.js_errors,[], 'The isolated Meta fixture must not have JavaScript errors')
     async def fixture(self,owned=False,full=False,stuck=False,duplicate=False,disabled=False):
         html=HTML
         for key,value in {"OWNED":str(owned).lower(),"FULL":str(full).lower(),"STUCK":str(stuck).lower(),
@@ -214,3 +217,40 @@ class ExistingPageFullControlChromiumTests(unittest.IsolatedAsyncioTestCase):
         await self.page.locator("#detail").evaluate("el=>el.hidden=false")
         await self.page.locator("#assign-dialog").evaluate("el=>{el.hidden=false;el.innerHTML='<div role=\"row\">You Full control</div>'}")
         self.assertIsNone(await _operator_full_proof(self.page,UID))
+
+    async def test_pending_ownership_request_never_submits_another_existing_page_add(self):
+        await self.fixture()
+        self.browser.add_existing_page=AsyncMock()
+        approve=AsyncMock(return_value=False)
+        with patch("app.provisioning.page_full_control._approve_existing_request",approve):
+            with self.assertRaises(BrowserBusinessError) as caught:
+                await self.run_flow({"phase":"TARGET_PAGE_ACCESS_FULL_ADD_SUBMITTED","access_mode":MODE})
+        self.assertEqual(caught.exception.code,"PAGE_OWNERSHIP_RESULT_UNKNOWN")
+        self.browser.add_existing_page.assert_not_awaited()
+        approve.assert_awaited_once()
+        self.assertEqual(await self.counts(),{"claims":0,"assigns":0,"partial":0})
+    async def test_pending_owner_approval_is_verification_only(self):
+        await self.fixture()
+        self.browser.add_existing_page=AsyncMock()
+        approve=AsyncMock()
+        with patch("app.provisioning.page_full_control._approve_existing_request",approve):
+            for phase in ("TARGET_PAGE_ACCESS_FULL_OWNER_APPROVE_CLICK_INTENT",
+                          "TARGET_PAGE_ACCESS_FULL_OWNER_APPROVE_SUBMITTED"):
+                with self.assertRaises(BrowserBusinessError):
+                    await self.run_flow({"phase":phase,"access_mode":MODE})
+        self.browser.add_existing_page.assert_not_awaited()
+        approve.assert_not_awaited()
+    async def test_real_owned_verifier_reads_exact_embedded_business_page_connection(self):
+        payload={"data":{"business":{"id":BM,"owned_pages":{"nodes":[{"id":PAGE,"__typename":"Page"}]}}}}
+        async def fixture_route(route):
+            await route.fulfill(content_type="text/html; charset=utf-8",
+                body="<h1>Pages</h1><script type='application/json'>"+json.dumps(payload)+"</script>")
+        await self.page.route("**/*",fixture_route)
+        self.browser._assert_authenticated=AsyncMock()
+        async def goto(target,**kwargs):
+            await self.page.goto(target)
+        self.browser._goto=AsyncMock(side_effect=goto)
+        result=await FacebookBusinessBrowser.verify_page_attached(self.browser,
+            business_id=BM,page_id=PAGE,require_owned=True)
+        self.assertTrue(result)
+        self.assertIn("business_id="+BM,self.page.url)

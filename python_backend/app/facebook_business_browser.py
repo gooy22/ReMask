@@ -20798,8 +20798,8 @@ timeout_seconds=4.0,
                 "Facebook-Seite",
             ),
             value=page,
-            lookup_override=page_lookup_url(
-                getattr(self.context, 'pages', None) or [], page) if require_owned else '',
+            **({'lookup_override': page_lookup_url(
+                getattr(self.context, 'pages', None) or [], page)} if require_owned else {}),
         )
 
         if not page_filled:
@@ -20845,7 +20845,10 @@ timeout_seconds=4.0,
                 return
 
             if gate_future.done():
-                await route.continue_()
+                if require_owned:
+                    await route.abort()
+                else:
+                    await route.continue_()
                 return
 
             try:
@@ -20928,7 +20931,6 @@ timeout_seconds=4.0,
                         break
                     if not require_owned and await self._click_unique_page_add_result(
                         page_id=page,
-                        **({'require_owned': True} if require_owned else {}),
                     ):
                         result_selected = True
                         await self.page.wait_for_timeout(350)
@@ -21095,6 +21097,7 @@ timeout_seconds=4.0,
                     if await self.verify_page_attached(
                         business_id=business,
                         page_id=page,
+                        **({'require_owned': True} if require_owned else {}),
                     ):
                         # Live verification is stronger than an inferred
                         # submit checkpoint. The caller will persist

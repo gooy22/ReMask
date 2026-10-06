@@ -210,12 +210,15 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
         verify.assert_not_awaited()
 
     async def _full_access_handler_fixture(self, prior=None, failure=None):
+        item='full-'+str(getattr(self,'full_fixture_count',0))
+        self.full_fixture_count=getattr(self,'full_fixture_count',0)+1
+        self.last_full_item=item
         await AdvertisingPageStore(self.state,'8','61594882851656').patch(
             page_id=PAGE,name='PrgssTeam',owner_profile_id='8',
             grants={BM:prior or {}})
-        await self.state.complete('full','8','full',ProvisioningStep.AD_ACCOUNT,
+        await self.state.complete(item,'8',item,ProvisioningStep.AD_ACCOUNT,
             {'business_id':BM,'ad_account_id':'act_'+RK})
-        await self.state.set_running('full','8','full',ProvisioningStep.PAGE_ACCESS)
+        await self.state.set_running(item,'8',item,ProvisioningStep.PAGE_ACCESS)
         browser=SimpleNamespace(page=SimpleNamespace(url='about:blank'),
             _diagnostic=AsyncMock(return_value={}))
         class Lease:
@@ -239,7 +242,7 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
              patch('app.provisioning.page_access_handler._request_target_page_access',new=AsyncMock()) as partial, \
              patch('app.provisioning.page_access_handler.inspect_browser_pages',new=AsyncMock()) as inspect:
             result=await page_access_handler(session,{}, {'business_id':BM,'ad_account_id':'act_'+RK},
-                provisioning_state=self.state,profile_id='8',item_id='full',scope_key='full')
+                provisioning_state=self.state,profile_id='8',item_id=item,scope_key=item)
         self.assertEqual(factory.call_count,1)
         partial.assert_not_awaited()
         inspect.assert_not_awaited()
@@ -278,7 +281,7 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
     async def test_full_control_crash_has_current_diagnostic_without_claiming_success(self):
         with self.assertRaisesRegex(RuntimeError,'Page crashed'):
             await self._full_access_handler_fixture(failure=RuntimeError('Page crashed'))
-        state=(await self.state.step('full',ProvisioningStep.PAGE_ACCESS))['result']
+        state=(await self.state.step(self.last_full_item,ProvisioningStep.PAGE_ACCESS))['result']
         self.assertEqual(state['diagnostic']['stage'],'existing_page_full_control')
         self.assertEqual(state['diagnostic']['v8_old_space_mb'],256)
         self.assertNotIn('operator_full_control_verified',state)

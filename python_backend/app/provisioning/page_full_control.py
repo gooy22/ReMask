@@ -1,12 +1,14 @@
 """Add the exact existing Page and prove full operator control in Business Settings."""
 from __future__ import annotations
 import asyncio
+import logging
 import re
 from urllib.parse import parse_qs, urlsplit
 
 from ..facebook_business_browser import BrowserBusinessError
 
 MODE = "existing_page_full_control"
+log = logging.getLogger("remask.page_full_control")
 
 
 async def _full_control(scope):
@@ -132,6 +134,8 @@ async def ensure_existing_page_full_control(browser, config, business, checkpoin
         raise BrowserBusinessError("PAGE_OPERATOR_IDENTITY_UNAVAILABLE",
             "The authenticated operator's exact identity is unavailable",retryable=True)
     full_prior = prior.get("access_mode")==MODE
+    log.info("PAGE_FULL_CONTROL start page=%s business=%s phase=%s mode=%s",
+        page_id,business,str(prior.get("phase") or ""),MODE)
     owned = await browser.verify_page_attached(
         business_id=business,page_id=page_id,require_owned=True)
     if not owned:
@@ -158,6 +162,7 @@ async def ensure_existing_page_full_control(browser, config, business, checkpoin
                 if patch.get("phase") in mapped:
                     patch["phase"]=mapped[patch["phase"]]
                 await checkpoint({**patch,"access_mode":MODE,"requested_tasks":["MANAGE"]})
+            log.info("PAGE_FULL_CONTROL add existing Page page=%s business=%s",page_id,business)
             try:
                 await browser.add_existing_page(business_id=business,page_id=page_id,
                     page_name=config["name"],before_submit=before_submit,require_owned=True)
@@ -174,6 +179,8 @@ async def ensure_existing_page_full_control(browser, config, business, checkpoin
         "TARGET_PAGE_OPERATOR_FULL_ASSIGN_CLICK_INTENT","TARGET_PAGE_OPERATOR_FULL_ASSIGN_SUBMITTED"}
     await checkpoint({**({} if operator_pending else {"phase":"TARGET_PAGE_ACCESS_FULL_OWNERSHIP_CONFIRMED"}),
         "access_mode":MODE,"page_owned_by_business":True,"owner_business_id":business})
+
+    log.info("PAGE_FULL_CONTROL ownership proven page=%s business=%s",page_id,business)
 
     # Ownership verification navigates this same browser to the exact BM Pages
     # surface. Never start operator selection in a fresh about:blank session.
@@ -231,5 +238,7 @@ async def ensure_existing_page_full_control(browser, config, business, checkpoin
                 "Assignment was sent, but the exact profile's full-control row is not yet confirmed",retryable=True)
     await checkpoint({"phase":"TARGET_PAGE_OPERATOR_FULL_ASSIGN_CONFIRMED","access_mode":MODE,
         "operator_full_control_verified":True,"operator_full_control_proof":proof})
+    log.info("PAGE_FULL_CONTROL operator proven page=%s business=%s operator=%s source=%s",
+        page_id,business,uid,proof["source"])
     return {"page_owned_by_business":True,"operator_full_control_verified":True,
         "operator_full_control_proof":proof,"transport":MODE}
