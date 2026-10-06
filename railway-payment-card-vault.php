@@ -65,6 +65,23 @@ final class RemaskPaymentCardVault {
         if(strlen($card['label'])>80 || preg_match('/\d{12,19}/',preg_replace('/[\s-]+/','',$card['label']))) throw new InvalidArgumentException('CARD_LABEL_INVALID');
         return $card;
     }
+    private static function cardBrand(string $value): string {
+        $brand=strtolower((string)preg_replace('/[^a-z]/i','',$value));
+        return match($brand){
+            'americanexpress','amex'=>'amex',
+            'mastercard','master'=>'mastercard',
+            'visa'=>'visa',
+            'discover'=>'discover',
+            default=>$brand,
+        };
+    }
+    private static function panBrand(string $pan): string {
+        if(str_starts_with($pan,'4'))return 'Visa';
+        if(preg_match('/^(?:5[1-5]|2(?:2[2-9]|[3-6]\d|7[01]))/',$pan))return 'Mastercard';
+        if(preg_match('/^3[47]/',$pan))return 'Amex';
+        if(preg_match('/^(?:6011|65|64[4-9]|622(?:12[6-9]|1[3-9]\d|[2-8]\d{2}|9[01]\d|92[0-5]))/',$pan))return 'Discover';
+        return 'Card';
+    }
     private static function publicCard(array $row): array {
         return array_intersect_key($row,array_flip(['id','last4','brand','month','year','label','created_at']));
     }
@@ -83,7 +100,7 @@ final class RemaskPaymentCardVault {
         $cipher=openssl_encrypt(json_encode($card,JSON_THROW_ON_ERROR),'aes-256-gcm',$this->key,OPENSSL_RAW_DATA,$iv,$tag,'remask-payment-card-v1');
         if(!is_string($cipher))throw new RuntimeException('CARD_ENCRYPTION_FAILED');
         $pan=$card['number'];
-        $brand=str_starts_with($pan,'4')?'Visa':(preg_match('/^(5[1-5]|2[2-7])/',$pan)?'Mastercard':(preg_match('/^3[47]/',$pan)?'Amex':'Card'));
+        $brand=self::panBrand($pan);
         return $this->locked(static function(array &$data) use($card,$fingerprint,$iv,$tag,$cipher,$pan,$brand) {
             $id='card_'.bin2hex(random_bytes(12)); $created=gmdate('c');
             foreach($data['cards'] as $old)if(hash_equals((string)$old['fingerprint'],$fingerprint)){ $id=$old['id'];$created=$old['created_at'];break; }
@@ -197,8 +214,8 @@ final class RemaskPaymentCardVault {
             $scope=($funding['profile_id']??null)===$profile&&($funding['account_id']??null)===$account&&
                 ($funding['account_scope_verified']??false)===true&&($funding['checked_live']??false)===true&&
                 in_array($funding['source']??'',['private_facebook_billing_ui','private_facebook_selected_rk_payment_tab'],true);
-            $brand=static fn(string $value)=>strtolower(preg_replace('/[^a-z]/i','',$value));
-            $matches=array_filter($data['cards'],static fn($c)=>$c['last4']===$card['last4']&&$brand($c['brand'])===$brand($card['brand']));
+            $brand=static fn(string $value)=>self::cardBrand($value);
+            $matches=array_filter($data['cards'],static fn($c)=>$c['last4']===$card['last4']&&$brand((string)$c['brand'])===$brand((string)$card['brand']));
             $observed=false;
             if($scope&&count($matches)===1&&($funding['verification_status']??'')==='LINKED'){
                 foreach($funding['payment_methods']??[] as $method){
