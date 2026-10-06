@@ -149,8 +149,14 @@ vm.createContext(sandbox); vm.runInContext(source.slice(start,end), sandbox);
   assert.equal(storage.has('remask_python_worker_prepare_pending_v1'),false);
   assert.deepEqual(captured[0],captured[1], 'lost response retry must not change the accepted Job');
   assert.equal(captured[0].profiles.length,2);
-  assert.equal(captured[0].profiles[0].tasks[0].action,'prepare');\n  assert.equal(captured[0].profiles[0].tasks[0].payload.desired.ad_accounts,2);\n  assert.equal(captured[0].profiles[0].tasks[0].payload.desired.payment,true);\n  assert.equal(captured[0].profiles[0].tasks[0].payload.auto_generate,undefined);\n  assert.equal(captured[0].profiles[0].tasks[0].payload.batch_count,undefined);
-  assert.equal(captured[0].profiles[0].tasks[0].payload.scope_key,'prepare:7');\n  assert.equal(captured[0].profiles[0].tasks[0].idempotency_key,'prepare:7');\n  assert.equal(captured[0].profiles[1].tasks[0].payload.scope_key,'prepare:8');
+  assert.equal(captured[0].profiles[0].tasks[0].action,'prepare');
+  assert.equal(captured[0].profiles[0].tasks[0].payload.desired.ad_accounts,2);
+  assert.equal(captured[0].profiles[0].tasks[0].payload.desired.payment,true);
+  assert.equal(captured[0].profiles[0].tasks[0].payload.auto_generate,undefined);
+  assert.equal(captured[0].profiles[0].tasks[0].payload.batch_count,undefined);
+  assert.equal(captured[0].profiles[0].tasks[0].payload.scope_key,'prepare:7');
+  assert.equal(captured[0].profiles[0].tasks[0].idempotency_key,'prepare:7');
+  assert.equal(captured[0].profiles[1].tasks[0].payload.scope_key,'prepare:8');
   // Independent BM: an empty optional Page must not block submission or
   // turn different explicit CREATE requests into the same empty-Page scope.
   const bmStart=source.indexOf('async function pythonWorkerStartBusiness(');
