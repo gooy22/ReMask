@@ -593,11 +593,9 @@ def _payment_selector(payload: dict[str, Any]) -> dict[str, str] | None:
     return {"type": brand, "last4": last4}
 
 
-def _select_payment_method(
-    methods: Any,
-    selector: dict[str, str] | None,
-) -> tuple[dict[str, str], str]:
+def _safe_payment_methods(methods: Any) -> list[dict[str, str]]:
     safe_methods: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
     for row in methods if isinstance(methods, list) else []:
         if not isinstance(row, dict):
             continue
@@ -610,15 +608,25 @@ def _select_payment_method(
             or not re.fullmatch(r"[A-Za-z][A-Za-z .+-]{0,39}", brand)
         ):
             continue
-        safe_methods.append(
-            {
-                "type": brand,
-                "last4": last4,
-                "linkage_status": str(
-                    row.get("linkage_status") or "OBSERVED"
-                )[:32],
-            }
-        )
+        key = (brand.casefold(), last4)
+        if key in seen:
+            continue
+        seen.add(key)
+        safe_methods.append({
+            "type": brand,
+            "last4": last4,
+            "linkage_status": str(
+                row.get("linkage_status") or "OBSERVED"
+            )[:32],
+        })
+    return safe_methods
+
+
+def _select_payment_method(
+    methods: Any,
+    selector: dict[str, str] | None,
+) -> tuple[dict[str, str], str]:
+    safe_methods = _safe_payment_methods(methods)
 
     if not safe_methods:
         raise ProvisioningError(
@@ -833,10 +841,23 @@ class PrivateLaunchService:
                 retryable=False,
             )
 
-        selected_payment_method, payment_selection_source = _select_payment_method(
-            funding.get("payment_methods"),
-            payment_selector,
+        safe_payment_methods = _safe_payment_methods(
+            funding.get("payment_methods")
         )
+        payment_selection_required = (
+            payment_selector is None
+            and len(safe_payment_methods) > 1
+        )
+        if payment_selection_required:
+            selected_payment_method: dict[str, str] = {}
+            payment_selection_source = "selection_required"
+        else:
+            selected_payment_method, payment_selection_source = (
+                _select_payment_method(
+                    safe_payment_methods,
+                    payment_selector,
+                )
+            )
 
         return {
             "profile_id": profile_id,
@@ -850,6 +871,12 @@ class PrivateLaunchService:
             "payment_method_count": len(funding.get("payment_methods") or []),
             "selected_payment_method": selected_payment_method,
             "payment_selection_source": payment_selection_source,
+            "payment_selection_required": payment_selection_required,
+            "payment_methods": (
+                safe_payment_methods
+                if payment_selection_required
+                else []
+            ),
         }
 
     async def _review_preflight(
@@ -941,7 +968,7 @@ class PrivateLaunchService:
             payment_selector=payment_selector,
         )
         return {
-            "ready": True,
+            "ready": preflight.get("payment_selection_required") is not True,
             "profile_id": profile_id,
             "business_id": business_id,
             "ad_account_id": ad_account_id,
@@ -1037,6 +1064,12 @@ class PrivateLaunchService:
             payload=payload,
             transport=meta_transport,
         )
+        if review.get("ready") is not True:
+            raise ProvisioningError(
+                "PRIVATE_LAUNCH_PAYMENT_SELECTION_REQUIRED",
+                "Select one live masked payment method for the exact RK before Launch",
+                retryable=False,
+            )
         business_id = str(review["business_id"])
         ad_account_id = str(review["ad_account_id"])
         page_id = str(review["page_id"])
