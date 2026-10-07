@@ -70,6 +70,10 @@ STATIC_CANDIDATES: dict[
     "CREATE_AD_ACCOUNT": [],
     "SET_PRIMARY_PAGE": [],
     "LIST_PAGES": [],
+    "LAUNCH_CAMPAIGN": [],
+    "LAUNCH_ADSET": [],
+    "LAUNCH_CREATIVE": [],
+    "LAUNCH_AD": [],
 }
 
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -15,6 +16,14 @@ from urllib.parse import urlsplit
 from fb_worker import AuthenticationError, RemoteRequestError
 
 from .action_result import ActionResult
+from .facebook_docids import (
+    DocIdCandidate,
+    classify_cache_failure,
+    list_candidates,
+    record_result,
+    registry_view,
+    upsert_candidate,
+)
 from .page_access_inspection import inspect_browser_pages
 from .payment_inspection import inspect_payment_methods
 from .provisioning.models import ProvisioningError
@@ -36,6 +45,15 @@ STEP_ORDER = [
     PrivateLaunchStep.AD,
 ]
 
+LAUNCH_DOCID_OPERATION = {
+    PrivateLaunchStep.CAMPAIGN: "LAUNCH_CAMPAIGN",
+    PrivateLaunchStep.ADSET: "LAUNCH_ADSET",
+    PrivateLaunchStep.CREATIVE: "LAUNCH_CREATIVE",
+    PrivateLaunchStep.AD: "LAUNCH_AD",
+}
+
+log = logging.getLogger("remask.private_launch")
+
 
 @dataclass(slots=True, frozen=True)
 class MutationContract:
@@ -46,6 +64,73 @@ class MutationContract:
     variables: dict[str, Any]
     result_id_paths: tuple[str, ...]
     request_envelope: dict[str, Any]
+
+
+def _contract_variables_mode(step: PrivateLaunchStep) -> str:
+    return f"private_launch_{step.value.lower()}_v1"
+
+
+def _contract_candidate(
+    step: PrivateLaunchStep,
+    contract: MutationContract,
+    *,
+    source: str = "private_launch_contract",
+) -> DocIdCandidate:
+    return upsert_candidate(
+        LAUNCH_DOCID_OPERATION[step],
+        doc_id=contract.doc_id,
+        friendly_name=contract.friendly_name,
+        endpoint_url=contract.endpoint_url,
+        variables_mode=_contract_variables_mode(step),
+        source=source or "private_launch_contract",
+        priority=8_000,
+    )
+
+
+def _candidate_is_active(
+    step: PrivateLaunchStep,
+    candidate: DocIdCandidate,
+) -> bool:
+    for row in list_candidates(
+        LAUNCH_DOCID_OPERATION[step],
+        confirmed_only=False,
+    ):
+        if (
+            row.doc_id == candidate.doc_id
+            and row.friendly_name == candidate.friendly_name
+            and row.variables_mode == candidate.variables_mode
+            and row.endpoint_url == candidate.endpoint_url
+        ):
+            return True
+    return False
+
+
+def _record_contract_result(
+    step: PrivateLaunchStep,
+    candidate: DocIdCandidate,
+    *,
+    success: bool,
+    profile_id: str,
+    reason: str = "",
+    response_path: str = "",
+    failure_kind: str = "",
+) -> None:
+    try:
+        record_result(
+            LAUNCH_DOCID_OPERATION[step],
+            candidate,
+            success=success,
+            reason=reason,
+            response_path=response_path,
+            profile_id=profile_id,
+            failure_kind=failure_kind,
+        )
+    except Exception as exc:
+        log.warning(
+            "private Launch doc_id result registry failed step=%s type=%s",
+            step.value,
+            exc.__class__.__name__,
+        )
 
 
 class PrivateLaunchContractStore:
@@ -262,11 +347,48 @@ class PrivateLaunchContractStore:
         for step in STEP_ORDER:
             try:
                 contract = self.get(step)
+                candidate = _contract_candidate(
+                    step,
+                    contract,
+                    source="private_launch_contract",
+                )
+                active = _candidate_is_active(step, candidate)
+                stats = {}
+                try:
+                    registry = registry_view(
+                        LAUNCH_DOCID_OPERATION[step]
+                    )
+                    for row in (
+                        registry.get("operations", {})
+                        .get(LAUNCH_DOCID_OPERATION[step], [])
+                    ):
+                        if (
+                            str(row.get("doc_id") or "") == candidate.doc_id
+                            and str(row.get("friendly_name") or "")
+                            == candidate.friendly_name
+                            and str(row.get("variables_mode") or "")
+                            == candidate.variables_mode
+                        ):
+                            stats = (
+                                row.get("stats")
+                                if isinstance(row.get("stats"), dict)
+                                else {}
+                            )
+                            break
+                except Exception:
+                    stats = {}
                 output[step.value] = {
                     "configured": True,
+                    "active": active,
                     "friendly_name": contract.friendly_name,
                     "endpoint_host": urlsplit(contract.endpoint_url).hostname or "",
                     "result_paths": len(contract.result_id_paths),
+                    "registry_operation": LAUNCH_DOCID_OPERATION[step],
+                    "success_count": int(stats.get("success_count") or 0),
+                    "stale_failure_count": int(
+                        stats.get("stale_failure_count") or 0
+                    ),
+                    "disabled": bool(stats.get("disabled")),
                 }
             except ProvisioningError as exc:
                 output[step.value] = {
@@ -321,6 +443,19 @@ class PrivateLaunchContractStore:
                 f"Private Launch contract registry write failed: {exc.__class__.__name__}",
                 retryable=False,
             ) from exc
+
+        try:
+            _contract_candidate(
+                step,
+                contract,
+                source="private_launch_contract",
+            )
+        except Exception as exc:
+            log.warning(
+                "private Launch contract candidate mirror failed step=%s type=%s",
+                step.value,
+                exc.__class__.__name__,
+            )
         return contract
 
 
@@ -1099,6 +1234,20 @@ class PrivateLaunchService:
                 })
                 continue
             contract = contracts[step]
+            candidate = _contract_candidate(
+                step,
+                contract,
+                source="private_launch_contract",
+            )
+            if not _candidate_is_active(step, candidate):
+                raise ProvisioningError(
+                    f"PRIVATE_LAUNCH_{step.value}_CONTRACT_STALE",
+                    (
+                        f"{step.value} private mutation contract is disabled "
+                        "by the shared doc_id lifecycle"
+                    ),
+                    retryable=False,
+                )
             variables = _render(
                 contract.variables,
                 {
@@ -1116,12 +1265,34 @@ class PrivateLaunchService:
             try:
                 await web.bootstrap()
             except AuthenticationError as exc:
+                _record_contract_result(
+                    step,
+                    candidate,
+                    success=False,
+                    profile_id=profile_id,
+                    reason="AUTH_PRECHECK",
+                    failure_kind="account",
+                )
                 raise ProvisioningError(
                     f"PRIVATE_LAUNCH_{step.value}_AUTH_PRECHECK",
                     "Facebook session is not ready before the private mutation",
                     retryable=False,
                 ) from exc
             except RemoteRequestError as exc:
+                _record_contract_result(
+                    step,
+                    candidate,
+                    success=False,
+                    profile_id=profile_id,
+                    reason="PRE_SUBMIT_TRANSPORT",
+                    failure_kind=classify_cache_failure(
+                        exception=exc,
+                        message=str(exc),
+                        http_status=int(
+                            getattr(exc, "http_status", 0) or 0
+                        ) or None,
+                    ),
+                )
                 raise ProvisioningError(
                     f"PRIVATE_LAUNCH_{step.value}_PRE_SUBMIT_TRANSPORT",
                     "Private Launch transport failed before the submit checkpoint",
@@ -1159,6 +1330,14 @@ class PrivateLaunchService:
                     request_envelope=contract.request_envelope,
                 )
             except AuthenticationError:
+                _record_contract_result(
+                    step,
+                    candidate,
+                    success=False,
+                    profile_id=profile_id,
+                    reason="AUTH_RESULT_UNKNOWN",
+                    failure_kind="account",
+                )
                 result = ActionResult.reconcile(
                     step.value,
                     code=f"PRIVATE_LAUNCH_{step.value}_AUTH_RESULT_UNKNOWN",
@@ -1180,6 +1359,28 @@ class PrivateLaunchService:
                 raise ProvisioningError(result.code, result.message, retryable=False)
             except RemoteRequestError as exc:
                 http_status = int(getattr(exc, "http_status", 0) or 0)
+                failure_kind = classify_cache_failure(
+                    exception=exc,
+                    payload=(
+                        getattr(exc, "payload", None)
+                        if isinstance(getattr(exc, "payload", None), dict)
+                        else None
+                    ),
+                    message=str(exc),
+                    http_status=http_status or None,
+                )
+                _record_contract_result(
+                    step,
+                    candidate,
+                    success=False,
+                    profile_id=profile_id,
+                    reason=(
+                        f"HTTP_{http_status}"
+                        if http_status
+                        else exc.__class__.__name__
+                    ),
+                    failure_kind=failure_kind,
+                )
                 if 400 <= http_status < 500 and http_status != 429:
                     result = ActionResult.blocked(
                         step.value,
@@ -1232,6 +1433,21 @@ class PrivateLaunchService:
                 contract.result_id_paths,
             )
             if not entity_id:
+                _record_contract_result(
+                    step,
+                    candidate,
+                    success=False,
+                    profile_id=profile_id,
+                    reason="RESULT_PATH_MISSING",
+                    failure_kind=classify_cache_failure(
+                        payload=(
+                            response
+                            if isinstance(response, dict)
+                            else None
+                        ),
+                        message="configured result id path missing",
+                    ),
+                )
                 result = ActionResult.reconcile(
                     step.value,
                     code=f"PRIVATE_LAUNCH_{step.value}_RESULT_UNKNOWN",
@@ -1255,6 +1471,13 @@ class PrivateLaunchService:
                 )
                 raise ProvisioningError(result.code, result.message, retryable=False)
 
+            _record_contract_result(
+                step,
+                candidate,
+                success=True,
+                profile_id=profile_id,
+                response_path=response_path,
+            )
             result = ActionResult.success(
                 step.value,
                 entity_id=entity_id,

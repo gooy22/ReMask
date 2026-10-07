@@ -13,6 +13,7 @@ from app.private_launch import (
     _select_payment_method,
 )
 from app.provisioning.models import ProvisioningError
+from app.facebook_docids import registry_view
 from app.provisioning.state import ProvisioningStateStore
 
 
@@ -72,6 +73,13 @@ class PrivateLaunchContractRegistryTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.path = Path(self.tmp.name) / "contracts.json"
+        self.docids = Path(self.tmp.name) / "docids.json"
+        self.docid_patch = patch(
+            "app.facebook_docids.STORE_PATH",
+            self.docids,
+        )
+        self.docid_patch.start()
+        self.addCleanup(self.docid_patch.stop)
 
     def test_registry_persists_valid_contract_and_reloads_it(self):
         store = PrivateLaunchContractStore("{}", path=self.path)
@@ -86,6 +94,30 @@ class PrivateLaunchContractRegistryTests(unittest.TestCase):
         status = reloaded.status()
         self.assertTrue(status["CAMPAIGN"]["configured"])
         self.assertFalse(status["ADSET"]["configured"])
+
+    def test_register_mirrors_contract_into_shared_docid_registry(self):
+        step = __import__(
+            "app.private_launch",
+            fromlist=["PrivateLaunchStep"],
+        ).PrivateLaunchStep.CAMPAIGN
+        store = PrivateLaunchContractStore("{}", path=self.path)
+        store.register(step, contracts()["CAMPAIGN"])
+
+        registry = registry_view("LAUNCH_CAMPAIGN")
+        rows = registry["operations"]["LAUNCH_CAMPAIGN"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["doc_id"], "111111")
+        self.assertEqual(
+            rows[0]["variables_mode"],
+            "private_launch_campaign_v1",
+        )
+        status = store.status()["CAMPAIGN"]
+        self.assertTrue(status["configured"])
+        self.assertTrue(status["active"])
+        self.assertEqual(
+            status["registry_operation"],
+            "LAUNCH_CAMPAIGN",
+        )
 
     def test_registry_rejects_missing_target_placeholder_and_auth_material(self):
         step = __import__("app.private_launch", fromlist=["PrivateLaunchStep"]).PrivateLaunchStep.CAMPAIGN
@@ -218,6 +250,12 @@ class PrivateLaunchTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
+        self.docid_patch = patch(
+            "app.facebook_docids.STORE_PATH",
+            Path(self.tmp.name) / "docids.json",
+        )
+        self.docid_patch.start()
+        self.addCleanup(self.docid_patch.stop)
         self.state = ProvisioningStateStore(str(Path(self.tmp.name) / "jobs.sqlite"))
         await self.state.init()
         self.service = PrivateLaunchService(
@@ -287,6 +325,13 @@ class PrivateLaunchTests(unittest.IsolatedAsyncioTestCase):
             },
         )
         self.assertEqual(self.web.graphql.await_count, 4)
+        campaign_registry = registry_view("LAUNCH_CAMPAIGN")
+        campaign_rows = campaign_registry["operations"]["LAUNCH_CAMPAIGN"]
+        self.assertEqual(len(campaign_rows), 1)
+        self.assertEqual(
+            campaign_rows[0]["stats"].get("success_count"),
+            1,
+        )
         campaign_vars = self.web.graphql.await_args_list[0].args[1]
         adset_vars = self.web.graphql.await_args_list[1].args[1]
         ad_vars = self.web.graphql.await_args_list[3].args[1]
@@ -377,6 +422,33 @@ class PrivateLaunchTests(unittest.IsolatedAsyncioTestCase):
                     payload={**self.payload, "launch_key": "crash-launch"},
                 )
         self.assertEqual(caught.exception.code, "PRIVATE_LAUNCH_RECONCILE_REQUIRED")
+        self.web.graphql.assert_not_awaited()
+
+    async def test_disabled_contract_blocks_before_transport(self):
+        with patch(
+            "app.private_launch._candidate_is_active",
+            return_value=False,
+        ), patch.object(
+            self.service,
+            "_live_preflight",
+            AsyncMock(return_value=self.preflight),
+        ):
+            with self.assertRaises(ProvisioningError) as caught:
+                await self.service.run(
+                    item_id="item-stale",
+                    profile_id="7",
+                    context=self.context,
+                    session=self.session,
+                    payload={
+                        **self.payload,
+                        "launch_key": "stale-contract",
+                    },
+                )
+        self.assertEqual(
+            caught.exception.code,
+            "PRIVATE_LAUNCH_CAMPAIGN_CONTRACT_STALE",
+        )
+        self.session.facebook_web.assert_not_awaited()
         self.web.graphql.assert_not_awaited()
 
     async def test_unknown_submitted_result_blocks_automatic_resubmit(self):
