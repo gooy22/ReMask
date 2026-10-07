@@ -119,6 +119,118 @@ class PrivateLaunchContractRegistryTests(unittest.TestCase):
             "LAUNCH_CAMPAIGN",
         )
 
+    def test_register_capture_templates_ids_and_payload_values(self):
+        step = __import__(
+            "app.private_launch",
+            fromlist=["PrivateLaunchStep"],
+        ).PrivateLaunchStep.CAMPAIGN
+        store = PrivateLaunchContractStore("{}", path=self.path)
+        store.register(step, contracts()["CAMPAIGN"])
+
+        captured = {
+            "doc_id": "999999",
+            "friendly_name": "RotatedCampaignCreateMutation",
+            "endpoint_url": "https://business.facebook.com/api/graphql/",
+            "variables": {
+                "input": {
+                    "account_id": "act_123456789",
+                    "owner_id": 123456789,
+                    "name": "ReMask Capture Canary",
+                    "objective": "OUTCOME_TRAFFIC",
+                }
+            },
+            "request_envelope": {"__req": "a", "dpr": "1"},
+            "source": "browser_graphql_capture",
+        }
+        contract = store.register_capture(
+            step,
+            captured,
+            placeholder_values={
+                "ad_account_id": "123456789",
+                "payload.campaign.name": "ReMask Capture Canary",
+            },
+        )
+        self.assertEqual(contract.doc_id, "999999")
+        self.assertEqual(
+            contract.variables["input"]["account_id"],
+            "act_{{ad_account_id}}",
+        )
+        self.assertEqual(
+            contract.variables["input"]["owner_id"],
+            "{{ad_account_id}}",
+        )
+        self.assertEqual(
+            contract.variables["input"]["name"],
+            "{{payload.campaign.name}}",
+        )
+        self.assertEqual(
+            contract.result_id_paths,
+            ("data.create.id",),
+        )
+        disk = self.path.read_text(encoding="utf-8")
+        self.assertNotIn("ReMask Capture Canary", disk)
+        self.assertNotIn("123456789", disk)
+
+    def test_first_capture_requires_proven_response_path(self):
+        step = __import__(
+            "app.private_launch",
+            fromlist=["PrivateLaunchStep"],
+        ).PrivateLaunchStep.CAMPAIGN
+        store = PrivateLaunchContractStore("{}", path=self.path)
+        with self.assertRaises(ProvisioningError) as caught:
+            store.register_capture(
+                step,
+                {
+                    "doc_id": "999999",
+                    "friendly_name": "CampaignCreateMutation",
+                    "variables": {
+                        "input": {
+                            "account_id": "123456789",
+                            "name": "Canary",
+                        }
+                    },
+                },
+                placeholder_values={
+                    "ad_account_id": "123456789",
+                    "payload.campaign.name": "Canary",
+                },
+            )
+        self.assertEqual(
+            caught.exception.code,
+            "PRIVATE_LAUNCH_RESULT_PATH_REQUIRED",
+        )
+        self.assertFalse(self.path.exists())
+
+    def test_capture_rejects_ambiguous_placeholder_scalar(self):
+        step = __import__(
+            "app.private_launch",
+            fromlist=["PrivateLaunchStep"],
+        ).PrivateLaunchStep.CREATIVE
+        store = PrivateLaunchContractStore("{}", path=self.path)
+        with self.assertRaises(ProvisioningError) as caught:
+            store.register_capture(
+                step,
+                {
+                    "doc_id": "999999",
+                    "friendly_name": "CreativeCreateMutation",
+                    "variables": {
+                        "input": {
+                            "account_id": "123456789",
+                            "page_id": "123456789",
+                        }
+                    },
+                },
+                placeholder_values={
+                    "ad_account_id": "123456789",
+                    "page_id": "123456789",
+                },
+                result_id_paths=["data.create.id"],
+            )
+        self.assertEqual(
+            caught.exception.code,
+            "PRIVATE_LAUNCH_CAPTURE_AMBIGUOUS",
+        )
+
     def test_registry_rejects_missing_target_placeholder_and_auth_material(self):
         step = __import__("app.private_launch", fromlist=["PrivateLaunchStep"]).PrivateLaunchStep.CAMPAIGN
         store = PrivateLaunchContractStore("{}", path=self.path)
