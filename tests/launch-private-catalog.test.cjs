@@ -123,6 +123,19 @@ console.log('Private Launch catalog and funding truth checks passed');
   assert.equal(reused.reused,true);
   assert.deepEqual(reused.request,planned.request,'lost response must reuse the identical worker Job request');
 
+  assert.equal(storage.has('remask_private_launch_pending_v1'),true);
+  assert.equal(privateCtx.remaskPrivateFinalizeJob({status:'FAILED'}),'FAILED');
+  assert.equal(storage.has('remask_private_launch_pending_v1'),true,
+    'failed/partial jobs must retain the exact idempotency request');
+  assert.equal(privateCtx.remaskPrivateFinalizeJob({status:'PARTIAL'}),'PARTIAL');
+  assert.equal(storage.has('remask_private_launch_pending_v1'),true);
+  assert.equal(privateCtx.remaskPrivateFinalizeJob({status:'SUCCESS'}),'SUCCESS');
+  assert.equal(storage.has('remask_private_launch_pending_v1'),false,
+    'only terminal SUCCESS may clear the pending request');
+
+  // Recreate one pending request so the explicit clear helper stays covered.
+  privateCtx.remaskPrivateJobRequest(config,reviewed);
+  assert.equal(storage.has('remask_private_launch_pending_v1'),true);
   privateCtx.remaskPrivatePendingClear();
   assert.equal(storage.has('remask_private_launch_pending_v1'),false);
   console.log('Private Launch UI uses worker review + independent per-RK jobs with durable idempotency.');
