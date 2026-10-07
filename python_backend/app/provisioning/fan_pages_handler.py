@@ -21,6 +21,14 @@ def _clean(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _browser_lease(session: Any, **kwargs: Any):
+    factory = getattr(session, "browser_lease", None)
+    if callable(factory):
+        return factory(**kwargs)
+    return _browser_lease(session, **kwargs,
+    )
+
+
 _AUTH_RECOVERY_CODES = {
     "CHECKPOINT_REQUIRED",
     "SESSION_EXPIRED",
@@ -109,7 +117,7 @@ async def _confirm_created_pages(session: Any, params: dict[str, Any], checkpoin
         if verify_only:
             await save({"activity":"VERIFY_MAIN_BUSINESS_PAGE"})
         try:
-            async with FacebookBusinessBrowser(session.context, timeout_seconds=75, v8_old_space_mb=256) as browser:
+            async with _browser_lease(session, timeout_seconds=75, v8_old_space_mb=256) as browser:
                 try:
                     result = await asyncio.wait_for(confirm_main_page(browser, business_id=business, page_id=page_id,
                         page_name=name, before_submit=save, verification_only=verify_only), timeout=85)
@@ -217,9 +225,7 @@ def _find_created_page(
 
 
 async def _fresh_page_inventory(session: Any) -> list[dict[str, Any]]:
-    async with FacebookBusinessBrowser(
-        session.context,
-        timeout_seconds=60,
+    async with _browser_lease(session, timeout_seconds=60,
     ) as browser:
         # REMASK_FP_INVENTORY_UNAVAILABLE_IS_NOT_EMPTY_V1
         # discover_managed_pages() raises FAN_PAGES_NOT_DISCOVERED both when
@@ -248,9 +254,7 @@ async def _fresh_page_inventory(session: Any) -> list[dict[str, Any]]:
 
 async def _fresh_promotable_page_inventory(session: Any) -> list[dict[str, Any]]:
     """Positive-only Page recovery through Ads Manager's live promotable list."""
-    async with FacebookBusinessBrowser(
-        session.context,
-        timeout_seconds=60,
+    async with _browser_lease(session, timeout_seconds=60,
     ) as browser:
         rows = await browser.discover_promotable_pages_from_ads_manager(
             timeout_seconds=8.0,
@@ -577,9 +581,7 @@ async def _attach_page_to_business(
         and checkpoint_business == business
         and checkpoint_page == page
     ):
-        async with FacebookBusinessBrowser(
-            session.context,
-            timeout_seconds=60,
+        async with _browser_lease(session, timeout_seconds=60,
         ) as browser:
             attached = await browser.verify_page_attached(
                 business_id=business,
@@ -628,9 +630,7 @@ async def _attach_page_to_business(
         )
 
     try:
-        async with FacebookBusinessBrowser(
-            session.context,
-            timeout_seconds=75,
+        async with _browser_lease(session, timeout_seconds=75,
         ) as browser:
             result = await browser.add_existing_page(
                 business_id=business,
@@ -715,6 +715,10 @@ async def fan_pages_handler(
     **kwargs: Any,
 ) -> dict[str, Any]:
     del args, state
+
+    meta_transport = kwargs.get("meta_transport")
+    if meta_transport is not None:
+        session = meta_transport
 
     profile_id = _clean(
         kwargs.get("profile_id")
@@ -1234,9 +1238,7 @@ async def fan_pages_handler(
                 )
 
             try:
-                async with FacebookBusinessBrowser(
-                    session.context,
-                    timeout_seconds=75,
+                async with _browser_lease(session, timeout_seconds=75,
                 ) as browser:
                     create_result = await browser.create_fan_page(
                         page_name=page_name,
