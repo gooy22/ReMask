@@ -104,12 +104,19 @@ async def business_handler(
         raise ProvisioningError("INVALID_INPUT", "BUSINESS.attach_page must be boolean", retryable=False)
 
     page_id = _clean(params.get("page_id") or params.get("primary_page_id"))
-    if (attach_page or page_id) and not re.fullmatch(r"\d{5,30}", page_id):
-        raise ProvisioningError(
-            "INVALID_PRIMARY_PAGE",
-            "BUSINESS.page_id must be a numeric Facebook Page ID",
-            retryable=False,
-        )
+    if attach_page:
+        if not re.fullmatch(r"\d{5,30}", page_id):
+            raise ProvisioningError(
+                "INVALID_PRIMARY_PAGE",
+                "BUSINESS.page_id must be a numeric Facebook Page ID",
+                retryable=False,
+            )
+    else:
+        # Ordinary Add BM is independent from any FP selected in Workspace.
+        # A stale browser tab may still send page_id, but it must not influence
+        # CREATE_BM candidate selection, recovery scope, or any Page-access
+        # transport. Page identity exists only for explicit attach_page=True.
+        page_id = ""
 
     user_email = _clean(
         params.get("user_email")
