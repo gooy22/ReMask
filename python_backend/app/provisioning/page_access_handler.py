@@ -1146,10 +1146,39 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
                 saved_grant=(config.get('grants') or {}).get(business) or {}
                 resume_state={**saved_grant,**prior}
                 async with _browser_lease(session,v8_old_space_mb=256) as browser:
-                    full_access=await ensure_existing_page_full_control(
-                        browser,config,business,checkpoint,resume_state)
-                    rk_full_access=await ensure_ad_account_full_control(
-                        browser,business,account,rk_name,checkpoint,resume_state)
+                    try:
+                        full_access=await ensure_existing_page_full_control(
+                            browser,config,business,checkpoint,resume_state)
+                        rk_full_access=await ensure_ad_account_full_control(
+                            browser,business,account,rk_name,checkpoint,resume_state)
+                    except Exception as exc:
+                        diagnostic={
+                            'stage':'existing_page_full_control',
+                            'url':str(getattr(browser.page,'url','')),
+                            'memory':_cgroup_memory_snapshot_mb(),
+                            'v8_old_space_mb':256,
+                        }
+                        try:
+                            diagnostic.update(await asyncio.wait_for(
+                                browser._diagnostic('existing_page_full_control'),
+                                timeout=3,
+                            ))
+                        except Exception:
+                            pass
+                        if isinstance(exc,BrowserBusinessError):
+                            exc.diagnostic={
+                                **diagnostic,
+                                **(exc.diagnostic or {}),
+                            }
+                        else:
+                            await checkpoint({'diagnostic':diagnostic})
+                        raise
+                await store.patch(
+                    owner_business_id=business,
+                    owner_business_confirmed=True,
+                    ownership_phase='PAGE_OWNERSHIP_CONFIRMED',
+                    name=full_access.get('page_name') or config['name'],
+                )
             result={
                 'page_id':config['page_id'],'page_name':config['name'],
                 'business_id':business,'ad_account_id':account,
