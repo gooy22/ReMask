@@ -3126,6 +3126,39 @@ async def profile_provisioning_state(profile_id: str):
         'personal_scope_id':personal_scope_id,
     }
 
+@app.post('/api/v1/profiles/{profile_id}/private-launch-review',dependencies=[Depends(require_key)])
+async def private_launch_review(profile_id: str, payload: dict = Body(...)):
+    clean_profile=str(profile_id or '').strip()
+    if not clean_profile:
+        raise HTTPException(status_code=400,detail='profile_id is required')
+    try:
+        context=await pool.resolver.resolve(clean_profile)
+        result=await pool.private_launch.review(
+            profile_id=clean_profile,
+            context=context,
+            payload=payload,
+        )
+        result.pop('_contracts',None)
+        return {'ok':True,**result}
+    except ProvisioningError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                'code':exc.code,
+                'message':str(exc),
+                'retryable':bool(exc.retryable),
+            },
+        ) from exc
+    except ProfileContextError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                'code':str(getattr(exc,'category','PROFILE_CONTEXT_ERROR')).upper(),
+                'message':str(exc),
+                'retryable':bool(getattr(exc,'retryable',False)),
+            },
+        ) from exc
+
 @app.post('/api/v1/jobs',response_model=JobAccepted,dependencies=[Depends(require_key)])
 async def create_job(request: CreateJobRequest) -> JobAccepted:
     fp_profiles=_request_fan_page_profile_ids(request)
