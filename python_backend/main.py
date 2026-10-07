@@ -22,6 +22,7 @@ from app.facebook_business_browser import BROWSER_TERMINAL_ACCESS_CODES, Browser
 from app.facebook_page_discovery import PageDiscoveryError, list_pages_via_private_graphql
 from app.private_inventory import private_inventory_snapshot
 from app.provisioning.models import ProvisioningError, ProvisioningStep
+from app.provisioning.meta_transport import MetaTransportRouter
 from app.facebook_docids import (
     list_candidates,
     registry_view,
@@ -1857,6 +1858,7 @@ async def profile_live_inventory(
     try:
         stage='profile_session'
         async with ProfileSession(context) as profile_session:
+            meta_transport=MetaTransportRouter(profile_session)
             # REMASK_PRIVATE_FIRST_SYNC_V1
             # Sync is transport-agnostic: reuse the profile cookie/proxy web
             # session first and open Chromium only when private Relay/HTML
@@ -1865,7 +1867,7 @@ async def profile_live_inventory(
             private_started=time.monotonic()
             private_snapshot: dict[str,Any] = {}
             try:
-                facebook_web=await profile_session.facebook_web()
+                facebook_web=await meta_transport.facebook_web()
                 private_timeout=budget(12.0)
                 private_snapshot=await hard_deadline(
                     private_inventory_snapshot(
@@ -2027,7 +2029,7 @@ async def profile_live_inventory(
             try:
                 browser_open_timeout=budget(24.0)
                 browser=await asyncio.wait_for(
-                    profile_session.facebook_business_browser(),
+                    meta_transport.facebook_business_browser(),
                     timeout=browser_open_timeout,
                 )
             except asyncio.TimeoutError as exc:
@@ -2060,17 +2062,13 @@ async def profile_live_inventory(
 
             async def reopen_inventory_browser():
                 nonlocal browser
-                # Drop the timed-out renderer before using the existing Settings
-                # fallback. Keep the same profile/cookies/proxy and total budget.
-                try:
-                    await browser.close()
-                except Exception:
-                    pass
-                finally:
-                    profile_session._business_browser=None
+                # Drop the timed-out renderer through the transport facade.
+                # The profile cookies/proxy stay the same; only Chromium state
+                # is recycled before the fallback probe.
+                await meta_transport.close_business_browser()
                 reopen_timeout=budget(6.0)
                 browser=await hard_deadline(
-                    profile_session.facebook_business_browser(),reopen_timeout,
+                    meta_transport.facebook_business_browser(),reopen_timeout,
                 )
 
             # REMASK_CONFIRMED_HINT_FAST_REVALIDATION_V1
@@ -2400,14 +2398,7 @@ async def profile_live_inventory(
                         exc.code,
                         str(diagnostic.get('url') or '')[:500],
                     )
-                    try:
-                        await browser.close()
-                    except Exception:
-                        pass
-                    try:
-                        profile_session._business_browser=None
-                    except Exception:
-                        pass
+                    await meta_transport.close_business_browser()
                     # The browser context still uses the same profile session.
                     # Reopening drops the redirected renderer; it does not
                     # alter cookies or attempt to bypass Meta's challenge.
@@ -2562,14 +2553,7 @@ async def profile_live_inventory(
                                 business_id,
                                 exc.code,
                             )
-                            try:
-                                await browser.close()
-                            except Exception:
-                                pass
-                            try:
-                                profile_session._business_browser=None
-                            except Exception:
-                                pass
+                            await meta_transport.close_business_browser()
                             # Re-resolve the same profile after an auth failure.
                             # Reopening Chromium alone repeats the original cookies.
                             try:
@@ -2588,7 +2572,7 @@ async def profile_live_inventory(
                                 )
                             browser_reopen_timeout=budget(18.0)
                             browser=await asyncio.wait_for(
-                                profile_session.facebook_business_browser(),
+                                meta_transport.facebook_business_browser(),
                                 timeout=browser_reopen_timeout,
                             )
                             continue
@@ -2670,14 +2654,7 @@ async def profile_live_inventory(
                             separators=(',', ':'),
                         )[:6000],
                     )
-                    try:
-                        await browser.close()
-                    except Exception:
-                        pass
-                    try:
-                        profile_session._business_browser=None
-                    except Exception:
-                        pass
+                    await meta_transport.close_business_browser()
                     raise HTTPException(
                         status_code=504,
                         detail='LIVE_INVENTORY_TIMEOUT:rk_inventory',
@@ -3152,7 +3129,7 @@ async def profile_live_inventory(
                     private_pages_timeout=optional_page_budget(3.5)
                     if private_pages_timeout <= 0.25:
                         raise asyncio.TimeoutError()
-                    facebook_web=await profile_session.facebook_web()
+                    facebook_web=await meta_transport.facebook_web()
                     private_page_result=await hard_deadline(
                         list_pages_via_private_graphql(facebook_web),
                         private_pages_timeout,
