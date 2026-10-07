@@ -3901,6 +3901,37 @@ class BrowserAuthenticationStateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(browser._assert_authenticated.await_count,2)
         browser._resolve_business_login_gate.assert_awaited_once()
 
+    async def test_navigation_error_landing_on_business_gate_uses_safe_continuation(self):
+        browser=FacebookBusinessBrowser(SimpleNamespace(profile_id='gate-nav-error'))
+        page=SimpleNamespace(
+            url='about:blank',
+            wait_for_timeout=AsyncMock(),
+        )
+        async def goto(url,**kwargs):
+            page.url='https://business.facebook.com/business/loginpage/?next=home'
+            raise RuntimeError('net::ERR_ABORTED')
+        page.goto=AsyncMock(side_effect=goto)
+        browser.page=page
+        browser._resolve_facebook_cookie_consent=AsyncMock()
+        browser._assert_authenticated=AsyncMock(return_value=None)
+        async def resolve(**kwargs):
+            page.url='https://business.facebook.com/latest/home'
+            return True
+        browser._resolve_business_login_gate=AsyncMock(side_effect=resolve)
+
+        result=await browser._goto(
+            'https://business.facebook.com/latest/home',
+            settle_ms=0,
+            attempts=1,
+        )
+
+        self.assertEqual(
+            result,
+            'https://business.facebook.com/latest/home',
+        )
+        browser._resolve_business_login_gate.assert_awaited()
+        browser._assert_authenticated.assert_awaited()
+
     async def test_business_suite_body_word_checkpoint_is_not_auth_checkpoint(self):
         browser = FacebookBusinessBrowser(
             SimpleNamespace(profile_id="profile-checkpoint-word")
