@@ -190,8 +190,8 @@ def page_access_request_match(
     friendly = _clean(meta.get("friendly_name")).lower()
     keys = _recursive_keys(variables)
     semantic_tokens = (
-        "access", "permission", "partner", "asset", "page",
-        "business", "request", "task", "role",
+        "access", "permission", "partner", "request",
+        "task", "role", "share", "assign",
     )
     semantic = any(token in friendly for token in semantic_tokens)
     if not semantic:
