@@ -203,6 +203,26 @@ class AdAccountPostCreateVerificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(verified)
         self.assertEqual(len(observations), 1)
 
+    async def test_private_exact_response_pair_skips_browser_verification(self):
+        session = SimpleNamespace(facebook_web=AsyncMock(return_value=SimpleNamespace()))
+        evidence = {"businesses": [{"id": "1056638030476027", "ad_accounts": [{"id": "1111111111", "business_id": "1056638030476027"}]}]}
+        with patch("app.private_inventory.private_inventory_snapshot", new=AsyncMock(return_value=evidence)) as private, \
+             patch("app.provisioning.ad_account_handler._reconcile_existing_browser_inventory", new=AsyncMock()) as browser:
+            verified, observations = await _verify_expected_ad_account_in_business(session, business_id="1056638030476027", account_name="ReMask RK", expected_ad_account_id="act_1111111111")
+        self.assertTrue(verified)
+        browser.assert_not_awaited()
+        self.assertFalse(private.await_args.kwargs["discover_businesses"])
+        self.assertEqual(observations[0]["source"], "private_http_relay_inventory_expected_id")
+
+    async def test_private_inconclusive_pair_keeps_browser_verification(self):
+        session = SimpleNamespace(facebook_web=AsyncMock(return_value=SimpleNamespace()))
+        evidence = {"businesses": [{"id": "1056638030476027", "ad_accounts": [{"id": "1111111111", "business_id": "9999999999"}]}]}
+        with patch("app.private_inventory.private_inventory_snapshot", new=AsyncMock(return_value=evidence)), \
+             patch("app.provisioning.ad_account_handler._reconcile_existing_browser_inventory", new=AsyncMock(return_value=("act_1111111111", {"confirmed": True}))) as browser:
+            verified, _ = await _verify_expected_ad_account_in_business(session, business_id="1056638030476027", account_name="ReMask RK", expected_ad_account_id="act_1111111111")
+        self.assertTrue(verified)
+        browser.assert_awaited_once()
+
     def test_generic_unrelated_account_id_is_not_create_result(self) -> None:
         payload = {
             "data": {

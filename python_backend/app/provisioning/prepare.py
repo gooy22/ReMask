@@ -804,13 +804,9 @@ class PrepareService:
                     business_id,
                     account_id,
                 )
-                if desired.require_page_access
-                else True
             )
             payment = (
                 await self.state.funding_confirmed(profile_id, account_id)
-                if desired.require_payment
-                else True
             )
             access_ready = access_ready and access
             payment_ready = payment_ready and payment

@@ -630,6 +630,40 @@ async def _verify_expected_ad_account_in_business(
     observations: list[dict[str, Any]] = []
     attempts = max(1, int(checks))
 
+    # Positive exact-pair evidence can be read through the cookie/proxy HTTP
+    # session. Missing private evidence is inconclusive and retains the existing
+    # independent browser verification; it never authorizes another CREATE.
+    web_factory = getattr(session, "facebook_web", None)
+    if callable(web_factory):
+        try:
+            from ..private_inventory import private_inventory_snapshot
+            web = await web_factory()
+            private = await private_inventory_snapshot(
+                web,
+                known_accounts_by_business={business_id: {expected.removeprefix("act_")}},
+                known_business_ids={business_id},
+                discover_businesses=False,
+            )
+            exact_rows = [
+                account
+                for business in private.get("businesses", [])
+                if str(business.get("id") or "") == business_id
+                for account in business.get("ad_accounts", [])
+                if str(account.get("business_id") or "") == business_id
+                and _normalize_ad_account_id(account.get("id")) == expected
+            ]
+            if exact_rows:
+                return True, [{
+                    "source": "private_http_relay_inventory_expected_id",
+                    "business_id": business_id,
+                    "expected_ad_account_id": expected,
+                    "found_ad_account_id": expected,
+                    "confirmed": True,
+                }]
+        except Exception as exc:
+            log.info("RK private verification inconclusive business=%s error_type=%s",
+                     business_id, type(exc).__name__)
+
     for attempt in range(attempts):
         found_id, evidence = await _reconcile_existing_browser_inventory(
             session,

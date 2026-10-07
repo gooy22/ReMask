@@ -8,13 +8,25 @@ from typing import Any
 from .facebook_business_browser import (
     _extract_business_inventory_rows,
     _extract_inventory_ad_account_rows,
-    _has_ad_account_inventory_container,
 )
 
 _JSON_SCRIPT_RE = re.compile(
     r"<script[^>]+type=[\"']application/json[\"'][^>]*>(.*?)</script>",
     re.IGNORECASE | re.DOTALL,
 )
+_REQUEST_KEYS = {"variables", "params", "request", "input", "query", "preloadparams"}
+
+
+def _response_only(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _response_only(child)
+            for key, child in value.items()
+            if str(key).replace("_", "").lower() not in _REQUEST_KEYS
+        }
+    if isinstance(value, list):
+        return [_response_only(child) for child in value]
+    return value
 
 
 def _clean_id(value: Any) -> str:
@@ -36,13 +48,6 @@ def _auth_gate(url: str, body: str) -> str:
     return ""
 
 
-def _payloads_text(payloads: list[Any]) -> str:
-    try:
-        return json.dumps(payloads, ensure_ascii=False, separators=(",", ":"))
-    except Exception:
-        return ""
-
-
 def _json_payloads(body: str) -> list[Any]:
     payloads: list[Any] = []
     for match in _JSON_SCRIPT_RE.finditer(str(body or "")):
@@ -50,10 +55,62 @@ def _json_payloads(body: str) -> list[Any]:
         if not raw:
             continue
         try:
-            payloads.append(json.loads(raw))
+            payloads.append(_response_only(json.loads(raw)))
         except (TypeError, ValueError, json.JSONDecodeError):
             continue
     return payloads
+
+
+def _business_payloads(payload: Any, business_id: str) -> list[dict[str, Any]]:
+    """Only response subtrees which identify the exact portfolio are scoped.
+
+    Request variables and the requested URL are lookup hints, never evidence.
+    A selected Ads Manager account may belong to a different portfolio.
+    """
+    output: list[dict[str, Any]] = []
+    ignored = {"variables", "params", "request", "input", "query", "preloadparams"}
+
+    def walk(value, key=""):
+        if isinstance(value, dict):
+            typename = str(value.get("__typename") or "").replace("_", "").lower()
+            business_node = typename in {"business", "businessportfolio"} or key.lower() in {
+                "business", "bizkit_business", "business_portfolio", "businessportfolio",
+            }
+            if business_node and _clean_id(value.get("id")) == business_id:
+                output.append(value)
+                return
+            for child_key, child in value.items():
+                if str(child_key).replace("_", "").lower() not in ignored:
+                    walk(child, str(child_key))
+        elif isinstance(value, list):
+            for child in value:
+                walk(child, key)
+    walk(payload)
+    return output
+
+
+def _has_complete_scoped_inventory(payload: Any) -> bool:
+    """A single account or a paginated fragment cannot prove an empty list."""
+    collection_keys = {"adaccounts", "ownedadaccounts", "clientadaccounts", "advertisingaccounts"}
+    if isinstance(payload, dict):
+        for key, child in payload.items():
+            compact = str(key).replace("_", "").lower()
+            if compact in collection_keys:
+                if isinstance(child, list):
+                    return True
+                if isinstance(child, dict):
+                    page_info = child.get("page_info", child.get("pageInfo", {}))
+                    if isinstance(page_info, dict) and (
+                        page_info.get("has_next_page", page_info.get("hasNextPage")) is False
+                        and page_info.get("has_previous_page", page_info.get("hasPreviousPage", False)) is False
+                        and any(isinstance(child.get(field), list) for field in ("edges", "nodes", "items", "results"))
+                    ):
+                        return True
+            if compact not in {"variables", "params", "request", "input", "query"} and _has_complete_scoped_inventory(child):
+                return True
+    elif isinstance(payload, list):
+        return any(_has_complete_scoped_inventory(child) for child in payload)
+    return False
 
 
 async def _fetch_payloads(web, url: str) -> tuple[list[Any], dict[str, Any]]:
@@ -65,6 +122,7 @@ async def _fetch_payloads(web, url: str) -> tuple[list[Any], dict[str, Any]]:
         "http_status": int(status),
         "auth_gate": gate,
         "bytes": len(body),
+        "usable": 200 <= int(status) < 300 and not gate,
     }
 
 
@@ -74,6 +132,7 @@ async def private_inventory_snapshot(
     known_accounts_by_business: dict[str, set[str]],
     known_business_ids: set[str],
     personal_scope_id: str = "",
+    discover_businesses: bool = True,
 ) -> dict[str, Any]:
     """Read Meta inventory without Chromium.
 
@@ -85,10 +144,11 @@ async def private_inventory_snapshot(
     diagnostics: list[dict[str, Any]] = []
     businesses: dict[str, str] = {}
 
-    for url in (
+    discovery_urls = (
         "https://business.facebook.com/latest/home",
         "https://business.facebook.com/latest/overview",
-    ):
+    ) if discover_businesses else ()
+    for url in discovery_urls:
         try:
             payloads, diag = await _fetch_payloads(web, url)
         except Exception as exc:
@@ -99,7 +159,7 @@ async def private_inventory_snapshot(
             })
             continue
         diagnostics.append({"phase": "business_discovery", **diag})
-        if diag.get("auth_gate"):
+        if not diag.get("usable"):
             continue
         for payload in payloads:
             for row in _extract_business_inventory_rows(payload):
@@ -154,22 +214,21 @@ async def private_inventory_snapshot(
                 continue
 
             business_diags.append(diag)
-            if diag.get("auth_gate"):
+            if not diag.get("usable"):
                 continue
 
             request_scoped = "settings/ad_accounts" in url
-            requested_expected = ""
-            match = re.search(r"[?&]act=(\d{5,30})", url)
-            if match:
-                requested_expected = _clean_id(match.group(1))
             for payload in payloads:
-                authoritative_container = (
-                    authoritative_container
-                    or _has_ad_account_inventory_container(
-                        payload,
-                        request_scoped=request_scoped,
-                    )
+                scoped = _business_payloads(payload, business_id)
+                authoritative_container = authoritative_container or any(
+                    _has_complete_scoped_inventory(value)
+                    for value in scoped
                 )
+                scoped_ids = {
+                    _clean_id(account.get("id") or account.get("account_id"))
+                    for value in scoped
+                    for account in _extract_inventory_ad_account_rows(value, request_scoped=request_scoped)
+                }
                 for account in _extract_inventory_ad_account_rows(
                     payload,
                     request_scoped=request_scoped,
@@ -181,43 +240,27 @@ async def private_inventory_snapshot(
                     )
                     if not account_id:
                         continue
+                    row_business = _clean_id(account.get("business_id"))
+                    if row_business and row_business != business_id:
+                        continue
+                    if not row_business and account_id not in scoped_ids:
+                        continue
                     row = dict(account)
                     row["id"] = account_id
                     row["account_id"] = account_id
-                    row.setdefault("business_id", business_id)
+                    row["business_id"] = business_id
                     account_rows[account_id] = row
 
-            # Some Ads Manager HTML bootstraps expose the selected account only
-            # in the final authenticated URL while the Relay row is deferred.
-            # Accept this only for an exact expected hint and only when the
-            # response is clearly authenticated (DTSG/current-user markers).
-            if requested_expected and requested_expected in expected and not diag.get("auth_gate"):
-                final_url = str(diag.get("final_url") or "")
-                final_act = re.findall(r"(?:[?&]act=|act[_:=/%-]+)(\d{5,30})", final_url, flags=re.I)
-                authenticated = any(
-                    marker in str(body_marker)
-                    for marker in ("DTSGInitialData", "DTSGInitData", "CurrentUserInitialData")
-                    for body_marker in [str(_payloads_text(payloads))]
-                )
-                if requested_expected in final_act and authenticated and requested_expected not in account_rows:
-                    account_rows[requested_expected] = {
-                        "id": requested_expected,
-                        "account_id": requested_expected,
-                        "name": "",
-                        "business_id": business_id,
-                        "_source": "private_ads_manager_exact_act",
-                    }
-                    business_diags.append({
-                        "url": url,
-                        "phase": "exact_act_live_confirmed",
-                        "account_id": requested_expected,
-                    })
+            # Stop read-only probes as soon as all exact known pairs are
+            # confirmed, or this portfolio exposes an authoritative inventory.
+            if (expected and expected.issubset(account_rows)) or authoritative_container:
+                break
 
         confirmed_expected = sorted(expected.intersection(account_rows))
         ready = bool(account_rows) and (
-            not expected or bool(confirmed_expected)
+            not expected or expected.issubset(account_rows)
         )
-        confirmed_empty = bool(authoritative_container and not account_rows)
+        confirmed_empty = bool(authoritative_container and not account_rows and not expected)
 
         if ready or confirmed_empty:
             confirmed_businesses.add(business_id)
@@ -249,7 +292,8 @@ async def private_inventory_snapshot(
         value for value in known_business_ids
         if value and value != personal_scope_id
     }
-    ready = bool(known_targets) and known_targets.issubset(confirmed_businesses)
+    required_targets = known_targets | set(businesses)
+    ready = bool(required_targets) and required_targets.issubset(confirmed_businesses)
 
     return {
         "ready": ready,

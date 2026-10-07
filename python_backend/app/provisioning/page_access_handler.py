@@ -12,8 +12,10 @@ from ..facebook_page_search import page_lookup_url
 from ..session_auth_refresh import refresh_saved_auth_context
 from ..graphql_mutation_capture import GraphqlMutationCapture
 from ..private_page_access import (
+    PAGE_ACCESS_PENDING_PHASES,
     PageAccessContractStore,
     page_access_request_match,
+    submit_page_access_request,
 )
 from .advertising_page import AdvertisingPageStore, _PAGE_LOCK, ensure_common_page
 from .models import ProvisioningError, ProvisioningStep
@@ -307,6 +309,8 @@ async def _request_target_page_access(
         # while continuing RK/operator reconciliation.
         return True
     if phase in {
+            'TARGET_PAGE_ACCESS_PRIVATE_SUBMIT_INTENT',
+            'TARGET_PAGE_ACCESS_PRIVATE_RESULT_UNKNOWN',
             'TARGET_PAGE_ACCESS_SUBMITTED',
             'TARGET_PAGE_ACCESS_OWNER_APPROVE_CLICK_INTENT',
             'TARGET_PAGE_ACCESS_OWNER_APPROVED',
@@ -413,6 +417,7 @@ async def _request_target_page_access(
             captured,
             business_id=business,
             page_id=str(config['page_id']),
+            actor_id=str((getattr(getattr(browser,'context',None),'cookies',{}) or {}).get('c_user') or ''),
         )
         await checkpoint({
             'phase':'TARGET_PAGE_ACCESS_PRIVATE_CONTRACT_CAPTURED',
@@ -423,11 +428,12 @@ async def _request_target_page_access(
             },
         })
         try:
-            await contract_store.execute(
-                private_web,
+            await submit_page_access_request(
+                contract_store, private_web,
                 business_id=business,
                 page_id=str(config['page_id']),
                 profile_id=profile_id,
+                checkpoint=checkpoint,
             )
         except ProvisioningError:
             raise
@@ -1349,16 +1355,7 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
                 if callable(facebook_web_factory):
                     private_web=await facebook_web_factory()
 
-                request_submitted_phase={
-                    'TARGET_PAGE_ACCESS_SUBMITTED',
-                    'TARGET_PAGE_ACCESS_OWNER_APPROVE_CLICK_INTENT',
-                    'TARGET_PAGE_ACCESS_OWNER_APPROVED',
-                    'TARGET_PAGE_ACCESS_OWNER_CONFIRMED',
-                    'TARGET_PAGE_ACCESS_RK_CONFIRMED',
-                    'TARGET_PAGE_OPERATOR_ASSIGN_CLICK_INTENT',
-                    'TARGET_PAGE_OPERATOR_ASSIGN_SUBMITTED',
-                    'TARGET_PAGE_OPERATOR_ASSIGN_CONFIRMED',
-                }
+                request_submitted_phase=PAGE_ACCESS_PENDING_PHASES
                 phase=str(resume_state.get('phase') or '')
                 private_request_submitted=phase in request_submitted_phase
 
@@ -1372,11 +1369,12 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
                         'transport':'private_graphql',
                     })
                     try:
-                        await private_contract_store.execute(
-                            private_web,
+                        await submit_page_access_request(
+                            private_contract_store, private_web,
                             business_id=business,
                             page_id=str(config['page_id']),
                             profile_id=str(profile),
+                            checkpoint=checkpoint,
                         )
                     except ProvisioningError as exc:
                         if exc.code!='PRIVATE_PAGE_ACCESS_CONTRACT_STALE':

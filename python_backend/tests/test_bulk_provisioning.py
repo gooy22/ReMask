@@ -333,7 +333,8 @@ class BulkPersistenceTests(unittest.IsolatedAsyncioTestCase):
             return SimpleNamespace(business_id='444444444',transport='facebook_web_graphql_scope_selector',primary_page_id='',diagnostics=[])
         with patch('app.provisioning.business_handler.create_business_resilient',new=AsyncMock(side_effect=created)),patch('app.provisioning.business_handler.set_business_primary_page',new=AsyncMock()) as attach:
             result=await business_handler(session,{'name':'Fresh','user_email':'owner@example.com','page_id':'555555555'},{},**kwargs)
-        self.assertEqual(result['selected_page_id'],'555555555'); self.assertIsNone(result['primary_page_id'])
+        # Independent Add BM strips a stale Page selection before CREATE.
+        self.assertIsNone(result['selected_page_id']); self.assertIsNone(result['primary_page_id'])
         attach.assert_not_awaited(); session.facebook_business_browser.assert_not_awaited()
 
     async def test_uncertain_create_still_cannot_be_resubmitted_without_page_attach(self):

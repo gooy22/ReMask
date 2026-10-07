@@ -101,7 +101,7 @@ class FacebookRequestEnvelopeTests(unittest.IsolatedAsyncioTestCase):
                 fb_dtsg="dtsg",
                 actor_id="123456789",
                 lsd="lsd-token",
-                request_context={"__aaid": "42"},
+                request_context={"__aaid": "42", "__hsi": "fresh-session", "__rev": "200", "__spin_t": "999"},
                 source_url=(
                     "https://business.facebook.com/latest/home"
                     "?asset_id=1348798761652037&ir_qe_exposed=1"
@@ -113,6 +113,7 @@ class FacebookRequestEnvelopeTests(unittest.IsolatedAsyncioTestCase):
             "28057338880523368",
             {"input": {"actor_id": "123456789"}},
             friendly_name="useBusinessCreationMutationMutation",
+            request_envelope={"__aaid": "old-asset", "__hsi": "old-session", "__rev": "100", "__spin_t": "111", "__dyn": "other-profile-dyn", "__req": "cached-counter", "fb_dtsg": "other-profile-token", "dpr": "2"},
         )
 
         self.assertTrue(payload["data"]["ok"])
@@ -129,6 +130,17 @@ class FacebookRequestEnvelopeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(headers["Sec-Fetch-Dest"], "empty")
         self.assertEqual(headers["Sec-Fetch-Mode"], "cors")
         self.assertEqual(headers["Sec-Fetch-Site"], "same-origin")
+        form = kwargs["data"]
+        self.assertEqual(form["__aaid"], "42")
+        self.assertEqual(form["__hsi"], "fresh-session")
+        self.assertEqual(form["__rev"], "200")
+        self.assertEqual(form["__spin_t"], "999")
+        self.assertEqual(form["__req"], "1")
+        self.assertEqual(form["fb_dtsg"], "dtsg")
+        self.assertEqual(form["dpr"], "2")
+        self.assertNotIn("__dyn", form)
+        await session.graphql("28057338880523368", {}, request_envelope={"__req": "cached"})
+        self.assertEqual(fake.calls[1][1]["data"]["__req"], "2")
 
 
 if __name__ == "__main__":

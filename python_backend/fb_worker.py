@@ -1050,9 +1050,10 @@ class FacebookWebSession:
             if key in allowed_context_keys and str(value or "").strip():
                 form[key] = str(value).strip()
 
-        # Exact safe envelope captured from the user's real BizWeb CREATE wins
-        # over values inferred from bootstrap HTML. Authentication fields are
-        # deliberately excluded from allowed_context_keys.
+        # A reusable contract describes the operation, not the source session.
+        # Session/asset IDs, revisions and counters from an old capture must
+        # never replace this profile's fresh bootstrap context.
+        reusable_envelope_keys = {"dpr", "server_timestamps", "fb_api_caller_class"}
         for key, value in (
             request_envelope
             if isinstance(request_envelope, dict)
@@ -1060,10 +1061,10 @@ class FacebookWebSession:
         ).items():
             clean_key = str(key or "").strip()
             clean_value = str(value or "").strip()
-            if clean_key in allowed_context_keys and clean_value:
+            if clean_key in reusable_envelope_keys and clean_value:
                 form[clean_key] = clean_value[:20000]
 
-        form.setdefault("__req", self._next_graphql_req())
+        form["__req"] = self._next_graphql_req()
         form.setdefault("dpr", "1")
         form.setdefault("__ccg", "EXCELLENT")
         form.setdefault("__jssesw", "1")

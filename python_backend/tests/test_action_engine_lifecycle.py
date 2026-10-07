@@ -114,7 +114,7 @@ class ActionEngineLifecycleTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             observed["policy"].fallback,
-            "chromium_business_suite",
+            "none_private_only",
         )
         step = await self.state.step(
             "item-router",

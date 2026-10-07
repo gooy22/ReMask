@@ -280,7 +280,10 @@ class PreparePlannerTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(sequence, ["BUSINESS", "AD_ACCOUNT"])
-        self.assertEqual(result["status"], "READY_TO_LAUNCH")
+        self.assertEqual(result["status"], "PREPARED")
+        self.assertFalse(result["ready_to_launch"])
+        self.assertFalse(result["actual"]["ad_accounts"][0]["page_access_confirmed"])
+        self.assertFalse(result["actual"]["ad_accounts"][0]["payment_confirmed"])
         self.assertEqual(
             {row["business_id"] for row in result["actual"]["bundles"]},
             {self.business_id, self.business_id_2},
@@ -322,7 +325,10 @@ class PreparePlannerTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(provisioning.run.await_count, 1)
-        self.assertEqual(result["status"], "READY_TO_LAUNCH")
+        self.assertEqual(result["status"], "PREPARED")
+        self.assertFalse(result["ready_to_launch"])
+        self.assertFalse(result["actual"]["ad_accounts"][0]["page_access_confirmed"])
+        self.assertFalse(result["actual"]["ad_accounts"][0]["payment_confirmed"])
         self.assertEqual(
             len({row["business_id"] for row in result["actual"]["bundles"]}),
             2,
@@ -365,7 +371,9 @@ class PreparePlannerTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(provisioning.run.await_count, 1)
-        self.assertEqual(result["status"], "READY_TO_LAUNCH")
+        self.assertEqual(result["status"], "PREPARED")
+        self.assertFalse(result["ready_to_launch"])
+        self.assertFalse(result["actual"]["ad_accounts"][0]["payment_confirmed"])
         self.assertTrue(result["actual"]["ad_accounts"][0]["page_access_confirmed"])
 
     async def test_workspace_inventory_with_two_bm_rk_pairs_suppresses_duplicate_create(self):
@@ -408,7 +416,10 @@ class PreparePlannerTests(unittest.IsolatedAsyncioTestCase):
         )
 
         provisioning.run.assert_not_awaited()
-        self.assertEqual(result["status"], "READY_TO_LAUNCH")
+        self.assertEqual(result["status"], "PREPARED")
+        self.assertFalse(result["ready_to_launch"])
+        self.assertFalse(result["actual"]["ad_accounts"][0]["page_access_confirmed"])
+        self.assertFalse(result["actual"]["ad_accounts"][0]["payment_confirmed"])
         self.assertEqual(
             result["actual"]["business_ids"],
             [row["business_id"] for row in result["actual"]["bundles"]],

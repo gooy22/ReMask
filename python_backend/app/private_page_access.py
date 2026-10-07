@@ -173,6 +173,8 @@ def page_access_request_match(
     )
     if not variables:
         return False
+    if meta.get("method") and str(meta["method"]).upper() != "POST":
+        return False
 
     business = _clean(business_id)
     page = _clean(page_id)
@@ -188,6 +190,10 @@ def page_access_request_match(
         return False
 
     friendly = _clean(meta.get("friendly_name")).lower()
+    if "mutation" not in friendly or any(token in friendly for token in (
+        "claim", "ownership", "transfer", "createpage",
+    )):
+        return False
     keys = _recursive_keys(variables)
     semantic_tokens = (
         "access", "permission", "partner", "request",
@@ -258,6 +264,10 @@ class PageAccessContractStore:
 
         _reject_auth_material(variables, "variables")
         _reject_auth_material(envelope, "request_envelope")
+        if _concrete_actor_ids(variables):
+            # Legacy captures may embed the source profile's actor. They must
+            # be captured again rather than replayed under another profile.
+            return None
         safe_envelope = {
             str(key): _clean(value)
             for key, value in envelope.items()
@@ -285,6 +295,7 @@ class PageAccessContractStore:
         *,
         business_id: str,
         page_id: str,
+        actor_id: str = "",
     ) -> PageAccessContract:
         if not isinstance(captured, dict):
             raise ProvisioningError(
@@ -308,12 +319,18 @@ class PageAccessContractStore:
                 retryable=False,
             )
 
+        actor = _clean(actor_id)
+        captured_actors = _concrete_actor_ids(variables)
+        if captured_actors and (not actor.isdigit() or captured_actors != {actor}
+                               or actor in {business, page}):
+            raise ProvisioningError("PRIVATE_PAGE_ACCESS_CAPTURE_INVALID",
+                "Captured Page-access actor is not the current profile", retryable=False)
+        replacements = {business: "{{business_id}}", page: "{{page_id}}"}
+        if actor:
+            replacements[actor] = "{{actor_id}}"
         templated = _template_value(
             variables,
-            {
-                business: "{{business_id}}",
-                page: "{{page_id}}",
-            },
+            replacements,
         )
         encoded = json.dumps(
             templated,
@@ -384,6 +401,7 @@ class PageAccessContractStore:
         *,
         business_id: str,
         page_id: str,
+        actor_id: str = "",
     ) -> dict[str, Any]:
         business = _clean(business_id)
         page = _clean(page_id)
@@ -393,11 +411,15 @@ class PageAccessContractStore:
                 "Page-access target IDs are invalid",
                 retryable=False,
             )
+        if "{{actor_id}}" in json.dumps(contract.variables) and not _clean(actor_id).isdigit():
+            raise ProvisioningError("PRIVATE_PAGE_ACCESS_TARGET_INVALID",
+                "The current Facebook actor is required to render this contract", retryable=False)
         variables = _render_value(
             contract.variables,
             {
                 "{{business_id}}": business,
                 "{{page_id}}": page,
+                "{{actor_id}}": _clean(actor_id),
             },
         )
         if not isinstance(variables, dict):
@@ -415,6 +437,7 @@ class PageAccessContractStore:
         business_id: str,
         page_id: str,
         profile_id: str,
+        before_submit: Any = None,
     ) -> dict[str, Any]:
         contract = self.get()
         if contract is None:
@@ -433,10 +456,13 @@ class PageAccessContractStore:
             source="private_page_access_contract",
             priority=8_500,
         )
+        cookies = getattr(getattr(web, "profile", None), "cookies", {})
+        actor = str(cookies.get("c_user") or "") if isinstance(cookies, dict) else ""
         variables = self.render(
             contract,
             business_id=business_id,
             page_id=page_id,
+            actor_id=actor,
         )
 
         try:
@@ -446,6 +472,7 @@ class PageAccessContractStore:
                 friendly_name=contract.friendly_name,
                 endpoint_url=contract.endpoint_url,
                 request_envelope=contract.request_envelope,
+                **({"before_submit": before_submit} if before_submit is not None else {}),
             )
         except AuthenticationError as exc:
             record_result(
@@ -480,18 +507,27 @@ class PageAccessContractStore:
                 profile_id=profile_id,
                 failure_kind=kind,
             )
-            if kind == "stale_schema":
-                raise ProvisioningError(
+            rejected = bool(exc.meta_payload and not exc.meta_payload.get("data")
+                and (exc.meta_payload.get("error") or exc.meta_payload.get("errors")))
+            if kind == "stale_schema" and rejected:
+                error = ProvisioningError(
                     "PRIVATE_PAGE_ACCESS_CONTRACT_STALE",
                     "Captured Page-access contract is stale",
                     retryable=True,
-                ) from exc
-            if exc.http_status and 400 <= int(exc.http_status) < 500:
-                raise ProvisioningError(
+                )
+                error.request_rejected = True
+                raise error from exc
+            if exc.request_may_have_been_sent is False:
+                raise ProvisioningError("PRIVATE_PAGE_ACCESS_NOT_SUBMITTED",
+                    "Private Page-access request was not submitted", retryable=True) from exc
+            if rejected:
+                error = ProvisioningError(
                     "PRIVATE_PAGE_ACCESS_META_REJECTED",
                     "Meta explicitly rejected the private Page-access request",
                     retryable=False,
-                ) from exc
+                )
+                error.request_rejected = True
+                raise error from exc
             raise ProvisioningError(
                 "PRIVATE_PAGE_ACCESS_RESULT_UNKNOWN",
                 "Private Page-access request transport failed after submit",
@@ -506,11 +542,11 @@ class PageAccessContractStore:
             )
 
         errors = payload.get("errors")
-        if isinstance(errors, list) and errors:
+        if payload.get("error") or (isinstance(errors, list) and errors):
             kind = classify_cache_failure(
                 payload=payload,
                 message=json.dumps(
-                    errors,
+                    payload,
                     ensure_ascii=False,
                     separators=(",", ":"),
                 )[:1600],
@@ -525,14 +561,23 @@ class PageAccessContractStore:
             )
             code = (
                 "PRIVATE_PAGE_ACCESS_CONTRACT_STALE"
-                if kind == "stale_schema"
+                if kind == "stale_schema" and not payload.get("data")
                 else "PRIVATE_PAGE_ACCESS_META_REJECTED"
             )
-            raise ProvisioningError(
+            if payload.get("data"):
+                raise ProvisioningError("PRIVATE_PAGE_ACCESS_RESULT_UNKNOWN",
+                    "Meta returned both mutation data and errors; verify the existing request", retryable=True)
+            error = ProvisioningError(
                 code,
                 "Meta rejected the private Page-access mutation",
                 retryable=(kind == "stale_schema"),
             )
+            error.request_rejected = True
+            raise error
+
+        if not isinstance(payload.get("data"), dict) or not payload["data"]:
+            raise ProvisioningError("PRIVATE_PAGE_ACCESS_RESULT_UNKNOWN",
+                "Meta returned no mutation data; the request must be verified", retryable=True)
 
         record_result(
             OPERATION,
@@ -544,9 +589,68 @@ class PageAccessContractStore:
         return payload
 
 
+def _concrete_actor_ids(value: Any) -> set[str]:
+    found: set[str] = set()
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if str(key).lower() == "actor_id" and str(child or "").isdigit():
+                found.add(str(child))
+            found.update(_concrete_actor_ids(child))
+    elif isinstance(value, list):
+        for child in value:
+            found.update(_concrete_actor_ids(child))
+    return found
+
+
+PAGE_ACCESS_PENDING_PHASES = frozenset({
+    "TARGET_PAGE_ACCESS_PRIVATE_SUBMIT_INTENT",
+    "TARGET_PAGE_ACCESS_PRIVATE_RESULT_UNKNOWN",
+    "TARGET_PAGE_ACCESS_SUBMITTED",
+    "TARGET_PAGE_ACCESS_OWNER_APPROVE_CLICK_INTENT",
+    "TARGET_PAGE_ACCESS_OWNER_APPROVED",
+    "TARGET_PAGE_ACCESS_OWNER_CONFIRMED",
+    "TARGET_PAGE_ACCESS_RK_CONFIRMED",
+    "TARGET_PAGE_OPERATOR_ASSIGN_CLICK_INTENT",
+    "TARGET_PAGE_OPERATOR_ASSIGN_SUBMITTED",
+    "TARGET_PAGE_OPERATOR_ASSIGN_CONFIRMED",
+})
+
+
+async def submit_page_access_request(store, web, *, business_id, page_id, profile_id, checkpoint):
+    """One durable POST boundary, shared by replay and newly captured requests."""
+    submitted = False
+
+    async def before_submit():
+        nonlocal submitted
+        await checkpoint({"phase": "TARGET_PAGE_ACCESS_PRIVATE_SUBMIT_INTENT",
+            "transport": "private_graphql", "requested_tasks": ["ADVERTISE"],
+            "private_request_rejected": False})
+        submitted = True
+
+    try:
+        result = await store.execute(web, business_id=business_id, page_id=page_id,
+            profile_id=profile_id, before_submit=before_submit)
+    except ProvisioningError as exc:
+        if getattr(exc, "request_rejected", False):
+            await checkpoint({"phase": "TARGET_PAGE_ACCESS_PRIVATE_REJECTED",
+                "private_request_rejected": True, "last_error_code": exc.code})
+        elif submitted and exc.code != "PRIVATE_PAGE_ACCESS_NOT_SUBMITTED":
+            await checkpoint({"phase": "TARGET_PAGE_ACCESS_PRIVATE_RESULT_UNKNOWN",
+                "transport": "private_graphql", "last_error_code": exc.code})
+        elif exc.code == "PRIVATE_PAGE_ACCESS_NOT_SUBMITTED":
+            await checkpoint({"phase": "TARGET_PAGE_ACCESS_PRIVATE_NOT_SUBMITTED",
+                "transport": "private_graphql", "last_error_code": exc.code})
+        raise
+    await checkpoint({"phase": "TARGET_PAGE_ACCESS_SUBMITTED", "transport": "private_graphql",
+        "requested_tasks": ["ADVERTISE"], "private_request_rejected": False})
+    return result
+
+
 __all__ = [
     "OPERATION",
     "PageAccessContract",
     "PageAccessContractStore",
     "page_access_request_match",
+    "PAGE_ACCESS_PENDING_PHASES",
+    "submit_page_access_request",
 ]
