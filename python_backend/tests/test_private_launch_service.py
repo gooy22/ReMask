@@ -132,7 +132,10 @@ class PrivateLaunchTests(unittest.IsolatedAsyncioTestCase):
             contracts=PrivateLaunchContractStore(__import__("json").dumps(contracts())),
         )
         self.context = SimpleNamespace(profile_id="7")
-        self.web = SimpleNamespace(graphql=AsyncMock())
+        self.web = SimpleNamespace(
+            bootstrap=AsyncMock(return_value=SimpleNamespace(actor_id="61594993341059")),
+            graphql=AsyncMock(),
+        )
         self.session = SimpleNamespace(facebook_web=AsyncMock(return_value=self.web))
         self.payload = {
             "business_id": "1760742031708754",
@@ -250,6 +253,38 @@ class PrivateLaunchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(effective["adset"]["targeting"], {"age_min": 18, "age_max": 35})
         self.assertEqual(effective["creative"]["message"], "RK override")
         self.assertEqual(effective["creative"]["name"], "Base creative")
+
+    async def test_crash_after_submit_checkpoint_never_replays_mutation(self):
+        self.web.graphql.side_effect = RuntimeError("process-crash-fixture")
+        with patch.object(self.service, "_live_preflight", AsyncMock(return_value=self.preflight)):
+            with self.assertRaises(RuntimeError):
+                await self.service.run(
+                    item_id="item-crash",
+                    profile_id="7",
+                    context=self.context,
+                    session=self.session,
+                    payload={**self.payload, "launch_key": "crash-launch"},
+                )
+        step = await self.service.state.step(
+            "crash-launch",
+            __import__("app.private_launch", fromlist=["PrivateLaunchStep"]).PrivateLaunchStep.CAMPAIGN,
+        )
+        self.assertEqual(step["status"], "SUBMITTING")
+        self.assertIsNone(step["submitted"])
+
+        self.web.graphql.reset_mock()
+        self.web.graphql.return_value = {"data": {"create": {"id": "599999999999999"}}}
+        with patch.object(self.service, "_live_preflight", AsyncMock(return_value=self.preflight)):
+            with self.assertRaises(ProvisioningError) as caught:
+                await self.service.run(
+                    item_id="item-crash-retry",
+                    profile_id="7",
+                    context=self.context,
+                    session=self.session,
+                    payload={**self.payload, "launch_key": "crash-launch"},
+                )
+        self.assertEqual(caught.exception.code, "PRIVATE_LAUNCH_RECONCILE_REQUIRED")
+        self.web.graphql.assert_not_awaited()
 
     async def test_unknown_submitted_result_blocks_automatic_resubmit(self):
         self.web.graphql.return_value = {"data": {"create": {}}}
