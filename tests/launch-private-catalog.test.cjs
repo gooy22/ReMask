@@ -115,7 +115,7 @@ console.log('Private Launch catalog and funding truth checks passed');
   assert.equal(planned.request.action,'create');
   assert.equal(planned.request.profiles.length,2);
   assert.ok(planned.request.profiles.every(row=>row.tasks.length===1&&row.tasks[0].action==='private_launch'));
-  assert.deepEqual(planned.request.profiles.map(row=>row.tasks[0].payload.page_id),['333333333','444444444']);
+  assert.deepEqual(Array.from(planned.request.profiles,row=>row.tasks[0].payload.page_id),['333333333','444444444']);
   assert.ok(planned.request.profiles.every(row=>row.tasks[0].payload.launch.base.campaign.name==='Campaign'));
   assert.ok(planned.request.profiles.every(row=>row.tasks[0].payload.doc_id===undefined));
 
