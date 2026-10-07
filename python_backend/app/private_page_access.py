@@ -415,7 +415,7 @@ class PrivatePageShareContractStore:
             },
         )
         encoded = json.dumps(rendered, ensure_ascii=False)
-        if "{{" in encoded or "}}" in encoded:
+        if re.search(r"\{\{[A-Za-z0-9_.-]+\}\}", encoded):
             raise ProvisioningError(
                 "PRIVATE_PAGE_SHARE_CONTRACT_INVALID",
                 "Captured Page-share contract still contains unresolved placeholders",
