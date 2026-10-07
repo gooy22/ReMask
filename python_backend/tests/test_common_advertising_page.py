@@ -414,8 +414,12 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
         browser._goto.assert_awaited_once()
         self.assertEqual(result['access_mode'],'shared_ads_access')
         self.assertEqual(
+            result['request_transport'],
+            'facebook_private_graphql',
+        )
+        self.assertEqual(
             result['transport'],
-            'target_business_page_advertising_access',
+            'facebook_private_graphql_then_browser_reconcile',
         )
         self.assertTrue(result['page_shared_to_business'])
         self.assertTrue(result['operator_ads_access_assigned'])
@@ -424,6 +428,26 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
         ).get()
         self.assertFalse(bool(config.get('owner_business_confirmed')))
         self.assertNotEqual(str(config.get('owner_business_id') or ''),BM)
+
+    async def test_missing_private_contract_is_captured_then_replayed_privately(self):
+        (
+            result,request,approve,assign,ownership,rk_full,refresh,browser,
+            private_execute,contract_store,
+        )=await self._shared_access_handler_fixture(
+            contract_available=False,
+        )
+        request.assert_awaited_once()
+        self.assertTrue(
+            request.await_args.kwargs.get('capture_only')
+        )
+        contract_store.register_capture.assert_called_once()
+        private_execute.assert_awaited_once()
+        approve.assert_awaited_once()
+        assign.assert_awaited_once()
+        self.assertEqual(
+            result['request_transport'],
+            'facebook_private_graphql',
+        )
 
     async def test_business_login_gate_refreshes_same_profile_once_then_retries(self):
         gate=BrowserBusinessError(
