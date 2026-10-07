@@ -121,6 +121,54 @@ class PrivateLaunchContractRegistryTests(unittest.TestCase):
         self.assertFalse(self.path.exists())
 
 
+class PrivateLaunchPaymentSelectionTests(unittest.TestCase):
+    def test_single_live_method_is_selected_without_explicit_choice(self):
+        module = __import__("app.private_launch", fromlist=["_select_payment_method"])
+        selected, source = module._select_payment_method(
+            [{"type": "Visa", "last4": "1234", "linkage_status": "OBSERVED"}],
+            None,
+        )
+        self.assertEqual(selected["last4"], "1234")
+        self.assertEqual(source, "single_live_method")
+
+    def test_multiple_live_methods_require_explicit_masked_choice(self):
+        module = __import__("app.private_launch", fromlist=["_select_payment_method"])
+        methods = [
+            {"type": "Visa", "last4": "1234"},
+            {"type": "Mastercard", "last4": "5678"},
+        ]
+        with self.assertRaises(ProvisioningError) as caught:
+            module._select_payment_method(methods, None)
+        self.assertEqual(
+            caught.exception.code,
+            "PRIVATE_LAUNCH_PAYMENT_SELECTION_REQUIRED",
+        )
+        selected, source = module._select_payment_method(
+            methods,
+            {"type": "Mastercard", "last4": "5678"},
+        )
+        self.assertEqual(selected["type"], "Mastercard")
+        self.assertEqual(selected["last4"], "5678")
+        self.assertEqual(source, "explicit_masked_selection")
+
+    def test_selection_rejects_raw_payment_fields(self):
+        module = __import__("app.private_launch", fromlist=["_payment_selector"])
+        with self.assertRaises(ProvisioningError) as caught:
+            module._payment_selector(
+                {
+                    "selected_payment_method": {
+                        "type": "Visa",
+                        "last4": "1234",
+                        "card_number": "4111111111111111",
+                    }
+                }
+            )
+        self.assertEqual(
+            caught.exception.code,
+            "PRIVATE_LAUNCH_PAYMENT_SELECTION_INVALID",
+        )
+
+
 class PrivateLaunchTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.tmp = tempfile.TemporaryDirectory()
