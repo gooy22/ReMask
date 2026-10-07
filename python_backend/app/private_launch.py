@@ -491,6 +491,58 @@ class PrivateLaunchService:
             "payment_method_count": len(funding.get("payment_methods") or []),
         }
 
+    async def review(
+        self,
+        *,
+        profile_id: str,
+        context: Any,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        if not isinstance(payload, dict):
+            raise ProvisioningError(
+                "PRIVATE_LAUNCH_INVALID_INPUT",
+                "Private Launch payload must be an object",
+                retryable=False,
+            )
+        business_id = self._id(payload.get("business_id"), "business_id")
+        ad_account_id = self._id(payload.get("ad_account_id"), "ad_account_id")
+        page_id = self._id(payload.get("page_id"), "page_id")
+        launch_payload = payload.get("launch")
+        if not isinstance(launch_payload, dict):
+            raise ProvisioningError(
+                "PRIVATE_LAUNCH_INVALID_INPUT",
+                "launch must be an object",
+                retryable=False,
+            )
+
+        # Validate the complete mutation chain before the first irreversible
+        # request. A missing downstream contract must never leave an orphaned
+        # Campaign or Ad Set behind.
+        contracts = {step: self.contracts.get(step) for step in STEP_ORDER}
+        preflight = await self._live_preflight(
+            context=context,
+            profile_id=profile_id,
+            business_id=business_id,
+            ad_account_id=ad_account_id,
+            page_id=page_id,
+        )
+        return {
+            "ready": True,
+            "profile_id": profile_id,
+            "business_id": business_id,
+            "ad_account_id": ad_account_id,
+            "page_id": page_id,
+            "preflight": preflight,
+            "contracts": {
+                step.value: {
+                    "friendly_name": contract.friendly_name,
+                    "doc_id_configured": True,
+                }
+                for step, contract in contracts.items()
+            },
+            "_contracts": contracts,
+        }
+
     async def run(
         self,
         *,
@@ -502,23 +554,17 @@ class PrivateLaunchService:
         task_idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         del item_id
-        if not isinstance(payload, dict):
-            raise ProvisioningError(
-                "PRIVATE_LAUNCH_INVALID_INPUT",
-                "Private Launch payload must be an object",
-                retryable=False,
-            )
-
-        business_id = self._id(payload.get("business_id"), "business_id")
-        ad_account_id = self._id(payload.get("ad_account_id"), "ad_account_id")
-        page_id = self._id(payload.get("page_id"), "page_id")
-        launch_payload = payload.get("launch")
-        if not isinstance(launch_payload, dict):
-            raise ProvisioningError(
-                "PRIVATE_LAUNCH_INVALID_INPUT",
-                "launch must be an object",
-                retryable=False,
-            )
+        review = await self.review(
+            profile_id=profile_id,
+            context=context,
+            payload=payload,
+        )
+        business_id = str(review["business_id"])
+        ad_account_id = str(review["ad_account_id"])
+        page_id = str(review["page_id"])
+        launch_payload = payload["launch"]
+        contracts = review.pop("_contracts")
+        preflight = review["preflight"]
 
         launch_key = str(
             payload.get("launch_key")
@@ -533,13 +579,6 @@ class PrivateLaunchService:
             )
 
         await self.state.init()
-        preflight = await self._live_preflight(
-            context=context,
-            profile_id=profile_id,
-            business_id=business_id,
-            ad_account_id=ad_account_id,
-            page_id=page_id,
-        )
 
         values: dict[str, Any] = {
             "profile_id": profile_id,
@@ -569,7 +608,7 @@ class PrivateLaunchService:
                     retryable=False,
                 )
 
-            contract = self.contracts.get(step)
+            contract = contracts[step]
             variables = _render(
                 contract.variables,
                 {
