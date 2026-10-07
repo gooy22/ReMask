@@ -1237,6 +1237,20 @@ class PrivateLaunchService:
                 })
                 continue
             contract = contracts[step]
+            candidate = _contract_candidate(
+                step,
+                contract,
+                source="private_launch_runtime",
+            )
+            if not _candidate_is_active(step, candidate):
+                raise ProvisioningError(
+                    f"PRIVATE_LAUNCH_{step.value}_CONTRACT_STALE",
+                    (
+                        f"{step.value} private mutation contract is disabled "
+                        "by the shared doc_id lifecycle"
+                    ),
+                    retryable=False,
+                )
             variables = _render(
                 contract.variables,
                 {
@@ -1254,12 +1268,34 @@ class PrivateLaunchService:
             try:
                 await web.bootstrap()
             except AuthenticationError as exc:
+                _record_contract_result(
+                    step,
+                    candidate,
+                    success=False,
+                    profile_id=profile_id,
+                    reason="AUTH_PRECHECK",
+                    failure_kind="account",
+                )
                 raise ProvisioningError(
                     f"PRIVATE_LAUNCH_{step.value}_AUTH_PRECHECK",
                     "Facebook session is not ready before the private mutation",
                     retryable=False,
                 ) from exc
             except RemoteRequestError as exc:
+                _record_contract_result(
+                    step,
+                    candidate,
+                    success=False,
+                    profile_id=profile_id,
+                    reason="PRE_SUBMIT_TRANSPORT",
+                    failure_kind=classify_cache_failure(
+                        exception=exc,
+                        message=str(exc),
+                        http_status=int(
+                            getattr(exc, "http_status", 0) or 0
+                        ) or None,
+                    ),
+                )
                 raise ProvisioningError(
                     f"PRIVATE_LAUNCH_{step.value}_PRE_SUBMIT_TRANSPORT",
                     "Private Launch transport failed before the submit checkpoint",
@@ -1297,6 +1333,14 @@ class PrivateLaunchService:
                     request_envelope=contract.request_envelope,
                 )
             except AuthenticationError:
+                _record_contract_result(
+                    step,
+                    candidate,
+                    success=False,
+                    profile_id=profile_id,
+                    reason="AUTH_RESULT_UNKNOWN",
+                    failure_kind="account",
+                )
                 result = ActionResult.reconcile(
                     step.value,
                     code=f"PRIVATE_LAUNCH_{step.value}_AUTH_RESULT_UNKNOWN",
@@ -1318,6 +1362,28 @@ class PrivateLaunchService:
                 raise ProvisioningError(result.code, result.message, retryable=False)
             except RemoteRequestError as exc:
                 http_status = int(getattr(exc, "http_status", 0) or 0)
+                failure_kind = classify_cache_failure(
+                    exception=exc,
+                    payload=(
+                        getattr(exc, "payload", None)
+                        if isinstance(getattr(exc, "payload", None), dict)
+                        else None
+                    ),
+                    message=str(exc),
+                    http_status=http_status or None,
+                )
+                _record_contract_result(
+                    step,
+                    candidate,
+                    success=False,
+                    profile_id=profile_id,
+                    reason=(
+                        f"HTTP_{http_status}"
+                        if http_status
+                        else exc.__class__.__name__
+                    ),
+                    failure_kind=failure_kind,
+                )
                 if 400 <= http_status < 500 and http_status != 429:
                     result = ActionResult.blocked(
                         step.value,
@@ -1370,6 +1436,21 @@ class PrivateLaunchService:
                 contract.result_id_paths,
             )
             if not entity_id:
+                _record_contract_result(
+                    step,
+                    candidate,
+                    success=False,
+                    profile_id=profile_id,
+                    reason="RESULT_PATH_MISSING",
+                    failure_kind=classify_cache_failure(
+                        payload=(
+                            response
+                            if isinstance(response, dict)
+                            else None
+                        ),
+                        message="configured result id path missing",
+                    ),
+                )
                 result = ActionResult.reconcile(
                     step.value,
                     code=f"PRIVATE_LAUNCH_{step.value}_RESULT_UNKNOWN",
@@ -1393,6 +1474,13 @@ class PrivateLaunchService:
                 )
                 raise ProvisioningError(result.code, result.message, retryable=False)
 
+            _record_contract_result(
+                step,
+                candidate,
+                success=True,
+                profile_id=profile_id,
+                response_path=response_path,
+            )
             result = ActionResult.success(
                 step.value,
                 entity_id=entity_id,
