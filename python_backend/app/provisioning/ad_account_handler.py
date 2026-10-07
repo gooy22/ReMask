@@ -70,6 +70,14 @@ def _clean(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _browser_lease(session: Any, **kwargs: Any):
+    factory = getattr(session, "browser_lease", None)
+    if callable(factory):
+        return factory(**kwargs)
+    return _browser_lease(session, **kwargs,
+    )
+
+
 def _capture_success_id_from_checkpoint(
     result: Any,
     *,
@@ -436,9 +444,7 @@ async def _reconcile_existing_browser_inventory(
     unlock a duplicate CREATE guard.
     """
     try:
-        async with FacebookBusinessBrowser(
-            session.context,
-            timeout_seconds=45,
+        async with _browser_lease(session, timeout_seconds=45,
         ) as browser:
             raw_result = await browser.find_ad_account_in_inventory(
                 business_id=business_id,
@@ -728,9 +734,7 @@ async def _prove_empty_after_uncertainty(
         graph_empty_confirmed and browser_empty_confirmations >= 1
     ) and browser_empty_confirmations < max(2, int(browser_required_checks)):
         try:
-            async with FacebookBusinessBrowser(
-                session.context,
-                timeout_seconds=45,
+            async with _browser_lease(session, timeout_seconds=45,
             ) as inventory_browser:
                 ui_inventory = (
                     await inventory_browser.verify_ad_account_inventory_empty(
@@ -867,6 +871,10 @@ async def ad_account_handler(
     **kwargs: Any,
 ) -> dict[str, Any]:
     del args
+
+    meta_transport = kwargs.get("meta_transport")
+    if meta_transport is not None:
+        session = meta_transport
 
     context = session.context
     profile_id = _clean(
@@ -1640,9 +1648,7 @@ async def ad_account_handler(
         and not bool(browser_inventory_before.get("confirmed_empty"))
     ):
         try:
-            async with FacebookBusinessBrowser(
-                session.context,
-                timeout_seconds=45,
+            async with _browser_lease(session, timeout_seconds=45,
             ) as inventory_browser:
                 ui_inventory_before = (
                     await inventory_browser.verify_ad_account_inventory_empty(
@@ -1951,9 +1957,7 @@ async def ad_account_handler(
 
             async def _run_capture_attempt() -> dict[str, Any]:
                 nonlocal browser
-                async with FacebookBusinessBrowser(
-                    session.context,
-                    timeout_seconds=90,
+                async with _browser_lease(session, timeout_seconds=90,
                 ) as active_browser:
                     browser = active_browser
                     return await active_browser.capture_ad_account_create_request(
@@ -2850,9 +2854,7 @@ async def ad_account_handler(
                         }
                     )
                     try:
-                        async with FacebookBusinessBrowser(
-                            session.context,
-                            timeout_seconds=90,
+                        async with _browser_lease(session, timeout_seconds=90,
                         ) as browser:
                             refreshed_capture = (
                                 await browser.capture_ad_account_create_request(
