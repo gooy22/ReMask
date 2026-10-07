@@ -152,9 +152,26 @@ class ProvisioningService:
                 continue
 
             await self.state.set_running(item_id, profile_id, scope_key, step)
+            await self.state.checkpoint(
+                item_id,
+                profile_id,
+                scope_key,
+                step,
+                {
+                    "action_phase": "PRECHECK",
+                    "action_contract_version": 1,
+                },
+            )
 
             try:
                 if step is ProvisioningStep.PROXY_CHECK:
+                    await self.state.checkpoint(
+                        item_id,
+                        profile_id,
+                        scope_key,
+                        step,
+                        {"action_phase": "EXECUTE"},
+                    )
                     result = await ProxyChecker(
                         context.proxy,
                         context.user_agent,
@@ -184,6 +201,17 @@ class ProvisioningService:
                     )
 
                     handler = get_handler(step.value)
+
+                    await self.state.checkpoint(
+                        item_id,
+                        profile_id,
+                        scope_key,
+                        step,
+                        {
+                            "action_phase": "EXECUTE",
+                            "action_idempotency_key": step_key,
+                        },
+                    )
 
                     if step in _MUTATING_BROWSER_STEPS:
                         await _await_profile_mutation_cooldown(profile_id)
@@ -259,6 +287,25 @@ class ProvisioningService:
                         f"{step.value} result is missing {entity_key}",
                     )
 
+                await self.state.checkpoint(
+                    item_id,
+                    profile_id,
+                    scope_key,
+                    step,
+                    {"action_phase": "VERIFY"},
+                )
+                self._verify_result_contract(
+                    step,
+                    result,
+                    step_params if step is not ProvisioningStep.PROXY_CHECK else {},
+                    snapshot.as_dict(),
+                )
+                result = {
+                    **result,
+                    "action_phase": "COMMIT",
+                    "action_contract_version": 1,
+                }
+
                 await self.state.complete(
                     item_id, profile_id, scope_key, step, result
                 )
@@ -293,6 +340,117 @@ class ProvisioningService:
             "steps": completed,
             "state": final_state.as_dict(),
         }
+
+    @staticmethod
+    def _verify_result_contract(
+        step: ProvisioningStep,
+        result: dict[str, Any],
+        params: dict[str, Any],
+        snapshot: dict[str, Any],
+    ) -> None:
+        """Common VERIFY gate before durable COMMIT.
+
+        Handlers remain responsible for Meta-specific reconciliation. This gate
+        enforces the shared action contract so an arbitrary/partial dict cannot
+        be committed as a successful provisioning step.
+        """
+
+        def numeric(value: Any) -> str:
+            clean = str(value or "").strip()
+            if clean.startswith("act_"):
+                clean = clean[4:]
+            return clean if clean.isdigit() else ""
+
+        if step is ProvisioningStep.BUSINESS:
+            if not numeric(result.get("business_id")):
+                raise ProvisioningError(
+                    "VERIFY_BUSINESS_ID_INVALID",
+                    "BUSINESS VERIFY requires a numeric business_id",
+                    retryable=True,
+                )
+            return
+
+        if step is ProvisioningStep.AD_ACCOUNT:
+            account_id = numeric(
+                result.get("ad_account_id")
+                or result.get("account_id")
+            )
+            if not account_id:
+                raise ProvisioningError(
+                    "VERIFY_AD_ACCOUNT_ID_INVALID",
+                    "AD_ACCOUNT VERIFY requires a numeric ad_account_id",
+                    retryable=True,
+                )
+            target_business = numeric(
+                params.get("business_id")
+                or snapshot.get("business_id")
+            )
+            result_business = numeric(result.get("business_id"))
+            if (
+                target_business
+                and result_business
+                and result_business != target_business
+            ):
+                raise ProvisioningError(
+                    "VERIFY_AD_ACCOUNT_BUSINESS_MISMATCH",
+                    (
+                        "AD_ACCOUNT VERIFY returned an RK for a different "
+                        "Business Portfolio"
+                    ),
+                    retryable=True,
+                )
+            return
+
+        if step is ProvisioningStep.FAN_PAGES:
+            page_ids = result.get("page_ids")
+            if not isinstance(page_ids, list) or not page_ids:
+                raise ProvisioningError(
+                    "VERIFY_FAN_PAGE_MISSING",
+                    "FAN_PAGES VERIFY requires at least one confirmed page_id",
+                    retryable=True,
+                )
+            if any(not numeric(value) for value in page_ids):
+                raise ProvisioningError(
+                    "VERIFY_FAN_PAGE_ID_INVALID",
+                    "FAN_PAGES VERIFY returned a non-numeric page_id",
+                    retryable=True,
+                )
+            return
+
+        if step is ProvisioningStep.PAGE_ACCESS:
+            for key in (
+                "page_id",
+                "business_id",
+                "ad_account_id",
+            ):
+                if not numeric(result.get(key)):
+                    raise ProvisioningError(
+                        "VERIFY_PAGE_ACCESS_ID_INVALID",
+                        f"PAGE_ACCESS VERIFY requires numeric {key}",
+                        retryable=True,
+                    )
+            # Current full-control flow proves both relation stages.
+            # Older verified PAGE_ACCESS results may instead expose the
+            # stronger aggregate ad_account_page_access_verified flag.
+            if result.get("ad_account_page_access_verified") is True:
+                return
+            if result.get("page_shared_to_business") is not True:
+                raise ProvisioningError(
+                    "VERIFY_PAGE_SHARE_UNCONFIRMED",
+                    "PAGE_ACCESS VERIFY did not confirm Page sharing to the Business",
+                    retryable=True,
+                )
+            if result.get("operator_ads_access_assigned") is not True:
+                raise ProvisioningError(
+                    "VERIFY_RK_PAGE_ACCESS_UNCONFIRMED",
+                    "PAGE_ACCESS VERIFY did not confirm advertising access",
+                    retryable=True,
+                )
+            return
+
+        # FUNDING performs its stronger RK/source verification inside the
+        # funding handler. PROXY_CHECK has no remote entity identity to verify.
+
 
     async def _run_handler(self, handler, step, session, params, snapshot, **kwargs):
         if step is ProvisioningStep.FAN_PAGES and params.get('common_page') is True:

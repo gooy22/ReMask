@@ -193,7 +193,13 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
             return {'business_id':BM,'ad_account_id':RK}
         async def access(session,params,snapshot,**kwargs):
             observed.append('PAGE'); self.assertEqual(snapshot['ad_account_id'],RK)
-            return {'business_id':BM,'ad_account_id':RK,'page_id':PAGE}
+            return {
+                'business_id':BM,
+                'ad_account_id':RK,
+                'page_id':PAGE,
+                'page_shared_to_business':True,
+                'operator_ads_access_assigned':True,
+            }
         with patch('app.provisioning.service.get_handler',side_effect=lambda step:rk if step=='AD_ACCOUNT' else access), \
              patch('app.provisioning.service._await_profile_mutation_cooldown',new=AsyncMock()):
             await ProvisioningService(self.state).run(item_id='ordered',profile_id='9',context=SimpleNamespace(),session=SimpleNamespace(),

@@ -120,6 +120,10 @@ class PreparePlannerTests(unittest.IsolatedAsyncioTestCase):
             },
         }
 
+    def test_prepare_default_topology_is_one_business_one_rk(self):
+        desired = PrepareService._desired({})
+        self.assertEqual(desired.ad_accounts, 1)
+
     async def test_legacy_multi_rk_inventory_is_preserved_but_not_counted_as_two_bundles(self):
         await self._confirmed_business()
         await self._confirmed_rk("111111111111111")

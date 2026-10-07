@@ -13,7 +13,7 @@ from .state import ProvisioningStateStore
 
 @dataclass(slots=True, frozen=True)
 class DesiredProfileState:
-    ad_accounts: int = 2
+    ad_accounts: int = 1
     require_page: bool = True
     require_business: bool = True
     require_page_access: bool = True
@@ -48,7 +48,7 @@ class PrepareService:
             )
 
         try:
-            ad_accounts = int(raw.get("ad_accounts", 2))
+            ad_accounts = int(raw.get("ad_accounts", 1))
         except (TypeError, ValueError) as exc:
             raise ProvisioningError(
                 "PREPARE_INVALID_AD_ACCOUNT_COUNT",
