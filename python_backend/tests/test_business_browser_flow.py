@@ -5226,6 +5226,69 @@ class BusinessBrowserFlowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(stored["result"].get("recovered_cross_job"))
 
+    async def test_independent_add_bm_does_not_recover_old_page_scoped_uncertainty(self):
+        legacy_item_id = "legacy-independent-page-uncertain"
+        legacy_scope = "add-bm-page-123456789"
+        await self.store.set_running(
+            legacy_item_id,
+            self.profile_id,
+            legacy_scope,
+            ProvisioningStep.BUSINESS,
+        )
+        await self.store.checkpoint(
+            legacy_item_id,
+            self.profile_id,
+            legacy_scope,
+            ProvisioningStep.BUSINESS,
+            {
+                "phase": "CREATE_SUBMITTED",
+                "business_name": "Old Business",
+                "primary_page_id": "123456789",
+                "business_ids_before": ["111111111111111"],
+            },
+        )
+
+        new_item_id = "item-independent-add-bm"
+        new_scope = "add-bm-fresh-nonce"
+        await self.store.set_running(
+            new_item_id,
+            self.profile_id,
+            new_scope,
+            ProvisioningStep.BUSINESS,
+        )
+
+        browser = _FakeBrowser(
+            create_id="777888999000111",
+            reconcile_id="555666777888999",
+        )
+        result = await business_handler(
+            _FakeSession(browser),
+            {
+                "name": "Fresh Business",
+                "page_id": "123456789",
+                "attach_page": False,
+                "user_email": "owner@example.com",
+            },
+            {
+                "profile_id": self.profile_id,
+                "scope_key": new_scope,
+            },
+            provisioning_state=self.store,
+            item_id=new_item_id,
+            profile_id=self.profile_id,
+            scope_key=new_scope,
+        )
+
+        self.assertEqual(result["business_id"], "777888999000111")
+        self.assertEqual(browser.reconcile_calls, 0)
+        self.assertEqual(browser.create_calls, 1)
+
+        stored = await self.store.step(
+            new_item_id,
+            ProvisioningStep.BUSINESS,
+        )
+        self.assertFalse(bool(stored["result"].get("recovered_cross_job")))
+
     async def test_create_submitted_retry_reconciles_without_second_create(self):
         await self.store.checkpoint(
             self.item_id,
