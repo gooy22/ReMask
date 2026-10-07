@@ -106,6 +106,32 @@ async function remaskPrivateWorker(payload) {
     }
     return data;
 }
+async function remaskPrivateContractStatus({render=true}={}) {
+    const response=await remaskPrivateWorker({action:'private_launch_contracts'});
+    const contracts=response?.contracts||{};
+    const order=['CAMPAIGN','AD_SET','CREATIVE','AD'];
+    const rows=order.map(step=>{
+        const row=contracts[step]||{};
+        return {
+            step,
+            configured:row.configured===true,
+            code:String(row.code||''),
+            message:String(row.message||''),
+            friendly_name:String(row.friendly_name||'')
+        };
+    });
+    const missing=rows.filter(row=>!row.configured);
+    if(render){
+        remaskPrivateShow(
+            'Private Launch contracts · '+
+            rows.map(row=>row.step+' '+(row.configured?'READY':'MISSING')).join(' · ')+
+            (missing.length?' · запуск заблокирован до полного комплекта':''),
+            missing.length?'failed':'ready'
+        );
+    }
+    return {rows,missing,ready:missing.length===0};
+}
+
 function remaskPrivateShow(text,kind='') {
     const target=$('launchResult')||$('reviewStatus');
     if(typeof show==='function'&&target)show(target,text,kind);
@@ -141,6 +167,11 @@ function remaskPrivatePendingClear() {
     try{localStorage.removeItem(remaskPrivateLaunchPendingKey);}catch(_){}
 }
 async function remaskPrivateReviewConfig(config,{render=true}={}) {
+    const contractStatus=await remaskPrivateContractStatus({render});
+    if(!contractStatus.ready){
+        const missing=contractStatus.missing.map(row=>row.step).join(', ');
+        throw new Error('Private Launch contracts missing: '+missing+'.');
+    }
     const rows=remaskPrivateTargetRows(config);
     const results=[];
     for(let index=0;index<rows.length;index++){

@@ -246,6 +246,31 @@ try {
         rmx_pwj_out(['ok'=>true,'registry'=>$result]);
     }
 
+    if ($action === 'private_launch_contracts') {
+        $result = rmx_pwj_worker_request(
+            'GET',
+            '/api/v1/private-launch/contracts'
+        );
+        $contracts = is_array($result['contracts'] ?? null)
+            ? $result['contracts']
+            : [];
+        $safe = [];
+        foreach (['CAMPAIGN','AD_SET','CREATIVE','AD'] as $step) {
+            $row = is_array($contracts[$step] ?? null)
+                ? $contracts[$step]
+                : [];
+            $safe[$step] = [
+                'configured' => (($row['configured'] ?? false) === true),
+                'code' => trim((string)($row['code'] ?? '')),
+                'message' => trim((string)($row['message'] ?? '')),
+                'friendly_name' => trim((string)($row['friendly_name'] ?? '')),
+                'endpoint_host' => trim((string)($row['endpoint_host'] ?? '')),
+                'result_paths' => (int)($row['result_paths'] ?? 0),
+            ];
+        }
+        rmx_pwj_out(['ok'=>true,'contracts'=>$safe]);
+    }
+
     if ($action === 'private_launch_review') {
         $profileId = trim((string)($input['profile_id'] ?? $input['profile'] ?? ''));
         $businessId = trim((string)($input['business_id'] ?? ''));
