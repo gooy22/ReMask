@@ -429,6 +429,11 @@ class ProvisioningService:
                         f"PAGE_ACCESS VERIFY requires numeric {key}",
                         retryable=True,
                     )
+            # Current full-control flow proves both relation stages.
+            # Older verified PAGE_ACCESS results may instead expose the
+            # stronger aggregate ad_account_page_access_verified flag.
+            if result.get("ad_account_page_access_verified") is True:
+                return
             if result.get("page_shared_to_business") is not True:
                 raise ProvisioningError(
                     "VERIFY_PAGE_SHARE_UNCONFIRMED",
