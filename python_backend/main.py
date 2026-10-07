@@ -2743,6 +2743,24 @@ async def profile_live_inventory(
                     len(current_binding_pages),
                 )
 
+            page_live_probe_auth_blocked=bool(
+                auth_blocked_business_codes
+                and not live_business_ids
+            )
+            if page_live_probe_auth_blocked:
+                blocked_codes=sorted(set(auth_blocked_business_codes.values()))
+                page_primary_error=(
+                    'PAGE_LIVE_PROBE_SKIPPED_AUTH_BLOCKED:'
+                    + ','.join(blocked_codes)
+                )
+                log.info(
+                    'live inventory profile=%s Page live enrichment skipped '
+                    'because BM/RK auth is terminal codes=%s; durable_pages=%d',
+                    clean_profile,
+                    ','.join(blocked_codes),
+                    len(durable_pages),
+                )
+
             page_evidence_present=bool(
                 durable_pages
                 or known_pages_by_business
@@ -2764,7 +2782,7 @@ async def profile_live_inventory(
             # optional Page phase still has enough wall-clock budget for its
             # own navigation + Relay hydration.
             isolated_page_probe_attempted=False
-            if not pages_live_verified:
+            if not pages_live_verified and not page_live_probe_auth_blocked:
                 isolated_page_probe_attempted=True
                 try:
                     isolated_pages_timeout=optional_page_budget(
@@ -2842,7 +2860,7 @@ async def profile_live_inventory(
             # Exact BM->Page history is useful only for Pages that really are
             # attached to that BM. Treat it as optional positive enrichment,
             # never as proof of the complete account-level Page list.
-            if not pages_live_verified and known_pages_by_business:
+            if not pages_live_verified and not page_live_probe_auth_blocked and known_pages_by_business:
                 confirmed_page_rows=[]
                 fast_page_diagnostics=[]
                 try:
@@ -2914,7 +2932,7 @@ async def profile_live_inventory(
             # REMASK_ADS_MANAGER_PAGES_FIRST_V1
             # Account-level live Page enumeration is enrichment only. Keep the
             # attempt deliberately short; it must not dominate a BM/RK sync.
-            if not pages_live_verified:
+            if not pages_live_verified and not page_live_probe_auth_blocked:
                 try:
                     ads_pages_timeout=optional_page_budget(4.0)
                     if ads_pages_timeout <= 0.25:
@@ -2961,7 +2979,7 @@ async def profile_live_inventory(
             # A persisted private LIST_PAGES query is also a short enrichment
             # path. It is attempted only when Ads Manager did not produce a
             # live account-level list.
-            if not pages_live_verified:
+            if not pages_live_verified and not page_live_probe_auth_blocked:
                 try:
                     private_pages_timeout=optional_page_budget(3.5)
                     if private_pages_timeout <= 0.25:
