@@ -638,11 +638,14 @@ async def _verify_expected_ad_account_in_business(
         try:
             from ..private_inventory import private_inventory_snapshot
             web = await web_factory()
-            private = await private_inventory_snapshot(
-                web,
-                known_accounts_by_business={business_id: {expected.removeprefix("act_")}},
-                known_business_ids={business_id},
-                discover_businesses=False,
+            private = await asyncio.wait_for(
+                private_inventory_snapshot(
+                    web,
+                    known_accounts_by_business={business_id: {expected.removeprefix("act_")}},
+                    known_business_ids={business_id},
+                    discover_businesses=False,
+                ),
+                timeout=12.0,
             )
             exact_rows = [
                 account
