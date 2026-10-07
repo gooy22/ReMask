@@ -746,6 +746,20 @@ async def lifespan(app: FastAPI):
         except MirrorError as exc:
             log.error('persistent job mirror restore failed: %s',exc)
     await pool.start()
+    launch_contract_status=pool.private_launch.contracts.status()
+    launch_contract_configured={
+        step: bool((row or {}).get('configured'))
+        for step,row in launch_contract_status.items()
+    }
+    log.info(
+        'private launch contract readiness %s',
+        json.dumps(
+            launch_contract_configured,
+            ensure_ascii=False,
+            separators=(',', ':'),
+            sort_keys=True,
+        ),
+    )
     log.info(
         'bm browser runtime config canary=%s diagnostics=%s browser_concurrency=%s',
         BM_CANARY_ON_START,
@@ -951,6 +965,12 @@ async def ready():
             detail=f'profile resolver unavailable: {exc}',
         ) from exc
 
+    launch_contract_status=pool.private_launch.contracts.status()
+    launch_contracts={
+        step: bool((row or {}).get('configured'))
+        for step,row in launch_contract_status.items()
+    }
+
     return {
         'ok':True,
         'service':'remask-python-worker',
@@ -966,6 +986,8 @@ async def ready():
             or ''
         )[:12],
         'create_bm_payload_version':'business_suite_ui_v1',
+        'private_launch_contracts':launch_contracts,
+        'private_launch_contracts_ready':all(launch_contracts.values()),
         'volume_mounted':bool(str(os.getenv('RAILWAY_VOLUME_MOUNT_PATH') or '').strip()),
         'volume_path':str(os.getenv('RAILWAY_VOLUME_MOUNT_PATH') or ''),
     }
