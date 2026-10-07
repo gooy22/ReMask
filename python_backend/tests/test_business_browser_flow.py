@@ -3808,6 +3808,99 @@ class BrowserAuthenticationStateTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("private-query", str(caught.exception))
         browser._body_text.assert_not_awaited()
 
+    async def test_business_login_gate_one_click_continuation_is_resolved(self):
+        browser=FacebookBusinessBrowser(SimpleNamespace(profile_id='gate-profile'))
+        page=SimpleNamespace(
+            url='https://business.facebook.com/business/loginpage/?next=%2Flatest%2Fhome',
+            wait_for_load_state=AsyncMock(),
+            wait_for_timeout=AsyncMock(),
+        )
+        calls={'evaluate':0}
+        async def evaluate(script):
+            calls['evaluate']+=1
+            if calls['evaluate']==1:
+                return {
+                    'hasCredentialInput':False,
+                    'candidateCount':1,
+                    'labels':['Continue as Fixture'],
+                }
+            page.url='https://business.facebook.com/latest/home'
+            return True
+        page.evaluate=AsyncMock(side_effect=evaluate)
+        browser.page=page
+        browser._body_text=AsyncMock(return_value='Continue as Fixture')
+        browser._last_selector_diagnostic={}
+        resolved=await browser._resolve_business_login_gate(
+            return_url='https://business.facebook.com/latest/home'
+        )
+        self.assertTrue(resolved)
+        self.assertEqual(
+            page.url,
+            'https://business.facebook.com/latest/home',
+        )
+        self.assertTrue(
+            browser._last_selector_diagnostic[
+                'business_login_gate_resolved'
+            ]
+        )
+
+    async def test_business_login_gate_with_credentials_is_never_clicked(self):
+        browser=FacebookBusinessBrowser(SimpleNamespace(profile_id='gate-credentials'))
+        page=SimpleNamespace(
+            url='https://business.facebook.com/business/loginpage/',
+            wait_for_load_state=AsyncMock(),
+            wait_for_timeout=AsyncMock(),
+            evaluate=AsyncMock(return_value={
+                'hasCredentialInput':True,
+                'candidateCount':1,
+                'labels':['Continue'],
+            }),
+        )
+        browser.page=page
+        browser._body_text=AsyncMock(return_value='Continue Email Password')
+        browser._last_selector_diagnostic={}
+        resolved=await browser._resolve_business_login_gate()
+        self.assertFalse(resolved)
+        self.assertEqual(page.evaluate.await_count,1)
+
+    async def test_goto_retries_auth_after_safe_business_continuation(self):
+        browser=FacebookBusinessBrowser(SimpleNamespace(profile_id='gate-goto'))
+        page=SimpleNamespace(
+            url='about:blank',
+            goto=AsyncMock(),
+            wait_for_timeout=AsyncMock(),
+        )
+        async def goto(url,**kwargs):
+            page.url='https://business.facebook.com/business/loginpage/?next=home'
+        page.goto=AsyncMock(side_effect=goto)
+        browser.page=page
+        browser._resolve_facebook_cookie_consent=AsyncMock()
+        gate=BrowserBusinessError(
+            'BUSINESS_LOGIN_GATE',
+            'gate',
+            retryable=True,
+        )
+        browser._assert_authenticated=AsyncMock(
+            side_effect=[gate,None]
+        )
+        async def resolve(**kwargs):
+            page.url='https://business.facebook.com/latest/home'
+            return True
+        browser._resolve_business_login_gate=AsyncMock(side_effect=resolve)
+
+        result=await browser._goto(
+            'https://business.facebook.com/latest/home',
+            settle_ms=0,
+            attempts=1,
+        )
+
+        self.assertEqual(
+            result,
+            'https://business.facebook.com/latest/home',
+        )
+        self.assertEqual(browser._assert_authenticated.await_count,2)
+        browser._resolve_business_login_gate.assert_awaited_once()
+
     async def test_business_suite_body_word_checkpoint_is_not_auth_checkpoint(self):
         browser = FacebookBusinessBrowser(
             SimpleNamespace(profile_id="profile-checkpoint-word")
