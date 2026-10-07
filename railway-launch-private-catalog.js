@@ -208,6 +208,11 @@ function remaskPrivateJobRequest(config,reviewed) {
     remaskPrivatePendingWrite(fingerprint,request);
     return {request,fingerprint,reused:false};
 }
+function remaskPrivateFinalizeJob(job) {
+    const status=String(job?.status||'').toUpperCase();
+    if(status==='SUCCESS')remaskPrivatePendingClear();
+    return status;
+}
 async function remaskPrivatePollJob(jobId) {
     for(let attempt=0;attempt<180;attempt++){
         await new Promise(resolve=>setTimeout(resolve,2000));
@@ -220,7 +225,10 @@ async function remaskPrivatePollJob(jobId) {
                 'Private Launch Job '+jobId+' · '+String(job.status||'RUNNING')+
                 (total?' · '+done+'/'+total:'')
             );
-            if(['SUCCESS','FAILED','PARTIAL'].includes(String(job.status||'').toUpperCase()))return job;
+            if(['SUCCESS','FAILED','PARTIAL'].includes(String(job.status||'').toUpperCase())){
+                remaskPrivateFinalizeJob(job);
+                return job;
+            }
         }catch(_){return null;}
     }
     return null;
@@ -238,8 +246,10 @@ async function remaskPrivateCreateJob() {
         const accepted=await remaskPrivateWorker(planned.request);
         const jobId=String(accepted?.job?.job_id||'').trim();
         if(!jobId)throw new Error('Worker did not return job_id.');
-        remaskPrivatePendingClear();
-        remaskPrivateShow('Private Launch Job принят: '+jobId+' · '+reviewed.length+' RK.');
+        remaskPrivateShow(
+            'Private Launch Job принят: '+jobId+' · '+reviewed.length+
+            ' RK. Idempotency request сохраняется до terminal SUCCESS.'
+        );
         remaskPrivatePollJob(jobId);
         return accepted;
     }catch(error){
