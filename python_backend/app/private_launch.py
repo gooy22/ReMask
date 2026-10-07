@@ -830,18 +830,20 @@ class PrivateLaunchService:
         task_idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         del item_id
-        review = await self.review(
-            profile_id=profile_id,
-            context=context,
-            payload=payload,
-        )
-        business_id = str(review["business_id"])
-        ad_account_id = str(review["ad_account_id"])
-        page_id = str(review["page_id"])
-        launch_payload = review["launch"]
-        contracts = review.pop("_contracts")
-        preflight = review["preflight"]
+        if not isinstance(payload, dict):
+            raise ProvisioningError(
+                "PRIVATE_LAUNCH_INVALID_INPUT",
+                "Private Launch payload must be an object",
+                retryable=False,
+            )
 
+        # Durable submit uncertainty must outrank fresh Page/payment/contract
+        # checks. Once a step may have crossed CREATE, a rerun must surface the
+        # saved no-replay state before opening browsers or evaluating a newer
+        # configuration.
+        business_id = self._id(payload.get("business_id"), "business_id")
+        ad_account_id = self._id(payload.get("ad_account_id"), "ad_account_id")
+        page_id = self._id(payload.get("page_id"), "page_id")
         launch_key = str(
             payload.get("launch_key")
             or task_idempotency_key
@@ -855,50 +857,29 @@ class PrivateLaunchService:
             )
 
         await self.state.init()
-
-        values: dict[str, Any] = {
-            "profile_id": profile_id,
-            "business_id": business_id,
-            "ad_account_id": ad_account_id,
-            "page_id": page_id,
-            "payload": launch_payload,
-        }
-        completed: list[dict[str, Any]] = []
-
+        prior_by_step: dict[PrivateLaunchStep, dict[str, Any] | None] = {}
+        current_target = (profile_id, business_id, ad_account_id)
         for step in STEP_ORDER:
             prior = await self.state.step(launch_key, step)
-            if prior:
-                prior_target = (
-                    str(prior.get("profile_id") or "").strip(),
-                    str(prior.get("business_id") or "").strip(),
-                    str(prior.get("ad_account_id") or "").removeprefix("act_").strip(),
-                )
-                current_target = (profile_id, business_id, ad_account_id)
-                if prior_target != current_target:
-                    raise ProvisioningError(
-                        "PRIVATE_LAUNCH_KEY_TARGET_MISMATCH",
-                        (
-                            "Private Launch key is already bound to a different "
-                            "profile/BM/RK target"
-                        ),
-                        retryable=False,
-                    )
-            if prior and str(prior.get("status") or "").upper() == "SUCCESS":
-                entity_id = str(prior.get("entity_id") or "").strip()
-                values[f"{step.value.lower()}_id"] = entity_id
-                completed.append({
-                    "step": step.value,
-                    "status": "SUCCESS",
-                    "skipped": True,
-                    "entity_id": entity_id,
-                })
+            prior_by_step[step] = prior
+            if not prior:
                 continue
-            if prior and str(prior.get("status") or "").upper() in {
-                "SUBMITTING",
-                "RECONCILE_REQUIRED",
-                "BLOCKED",
-            }:
-                previous_status = str(prior.get("status") or "").upper()
+            prior_target = (
+                str(prior.get("profile_id") or "").strip(),
+                str(prior.get("business_id") or "").strip(),
+                str(prior.get("ad_account_id") or "").removeprefix("act_").strip(),
+            )
+            if prior_target != current_target:
+                raise ProvisioningError(
+                    "PRIVATE_LAUNCH_KEY_TARGET_MISMATCH",
+                    (
+                        "Private Launch key is already bound to a different "
+                        "profile/BM/RK target"
+                    ),
+                    retryable=False,
+                )
+            previous_status = str(prior.get("status") or "").upper()
+            if previous_status in {"SUBMITTING", "RECONCILE_REQUIRED", "BLOCKED"}:
                 code = (
                     "PRIVATE_LAUNCH_BLOCKED_REPLAY"
                     if previous_status == "BLOCKED"
@@ -910,6 +891,39 @@ class PrivateLaunchService:
                     retryable=False,
                 )
 
+        review = await self.review(
+            profile_id=profile_id,
+            context=context,
+            payload=payload,
+        )
+        business_id = str(review["business_id"])
+        ad_account_id = str(review["ad_account_id"])
+        page_id = str(review["page_id"])
+        launch_payload = review["launch"]
+        contracts = review.pop("_contracts")
+        preflight = review["preflight"]
+
+        values: dict[str, Any] = {
+            "profile_id": profile_id,
+            "business_id": business_id,
+            "ad_account_id": ad_account_id,
+            "page_id": page_id,
+            "payload": launch_payload,
+        }
+        completed: list[dict[str, Any]] = []
+
+        for step in STEP_ORDER:
+            prior = prior_by_step.get(step)
+            if prior and str(prior.get("status") or "").upper() == "SUCCESS":
+                entity_id = str(prior.get("entity_id") or "").strip()
+                values[f"{step.value.lower()}_id"] = entity_id
+                completed.append({
+                    "step": step.value,
+                    "status": "SUCCESS",
+                    "skipped": True,
+                    "entity_id": entity_id,
+                })
+                continue
             contract = contracts[step]
             variables = _render(
                 contract.variables,
