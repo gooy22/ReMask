@@ -461,6 +461,52 @@ class PrivateLaunchTests(unittest.IsolatedAsyncioTestCase):
             {"type": "Visa", "last4": "1234"},
         )
 
+    async def test_review_returns_masked_choices_when_payment_selection_is_required(self):
+        choices = [
+            {"type": "Visa", "last4": "1234", "linkage_status": "OBSERVED"},
+            {"type": "Mastercard", "last4": "5678", "linkage_status": "OBSERVED"},
+        ]
+        probe = AsyncMock(return_value={
+            **self.preflight,
+            "payment_selection_required": True,
+            "payment_methods": choices,
+            "selected_payment_method": {},
+            "payment_selection_source": "selection_required",
+        })
+        with patch.object(self.service, "_live_preflight", probe):
+            result = await self.service.review(
+                profile_id="7",
+                context=self.context,
+                payload=self.payload,
+            )
+        self.assertFalse(result["ready"])
+        self.assertEqual(result["preflight"]["payment_methods"], choices)
+
+    async def test_run_blocks_before_private_mutation_when_payment_selection_is_required(self):
+        probe = AsyncMock(return_value={
+            **self.preflight,
+            "payment_selection_required": True,
+            "payment_methods": [
+                {"type": "Visa", "last4": "1234"},
+                {"type": "Mastercard", "last4": "5678"},
+            ],
+        })
+        with patch.object(self.service, "_live_preflight", probe):
+            with self.assertRaises(ProvisioningError) as caught:
+                await self.service.run(
+                    item_id="item-payment-choice",
+                    profile_id="7",
+                    context=self.context,
+                    session=self.session,
+                    payload={**self.payload, "launch_key": "payment-choice"},
+                )
+        self.assertEqual(
+            caught.exception.code,
+            "PRIVATE_LAUNCH_PAYMENT_SELECTION_REQUIRED",
+        )
+        self.web.bootstrap.assert_not_awaited()
+        self.web.graphql.assert_not_awaited()
+
     async def test_explicit_meta_rejection_is_durable_and_never_replayed(self):
         self.web.graphql.side_effect = RemoteRequestError(
             "rejected",
