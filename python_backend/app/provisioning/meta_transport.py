@@ -100,10 +100,28 @@ class MetaTransportRouter:
             )
         return await factory()
 
+    def browser_lease(self, **kwargs: Any):
+        """Create an isolated Chromium lease behind the transport facade."""
+        factory = getattr(self.session, "browser_lease", None)
+        if callable(factory):
+            return factory(**kwargs)
+
+        from ..facebook_business_browser import FacebookBusinessBrowser
+
+        return FacebookBusinessBrowser(
+            self.context,
+            **kwargs,
+        )
+
     async def close_business_browser(self) -> None:
         closer = getattr(self.session, "close_business_browser", None)
         if callable(closer):
             await closer()
+
+    def __getattr__(self, name: str) -> Any:
+        # Transitional compatibility: handlers can be moved behind the router
+        # incrementally without losing profile-session capabilities.
+        return getattr(self.session, name)
 
 
 __all__ = [
