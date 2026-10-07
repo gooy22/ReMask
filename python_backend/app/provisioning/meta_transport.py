@@ -20,10 +20,12 @@ class MetaTransportRouter:
     """
 
     SAFE_MUTATION_FALLBACK_CODES: dict[str, frozenset[str]] = {
-        "BUSINESS": frozenset({
-            "CREATE_BM_MUTATION_NOT_DISCOVERED",
-            "PAGE_BACKED_BM_ROUTE_UNAVAILABLE",
-        }),
+        # Add BM is private-only in production. CREATE_BM already has its
+        # persisted-query registry plus a bounded captured-contract fallback;
+        # opening Business Suite after private resolution fails only converts
+        # a useful private diagnostic into BUSINESS_LOGIN_GATE and reintroduces
+        # a second mutation transport.
+        "BUSINESS": frozenset(),
         "AD_ACCOUNT": frozenset({
             "CREATE_AD_ACCOUNT_MUTATION_NOT_DISCOVERED",
             "CREATE_AD_ACCOUNT_LIVE_CAPTURE_INVALID",
@@ -41,7 +43,7 @@ class MetaTransportRouter:
         "BUSINESS": TransportPolicy(
             capability="BUSINESS",
             primary="facebook_web_graphql",
-            fallback="chromium_business_suite",
+            fallback="none_private_only",
         ),
         "AD_ACCOUNT": TransportPolicy(
             capability="AD_ACCOUNT",
