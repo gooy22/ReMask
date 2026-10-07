@@ -474,23 +474,27 @@ class PrivateLaunchService:
                 ),
                 timeout=60,
             )
-            page_ids = {
-                str(value.get("id") or "").strip()
-                for value in (pages.get("data") or [])
-                if isinstance(value, dict)
-            }
-            if (
-                pages.get("checked_live") is not True
-                or pages.get("account_scope_verified") is not True
-                or pages.get("ad_account_page_access_verified") is not True
-                or page_id not in page_ids
-            ):
-                raise ProvisioningError(
-                    "PRIVATE_LAUNCH_PAGE_ACCESS_UNVERIFIED",
-                    "Launch requires the selected Page to be live-proven for the exact RK",
-                    retryable=False,
-                )
+        page_ids = {
+            str(value.get("id") or "").strip()
+            for value in (pages.get("data") or [])
+            if isinstance(value, dict)
+        }
+        if (
+            pages.get("checked_live") is not True
+            or pages.get("account_scope_verified") is not True
+            or pages.get("ad_account_page_access_verified") is not True
+            or page_id not in page_ids
+        ):
+            raise ProvisioningError(
+                "PRIVATE_LAUNCH_PAGE_ACCESS_UNVERIFIED",
+                "Launch requires the selected Page to be live-proven for the exact RK",
+                retryable=False,
+            )
 
+        # inspect_browser_pages intentionally keeps a write barrier installed
+        # until its browser context closes. Billing therefore gets a fresh
+        # context so read-only payment hydration cannot inherit that route gate.
+        async with FacebookBusinessBrowser(context, v8_old_space_mb=256) as browser:
             funding = await asyncio.wait_for(
                 inspect_payment_methods(
                     browser,
@@ -505,18 +509,18 @@ class PrivateLaunchService:
                 ),
                 timeout=65,
             )
-            if (
-                funding.get("account_scope_verified") is not True
-                or funding.get("checked_live") is not True
-                or funding.get("verification_status") != "LINKED"
-                or funding.get("card_linked") is not True
-                or not (funding.get("payment_methods") or [])
-            ):
-                raise ProvisioningError(
-                    "PRIVATE_LAUNCH_PAYMENT_UNVERIFIED",
-                    "Launch requires a live linked payment method on the exact RK",
-                    retryable=False,
-                )
+        if (
+            funding.get("account_scope_verified") is not True
+            or funding.get("checked_live") is not True
+            or funding.get("verification_status") != "LINKED"
+            or funding.get("card_linked") is not True
+            or not (funding.get("payment_methods") or [])
+        ):
+            raise ProvisioningError(
+                "PRIVATE_LAUNCH_PAYMENT_UNVERIFIED",
+                "Launch requires a live linked payment method on the exact RK",
+                retryable=False,
+            )
 
         return {
             "profile_id": profile_id,
