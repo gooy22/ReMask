@@ -2408,6 +2408,210 @@ class FacebookBusinessBrowser:
         }
         return True
 
+    async def _resolve_business_login_gate(
+        self,
+        *,
+        return_url: str = "",
+    ) -> bool:
+        """Resolve only a one-click Meta Business continuation gate.
+
+        This never fills credentials and never handles checkpoint/2FA. It is
+        safe only when the current page is the Business login handoff, there
+        are no visible credential inputs, and exactly one visible continuation
+        control is present.
+        """
+        if self.page is None:
+            return False
+
+        try:
+            parsed=urlsplit(_clean(self.page.url))
+            host=_clean(parsed.hostname).lower()
+            path=_clean(parsed.path).lower().rstrip("/")
+        except Exception:
+            return False
+        if host!="business.facebook.com" or path!="/business/loginpage":
+            return False
+
+        try:
+            await self.page.wait_for_load_state(
+                "domcontentloaded",
+                timeout=2500,
+            )
+        except Exception:
+            pass
+        try:
+            await self.page.wait_for_timeout(250)
+        except Exception:
+            pass
+
+        body=(await self._body_text(timeout_ms=1800)).lower()
+        if any(marker in body for marker in (
+            "two-factor authentication",
+            "authentication code",
+            "enter security code",
+            "checkpoint",
+            "confirm your identity",
+        )):
+            return False
+
+        try:
+            probe=await self.page.evaluate(
+                """() => {
+                    const visible = (el) => {
+                        if (!el) return false;
+                        const r = el.getBoundingClientRect();
+                        const s = getComputedStyle(el);
+                        return r.width > 0 && r.height > 0
+                            && s.display !== 'none'
+                            && s.visibility !== 'hidden';
+                    };
+                    const inputs = [...document.querySelectorAll('input')]
+                        .filter(visible)
+                        .map(el => ({
+                            type: String(el.type || '').toLowerCase(),
+                            name: String(el.name || '').toLowerCase(),
+                            autocomplete: String(
+                                el.autocomplete || ''
+                            ).toLowerCase(),
+                            aria: String(
+                                el.getAttribute('aria-label') || ''
+                            ).toLowerCase()
+                        }));
+                    const hasCredentialInput = inputs.some(row =>
+                        row.type === 'password'
+                        || row.autocomplete === 'current-password'
+                        || /(^|[_-])(pass|password|email|login)([_-]|$)/
+                            .test(row.name)
+                        || /password|email address|login/.test(row.aria)
+                    );
+                    const normalize = value =>
+                        String(value || '').replace(/\s+/g, ' ').trim();
+                    const allow = text => {
+                        const t = normalize(text);
+                        return /^Continue(?: as .+)?$/i.test(t)
+                            || /^Continue with Facebook$/i.test(t)
+                            || /^Continue to (?:Meta )?Business(?: Suite)?$/i.test(t)
+                            || /^Продолжить(?: как .+)?$/i.test(t)
+                            || /^Продовжити(?: як .+)?$/i.test(t)
+                            || /^Weiter(?: als .+)?$/i.test(t)
+                            || /^Continuer(?: en tant que .+)?$/i.test(t)
+                            || /^Tiếp tục(?: với tư cách .+)?$/i.test(t);
+                    };
+                    const controls = [
+                        ...document.querySelectorAll(
+                            'button,a,[role="button"],[role="link"]'
+                        )
+                    ].filter(visible).map(el => ({
+                        el,
+                        text: normalize(
+                            el.innerText
+                            || el.textContent
+                            || el.getAttribute('aria-label')
+                            || ''
+                        )
+                    })).filter(row => allow(row.text));
+                    return {
+                        hasCredentialInput,
+                        candidateCount: controls.length,
+                        labels: controls.slice(0, 8).map(row => row.text),
+                    };
+                }"""
+            )
+        except Exception:
+            return False
+
+        if not isinstance(probe,dict):
+            return False
+        if bool(probe.get("hasCredentialInput")):
+            return False
+        if int(probe.get("candidateCount") or 0)!=1:
+            self._last_selector_diagnostic={
+                **(self._last_selector_diagnostic or {}),
+                "business_login_gate_continuation_candidates":
+                    probe.get("labels") or [],
+                "business_login_gate_continuation_count":
+                    int(probe.get("candidateCount") or 0),
+            }
+            return False
+
+        try:
+            clicked=await self.page.evaluate(
+                """() => {
+                    const visible = (el) => {
+                        if (!el) return false;
+                        const r = el.getBoundingClientRect();
+                        const s = getComputedStyle(el);
+                        return r.width > 0 && r.height > 0
+                            && s.display !== 'none'
+                            && s.visibility !== 'hidden';
+                    };
+                    const normalize = value =>
+                        String(value || '').replace(/\s+/g, ' ').trim();
+                    const allow = text => {
+                        const t = normalize(text);
+                        return /^Continue(?: as .+)?$/i.test(t)
+                            || /^Continue with Facebook$/i.test(t)
+                            || /^Continue to (?:Meta )?Business(?: Suite)?$/i.test(t)
+                            || /^Продолжить(?: как .+)?$/i.test(t)
+                            || /^Продовжити(?: як .+)?$/i.test(t)
+                            || /^Weiter(?: als .+)?$/i.test(t)
+                            || /^Continuer(?: en tant que .+)?$/i.test(t)
+                            || /^Tiếp tục(?: với tư cách .+)?$/i.test(t);
+                    };
+                    const rows = [
+                        ...document.querySelectorAll(
+                            'button,a,[role="button"],[role="link"]'
+                        )
+                    ].filter(visible).filter(el => allow(
+                        el.innerText
+                        || el.textContent
+                        || el.getAttribute('aria-label')
+                        || ''
+                    ));
+                    if (rows.length !== 1) return false;
+                    rows[0].click();
+                    return true;
+                }"""
+            )
+        except Exception:
+            return False
+        if clicked is not True:
+            return False
+
+        try:
+            await self.page.wait_for_timeout(700)
+        except Exception:
+            pass
+        try:
+            await self.page.wait_for_load_state(
+                "domcontentloaded",
+                timeout=3500,
+            )
+        except Exception:
+            pass
+
+        current=_clean(getattr(self.page,"url",""))
+        try:
+            parsed=urlsplit(current)
+            still_gate=(
+                _clean(parsed.hostname).lower()=="business.facebook.com"
+                and _clean(parsed.path).lower().rstrip("/")
+                    =="/business/loginpage"
+            )
+        except Exception:
+            still_gate=True
+        if still_gate:
+            return False
+
+        self._last_selector_diagnostic={
+            **(self._last_selector_diagnostic or {}),
+            "business_login_gate_resolved":True,
+            "business_login_gate_return_url":_clean(return_url)[:700],
+            "business_login_gate_final_url":current[:700],
+        }
+        return True
+
+
     async def _goto(
         self,
         url: str,
@@ -2449,9 +2653,25 @@ class FacebookBusinessBrowser:
                 )
                 return _clean(self.page.url)
 
-            except BrowserBusinessError:
+            except BrowserBusinessError as exc:
+                if exc.code=="BUSINESS_LOGIN_GATE":
+                    resolved=await self._resolve_business_login_gate(
+                        return_url=url
+                    )
+                    if resolved:
+                        await self._resolve_facebook_cookie_consent(
+                            return_url=url
+                        )
+                        await self._assert_authenticated(
+                            body_timeout_ms=max(
+                                100,
+                                min(int(auth_body_timeout_ms or 1500),5000),
+                            )
+                        )
+                        return _clean(self.page.url)
                 # Preserve meaningful account/session errors such as
-                # SESSION_EXPIRED and CHECKPOINT_REQUIRED.
+                # SESSION_EXPIRED, CHECKPOINT_REQUIRED and an unresolved
+                # Business login gate.
                 raise
 
             except Exception as exc:
