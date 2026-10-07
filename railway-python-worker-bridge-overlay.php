@@ -225,12 +225,16 @@ function rmx_py_live_inventory(string $profile): array {
         $businessId = trim((string)($account['business_id'] ?? ''));
         if (!preg_match('/^\d{5,30}$/', $id) || !preg_match('/^\d{5,30}$/', $businessId)
             || isset($seenAccounts[$id])) continue;
+        $status = $account['account_status'] ?? null;
         $accounts[] = [
             'id'=>$id,
             'account_id'=>$id,
             'ad_account_id'=>$id,
             'business_id'=>$businessId,
             'name'=>trim((string)($account['name'] ?? $account['account_name'] ?? $id)) ?: $id,
+            'account_status'=>is_numeric($status) ? (int)$status : null,
+            'currency'=>trim((string)($account['currency'] ?? '')),
+            'disable_reason'=>trim((string)($account['disable_reason'] ?? '')),
             'source'=>'workspace_last_confirmed_live',
         ];
         $seenAccounts[$id] = true;
