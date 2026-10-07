@@ -163,6 +163,56 @@ console.log('Private Launch catalog and funding truth checks passed');
   assert.equal(storage.has('remask_private_launch_pending_v1'),true);
   privateCtx.remaskPrivatePendingClear();
   assert.equal(storage.has('remask_private_launch_pending_v1'),false);
+
+  // Multiple live cards must stop before Job creation and expose only masked
+  // choices for the exact RK.
+  const paymentHost={children:[],insertBefore(node){this.children.push(node);node.parentNode=this;}};
+  buttons.fundingStatus.parentNode=paymentHost;
+  privateCtx.document.createElement=tag=>{
+    const node={
+      tagName:String(tag).toUpperCase(),children:[],dataset:{},className:'',
+      textContent:'',value:'',selected:false,parentNode:null,
+      appendChild(child){this.children.push(child);child.parentNode=this;},
+      addEventListener(kind,handler){this['on'+kind]=handler;}
+    };
+    if(tag==='select'){
+      Object.defineProperty(node,'options',{get(){return this.children;}});
+      node.selectedIndex=0;
+    }
+    return node;
+  };
+  privateCtx.fetch=async(url,options)=>{
+    const body=JSON.parse(options.body);
+    if(body.action==='private_launch_contracts')
+      return {ok:true,status:200,json:async()=>({ok:true,contracts:{
+        CAMPAIGN:{configured:true},AD_SET:{configured:true},
+        CREATIVE:{configured:true},AD:{configured:true}
+      }})};
+    if(body.action==='private_launch_review')
+      return {ok:true,status:200,json:async()=>({ok:true,review:{
+        ready:false,preflight:{
+          payment_selection_required:true,
+          payment_methods:[
+            {type:'Visa',last4:'1111',linkage_status:'OBSERVED'},
+            {type:'Mastercard',last4:'2222',linkage_status:'OBSERVED'}
+          ]
+        }
+      }})};
+    throw new Error('unexpected worker call');
+  };
+  const oneConfig={...config,accountIds:['111111111']};
+  await assert.rejects(
+    ()=>privateCtx.remaskPrivateReviewConfig(oneConfig,{render:false}),
+    /выберите карту для RK 111111111/
+  );
+  assert.equal(paymentHost.children.length,1);
+  const selectorBlock=paymentHost.children[0].children[0];
+  const selector=selectorBlock.children.find(node=>node.dataset?.paymentSelect==='1');
+  assert.ok(selector,'masked payment selector was not rendered');
+  assert.equal(selector.children.length,3);
+  assert.match(selector.children[1].textContent,/Visa.*1111/);
+  assert.match(selector.children[2].textContent,/Mastercard.*2222/);
+
   console.log('Private Launch UI uses worker review + independent per-RK jobs with durable idempotency.');
 })().catch(e=>{console.error(e);process.exitCode=1});
 
