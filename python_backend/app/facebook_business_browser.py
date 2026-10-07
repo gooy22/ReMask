@@ -2720,7 +2720,28 @@ class FacebookBusinessBrowser:
                         # or create surface separately.
                         if facebook_surface:
                             return current_url
-                    except BrowserBusinessError:
+                    except BrowserBusinessError as auth_exc:
+                        if auth_exc.code=="BUSINESS_LOGIN_GATE":
+                            resolved=await self._resolve_business_login_gate(
+                                return_url=url
+                            )
+                            if resolved:
+                                await self._resolve_facebook_cookie_consent(
+                                    return_url=url
+                                )
+                                await self._assert_authenticated(
+                                    body_timeout_ms=max(
+                                        100,
+                                        min(
+                                            int(
+                                                auth_body_timeout_ms
+                                                or 1500
+                                            ),
+                                            5000,
+                                        ),
+                                    )
+                                )
+                                return _clean(self.page.url)
                         raise
                     except Exception:
                         pass
