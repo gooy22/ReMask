@@ -202,6 +202,41 @@ def page_access_request_match(
     return semantic
 
 
+def page_access_request_plausible(
+    meta: dict[str, Any],
+    *,
+    business_id: str,
+    page_id: str,
+) -> bool:
+    """Conservative final-gate matcher for an unclassified Page-access mutation.
+
+    It may block an unknown mutation only when the exact target Business and
+    Page IDs are both present in GraphQL variables. Unrelated hydration/query
+    requests are allowed to continue.
+    """
+    if str(meta.get("method") or "").upper() != "POST":
+        return False
+    if "graphql" not in str(meta.get("url") or "").lower():
+        return False
+    variables = (
+        meta.get("variables")
+        if isinstance(meta.get("variables"), dict)
+        else {}
+    )
+    if not variables:
+        return False
+    business = _clean(business_id)
+    page = _clean(page_id)
+    if not business.isdigit() or not page.isdigit():
+        return False
+    if not _clean(meta.get("doc_id")).isdigit():
+        return False
+    return (
+        _value_contains_id(variables, business)
+        and _value_contains_id(variables, page)
+    )
+
+
 class PageAccessContractStore:
     def __init__(self, path: str | Path | None = None) -> None:
         default = (
@@ -285,6 +320,7 @@ class PageAccessContractStore:
         *,
         business_id: str,
         page_id: str,
+        actor_id: str = "",
     ) -> PageAccessContract:
         if not isinstance(captured, dict):
             raise ProvisioningError(
@@ -295,6 +331,7 @@ class PageAccessContractStore:
 
         business = _clean(business_id)
         page = _clean(page_id)
+        actor = _clean(actor_id)
         variables = captured.get("variables")
         if (
             not business.isdigit()
@@ -308,12 +345,21 @@ class PageAccessContractStore:
                 retryable=False,
             )
 
+        replacements = {
+            business: "{{business_id}}",
+            page: "{{page_id}}",
+        }
+        actor_present = bool(
+            actor.isdigit()
+            and actor not in replacements
+            and _value_contains_id(variables, actor)
+        )
+        if actor_present:
+            replacements[actor] = "{{actor_id}}"
+
         templated = _template_value(
             variables,
-            {
-                business: "{{business_id}}",
-                page: "{{page_id}}",
-            },
+            replacements,
         )
         encoded = json.dumps(
             templated,
@@ -326,6 +372,19 @@ class PageAccessContractStore:
                 "Captured Page-access mutation did not bind both target IDs",
                 retryable=False,
             )
+        if actor_present and "{{actor_id}}" not in encoded:
+            raise ProvisioningError(
+                "PRIVATE_PAGE_ACCESS_CAPTURE_INVALID",
+                "Captured Page-access mutation did not template its profile actor",
+                retryable=False,
+            )
+        for raw in (business, page, actor if actor_present else ""):
+            if raw and _value_contains_id(templated, raw):
+                raise ProvisioningError(
+                    "PRIVATE_PAGE_ACCESS_CAPTURE_INVALID",
+                    "Target/profile-specific ID remains in the captured Page-access contract",
+                    retryable=False,
+                )
 
         _reject_auth_material(templated, "variables")
 
@@ -384,26 +443,53 @@ class PageAccessContractStore:
         *,
         business_id: str,
         page_id: str,
+        actor_id: str = "",
     ) -> dict[str, Any]:
         business = _clean(business_id)
         page = _clean(page_id)
+        actor = _clean(actor_id)
         if not business.isdigit() or not page.isdigit():
             raise ProvisioningError(
                 "PRIVATE_PAGE_ACCESS_TARGET_INVALID",
                 "Page-access target IDs are invalid",
                 retryable=False,
             )
+        replacements = {
+            "{{business_id}}": business,
+            "{{page_id}}": page,
+        }
+        encoded_contract = json.dumps(
+            contract.variables,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        if "{{actor_id}}" in encoded_contract:
+            if not actor.isdigit():
+                raise ProvisioningError(
+                    "PRIVATE_PAGE_ACCESS_TARGET_INVALID",
+                    "Captured Page-access contract requires the exact Facebook actor ID",
+                    retryable=False,
+                )
+            replacements["{{actor_id}}"] = actor
         variables = _render_value(
             contract.variables,
-            {
-                "{{business_id}}": business,
-                "{{page_id}}": page,
-            },
+            replacements,
         )
         if not isinstance(variables, dict):
             raise ProvisioningError(
                 "PRIVATE_PAGE_ACCESS_CONTRACT_INVALID",
                 "Rendered Page-access variables are invalid",
+                retryable=False,
+            )
+        rendered_text = json.dumps(
+            variables,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        if re.search(r"\{\{[A-Za-z0-9_.-]+\}\}", rendered_text):
+            raise ProvisioningError(
+                "PRIVATE_PAGE_ACCESS_CONTRACT_INVALID",
+                "Rendered Page-access variables still contain unresolved placeholders",
                 retryable=False,
             )
         return variables
@@ -415,6 +501,7 @@ class PageAccessContractStore:
         business_id: str,
         page_id: str,
         profile_id: str,
+        actor_id: str = "",
     ) -> dict[str, Any]:
         contract = self.get()
         if contract is None:
@@ -437,6 +524,7 @@ class PageAccessContractStore:
             contract,
             business_id=business_id,
             page_id=page_id,
+            actor_id=actor_id,
         )
 
         try:
@@ -549,4 +637,5 @@ __all__ = [
     "PageAccessContract",
     "PageAccessContractStore",
     "page_access_request_match",
+    "page_access_request_plausible",
 ]
