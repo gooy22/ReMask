@@ -3775,10 +3775,10 @@ class BrowserAuthenticationStateTests(unittest.IsolatedAsyncioTestCase):
                 browser._diagnostic.assert_not_awaited()
 
     async def test_real_login_route_blocks_session_and_reports_route_without_query(self):
-        for path in ("/login", "/login.php", "/login/device-based/regular/login/", "/business/loginpage/"):
+        for path in ("/login", "/login.php", "/login/device-based/regular/login/"):
             with self.subTest(path=path):
                 browser = FacebookBusinessBrowser(SimpleNamespace(profile_id="9"))
-                host = "business.facebook.com" if path == "/business/loginpage/" else "www.facebook.com"
+                host = "www.facebook.com"
                 browser.page = SimpleNamespace(url="https://" + host + path + "?next=private-query")
                 browser._body_text = AsyncMock(return_value="")
                 browser._diagnostic = AsyncMock(return_value={})
@@ -3789,6 +3789,33 @@ class BrowserAuthenticationStateTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn(host + path, str(caught.exception))
                 self.assertNotIn("private-query", str(caught.exception))
                 browser._body_text.assert_not_awaited()
+
+    async def test_business_login_gate_is_not_global_session_expiry(self):
+        browser = FacebookBusinessBrowser(SimpleNamespace(profile_id="9"))
+        browser.page = SimpleNamespace(
+            url=(
+                "https://business.facebook.com/business/loginpage/"
+                "?next=private-query"
+            )
+        )
+        browser._body_text = AsyncMock(return_value="")
+        browser._diagnostic = AsyncMock(return_value={})
+
+        with self.assertRaises(BrowserBusinessError) as caught:
+            await browser._assert_authenticated()
+
+        self.assertEqual(caught.exception.code, "BUSINESS_LOGIN_GATE")
+        self.assertTrue(caught.exception.retryable)
+        self.assertEqual(
+            caught.exception.diagnostic["auth_evidence"],
+            "business_login_gate",
+        )
+        self.assertEqual(
+            caught.exception.diagnostic["login_path"],
+            "/business/loginpage/",
+        )
+        self.assertNotIn("private-query", str(caught.exception))
+        browser._body_text.assert_not_awaited()
 
     async def test_business_suite_body_word_checkpoint_is_not_auth_checkpoint(self):
         browser = FacebookBusinessBrowser(
