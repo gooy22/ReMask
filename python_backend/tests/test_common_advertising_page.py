@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from types import SimpleNamespace
 from pathlib import Path
-from unittest.mock import AsyncMock,patch
+from unittest.mock import AsyncMock,Mock,patch
 
 from app.provisioning.advertising_page import AdvertisingPageStore,ensure_common_page
 from app.provisioning.models import ProvisioningError,ProvisioningStep
@@ -268,9 +268,10 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
     async def _shared_access_handler_fixture(
         self,
         *,
-        request_side_effect=True,
+        request_side_effect=None,
         approve_side_effect=True,
         refresh_side_effect=None,
+        contract_available=True,
     ):
         item='shared-'+str(getattr(self,'shared_fixture_count',0))
         self.shared_fixture_count=getattr(self,'shared_fixture_count',0)+1
@@ -306,11 +307,28 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
         )
         resolver=SimpleNamespace(resolve=AsyncMock())
 
+        capture_row={
+            'doc_id':'987654321',
+            'friendly_name':'BusinessRequestPageAccessMutation',
+            'endpoint_url':'https://business.facebook.com/api/graphql/',
+            'variables':{
+                'input':{
+                    'business_id':BM,
+                    'page_id':PAGE,
+                    'actor_id':'61594882851656',
+                    'tasks':['ADVERTISE'],
+                }
+            },
+            'request_envelope':{'__req':'a','dpr':'1'},
+        }
         request=AsyncMock()
-        if isinstance(request_side_effect,(list,tuple,BaseException)):
-            request.side_effect=request_side_effect
+        effective_request=(
+            capture_row if request_side_effect is None else request_side_effect
+        )
+        if isinstance(effective_request,(list,tuple,BaseException)):
+            request.side_effect=effective_request
         else:
-            request.return_value=request_side_effect
+            request.return_value=effective_request
         approve=AsyncMock()
         if isinstance(approve_side_effect,(list,tuple,BaseException)):
             approve.side_effect=approve_side_effect
@@ -326,9 +344,31 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
             if refresh_side_effect is not None else False
         )
 
+        private_contract=SimpleNamespace(
+            doc_id='987654321',
+            friendly_name='BusinessRequestPageAccessMutation',
+        )
+        contract_store=Mock()
+        if contract_available:
+            contract_store.get.return_value=private_contract
+        else:
+            contract_store.get.side_effect=ProvisioningError(
+                'PRIVATE_PAGE_SHARE_CONTRACT_REQUIRED',
+                'missing',
+                retryable=True,
+            )
+        contract_store.register_capture.return_value=private_contract
+        private_execute=AsyncMock(return_value={'data':{'ok':True}})
+
         with patch(
             'app.provisioning.page_access_handler.ensure_common_page',
             new=AsyncMock(),
+        ), patch(
+            'app.provisioning.page_access_handler.PrivatePageShareContractStore',
+            return_value=contract_store,
+        ), patch(
+            'app.provisioning.page_access_handler._execute_private_page_share_request',
+            private_execute,
         ), patch(
             'app.provisioning.page_access_handler._request_target_page_access',
             request,
@@ -354,16 +394,19 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
                 provisioning_state=self.state,profile_id='8',
                 item_id=item,scope_key=item,profile_resolver=resolver,
             )
-        return result,request,approve,assign,ownership,rk_full,refresh,browser
-
-    async def test_default_page_access_uses_shared_ads_not_ownership(self):
-        result,request,approve,assign,ownership,rk_full,refresh,browser=(
-            await self._shared_access_handler_fixture(
-                request_side_effect=True,
-            )
+        return (
+            result,request,approve,assign,ownership,rk_full,refresh,browser,
+            private_execute,contract_store,
         )
-        request.assert_awaited_once()
-        approve.assert_not_awaited()
+
+    async def test_default_page_access_uses_private_share_request_not_browser_submit(self):
+        (
+            result,request,approve,assign,ownership,rk_full,refresh,browser,
+            private_execute,contract_store,
+        )=await self._shared_access_handler_fixture()
+        request.assert_not_awaited()
+        private_execute.assert_awaited_once()
+        approve.assert_awaited_once()
         assign.assert_awaited_once()
         ownership.assert_not_awaited()
         rk_full.assert_not_awaited()
@@ -371,8 +414,12 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
         browser._goto.assert_awaited_once()
         self.assertEqual(result['access_mode'],'shared_ads_access')
         self.assertEqual(
+            result['request_transport'],
+            'facebook_private_graphql',
+        )
+        self.assertEqual(
             result['transport'],
-            'target_business_page_advertising_access',
+            'facebook_private_graphql_then_browser_reconcile',
         )
         self.assertTrue(result['page_shared_to_business'])
         self.assertTrue(result['operator_ads_access_assigned'])
@@ -382,6 +429,26 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(bool(config.get('owner_business_confirmed')))
         self.assertNotEqual(str(config.get('owner_business_id') or ''),BM)
 
+    async def test_missing_private_contract_is_captured_then_replayed_privately(self):
+        (
+            result,request,approve,assign,ownership,rk_full,refresh,browser,
+            private_execute,contract_store,
+        )=await self._shared_access_handler_fixture(
+            contract_available=False,
+        )
+        request.assert_awaited_once()
+        self.assertTrue(
+            request.await_args.kwargs.get('capture_only')
+        )
+        contract_store.register_capture.assert_called_once()
+        private_execute.assert_awaited_once()
+        approve.assert_awaited_once()
+        assign.assert_awaited_once()
+        self.assertEqual(
+            result['request_transport'],
+            'facebook_private_graphql',
+        )
+
     async def test_business_login_gate_refreshes_same_profile_once_then_retries(self):
         gate=BrowserBusinessError(
             'BUSINESS_LOGIN_GATE',
@@ -389,15 +456,17 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
             retryable=True,
             diagnostic={'login_path':'/business/loginpage/'},
         )
-        result,request,approve,assign,ownership,rk_full,refresh,browser=(
-            await self._shared_access_handler_fixture(
-                request_side_effect=[gate,True],
-                refresh_side_effect=True,
-            )
+        (
+            result,request,approve,assign,ownership,rk_full,refresh,browser,
+            private_execute,contract_store,
+        )=await self._shared_access_handler_fixture(
+            approve_side_effect=[gate,True],
+            refresh_side_effect=True,
         )
-        self.assertEqual(request.await_count,2)
+        request.assert_not_awaited()
+        private_execute.assert_awaited_once()
+        self.assertEqual(approve.await_count,2)
         refresh.assert_awaited_once()
-        approve.assert_not_awaited()
         assign.assert_awaited_once()
         self.assertTrue(result['page_shared_to_business'])
 
