@@ -5,7 +5,10 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from app import facebook_docids
-from app.facebook_business_create import create_business_with_docids
+from app.facebook_business_create import (
+    CAPTURED_CREATE_BM_DOC_ID,
+    create_business_with_docids,
+)
 from app.facebook_docids import (
     DocIdCandidate,
     classify_cache_failure,
@@ -367,6 +370,74 @@ class CacheFailureClassifierTests(unittest.TestCase):
             http_status=429,
         )
         self.assertEqual(kind, "network")
+
+
+class _CapturedCreateSelfHealSession:
+    def __init__(self):
+        self.profile = SimpleNamespace(name="profile-captured-self-heal")
+        self.used_doc_ids = []
+
+    async def bootstrap(self):
+        return SimpleNamespace(
+            actor_id="123456789",
+            request_context={},
+        )
+
+    async def graphql(self, doc_id, variables, **kwargs):
+        self.used_doc_ids.append(doc_id)
+        if doc_id != CAPTURED_CREATE_BM_DOC_ID:
+            return {
+                "error": 1357054,
+                "isNotCritical": 1,
+                "errorDescription": "PersistedQueryNotFound: unknown argument",
+            }
+        return {
+            "data": {
+                "bizkit_create_business": {
+                    "id": "555666777888999"
+                }
+            }
+        }
+
+
+class CapturedCreateSelfHealTests(unittest.IsolatedAsyncioTestCase):
+    async def test_captured_contract_runs_after_stale_confirmed_cache(self):
+        session = _CapturedCreateSelfHealSession()
+        stale = DocIdCandidate(
+            operation="CREATE_BM",
+            doc_id="7766554433221100",
+            friendly_name="useBusinessCreationMutationMutation",
+            endpoint_url="https://business.facebook.com/api/graphql/",
+            variables_mode="scope_selector_footer_v6_browser_native",
+            source="confirmed_cache_test",
+            priority=9000,
+            observed_at="runtime",
+            enabled=True,
+        )
+
+        with patch(
+            "app.facebook_business_create.discover_current_scope_selector_create_candidate",
+            return_value=None,
+        ), patch(
+            "app.facebook_business_create.list_candidates",
+            return_value=[stale],
+        ), patch(
+            "app.facebook_business_create.record_result",
+        ), patch(
+            "app.facebook_business_create.upsert_candidate",
+        ):
+            result = await create_business_with_docids(
+                session,
+                business_name="Test Business",
+                user_email="owner@example.com",
+            )
+
+        self.assertEqual(result.business_id, "555666777888999")
+        self.assertEqual(
+            session.used_doc_ids,
+            ["7766554433221100", CAPTURED_CREATE_BM_DOC_ID],
+        )
+        self.assertEqual(result.candidate.source, "live_capture_2026_09_24")
 
 
 class _ManualSession:
