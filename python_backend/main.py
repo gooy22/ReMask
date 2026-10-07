@@ -20,6 +20,7 @@ from app.session_auth_refresh import refresh_saved_auth_context
 from app.store import JobStore
 from app.facebook_business_browser import BROWSER_TERMINAL_ACCESS_CODES, BrowserBusinessError, FacebookBusinessBrowser
 from app.facebook_page_discovery import PageDiscoveryError, list_pages_via_private_graphql
+from app.private_inventory import private_inventory_snapshot
 from app.provisioning.models import ProvisioningError, ProvisioningStep
 from app.facebook_docids import (
     list_candidates,
@@ -1856,6 +1857,171 @@ async def profile_live_inventory(
     try:
         stage='profile_session'
         async with ProfileSession(context) as profile_session:
+            # REMASK_PRIVATE_FIRST_SYNC_V1
+            # Sync is transport-agnostic: reuse the profile cookie/proxy web
+            # session first and open Chromium only when private Relay/HTML
+            # inventory cannot prove the known BM/RK targets.
+            stage='private_inventory'
+            private_started=time.monotonic()
+            private_snapshot: dict[str,Any] = {}
+            try:
+                facebook_web=await profile_session.facebook_web()
+                private_timeout=budget(12.0)
+                private_snapshot=await hard_deadline(
+                    private_inventory_snapshot(
+                        facebook_web,
+                        known_accounts_by_business=known_accounts_by_business,
+                        known_business_ids=known_business_ids,
+                        personal_scope_id=personal_scope_id,
+                    ),
+                    private_timeout,
+                )
+            except Exception as exc:
+                log.info(
+                    'live inventory profile=%s private-first unavailable=%s',
+                    clean_profile,
+                    f'{exc.__class__.__name__}: {exc}'[:700],
+                )
+                private_snapshot={}
+
+            if private_snapshot.get('ready'):
+                private_businesses=[
+                    row for row in (private_snapshot.get('businesses') or [])
+                    if isinstance(row,dict)
+                    and bool(row.get('ad_accounts_ready'))
+                ]
+                private_live_business_ids={
+                    str(row.get('id') or '')
+                    for row in private_businesses
+                    if str(row.get('id') or '').isdigit()
+                }
+                private_business_map={
+                    str(row.get('id') or ''):str(
+                        row.get('name') or row.get('id') or ''
+                    )
+                    for row in private_businesses
+                    if str(row.get('id') or '').isdigit()
+                }
+
+                # Pages remain an independent profile-level asset. Preserve the
+                # current durable/context baseline; private LIST_PAGES is a
+                # bounded enrichment and never blocks a successful BM/RK sync.
+                private_pages_by_id: dict[str,dict[str,Any]]={}
+                for page in [*profile_context_pages,*confirmed_fan_pages]:
+                    if not isinstance(page,dict):
+                        continue
+                    page_id=str(page.get('id') or page.get('page_id') or '').strip()
+                    if not page_id.isdigit():
+                        continue
+                    current=private_pages_by_id.get(page_id,{})
+                    current.update({
+                        key:value for key,value in page.items()
+                        if value not in ('',None,[],{})
+                    })
+                    current['id']=page_id
+                    current['name']=str(
+                        current.get('name')
+                        or current.get('page_name')
+                        or page_id
+                    ).strip()
+                    private_pages_by_id[page_id]=current
+
+                private_pages=list(private_pages_by_id.values())
+                private_pages_live_verified=False
+                private_pages_source=(
+                    'profile_context+python_worker_confirmed'
+                    if private_pages else ''
+                )
+                private_page_diag=''
+                try:
+                    private_page_timeout=min(3.5,budget(4.0))
+                    private_page_result=await hard_deadline(
+                        list_pages_via_private_graphql(facebook_web),
+                        private_page_timeout,
+                    )
+                    for page in private_page_result.pages or []:
+                        if not isinstance(page,dict):
+                            continue
+                        page_id=str(page.get('id') or page.get('page_id') or '').strip()
+                        if not page_id.isdigit():
+                            continue
+                        current=private_pages_by_id.get(page_id,{})
+                        current.update({
+                            key:value for key,value in page.items()
+                            if value not in ('',None,[],{})
+                        })
+                        current['id']=page_id
+                        current['name']=str(
+                            current.get('name')
+                            or current.get('page_name')
+                            or page_id
+                        ).strip()
+                        private_pages_by_id[page_id]=current
+                    private_pages=list(private_pages_by_id.values())
+                    private_pages_live_verified=True
+                    private_pages_source=str(
+                        private_page_result.source or 'facebook_web_graphql'
+                    )
+                except Exception as exc:
+                    private_page_diag=f'{exc.__class__.__name__}: {exc}'[:900]
+
+                private_warnings=list(warnings)
+                if not private_snapshot.get('discovery_complete'):
+                    private_warnings.append(
+                        'Private BM enumeration was partial; exact known BM/RK targets were live-confirmed'
+                    )
+
+                result={
+                    'ok':True,
+                    'profile_id':clean_profile,
+                    'session_ready':True,
+                    'live_ready':_live_inventory_targets_ready(
+                        private_business_map,
+                        private_live_business_ids,
+                        confirmed_empty=False,
+                    ),
+                    'business_inventory_confirmed_empty':False,
+                    'businesses':private_businesses,
+                    'businesses_count':len(private_businesses),
+                    'live_businesses_count':len(private_live_business_ids),
+                    'known_businesses_count':len(known_business_ids),
+                    'auth_blocked_businesses':[],
+                    'auth_blocked_business_codes':{},
+                    'discovery_source':'private_http_relay_inventory',
+                    'business_inventory_diagnostic':{
+                        'transport':'private_http_relay',
+                        'diagnostics':private_snapshot.get('diagnostics') or [],
+                        'discovered_business_ids':private_snapshot.get('discovered_business_ids') or [],
+                        'inconclusive_business_ids':private_snapshot.get('inconclusive_business_ids') or [],
+                    },
+                    'source':'private_http_relay_inventory',
+                    'pages':private_pages,
+                    'pages_count':len(private_pages),
+                    'pages_ready':bool(private_pages) or private_pages_live_verified,
+                    'pages_live_verified':private_pages_live_verified,
+                    'pages_source':private_pages_source,
+                    'pages_diagnostic':private_page_diag,
+                    'warnings':private_warnings,
+                }
+                log.info(
+                    'live inventory profile=%s private-first complete ms=%d live_ready=%s '
+                    'live_businesses=%d pages=%d pages_live_verified=%s',
+                    clean_profile,
+                    int((time.monotonic()-private_started)*1000),
+                    bool(result['live_ready']),
+                    len(private_live_business_ids),
+                    len(private_pages),
+                    private_pages_live_verified,
+                )
+                return result
+
+            log.info(
+                'live inventory profile=%s private-first inconclusive ms=%d businesses=%s; falling back to Chromium',
+                clean_profile,
+                int((time.monotonic()-private_started)*1000),
+                ','.join(private_snapshot.get('inconclusive_business_ids') or []) or '-',
+            )
+
             stage='browser_open'
             browser_open_started=time.monotonic()
             try:
