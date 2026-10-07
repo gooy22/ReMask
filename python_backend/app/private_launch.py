@@ -49,15 +49,54 @@ class MutationContract:
 
 
 class PrivateLaunchContractStore:
-    """Server-side contracts captured from Meta's current private web flow."""
+    """Durable server-side contracts captured from Meta's current private web flow."""
 
     ALLOWED_HOSTS = {"business.facebook.com", "www.facebook.com"}
+    SAFE_ENVELOPE_KEYS = {
+        "__aaid", "__bid", "__hs", "__hblp", "__hsdp", "__rev", "__s",
+        "__hsi", "__dyn", "__csr", "__comet_req", "__spin_r", "__spin_b",
+        "__spin_t", "__jssesw", "__crn", "__req", "__ccg", "dpr",
+        "server_timestamps", "fb_api_caller_class",
+    }
+    REQUIRED_PLACEHOLDERS = {
+        PrivateLaunchStep.CAMPAIGN: {"{{ad_account_id}}"},
+        PrivateLaunchStep.ADSET: {"{{campaign_id}}"},
+        PrivateLaunchStep.CREATIVE: {"{{ad_account_id}}", "{{page_id}}"},
+        PrivateLaunchStep.AD: {"{{adset_id}}", "{{creative_id}}"},
+    }
 
-    def __init__(self, raw: str | None = None) -> None:
-        raw = raw if raw is not None else os.getenv(
-            "REMASK_PRIVATE_LAUNCH_CONTRACTS_JSON",
-            "{}",
+    def __init__(
+        self,
+        raw: str | None = None,
+        *,
+        path: str | Path | None = None,
+    ) -> None:
+        self.path = Path(
+            path
+            or os.getenv("REMASK_PRIVATE_LAUNCH_CONTRACTS_PATH")
+            or "/var/lib/remask/private-launch-contracts.json"
         )
+        if raw is not None:
+            parsed = self._decode(raw)
+        else:
+            persisted: dict[str, Any] = {}
+            try:
+                if self.path.is_file():
+                    persisted = self._decode(self.path.read_text(encoding="utf-8"))
+            except OSError as exc:
+                raise ProvisioningError(
+                    "PRIVATE_LAUNCH_CONTRACT_CONFIG_ERROR",
+                    f"Private Launch contract registry cannot be read: {exc.__class__.__name__}",
+                    retryable=False,
+                ) from exc
+            env_parsed = self._decode(
+                os.getenv("REMASK_PRIVATE_LAUNCH_CONTRACTS_JSON", "{}")
+            )
+            parsed = {**persisted, **env_parsed}
+        self._raw = parsed
+
+    @staticmethod
+    def _decode(raw: str | None) -> dict[str, Any]:
         try:
             parsed = json.loads(raw or "{}")
         except json.JSONDecodeError as exc:
@@ -72,7 +111,7 @@ class PrivateLaunchContractStore:
                 "Private Launch contract JSON must be an object",
                 retryable=False,
             )
-        self._raw = parsed
+        return parsed
 
     @classmethod
     def _endpoint(cls, value: Any) -> str:
@@ -90,6 +129,57 @@ class PrivateLaunchContractStore:
             )
         return endpoint
 
+    @classmethod
+    def _validate_placeholders(
+        cls,
+        step: PrivateLaunchStep,
+        variables: dict[str, Any],
+    ) -> None:
+        encoded = json.dumps(
+            variables,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        missing = sorted(
+            placeholder
+            for placeholder in cls.REQUIRED_PLACEHOLDERS[step]
+            if placeholder not in encoded
+        )
+        if missing:
+            raise ProvisioningError(
+                "PRIVATE_LAUNCH_CONTRACT_CONFIG_ERROR",
+                f"{step.value} contract is missing required placeholders: {', '.join(missing)}",
+                retryable=False,
+            )
+
+    @classmethod
+    def _clean_envelope(cls, value: Any) -> dict[str, str]:
+        if value in (None, {}):
+            return {}
+        if not isinstance(value, dict):
+            raise ProvisioningError(
+                "PRIVATE_LAUNCH_CONTRACT_CONFIG_ERROR",
+                "request_envelope must be an object",
+                retryable=False,
+            )
+        unknown = sorted(
+            str(key)
+            for key in value
+            if str(key) not in cls.SAFE_ENVELOPE_KEYS
+        )
+        if unknown:
+            raise ProvisioningError(
+                "PRIVATE_LAUNCH_CONTRACT_CONFIG_ERROR",
+                "Private Launch request_envelope contains unsupported fields: "
+                + ", ".join(unknown[:10]),
+                retryable=False,
+            )
+        return {
+            str(key): str(raw_value)[:20000]
+            for key, raw_value in value.items()
+            if str(raw_value or "").strip()
+        }
+
     def get(self, step: PrivateLaunchStep) -> MutationContract:
         row = self._raw.get(step.value)
         if not isinstance(row, dict):
@@ -102,7 +192,6 @@ class PrivateLaunchContractStore:
         friendly_name = str(row.get("friendly_name") or "").strip()
         variables = row.get("variables")
         result_paths = row.get("result_id_paths")
-        envelope = row.get("request_envelope") or {}
         if (
             not re.fullmatch(r"\d{5,40}", doc_id)
             or not friendly_name
@@ -110,13 +199,13 @@ class PrivateLaunchContractStore:
             or not isinstance(result_paths, list)
             or not result_paths
             or not all(isinstance(path, str) and path.strip() for path in result_paths)
-            or not isinstance(envelope, dict)
         ):
             raise ProvisioningError(
                 "PRIVATE_LAUNCH_CONTRACT_CONFIG_ERROR",
                 f"Captured contract for {step.value} is incomplete",
                 retryable=False,
             )
+        self._validate_placeholders(step, variables)
         return MutationContract(
             step=step,
             doc_id=doc_id,
@@ -124,8 +213,74 @@ class PrivateLaunchContractStore:
             endpoint_url=self._endpoint(row.get("endpoint_url")),
             variables=variables,
             result_id_paths=tuple(path.strip() for path in result_paths),
-            request_envelope={str(k): str(v) for k, v in envelope.items()},
+            request_envelope=self._clean_envelope(row.get("request_envelope")),
         )
+
+    def status(self) -> dict[str, dict[str, Any]]:
+        output: dict[str, dict[str, Any]] = {}
+        for step in STEP_ORDER:
+            try:
+                contract = self.get(step)
+                output[step.value] = {
+                    "configured": True,
+                    "friendly_name": contract.friendly_name,
+                    "endpoint_host": urlsplit(contract.endpoint_url).hostname or "",
+                    "result_paths": len(contract.result_id_paths),
+                }
+            except ProvisioningError as exc:
+                output[step.value] = {
+                    "configured": False,
+                    "code": exc.code,
+                    "message": str(exc),
+                }
+        return output
+
+    def register(
+        self,
+        step: PrivateLaunchStep,
+        row: dict[str, Any],
+    ) -> MutationContract:
+        if not isinstance(row, dict):
+            raise ProvisioningError(
+                "PRIVATE_LAUNCH_CONTRACT_CONFIG_ERROR",
+                "Captured contract must be an object",
+                retryable=False,
+            )
+        previous = self._raw.get(step.value)
+        self._raw[step.value] = dict(row)
+        try:
+            contract = self.get(step)
+        except Exception:
+            if previous is None:
+                self._raw.pop(step.value, None)
+            else:
+                self._raw[step.value] = previous
+            raise
+
+        persisted = dict(self._raw)
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.path.with_suffix(self.path.suffix + ".tmp")
+            tmp.write_text(
+                json.dumps(
+                    persisted,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+                encoding="utf-8",
+            )
+            tmp.replace(self.path)
+        except OSError as exc:
+            if previous is None:
+                self._raw.pop(step.value, None)
+            else:
+                self._raw[step.value] = previous
+            raise ProvisioningError(
+                "PRIVATE_LAUNCH_CONTRACT_STORE_FAILED",
+                f"Private Launch contract registry write failed: {exc.__class__.__name__}",
+                retryable=False,
+            ) from exc
+        return contract
 
 
 class PrivateLaunchStateStore:
