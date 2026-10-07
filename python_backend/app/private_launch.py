@@ -15,10 +15,10 @@ from urllib.parse import urlsplit
 from fb_worker import AuthenticationError, RemoteRequestError
 
 from .action_result import ActionResult
-from .facebook_business_browser import FacebookBusinessBrowser
 from .page_access_inspection import inspect_browser_pages
 from .payment_inspection import inspect_payment_methods
 from .provisioning.models import ProvisioningError
+from .provisioning.meta_transport import MetaTransportRouter
 from .provisioning.state import ProvisioningStateStore
 
 
@@ -611,6 +611,7 @@ class PrivateLaunchService:
         business_id: str,
         ad_account_id: str,
         page_id: str,
+        transport: MetaTransportRouter | None = None,
     ) -> dict[str, Any]:
         row = self._inventory_row(context, business_id, ad_account_id)
         if row is None:
@@ -657,8 +658,9 @@ class PrivateLaunchService:
             )
 
         account_name = str(row.get("name") or row.get("account_name") or ad_account_id).strip()
+        transport = transport or MetaTransportRouter(context=context)
         progress: dict[str, Any] = {}
-        async with FacebookBusinessBrowser(context, v8_old_space_mb=256) as browser:
+        async with transport.browser_lease(v8_old_space_mb=256) as browser:
             pages = await asyncio.wait_for(
                 inspect_browser_pages(
                     browser,
@@ -690,7 +692,7 @@ class PrivateLaunchService:
         # inspect_browser_pages intentionally keeps a write barrier installed
         # until its browser context closes. Billing therefore gets a fresh
         # context so read-only payment hydration cannot inherit that route gate.
-        async with FacebookBusinessBrowser(context, v8_old_space_mb=256) as browser:
+        async with transport.browser_lease(v8_old_space_mb=256) as browser:
             funding = await asyncio.wait_for(
                 inspect_payment_methods(
                     browser,
@@ -738,6 +740,7 @@ class PrivateLaunchService:
         business_id: str,
         ad_account_id: str,
         page_id: str,
+        transport: MetaTransportRouter | None = None,
     ) -> dict[str, Any]:
         try:
             ttl = max(
@@ -768,6 +771,7 @@ class PrivateLaunchService:
             business_id=business_id,
             ad_account_id=ad_account_id,
             page_id=page_id,
+            transport=transport,
         )
         self._preflight_cache[key] = (now, inventory_at, dict(proof))
         return proof
@@ -778,6 +782,7 @@ class PrivateLaunchService:
         profile_id: str,
         context: Any,
         payload: dict[str, Any],
+        transport: MetaTransportRouter | None = None,
     ) -> dict[str, Any]:
         if not isinstance(payload, dict):
             raise ProvisioningError(
@@ -800,6 +805,7 @@ class PrivateLaunchService:
             business_id=business_id,
             ad_account_id=ad_account_id,
             page_id=page_id,
+            transport=transport,
         )
         return {
             "ready": True,
@@ -857,6 +863,7 @@ class PrivateLaunchService:
             )
 
         await self.state.init()
+        meta_transport = MetaTransportRouter(session)
         prior_by_step: dict[PrivateLaunchStep, dict[str, Any] | None] = {}
         current_target = (profile_id, business_id, ad_account_id)
         for step in STEP_ORDER:
@@ -895,6 +902,7 @@ class PrivateLaunchService:
             profile_id=profile_id,
             context=context,
             payload=payload,
+            transport=meta_transport,
         )
         business_id = str(review["business_id"])
         ad_account_id = str(review["ad_account_id"])
@@ -938,7 +946,7 @@ class PrivateLaunchService:
                 },
             )
 
-            web = await session.facebook_web()
+            web = await meta_transport.facebook_web()
             try:
                 await web.bootstrap()
             except AuthenticationError as exc:
