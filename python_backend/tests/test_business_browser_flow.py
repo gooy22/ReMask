@@ -3844,6 +3844,39 @@ class BrowserAuthenticationStateTests(unittest.IsolatedAsyncioTestCase):
             ]
         )
 
+    async def test_business_login_gate_accepts_explicit_facebook_login_option(self):
+        browser=FacebookBusinessBrowser(SimpleNamespace(profile_id='gate-facebook-option'))
+        page=SimpleNamespace(
+            url='https://business.facebook.com/business/loginpage/?login_options%5B0%5D=FB&login_options%5B1%5D=IG&login_options%5B2%5D=SSO',
+            wait_for_load_state=AsyncMock(),
+            wait_for_timeout=AsyncMock(),
+        )
+        calls={'evaluate':0}
+        async def evaluate(script):
+            calls['evaluate']+=1
+            if calls['evaluate']==1:
+                return {
+                    'hasCredentialInput':False,
+                    'candidateCount':1,
+                    'labels':['Log in with Facebook'],
+                }
+            page.url='https://business.facebook.com/latest/home'
+            return True
+        page.evaluate=AsyncMock(side_effect=evaluate)
+        browser.page=page
+        browser._body_text=AsyncMock(return_value='Log in with Facebook Continue with Instagram SSO')
+        browser._last_selector_diagnostic={}
+        resolved=await browser._resolve_business_login_gate(
+            return_url='https://business.facebook.com/latest/home'
+        )
+        self.assertTrue(resolved)
+        self.assertEqual(
+            browser._last_selector_diagnostic[
+                'business_login_gate_choice'
+            ],
+            'Log in with Facebook',
+        )
+
     async def test_business_login_gate_with_credentials_is_never_clicked(self):
         browser=FacebookBusinessBrowser(SimpleNamespace(profile_id='gate-credentials'))
         page=SimpleNamespace(
