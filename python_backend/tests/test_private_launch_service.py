@@ -186,11 +186,6 @@ class PrivateLaunchTests(unittest.IsolatedAsyncioTestCase):
                 payload=payload,
             )
         self.assertEqual(result["status"], "SUCCESS")
-        review = await self.service.review(
-            profile_id="7",
-            context=self.context,
-            payload=payload,
-        ) if False else None
         # Contract placeholders see one effective per-RK payload; nested base
         # values survive while the selected RK override replaces only its leaf.
         effective = __import__("app.private_launch", fromlist=["_effective_launch_payload"])._effective_launch_payload(payload["launch"])
