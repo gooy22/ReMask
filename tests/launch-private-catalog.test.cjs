@@ -88,6 +88,13 @@ console.log('Private Launch catalog and funding truth checks passed');
     Uint32Array,
     fetch:async(url,options)=>{
       const body=JSON.parse(options.body);requests.push({url,body});
+      if(body.action==='private_launch_contracts')
+        return {ok:true,status:200,json:async()=>({ok:true,contracts:{
+          CAMPAIGN:{configured:true,friendly_name:'CampaignMutation'},
+          AD_SET:{configured:true,friendly_name:'AdSetMutation'},
+          CREATIVE:{configured:true,friendly_name:'CreativeMutation'},
+          AD:{configured:true,friendly_name:'AdMutation'}
+        }})};
       if(body.action==='private_launch_review')
         return {ok:true,status:200,json:async()=>({ok:true,review:{ready:true,profile_id:body.profile_id}})};
       if(body.action==='create')
@@ -103,12 +110,13 @@ console.log('Private Launch catalog and funding truth checks passed');
 
   const reviewed=await privateCtx.remaskPrivateReviewConfig(config,{render:false});
   assert.equal(reviewed.length,2);
-  assert.deepEqual(requests.map(r=>r.body.action),['private_launch_review','private_launch_review']);
+  assert.deepEqual(requests.map(r=>r.body.action),['private_launch_contracts','private_launch_review','private_launch_review']);
   assert.ok(requests.every(r=>r.url==='ajax/pythonWorkerJobs.php'));
-  assert.deepEqual(requests.map(r=>r.body.page_id),['333333333','444444444']);
-  assert.deepEqual(requests.map(r=>r.body.business_id),['555555555','666666666']);
-  assert.equal(requests[0].body.launch.override.creative.message,'one');
-  assert.equal(requests[1].body.launch.override.adset.targeting.age_max,35);
+  const reviewRequests=requests.filter(r=>r.body.action==='private_launch_review');
+  assert.deepEqual(reviewRequests.map(r=>r.body.page_id),['333333333','444444444']);
+  assert.deepEqual(reviewRequests.map(r=>r.body.business_id),['555555555','666666666']);
+  assert.equal(reviewRequests[0].body.launch.override.creative.message,'one');
+  assert.equal(reviewRequests[1].body.launch.override.adset.targeting.age_max,35);
   assert.ok(requests.every(r=>r.body.doc_id===undefined&&r.body.fb_dtsg===undefined));
 
   const planned=privateCtx.remaskPrivateJobRequest(config,reviewed);
