@@ -119,6 +119,16 @@ class GraphqlRequestParserTests(unittest.TestCase):
 
 
 class GraphqlMutationCaptureTests(unittest.IsolatedAsyncioTestCase):
+    async def test_installed_matcher_covers_trailing_slash_and_query_urls(self):
+        page = FakePage()
+        async with GraphqlMutationCapture(page, matcher=lambda req, meta: True):
+            for url in ("https://business.facebook.com/api/graphql/",
+                        "https://business.facebook.com/api/graphql/?method=post",
+                        "https://www.facebook.com/api/graphql",
+                        "https://adsmanager.facebook.com/api/graphql/"):
+                self.assertIsNotNone(page.pattern.search(url))
+            self.assertIsNone(page.pattern.search("https://business.facebook.com/latest/home?query=graphql"))
+
     async def test_definitive_match_is_aborted_and_returned(self):
         page = FakePage()
         request = request_for(

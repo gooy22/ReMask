@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from typing import Any, Awaitable, Callable
 from urllib.parse import parse_qs, unquote_plus, urlsplit
+
+
+GRAPHQL_ROUTE_PATTERN = re.compile(r"https?://[^/]+/[^?#]*graphql", re.IGNORECASE)
 
 
 SAFE_ENVELOPE_KEYS = frozenset({
@@ -193,19 +197,22 @@ class GraphqlMutationCapture:
         self._future: asyncio.Future[dict[str, Any]] | None = None
         self._installed = False
         self._handler: Any = None
+        # A single glob star cannot match the trailing slash in /api/graphql/.
+        # Use the same compiled path matcher for installation and cleanup.
+        self._route_pattern = GRAPHQL_ROUTE_PATTERN
 
     async def __aenter__(self) -> "GraphqlMutationCapture":
         loop = asyncio.get_running_loop()
         self._future = loop.create_future()
         self._handler = self._intercept
-        await self.page.route("**/*graphql*", self._handler)
+        await self.page.route(self._route_pattern, self._handler)
         self._installed = True
         return self
 
     async def __aexit__(self, exc_type, exc, tb) -> None:
         if self._installed:
             try:
-                await self.page.unroute("**/*graphql*", self._handler)
+                await self.page.unroute(self._route_pattern, self._handler)
             except Exception:
                 pass
             self._installed = False
@@ -292,6 +299,7 @@ class GraphqlMutationCapture:
 
 __all__ = [
     "GraphqlMutationCapture",
+    "GRAPHQL_ROUTE_PATTERN",
     "SAFE_ENVELOPE_KEYS",
     "graphql_request_meta",
     "safe_graphql_request_summary",

@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from playwright.async_api import async_playwright
 from app.facebook_business_browser import FacebookBusinessBrowser, BrowserBusinessError
+from app.graphql_mutation_capture import GraphqlMutationCapture
 
 BUSINESS = "1428816905866955"
 NAME = "ReMask RK 1"
@@ -89,6 +90,31 @@ class StackedDialogsTests(unittest.IsolatedAsyncioTestCase):
         result = await self.driver._click_ad_account_form_action_by_visible_text("final")
         self.assertFalse(result["clicked"])
         self.assertEqual(await self.page.evaluate("window.entryClicks"), 0)
+
+    async def test_final_over_locator_limit_handles_duplicate_aria_and_text(self):
+        await self.load(confirmation=True, padding=130)
+        await self.page.locator("#final").evaluate("el => el.setAttribute('aria-label','Create ad account')")
+        result = await self.driver._click_ad_account_final_interactive()
+        self.assertTrue(result["clicked"])
+        self.assertEqual(await self.page.evaluate("window.finalClicks"), 1)
+
+    async def test_localized_chooser_gridcell_is_never_final(self):
+        await self.load()
+        await self.page.locator("#wizard").evaluate("el=>el.remove()")
+        await self.page.locator("#entry").evaluate("el=>el.textContent='Créer un compte publicitaire'")
+        result = await self.driver._click_ad_account_final_interactive()
+        self.assertFalse(result["attempted"])
+        self.assertEqual(await self.page.evaluate("window.entryClicks"), 0)
+
+    async def test_capture_route_matches_slash_and_query_endpoints(self):
+        for url in ("https://wizard.test/api/graphql/", "https://wizard.test/api/graphql/?method=post", "https://wizard.test/api/graphql"):
+            with self.subTest(url=url):
+                async with GraphqlMutationCapture(self.page, matcher=lambda req, meta: meta["doc_id"] == "123456789000") as capture:
+                    await self.page.evaluate("""url => {
+                        fetch(url,{method:'POST',body:new URLSearchParams({doc_id:'123456789000',variables:'{"input":{"name":"fixture"}}'})}).catch(()=>{});
+                    }""",url)
+                    row = await capture.wait(1.0)
+                    self.assertEqual(row["doc_id"], "123456789000")
 
     async def test_capture_advances_next_then_aborts_exactly_one_create(self):
         await self.load()

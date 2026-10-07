@@ -16,6 +16,7 @@ from .facebook_fan_page_create import FAN_PAGE_CREATE_NAMES
 from .facebook_ad_account_identity import ad_account_route, read_ad_account_identity
 from .graphql_mutation_capture import (
     GraphqlMutationCapture,
+    GRAPHQL_ROUTE_PATTERN,
     graphql_request_meta,
     safe_graphql_request_summary,
     safe_request_envelope,
@@ -9279,6 +9280,8 @@ class FacebookBusinessBrowser:
                     continue
                 text = matched_label
                 role = _clean(await item.get_attribute("role"))
+                if role in {"gridcell", "row", "menuitem", "menuitemradio"}:
+                    continue
                 tag = _clean(
                     await item.evaluate("(el) => el.tagName || ''")
                 ).upper()
@@ -9562,6 +9565,7 @@ class FacebookBusinessBrowser:
                                 + '[tabindex]:not([tabindex="-1"])'
                             )) {
                                 if (!visible(el)) continue;
+                                if (['gridcell','row','menuitem','menuitemradio'].includes(el.getAttribute('role'))) continue;
                                 if (
                                     el.hasAttribute('disabled')
                                     || el.getAttribute('aria-disabled') === 'true'
@@ -9572,9 +9576,11 @@ class FacebookBusinessBrowser:
                                     (el.innerText || el.textContent || '')
                                 );
                                 if (!text) continue;
-                                const exactCreate = createWords.some(word =>
-                                    text === word
-                                );
+                                const exactCreate = [
+                                    el.getAttribute('aria-label') || '',
+                                    el.getAttribute('title') || '',
+                                    el.innerText || el.textContent || ''
+                                ].map(clean).some(label => createWords.includes(label));
                                 const accountAction = accountWords.some(word =>
                                     text.includes(word)
                                 );
@@ -9759,9 +9765,11 @@ class FacebookBusinessBrowser:
                             );
                             if (!text || text.length > 220) continue;
                             if (ai.some(word => text.includes(word))) continue;
-                            const createMatch = createWords.some(
-                                word => text === word
-                            );
+                            const createMatch = [
+                                el.getAttribute('aria-label') || '',
+                                el.getAttribute('title') || '',
+                                el.innerText || el.textContent || ''
+                            ].map(clean).some(label => createWords.includes(label));
                             const accountMatch = accountWords.some(
                                 word => text.includes(word)
                             );
@@ -9774,6 +9782,7 @@ class FacebookBusinessBrowser:
                                 + '[tabindex]:not([tabindex="-1"])'
                             );
                             if (!clickable || !visible(clickable)) continue;
+                            if (['gridcell','row','menuitem','menuitemradio'].includes(clickable.getAttribute('role'))) continue;
                             if (!insideAnchor(clickable)) continue;
                             if (
                                 clickable.hasAttribute('disabled')
@@ -17623,7 +17632,7 @@ timeout_seconds=4.0,
             ):
                 response_future.set_result(response)
 
-        await self.page.route("**/*graphql*", gate)
+        await self.page.route(GRAPHQL_ROUTE_PATTERN, gate)
         self.page.on("request", observe_request)
         self.page.on("response", observe_response)
 
@@ -18366,7 +18375,7 @@ timeout_seconds=4.0,
             except Exception:
                 pass
             try:
-                await self.page.unroute("**/*graphql*", gate)
+                await self.page.unroute(GRAPHQL_ROUTE_PATTERN, gate)
             except Exception:
                 pass
 
