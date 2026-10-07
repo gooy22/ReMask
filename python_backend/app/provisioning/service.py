@@ -34,6 +34,58 @@ _PROFILE_MUTATION_COOLDOWN_SECONDS = max(
 )
 
 
+def normalize_add_bm_payload(
+    payload: dict[str, Any],
+    *,
+    task_idempotency_key: str | None = None,
+) -> dict[str, Any]:
+    """Server-side guard for ordinary Add BM submitted by stale Workspace JS."""
+    source = dict(payload or {})
+    parameters = source.get("parameters")
+    if not isinstance(parameters, dict):
+        return source
+
+    business = parameters.get("BUSINESS")
+    if business is None:
+        business = parameters.get("business")
+    if not isinstance(business, dict):
+        return source
+
+    task_key = str(task_idempotency_key or "").strip()
+    scope_key = str(source.get("scope_key") or "").strip()
+    add_bm_intent = (
+        task_key.startswith("add-bm-")
+        or scope_key.startswith("add-bm-")
+    )
+    if not add_bm_intent or business.get("attach_page", False) is not False:
+        return source
+
+    clean_business = dict(business)
+    clean_business["attach_page"] = False
+    clean_business.pop("page_id", None)
+    clean_business.pop("primary_page_id", None)
+
+    clean_parameters = dict(parameters)
+    clean_parameters["BUSINESS"] = clean_business
+    clean_parameters.pop("business", None)
+    clean_parameters.pop("PAGE_ACCESS", None)
+    clean_parameters.pop("page_access", None)
+    clean_parameters.pop("AD_ACCOUNT", None)
+    clean_parameters.pop("ad_account", None)
+
+    clean_scope = task_key if task_key.startswith("add-bm-") else scope_key
+    if clean_scope.startswith("add-bm-page-"):
+        clean_scope = task_key if task_key and not task_key.startswith("add-bm-page-") else (
+            "add-bm-independent-" + clean_scope[len("add-bm-page-"):]
+        )
+
+    source["steps"] = ["PROXY_CHECK", "BUSINESS"]
+    source["parameters"] = clean_parameters
+    if clean_scope:
+        source["scope_key"] = clean_scope
+    return source
+
+
 async def _await_profile_mutation_cooldown(profile_id: str) -> float:
     """Serialize bursts on one FB profile without trying to mimic human timing."""
     if _PROFILE_MUTATION_COOLDOWN_SECONDS <= 0:
@@ -81,6 +133,10 @@ class ProvisioningService:
         payload: dict[str, Any],
         task_idempotency_key: str | None = None,
     ) -> dict[str, Any]:
+        payload = normalize_add_bm_payload(
+            payload,
+            task_idempotency_key=task_idempotency_key,
+        )
         steps = self._parse_steps(payload.get("steps"))
         parameters = payload.get("parameters") or {}
         if not isinstance(parameters, dict):
