@@ -36,11 +36,11 @@ async def business_handler(
     **kwargs: Any,
 ) -> dict[str, Any]:
     """
-    Browser-driven Add BM.
+    Private-first Add BM with resumable legacy recovery.
 
     Important invariants:
-    - Meta's own Business Suite UI submits CREATE and Page-add requests.
-    - ReMask never needs a CREATE_BM doc_id / qpl_join_id / request envelope.
+    - Production CREATE_BM uses the profile-bound private cookie GraphQL path.
+    - Chromium is not a production CREATE fallback for ordinary Add BM.
     - CREATE is checkpointed before the final click.
     - If a previous attempt reached CREATE_SUBMITTED, retry reconciles first and
       never blindly submits another CREATE.
@@ -314,10 +314,16 @@ async def business_handler(
     # introduced. Recover confirmed/uncertain CREATE state by profile+Page
     # across item/scope boundaries before any new irreversible CREATE.
     if (
-        not business_id.isdigit()
+        attach_page
+        and not business_id.isdigit()
         and not checkpoint_response_id.isdigit()
         and phase in {"", "BUSINESS_SNAPSHOT", "CREATE_NOT_SUBMITTED"}
     ):
+        # Cross-job recovery by Page is valid only when this CREATE intent
+        # actually attaches that Page. Ordinary Add BM keeps FP independent
+        # (attach_page=False), so a selected/reference Page must never pull a
+        # new BM job into an old CREATE_SUBMITTED/RESULT_UNKNOWN browser
+        # reconciliation path.
         previous_resume = await provisioning_state.latest_business_resume_for_page(
             profile_id,
             page_id,
