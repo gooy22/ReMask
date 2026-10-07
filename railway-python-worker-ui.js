@@ -1359,11 +1359,11 @@ async function pythonWorkerStartBusiness(bmName, options) {
             idempotency_key: 'add-bm-' + nonce + '-' + index,
             payload: {
               steps: ['PROXY_CHECK', 'BUSINESS'],
-              // Stable per profile+Page because profile_id is a separate
-              // provisioning-state key. If CREATE succeeded but Page attach
-              // failed, a later Add BM Job reuses the confirmed BM instead of
-              // creating a duplicate Business Portfolio.
-              scope_key: pageId ? 'add-bm-page-' + pageId : 'add-bm-' + nonce + '-' + index,
+              // Ordinary Add BM does not attach the selected FP. Keep
+              // each CREATE intent independent instead of keying it by Page;
+              // otherwise a fresh BM request can inherit an old Page-scoped
+              // CREATE uncertainty and reopen Chromium reconciliation.
+              scope_key: 'add-bm-' + nonce + '-' + index,
               parameters: {
                 BUSINESS: businessParams
               }
