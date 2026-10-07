@@ -64,6 +64,14 @@ class PrivateLaunchContractStore:
         PrivateLaunchStep.CREATIVE: {"{{ad_account_id}}", "{{page_id}}"},
         PrivateLaunchStep.AD: {"{{adset_id}}", "{{creative_id}}"},
     }
+    ALLOWED_CONTRACT_KEYS = {
+        "doc_id", "friendly_name", "endpoint_url", "variables",
+        "result_id_paths", "request_envelope", "source", "observed_at",
+    }
+    FORBIDDEN_AUTH_KEYS = {
+        "fb_dtsg", "access_token", "authorization", "cookie", "cookies",
+        "jazoest", "lsd", "__user", "xs", "c_user",
+    }
 
     def __init__(
         self,
@@ -116,6 +124,22 @@ class PrivateLaunchContractStore:
                 retryable=False,
             )
         return parsed
+
+    @classmethod
+    def _reject_auth_material(cls, value: Any, path: str = "contract") -> None:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                normalized = str(key or "").strip().lower()
+                if normalized in cls.FORBIDDEN_AUTH_KEYS:
+                    raise ProvisioningError(
+                        "PRIVATE_LAUNCH_CONTRACT_CONFIG_ERROR",
+                        f"Private Launch contract contains forbidden auth field at {path}.{key}",
+                        retryable=False,
+                    )
+                cls._reject_auth_material(child, f"{path}.{key}")
+        elif isinstance(value, list):
+            for index, child in enumerate(value):
+                cls._reject_auth_material(child, f"{path}[{index}]")
 
     @classmethod
     def _endpoint(cls, value: Any) -> str:
@@ -192,6 +216,19 @@ class PrivateLaunchContractStore:
                 f"No captured private mutation contract for {step.value}",
                 retryable=False,
             )
+        unknown_keys = sorted(
+            str(key) for key in row
+            if str(key) not in self.ALLOWED_CONTRACT_KEYS
+        )
+        if unknown_keys:
+            raise ProvisioningError(
+                "PRIVATE_LAUNCH_CONTRACT_CONFIG_ERROR",
+                "Private Launch contract contains unsupported fields: "
+                + ", ".join(unknown_keys[:10]),
+                retryable=False,
+            )
+        self._reject_auth_material(row)
+
         doc_id = str(row.get("doc_id") or "").strip()
         friendly_name = str(row.get("friendly_name") or "").strip()
         variables = row.get("variables")
