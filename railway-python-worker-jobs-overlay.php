@@ -246,6 +246,58 @@ try {
         rmx_pwj_out(['ok'=>true,'registry'=>$result]);
     }
 
+    if ($action === 'private_launch_review') {
+        $profileId = trim((string)($input['profile_id'] ?? $input['profile'] ?? ''));
+        $businessId = trim((string)($input['business_id'] ?? ''));
+        $accountId = preg_replace('/^act_/', '', trim((string)($input['ad_account_id'] ?? $input['account_id'] ?? '')));
+        $pageId = trim((string)($input['page_id'] ?? ''));
+        $launch = $input['launch'] ?? null;
+
+        if ($profileId === '' || strlen($profileId) > 160) {
+            rmx_pwj_out(['ok'=>false,'error'=>'INVALID_PROFILE_ID'], 400);
+        }
+        foreach ([
+            'business_id'=>$businessId,
+            'ad_account_id'=>$accountId,
+            'page_id'=>$pageId,
+        ] as $label=>$value) {
+            if (!preg_match('/^\d{5,30}$/D', (string)$value)) {
+                rmx_pwj_out(['ok'=>false,'error'=>'INVALID_PRIVATE_LAUNCH_TARGET','field'=>$label], 400);
+            }
+        }
+        if (!is_array($launch)) {
+            rmx_pwj_out(['ok'=>false,'error'=>'PRIVATE_LAUNCH_PAYLOAD_REQUIRED'], 400);
+        }
+
+        // Mutation doc_ids, fb_dtsg and request envelopes are intentionally
+        // server-side only. The browser may supply ad configuration, never a
+        // private Meta transport contract.
+        $forbidden = ['doc_id','docId','fb_dtsg','jazoest','request_envelope','endpoint_url'];
+        $walk = function($value) use (&$walk, $forbidden): void {
+            if (!is_array($value)) return;
+            foreach ($value as $key=>$child) {
+                if (in_array((string)$key, $forbidden, true)) {
+                    rmx_pwj_out(['ok'=>false,'error'=>'PRIVATE_LAUNCH_TRANSPORT_FIELD_FORBIDDEN'], 400);
+                }
+                if (is_array($child)) $walk($child);
+            }
+        };
+        $walk($launch);
+
+        $review = rmx_pwj_worker_request(
+            'POST',
+            '/api/v1/profiles/' . rawurlencode($profileId) . '/private-launch-review',
+            [
+                'business_id'=>$businessId,
+                'ad_account_id'=>$accountId,
+                'page_id'=>$pageId,
+                'launch'=>$launch,
+            ],
+            180
+        );
+        rmx_pwj_out(['ok'=>true,'review'=>$review]);
+    }
+
     if ($action === 'create') {
         $profiles = $input['profiles'] ?? null;
         if (!is_array($profiles) || $profiles === []) {
