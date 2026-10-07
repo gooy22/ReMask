@@ -2619,7 +2619,7 @@ async def profile_live_inventory(
                 reserve_seconds: float = 0.8,
             ) -> float:
                 remaining=(
-                    deadline_at
+                    page_phase_deadline
                     - time.monotonic()
                     - max(0.2,float(reserve_seconds))
                 )
@@ -2743,6 +2743,20 @@ async def profile_live_inventory(
                     len(current_binding_pages),
                 )
 
+            page_evidence_present=bool(
+                durable_pages
+                or known_pages_by_business
+            )
+            # REMASK_ADAPTIVE_PAGE_PHASE_BUDGET_V1
+            # Profiles with no known/confirmed Page history should not spend
+            # ~20s on a cold->warm Your-Pages retry chain. Keep a larger budget
+            # only when ReMask already has evidence that a Page should exist.
+            page_phase_budget_seconds=18.5 if page_evidence_present else 8.5
+            page_phase_deadline=min(
+                deadline_at-0.8,
+                pages_started+page_phase_budget_seconds,
+            )
+
             # REMASK_ISOLATED_PAGE_PRIMARY_V2
             # The isolated authenticated facebook.com tab is the only current
             # account-level Page surface that does not disturb the primary
@@ -2753,16 +2767,24 @@ async def profile_live_inventory(
             if not pages_live_verified:
                 isolated_page_probe_attempted=True
                 try:
-                    isolated_pages_timeout=optional_page_budget(20.0)
-                    # REMASK_PAGE_HANDOFF_TWO_PASS_BUDGET_V1
-                    # The low-memory handoff deliberately allows one cold and
-                    # one warm Your-Pages pass. Production profile 7 only
-                    # returned Page candidates on the warm pass. Do not start the
-                    # proof unless both bounded passes can realistically fit.
-                    if isolated_pages_timeout < 17.5:
+                    isolated_pages_timeout=optional_page_budget(
+                        18.0 if page_evidence_present else 7.0
+                    )
+                    # REMASK_PAGE_HANDOFF_TWO_PASS_BUDGET_V2
+                    # A warm retry is valuable only when we already have
+                    # independent evidence that this profile owns/manages a Page.
+                    # With no durable/binding hints, one bounded cold pass is
+                    # enough; failed discovery remains a separate partial state.
+                    minimum_probe_budget=(
+                        15.5 if page_evidence_present else 4.5
+                    )
+                    if isolated_pages_timeout < minimum_probe_budget:
                         raise asyncio.TimeoutError()
                     discovered_pages=await hard_deadline(
-                        browser.discover_managed_pages_isolated(fast=True),
+                        browser.discover_managed_pages_isolated(
+                            fast=True,
+                            warm_retry=page_evidence_present,
+                        ),
                         isolated_pages_timeout,
                     )
                     live_pages=normalize_page_rows(discovered_pages)
@@ -2985,13 +3007,16 @@ async def profile_live_inventory(
 
             log.info(
                 'live inventory profile=%s pages_ms=%d ready=%s '
-                'live_verified=%s pages=%d source=%s primary_error=%s',
+                'live_verified=%s pages=%d source=%s evidence=%s budget=%.1fs '
+                'primary_error=%s',
                 clean_profile,
                 int((time.monotonic()-pages_started)*1000),
                 pages_ready,
                 pages_live_verified,
                 len(pages),
                 pages_source or 'none',
+                page_evidence_present,
+                page_phase_budget_seconds,
                 page_primary_error[:1000],
             )
 
