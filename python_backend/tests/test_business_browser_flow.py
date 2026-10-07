@@ -3877,6 +3877,82 @@ class BrowserAuthenticationStateTests(unittest.IsolatedAsyncioTestCase):
             'Log in with Facebook',
         )
 
+    async def test_business_login_gate_prefers_unique_facebook_option_among_multiple_controls(self):
+        browser=FacebookBusinessBrowser(SimpleNamespace(profile_id='gate-multi-option'))
+        page=SimpleNamespace(
+            url='https://business.facebook.com/business/loginpage/?login_options%5B0%5D=FB&login_options%5B1%5D=IG&login_options%5B2%5D=SSO',
+            wait_for_load_state=AsyncMock(),
+            wait_for_timeout=AsyncMock(),
+        )
+        calls={'evaluate':0}
+        async def evaluate(script):
+            calls['evaluate']+=1
+            if calls['evaluate']==1:
+                return {
+                    'hasCredentialInput':False,
+                    'candidateCount':3,
+                    'labels':['Continue','Log in with Facebook','Continue to Meta Business Suite'],
+                    'topScore':300,
+                    'bestCount':1,
+                    'bestLabel':'Log in with Facebook',
+                }
+            page.url='https://business.facebook.com/latest/home'
+            return True
+        page.evaluate=AsyncMock(side_effect=evaluate)
+        browser.page=page
+        browser._body_text=AsyncMock(return_value='Continue Log in with Facebook Continue to Meta Business Suite')
+        browser._last_selector_diagnostic={}
+
+        resolved=await browser._resolve_business_login_gate(
+            return_url='https://business.facebook.com/latest/home'
+        )
+
+        self.assertTrue(resolved)
+        self.assertEqual(
+            browser._last_selector_diagnostic['business_login_gate_choice'],
+            'Log in with Facebook',
+        )
+
+    async def test_business_login_gate_reopens_return_url_after_handoff_cookie(self):
+        browser=FacebookBusinessBrowser(SimpleNamespace(profile_id='gate-cookie-handoff'))
+        browser.timeout_ms=10000
+        page=SimpleNamespace(
+            url='https://business.facebook.com/business/loginpage/?next=%2Flatest%2Fhome',
+            wait_for_load_state=AsyncMock(),
+            wait_for_timeout=AsyncMock(),
+        )
+        calls={'evaluate':0}
+        async def evaluate(script):
+            calls['evaluate']+=1
+            if calls['evaluate']==1:
+                return {
+                    'hasCredentialInput':False,
+                    'candidateCount':1,
+                    'labels':['Continue as Fixture'],
+                    'topScore':250,
+                    'bestCount':1,
+                    'bestLabel':'Continue as Fixture',
+                }
+            return True
+        async def goto(url,**kwargs):
+            page.url=url
+        page.evaluate=AsyncMock(side_effect=evaluate)
+        page.goto=AsyncMock(side_effect=goto)
+        browser.page=page
+        browser._body_text=AsyncMock(return_value='Continue as Fixture')
+        browser._last_selector_diagnostic={}
+
+        resolved=await browser._resolve_business_login_gate(
+            return_url='https://business.facebook.com/latest/home'
+        )
+
+        self.assertTrue(resolved)
+        page.goto.assert_awaited_once()
+        self.assertEqual(
+            page.url,
+            'https://business.facebook.com/latest/home',
+        )
+
     async def test_business_login_gate_with_credentials_is_never_clicked(self):
         browser=FacebookBusinessBrowser(SimpleNamespace(profile_id='gate-credentials'))
         page=SimpleNamespace(
