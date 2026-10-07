@@ -306,8 +306,16 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
         )
         resolver=SimpleNamespace(resolve=AsyncMock())
 
-        request=AsyncMock(side_effect=request_side_effect)
-        approve=AsyncMock(side_effect=approve_side_effect)
+        request=AsyncMock()
+        if isinstance(request_side_effect,(list,tuple,BaseException)):
+            request.side_effect=request_side_effect
+        else:
+            request.return_value=request_side_effect
+        approve=AsyncMock()
+        if isinstance(approve_side_effect,(list,tuple,BaseException)):
+            approve.side_effect=approve_side_effect
+        else:
+            approve.return_value=approve_side_effect
         assign=AsyncMock(return_value={
             'source':'exact_page_people_ads_access',
             'operator_uid':'61594882851656',
