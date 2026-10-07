@@ -815,17 +815,38 @@ async def business_handler(
                          "private_create_error_code": private_error.code},
                     )
 
-                # These errors explicitly mean the private CREATE route did not
-                # send a mutation. Only then is it safe and useful to try the
-                # Business Suite UI as a secondary compatibility path.
-                safe_ui_fallback_codes = {
-                    "CREATE_BM_MUTATION_NOT_DISCOVERED",
-                    "PAGE_BACKED_BM_ROUTE_UNAVAILABLE",
-                }
+                # Transport fallback is centrally policy-gated. A
+                # RESULT_UNKNOWN / post-submit state must never be replayed
+                # through Chromium as a second CREATE.
+                fallback_allowed = False
+                if private_error is not None:
+                    policy_gate = getattr(
+                        transport_session,
+                        "mutation_fallback_allowed",
+                        None,
+                    )
+                    fallback_allowed = (
+                        bool(policy_gate(
+                            "BUSINESS",
+                            private_error.code,
+                            submit_started=(
+                                _clean(checkpoint.get("phase")).upper()
+                                in {
+                                    "CREATE_SUBMITTED",
+                                    "CREATE_RESULT_UNKNOWN",
+                                }
+                            ),
+                        ))
+                        if callable(policy_gate)
+                        else private_error.code in {
+                            "CREATE_BM_MUTATION_NOT_DISCOVERED",
+                            "PAGE_BACKED_BM_ROUTE_UNAVAILABLE",
+                        }
+                    )
 
                 if (
                     private_error is not None
-                    and private_error.code not in safe_ui_fallback_codes
+                    and not fallback_allowed
                 ):
                     diagnostic_suffix = ""
                     if private_error_diagnostics:
