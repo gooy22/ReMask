@@ -252,6 +252,36 @@ class PrepareService:
         )
         return rows
 
+    async def _bundle_inventory(
+        self,
+        profile_id: str,
+        context: Any = None,
+    ) -> list[dict[str, Any]]:
+        """Return Business containers with their confirmed RK inventory.
+
+        Prepare treats one Business as one infrastructure slot. If a legacy BM
+        already contains multiple RK, only one can satisfy the slot; the extras
+        are preserved but never counted as additional desired bundles.
+        """
+        rows: list[dict[str, Any]] = []
+        for business in await self._business_inventory(profile_id, context):
+            business_id = str(business.get("business_id") or "").strip()
+            if not business_id.isdigit():
+                continue
+            accounts = await self._ad_account_inventory(
+                profile_id,
+                business_id,
+                context,
+            )
+            rows.append(
+                {
+                    "business_id": business_id,
+                    "business": business,
+                    "ad_accounts": accounts,
+                }
+            )
+        return rows
+
     async def _run_provisioning(
         self,
         *,
@@ -356,192 +386,312 @@ class PrepareService:
                 page_id=page_id,
             )
 
-        business = await self._choose_business(
-            profile_id,
-            desired.preferred_business_id,
-            context,
-        )
-        if desired.preferred_business_id and business is None:
+        base_rk = parameters["AD_ACCOUNT"]
+        if not str(base_rk.get("currency") or "").strip():
+            raise ProvisioningError(
+                "PREPARE_RK_CURRENCY_REQUIRED",
+                "parameters.AD_ACCOUNT.currency is required",
+                retryable=False,
+            )
+        if base_rk.get("timezone_id") in (None, ""):
+            raise ProvisioningError(
+                "PREPARE_RK_TIMEZONE_REQUIRED",
+                "parameters.AD_ACCOUNT.timezone_id is required",
+                retryable=False,
+            )
+
+        # One infrastructure slot is exactly one Business + one RK.
+        # REMASK_PREPARE_ONE_RK_PER_BUSINESS_V1
+        inventory = await self._bundle_inventory(profile_id, context)
+        preferred = desired.preferred_business_id
+        preferred_bundle = next(
+            (
+                row
+                for row in inventory
+                if str(row.get("business_id") or "") == preferred
+            ),
+            None,
+        ) if preferred else None
+        if preferred and preferred_bundle is None:
             self._trace(
                 trace,
                 "BUSINESS",
                 "PRECHECK",
                 status="PREFERRED_MISSING",
-                business_id=desired.preferred_business_id,
+                business_id=preferred,
             )
 
-        if desired.require_business and business is None:
-            self._trace(trace, "BUSINESS", "PRECHECK", status="MISSING")
-            token = self._stable_token(profile_id, base_scope)
-            business_params = {
-                "name": f"ReMask {profile_id} {token[:6]}",
-                "user_email": f"{token}@gmail.com",
-                "use_created_page": False,
-                "attach_page": False,
-                **parameters["BUSINESS"],
-            }
-            self._trace(trace, "BUSINESS", "EXECUTE")
-            result = await self._run_provisioning(
-                child_item_id=f"{item_id}:prepare:business",
-                profile_id=profile_id,
-                context=context,
-                session=session,
-                scope_key=f"{base_scope}:business",
-                steps=["BUSINESS"],
-                parameters={"BUSINESS": business_params},
-                idempotency_key=f"{base_scope}:business",
-            )
-            business_id = str(
-                ((result.get("state") or {}).get("business_id") or "")
-            ).strip()
-            business = await self._choose_business(profile_id, business_id, context)
-            self._trace(
-                trace,
-                "BUSINESS",
-                "VERIFY",
-                status="CONFIRMED" if business else "INCONCLUSIVE",
-                business_id=business_id,
-            )
-            if business is None:
-                raise ProvisioningError(
-                    "PREPARE_BUSINESS_UNCONFIRMED",
-                    "Prepare could not confirm the Business after creation",
-                    retryable=True,
-                )
-            self._trace(
-                trace,
-                "BUSINESS",
-                "COMMIT",
-                business_id=str(business.get("business_id") or ""),
-            )
-        elif desired.require_business and business is not None:
-            self._trace(
-                trace,
-                "BUSINESS",
-                "PRECHECK",
-                status="CONFIRMED",
-                business_id=str(business.get("business_id") or ""),
-            )
+        ready_bundles = [
+            row for row in inventory if row.get("ad_accounts")
+        ]
+        empty_bundles = [
+            row for row in inventory if not row.get("ad_accounts")
+        ]
+        ordered = ready_bundles + empty_bundles
+        if preferred_bundle is not None:
+            ordered = [
+                preferred_bundle,
+                *[
+                    row
+                    for row in ordered
+                    if row is not preferred_bundle
+                ],
+            ]
 
-        business_id = str((business or {}).get("business_id") or "").strip()
-        if desired.require_business and not business_id.isdigit():
-            raise ProvisioningError(
-                "PREPARE_BUSINESS_REQUIRED",
-                "Prepare requires one confirmed Business",
-                retryable=True,
-            )
-
-        existing_accounts = (
-            await self._ad_account_inventory(
-                profile_id,
-                business_id,
-                context,
-            )
-            if business_id
-            else []
+        self._trace(
+            trace,
+            "BUSINESS",
+            "PRECHECK",
+            status=(
+                "CONFIRMED"
+                if len(inventory) >= desired.ad_accounts
+                else "MISSING"
+            ),
+            confirmed=len(inventory),
+            desired=desired.ad_accounts,
+            topology="ONE_RK_PER_BUSINESS",
         )
         self._trace(
             trace,
             "AD_ACCOUNT",
             "PRECHECK",
-            status="CONFIRMED" if len(existing_accounts) >= desired.ad_accounts else "MISSING",
-            confirmed=len(existing_accounts),
+            status=(
+                "CONFIRMED"
+                if len(ready_bundles) >= desired.ad_accounts
+                else "MISSING"
+            ),
+            confirmed_businesses_with_rk=len(ready_bundles),
             desired=desired.ad_accounts,
-            business_id=business_id,
+            topology="ONE_RK_PER_BUSINESS",
         )
 
-        base_rk = parameters["AD_ACCOUNT"]
-        for slot in range(len(existing_accounts) + 1, desired.ad_accounts + 1):
-            rk_params = deepcopy(base_rk)
-            rk_params["business_id"] = business_id
-            rk_params["allow_multiple_in_business"] = True
-            rk_params.pop("bm_id", None)
-            rk_params.pop("ad_account_id", None)
-            rk_params.setdefault("name", f"ReMask {profile_id} RK {slot}")
-            rk_params.setdefault("use_common_page", desired.require_page_access)
+        selected: list[dict[str, Any]] = []
+        extras: list[dict[str, Any]] = []
 
-            if not str(rk_params.get("currency") or "").strip():
-                raise ProvisioningError(
-                    "PREPARE_RK_CURRENCY_REQUIRED",
-                    "parameters.AD_ACCOUNT.currency is required",
-                    retryable=False,
-                )
-            if rk_params.get("timezone_id") in (None, ""):
-                raise ProvisioningError(
-                    "PREPARE_RK_TIMEZONE_REQUIRED",
-                    "parameters.AD_ACCOUNT.timezone_id is required",
-                    retryable=False,
-                )
+        for slot in range(1, desired.ad_accounts + 1):
+            candidate = ordered[slot - 1] if slot <= len(ordered) else None
 
-            child = f"{item_id}:prepare:rk:{slot}"
-            scope = f"{base_scope}:rk:{slot}"
-            self._trace(
-                trace,
-                "AD_ACCOUNT",
-                "EXECUTE",
-                slot=slot,
-                business_id=business_id,
-            )
-            result = await self._run_provisioning(
-                child_item_id=child,
-                profile_id=profile_id,
-                context=context,
-                session=session,
-                scope_key=scope,
-                steps=["AD_ACCOUNT"],
-                parameters={
-                    "AD_ACCOUNT": rk_params,
-                    "PAGE_ACCESS": {
-                        **parameters["PAGE_ACCESS"],
-                        "business_id": business_id,
-                    },
-                },
-                idempotency_key=scope,
-            )
-            ad_account_id = str(
-                ((result.get("state") or {}).get("ad_account_id") or "")
-            ).removeprefix("act_").strip()
-            current = await self._ad_account_inventory(
-                profile_id,
-                business_id,
-                context,
-            )
-            confirmed = any(
-                str(row.get("ad_account_id") or "") == ad_account_id
-                for row in current
-            )
-            self._trace(
-                trace,
-                "AD_ACCOUNT",
-                "VERIFY",
-                slot=slot,
-                status="CONFIRMED" if confirmed else "INCONCLUSIVE",
-                ad_account_id=ad_account_id,
-            )
-            if not confirmed:
+            if candidate is None:
+                if not desired.require_business:
+                    break
+
+                token = self._stable_token(
+                    profile_id,
+                    f"{base_scope}:bundle:{slot}",
+                )
+                business_params = {
+                    "name": f"ReMask {profile_id} BM {slot} {token[:4]}",
+                    "user_email": f"{token}@gmail.com",
+                    "use_created_page": False,
+                    "attach_page": False,
+                    **parameters["BUSINESS"],
+                }
+                business_scope = f"{base_scope}:bundle:{slot}:business"
+                self._trace(
+                    trace,
+                    "BUSINESS",
+                    "EXECUTE",
+                    slot=slot,
+                )
+                result = await self._run_provisioning(
+                    child_item_id=f"{item_id}:prepare:bundle:{slot}:business",
+                    profile_id=profile_id,
+                    context=context,
+                    session=session,
+                    scope_key=business_scope,
+                    steps=["BUSINESS"],
+                    parameters={"BUSINESS": business_params},
+                    idempotency_key=business_scope,
+                )
+                business_id = str(
+                    ((result.get("state") or {}).get("business_id") or "")
+                ).strip()
+                business = await self._choose_business(
+                    profile_id,
+                    business_id,
+                    context,
+                )
+                self._trace(
+                    trace,
+                    "BUSINESS",
+                    "VERIFY",
+                    slot=slot,
+                    status=(
+                        "CONFIRMED"
+                        if business is not None
+                        else "INCONCLUSIVE"
+                    ),
+                    business_id=business_id,
+                )
+                if business is None or not business_id.isdigit():
+                    raise ProvisioningError(
+                        "PREPARE_BUSINESS_UNCONFIRMED",
+                        f"Prepare could not confirm Business slot {slot}",
+                        retryable=True,
+                    )
+                self._trace(
+                    trace,
+                    "BUSINESS",
+                    "COMMIT",
+                    slot=slot,
+                    business_id=business_id,
+                )
+                candidate = {
+                    "business_id": business_id,
+                    "business": business,
+                    "ad_accounts": [],
+                }
+
+            business_id = str(candidate.get("business_id") or "").strip()
+            if not business_id.isdigit():
                 raise ProvisioningError(
-                    "PREPARE_RK_UNCONFIRMED",
-                    f"Prepare could not confirm RK slot {slot}",
+                    "PREPARE_BUSINESS_REQUIRED",
+                    f"Prepare bundle {slot} has no confirmed Business",
                     retryable=True,
                 )
-            self._trace(
-                trace,
-                "AD_ACCOUNT",
-                "COMMIT",
-                slot=slot,
-                ad_account_id=ad_account_id,
-            )
-            existing_accounts = current
 
-        accounts = await self._ad_account_inventory(
-            profile_id,
-            business_id,
-            context,
-        )
-        accounts = accounts[: desired.ad_accounts]
+            accounts = [
+                row
+                for row in (candidate.get("ad_accounts") or [])
+                if isinstance(row, dict)
+                and str(row.get("ad_account_id") or "").isdigit()
+            ]
+            if len(accounts) > 1:
+                extras.extend(
+                    {
+                        **row,
+                        "business_id": business_id,
+                        "ignored_by_topology": True,
+                    }
+                    for row in accounts[1:]
+                )
+                self._trace(
+                    trace,
+                    "AD_ACCOUNT",
+                    "PRECHECK",
+                    slot=slot,
+                    status="EXTRA_EXISTING_RK_IGNORED",
+                    business_id=business_id,
+                    extras=len(accounts) - 1,
+                )
+
+            account = accounts[0] if accounts else None
+            if account is None:
+                rk_params = deepcopy(base_rk)
+                rk_params["business_id"] = business_id
+                rk_params.pop("allow_multiple_in_business", None)
+                rk_params.pop("bm_id", None)
+                rk_params.pop("ad_account_id", None)
+                rk_params.setdefault(
+                    "name",
+                    f"ReMask {profile_id} RK {slot}",
+                )
+                rk_params.setdefault(
+                    "use_common_page",
+                    desired.require_page_access,
+                )
+
+                rk_scope = f"{base_scope}:bundle:{slot}:rk"
+                self._trace(
+                    trace,
+                    "AD_ACCOUNT",
+                    "EXECUTE",
+                    slot=slot,
+                    business_id=business_id,
+                )
+                result = await self._run_provisioning(
+                    child_item_id=f"{item_id}:prepare:bundle:{slot}:rk",
+                    profile_id=profile_id,
+                    context=context,
+                    session=session,
+                    scope_key=rk_scope,
+                    steps=["AD_ACCOUNT"],
+                    parameters={
+                        "AD_ACCOUNT": rk_params,
+                        "PAGE_ACCESS": {
+                            **parameters["PAGE_ACCESS"],
+                            "business_id": business_id,
+                        },
+                    },
+                    idempotency_key=rk_scope,
+                )
+                ad_account_id = str(
+                    ((result.get("state") or {}).get("ad_account_id") or "")
+                ).removeprefix("act_").strip()
+                current = await self._ad_account_inventory(
+                    profile_id,
+                    business_id,
+                    context,
+                )
+                if ad_account_id.isdigit():
+                    account = next(
+                        (
+                            row
+                            for row in current
+                            if str(row.get("ad_account_id") or "")
+                            == ad_account_id
+                        ),
+                        None,
+                    )
+                elif len(current) == 1:
+                    account = current[0]
+                    ad_account_id = str(
+                        account.get("ad_account_id") or ""
+                    ).strip()
+
+                self._trace(
+                    trace,
+                    "AD_ACCOUNT",
+                    "VERIFY",
+                    slot=slot,
+                    status=(
+                        "CONFIRMED"
+                        if account is not None
+                        else "INCONCLUSIVE"
+                    ),
+                    business_id=business_id,
+                    ad_account_id=ad_account_id,
+                )
+                if account is None:
+                    raise ProvisioningError(
+                        "PREPARE_RK_UNCONFIRMED",
+                        f"Prepare could not confirm RK slot {slot}",
+                        retryable=True,
+                    )
+                self._trace(
+                    trace,
+                    "AD_ACCOUNT",
+                    "COMMIT",
+                    slot=slot,
+                    business_id=business_id,
+                    ad_account_id=ad_account_id,
+                )
+            else:
+                self._trace(
+                    trace,
+                    "AD_ACCOUNT",
+                    "PRECHECK",
+                    slot=slot,
+                    status="CONFIRMED",
+                    business_id=business_id,
+                    ad_account_id=str(
+                        account.get("ad_account_id") or ""
+                    ),
+                )
+
+            selected.append(
+                {
+                    "slot": slot,
+                    "business_id": business_id,
+                    "business": candidate.get("business") or {},
+                    "ad_account": account,
+                }
+            )
 
         if desired.require_page_access:
-            for row in accounts:
+            for bundle in selected:
+                business_id = str(bundle["business_id"])
+                row = bundle["ad_account"]
                 account_id = str(row.get("ad_account_id") or "").strip()
                 access_confirmed = await self.state.page_access_confirmed(
                     profile_id,
@@ -553,7 +703,9 @@ class PrepareService:
                         trace,
                         "PAGE_ACCESS",
                         "PRECHECK",
+                        slot=bundle["slot"],
                         status="CONFIRMED",
+                        business_id=business_id,
                         ad_account_id=account_id,
                     )
                     continue
@@ -562,10 +714,14 @@ class PrepareService:
                     trace,
                     "PAGE_ACCESS",
                     "PRECHECK",
+                    slot=bundle["slot"],
                     status="MISSING",
+                    business_id=business_id,
                     ad_account_id=account_id,
                 )
-                access_scope = f"{base_scope}:access:{account_id}"
+                access_scope = (
+                    f"{base_scope}:bundle:{bundle['slot']}:access:{account_id}"
+                )
                 access_params = {
                     **parameters["PAGE_ACCESS"],
                     "existing_target": True,
@@ -580,10 +736,15 @@ class PrepareService:
                     trace,
                     "PAGE_ACCESS",
                     "EXECUTE",
+                    slot=bundle["slot"],
+                    business_id=business_id,
                     ad_account_id=account_id,
                 )
                 await self._run_provisioning(
-                    child_item_id=f"{item_id}:prepare:access:{account_id}",
+                    child_item_id=(
+                        f"{item_id}:prepare:bundle:{bundle['slot']}:"
+                        f"access:{account_id}"
+                    ),
                     profile_id=profile_id,
                     context=context,
                     session=session,
@@ -601,11 +762,13 @@ class PrepareService:
                     trace,
                     "PAGE_ACCESS",
                     "VERIFY",
+                    slot=bundle["slot"],
                     status=(
                         "CONFIRMED"
                         if access_confirmed
                         else "INCONCLUSIVE"
                     ),
+                    business_id=business_id,
                     ad_account_id=account_id,
                 )
                 if not access_confirmed:
@@ -621,13 +784,19 @@ class PrepareService:
                     trace,
                     "PAGE_ACCESS",
                     "COMMIT",
+                    slot=bundle["slot"],
+                    business_id=business_id,
                     ad_account_id=account_id,
                 )
 
         readiness: list[dict[str, Any]] = []
+        bundle_rows: list[dict[str, Any]] = []
         access_ready = True
         payment_ready = True
-        for row in accounts:
+
+        for bundle in selected:
+            business_id = str(bundle["business_id"])
+            row = bundle["ad_account"]
             account_id = str(row.get("ad_account_id") or "")
             access = (
                 await self.state.page_access_confirmed(
@@ -645,9 +814,28 @@ class PrepareService:
             )
             access_ready = access_ready and access
             payment_ready = payment_ready and payment
-            readiness.append(
+
+            account_row = {
+                **row,
+                "business_id": business_id,
+                "slot": bundle["slot"],
+                "page_access_confirmed": access,
+                "payment_confirmed": payment,
+            }
+            readiness.append(account_row)
+            bundle_rows.append(
                 {
-                    **row,
+                    "slot": bundle["slot"],
+                    "business_id": business_id,
+                    "business_name": str(
+                        (bundle.get("business") or {}).get("business_name")
+                        or (bundle.get("business") or {}).get("name")
+                        or ""
+                    ).strip(),
+                    "ad_account_id": account_id,
+                    "ad_account_name": str(
+                        row.get("account_name") or ""
+                    ).strip(),
                     "page_access_confirmed": access,
                     "payment_confirmed": payment,
                 }
@@ -655,14 +843,21 @@ class PrepareService:
 
         object_ready = (
             (not desired.require_page or page_id.isdigit())
-            and (not desired.require_business or business_id.isdigit())
-            and len(accounts) >= desired.ad_accounts
+            and (
+                not desired.require_business
+                or len(selected) >= desired.ad_accounts
+            )
+            and len(readiness) >= desired.ad_accounts
+            and len(
+                {
+                    str(row.get("business_id") or "")
+                    for row in readiness
+                    if str(row.get("business_id") or "").isdigit()
+                }
+            )
+            >= desired.ad_accounts
         )
-        ready_to_launch = (
-            object_ready
-            and access_ready
-            and payment_ready
-        )
+        ready_to_launch = object_ready and access_ready and payment_ready
 
         if ready_to_launch:
             status = "READY_TO_LAUNCH"
@@ -680,6 +875,12 @@ class PrepareService:
             status = "PREPARED"
             reason = ""
 
+        business_ids = [
+            str(row.get("business_id") or "")
+            for row in bundle_rows
+            if str(row.get("business_id") or "").isdigit()
+        ]
+
         return {
             "profile_id": profile_id,
             "scope_key": base_scope,
@@ -689,14 +890,21 @@ class PrepareService:
                 "fan_page": desired.require_page,
                 "business": desired.require_business,
                 "ad_accounts": desired.ad_accounts,
+                "businesses": desired.ad_accounts,
+                "topology": "ONE_RK_PER_BUSINESS",
                 "page_access": desired.require_page_access,
                 "payment": desired.require_payment,
             },
             "actual": {
                 "page_id": page_id,
-                "business_id": business_id,
+                # Legacy single-value field retained for UI compatibility.
+                "business_id": business_ids[0] if business_ids else "",
+                "business_ids": business_ids,
+                "bundles": bundle_rows,
                 "ad_accounts": readiness,
+                "extra_ad_accounts": extras,
             },
             "ready_to_launch": ready_to_launch,
             "trace": trace,
         }
+

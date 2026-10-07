@@ -4103,7 +4103,7 @@ async function pythonWorkerOpenAutoModal() {
 
   const body = document.createElement('div'); body.className = 'pwbm-body';
   const note = document.createElement('div'); note.className = 'pwbm-note';
-  note.textContent = 'Цель задаётся один раз: FP → BM → нужное число РК. Prepare проверяет подтверждённое состояние и создаёт только недостающее. Payment остаётся отдельным readiness-gate перед Launch.';
+  note.textContent = 'Цель задаётся один раз: одна FP на профиль и отдельный BM для каждого РК. Prepare проверяет подтверждённое состояние и создаёт только недостающие пары BM → РК. Payment остаётся отдельным readiness-gate перед Launch.';
   body.appendChild(note);
 
   function field(label, input) {
@@ -4114,7 +4114,7 @@ async function pythonWorkerOpenAutoModal() {
 
   const count = document.createElement('input');
   count.type = 'number'; count.min = '1'; count.max = '20'; count.value = '2';
-  field('РК на каждый профиль (1–20)', count);
+  field('Комплектов BM + РК на профиль (1–20)', count);
 
   const category = document.createElement('input');
   category.value = 'Digital creator';
@@ -4163,7 +4163,7 @@ async function pythonWorkerOpenAutoModal() {
       && timezone.value.trim();
     create.disabled = pythonWorkerUiState.busy || !valid;
     status.textContent = valid
-      ? 'Цель: ' + profiles.length + ' проф., 1 FP + 1 BM + ' + n + ' РК на профиль. Всего РК: ' + totalRk + '. Создаются только недостающие объекты.'
+      ? 'Цель: ' + profiles.length + ' проф., 1 FP + ' + n + ' BM + ' + n + ' РК на профиль (1 BM = 1 РК). Всего комплектов: ' + totalRk + '. Создаются только недостающие пары.'
       : 'Нужны категория, 1–20 РК на профиль, валюта и часовой пояс.';
   }
 
