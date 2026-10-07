@@ -4,6 +4,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+from fb_worker import RemoteRequestError
+
 from app.private_launch import (
     PrivateLaunchContractStore,
     PrivateLaunchService,
@@ -219,6 +221,56 @@ class PrivateLaunchTests(unittest.IsolatedAsyncioTestCase):
                     payload=self.payload,
                 )
         self.assertEqual(caught.exception.code, "PRIVATE_LAUNCH_RECONCILE_REQUIRED")
+        self.web.graphql.assert_not_awaited()
+
+    async def test_review_cache_reuses_exact_recent_live_proof(self):
+        self.context.inventory_updated_at = 123456789
+        probe = AsyncMock(return_value=self.preflight)
+        with patch.object(self.service, "_live_preflight", probe):
+            first = await self.service.review(
+                profile_id="7",
+                context=self.context,
+                payload=self.payload,
+            )
+            second = await self.service.review(
+                profile_id="7",
+                context=self.context,
+                payload=self.payload,
+            )
+        self.assertTrue(first["ready"])
+        self.assertTrue(second["ready"])
+        self.assertIs(second["preflight"]["review_cache_reused"], True)
+        self.assertEqual(probe.await_count, 1)
+
+    async def test_explicit_meta_rejection_is_durable_and_never_replayed(self):
+        self.web.graphql.side_effect = RemoteRequestError(
+            "rejected",
+            http_status=400,
+        )
+        with patch.object(self.service, "_live_preflight", AsyncMock(return_value=self.preflight)):
+            with self.assertRaises(ProvisioningError) as caught:
+                await self.service.run(
+                    item_id="item-blocked",
+                    profile_id="7",
+                    context=self.context,
+                    session=self.session,
+                    payload={**self.payload, "launch_key": "blocked-launch"},
+                )
+        self.assertEqual(caught.exception.code, "PRIVATE_LAUNCH_CAMPAIGN_REJECTED")
+        self.assertEqual(self.web.graphql.await_count, 1)
+
+        self.web.graphql.reset_mock()
+        self.web.graphql.return_value = {"data": {"create": {"id": "500000000009999"}}}
+        with patch.object(self.service, "_live_preflight", AsyncMock(return_value=self.preflight)):
+            with self.assertRaises(ProvisioningError) as caught:
+                await self.service.run(
+                    item_id="item-blocked-retry",
+                    profile_id="7",
+                    context=self.context,
+                    session=self.session,
+                    payload={**self.payload, "launch_key": "blocked-launch"},
+                )
+        self.assertEqual(caught.exception.code, "PRIVATE_LAUNCH_BLOCKED_REPLAY")
         self.web.graphql.assert_not_awaited()
 
     async def test_missing_contract_stops_before_private_submit(self):
