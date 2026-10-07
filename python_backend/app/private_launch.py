@@ -133,6 +133,51 @@ def _record_contract_result(
         )
 
 
+_CAPTURE_PLACEHOLDER_KEY = re.compile(
+    r"^(?:business_id|ad_account_id|page_id|campaign_id|adset_id|creative_id|"
+    r"payload(?:\\.[A-Za-z0-9_-]+)+)$"
+)
+
+
+def _capture_template(
+    value: Any,
+    replacements: dict[str, str],
+) -> Any:
+    """Replace exact captured values with reusable Launch placeholders."""
+    if isinstance(value, dict):
+        return {
+            str(key): _capture_template(child, replacements)
+            for key, child in value.items()
+        }
+    if isinstance(value, list):
+        return [_capture_template(child, replacements) for child in value]
+
+    text = str(value) if isinstance(value, (str, int)) else None
+    if text is None:
+        return value
+
+    exact = replacements.get(text)
+    if exact:
+        return exact
+
+    if isinstance(value, str):
+        rendered = value
+        for raw, placeholder in sorted(
+            replacements.items(),
+            key=lambda row: len(row[0]),
+            reverse=True,
+        ):
+            if raw.isdigit() and len(raw) >= 5:
+                rendered = re.sub(
+                    rf"(?<!\\d){re.escape(raw)}(?!\\d)",
+                    placeholder,
+                    rendered,
+                )
+        return rendered
+
+    return value
+
+
 class PrivateLaunchContractStore:
     """Durable server-side contracts captured from Meta's current private web flow."""
 
@@ -397,6 +442,98 @@ class PrivateLaunchContractStore:
                     "message": str(exc),
                 }
         return output
+
+    def register_capture(
+        self,
+        step: PrivateLaunchStep,
+        captured: dict[str, Any],
+        *,
+        placeholder_values: dict[str, Any],
+        result_id_paths: list[str] | tuple[str, ...] | None = None,
+    ) -> MutationContract:
+        """Normalize one browser-captured mutation into a reusable contract."""
+        if not isinstance(captured, dict):
+            raise ProvisioningError(
+                "PRIVATE_LAUNCH_CAPTURE_INVALID",
+                "Captured mutation must be an object",
+                retryable=False,
+            )
+        variables = captured.get("variables")
+        if not isinstance(variables, dict) or not variables:
+            raise ProvisioningError(
+                "PRIVATE_LAUNCH_CAPTURE_INVALID",
+                "Captured mutation does not contain GraphQL variables",
+                retryable=False,
+            )
+        if not isinstance(placeholder_values, dict):
+            raise ProvisioningError(
+                "PRIVATE_LAUNCH_CAPTURE_INVALID",
+                "Capture placeholder values must be an object",
+                retryable=False,
+            )
+
+        replacements: dict[str, str] = {}
+        for raw_key, raw_value in placeholder_values.items():
+            key = str(raw_key or "").strip()
+            if not _CAPTURE_PLACEHOLDER_KEY.fullmatch(key):
+                raise ProvisioningError(
+                    "PRIVATE_LAUNCH_CAPTURE_INVALID",
+                    f"Unsupported capture placeholder: {key}",
+                    retryable=False,
+                )
+            value = str(raw_value or "").strip()
+            if not value:
+                continue
+            placeholder = "{{" + key + "}}"
+            current = replacements.get(value)
+            if current and current != placeholder:
+                raise ProvisioningError(
+                    "PRIVATE_LAUNCH_CAPTURE_AMBIGUOUS",
+                    "Two Launch placeholders map to the same captured scalar value",
+                    retryable=False,
+                )
+            replacements[value] = placeholder
+
+        templated = _capture_template(variables, replacements)
+
+        paths = [
+            str(path).strip()
+            for path in (result_id_paths or [])
+            if str(path or "").strip()
+        ]
+        if not paths:
+            try:
+                paths = list(self.get(step).result_id_paths)
+            except ProvisioningError:
+                raise ProvisioningError(
+                    "PRIVATE_LAUNCH_RESULT_PATH_REQUIRED",
+                    (
+                        f"{step.value} capture has no proven response ID path; "
+                        "a first validated response path is required"
+                    ),
+                    retryable=False,
+                ) from None
+
+        row = {
+            "doc_id": str(captured.get("doc_id") or "").strip(),
+            "friendly_name": str(captured.get("friendly_name") or "").strip(),
+            "endpoint_url": str(
+                captured.get("endpoint_url")
+                or "https://business.facebook.com/api/graphql/"
+            ).strip(),
+            "variables": templated,
+            "result_id_paths": paths,
+            "request_envelope": (
+                captured.get("request_envelope")
+                if isinstance(captured.get("request_envelope"), dict)
+                else {}
+            ),
+            "source": str(
+                captured.get("source") or "browser_graphql_capture"
+            ).strip(),
+            "observed_at": str(captured.get("observed_at") or "").strip(),
+        }
+        return self.register(step, row)
 
     def register(
         self,
