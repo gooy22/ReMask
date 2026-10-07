@@ -10176,9 +10176,10 @@ class FacebookBusinessBrowser:
                         // Never treat a plain text DIV/SPAN as a successful
                         // submit click; that produces a false "clicked" state
                         // with no network mutation.
-                        if (mode === 'final' && (
-                            !interactive || ['gridcell','row','menuitem','menuitemradio'].includes(role)
-                        )) {
+                        if (mode === 'final' && !interactive) {
+                            continue;
+                        }
+                        if (mode === 'final' && ['gridcell','row','menuitem','menuitemradio'].includes(role)) {
                             continue;
                         }
                         let score = Math.round(cr.y);
