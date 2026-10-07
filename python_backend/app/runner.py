@@ -15,6 +15,7 @@ from .provisioning import PrepareService, ProvisioningError, ProvisioningService
 from .provisioning.models import ProvisioningStep
 from .provisioning.timeouts import browser_provisioning_hard_timeout, prepare_hard_timeout
 from .router import RoutePolicyError, TransparentPostRouter
+from .private_launch import PrivateLaunchService
 from .session import ProfileResolver, ProfileSession, ProfileContextError, ProxyCheckError
 from .store import JobStore
 
@@ -119,6 +120,7 @@ class WorkerPool:
         self.resolver=ProfileResolver(os.getenv('REMASK_PROFILE_RESOLVER_URL'),os.getenv('REMASK_INTERNAL_KEY'))
         self.provisioning=ProvisioningService(self.provisioning_state,profile_resolver=self.resolver)
         self.prepare=PrepareService(self.provisioning_state,self.provisioning)
+        self.private_launch=PrivateLaunchService(self.provisioning_state)
         self._workers: list[asyncio.Task[None]]=[]
         self._created_businesses_lock = asyncio.Lock()
 
@@ -450,7 +452,33 @@ class WorkerPool:
                         await self.store.set_task_running(task['id'])
                         try:
                             action=str(task['action'])
-                            if action=='prepare':
+                            if action=='private_launch':
+                                payload=task['payload']
+                                try:
+                                    launch_timeout=float(
+                                        os.getenv('REMASK_PRIVATE_LAUNCH_HARD_TIMEOUT_SECONDS')
+                                        or '300'
+                                    )
+                                except (TypeError,ValueError):
+                                    launch_timeout=300.0
+                                launch_timeout=max(120.0,min(launch_timeout,900.0))
+                                result=await _await_with_hard_watchdog(
+                                    self.private_launch.run(
+                                        item_id=item_id,
+                                        profile_id=profile_id,
+                                        context=context,
+                                        session=session,
+                                        payload=payload,
+                                        task_idempotency_key=task.get('idempotency_key'),
+                                    ),
+                                    timeout_seconds=launch_timeout,
+                                    code='PRIVATE_LAUNCH_HARD_TIMEOUT',
+                                    message=(
+                                        'Private Launch exact preflight/mutation pipeline '
+                                        f'exceeded {int(launch_timeout)}s total runtime.'
+                                    ),
+                                )
+                            elif action=='prepare':
                                 payload=task['payload']
                                 desired=(payload.get('desired') or {}) if isinstance(payload,dict) else {}
                                 hard_timeout=prepare_hard_timeout(desired.get('ad_accounts',2))
