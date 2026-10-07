@@ -13,6 +13,30 @@ class MetaTransportRouterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(policy.primary, "facebook_web_graphql")
         self.assertEqual(policy.fallback, "chromium_business_suite")
 
+    def test_mutation_fallback_allows_only_proven_pre_submit_errors(self):
+        router = MetaTransportRouter(
+            SimpleNamespace(context=SimpleNamespace(profile_id="7"))
+        )
+        self.assertTrue(
+            router.mutation_fallback_allowed(
+                "BUSINESS",
+                "CREATE_BM_MUTATION_NOT_DISCOVERED",
+            )
+        )
+        self.assertFalse(
+            router.mutation_fallback_allowed(
+                "BUSINESS",
+                "CREATE_RESULT_UNKNOWN",
+            )
+        )
+        self.assertFalse(
+            router.mutation_fallback_allowed(
+                "BUSINESS",
+                "CREATE_BM_MUTATION_NOT_DISCOVERED",
+                submit_started=True,
+            )
+        )
+
     async def test_browser_lease_uses_session_factory_when_available(self):
         lease = object()
         session = SimpleNamespace(
