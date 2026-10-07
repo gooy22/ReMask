@@ -1420,6 +1420,16 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
                     'TARGET_PAGE_OPERATOR_ASSIGN_SUBMITTED',
                     'TARGET_PAGE_OPERATOR_ASSIGN_CONFIRMED',
                 }
+                relation_already_confirmed=phase in {
+                    'TARGET_PAGE_ACCESS_OWNER_CONFIRMED',
+                    'TARGET_PAGE_ACCESS_RK_CONFIRMED',
+                    'TARGET_PAGE_ACCESS_RK_PROBE_BLOCKED',
+                    'TARGET_PAGE_OPERATOR_ASSIGN_CLICK_INTENT',
+                    'TARGET_PAGE_OPERATOR_ASSIGN_SUBMITTED',
+                    'TARGET_PAGE_OPERATOR_ASSIGN_CONFIRMED',
+                }
+                if relation_already_confirmed:
+                    relation_proof=True
                 private_contract=None
                 capture_required=False
                 if not request_already_submitted:
@@ -1506,8 +1516,9 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
 
                             # Submitted private requests continue only with
                             # owner-side reconciliation; never re-submit.
-                            relation_proof=await _approve_owner_page_access(
-                                browser,config,business,checkpoint)
+                            if not relation_proof:
+                                relation_proof=await _approve_owner_page_access(
+                                    browser,config,business,checkpoint)
                             if not relation_proof:
                                 raise BrowserBusinessError(
                                     'TARGET_PAGE_ACCESS_APPROVAL_REQUIRED',
