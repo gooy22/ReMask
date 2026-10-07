@@ -350,7 +350,7 @@ class PrivateLaunchContractStore:
                 candidate = _contract_candidate(
                     step,
                     contract,
-                    source="private_launch_contract_status",
+                    source="private_launch_contract",
                 )
                 active = _candidate_is_active(step, candidate)
                 stats = {}
@@ -448,10 +448,7 @@ class PrivateLaunchContractStore:
             _contract_candidate(
                 step,
                 contract,
-                source=str(
-                    row.get("source")
-                    or "private_launch_contract_capture"
-                ).strip(),
+                source="private_launch_contract",
             )
         except Exception as exc:
             log.warning(
@@ -1240,7 +1237,7 @@ class PrivateLaunchService:
             candidate = _contract_candidate(
                 step,
                 contract,
-                source="private_launch_runtime",
+                source="private_launch_contract",
             )
             if not _candidate_is_active(step, candidate):
                 raise ProvisioningError(
