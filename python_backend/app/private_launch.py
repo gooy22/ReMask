@@ -347,11 +347,48 @@ class PrivateLaunchContractStore:
         for step in STEP_ORDER:
             try:
                 contract = self.get(step)
+                candidate = _contract_candidate(
+                    step,
+                    contract,
+                    source="private_launch_contract_status",
+                )
+                active = _candidate_is_active(step, candidate)
+                stats = {}
+                try:
+                    registry = registry_view(
+                        LAUNCH_DOCID_OPERATION[step]
+                    )
+                    for row in (
+                        registry.get("operations", {})
+                        .get(LAUNCH_DOCID_OPERATION[step], [])
+                    ):
+                        if (
+                            str(row.get("doc_id") or "") == candidate.doc_id
+                            and str(row.get("friendly_name") or "")
+                            == candidate.friendly_name
+                            and str(row.get("variables_mode") or "")
+                            == candidate.variables_mode
+                        ):
+                            stats = (
+                                row.get("stats")
+                                if isinstance(row.get("stats"), dict)
+                                else {}
+                            )
+                            break
+                except Exception:
+                    stats = {}
                 output[step.value] = {
                     "configured": True,
+                    "active": active,
                     "friendly_name": contract.friendly_name,
                     "endpoint_host": urlsplit(contract.endpoint_url).hostname or "",
                     "result_paths": len(contract.result_id_paths),
+                    "registry_operation": LAUNCH_DOCID_OPERATION[step],
+                    "success_count": int(stats.get("success_count") or 0),
+                    "stale_failure_count": int(
+                        stats.get("stale_failure_count") or 0
+                    ),
+                    "disabled": bool(stats.get("disabled")),
                 }
             except ProvisioningError as exc:
                 output[step.value] = {
@@ -406,6 +443,22 @@ class PrivateLaunchContractStore:
                 f"Private Launch contract registry write failed: {exc.__class__.__name__}",
                 retryable=False,
             ) from exc
+
+        try:
+            _contract_candidate(
+                step,
+                contract,
+                source=str(
+                    row.get("source")
+                    or "private_launch_contract_capture"
+                ).strip(),
+            )
+        except Exception as exc:
+            log.warning(
+                "private Launch contract candidate mirror failed step=%s type=%s",
+                step.value,
+                exc.__class__.__name__,
+            )
         return contract
 
 
