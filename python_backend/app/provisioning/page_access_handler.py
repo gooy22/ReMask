@@ -352,6 +352,8 @@ async def _request_target_page_access(
         return True
     if phase in {
             'TARGET_PAGE_ACCESS_SUBMITTED',
+            'TARGET_PAGE_ACCESS_PRIVATE_EXECUTE_INTENT',
+            'TARGET_PAGE_ACCESS_PRIVATE_RESULT_UNKNOWN',
             'TARGET_PAGE_ACCESS_OWNER_APPROVE_CLICK_INTENT',
             'TARGET_PAGE_ACCESS_OWNER_APPROVED',
         }:
@@ -465,6 +467,89 @@ async def _request_target_page_access(
     await checkpoint({'phase':'TARGET_PAGE_ACCESS_SUBMITTED',
         'diagnostic':await browser._diagnostic('target_page_access_submit_response')})
     return await browser.verify_page_attached(business_id=business,page_id=config['page_id'])
+
+
+async def _execute_private_page_share_request(
+    session: Any,
+    *,
+    store: PrivatePageShareContractStore,
+    contract,
+    config: dict[str, Any],
+    business: str,
+    profile_id: str,
+    checkpoint,
+) -> dict[str, Any]:
+    actor_id=str(
+        (getattr(session.context,'cookies',{}) or {}).get('c_user')
+        or ''
+    ).strip()
+    try:
+        web=await session.facebook_web()
+        # Finish authentication/bootstrap before the irreversible checkpoint.
+        await web.bootstrap()
+    except Exception as exc:
+        raise ProvisioningError(
+            'PRIVATE_PAGE_SHARE_AUTH_PRECHECK',
+            (
+                'Private Page-share session is not ready before submit: '
+                f'{exc.__class__.__name__}'
+            ),
+            retryable=True,
+        ) from exc
+
+    await checkpoint({
+        'phase':'TARGET_PAGE_ACCESS_PRIVATE_EXECUTE_INTENT',
+        'requested_tasks':['ADVERTISE'],
+        'page_id':str(config.get('page_id') or ''),
+        'business_id':business,
+        'transport':'facebook_private_graphql',
+        'doc_id':str(getattr(contract,'doc_id',''))[:80],
+        'friendly_name':str(
+            getattr(contract,'friendly_name','')
+        )[:180],
+    })
+    try:
+        payload=await execute_private_page_share(
+            web,
+            contract,
+            business_id=business,
+            page_id=str(config.get('page_id') or ''),
+            actor_id=actor_id,
+            profile_id=profile_id,
+        )
+    except ProvisioningError:
+        raise
+    except Exception as exc:
+        # The checkpoint was written immediately before the POST. Never
+        # replay automatically when transport fails after this point.
+        await checkpoint({
+            'phase':'TARGET_PAGE_ACCESS_PRIVATE_RESULT_UNKNOWN',
+            'last_error_code':'PRIVATE_PAGE_SHARE_RESULT_UNKNOWN',
+            'diagnostic':{
+                'stage':'private_page_share_result_unknown',
+                'error_type':exc.__class__.__name__,
+            },
+        })
+        raise ProvisioningError(
+            'PRIVATE_PAGE_SHARE_RESULT_UNKNOWN',
+            (
+                'Private Page-share request may have reached Meta; '
+                'retry will reconcile before any new submit'
+            ),
+            retryable=True,
+        ) from exc
+
+    await checkpoint({
+        'phase':'TARGET_PAGE_ACCESS_SUBMITTED',
+        'requested_tasks':['ADVERTISE'],
+        'page_id':str(config.get('page_id') or ''),
+        'business_id':business,
+        'transport':'facebook_private_graphql',
+        'private_response_keys':sorted(
+            str(key) for key in payload.keys()
+        )[:30] if isinstance(payload,dict) else [],
+    })
+    return payload
 
 
 async def _resolve_owner_page_actor(browser, config: dict) -> tuple[str, dict]:
@@ -1320,12 +1405,58 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
                 relation_proof=False
                 operator_proof={}
                 auth_refresh_attempted=False
+                contract_store=PrivatePageShareContractStore()
+                phase=str(resume_state.get('phase') or '')
+                request_already_submitted=phase in {
+                    'TARGET_PAGE_ACCESS_PRIVATE_EXECUTE_INTENT',
+                    'TARGET_PAGE_ACCESS_PRIVATE_RESULT_UNKNOWN',
+                    'TARGET_PAGE_ACCESS_SUBMITTED',
+                    'TARGET_PAGE_ACCESS_OWNER_APPROVE_CLICK_INTENT',
+                    'TARGET_PAGE_ACCESS_OWNER_APPROVED',
+                    'TARGET_PAGE_ACCESS_OWNER_CONFIRMED',
+                    'TARGET_PAGE_ACCESS_RK_CONFIRMED',
+                    'TARGET_PAGE_ACCESS_RK_PROBE_BLOCKED',
+                    'TARGET_PAGE_OPERATOR_ASSIGN_CLICK_INTENT',
+                    'TARGET_PAGE_OPERATOR_ASSIGN_SUBMITTED',
+                    'TARGET_PAGE_OPERATOR_ASSIGN_CONFIRMED',
+                }
+                private_contract=None
+                capture_required=False
+                if not request_already_submitted:
+                    try:
+                        private_contract=contract_store.get()
+                    except ProvisioningError as exc:
+                        if exc.code in {
+                            'PRIVATE_PAGE_SHARE_CONTRACT_REQUIRED',
+                            'PRIVATE_PAGE_SHARE_CONTRACT_STALE',
+                        }:
+                            capture_required=True
+                        else:
+                            raise
+
+                # Once a contract has been captured, normal requests leave
+                # Chromium entirely and execute through FacebookWebSession.
+                if private_contract is not None:
+                    await _execute_private_page_share_request(
+                        session,
+                        store=contract_store,
+                        contract=private_contract,
+                        config=config,
+                        business=business,
+                        profile_id=profile,
+                        checkpoint=checkpoint,
+                    )
+                    resume_state={
+                        **resume_state,
+                        'phase':'TARGET_PAGE_ACCESS_SUBMITTED',
+                        'transport':'facebook_private_graphql',
+                    }
+                    request_already_submitted=True
 
                 for browser_attempt in range(2):
                     try:
                         async with _browser_lease(session,v8_old_space_mb=256) as browser:
-                            # Establish the ordinary Facebook cookie session
-                            # before entering Business Settings. This is read-only.
+                            # Browser is now only capture/reconcile/fallback.
                             await browser._goto(
                                 'https://www.facebook.com/',
                                 timeout_ms=10000,
@@ -1333,11 +1464,50 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
                                 settle_ms=450,
                                 attempts=1,
                             )
-                            relation_proof=await _request_target_page_access(
-                                browser,config,business,checkpoint,resume_state)
-                            if not relation_proof:
-                                relation_proof=await _approve_owner_page_access(
-                                    browser,config,business,checkpoint)
+                            if capture_required and not request_already_submitted:
+                                captured=await _request_target_page_access(
+                                    browser,config,business,checkpoint,resume_state,
+                                    capture_only=True,
+                                )
+                                actor_id=str(
+                                    (
+                                        getattr(session.context,'cookies',{})
+                                        or {}
+                                    ).get('c_user') or ''
+                                ).strip()
+                                private_contract=contract_store.register_capture(
+                                    captured,
+                                    business_id=business,
+                                    page_id=str(config.get('page_id') or ''),
+                                    actor_id=actor_id,
+                                )
+                                await checkpoint({
+                                    'activity':'TARGET_PAGE_ACCESS_PRIVATE_CONTRACT_REGISTERED',
+                                    'transport':'browser_capture_then_private_graphql',
+                                    'captured_doc_id':private_contract.doc_id,
+                                    'captured_friendly_name':
+                                        private_contract.friendly_name[:180],
+                                })
+                                await _execute_private_page_share_request(
+                                    session,
+                                    store=contract_store,
+                                    contract=private_contract,
+                                    config=config,
+                                    business=business,
+                                    profile_id=profile,
+                                    checkpoint=checkpoint,
+                                )
+                                resume_state={
+                                    **resume_state,
+                                    'phase':'TARGET_PAGE_ACCESS_SUBMITTED',
+                                    'transport':'facebook_private_graphql',
+                                }
+                                request_already_submitted=True
+
+                            # Submitted private requests continue only with
+                            # owner-side reconciliation; never re-submit.
+                            relation_proof=await _approve_owner_page_access(
+                                browser,config,business,checkpoint)
                             if not relation_proof:
                                 raise BrowserBusinessError(
                                     'TARGET_PAGE_ACCESS_APPROVAL_REQUIRED',
