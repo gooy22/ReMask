@@ -157,18 +157,68 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
             await service.run(**request)
         self.assertEqual(calls,['RK','PAGE','PAGE'])
 
-    async def test_existing_rk_requires_live_exact_business_binding_before_page_mutation(self):
+    async def test_existing_rk_inconclusive_live_probe_is_not_false_negative(self):
         await self.state.set_running("existing","9","existing",ProvisioningStep.PAGE_ACCESS)
-        with patch('app.provisioning.ad_account_handler._verify_expected_ad_account_in_business',new=AsyncMock(return_value=(False,[]))) as verify, \
+        with patch('app.provisioning.ad_account_handler._verify_expected_ad_account_in_business',new=AsyncMock(return_value=(False,[{
+                'source':'business_settings_inventory',
+                'confirmed':False,
+                'confirmed_empty':False,
+                'error':'BUSINESS_LOGIN_GATE',
+            }]))) as verify, \
              patch('app.provisioning.page_access_handler.ensure_common_page',new=AsyncMock()) as create:
             with self.assertRaises(ProvisioningError) as exc:
                 await page_access_handler(SimpleNamespace(context=SimpleNamespace(cookies={'c_user':'61594882851656'})),
                     {'existing_target':True,'business_id':BM,'ad_account_id':RK}, {},
                     provisioning_state=self.state,profile_id='9',item_id='existing',scope_key='existing')
-        self.assertEqual(exc.exception.code,'BUSINESS_RK_RELATION_UNVERIFIED')
+        self.assertEqual(exc.exception.code,'BUSINESS_RK_RELATION_INCONCLUSIVE')
         self.assertEqual(verify.call_args.kwargs['business_id'],BM)
         self.assertEqual(verify.call_args.kwargs['expected_ad_account_id'],RK)
         create.assert_not_awaited()
+
+    async def test_existing_rk_exact_negative_inventory_remains_unverified(self):
+        await self.state.set_running("negative","9","negative",ProvisioningStep.PAGE_ACCESS)
+        evidence=[{
+            'source':'business_settings_inventory',
+            'confirmed':False,
+            'confirmed_empty':False,
+            'evidence':{
+                'exact_business_context':True,
+                'inventory_observed':True,
+                'inventory_ids':['999999999999999'],
+            },
+        }]
+        with patch('app.provisioning.ad_account_handler._verify_expected_ad_account_in_business',new=AsyncMock(return_value=(False,evidence))), \
+             patch('app.provisioning.page_access_handler.ensure_common_page',new=AsyncMock()) as create:
+            with self.assertRaises(ProvisioningError) as exc:
+                await page_access_handler(SimpleNamespace(context=SimpleNamespace(cookies={'c_user':'61594882851656'})),
+                    {'existing_target':True,'business_id':BM,'ad_account_id':RK}, {},
+                    provisioning_state=self.state,profile_id='9',item_id='negative',scope_key='negative')
+        self.assertEqual(exc.exception.code,'BUSINESS_RK_RELATION_UNVERIFIED')
+        create.assert_not_awaited()
+
+    async def test_existing_rk_uses_resolved_last_confirmed_context_binding(self):
+        await self.state.set_running("context-binding","9","context-binding",ProvisioningStep.PAGE_ACCESS)
+        context=SimpleNamespace(
+            cookies={'c_user':'61594882851656'},
+            inventory_updated_at=1791370000,
+            ad_accounts=[{
+                'profile_id':'9',
+                'business_id':BM,
+                'ad_account_id':RK,
+                'source':'workspace_last_confirmed_live',
+            }],
+        )
+        with patch('app.provisioning.ad_account_handler._verify_expected_ad_account_in_business',new=AsyncMock()) as verify, \
+             patch('app.provisioning.page_access_handler.ensure_common_page',new=AsyncMock(side_effect=RuntimeError('stop before Page mutation'))):
+            with self.assertRaisesRegex(RuntimeError,'stop before Page mutation'):
+                await page_access_handler(SimpleNamespace(context=context),
+                    {'existing_target':True,'business_id':BM,'ad_account_id':RK}, {},
+                    provisioning_state=self.state,profile_id='9',item_id='context-binding',scope_key='context-binding')
+        verify.assert_not_awaited()
+        result=(await self.state.step('context-binding',ProvisioningStep.PAGE_ACCESS))['result']
+        self.assertTrue(result['context_binding_confirmed'])
+        self.assertFalse(result['inventory_binding_verified'])
+        self.assertEqual(result['binding_evidence'][0]['source'],'workspace_last_confirmed_live')
 
     async def test_owner_created_rk_reconciliation_uses_saved_exact_create_without_false_live_claim(self):
         await AdvertisingPageStore(self.state).patch(page_id=PAGE,name='PrgssTeam',owner_profile_id='9',owner_business_id=BM)
