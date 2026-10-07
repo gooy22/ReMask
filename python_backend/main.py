@@ -8,6 +8,7 @@ import os
 import re
 import time
 from contextlib import asynccontextmanager
+from urllib.parse import urlsplit
 
 from fastapi import Body, Depends, FastAPI, Header, HTTPException, status
 
@@ -19,7 +20,7 @@ from app.session_auth_refresh import refresh_saved_auth_context
 from app.store import JobStore
 from app.facebook_business_browser import BROWSER_TERMINAL_ACCESS_CODES, BrowserBusinessError, FacebookBusinessBrowser
 from app.facebook_page_discovery import PageDiscoveryError, list_pages_via_private_graphql
-from app.provisioning.models import ProvisioningStep
+from app.provisioning.models import ProvisioningError, ProvisioningStep
 from app.facebook_docids import (
     list_candidates,
     registry_view,
