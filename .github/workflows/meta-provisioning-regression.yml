@@ -55,6 +55,12 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
+      - name: Install runtime build test dependencies
+        run: |
+          python3 -m venv /tmp/remask-runtime-build
+          /tmp/remask-runtime-build/bin/pip install -r python_backend/requirements.txt
+      - name: Complete PHP runtime overlay build
+        run: PYTHONPATH=python_backend /tmp/remask-runtime-build/bin/python -m unittest tests.test_cookie_only_profiles.CookieOnlyProfileTests.test_complete_runtime_overlay_order_and_installed_php_build_contracts
       - name: Card UI installation and browser cache invalidation
         run: php tests/payment-inspection-install.test.php
 

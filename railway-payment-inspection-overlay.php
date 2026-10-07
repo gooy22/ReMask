@@ -104,10 +104,12 @@ foreach (['accounts.php', 'workspace.php'] as $name) {
     // produce a new URL, including deployments that leave the worker UI version
     // unchanged. A content hash also stays stable across identical builds.
     $cardHash = substr(hash('sha256', $cardUi), 0, 12);
+    // PHP templates may escape attribute quotes. Match the asset URL itself
+    // and update every reference without depending on HTML quote syntax.
     $html = preg_replace_callback(
-        '~(\bsrc\s*=\s*)(["\'])(scripts/workspace\.js(?:\?[^"\']*)?)\2~i',
+        '~scripts/workspace\.js(?:\?[^"\'<>\x5c\s]*)?~i',
         static function (array $match) use ($cardHash): string {
-            $url = html_entity_decode($match[3], ENT_QUOTES | ENT_HTML5, 'UTF-8');
+            $url = html_entity_decode($match[0], ENT_QUOTES | ENT_HTML5, 'UTF-8');
             $fragment = '';
             if (($position = strpos($url, '#')) !== false) {
                 $fragment = substr($url, $position);
@@ -121,14 +123,13 @@ foreach (['accounts.php', 'workspace.php'] as $name) {
             ));
             $parameters[] = 'payment_cards=' . $cardHash;
             $url = $parts[0] . '?' . implode('&', $parameters) . $fragment;
-            return $match[1] . $match[2]
-                . htmlspecialchars($url, ENT_QUOTES, 'UTF-8') . $match[2];
+            return htmlspecialchars($url, ENT_QUOTES, 'UTF-8');
         },
         $html,
         -1,
         $count,
     );
-    if ($count !== 1 || !is_string($html)) throw new RuntimeException('Workspace card cache boundary missing for ' . $name);
+    if ($count < 1 || !is_string($html)) throw new RuntimeException('Workspace card cache boundary missing for ' . $name);
     file_put_contents($path, $html);
 }
 fwrite(STDERR, "[private-payment] profile browser inspection and canonical RK display installed\n");
