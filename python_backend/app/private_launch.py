@@ -375,6 +375,10 @@ class PrivateLaunchService:
         self.provisioning_state = provisioning_state
         self.contracts = contracts or PrivateLaunchContractStore()
         self.state = PrivateLaunchStateStore(provisioning_state.path)
+        self._preflight_cache: dict[
+            tuple[str, str, str, str],
+            tuple[float, int, dict[str, Any]],
+        ] = {}
 
     @staticmethod
     def _id(value: Any, label: str) -> str:
@@ -526,6 +530,48 @@ class PrivateLaunchService:
             "payment_method_count": len(funding.get("payment_methods") or []),
         }
 
+    async def _review_preflight(
+        self,
+        *,
+        context: Any,
+        profile_id: str,
+        business_id: str,
+        ad_account_id: str,
+        page_id: str,
+    ) -> dict[str, Any]:
+        try:
+            ttl = max(
+                10.0,
+                min(
+                    120.0,
+                    float(os.getenv("REMASK_PRIVATE_LAUNCH_REVIEW_TTL_SECONDS") or "60"),
+                ),
+            )
+        except (TypeError, ValueError):
+            ttl = 60.0
+        inventory_at = int(getattr(context, "inventory_updated_at", 0) or 0)
+        key = (profile_id, business_id, ad_account_id, page_id)
+        cached = self._preflight_cache.get(key)
+        now = time.monotonic()
+        if cached is not None:
+            cached_at, cached_inventory_at, proof = cached
+            if (
+                inventory_at > 0
+                and cached_inventory_at == inventory_at
+                and now - cached_at <= ttl
+            ):
+                return {**proof, "review_cache_reused": True}
+
+        proof = await self._live_preflight(
+            context=context,
+            profile_id=profile_id,
+            business_id=business_id,
+            ad_account_id=ad_account_id,
+            page_id=page_id,
+        )
+        self._preflight_cache[key] = (now, inventory_at, dict(proof))
+        return proof
+
     async def review(
         self,
         *,
@@ -548,7 +594,7 @@ class PrivateLaunchService:
         # request. A missing downstream contract must never leave an orphaned
         # Campaign or Ad Set behind.
         contracts = {step: self.contracts.get(step) for step in STEP_ORDER}
-        preflight = await self._live_preflight(
+        preflight = await self._review_preflight(
             context=context,
             profile_id=profile_id,
             business_id=business_id,
@@ -631,10 +677,19 @@ class PrivateLaunchService:
                     "entity_id": entity_id,
                 })
                 continue
-            if prior and str(prior.get("status") or "").upper() == "RECONCILE_REQUIRED":
+            if prior and str(prior.get("status") or "").upper() in {
+                "RECONCILE_REQUIRED",
+                "BLOCKED",
+            }:
+                previous_status = str(prior.get("status") or "").upper()
+                code = (
+                    "PRIVATE_LAUNCH_RECONCILE_REQUIRED"
+                    if previous_status == "RECONCILE_REQUIRED"
+                    else "PRIVATE_LAUNCH_BLOCKED_REPLAY"
+                )
                 raise ProvisioningError(
-                    "PRIVATE_LAUNCH_RECONCILE_REQUIRED",
-                    f"{step.value} has an unresolved submitted result; automatic resubmit is blocked",
+                    code,
+                    f"{step.value} has a durable {previous_status} result; automatic resubmit is blocked",
                     retryable=False,
                 )
 
