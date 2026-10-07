@@ -1001,18 +1001,15 @@ async def create_business_with_docids(
         confirmed_cache
     )
 
-    candidates = _unique_candidates(
-        ordered
-    )
-
-    if not candidates:
-        # We already have an exact live capture of Meta's current Business
-        # creation mutation in the repository test fixture. Runtime HTML/JS
-        # discovery is not guaranteed to expose Relay metadata for every
-        # account/A-B shell, so use the same captured request doc_id as a
-        # single bounded private-request fallback instead of failing before
-        # any CREATE reaches Meta.
-        candidates = [
+    # The captured production contract is the final private self-heal
+    # candidate, not merely a fallback for an empty registry. A registry can
+    # contain candidates that were valid earlier but are now stale; if all of
+    # them are rejected we still need to try the bounded known capture before
+    # declaring CREATE_BM unavailable. Explicit/manual doc_id stays exclusive
+    # so operator-directed diagnostics are not silently followed by another
+    # mutation contract.
+    if not clean_manual_doc_id:
+        ordered.append(
             DocIdCandidate(
                 operation=CREATE_BM_OPERATION,
                 doc_id=CAPTURED_CREATE_BM_DOC_ID,
@@ -1024,7 +1021,11 @@ async def create_business_with_docids(
                 observed_at="2026-09-24",
                 enabled=True,
             )
-        ]
+        )
+
+    candidates = _unique_candidates(
+        ordered
+    )
 
     diagnostics: list[str] = []
 
