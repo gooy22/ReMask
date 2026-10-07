@@ -6160,6 +6160,7 @@ class FacebookBusinessBrowser:
         self,
         *,
         fast: bool = True,
+        warm_retry: bool = True,
     ) -> list[dict[str, Any]]:
         """Run account-level Page discovery after BM/RK work is complete.
 
@@ -6202,7 +6203,7 @@ class FacebookBusinessBrowser:
             })
 
         last_error: BaseException | None=None
-        attempts=2 if fast else 1
+        attempts=2 if fast and warm_retry else 1
 
         for pass_no in range(1,attempts+1):
             try:
