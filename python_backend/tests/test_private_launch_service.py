@@ -201,7 +201,7 @@ class PrivateLaunchTests(unittest.IsolatedAsyncioTestCase):
                     payload={**self.payload, "launch_key": "missing-contract"},
                 )
         self.assertEqual(caught.exception.code, "PRIVATE_LAUNCH_CONTRACT_REQUIRED")
-        self.assertEqual(self.web.graphql.await_count, 1)
+        self.web.graphql.assert_not_awaited()
 
 
 if __name__ == "__main__":
