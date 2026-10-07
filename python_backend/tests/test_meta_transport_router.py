@@ -3,6 +3,57 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 from app.provisioning.meta_transport import MetaTransportRouter
+from app.provisioning.service import normalize_add_bm_payload
+
+
+class AddBmPayloadNormalizationTests(unittest.TestCase):
+    def test_stale_add_bm_payload_is_forced_to_business_only(self):
+        payload = {
+            "steps": ["PROXY_CHECK", "BUSINESS", "AD_ACCOUNT", "PAGE_ACCESS"],
+            "scope_key": "add-bm-page-1318717134669505",
+            "parameters": {
+                "BUSINESS": {
+                    "name": "Fresh Business",
+                    "attach_page": False,
+                    "page_id": "1318717134669505",
+                },
+                "AD_ACCOUNT": {"name": "stale-rk"},
+                "PAGE_ACCESS": {"page_id": "1318717134669505"},
+            },
+        }
+
+        normalized = normalize_add_bm_payload(
+            payload,
+            task_idempotency_key="add-bm-1760000000-0",
+        )
+
+        self.assertEqual(normalized["steps"], ["PROXY_CHECK", "BUSINESS"])
+        self.assertEqual(normalized["scope_key"], "add-bm-1760000000-0")
+        self.assertNotIn("page_id", normalized["parameters"]["BUSINESS"])
+        self.assertNotIn("primary_page_id", normalized["parameters"]["BUSINESS"])
+        self.assertNotIn("AD_ACCOUNT", normalized["parameters"])
+        self.assertNotIn("PAGE_ACCESS", normalized["parameters"])
+
+    def test_explicit_page_attach_is_not_rewritten(self):
+        payload = {
+            "steps": ["PROXY_CHECK", "BUSINESS", "PAGE_ACCESS"],
+            "scope_key": "add-bm-page-1318717134669505",
+            "parameters": {
+                "BUSINESS": {
+                    "name": "Page-backed Business",
+                    "attach_page": True,
+                    "page_id": "1318717134669505",
+                },
+                "PAGE_ACCESS": {"page_id": "1318717134669505"},
+            },
+        }
+
+        normalized = normalize_add_bm_payload(
+            payload,
+            task_idempotency_key="add-bm-1760000000-0",
+        )
+
+        self.assertEqual(normalized, payload)
 
 
 class MetaTransportRouterTests(unittest.IsolatedAsyncioTestCase):
