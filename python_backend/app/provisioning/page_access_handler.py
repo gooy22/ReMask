@@ -1405,6 +1405,7 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
                 relation_proof=False
                 operator_proof={}
                 auth_refresh_attempted=False
+                share_request_transport='reconcile_only'
                 contract_store=PrivatePageShareContractStore()
                 phase=str(resume_state.get('phase') or '')
                 request_already_submitted=phase in {
@@ -1456,6 +1457,7 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
                         profile_id=profile,
                         checkpoint=checkpoint,
                     )
+                    share_request_transport='facebook_private_graphql'
                     resume_state={
                         **resume_state,
                         'phase':'TARGET_PAGE_ACCESS_SUBMITTED',
@@ -1507,6 +1509,7 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
                                     profile_id=profile,
                                     checkpoint=checkpoint,
                                 )
+                                share_request_transport='facebook_private_graphql'
                                 resume_state={
                                     **resume_state,
                                     'phase':'TARGET_PAGE_ACCESS_SUBMITTED',
@@ -1580,7 +1583,12 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
                 'ad_account_page_access_verified':False,
                 'identity_verification':'not_requested',
                 'access_mode':'shared_ads_access',
-                'transport':'target_business_page_advertising_access',
+                'request_transport':share_request_transport,
+                'transport':(
+                    'facebook_private_graphql_then_browser_reconcile'
+                    if share_request_transport=='facebook_private_graphql'
+                    else 'browser_reconcile_only'
+                ),
             }
         # Ads Manager / ad-form identity verification is explicitly opt-in.
         # Normal provisioning must not enter that surface.
