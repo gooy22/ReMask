@@ -647,6 +647,7 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
             async def is_enabled(self): return self._count>0
             async def click(self,**kwargs): events.append('CLICK_'+self.label)
             async def check(self,**kwargs): events.append('CHECK_'+self.label)
+            def filter(self,**kwargs): return self
             def get_by_role(self,role,**kwargs):
                 pattern=getattr(kwargs.get('name'),'pattern',str(kwargs.get('name') or ''))
                 if role=='checkbox' and 'You' in pattern: return Locator(1,'YOU')
