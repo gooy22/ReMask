@@ -2729,6 +2729,30 @@ class FacebookBusinessBrowser:
                         await asyncio.sleep(0.25)
                         continue
 
+                # Meta can abort/replace the navigation while already
+                # landing on the Business login handoff. Treat that as the
+                # same bounded continuation case instead of collapsing it into
+                # FACEBOOK_NAVIGATION_FAILED.
+                try:
+                    resolved_gate = await self._resolve_business_login_gate(
+                        return_url=url
+                    )
+                    if resolved_gate:
+                        await self._resolve_facebook_cookie_consent(
+                            return_url=url
+                        )
+                        await self._assert_authenticated(
+                            body_timeout_ms=max(
+                                100,
+                                min(int(auth_body_timeout_ms or 1500),5000),
+                            )
+                        )
+                        return _clean(self.page.url)
+                except BrowserBusinessError:
+                    raise
+                except Exception:
+                    pass
+
                 page_crashed = (
                     "page crashed" in lower
                     or "targetclosederror" in lower
