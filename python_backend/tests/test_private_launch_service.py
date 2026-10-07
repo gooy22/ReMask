@@ -364,6 +364,52 @@ class PrivateLaunchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(caught.exception.code, "PRIVATE_LAUNCH_BLOCKED_REPLAY")
         self.web.graphql.assert_not_awaited()
 
+    async def test_launch_key_cannot_resume_on_different_rk_target(self):
+        self.web.graphql.side_effect = [
+            {"data": {"create": {"id": "520000000000001"}}},
+            {"data": {"create": {"id": "520000000000002"}}},
+            {"data": {"create": {"id": "520000000000003"}}},
+            {"data": {"create": {"id": "520000000000004"}}},
+        ]
+        with patch.object(self.service, "_live_preflight", AsyncMock(return_value=self.preflight)):
+            first = await self.service.run(
+                item_id="item-key-target",
+                profile_id="7",
+                context=self.context,
+                session=self.session,
+                payload={**self.payload, "launch_key": "shared-launch-key"},
+            )
+        self.assertEqual(first["status"], "SUCCESS")
+
+        self.web.graphql.reset_mock()
+        other_payload = {
+            **self.payload,
+            "ad_account_id": "1569487661117198",
+            "launch_key": "shared-launch-key",
+        }
+        other_preflight = {
+            **self.preflight,
+            "ad_account_id": "1569487661117198",
+        }
+        with patch.object(
+            self.service,
+            "_live_preflight",
+            AsyncMock(return_value=other_preflight),
+        ):
+            with self.assertRaises(ProvisioningError) as caught:
+                await self.service.run(
+                    item_id="item-key-target-other",
+                    profile_id="7",
+                    context=self.context,
+                    session=self.session,
+                    payload=other_payload,
+                )
+        self.assertEqual(
+            caught.exception.code,
+            "PRIVATE_LAUNCH_KEY_TARGET_MISMATCH",
+        )
+        self.web.graphql.assert_not_awaited()
+
     async def test_missing_contract_stops_before_private_submit(self):
         only_campaign = {"CAMPAIGN": contracts()["CAMPAIGN"]}
         service = PrivateLaunchService(
