@@ -2717,11 +2717,25 @@ class FacebookBusinessBrowser:
         # URL-level auth evidence is immediate and authoritative. Do not block
         # a commit-level read-only navigation on body hydration before checking
         # login/checkpoint redirects.
+        business_login_gate = bool(
+            facebook_host
+            and current_host == "business.facebook.com"
+            and current_path.rstrip("/") == "/business/loginpage"
+        )
+        if business_login_gate:
+            diagnostic = await self._diagnostic("business_login_gate")
+            diagnostic["auth_evidence"] = "business_login_gate_url"
+            diagnostic["login_path"] = current_path
+            raise BrowserBusinessError(
+                "BUSINESS_LOGIN_GATE",
+                "Meta Business redirected this surface to the Business login gate.",
+                retryable=True,
+                diagnostic=diagnostic,
+            )
+
         login_url = facebook_host and (
             current_path in {"/login", "/login.php"}
             or current_path.startswith("/login/")
-            or (current_host == "business.facebook.com"
-                and current_path.rstrip("/") == "/business/loginpage")
         )
         if login_url:
             diagnostic = await self._diagnostic("login")
@@ -7044,7 +7058,7 @@ class FacebookBusinessBrowser:
                 return False
             diagnostic = exc.diagnostic if isinstance(exc.diagnostic, dict) else {}
             return (
-                exc.code == "SESSION_EXPIRED"
+                exc.code == "BUSINESS_LOGIN_GATE"
                 and str(diagnostic.get("login_path") or "").rstrip("/")
                     == "/business/loginpage"
             )
