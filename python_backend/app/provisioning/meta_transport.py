@@ -19,6 +19,24 @@ class MetaTransportRouter:
     proxy and user-agent across private HTTP/GraphQL and Chromium fallback.
     """
 
+    SAFE_MUTATION_FALLBACK_CODES: dict[str, frozenset[str]] = {
+        "BUSINESS": frozenset({
+            "CREATE_BM_MUTATION_NOT_DISCOVERED",
+            "PAGE_BACKED_BM_ROUTE_UNAVAILABLE",
+        }),
+        "AD_ACCOUNT": frozenset({
+            "CREATE_AD_ACCOUNT_MUTATION_NOT_DISCOVERED",
+            "CREATE_AD_ACCOUNT_LIVE_CAPTURE_INVALID",
+        }),
+        "FAN_PAGES": frozenset({
+            "FAN_PAGE_CREATE_NOT_SUBMITTED",
+            "FAN_PAGE_CREATE_UI_CHANGED",
+        }),
+        "PAGE_ACCESS": frozenset({
+            "PAGE_SHARE_UI_UNAVAILABLE",
+        }),
+    }
+
     POLICIES: dict[str, TransportPolicy] = {
         "BUSINESS": TransportPolicy(
             capability="BUSINESS",
@@ -64,6 +82,34 @@ class MetaTransportRouter:
                 fallback="chromium_fallback",
             ),
         )
+
+    def mutation_fallback_allowed(
+        self,
+        capability: str,
+        error_code: str,
+        *,
+        submit_started: bool = False,
+    ) -> bool:
+        """Allow transport fallback only when the mutation is proven unsent."""
+        if submit_started:
+            return False
+        code = str(error_code or "").strip().upper()
+        if not code:
+            return False
+        if any(
+            marker in code
+            for marker in (
+                "RESULT_UNKNOWN",
+                "SUBMITTED",
+                "MAY_HAVE_BEEN_SENT",
+            )
+        ):
+            return False
+        allowed = self.SAFE_MUTATION_FALLBACK_CODES.get(
+            str(capability or "").strip().upper(),
+            frozenset(),
+        )
+        return code in allowed
 
     def private_controller_available(self) -> bool:
         return callable(getattr(self.session, "facebook_controller", None))
