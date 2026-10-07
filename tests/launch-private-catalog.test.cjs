@@ -121,7 +121,7 @@ console.log('Private Launch catalog and funding truth checks passed');
 
   const reused=privateCtx.remaskPrivateJobRequest(config,reviewed);
   assert.equal(reused.reused,true);
-  assert.deepEqual(reused.request,planned.request,'lost response must reuse the identical worker Job request');
+  assert.equal(JSON.stringify(reused.request),JSON.stringify(planned.request),'lost response must reuse the identical worker Job request');
 
   assert.equal(storage.has('remask_private_launch_pending_v1'),true);
   assert.equal(privateCtx.remaskPrivateFinalizeJob({status:'FAILED'}),'FAILED');
