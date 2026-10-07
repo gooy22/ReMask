@@ -2246,38 +2246,39 @@ async def profile_live_inventory(
                         'TWO_FACTOR_REQUIRED',
                     } or not known_business_ids:
                         raise
-                    diagnostic=(
-                        exc.diagnostic
-                        if isinstance(exc.diagnostic,dict)
-                        else {}
-                    )
-                    warnings.append(
-                        'Business portfolio discovery was blocked; '
-                        'revalidating previously confirmed BMs individually'
-                    )
-                    discovery_source=(
-                        'business_suite_auth_redirect_hint_fallback'
-                    )
-                    log.warning(
-                        'live inventory profile=%s business_discovery auth '
-                        'redirect=%s; trying confirmed BM hints individually '
-                        'url=%s',
-                        clean_profile,
-                        exc.code,
-                        str(diagnostic.get('url') or '')[:500],
-                    )
-                    try:
-                        await browser.close()
-                    except Exception:
-                        pass
-                    try:
-                        profile_session._business_browser=None
-                    except Exception:
-                        pass
-                    # The browser context still uses the same profile session.
-                    # Reopening drops the redirected renderer; it does not
-                    # alter cookies or attempt to bypass Meta's challenge.
-                    await reopen_inventory_browser()
+                    else:
+                        diagnostic=(
+                            exc.diagnostic
+                            if isinstance(exc.diagnostic,dict)
+                            else {}
+                        )
+                        warnings.append(
+                            'Business portfolio discovery was blocked; '
+                            'revalidating previously confirmed BMs individually'
+                        )
+                        discovery_source=(
+                            'business_suite_auth_redirect_hint_fallback'
+                        )
+                        log.warning(
+                            'live inventory profile=%s business_discovery auth '
+                            'redirect=%s; trying confirmed BM hints individually '
+                            'url=%s',
+                            clean_profile,
+                            exc.code,
+                            str(diagnostic.get('url') or '')[:500],
+                        )
+                        try:
+                            await browser.close()
+                        except Exception:
+                            pass
+                        try:
+                            profile_session._business_browser=None
+                        except Exception:
+                            pass
+                        # The browser context still uses the same profile session.
+                        # Reopening drops the redirected renderer; it does not
+                        # alter cookies or attempt to bypass Meta's challenge.
+                        await reopen_inventory_browser()
                 finally:
                     log.info(
                         'live inventory profile=%s business_discovery source=%s ms=%d count=%d',
