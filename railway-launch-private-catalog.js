@@ -1,3 +1,4 @@
+/* REMASK_PRIVATE_LAUNCH_CATALOG_V1 */
 /* REMASK_PRIVATE_LAUNCH_CATALOG_V2 */
 function remaskFundingState(info) {
     if (!info) return {label:'NOT LOADED',cls:'muted'};
