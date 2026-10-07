@@ -40,14 +40,18 @@ function closeModal(){return;}
 async function showFunding(){return;}
 function annotateDeliveryRows(rows){return rows;}
 JS);
-        $html='<script src="scripts/workspace.js?v=20261004-python-worker-ui-v219-cookie-only-v1-numbered-v1-txt-v3"></script>';
-        foreach(['accounts.php','workspace.php'] as $page)file_put_contents($directory.'/html/'.$page,$html);
+        foreach(['accounts.php'=>'219','workspace.php'=>'221'] as $page=>$workerVersion){
+            $previous=$urls[$page][$index-1]??('scripts/workspace.js?v=20261004-python-worker-ui-v'.$workerVersion.'-cookie-only-v1-numbered-v1-txt-v3&amp;payment_cards=old-hash');
+            file_put_contents($directory.'/html/'.$page,'<script src="'.$previous.'"></script><script src="scripts/unrelated.js?v=keep"></script>');
+        }
         $output=[];$exit=0;
         exec(escapeshellarg(PHP_BINARY).' '.escapeshellarg($directory.'/install.php').' 2>&1',$output,$exit);
         if($exit!==0)throw new RuntimeException('Installer failed: '.implode("\n",$output));
         foreach(['accounts.php','workspace.php'] as $page){
             preg_match('/src="([^"]+)"/',file_get_contents($directory.'/html/'.$page),$match);
             $urls[$page][]=$match[1]??'';
+            if(substr_count($match[1]??'','payment_cards=')!==1)throw new RuntimeException('Duplicate card cache key for '.$page);
+            if(!str_contains(file_get_contents($directory.'/html/'.$page),'scripts/unrelated.js?v=keep'))throw new RuntimeException('Unrelated script changed');
         }
         if(!str_contains(file_get_contents($directory.'/html/scripts/workspace.js'),$source))throw new RuntimeException('New UI was not installed');
         if(!is_file($directory.'/html/ajax/paymentCards.php')||!is_file($directory.'/html/classes/RemaskPaymentCardVault.php'))throw new RuntimeException('Card endpoint or vault not installed');

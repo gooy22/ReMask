@@ -103,7 +103,32 @@ foreach (['accounts.php', 'workspace.php'] as $name) {
     // The workspace bundle is cached by browsers. Every card UI change must
     // produce a new URL, including deployments that leave the worker UI version
     // unchanged. A content hash also stays stable across identical builds.
-    $html = str_replace('python-worker-ui-v220-cookie-only-v1', 'python-worker-ui-v220-cookie-only-v1-payment-cards-' . substr(hash('sha256', $cardUi), 0, 12), $html);
+    $cardHash = substr(hash('sha256', $cardUi), 0, 12);
+    $html = preg_replace_callback(
+        '~(\bsrc\s*=\s*)(["\'])(scripts/workspace\.js(?:\?[^"\']*)?)\2~i',
+        static function (array $match) use ($cardHash): string {
+            $url = html_entity_decode($match[3], ENT_QUOTES | ENT_HTML5, 'UTF-8');
+            $fragment = '';
+            if (($position = strpos($url, '#')) !== false) {
+                $fragment = substr($url, $position);
+                $url = substr($url, 0, $position);
+            }
+            $parts = explode('?', $url, 2);
+            $parameters = array_values(array_filter(
+                explode('&', $parts[1] ?? ''),
+                static fn(string $part): bool => $part !== ''
+                    && urldecode(explode('=', $part, 2)[0]) !== 'payment_cards',
+            ));
+            $parameters[] = 'payment_cards=' . $cardHash;
+            $url = $parts[0] . '?' . implode('&', $parameters) . $fragment;
+            return $match[1] . $match[2]
+                . htmlspecialchars($url, ENT_QUOTES, 'UTF-8') . $match[2];
+        },
+        $html,
+        -1,
+        $count,
+    );
+    if ($count !== 1 || !is_string($html)) throw new RuntimeException('Workspace card cache boundary missing for ' . $name);
     file_put_contents($path, $html);
 }
 fwrite(STDERR, "[private-payment] profile browser inspection and canonical RK display installed\n");
