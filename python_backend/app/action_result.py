@@ -85,6 +85,7 @@ class ActionResult:
         *,
         code: str,
         message: str,
+        submitted: bool | None = False,
         evidence: dict[str, Any] | None = None,
     ) -> "ActionResult":
         return cls(
@@ -92,7 +93,7 @@ class ActionResult:
             status=ActionStatus.BLOCKED,
             code=code,
             message=message,
-            submitted=False,
+            submitted=submitted,
             verified=False,
             retryable=False,
             evidence=dict(evidence or {}),
