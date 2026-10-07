@@ -13,6 +13,20 @@ class MetaTransportRouterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(policy.primary, "facebook_web_graphql")
         self.assertEqual(policy.fallback, "chromium_business_suite")
 
+    async def test_browser_lease_uses_session_factory_when_available(self):
+        lease = object()
+        session = SimpleNamespace(
+            context=SimpleNamespace(profile_id="7"),
+            browser_lease=lambda **kwargs: (
+                lease if kwargs.get("timeout_seconds") == 45 else None
+            ),
+        )
+        router = MetaTransportRouter(session)
+        self.assertIs(
+            router.browser_lease(timeout_seconds=45),
+            lease,
+        )
+
     async def test_router_delegates_profile_bound_resources(self):
         web = object()
         controller = object()
