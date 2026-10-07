@@ -27,6 +27,87 @@ def _browser_lease(session: Any, **kwargs: Any):
     )
 
 
+def _context_rk_binding(
+    context: Any,
+    *,
+    profile_id: str,
+    business_id: str,
+    ad_account_id: str,
+) -> dict[str, Any] | None:
+    """Return one exact last-confirmed BM -> RK binding from resolved context."""
+    business=str(business_id or '').strip()
+    account=_normalize_ad_account_id(ad_account_id).removeprefix('act_')
+    profile=str(profile_id or '').strip()
+    if not business.isdigit() or not account.isdigit():
+        return None
+    for row in (getattr(context,'ad_accounts',None) or []):
+        if not isinstance(row,dict):
+            continue
+        row_business=str(row.get('business_id') or '').strip()
+        row_account=_normalize_ad_account_id(
+            row.get('ad_account_id')
+            or row.get('account_id')
+            or row.get('id')
+        ).removeprefix('act_')
+        row_profile=str(row.get('profile_id') or '').strip()
+        if row_profile and profile and row_profile!=profile:
+            continue
+        if row_business!=business or row_account!=account:
+            continue
+        return {
+            'source':str(
+                row.get('source')
+                or 'resolved_profile_last_confirmed_inventory'
+            ).strip(),
+            'business_id':business,
+            'ad_account_id':account,
+            'profile_id':profile,
+            'inventory_updated_at':int(
+                getattr(context,'inventory_updated_at',0) or 0
+            ),
+        }
+    return None
+
+
+def _rk_relation_negative_proof(
+    evidence: list[dict[str, Any]] | Any,
+    *,
+    expected_ad_account_id: str,
+) -> bool:
+    """True only when exact BM inventory was observed and excludes the RK."""
+    expected=_normalize_ad_account_id(expected_ad_account_id).removeprefix('act_')
+    if not expected:
+        return False
+    for observation in evidence if isinstance(evidence,list) else []:
+        if not isinstance(observation,dict):
+            continue
+        if observation.get('confirmed_empty') is True:
+            return True
+        candidates=[]
+        nested=observation.get('evidence')
+        if isinstance(nested,dict):
+            candidates.append(nested)
+        diagnostics=observation.get('diagnostics')
+        if isinstance(diagnostics,list):
+            candidates.extend(
+                row for row in diagnostics if isinstance(row,dict)
+            )
+        for row in candidates:
+            if (
+                row.get('exact_business_context') is not True
+                or row.get('inventory_observed') is not True
+            ):
+                continue
+            ids={
+                _normalize_ad_account_id(value).removeprefix('act_')
+                for value in (row.get('inventory_ids') or [])
+            }
+            ids.discard('')
+            if expected not in ids:
+                return True
+    return False
+
+
 async def _one(locator):
     return await locator.count()==1 and await locator.is_visible()
 
@@ -836,21 +917,75 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
         created_binding=(any(str(row.get('business_id') or '')==business
                 and _normalize_ad_account_id(row.get('ad_account_id')).removeprefix('act_')==account
                 for row in recorded))
-        # The original creation flow uses this exact durable proof too. A
-        # recovery action must not depend on rediscovery of the already-created
-        # RK. Live advertising permission is still proved independently below.
-        verified,evidence=(True,[{'source':'recorded_profile_rk_create','business_id':business,
-            'ad_account_id':account}]) if created_binding else await _verify_expected_ad_account_in_business(session,
-                business_id=business,account_name=str(params.get('ad_account_name') or ''),
-                expected_ad_account_id=account,checks=1)
+        context_binding=_context_rk_binding(
+            session.context,
+            profile_id=profile,
+            business_id=business,
+            ad_account_id=account,
+        )
+        durable_binding=bool(created_binding or context_binding)
+        # Recovery must accept an exact last-confirmed BM->RK relation from
+        # either worker CREATE history or the resolved Workspace inventory.
+        # A transient Business login gate must not erase that relation.
+        if created_binding:
+            verified=True
+            evidence=[{
+                'source':'recorded_profile_rk_create',
+                'business_id':business,
+                'ad_account_id':account,
+            }]
+        elif context_binding:
+            verified=True
+            evidence=[context_binding]
+        else:
+            verified,evidence=await _verify_expected_ad_account_in_business(
+                session,
+                business_id=business,
+                account_name=str(params.get('ad_account_name') or ''),
+                expected_ad_account_id=account,
+                checks=1,
+            )
         if not verified:
-            await state.checkpoint(item,profile,scope,ProvisioningStep.PAGE_ACCESS,
-                {'business_id':business,'ad_account_id':account,'diagnostic':{
-                    'stage':'business_rk_relation_unverified','binding_evidence':evidence}})
-            raise ProvisioningError('BUSINESS_RK_RELATION_UNVERIFIED','Meta did not confirm this exact RK in the requested Business Portfolio',retryable=True)
+            negative=_rk_relation_negative_proof(
+                evidence,
+                expected_ad_account_id=account,
+            )
+            stage=(
+                'business_rk_relation_unverified'
+                if negative
+                else 'business_rk_relation_inconclusive'
+            )
+            code=(
+                'BUSINESS_RK_RELATION_UNVERIFIED'
+                if negative
+                else 'BUSINESS_RK_RELATION_INCONCLUSIVE'
+            )
+            message=(
+                'Meta exact Business inventory does not contain this RK'
+                if negative
+                else (
+                    'Live Meta inventory could not re-confirm the exact BM/RK '
+                    'relation; the relation was not disproved'
+                )
+            )
+            await state.checkpoint(
+                item,profile,scope,ProvisioningStep.PAGE_ACCESS,
+                {
+                    'business_id':business,
+                    'ad_account_id':account,
+                    'diagnostic':{
+                        'stage':stage,
+                        'binding_evidence':evidence,
+                    },
+                },
+            )
+            raise ProvisioningError(code,message,retryable=True)
         await state.checkpoint(item,profile,scope,ProvisioningStep.PAGE_ACCESS,
-            {'business_id':business,'ad_account_id':account,'inventory_binding_verified':not created_binding,
-                'created_binding_confirmed':created_binding,'binding_evidence':evidence})
+            {'business_id':business,'ad_account_id':account,
+                'inventory_binding_verified':not durable_binding,
+                'created_binding_confirmed':created_binding,
+                'context_binding_confirmed':bool(context_binding),
+                'binding_evidence':evidence})
     else:
         rk_state=await state.step(item,ProvisioningStep.AD_ACCOUNT)
         result=(rk_state or {}).get('result') or {}
