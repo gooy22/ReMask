@@ -255,7 +255,7 @@ class LiveSyncContractTests(unittest.TestCase):
         self.assertIn("REMASK_LOW_MEMORY_PAGE_HANDOFF_V1", browser_source)
         self.assertIn("REMASK_PAGE_HANDOFF_UNLOAD_ADS_V1", browser_source)
         self.assertIn('page.goto(\n                "about:blank"', browser_source)
-        self.assertIn("attempts=2 if fast else 1", browser_source)
+        self.assertIn("attempts=2 if fast and warm_retry else 1", browser_source)
         self.assertIn("navigation_timeout_ms=9000", browser_source)
         self.assertIn("handoff_history", browser_source)
         self.assertNotIn("self._browser_context.new_page()", browser_source)
