@@ -287,18 +287,18 @@ class ProvisioningService:
                         f"{step.value} result is missing {entity_key}",
                     )
 
-                self._verify_result_contract(
-                    step,
-                    result,
-                    step_params if step is not ProvisioningStep.PROXY_CHECK else {},
-                    snapshot.as_dict(),
-                )
                 await self.state.checkpoint(
                     item_id,
                     profile_id,
                     scope_key,
                     step,
                     {"action_phase": "VERIFY"},
+                )
+                self._verify_result_contract(
+                    step,
+                    result,
+                    step_params if step is not ProvisioningStep.PROXY_CHECK else {},
+                    snapshot.as_dict(),
                 )
                 result = {
                     **result,
