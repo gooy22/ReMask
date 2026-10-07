@@ -51,6 +51,19 @@ class MetaTransportRouterTests(unittest.IsolatedAsyncioTestCase):
             lease,
         )
 
+    async def test_close_browser_falls_back_to_last_shared_browser(self):
+        browser = SimpleNamespace(close=AsyncMock())
+        session = SimpleNamespace(
+            context=SimpleNamespace(profile_id="7"),
+            facebook_business_browser=AsyncMock(return_value=browser),
+            _business_browser=browser,
+        )
+        router = MetaTransportRouter(session)
+        self.assertIs(await router.facebook_business_browser(), browser)
+        await router.close_business_browser()
+        browser.close.assert_awaited_once()
+        self.assertIsNone(session._business_browser)
+
     async def test_router_delegates_profile_bound_resources(self):
         web = object()
         controller = object()
