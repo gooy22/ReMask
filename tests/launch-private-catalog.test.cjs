@@ -96,7 +96,18 @@ console.log('Private Launch catalog and funding truth checks passed');
           AD:{configured:true,friendly_name:'AdMutation'}
         }})};
       if(body.action==='private_launch_review')
-        return {ok:true,status:200,json:async()=>({ok:true,review:{ready:true,profile_id:body.profile_id}})};
+        return {ok:true,status:200,json:async()=>({ok:true,review:{
+          ready:true,
+          profile_id:body.profile_id,
+          preflight:{
+            selected_payment_method:{
+              type:body.ad_account_id==='111111111'?'Visa':'Mastercard',
+              last4:body.ad_account_id==='111111111'?'1111':'2222',
+              linkage_status:'OBSERVED'
+            },
+            payment_selection_source:'single_live_method'
+          }
+        }})};
       if(body.action==='create')
         return {ok:true,status:200,json:async()=>({ok:true,job:{job_id:'private-job-1'}})};
       return {ok:true,status:200,json:async()=>({ok:true,job:{status:'SUCCESS',items_total:2,items_done:2}})};
@@ -117,6 +128,8 @@ console.log('Private Launch catalog and funding truth checks passed');
   assert.deepEqual(reviewRequests.map(r=>r.body.business_id),['555555555','666666666']);
   assert.equal(reviewRequests[0].body.launch.override.creative.message,'one');
   assert.equal(reviewRequests[1].body.launch.override.adset.targeting.age_max,35);
+  assert.equal(reviewed[0].row.selected_payment_method.last4,'1111');
+  assert.equal(reviewed[1].row.selected_payment_method.last4,'2222');
   assert.ok(requests.every(r=>r.body.doc_id===undefined&&r.body.fb_dtsg===undefined));
 
   const planned=privateCtx.remaskPrivateJobRequest(config,reviewed);
@@ -125,6 +138,10 @@ console.log('Private Launch catalog and funding truth checks passed');
   assert.ok(planned.request.profiles.every(row=>row.tasks.length===1&&row.tasks[0].action==='private_launch'));
   assert.deepEqual(Array.from(planned.request.profiles,row=>row.tasks[0].payload.page_id),['333333333','444444444']);
   assert.ok(planned.request.profiles.every(row=>row.tasks[0].payload.launch.base.campaign.name==='Campaign'));
+  assert.deepEqual(
+    Array.from(planned.request.profiles,row=>row.tasks[0].payload.selected_payment_method.last4),
+    ['1111','2222']
+  );
   assert.ok(planned.request.profiles.every(row=>row.tasks[0].payload.doc_id===undefined));
 
   const reused=privateCtx.remaskPrivateJobRequest(config,reviewed);
