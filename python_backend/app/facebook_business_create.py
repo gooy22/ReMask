@@ -1010,8 +1010,8 @@ async def create_business_with_docids(
         # creation mutation in the repository test fixture. Runtime HTML/JS
         # discovery is not guaranteed to expose Relay metadata for every
         # account/A-B shell, so use the same captured request doc_id as a
-        # single bounded fallback instead of failing before any CREATE reaches
-        # Meta.
+        # single bounded private-request fallback instead of failing before
+        # any CREATE reaches Meta.
         candidates = [
             DocIdCandidate(
                 operation=CREATE_BM_OPERATION,
@@ -1030,35 +1030,72 @@ async def create_business_with_docids(
 
     for candidate in candidates:
         try:
-            browser_graphql = getattr(
+            # Production CREATE_BM is a direct private cookie-session request.
+            # It must not require opening Meta Business Suite in Chromium just
+            # to obtain a browser execution context. The shared Facebook web
+            # session already owns cookies, proxy, fb_dtsg and request envelope.
+            private_graphql = getattr(
                 session,
-                "graphql_browser_native",
+                "graphql",
                 None,
             )
-            if not callable(browser_graphql):
-                raise BusinessMutationError(
-                    "CREATE_BM_BROWSER_TRANSPORT_UNAVAILABLE",
-                    (
-                        "CREATE_BM requires browser-native transport, "
-                        "but the current worker does not provide it."
+            if callable(private_graphql):
+                response = await private_graphql(
+                    candidate.doc_id,
+                    variables,
+                    friendly_name=(
+                        candidate.friendly_name
                     ),
-                    retryable=False,
+                    endpoint_url=(
+                        candidate.endpoint_url
+                    ),
+                    request_envelope=(
+                        captured_envelope
+                    ),
+                    **(
+                        {"before_submit": before_submit}
+                        if before_submit is not None
+                        else {}
+                    ),
                 )
-
-            response = await browser_graphql(
-                candidate.doc_id,
-                variables,
-                friendly_name=(
-                    candidate.friendly_name
-                ),
-                endpoint_url=(
-                    candidate.endpoint_url
-                ),
-                request_envelope=(
-                    captured_envelope
-                ),
-                **({"before_submit": before_submit} if before_submit is not None else {}),
-            )
+            else:
+                # Legacy test/dummy sessions may expose only the previous
+                # browser-native method. Keep that compatibility path out of
+                # normal production sessions; never switch to it after a
+                # direct private POST has started.
+                browser_graphql = getattr(
+                    session,
+                    "graphql_browser_native",
+                    None,
+                )
+                if not callable(browser_graphql):
+                    raise BusinessMutationError(
+                        "CREATE_BM_PRIVATE_TRANSPORT_UNAVAILABLE",
+                        (
+                            "CREATE_BM requires the private cookie GraphQL "
+                            "transport, but the current session does not "
+                            "provide it."
+                        ),
+                        retryable=False,
+                    )
+                response = await browser_graphql(
+                    candidate.doc_id,
+                    variables,
+                    friendly_name=(
+                        candidate.friendly_name
+                    ),
+                    endpoint_url=(
+                        candidate.endpoint_url
+                    ),
+                    request_envelope=(
+                        captured_envelope
+                    ),
+                    **(
+                        {"before_submit": before_submit}
+                        if before_submit is not None
+                        else {}
+                    ),
+                )
 
         except Exception as exc:
             payload = getattr(
