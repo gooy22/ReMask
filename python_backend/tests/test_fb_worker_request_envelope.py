@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 from fb_worker import FacebookBootstrap, FacebookWebSession, WebProfile
 
 
-class FacebookRequestEnvelopeTests(unittest.TestCase):
+class FacebookRequestEnvelopeTests(unittest.IsolatedAsyncioTestCase):
     def _session(self):
         return FacebookWebSession(
             WebProfile(
