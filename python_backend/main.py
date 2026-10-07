@@ -3126,6 +3126,38 @@ async def profile_provisioning_state(profile_id: str):
         'personal_scope_id':personal_scope_id,
     }
 
+@app.get('/api/v1/private-launch/contracts',dependencies=[Depends(require_key)])
+async def private_launch_contract_status():
+    return {
+        'ok':True,
+        'contracts':pool.private_launch.contracts.status(),
+    }
+
+@app.post('/api/v1/private-launch/contracts/{step_name}',dependencies=[Depends(require_key)])
+async def private_launch_contract_register(step_name: str, payload: dict = Body(...)):
+    from app.private_launch import PrivateLaunchStep
+    try:
+        step=PrivateLaunchStep(str(step_name or '').strip().upper())
+    except ValueError as exc:
+        raise HTTPException(status_code=404,detail='unsupported private Launch step') from exc
+    try:
+        contract=pool.private_launch.contracts.register(step,payload)
+    except ProvisioningError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={'code':exc.code,'message':str(exc),'retryable':False},
+        ) from exc
+    return {
+        'ok':True,
+        'step':step.value,
+        'contract':{
+            'configured':True,
+            'friendly_name':contract.friendly_name,
+            'endpoint_host':urlsplit(contract.endpoint_url).hostname or '',
+            'result_paths':len(contract.result_id_paths),
+        },
+    }
+
 @app.post('/api/v1/profiles/{profile_id}/private-launch-review',dependencies=[Depends(require_key)])
 async def private_launch_review(profile_id: str, payload: dict = Body(...)):
     clean_profile=str(profile_id or '').strip()
