@@ -144,6 +144,13 @@ async def business_handler(
         or getattr(context, "display_name", "")
     )
 
+    meta_transport = kwargs.get("meta_transport")
+    transport_session = (
+        meta_transport
+        if meta_transport is not None
+        else session
+    )
+
     step_state = kwargs.get("step_state")
     if not isinstance(step_state, dict):
         step_state = await provisioning_state.step(
@@ -156,7 +163,7 @@ async def business_handler(
     async def get_browser():
         nonlocal browser
         if browser is None:
-            browser = await session.facebook_business_browser()
+            browser = await transport_session.facebook_business_browser()
         return browser
 
     # Legacy Your-Pages parsing stored the profile-plus wrapper as Page ID.
@@ -174,7 +181,7 @@ async def business_handler(
             if callable(discover):
                 candidates = await discover(fast=True)
                 context.pages = candidates
-                release = getattr(session, "close_business_browser", None)
+                release = getattr(transport_session, "close_business_browser", None)
                 if callable(release):
                     await release()
                     browser = None
@@ -625,7 +632,7 @@ async def business_handler(
 
             private_result = None
             private_error = None
-            private_controller = getattr(session, "facebook_controller", None)
+            private_controller = getattr(transport_session, "facebook_controller", None)
 
             # Real MetaSession/ProfileSession exposes facebook_controller().
             # Test/dummy sessions from the legacy browser-flow suite do not;
@@ -648,7 +655,7 @@ async def business_handler(
             else:
                 try:
                     private_result = await create_business_resilient(
-                        session,
+                        transport_session,
                         business_name=bm_name,
                         page_id=page_id if attach_page else "",
                         user_email=user_email,
@@ -808,17 +815,38 @@ async def business_handler(
                          "private_create_error_code": private_error.code},
                     )
 
-                # These errors explicitly mean the private CREATE route did not
-                # send a mutation. Only then is it safe and useful to try the
-                # Business Suite UI as a secondary compatibility path.
-                safe_ui_fallback_codes = {
-                    "CREATE_BM_MUTATION_NOT_DISCOVERED",
-                    "PAGE_BACKED_BM_ROUTE_UNAVAILABLE",
-                }
+                # Transport fallback is centrally policy-gated. A
+                # RESULT_UNKNOWN / post-submit state must never be replayed
+                # through Chromium as a second CREATE.
+                fallback_allowed = False
+                if private_error is not None:
+                    policy_gate = getattr(
+                        transport_session,
+                        "mutation_fallback_allowed",
+                        None,
+                    )
+                    fallback_allowed = (
+                        bool(policy_gate(
+                            "BUSINESS",
+                            private_error.code,
+                            submit_started=(
+                                _clean(checkpoint.get("phase")).upper()
+                                in {
+                                    "CREATE_SUBMITTED",
+                                    "CREATE_RESULT_UNKNOWN",
+                                }
+                            ),
+                        ))
+                        if callable(policy_gate)
+                        else private_error.code in {
+                            "CREATE_BM_MUTATION_NOT_DISCOVERED",
+                            "PAGE_BACKED_BM_ROUTE_UNAVAILABLE",
+                        }
+                    )
 
                 if (
                     private_error is not None
-                    and private_error.code not in safe_ui_fallback_codes
+                    and not fallback_allowed
                 ):
                     diagnostic_suffix = ""
                     if private_error_diagnostics:
@@ -1133,7 +1161,7 @@ async def business_handler(
 
                 # Resume the same private Page-attach route used by CREATE.
                 private_attach_confirmed = False
-                controller_factory = getattr(session, "facebook_controller", None)
+                controller_factory = getattr(transport_session, "facebook_controller", None)
                 if callable(controller_factory):
                     controller = await controller_factory()
                     web_session = getattr(controller, "session", None)

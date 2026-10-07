@@ -15,6 +15,7 @@ from .proxy import ProxyChecker
 from .registry import get_handler
 from .state import ProvisioningStateStore
 from .transport import ProvisioningTransport, TransportError
+from .meta_transport import MetaTransportRouter
 
 
 _MUTATING_BROWSER_STEPS = {
@@ -101,6 +102,7 @@ class ProvisioningService:
         ).strip() or "default"
 
         completed: list[dict[str, Any]] = []
+        meta_transport = MetaTransportRouter(session)
 
         for step in steps:
             prior = await self.state.step(item_id, step)
@@ -202,6 +204,7 @@ class ProvisioningService:
 
                     handler = get_handler(step.value)
 
+                    policy = meta_transport.policy(step.value)
                     await self.state.checkpoint(
                         item_id,
                         profile_id,
@@ -210,6 +213,8 @@ class ProvisioningService:
                         {
                             "action_phase": "EXECUTE",
                             "action_idempotency_key": step_key,
+                            "transport_primary": policy.primary,
+                            "transport_fallback": policy.fallback,
                         },
                     )
 
@@ -250,6 +255,7 @@ class ProvisioningService:
                                         scope_key=scope_key,
                                         step_state=prior,
                                         profile_resolver=self.profile_resolver,
+                                        meta_transport=meta_transport,
                                     ),
                                     timeout=step_timeout,
                                 )

@@ -77,6 +77,54 @@ class ActionEngineLifecycleTests(unittest.IsolatedAsyncioTestCase):
             "COMMIT",
         )
 
+    async def test_action_receives_transport_router_and_records_policy(self):
+        observed = {}
+
+        async def handler(session, params, state, **kwargs):
+            router = kwargs.get("meta_transport")
+            observed["router"] = router
+            observed["policy"] = router.policy("BUSINESS")
+            return {
+                "business_id": "111111111111111",
+                "phase": "CREATE_CONFIRMED",
+            }
+
+        with patch(
+            "app.provisioning.service.get_handler",
+            return_value=handler,
+        ), patch(
+            "app.provisioning.service._await_profile_mutation_cooldown",
+            new=AsyncMock(),
+        ):
+            await ProvisioningService(self.state).run(
+                item_id="item-router",
+                profile_id="7",
+                context=self.context,
+                session=self.session,
+                payload={
+                    "steps": ["BUSINESS"],
+                    "scope_key": "scope-router",
+                    "parameters": {"BUSINESS": {"name": "BM Router"}},
+                },
+            )
+
+        self.assertEqual(
+            observed["policy"].primary,
+            "facebook_web_graphql",
+        )
+        self.assertEqual(
+            observed["policy"].fallback,
+            "chromium_business_suite",
+        )
+        step = await self.state.step(
+            "item-router",
+            ProvisioningStep.BUSINESS,
+        )
+        self.assertEqual(
+            step["result"]["action_phase"],
+            "COMMIT",
+        )
+
     async def test_verify_blocks_wrong_business_relation_before_commit(self):
         async def handler(session, params, state, **kwargs):
             return {

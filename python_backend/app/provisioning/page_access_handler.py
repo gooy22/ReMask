@@ -17,6 +17,16 @@ from .ad_account_full_control import ensure_ad_account_full_control
 log=logging.getLogger('remask.page_access')
 
 
+def _browser_lease(session: Any, **kwargs: Any):
+    factory = getattr(session, "browser_lease", None)
+    if callable(factory):
+        return factory(**kwargs)
+    return FacebookBusinessBrowser(
+        session.context,
+        **kwargs,
+    )
+
+
 async def _one(locator):
     return await locator.count()==1 and await locator.is_visible()
 
@@ -804,6 +814,9 @@ async def _assign_operator(
 
 
 async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwargs) -> dict:
+    meta_transport=kwargs.get('meta_transport')
+    if meta_transport is not None:
+        session=meta_transport
     state=kwargs['provisioning_state']; profile=kwargs['profile_id']; item=kwargs['item_id']; scope=kwargs['scope_key']
     resolver=kwargs.get('profile_resolver')
     business=str(snapshot.get('business_id') or '')
@@ -886,7 +899,7 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
             config={**config,'target_business_identity':target_business_identity}
             saved_grant=(config.get('grants') or {}).get(business) or {}
             resume_state={**saved_grant,**prior}
-            async with FacebookBusinessBrowser(session.context,v8_old_space_mb=256) as browser:
+            async with _browser_lease(session, v8_old_space_mb=256) as browser:
                 try:
                     full_access=await ensure_existing_page_full_control(
                         browser,config,business,checkpoint,resume_state)
@@ -919,7 +932,7 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
             return result
         await checkpoint({'phase':'VERIFY_AD_IDENTITY','page_shared_to_business':True})
         progress={}
-        async with FacebookBusinessBrowser(session.context,v8_old_space_mb=256) as browser:
+        async with _browser_lease(session, v8_old_space_mb=256) as browser:
             try:
                 proof=await asyncio.wait_for(inspect_browser_pages(browser,account,business,
                     timeout=45,open_identity=True,progress=progress),timeout=55)
