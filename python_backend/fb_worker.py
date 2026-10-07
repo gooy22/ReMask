@@ -68,6 +68,7 @@ class FacebookBootstrap:
     lsd: str = ""
     jazoest: str = ""
     request_context: dict[str, str] = field(default_factory=dict)
+    source_url: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -765,6 +766,7 @@ class FacebookWebSession:
                 lsd=lsd,
                 jazoest=jazoest,
                 request_context=request_context,
+                source_url=final_url,
             )
 
             self._bootstrap = bootstrap
@@ -1085,10 +1087,24 @@ class FacebookWebSession:
             if endpoint_parts.scheme and endpoint_parts.netloc
             else "https://business.facebook.com"
         )
+        bootstrap_source_url = str(
+            getattr(bootstrap, "source_url", "") or ""
+        ).strip()
+        bootstrap_source_parts = urlsplit(bootstrap_source_url)
+        same_business_origin = (
+            "business.facebook.com" in endpoint_parts.netloc
+            and bootstrap_source_parts.hostname == "business.facebook.com"
+            and "/login" not in bootstrap_source_parts.path.lower()
+            and "/checkpoint" not in bootstrap_source_parts.path.lower()
+        )
         referer = (
-            self.ADS_MANAGER_URL
-            if "business.facebook.com" in endpoint_parts.netloc
-            else origin + "/"
+            bootstrap_source_url
+            if same_business_origin
+            else (
+                self.ADS_MANAGER_URL
+                if "business.facebook.com" in endpoint_parts.netloc
+                else origin + "/"
+            )
         )
 
         headers = {
@@ -1097,6 +1113,12 @@ class FacebookWebSession:
             "Content-Type": "application/x-www-form-urlencoded",
             "Origin": origin,
             "Referer": referer,
+            # Match a same-origin browser fetch closely without requiring
+            # Chromium. These are ordinary browser request metadata; the
+            # profile's own cookies/proxy/auth fields remain authoritative.
+            "Sec-Fetch-Dest": "empty",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Site": "same-origin",
         }
 
         comet_req = str(os.getenv("REMASK_FB_COMET_REQ") or "").strip()
