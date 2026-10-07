@@ -207,7 +207,7 @@ class LiveSyncContractTests(unittest.TestCase):
         # after BM/RK live state is resolved. The heavy Ads Manager document is
         # unloaded before the cold->warm Page handoff to keep Chromium stable.
         self.assertIn("REMASK_ISOLATED_PAGE_PRIMARY_V2", source)
-        self.assertIn("discover_managed_pages_isolated(fast=True)", source)
+        self.assertIn("warm_retry=page_evidence_present", source)
         self.assertNotIn("REMASK_ENABLE_GLOBAL_PAGE_DISCOVERY", source)
         self.assertNotIn("discover_managed_pages(fast=False)", source)
         self.assertNotIn("REMASK_PAGE_INVENTORY_WARM_RETRY_V2", source)
