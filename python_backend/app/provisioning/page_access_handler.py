@@ -21,7 +21,9 @@ def _browser_lease(session: Any, **kwargs: Any):
     factory = getattr(session, "browser_lease", None)
     if callable(factory):
         return factory(**kwargs)
-    return _browser_lease(session, **kwargs,
+    return FacebookBusinessBrowser(
+        session.context,
+        **kwargs,
     )
 
 
