@@ -47,7 +47,7 @@ def form_action_guard(text: str, fields: list[dict[str,Any]]) -> str:
 
 
 async def active_card_form_text(page: Any, fields: list[dict[str,Any]]) -> str:
-    """Read the visible card form rather than unrelated page help or menus."""
+    """Read only visible payment/card scopes, never unrelated page-wide text."""
     field=next((f for f in fields if f.get('kind')=='number' and f.get('control') is not None),None)
     if field:
         try:
@@ -56,8 +56,35 @@ async def active_card_form_text(page: Any, fields: list[dict[str,Any]]) -> str:
               return scope && scope.getClientRects().length ? scope.innerText : '';
             }""")
             if isinstance(text,str) and text.strip():return text
-        except Exception:pass
-    return await page.locator('body').inner_text(timeout=3000)
+        except Exception:
+            pass
+
+    # Before the PAN field mounts Meta may show a payment-method or setup
+    # dialog. Inspect only visible dialog/form containers. Text elsewhere on
+    # Business Suite (help, navigation, account summaries) must never turn a
+    # safe card flow into ACTION_REQUIRED.
+    try:
+        scopes=page.locator('[role="dialog"]:visible,[role="alertdialog"]:visible,form:visible')
+        texts=[]
+        count=min(await scopes.count(),12)
+        for index in range(count):
+            try:
+                text=await scopes.nth(index).inner_text(timeout=1200)
+            except Exception:
+                continue
+            if not isinstance(text,str) or not text.strip():
+                continue
+            if re.search(
+                r'payment|billing|credit|debit|card|способ(?:ы)? оплаты|оплат|карт|платіж',
+                text,
+                re.I,
+            ):
+                texts.append(text.strip())
+        if texts:
+            return '\n'.join(texts[-3:])[:12000]
+    except Exception:
+        pass
+    return ''
 
 
 def field_kind(label: str, autocomplete: str = '') -> str:
@@ -737,6 +764,17 @@ async def profile_payment_card(resolver:Any,profile:str,payload:dict[str,Any],*,
         # PHP waits 130s. Resolution, browser-slot acquisition, the form and
         # cancellation/cleanup must all fit inside that transport boundary.
         result=await asyncio.wait_for(_profile_payment_card_execute(resolver,profile,payload,state),timeout=110)
+        funding=result.get('funding') if isinstance(result.get('funding'),dict) else {}
+        if (
+            state is not None
+            and operation=='bind'
+            and result.get('status')=='LINKED'
+            and funding.get('account_scope_verified') is True
+            and hasattr(state,'set_payment_link_state')
+        ):
+            await state.set_payment_link_state(
+                profile,target,True,source='card_link_observed'
+            )
         logging.getLogger('remask.payment_card').info(
             'payment card result profile=%s account=%s operation=%s status=%s code=%s submitted=%s',
             profile,target,operation,str(result.get('status') or '')[:40],

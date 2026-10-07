@@ -553,6 +553,34 @@ def _browser_inventory_confirms_nonempty(value: Any) -> bool:
     return False
 
 
+def _browser_inventory_confirms_target_absent(value: Any) -> bool:
+    """True only when exact Business inventory was observed and target name is absent."""
+    if not isinstance(value, dict):
+        return False
+
+    candidates: list[dict[str, Any]] = []
+    evidence = value.get("evidence")
+    if isinstance(evidence, dict):
+        candidates.append(evidence)
+    diagnostics = value.get("diagnostics")
+    if isinstance(diagnostics, list):
+        candidates.extend(
+            row for row in diagnostics if isinstance(row, dict)
+        )
+
+    for row in candidates:
+        if not bool(row.get("exact_business_context")):
+            continue
+        if not bool(row.get("inventory_observed")):
+            continue
+        exact_name_ids = row.get("exact_name_ids")
+        if isinstance(exact_name_ids, list) and not any(
+            _normalize_ad_account_id(item) for item in exact_name_ids
+        ):
+            return True
+    return False
+
+
 def _raise_rk_already_exists(
     *,
     business_id: str,
@@ -629,6 +657,7 @@ async def _prove_empty_after_uncertainty(
     graph_required_checks: int = 3,
     browser_required_checks: int = 3,
     delay_seconds: float = 1.5,
+    allow_multiple_in_business: bool = False,
 ) -> tuple[str, bool, dict[str, Any]]:
     """Resolve an ambiguous CREATE without allowing an endless duplicate lock.
 
@@ -638,6 +667,14 @@ async def _prove_empty_after_uncertainty(
 
     Finding any RK wins immediately and returns its ID.
     """
+    if allow_multiple_in_business:
+        return await _prove_target_absent_after_uncertainty(
+            session,
+            business_id=business_id,
+            account_name=account_name,
+            required_checks=browser_required_checks,
+            delay_seconds=delay_seconds,
+        )
     # Ignore legacy token inventory, including restored diagnostics. It must
     # never shorten the independent browser proof required before another CREATE.
     graph_evidence: list[dict[str, Any]] = []
@@ -746,6 +783,64 @@ async def _prove_empty_after_uncertainty(
     return "", proven_empty, proof
 
 
+async def _prove_target_absent_after_uncertainty(
+    session: Any,
+    *,
+    business_id: str,
+    account_name: str,
+    required_checks: int = 3,
+    delay_seconds: float = 1.5,
+) -> tuple[str, bool, dict[str, Any]]:
+    """Resolve an ambiguous named CREATE inside a BM that may contain other RK.
+
+    Other advertising accounts are allowed. A new CREATE is unlocked only when
+    multiple fresh exact-Business inventory reads expose the inventory container
+    and contain no RK with the target name.
+    """
+    checks: list[dict[str, Any]] = []
+    absent_confirmations = 0
+    goal = max(2, int(required_checks))
+
+    for attempt in range(max(1, int(required_checks))):
+        found_id, inventory = await _reconcile_existing_browser_inventory(
+            session,
+            business_id=business_id,
+            account_name=account_name,
+        )
+        row = {
+            "attempt": attempt + 1,
+            **(inventory if isinstance(inventory, dict) else {}),
+        }
+        checks.append(row)
+
+        if found_id:
+            return found_id, False, {
+                "strategy": "uncertain_target_name_v1",
+                "found_via": "business_settings_graphql_inventory",
+                "browser_checks": checks[-6:],
+                "proof_path": "target_found",
+                "proven_absent": False,
+            }
+
+        if _browser_inventory_confirms_target_absent(inventory):
+            absent_confirmations += 1
+
+        if absent_confirmations >= goal:
+            break
+        if attempt < max(1, int(required_checks)) - 1:
+            await asyncio.sleep(max(0.25, float(delay_seconds)))
+
+    proven_absent = absent_confirmations >= goal
+    return "", proven_absent, {
+        "strategy": "uncertain_target_name_v1",
+        "browser_absent_confirmations": absent_confirmations,
+        "browser_required_checks": goal,
+        "browser_checks": checks[-6:],
+        "proof_path": "target_name_absent_consensus" if proven_absent else "inconclusive",
+        "proven_absent": proven_absent,
+    }
+
+
 def _inventory_proof_summary(proof: Any) -> str:
     """Compact diagnostics safe to surface in retryable UI errors."""
     if not isinstance(proof, dict):
@@ -814,6 +909,7 @@ async def ad_account_handler(
         )
 
     rk_name = _clean(params.get("name") or params.get("rk_name"))
+    allow_multiple_in_business = params.get("allow_multiple_in_business") is True
     if params.get('use_common_page') is True and business_id==_clean((getattr(context,'cookies',{}) or {}).get('c_user')):
         raise ProvisioningError('CREATED_BUSINESS_REQUIRED','Choose a created Business Portfolio; the personal Facebook scope cannot be used for this RK',retryable=False)
     if not rk_name:
@@ -1074,6 +1170,7 @@ async def ad_account_handler(
         profile_id,
         business_id,
         exclude_item_id=item_id,
+        account_name=rk_name if allow_multiple_in_business else "",
     )
     if cross_job:
         prior = (
@@ -1164,14 +1261,23 @@ async def ad_account_handler(
                     }
                 )
 
-            proof_found_id, proven_empty, inventory_proof = (
-                await _prove_empty_after_uncertainty(
-                    session,
-                    business_id=business_id,
-                    account_name=rk_name,
-                    initial_graph_diagnostics=diagnostics,
+            if allow_multiple_in_business:
+                proof_found_id, proven_empty, inventory_proof = (
+                    await _prove_target_absent_after_uncertainty(
+                        session,
+                        business_id=business_id,
+                        account_name=rk_name,
+                    )
                 )
-            )
+            else:
+                proof_found_id, proven_empty, inventory_proof = (
+                    await _prove_empty_after_uncertainty(
+                        session,
+                        business_id=business_id,
+                        account_name=rk_name,
+                        initial_graph_diagnostics=diagnostics,
+                    )
+                )
             if proof_found_id:
                 _raise_rk_already_exists(
                     business_id=business_id,
@@ -1273,6 +1379,7 @@ async def ad_account_handler(
                 session,
                 business_id=business_id,
                 account_name=rk_name,
+                allow_multiple_in_business=allow_multiple_in_business,
             )
         )
         if proof_found_id:
@@ -1345,10 +1452,11 @@ async def ad_account_handler(
                 retryable=True,
             )
 
-    # Read-only preflight enforces the 1 BM = 1 RK invariant. A CREATE must
-    # never proceed merely because one inventory transport is unavailable:
-    # fall back to Meta Business Settings inventory first so mass jobs cannot
-    # create a second RK when Graph permissions/cache are temporarily missing.
+    # Read-only preflight enforces the 1 BM = 1 RK invariant.
+    # That invariant remains the default for legacy Add RK. Prepare may
+    # explicitly opt into multiple RK only after repeated exact-Business
+    # inventory reads prove that this slot's stable target name is absent.
+    # A CREATE never proceeds on unavailable or ambiguous inventory evidence.
     found_id, inventory_before = await _reconcile_existing(
         session,
         business_id=business_id,
@@ -1481,10 +1589,56 @@ async def ad_account_handler(
             "candidate_confirmations": browser_candidate_confirmations,
         }
 
+    target_absent_confirmations = sum(
+        1
+        for row in browser_inventory_attempts
+        if _browser_inventory_confirms_target_absent(row)
+    )
+
+    if allow_multiple_in_business and target_absent_confirmations < 2:
+        diagnostic = {
+            "inventory_before": inventory_before,
+            "browser_inventory_before": browser_inventory_before,
+            "browser_inventory_attempts": browser_inventory_attempts,
+            "target_absent_confirmations": target_absent_confirmations,
+            "target_account_name": rk_name,
+        }
+        await provisioning_state.checkpoint(
+            item_id,
+            profile_id,
+            scope_key,
+            ProvisioningStep.AD_ACCOUNT,
+            {
+                "phase": "CREATE_NOT_SUBMITTED",
+                "resume_from": "CREATE",
+                "business_id": business_id,
+                "account_name": rk_name,
+                "currency": currency,
+                "timezone_id": timezone_id,
+                "last_error_code": "AD_ACCOUNT_TARGET_INVENTORY_UNAVAILABLE",
+                "last_error": (
+                    "Exact Business inventory could not prove that the target "
+                    "RK name is absent; duplicate-safe CREATE was blocked."
+                ),
+                **diagnostic,
+            },
+        )
+        raise ProvisioningError(
+            "AD_ACCOUNT_TARGET_INVENTORY_UNAVAILABLE",
+            (
+                f"Business {business_id} inventory did not prove that RK "
+                f"{rk_name!r} is absent. CREATE was not submitted."
+            ),
+            retryable=True,
+        )
+
     structural_ui_empty = False
     cross_source_empty = False
 
-    if not bool(browser_inventory_before.get("confirmed_empty")):
+    if (
+        not allow_multiple_in_business
+        and not bool(browser_inventory_before.get("confirmed_empty"))
+    ):
         try:
             async with FacebookBusinessBrowser(
                 session.context,
@@ -1593,7 +1747,9 @@ async def ad_account_handler(
             "browser_inventory_before": browser_inventory_before,
             "ui_inventory_before": ui_inventory_before,
             "inventory_proof_path": (
-                "graph_plus_stable_ui"
+                "target_name_absent_in_exact_business_inventory"
+                if allow_multiple_in_business
+                else "graph_plus_stable_ui"
                 if cross_source_empty
                 else (
                     _clean(ui_inventory_before.get("source"))
@@ -1601,6 +1757,8 @@ async def ad_account_handler(
                     or "business_settings"
                 )
             ),
+            "allow_multiple_in_business": allow_multiple_in_business,
+            "target_absent_confirmations": target_absent_confirmations,
             "activity": "BUSINESS_SETTINGS_CREATE_OPENING",
         },
     )
@@ -1674,6 +1832,7 @@ async def ad_account_handler(
                 session,
                 business_id=business_id,
                 account_name=rk_name,
+                allow_multiple_in_business=allow_multiple_in_business,
             )
         )
         if found_id:
@@ -2055,6 +2214,7 @@ async def ad_account_handler(
                         session,
                         business_id=business_id,
                         account_name=rk_name,
+                        allow_multiple_in_business=allow_multiple_in_business,
                     )
                 )
                 if proof_found_id:
@@ -2281,6 +2441,7 @@ async def ad_account_handler(
                     session,
                     business_id=business_id,
                     account_name=rk_name,
+                    allow_multiple_in_business=allow_multiple_in_business,
                 )
             )
 

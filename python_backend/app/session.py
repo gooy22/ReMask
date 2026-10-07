@@ -45,6 +45,10 @@ class ProfileContext:
     first_name: str = ""
     last_name: str = ""
     pages: list[dict[str, Any]] | None = None
+    businesses: list[dict[str, Any]] | None = None
+    ad_accounts: list[dict[str, Any]] | None = None
+    inventory_updated_at: int = 0
+    inventory_source: str = ""
 
 
 class ProfileResolver:
@@ -339,6 +343,29 @@ class ProfileResolver:
                 if isinstance(row, dict)
                 and str(row.get("id") or "").strip().isdigit()
             ],
+            businesses=[
+                row
+                for row in (payload.get("businesses") or [])
+                if isinstance(row, dict)
+                and str(row.get("business_id") or row.get("id") or "").strip().isdigit()
+            ],
+            ad_accounts=[
+                row
+                for row in (payload.get("ad_accounts") or [])
+                if isinstance(row, dict)
+                and str(
+                    row.get("ad_account_id")
+                    or row.get("account_id")
+                    or row.get("id")
+                    or ""
+                ).removeprefix("act_").strip().isdigit()
+                and str(row.get("business_id") or "").strip().isdigit()
+            ],
+            inventory_updated_at=max(
+                0,
+                int(payload.get("inventory_updated_at") or 0),
+            ),
+            inventory_source=str(payload.get("inventory_source") or "").strip(),
         )
 
 

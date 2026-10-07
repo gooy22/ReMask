@@ -67,6 +67,29 @@ def browser_step_timeout(step: ProvisioningStep) -> float:
     raise ValueError(f"unsupported browser step: {step}")
 
 
+
+def prepare_hard_timeout(ad_accounts: int = 2) -> float:
+    """Hard wall-clock guard sized for the requested Prepare RK target."""
+    explicit = _env_float("REMASK_PREPARE_HARD_TIMEOUT_SECONDS")
+    if explicit is not None:
+        return max(300.0, min(explicit, 7200.0))
+
+    try:
+        rk_count = max(1, min(int(ad_accounts), 20))
+    except (TypeError, ValueError):
+        rk_count = 2
+
+    total = (
+        browser_step_timeout(ProvisioningStep.FAN_PAGES)
+        + browser_step_timeout(ProvisioningStep.BUSINESS)
+        + rk_count * (
+            browser_step_timeout(ProvisioningStep.AD_ACCOUNT)
+            + browser_step_timeout(ProvisioningStep.PAGE_ACCESS)
+        )
+        + 180.0
+    )
+    return min(7200.0, max(300.0, total))
+
 def browser_provisioning_hard_timeout(
     steps: Iterable[ProvisioningStep | str],
 ) -> float:

@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from urllib.parse import urlencode
 from unittest.mock import AsyncMock, patch
 
-from app.page_access_inspection import promotable_pages, request_accounts, inspect_browser_pages, allowed_readonly_request,advertiser_phone_status,page_inspection_memory_exhausted
+from app.page_access_inspection import promotable_pages, request_accounts, inspect_browser_pages, allowed_readonly_request, blocked_write_summary,advertiser_phone_status,page_inspection_memory_exhausted
 
 RK='2279305019588057'
 BM='61594882851656'
@@ -51,6 +51,31 @@ class PageAccessEvidenceTests(unittest.TestCase):
         self.assertTrue(allowed_readonly_request(SimpleNamespace(method='POST',url='https://graph.facebook.com/',post_data=read_batch)))
         self.assertTrue(allowed_readonly_request(SimpleNamespace(method='POST',url='https://adsmanager.facebook.com/ajax/bulk-route-definitions/',post_data='')))
         self.assertFalse(allowed_readonly_request(SimpleNamespace(method='POST',url='https://adsmanager.facebook.com/ajax/save_campaign/',post_data='')))
+    def test_blocked_write_summary_exposes_contract_metadata_not_auth_or_raw_values(self):
+        request=SimpleNamespace(
+            method='POST',
+            url='https://adsmanager.facebook.com/api/graphql/',
+            post_data=urlencode({
+                'fb_api_req_friendly_name':'SaveCampaignMutation',
+                'doc_id':'123456789012345',
+                'variables':json.dumps({
+                    'input':{'adAccountID':'act_'+RK,'name':'Sensitive campaign name'},
+                    'adAccountID':'act_'+RK,
+                }),
+                'fb_dtsg':'must-never-leak',
+                'jazoest':'12345',
+            }),
+        )
+        summary=blocked_write_summary(request)
+        self.assertEqual(summary['operation'],'SaveCampaignMutation')
+        self.assertEqual(summary['doc_id'],'123456789012345')
+        self.assertEqual(summary['account_ids'],[RK])
+        self.assertIn('adAccountID',summary['variable_keys'])
+        encoded=json.dumps(summary)
+        self.assertNotIn('must-never-leak',encoded)
+        self.assertNotIn('Sensitive campaign name',encoded)
+        self.assertNotIn('fb_dtsg',encoded)
+
     def test_ads_manager_graph_reads_are_allowed_but_write_batches_are_blocked(self):
         host='https://adsmanager-graph.facebook.com/'
         read=SimpleNamespace(method='POST',url=host+'v22.0/act_'+RK,post_data='method=get')

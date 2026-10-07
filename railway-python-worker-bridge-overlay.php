@@ -185,6 +185,69 @@ function rmx_py_profile_pages(FbAccount $account, string $profile): array {
     return $pages;
 }
 
+function rmx_py_live_inventory(string $profile): array {
+    $path = '/var/lib/remask/workspace-live-meta-snapshots.json';
+    if (!is_file($path)) return [
+        'businesses'=>[], 'ad_accounts'=>[], 'updated_at'=>0, 'source'=>''
+    ];
+
+    $raw = @file_get_contents($path);
+    if (!is_string($raw) || trim($raw) === '') return [
+        'businesses'=>[], 'ad_accounts'=>[], 'updated_at'=>0, 'source'=>''
+    ];
+
+    $all = json_decode($raw, true);
+    $row = is_array($all) && is_array($all[$profile] ?? null)
+        ? $all[$profile]
+        : [];
+
+    $businesses = [];
+    $seenBusinesses = [];
+    foreach ((array)($row['businesses'] ?? []) as $business) {
+        if (!is_array($business)) continue;
+        $id = trim((string)($business['id'] ?? $business['business_id'] ?? ''));
+        if (!preg_match('/^\d{5,30}$/', $id) || isset($seenBusinesses[$id])) continue;
+        $businesses[] = [
+            'id'=>$id,
+            'business_id'=>$id,
+            'name'=>trim((string)($business['name'] ?? $business['business_name'] ?? $id)) ?: $id,
+            'source'=>'workspace_last_confirmed_live',
+        ];
+        $seenBusinesses[$id] = true;
+    }
+
+    $accounts = [];
+    $seenAccounts = [];
+    foreach ((array)($row['ad_accounts'] ?? []) as $account) {
+        if (!is_array($account)) continue;
+        $id = trim((string)($account['id'] ?? $account['account_id'] ?? $account['ad_account_id'] ?? ''));
+        if (str_starts_with($id, 'act_')) $id = substr($id, 4);
+        $businessId = trim((string)($account['business_id'] ?? ''));
+        if (!preg_match('/^\d{5,30}$/', $id) || !preg_match('/^\d{5,30}$/', $businessId)
+            || isset($seenAccounts[$id])) continue;
+        $status = $account['account_status'] ?? null;
+        $accounts[] = [
+            'id'=>$id,
+            'account_id'=>$id,
+            'ad_account_id'=>$id,
+            'business_id'=>$businessId,
+            'name'=>trim((string)($account['name'] ?? $account['account_name'] ?? $id)) ?: $id,
+            'account_status'=>is_numeric($status) ? (int)$status : null,
+            'currency'=>trim((string)($account['currency'] ?? '')),
+            'disable_reason'=>trim((string)($account['disable_reason'] ?? '')),
+            'source'=>'workspace_last_confirmed_live',
+        ];
+        $seenAccounts[$id] = true;
+    }
+
+    return [
+        'businesses'=>$businesses,
+        'ad_accounts'=>$accounts,
+        'updated_at'=>(int)($row['updated_at'] ?? 0),
+        'source'=>trim((string)($row['source'] ?? '')),
+    ];
+}
+
 function rmx_py_public_identity(FbAccount $account, string $profile): array {
     $vars = get_object_vars($account);
 
@@ -279,6 +342,7 @@ try {
     }
 
     $identity = rmx_py_public_identity($account, $profile);
+    $liveInventory = rmx_py_live_inventory($profile);
 
     rmx_py_out([
         'ok' => true,
@@ -293,6 +357,10 @@ try {
         'first_name' => $identity['first_name'],
         'last_name' => $identity['last_name'],
         'pages' => rmx_py_profile_pages($account, $profile),
+        'businesses' => $liveInventory['businesses'],
+        'ad_accounts' => $liveInventory['ad_accounts'],
+        'inventory_updated_at' => $liveInventory['updated_at'],
+        'inventory_source' => $liveInventory['source'],
     ]);
 } catch (Throwable $e) {
     error_log('[python-profile-context] ' . get_class($e) . ': ' . $e->getMessage());

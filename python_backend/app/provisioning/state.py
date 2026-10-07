@@ -144,6 +144,15 @@ class ProvisioningStateStore:
 
                 CREATE INDEX IF NOT EXISTS idx_provisioning_steps_profile
                     ON provisioning_steps(profile_id, scope_key, updated_at);
+
+                CREATE TABLE IF NOT EXISTS profile_payment_readiness (
+                    profile_id TEXT NOT NULL,
+                    ad_account_id TEXT NOT NULL,
+                    linked_verified INTEGER NOT NULL,
+                    source TEXT NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    PRIMARY KEY(profile_id, ad_account_id)
+                );
                 """
             )
             con.execute(
@@ -376,6 +385,7 @@ class ProvisioningStateStore:
         business_id: str,
         *,
         exclude_item_id: str = "",
+        account_name: str = "",
     ) -> dict[str, Any]:
         """
         Return the newest confirmed or uncertain AD_ACCOUNT checkpoint for a
@@ -387,6 +397,7 @@ class ProvisioningStateStore:
             profile_id,
             business_id,
             exclude_item_id,
+            str(account_name or "").strip(),
         )
 
     def _latest_ad_account_resume_for_business_sync(
@@ -394,6 +405,7 @@ class ProvisioningStateStore:
         profile_id: str,
         business_id: str,
         exclude_item_id: str,
+        account_name: str = "",
     ) -> dict[str, Any]:
         profile = str(profile_id or "").strip()
         business = str(business_id or "").strip()
@@ -442,6 +454,15 @@ class ProvisioningStateStore:
 
             if str(result.get("business_id") or "").strip() != business:
                 continue
+
+            if account_name:
+                stored_name = str(
+                    result.get("account_name")
+                    or result.get("name")
+                    or ""
+                ).strip()
+                if stored_name.casefold() != account_name.casefold():
+                    continue
 
             raw_id = str(result.get("ad_account_id") or "").strip()
             numeric_id = raw_id[4:] if raw_id.lower().startswith("act_") else raw_id
@@ -1151,6 +1172,269 @@ class ProvisioningStateStore:
             )
 
         return bindings
+
+    async def confirmed_ad_accounts_for_profile(
+        self,
+        profile_id: str,
+        business_id: str = "",
+    ) -> list[dict[str, Any]]:
+        """Return every durably confirmed RK for one profile.
+
+        Unlike confirmed_ad_account_binding_groups(), this method intentionally
+        preserves multiple ad accounts that belong to the same Business. Prepare
+        uses it for desired states such as one BM -> two RK without changing the
+        legacy Workspace aggregation contract.
+        """
+        return await asyncio.to_thread(
+            self._confirmed_ad_accounts_for_profile_sync,
+            str(profile_id or "").strip(),
+            str(business_id or "").strip(),
+        )
+
+    def _confirmed_ad_accounts_for_profile_sync(
+        self,
+        profile_id: str,
+        business_id: str,
+    ) -> list[dict[str, Any]]:
+        if not profile_id:
+            return []
+
+        with self._connect() as con:
+            rows = con.execute(
+                """
+                SELECT scope_key,status,result_json,updated_at
+                FROM provisioning_steps
+                WHERE profile_id=?
+                  AND step=?
+                  AND result_json IS NOT NULL
+                ORDER BY updated_at DESC
+                LIMIT 10000
+                """,
+                (profile_id, ProvisioningStep.AD_ACCOUNT.value),
+            ).fetchall()
+
+        output: list[dict[str, Any]] = []
+        seen_accounts: set[str] = set()
+        for row in rows:
+            try:
+                result = json.loads(str(row["result_json"] or "{}"))
+            except (json.JSONDecodeError, ValueError, TypeError):
+                continue
+            if not isinstance(result, dict):
+                continue
+
+            bound_business = str(result.get("business_id") or "").strip()
+            if not bound_business.isdigit():
+                continue
+            if business_id and bound_business != business_id:
+                continue
+
+            status = str(row["status"] or "").strip().upper()
+            ad_account_id = str(result.get("ad_account_id") or "").strip()
+            if ad_account_id.lower().startswith("act_"):
+                ad_account_id = ad_account_id[4:]
+
+            source = ""
+            if status == "SUCCESS" and ad_account_id.isdigit():
+                source = "python_worker_success_history"
+            else:
+                recovered = _capture_ui_confirmed_ad_account_id(result)
+                if recovered.isdigit():
+                    ad_account_id = recovered
+                    source = "python_worker_capture_ui_history"
+
+            if not source or not ad_account_id.isdigit():
+                continue
+            if ad_account_id in seen_accounts:
+                continue
+            seen_accounts.add(ad_account_id)
+
+            output.append(
+                {
+                    "business_id": bound_business,
+                    "ad_account_id": ad_account_id,
+                    "account_name": str(
+                        result.get("account_name")
+                        or result.get("name")
+                        or ""
+                    ).strip(),
+                    "scope_key": str(row["scope_key"] or ""),
+                    "updated_at": int(row["updated_at"] or 0),
+                    "source": source,
+                }
+            )
+
+        return output
+
+    async def page_access_confirmed(
+        self,
+        profile_id: str,
+        business_id: str,
+        ad_account_id: str,
+    ) -> bool:
+        return await asyncio.to_thread(
+            self._page_access_confirmed_sync,
+            str(profile_id or "").strip(),
+            str(business_id or "").strip(),
+            str(ad_account_id or "").removeprefix("act_").strip(),
+        )
+
+    def _page_access_confirmed_sync(
+        self,
+        profile_id: str,
+        business_id: str,
+        ad_account_id: str,
+    ) -> bool:
+        if not profile_id or not business_id.isdigit() or not ad_account_id.isdigit():
+            return False
+        with self._connect() as con:
+            rows = con.execute(
+                """
+                SELECT status,result_json
+                FROM provisioning_steps
+                WHERE profile_id=? AND step=? AND result_json IS NOT NULL
+                ORDER BY updated_at DESC
+                LIMIT 5000
+                """,
+                (profile_id, ProvisioningStep.PAGE_ACCESS.value),
+            ).fetchall()
+        for row in rows:
+            if str(row["status"] or "").upper() != "SUCCESS":
+                continue
+            try:
+                result = json.loads(str(row["result_json"] or "{}"))
+            except (json.JSONDecodeError, ValueError, TypeError):
+                continue
+            if not isinstance(result, dict):
+                continue
+            account = str(result.get("ad_account_id") or "").removeprefix("act_").strip()
+            if (
+                str(result.get("business_id") or "").strip() == business_id
+                and account == ad_account_id
+                and result.get("page_shared_to_business") is True
+                and result.get("operator_ads_access_assigned") is True
+            ):
+                return True
+        return False
+
+    async def set_payment_link_state(
+        self,
+        profile_id: str,
+        ad_account_id: str,
+        linked_verified: bool,
+        *,
+        source: str,
+    ) -> None:
+        await asyncio.to_thread(
+            self._set_payment_link_state_sync,
+            str(profile_id or "").strip(),
+            str(ad_account_id or "").removeprefix("act_").strip(),
+            bool(linked_verified),
+            str(source or "").strip()[:120] or "payment_observation",
+        )
+
+    def _set_payment_link_state_sync(
+        self,
+        profile_id: str,
+        ad_account_id: str,
+        linked_verified: bool,
+        source: str,
+    ) -> None:
+        if not profile_id or not ad_account_id.isdigit():
+            return
+        with self._connect() as con:
+            con.execute(
+                """
+                INSERT INTO profile_payment_readiness(
+                    profile_id,ad_account_id,linked_verified,source,updated_at
+                ) VALUES(?,?,?,?,?)
+                ON CONFLICT(profile_id,ad_account_id) DO UPDATE SET
+                    linked_verified=excluded.linked_verified,
+                    source=excluded.source,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    profile_id,
+                    ad_account_id,
+                    1 if linked_verified else 0,
+                    source,
+                    _now(),
+                ),
+            )
+
+    async def payment_link_confirmed(
+        self,
+        profile_id: str,
+        ad_account_id: str,
+    ) -> bool:
+        return await asyncio.to_thread(
+            self._payment_link_confirmed_sync,
+            str(profile_id or "").strip(),
+            str(ad_account_id or "").removeprefix("act_").strip(),
+        )
+
+    def _payment_link_confirmed_sync(
+        self,
+        profile_id: str,
+        ad_account_id: str,
+    ) -> bool:
+        if not profile_id or not ad_account_id.isdigit():
+            return False
+        with self._connect() as con:
+            row = con.execute(
+                """
+                SELECT linked_verified
+                FROM profile_payment_readiness
+                WHERE profile_id=? AND ad_account_id=?
+                """,
+                (profile_id, ad_account_id),
+            ).fetchone()
+        return bool(row and int(row["linked_verified"] or 0) == 1)
+
+    async def funding_confirmed(
+        self,
+        profile_id: str,
+        ad_account_id: str,
+    ) -> bool:
+        return await asyncio.to_thread(
+            self._funding_confirmed_sync,
+            str(profile_id or "").strip(),
+            str(ad_account_id or "").removeprefix("act_").strip(),
+        )
+
+    def _funding_confirmed_sync(
+        self,
+        profile_id: str,
+        ad_account_id: str,
+    ) -> bool:
+        if not profile_id or not ad_account_id.isdigit():
+            return False
+        if self._payment_link_confirmed_sync(profile_id, ad_account_id):
+            return True
+        with self._connect() as con:
+            rows = con.execute(
+                """
+                SELECT status,result_json
+                FROM provisioning_steps
+                WHERE profile_id=? AND step=? AND result_json IS NOT NULL
+                ORDER BY updated_at DESC
+                LIMIT 5000
+                """,
+                (profile_id, ProvisioningStep.FUNDING.value),
+            ).fetchall()
+        for row in rows:
+            if str(row["status"] or "").upper() != "SUCCESS":
+                continue
+            try:
+                result = json.loads(str(row["result_json"] or "{}"))
+            except (json.JSONDecodeError, ValueError, TypeError):
+                continue
+            if not isinstance(result, dict):
+                continue
+            account = str(result.get("ad_account_id") or "").removeprefix("act_").strip()
+            if account == ad_account_id and result.get("funding_verified") is True:
+                return True
+        return False
 
     async def confirmed_ad_account_binding_groups(
         self,

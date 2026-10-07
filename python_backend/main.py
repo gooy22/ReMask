@@ -8,6 +8,7 @@ import os
 import re
 import time
 from contextlib import asynccontextmanager
+from urllib.parse import urlsplit
 
 from fastapi import Body, Depends, FastAPI, Header, HTTPException, status
 
@@ -19,7 +20,7 @@ from app.session_auth_refresh import refresh_saved_auth_context
 from app.store import JobStore
 from app.facebook_business_browser import BROWSER_TERMINAL_ACCESS_CODES, BrowserBusinessError, FacebookBusinessBrowser
 from app.facebook_page_discovery import PageDiscoveryError, list_pages_via_private_graphql
-from app.provisioning.models import ProvisioningStep
+from app.provisioning.models import ProvisioningError, ProvisioningStep
 from app.facebook_docids import (
     list_candidates,
     registry_view,
@@ -3125,6 +3126,71 @@ async def profile_provisioning_state(profile_id: str):
         'advertising_page':advertising_page,
         'personal_scope_id':personal_scope_id,
     }
+
+@app.get('/api/v1/private-launch/contracts',dependencies=[Depends(require_key)])
+async def private_launch_contract_status():
+    return {
+        'ok':True,
+        'contracts':pool.private_launch.contracts.status(),
+    }
+
+@app.post('/api/v1/private-launch/contracts/{step_name}',dependencies=[Depends(require_key)])
+async def private_launch_contract_register(step_name: str, payload: dict = Body(...)):
+    from app.private_launch import PrivateLaunchStep
+    try:
+        step=PrivateLaunchStep(str(step_name or '').strip().upper())
+    except ValueError as exc:
+        raise HTTPException(status_code=404,detail='unsupported private Launch step') from exc
+    try:
+        contract=pool.private_launch.contracts.register(step,payload)
+    except ProvisioningError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={'code':exc.code,'message':str(exc),'retryable':False},
+        ) from exc
+    return {
+        'ok':True,
+        'step':step.value,
+        'contract':{
+            'configured':True,
+            'friendly_name':contract.friendly_name,
+            'endpoint_host':urlsplit(contract.endpoint_url).hostname or '',
+            'result_paths':len(contract.result_id_paths),
+        },
+    }
+
+@app.post('/api/v1/profiles/{profile_id}/private-launch-review',dependencies=[Depends(require_key)])
+async def private_launch_review(profile_id: str, payload: dict = Body(...)):
+    clean_profile=str(profile_id or '').strip()
+    if not clean_profile:
+        raise HTTPException(status_code=400,detail='profile_id is required')
+    try:
+        context=await pool.resolver.resolve(clean_profile)
+        result=await pool.private_launch.review(
+            profile_id=clean_profile,
+            context=context,
+            payload=payload,
+        )
+        result.pop('_contracts',None)
+        return {'ok':True,**result}
+    except ProvisioningError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                'code':exc.code,
+                'message':str(exc),
+                'retryable':bool(exc.retryable),
+            },
+        ) from exc
+    except ProfileContextError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                'code':str(getattr(exc,'category','PROFILE_CONTEXT_ERROR')).upper(),
+                'message':str(exc),
+                'retryable':bool(getattr(exc,'retryable',False)),
+            },
+        ) from exc
 
 @app.post('/api/v1/jobs',response_model=JobAccepted,dependencies=[Depends(require_key)])
 async def create_job(request: CreateJobRequest) -> JobAccepted:

@@ -406,6 +406,16 @@ async def inspect_profile_payment_methods(resolver: Any, profile_id: str, target
                 business_id=asset.get('business_id') or saved_payment_business(profile_id,target),asset=asset,fresh_billing_context=True), timeout=65)
             result['diagnostic']={'stage':'payment_methods_observed' if result['account_scope_verified'] else 'payment_account_scope_unverified',
                 'path':urlsplit(str(browser.page.url)).path,'masked_method_count':len(result['payment_methods'])}
+            if (
+                state is not None
+                and result.get('account_scope_verified') is True
+                and result.get('card_linked') in {True, False}
+                and hasattr(state,'set_payment_link_state')
+            ):
+                await state.set_payment_link_state(
+                    profile_id,target,bool(result.get('card_linked')),
+                    source='payment_methods_live_inspection'
+                )
             try:
                 import base64
                 masks=[frame.locator('input,textarea') for frame in browser.page.frames]

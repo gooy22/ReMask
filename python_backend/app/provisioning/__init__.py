@@ -1,5 +1,6 @@
 from .models import ProvisioningError, ProvisioningStep
 from .service import ProvisioningService
+from .prepare import PrepareService
 from .state import ProvisioningStateStore
 from .transport import ProvisioningTransport, TransportError
 from .business_handler import business_handler
@@ -11,6 +12,7 @@ __all__ = [
     "ProvisioningError",
     "ProvisioningStep",
     "ProvisioningService",
+    "PrepareService",
     "ProvisioningStateStore",
     "ProvisioningTransport",
     "TransportError",
