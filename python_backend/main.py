@@ -2201,13 +2201,46 @@ async def profile_live_inventory(
                         )
                         discovery_source='business_suite_discovery_timeout_inconclusive'
                 except BrowserBusinessError as exc:
+                    if exc.code == 'BUSINESS_LOGIN_GATE':
+                        diagnostic=(
+                            exc.diagnostic
+                            if isinstance(exc.diagnostic,dict)
+                            else {}
+                        )
+                        business_inventory_confirmed_empty=False
+                        warnings.append(
+                            'Business Suite login/access gate encountered; '
+                            'preserving confirmed inventory and checking exact BM hints'
+                        )
+                        discovery_source=(
+                            'business_suite_login_gate_hint_fallback'
+                            if known_business_ids
+                            else 'business_suite_login_gate_inconclusive'
+                        )
+                        log.info(
+                            'live inventory profile=%s Business Suite gate '
+                            'path=%s known_businesses=%d',
+                            clean_profile,
+                            str(diagnostic.get('login_path') or '')[:120],
+                            len(known_business_ids),
+                        )
+                        try:
+                            await browser.close()
+                        except Exception:
+                            pass
+                        try:
+                            profile_session._business_browser=None
+                        except Exception:
+                            pass
+                        if known_business_ids:
+                            await reopen_inventory_browser()
                     # A redirect while loading the aggregate Business Suite
                     # selector must not abort the profile sync before we have
                     # tried the exact BMs already confirmed for this profile.
                     # Revalidate those IDs individually below; this also keeps
                     # an auth redirect scoped to the affected BM instead of
                     # reporting a profile-wide CHECKPOINT_REQUIRED.
-                    if exc.code not in {
+                    elif exc.code not in {
                         'CHECKPOINT_REQUIRED',
                         'SESSION_EXPIRED',
                         'TWO_FACTOR_REQUIRED',
