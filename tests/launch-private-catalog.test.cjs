@@ -22,9 +22,111 @@ assert.equal(label({account_status:1,funding_source_details:{id:'123'}}),'SOURCE
 assert.equal(controls.launchButton.disabled,true);
 assert.equal(controls.reviewLaunch.disabled,true);
 assert.equal(controls.dryRunPlan.disabled,true);
-assert.match(controls.reviewStatus.textContent,/Запуск рекламы недоступен/);
+assert.match(controls.reviewStatus.textContent,/Private Launch/);
 assert.equal(controls.preflight.textContent,'Загрузить сохранённые РК');
 console.log('Private Launch catalog and funding truth checks passed');
+
+(async()=>{
+  const buttons=Object.fromEntries(
+    ['preflight','syncMeta','loadFunding','fundingStatus','reviewLaunch','launchButton','serverDryRun','dryRunPlan','reviewStatus','launchResult','adAccount']
+      .map(id=>[id,{disabled:false,title:'',textContent:''}])
+  );
+  buttons.adAccount.options=[
+    {value:'act_111111111',dataset:{profile:'7'}},
+    {value:'act_222222222',dataset:{profile:'7'}}
+  ];
+  const storage=new Map(),requests=[],shown=[];
+  let captureHandler=null;
+  const bindings={
+    '111111111':{page_id:'333333333'},
+    '222222222':{page_id:'444444444'}
+  };
+  const config={
+    accountIds:['111111111','222222222'],
+    payload:{
+      campaign:{name:'Campaign'},
+      adset:{name:'AdSet',targeting:{age_min:18,age_max:55}},
+      creative:{name:'Creative',message:'base'},
+      ad:{name:'Ad'}
+    },
+    accountOverrides:{
+      '111111111':{creative:{message:'one'}},
+      '222222222':{adset:{targeting:{age_max:35}}}
+    }
+  };
+  const privateCtx={
+    $:id=>buttons[id],
+    fundingState(){},fundingReviewLabel(){},loadFunding:async()=>{},
+    validateReady(){},
+    state:{
+      profile:'7',processingJob:false,
+      accounts:[
+        {id:'111111111',_profile:'7',business_id:'555555555'},
+        {id:'222222222',_profile:'7',business_id:'666666666'}
+      ],
+      targetBindings:bindings
+    },
+    selectedAccountIds:()=>config.accountIds,
+    currentLaunchConfigForRequest:()=>config,
+    targetForAccount:id=>{
+      const clean=String(id).replace(/^act_/,'');
+      return clean==='111111111'
+        ?{profile:'7',business_id:'555555555',account_id:clean}
+        :{profile:'7',business_id:'666666666',account_id:clean};
+    },
+    bindingFor:id=>bindings[String(id).replace(/^act_/,'')]||{},
+    show:(target,text)=>{target.textContent=text;shown.push(text);},
+    document:{addEventListener(kind,handler,capture){
+      if(kind==='click'&&capture===true)captureHandler=handler;
+    }},
+    localStorage:{
+      getItem:key=>storage.get(key)||null,
+      setItem:(key,value)=>storage.set(key,value),
+      removeItem:key=>storage.delete(key)
+    },
+    crypto:{getRandomValues(values){for(let i=0;i<values.length;i++)values[i]=i+1;return values;}},
+    Uint32Array,
+    fetch:async(url,options)=>{
+      const body=JSON.parse(options.body);requests.push({url,body});
+      if(body.action==='private_launch_review')
+        return {ok:true,status:200,json:async()=>({ok:true,review:{ready:true,profile_id:body.profile_id}})};
+      if(body.action==='create')
+        return {ok:true,status:200,json:async()=>({ok:true,job:{job_id:'private-job-1'}})};
+      return {ok:true,status:200,json:async()=>({ok:true,job:{status:'SUCCESS',items_total:2,items_done:2}})};
+    }
+  };
+  vm.createContext(privateCtx);vm.runInContext(source,privateCtx);
+
+  assert.equal(buttons.launchButton.disabled,false,'structurally complete private selection should enable Launch');
+  assert.equal(buttons.reviewLaunch.disabled,false);
+  assert.equal(typeof captureHandler,'function');
+
+  const reviewed=await privateCtx.remaskPrivateReviewConfig(config,{render:false});
+  assert.equal(reviewed.length,2);
+  assert.deepEqual(requests.map(r=>r.body.action),['private_launch_review','private_launch_review']);
+  assert.ok(requests.every(r=>r.url==='ajax/pythonWorkerJobs.php'));
+  assert.deepEqual(requests.map(r=>r.body.page_id),['333333333','444444444']);
+  assert.deepEqual(requests.map(r=>r.body.business_id),['555555555','666666666']);
+  assert.equal(requests[0].body.launch.override.creative.message,'one');
+  assert.equal(requests[1].body.launch.override.adset.targeting.age_max,35);
+  assert.ok(requests.every(r=>r.body.doc_id===undefined&&r.body.fb_dtsg===undefined));
+
+  const planned=privateCtx.remaskPrivateJobRequest(config,reviewed);
+  assert.equal(planned.request.action,'create');
+  assert.equal(planned.request.profiles.length,2);
+  assert.ok(planned.request.profiles.every(row=>row.tasks.length===1&&row.tasks[0].action==='private_launch'));
+  assert.deepEqual(planned.request.profiles.map(row=>row.tasks[0].payload.page_id),['333333333','444444444']);
+  assert.ok(planned.request.profiles.every(row=>row.tasks[0].payload.launch.base.campaign.name==='Campaign'));
+  assert.ok(planned.request.profiles.every(row=>row.tasks[0].payload.doc_id===undefined));
+
+  const reused=privateCtx.remaskPrivateJobRequest(config,reviewed);
+  assert.equal(reused.reused,true);
+  assert.deepEqual(reused.request,planned.request,'lost response must reuse the identical worker Job request');
+
+  privateCtx.remaskPrivatePendingClear();
+  assert.equal(storage.has('remask_private_launch_pending_v1'),false);
+  console.log('Private Launch UI uses worker review + independent per-RK jobs with durable idempotency.');
+})().catch(e=>{console.error(e);process.exitCode=1});
 
 (async()=>{
   const overlay=fs.readFileSync(path.join(__dirname,'..','railway-launch-private-catalog-overlay.php'),'utf8');
