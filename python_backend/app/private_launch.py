@@ -550,6 +550,118 @@ def _effective_launch_payload(value: Any) -> dict[str, Any]:
     return _deep_merge(base, override)
 
 
+def _payment_selector(payload: dict[str, Any]) -> dict[str, str] | None:
+    raw = (
+        payload.get("selected_payment_method")
+        if "selected_payment_method" in payload
+        else payload.get("payment_method")
+    )
+    if raw in (None, {}):
+        return None
+    if not isinstance(raw, dict):
+        raise ProvisioningError(
+            "PRIVATE_LAUNCH_PAYMENT_SELECTION_INVALID",
+            "selected payment method must be a masked object",
+            retryable=False,
+        )
+    allowed = {"type", "brand", "last4"}
+    unknown = sorted(str(key) for key in raw if str(key) not in allowed)
+    if unknown:
+        raise ProvisioningError(
+            "PRIVATE_LAUNCH_PAYMENT_SELECTION_INVALID",
+            "selected payment method contains unsupported fields: "
+            + ", ".join(unknown[:10]),
+            retryable=False,
+        )
+    brand = str(raw.get("brand") or raw.get("type") or "").strip()
+    last4 = str(raw.get("last4") or "").strip()
+    if brand and (
+        len(brand) > 40
+        or not re.fullmatch(r"[A-Za-z][A-Za-z .+-]{0,39}", brand)
+    ):
+        raise ProvisioningError(
+            "PRIVATE_LAUNCH_PAYMENT_SELECTION_INVALID",
+            "selected payment method brand is invalid",
+            retryable=False,
+        )
+    if not re.fullmatch(r"\d{4}", last4):
+        raise ProvisioningError(
+            "PRIVATE_LAUNCH_PAYMENT_SELECTION_INVALID",
+            "selected payment method requires masked last4",
+            retryable=False,
+        )
+    return {"type": brand, "last4": last4}
+
+
+def _select_payment_method(
+    methods: Any,
+    selector: dict[str, str] | None,
+) -> tuple[dict[str, str], str]:
+    safe_methods: list[dict[str, str]] = []
+    for row in methods if isinstance(methods, list) else []:
+        if not isinstance(row, dict):
+            continue
+        brand = str(row.get("type") or row.get("brand") or "").strip()
+        last4 = str(row.get("last4") or "").strip()
+        if not re.fullmatch(r"\d{4}", last4):
+            continue
+        if brand and (
+            len(brand) > 40
+            or not re.fullmatch(r"[A-Za-z][A-Za-z .+-]{0,39}", brand)
+        ):
+            continue
+        safe_methods.append(
+            {
+                "type": brand,
+                "last4": last4,
+                "linkage_status": str(
+                    row.get("linkage_status") or "OBSERVED"
+                )[:32],
+            }
+        )
+
+    if not safe_methods:
+        raise ProvisioningError(
+            "PRIVATE_LAUNCH_PAYMENT_UNVERIFIED",
+            "Launch requires a live linked payment method on the exact RK",
+            retryable=False,
+        )
+
+    if selector is None:
+        if len(safe_methods) != 1:
+            raise ProvisioningError(
+                "PRIVATE_LAUNCH_PAYMENT_SELECTION_REQUIRED",
+                "Multiple live payment methods are linked; select one masked card for this RK",
+                retryable=False,
+            )
+        return safe_methods[0], "single_live_method"
+
+    wanted_brand = str(selector.get("type") or "").casefold()
+    wanted_last4 = str(selector.get("last4") or "")
+    matches = [
+        row
+        for row in safe_methods
+        if row["last4"] == wanted_last4
+        and (
+            not wanted_brand
+            or str(row.get("type") or "").casefold() == wanted_brand
+        )
+    ]
+    if not matches:
+        raise ProvisioningError(
+            "PRIVATE_LAUNCH_PAYMENT_SELECTION_UNAVAILABLE",
+            "Selected masked payment method is not live-linked to the exact RK",
+            retryable=False,
+        )
+    if len(matches) != 1:
+        raise ProvisioningError(
+            "PRIVATE_LAUNCH_PAYMENT_SELECTION_AMBIGUOUS",
+            "Selected masked payment method is not unique for the exact RK",
+            retryable=False,
+        )
+    return matches[0], "explicit_masked_selection"
+
+
 def _response_summary(payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict):
         return {"response_type": type(payload).__name__}
