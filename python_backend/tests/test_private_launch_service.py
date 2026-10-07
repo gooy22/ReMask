@@ -154,6 +154,50 @@ class PrivateLaunchTests(unittest.IsolatedAsyncioTestCase):
         self.web.graphql.assert_not_awaited()
         self.assertTrue(all(step["skipped"] for step in rerun["steps"]))
 
+    async def test_per_rk_override_is_merged_before_contract_render(self):
+        payload = {
+            **self.payload,
+            "launch_key": "launch-override",
+            "launch": {
+                "base": {
+                    "campaign": {"name": "Base campaign"},
+                    "adset": {"name": "Base adset", "targeting": {"age_min": 18, "age_max": 55}},
+                    "creative": {"name": "Base creative", "message": "base"},
+                    "ad": {"name": "Base ad"},
+                },
+                "override": {
+                    "adset": {"targeting": {"age_max": 35}},
+                    "creative": {"message": "RK override"},
+                },
+            },
+        }
+        self.web.graphql.side_effect = [
+            {"data": {"create": {"id": "510000000000001"}}},
+            {"data": {"create": {"id": "510000000000002"}}},
+            {"data": {"create": {"id": "510000000000003"}}},
+            {"data": {"create": {"id": "510000000000004"}}},
+        ]
+        with patch.object(self.service, "_live_preflight", AsyncMock(return_value=self.preflight)):
+            result = await self.service.run(
+                item_id="item-override",
+                profile_id="7",
+                context=self.context,
+                session=self.session,
+                payload=payload,
+            )
+        self.assertEqual(result["status"], "SUCCESS")
+        review = await self.service.review(
+            profile_id="7",
+            context=self.context,
+            payload=payload,
+        ) if False else None
+        # Contract placeholders see one effective per-RK payload; nested base
+        # values survive while the selected RK override replaces only its leaf.
+        effective = __import__("app.private_launch", fromlist=["_effective_launch_payload"])._effective_launch_payload(payload["launch"])
+        self.assertEqual(effective["adset"]["targeting"], {"age_min": 18, "age_max": 35})
+        self.assertEqual(effective["creative"]["message"], "RK override")
+        self.assertEqual(effective["creative"]["name"], "Base creative")
+
     async def test_unknown_submitted_result_blocks_automatic_resubmit(self):
         self.web.graphql.return_value = {"data": {"create": {}}}
         with patch.object(self.service, "_live_preflight", AsyncMock(return_value=self.preflight)):
