@@ -319,6 +319,41 @@ def _extract_entity_id(payload: Any, paths: tuple[str, ...]) -> tuple[str, str]:
     return "", ""
 
 
+def _deep_merge(base: Any, override: Any) -> Any:
+    """Merge a per-RK Launch override without mutating the saved base payload."""
+    if not isinstance(base, dict):
+        return override
+    if not isinstance(override, dict):
+        return dict(base)
+    out = dict(base)
+    for key, value in override.items():
+        if isinstance(out.get(key), dict) and isinstance(value, dict):
+            out[key] = _deep_merge(out[key], value)
+        else:
+            out[key] = value
+    return out
+
+
+def _effective_launch_payload(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ProvisioningError(
+            "PRIVATE_LAUNCH_INVALID_INPUT",
+            "launch must be an object",
+            retryable=False,
+        )
+    if "base" not in value and "override" not in value:
+        return dict(value)
+    base = value.get("base") or {}
+    override = value.get("override") or {}
+    if not isinstance(base, dict) or not isinstance(override, dict):
+        raise ProvisioningError(
+            "PRIVATE_LAUNCH_INVALID_INPUT",
+            "launch.base and launch.override must be objects",
+            retryable=False,
+        )
+    return _deep_merge(base, override)
+
+
 def _response_summary(payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict):
         return {"response_type": type(payload).__name__}
@@ -507,13 +542,7 @@ class PrivateLaunchService:
         business_id = self._id(payload.get("business_id"), "business_id")
         ad_account_id = self._id(payload.get("ad_account_id"), "ad_account_id")
         page_id = self._id(payload.get("page_id"), "page_id")
-        launch_payload = payload.get("launch")
-        if not isinstance(launch_payload, dict):
-            raise ProvisioningError(
-                "PRIVATE_LAUNCH_INVALID_INPUT",
-                "launch must be an object",
-                retryable=False,
-            )
+        launch_payload = _effective_launch_payload(payload.get("launch"))
 
         # Validate the complete mutation chain before the first irreversible
         # request. A missing downstream contract must never leave an orphaned
@@ -533,6 +562,7 @@ class PrivateLaunchService:
             "ad_account_id": ad_account_id,
             "page_id": page_id,
             "preflight": preflight,
+            "launch": launch_payload,
             "contracts": {
                 step.value: {
                     "friendly_name": contract.friendly_name,
@@ -562,7 +592,7 @@ class PrivateLaunchService:
         business_id = str(review["business_id"])
         ad_account_id = str(review["ad_account_id"])
         page_id = str(review["page_id"])
-        launch_payload = payload["launch"]
+        launch_payload = review["launch"]
         contracts = review.pop("_contracts")
         preflight = review["preflight"]
 
