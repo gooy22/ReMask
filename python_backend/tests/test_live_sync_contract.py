@@ -315,6 +315,25 @@ class LiveSyncContractTests(unittest.TestCase):
         )
 
 
+    def test_terminal_auth_skips_page_live_enrichment(self) -> None:
+        source=inspect.getsource(api.profile_live_inventory)
+        start=source.index("REMASK_FULL_PROFILE_SYNC_PAGES_V2")
+        end=source.index("REMASK_LIVE_TARGET_SET_REQUIRED_V1",start)
+        page_phase=source[start:end]
+
+        self.assertIn("page_live_probe_auth_blocked=bool(", page_phase)
+        self.assertIn("auth_blocked_business_codes", page_phase)
+        self.assertIn("and not live_business_ids", page_phase)
+        self.assertIn("PAGE_LIVE_PROBE_SKIPPED_AUTH_BLOCKED", page_phase)
+        self.assertIn(
+            "if not pages_live_verified and not page_live_probe_auth_blocked:",
+            page_phase,
+        )
+        self.assertIn(
+            "if not pages_live_verified and not page_live_probe_auth_blocked and known_pages_by_business:",
+            page_phase,
+        )
+
     def test_optional_page_enrichment_cannot_exhaust_whole_sync(self) -> None:
         source=inspect.getsource(api.profile_live_inventory)
         start=source.index("REMASK_FULL_PROFILE_SYNC_PAGES_V2")
