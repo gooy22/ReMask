@@ -9,6 +9,7 @@ class _Session:
     def __init__(self):
         self.profile = SimpleNamespace(name="profile-envelope")
         self.calls = []
+        self.browser_touched = False
 
     async def bootstrap(self):
         return SimpleNamespace(
@@ -16,7 +17,7 @@ class _Session:
             request_context={"__rev": "111"},
         )
 
-    async def graphql_browser_native(self, doc_id, variables, **kwargs):
+    async def graphql(self, doc_id, variables, **kwargs):
         self.calls.append((doc_id, variables, kwargs))
         return {
             "data": {
@@ -26,9 +27,13 @@ class _Session:
             }
         }
 
+    async def graphql_browser_native(self, doc_id, variables, **kwargs):
+        self.browser_touched = True
+        raise AssertionError("CREATE_BM must not require Chromium when private GraphQL is available")
+
 
 class ExactEnvelopeTests(unittest.IsolatedAsyncioTestCase):
-    async def test_captured_safe_envelope_is_forwarded_to_browser_graphql(self):
+    async def test_captured_safe_envelope_is_forwarded_to_direct_private_graphql(self):
         session = _Session()
         captured = {
             "__rev": "222",
@@ -60,6 +65,7 @@ class ExactEnvelopeTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.business_id, "555666777888999")
         self.assertEqual(len(session.calls), 1)
+        self.assertFalse(session.browser_touched)
         _, variables, kwargs = session.calls[0]
         self.assertEqual(kwargs["request_envelope"], captured)
         self.assertEqual(
