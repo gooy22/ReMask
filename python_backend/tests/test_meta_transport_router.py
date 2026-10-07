@@ -11,13 +11,13 @@ class MetaTransportRouterTests(unittest.IsolatedAsyncioTestCase):
         router = MetaTransportRouter(session)
         policy = router.policy("BUSINESS")
         self.assertEqual(policy.primary, "facebook_web_graphql")
-        self.assertEqual(policy.fallback, "chromium_business_suite")
+        self.assertEqual(policy.fallback, "none_private_only")
 
     def test_mutation_fallback_allows_only_proven_pre_submit_errors(self):
         router = MetaTransportRouter(
             SimpleNamespace(context=SimpleNamespace(profile_id="7"))
         )
-        self.assertTrue(
+        self.assertFalse(
             router.mutation_fallback_allowed(
                 "BUSINESS",
                 "CREATE_BM_MUTATION_NOT_DISCOVERED",
