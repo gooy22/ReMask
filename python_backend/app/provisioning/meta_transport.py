@@ -67,6 +67,7 @@ class MetaTransportRouter:
 
     def __init__(self, session: Any) -> None:
         self.session = session
+        self._shared_browser: Any = None
 
     @property
     def context(self) -> Any:
@@ -144,7 +145,9 @@ class MetaTransportRouter:
             raise RuntimeError(
                 "PROFILE_BROWSER_TRANSPORT_UNAVAILABLE"
             )
-        return await factory()
+        browser = await factory()
+        self._shared_browser = browser
+        return browser
 
     def browser_lease(self, **kwargs: Any):
         """Create an isolated Chromium lease behind the transport facade."""
@@ -163,6 +166,22 @@ class MetaTransportRouter:
         closer = getattr(self.session, "close_business_browser", None)
         if callable(closer):
             await closer()
+            self._shared_browser = None
+            return
+
+        browser = self._shared_browser
+        self._shared_browser = None
+        close = getattr(browser, "close", None)
+        if callable(close):
+            await close()
+
+        # Compatibility for lightweight test/legacy sessions which expose the
+        # cached browser slot but not close_business_browser().
+        if hasattr(self.session, "_business_browser"):
+            try:
+                setattr(self.session, "_business_browser", None)
+            except Exception:
+                pass
 
     def __getattr__(self, name: str) -> Any:
         # Transitional compatibility: handlers can be moved behind the router
