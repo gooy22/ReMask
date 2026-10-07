@@ -2720,8 +2720,6 @@ class FacebookBusinessBrowser:
         login_url = facebook_host and (
             current_path in {"/login", "/login.php"}
             or current_path.startswith("/login/")
-            or (current_host == "business.facebook.com"
-                and current_path.rstrip("/") == "/business/loginpage")
         )
         if login_url:
             diagnostic = await self._diagnostic("login")
@@ -2732,6 +2730,27 @@ class FacebookBusinessBrowser:
                 "Facebook redirected the profile to login "
                 f"({current_host}{current_path}).",
                 retryable=False,
+                diagnostic=diagnostic,
+            )
+
+        # REMASK_BUSINESS_LOGIN_GATE_NOT_GLOBAL_LOGOUT_V1
+        # Meta Business can route an otherwise authenticated Facebook session
+        # through /business/loginpage when that particular Business surface
+        # requires an extra portfolio/login selection. This is not equivalent
+        # to www.facebook.com/login and must not poison the whole profile as
+        # SESSION_EXPIRED.
+        business_login_gate = (
+            current_host == "business.facebook.com"
+            and current_path.rstrip("/") == "/business/loginpage"
+        )
+        if business_login_gate:
+            diagnostic = await self._diagnostic("business_login_gate")
+            diagnostic["auth_evidence"] = "business_login_gate"
+            diagnostic["login_path"] = current_path
+            raise BrowserBusinessError(
+                "BUSINESS_LOGIN_GATE",
+                "Meta Business Suite opened its Business login/access gate.",
+                retryable=True,
                 diagnostic=diagnostic,
             )
 
@@ -7044,7 +7063,7 @@ class FacebookBusinessBrowser:
                 return False
             diagnostic = exc.diagnostic if isinstance(exc.diagnostic, dict) else {}
             return (
-                exc.code == "SESSION_EXPIRED"
+                exc.code == "BUSINESS_LOGIN_GATE"
                 and str(diagnostic.get("login_path") or "").rstrip("/")
                     == "/business/loginpage"
             )
