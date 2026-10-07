@@ -14,6 +14,12 @@ from urllib.parse import parse_qs, unquote, unquote_plus, urlencode, urlsplit
 
 from .facebook_fan_page_create import FAN_PAGE_CREATE_NAMES
 from .facebook_ad_account_identity import ad_account_route, read_ad_account_identity
+from .graphql_mutation_capture import (
+    GraphqlMutationCapture,
+    graphql_request_meta,
+    safe_graphql_request_summary,
+    safe_request_envelope,
+)
 
 CheckpointCallback = Callable[[dict[str, Any]], Awaitable[None]]
 
@@ -224,97 +230,8 @@ def _digits(value: Any) -> str:
 
 
 def _request_graphql_meta(request: Any) -> dict[str, Any]:
-    """Parse Meta GraphQL request metadata without exposing auth fields."""
-    method = ""
-    url = ""
-    raw = ""
-    body_decodable = True
-
-    try:
-        method = _clean(getattr(request, "method", "")).upper()
-        url = _clean(getattr(request, "url", ""))
-        raw_buffer = getattr(request, "post_data_buffer", None)
-        if raw_buffer:
-            if isinstance(raw_buffer, bytes):
-                raw = raw_buffer.decode("utf-8")
-            else:
-                raw = str(raw_buffer)
-        else:
-            raw = str(getattr(request, "post_data", "") or "")
-    except (UnicodeDecodeError, UnicodeError):
-        body_decodable = False
-        try:
-            raw = str(getattr(request, "post_data", "") or "")
-        except Exception:
-            raw = ""
-    except Exception:
-        body_decodable = False
-        try:
-            raw = str(getattr(request, "post_data", "") or "")
-        except Exception:
-            raw = ""
-
-    parsed = parse_qs(raw, keep_blank_values=True) if raw else {}
-    try:
-        url_query = parse_qs(
-            urlsplit(url).query,
-            keep_blank_values=True,
-        )
-    except Exception:
-        url_query = {}
-
-    # Meta may encode Relay GraphQL metadata in the URL query even when the
-    # browser-level request method is GET (for example graph.facebook.com/graphql
-    # with method=post). Merge query params without overwriting an explicit
-    # request-body value.
-    for key, values in url_query.items():
-        if key not in parsed and isinstance(values, list):
-            parsed[key] = values
-
-    effective_method = method
-    query_method = _clean((parsed.get("method") or [""])[0]).upper()
-    if method == "GET" and query_method == "POST":
-        effective_method = "POST"
-
-    friendly = _clean(
-        (parsed.get("fb_api_req_friendly_name") or [""])[0]
-    )
-    if not friendly:
-        try:
-            headers = getattr(request, "headers", {}) or {}
-            friendly = _clean(
-                headers.get("x-fb-friendly-name")
-                or headers.get("X-FB-Friendly-Name")
-            )
-        except Exception:
-            friendly = ""
-    doc_id = _clean((parsed.get("doc_id") or [""])[0])
-
-    variables: dict[str, Any] = {}
-    variables_raw = _clean((parsed.get("variables") or [""])[0])
-    if variables_raw:
-        try:
-            decoded_variables = json.loads(variables_raw)
-            if isinstance(decoded_variables, dict):
-                variables = decoded_variables
-        except (ValueError, json.JSONDecodeError):
-            variables = {}
-
-    raw_input = variables.get("input")
-    input_data = raw_input if isinstance(raw_input, dict) else {}
-
-    return {
-        "method": effective_method,
-        "browser_method": method,
-        "url": url,
-        "friendly_name": friendly,
-        "doc_id": doc_id,
-        "variables": variables,
-        "input": input_data,
-        "decoded_raw": unquote_plus(raw) if raw else "",
-        "body_decodable": body_decodable,
-    }
-
+    """Compatibility wrapper around the shared capture parser."""
+    return graphql_request_meta(request)
 
 def _ad_account_required_attribution_post_data(
     request: Any,
@@ -18278,24 +18195,7 @@ timeout_seconds=4.0,
                 await route.continue_()
                 return
 
-            raw = _clean(getattr(request, "post_data", ""))
-            parsed = parse_qs(raw, keep_blank_values=True) if raw else {}
-            allowed = {
-                "__aaid","__bid","__hs","__hblp","__hsdp","__rev","__s",
-                "__hsi","__dyn","__csr","__comet_req","__spin_r","__spin_b",
-                "__spin_t","__jssesw","__crn","__req","__ccg","dpr",
-                "server_timestamps","fb_api_caller_class",
-            }
-            envelope = {
-                key: _clean(values[0])
-                for key, values in parsed.items()
-                if (
-                    key in allowed
-                    and isinstance(values, list)
-                    and values
-                    and _clean(values[0])
-                )
-            }
+            envelope = safe_request_envelope(request)
             row = {
                 "doc_id": _clean(request_meta.get("doc_id")),
                 "friendly_name": _clean(
@@ -20454,39 +20354,7 @@ timeout_seconds=4.0,
 
     @staticmethod
     def _safe_graphql_request_summary(request: Any) -> dict[str, Any]:
-        """Return non-secret request metadata for diagnostics/canaries."""
-        meta = _request_graphql_meta(request)
-        variables = (
-            meta["variables"]
-            if isinstance(meta.get("variables"), dict)
-            else {}
-        )
-        raw_input = variables.get("input")
-        input_keys = (
-            sorted(str(key) for key in raw_input)
-            if isinstance(raw_input, dict)
-            else []
-        )
-        recursive_keys: set[str] = set()
-        def collect_keys(value: Any) -> None:
-            if isinstance(value, dict):
-                for key, child in value.items():
-                    recursive_keys.add(str(key))
-                    collect_keys(child)
-            elif isinstance(value, list):
-                for child in value:
-                    collect_keys(child)
-        collect_keys(variables)
-        return {
-            "url": _clean(meta.get("url")),
-            "method": _clean(meta.get("method")),
-            "friendly_name": _clean(meta.get("friendly_name")),
-            "doc_id": _clean(meta.get("doc_id")),
-            "variable_keys": sorted(str(key) for key in variables),
-            "input_keys": input_keys,
-            "recursive_keys": sorted(recursive_keys)[:80],
-            "body_decodable": bool(meta.get("body_decodable")),
-        }
+        return safe_graphql_request_summary(request)
 
     @staticmethod
     def _request_matches_page_add(
