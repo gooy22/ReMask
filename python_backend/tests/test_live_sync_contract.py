@@ -248,7 +248,7 @@ class LiveSyncContractTests(unittest.TestCase):
         goto_source=inspect.getsource(FacebookBusinessBrowser._goto)
 
         self.assertIn("REMASK_ISOLATED_PAGE_PRIMARY_V2", source)
-        self.assertIn("discover_managed_pages_isolated(fast=True)", source)
+        self.assertIn("warm_retry=page_evidence_present", source)
         self.assertNotIn("REMASK_ENABLE_GLOBAL_PAGE_DISCOVERY", source)
 
         self.assertIn("REMASK_ISOLATED_PAGE_INVENTORY_V1", browser_source)
@@ -294,10 +294,10 @@ class LiveSyncContractTests(unittest.TestCase):
         self.assertLess(isolated,known)
         self.assertLess(isolated,ads)
         self.assertLess(isolated,private)
-        self.assertIn("isolated_pages_timeout=optional_page_budget(20.0)",page_phase)
-        self.assertIn("if isolated_pages_timeout < 17.5:",page_phase)
+        self.assertIn("REMASK_ADAPTIVE_PAGE_PHASE_BUDGET_V1",page_phase)
+        self.assertIn("15.5 if page_evidence_present else 4.5",page_phase)
         self.assertEqual(
-            page_phase.count("discover_managed_pages_isolated(fast=True)"),
+            page_phase.count("browser.discover_managed_pages_isolated("),
             1,
         )
         self.assertIn(
@@ -326,8 +326,8 @@ class LiveSyncContractTests(unittest.TestCase):
         self.assertIn("fast_pages_timeout=optional_page_budget(5.5)", page_phase)
         self.assertIn("ads_pages_timeout=optional_page_budget(4.0)", page_phase)
         self.assertIn("private_pages_timeout=optional_page_budget(3.5)", page_phase)
-        self.assertIn("isolated_pages_timeout=optional_page_budget(20.0)", page_phase)
-        self.assertIn("if isolated_pages_timeout < 17.5:", page_phase)
+        self.assertIn("page_phase_deadline=min(", page_phase)
+        self.assertIn("minimum_probe_budget=(", page_phase)
         self.assertNotIn("=budget(5.5)", page_phase)
         self.assertNotIn("=budget(4.0)", page_phase)
         self.assertNotIn("=budget(3.5)", page_phase)
