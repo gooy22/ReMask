@@ -103,8 +103,13 @@ class StackedDialogsTests(unittest.IsolatedAsyncioTestCase):
         checkpoints = []
         async def save(patch):
             checkpoints.append(patch)
-        row = await self.driver.capture_ad_account_create_request(
-            business_id=BUSINESS, account_name=NAME, currency="USD",timezone_id=137,checkpoint=save)
+        try:
+            row = await self.driver.capture_ad_account_create_request(
+                business_id=BUSINESS, account_name=NAME, currency="USD",timezone_id=137,checkpoint=save)
+        except BrowserBusinessError as error:
+            print("FIXTURE_DIAGNOSTIC", __import__("json").dumps(error.diagnostic, default=str))
+            print("FIXTURE_COUNTS", await self.page.evaluate("({entry:window.entryClicks,next:window.nextClicks,final:window.finalClicks})"))
+            raise
         self.assertEqual(row["doc_id"], "123456789000")
         self.assertEqual(row["variables"]["input"]["name"], NAME)
         self.assertEqual(await self.page.evaluate("window.entryClicks"), 0)
