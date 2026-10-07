@@ -45,6 +45,8 @@ STEP_ORDER = [
     PrivateLaunchStep.AD,
 ]
 
+AUTO_RESULT_ID_PATH = "__AUTO_UNIQUE_CREATED_ID__"
+
 LAUNCH_DOCID_OPERATION = {
     PrivateLaunchStep.CAMPAIGN: "LAUNCH_CAMPAIGN",
     PrivateLaunchStep.ADSET: "LAUNCH_ADSET",
@@ -505,14 +507,7 @@ class PrivateLaunchContractStore:
             try:
                 paths = list(self.get(step).result_id_paths)
             except ProvisioningError:
-                raise ProvisioningError(
-                    "PRIVATE_LAUNCH_RESULT_PATH_REQUIRED",
-                    (
-                        f"{step.value} capture has no proven response ID path; "
-                        "a first validated response path is required"
-                    ),
-                    retryable=False,
-                ) from None
+                paths = [AUTO_RESULT_ID_PATH]
 
         row = {
             "doc_id": str(captured.get("doc_id") or "").strip(),
@@ -534,6 +529,37 @@ class PrivateLaunchContractStore:
             "observed_at": str(captured.get("observed_at") or "").strip(),
         }
         return self.register(step, row)
+
+    def promote_result_path(
+        self,
+        step: PrivateLaunchStep,
+        response_path: str,
+    ) -> MutationContract:
+        clean_path = str(response_path or "").strip()
+        if not clean_path or clean_path == AUTO_RESULT_ID_PATH:
+            raise ProvisioningError(
+                "PRIVATE_LAUNCH_RESULT_PATH_INVALID",
+                "A concrete response ID path is required",
+                retryable=False,
+            )
+        row = self._raw.get(step.value)
+        if not isinstance(row, dict):
+            raise ProvisioningError(
+                "PRIVATE_LAUNCH_CONTRACT_REQUIRED",
+                f"No captured private mutation contract for {step.value}",
+                retryable=False,
+            )
+        updated = dict(row)
+        existing = [
+            str(path).strip()
+            for path in (updated.get("result_id_paths") or [])
+            if str(path or "").strip()
+            and str(path).strip() != AUTO_RESULT_ID_PATH
+        ]
+        if clean_path not in existing:
+            existing.insert(0, clean_path)
+        updated["result_id_paths"] = existing
+        return self.register(step, updated)
 
     def register(
         self,
@@ -776,6 +802,71 @@ def _render(value: Any, context: dict[str, Any]) -> Any:
         return str(resolved)
 
     return _PLACEHOLDER.sub(replace, value)
+
+
+def _normalize_entity_id(value: Any) -> str:
+    candidate = str(value or "").removeprefix("act_").strip()
+    return candidate if re.fullmatch(r"\d{5,40}", candidate) else ""
+
+
+def _auto_entity_id(
+    payload: Any,
+    step: PrivateLaunchStep,
+    *,
+    excluded_ids: set[str],
+) -> tuple[str, str]:
+    """Return one unambiguous new entity ID and its response path."""
+    aliases = {
+        PrivateLaunchStep.CAMPAIGN: {
+            "campaign_id", "campaignid",
+        },
+        PrivateLaunchStep.ADSET: {
+            "adset_id", "ad_set_id", "adsetid", "ad_setid",
+        },
+        PrivateLaunchStep.CREATIVE: {
+            "creative_id", "creativeid", "adcreative_id", "adcreativeid",
+        },
+        PrivateLaunchStep.AD: {
+            "ad_id", "adid",
+        },
+    }[step]
+    specific: list[tuple[str, str]] = []
+    generic: list[tuple[str, str]] = []
+
+    def walk(value: Any, path: str = "") -> None:
+        if isinstance(value, dict):
+            for raw_key, child in value.items():
+                key = str(raw_key)
+                child_path = f"{path}.{key}" if path else key
+                normalized_key = re.sub(r"[^a-z0-9_]", "", key.casefold())
+                entity_id = _normalize_entity_id(child)
+                if entity_id and entity_id not in excluded_ids:
+                    if normalized_key in aliases:
+                        specific.append((entity_id, child_path))
+                    elif normalized_key == "id":
+                        generic.append((entity_id, child_path))
+                walk(child, child_path)
+        elif isinstance(value, list):
+            for index, child in enumerate(value):
+                child_path = f"{path}.{index}" if path else str(index)
+                walk(child, child_path)
+
+    walk(payload)
+
+    def unique(rows: list[tuple[str, str]]) -> tuple[str, str]:
+        by_id: dict[str, list[str]] = {}
+        for entity_id, path in rows:
+            by_id.setdefault(entity_id, []).append(path)
+        if len(by_id) != 1:
+            return "", ""
+        entity_id = next(iter(by_id))
+        paths = by_id[entity_id]
+        return entity_id, paths[0] if paths else ""
+
+    entity_id, response_path = unique(specific)
+    if entity_id:
+        return entity_id, response_path
+    return unique(generic)
 
 
 def _extract_entity_id(payload: Any, paths: tuple[str, ...]) -> tuple[str, str]:
@@ -1567,8 +1658,47 @@ class PrivateLaunchService:
 
             entity_id, response_path = _extract_entity_id(
                 response,
-                contract.result_id_paths,
+                tuple(
+                    path
+                    for path in contract.result_id_paths
+                    if path != AUTO_RESULT_ID_PATH
+                ),
             )
+            if (
+                not entity_id
+                and AUTO_RESULT_ID_PATH in contract.result_id_paths
+            ):
+                excluded_ids = {
+                    value
+                    for value in (
+                        _normalize_entity_id(business_id),
+                        _normalize_entity_id(ad_account_id),
+                        _normalize_entity_id(page_id),
+                        _normalize_entity_id(values.get("campaign_id")),
+                        _normalize_entity_id(values.get("adset_id")),
+                        _normalize_entity_id(values.get("creative_id")),
+                        _normalize_entity_id(values.get("ad_id")),
+                    )
+                    if value
+                }
+                entity_id, response_path = _auto_entity_id(
+                    response,
+                    step,
+                    excluded_ids=excluded_ids,
+                )
+                if entity_id and response_path:
+                    try:
+                        self.contracts.promote_result_path(
+                            step,
+                            response_path,
+                        )
+                    except Exception as exc:
+                        log.warning(
+                            "private Launch result path promotion failed "
+                            "step=%s type=%s",
+                            step.value,
+                            exc.__class__.__name__,
+                        )
             if not entity_id:
                 _record_contract_result(
                     step,
