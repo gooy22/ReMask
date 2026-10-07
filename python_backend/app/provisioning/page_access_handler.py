@@ -8,6 +8,11 @@ from typing import Any
 from ..facebook_business_browser import FacebookBusinessBrowser, BrowserBusinessError, _cgroup_memory_snapshot_mb
 from ..page_access_inspection import inspect_browser_pages
 from ..facebook_page_search import page_lookup_url
+from ..graphql_mutation_capture import GraphqlMutationCapture
+from ..private_page_access import (
+    PrivatePageShareContractStore,
+    execute_private_page_share,
+)
 from ..session_auth_refresh import refresh_saved_auth_context
 from .advertising_page import AdvertisingPageStore, _PAGE_LOCK, ensure_common_page
 from .models import ProvisioningError, ProvisioningStep
@@ -275,7 +280,61 @@ async def _ads_only(dialog) -> None:
     raise BrowserBusinessError('PAGE_SHARE_PERMISSION_UI_CHANGED','Ads permission control is unavailable',retryable=True)
 
 
-async def _request_target_page_access(browser, config: dict, business: str, checkpoint, prior: dict) -> bool:
+def _page_share_capture_match(
+    request: Any,
+    meta: dict[str, Any],
+    *,
+    business_id: str,
+    page_id: str,
+    require_named_access_marker: bool = True,
+) -> bool:
+    if str(meta.get('method') or '').upper()!='POST':
+        return False
+    if 'graphql' not in str(meta.get('url') or '').lower():
+        return False
+    business=str(business_id or '').strip()
+    page=str(page_id or '').strip()
+    if not business.isdigit() or not page.isdigit():
+        return False
+    variables=meta.get('variables') if isinstance(meta.get('variables'),dict) else {}
+    try:
+        encoded=json.dumps(variables,ensure_ascii=False,separators=(',',':'))
+    except Exception:
+        return False
+    if business not in encoded or page not in encoded:
+        return False
+
+    friendly=str(meta.get('friendly_name') or '').lower()
+    raw=str(meta.get('decoded_raw') or '').lower()
+    evidence=friendly+' '+raw
+    if 'mutation' not in evidence:
+        return False
+
+    ownership_markers=(
+        'claimpage','pageclaim','takeownership','ownership',
+        'addexistingpage','addpage',
+    )
+    if any(marker in evidence for marker in ownership_markers):
+        return False
+
+    if not require_named_access_marker:
+        return True
+    access_markers=(
+        'requestaccess','requestpage','sharedaccess','sharepage',
+        'pageaccess','partneraccess','permission','assetaccess',
+    )
+    return any(marker in evidence for marker in access_markers)
+
+
+async def _request_target_page_access(
+    browser,
+    config: dict,
+    business: str,
+    checkpoint,
+    prior: dict,
+    *,
+    capture_only: bool=False,
+) -> bool | dict[str, Any]:
     """Request Ads task access from the target BM; never claim Page ownership."""
     phase=str(prior.get('phase') or '')
     if phase in {
@@ -337,6 +396,67 @@ async def _request_target_page_access(browser, config: dict, business: str, chec
     submit=dialog.get_by_role('button',name=re.compile(r'^(Confirm|Request access|Send request)$',re.I))
     if not await _one(submit) or not await submit.is_enabled():
         raise BrowserBusinessError('PAGE_SHARE_UI_UNAVAILABLE','Shared-access final request action is unavailable',retryable=True)
+    if capture_only:
+        capture=GraphqlMutationCapture(
+            browser.page,
+            matcher=lambda request,meta: _page_share_capture_match(
+                request,meta,business_id=business,
+                page_id=str(config['page_id']),
+                require_named_access_marker=True,
+            ),
+            plausible_matcher=lambda request,meta: _page_share_capture_match(
+                request,meta,business_id=business,
+                page_id=str(config['page_id']),
+                require_named_access_marker=False,
+            ),
+        )
+        await capture.__aenter__()
+        try:
+            capture.arm()
+            await checkpoint({
+                'activity':'TARGET_PAGE_ACCESS_CAPTURE_CLICK_INTENT',
+                'requested_tasks':['ADVERTISE'],
+                'page_id':config['page_id'],
+                'business_id':business,
+            })
+            await submit.click(timeout=5000)
+            try:
+                row=await capture.wait(6.0)
+            except asyncio.TimeoutError as exc:
+                diagnostic={
+                    'stage':'page_share_private_capture',
+                    'blocked_unclassified':capture.blocked_unclassified,
+                    'graphql_candidates':capture.candidates[-12:],
+                }
+                code=(
+                    'PRIVATE_PAGE_SHARE_CAPTURE_UNCLASSIFIED'
+                    if capture.blocked_unclassified
+                    else 'PRIVATE_PAGE_SHARE_CAPTURE_NOT_FOUND'
+                )
+                raise BrowserBusinessError(
+                    code,
+                    'Meta Page-share mutation could not be captured safely',
+                    retryable=True,
+                    diagnostic=diagnostic,
+                ) from exc
+            row={
+                **row,
+                'source':'browser_graphql_capture',
+                'observed_at':str(int(__import__('time').time())),
+            }
+            await checkpoint({
+                'activity':'TARGET_PAGE_ACCESS_CONTRACT_CAPTURED',
+                'page_id':config['page_id'],
+                'business_id':business,
+                'captured_friendly_name':str(
+                    row.get('friendly_name') or ''
+                )[:180],
+                'captured_doc_id':str(row.get('doc_id') or '')[:80],
+            })
+            return row
+        finally:
+            await capture.__aexit__(None,None,None)
+
     await checkpoint({'phase':'TARGET_PAGE_ACCESS_CLICK_INTENT','requested_tasks':['ADVERTISE'],
         'page_id':config['page_id'],'business_id':business})
     await submit.click(timeout=5000)
