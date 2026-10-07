@@ -663,23 +663,30 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
         page=SimpleNamespace(get_by_role=page_role,wait_for_timeout=AsyncMock())
         browser=SimpleNamespace(
             page=page,
+            context=SimpleNamespace(cookies={'c_user':'61594882851656'}),
             verify_page_attached=AsyncMock(side_effect=AssertionError('redundant relation navigation')),
             _diagnostic=AsyncMock(return_value={'stage':'operator_submitted'}),
         )
         patches=[]
         async def checkpoint(patch): patches.append(patch)
+        proof={'source':'exact_page_people_ads_access',
+            'operator_uid':'61594882851656','row':'You Ads'}
         with patch('app.provisioning.page_access_handler._select_page',
                    new=AsyncMock(return_value={'source':'row_exact_page_id'})), \
-             patch('app.provisioning.page_access_handler._ads_only',new=AsyncMock()):
-            await _assign_operator(
+             patch('app.provisioning.page_access_handler._ads_only',new=AsyncMock()), \
+             patch('app.provisioning.page_access_handler._operator_ads_proof',
+                   new=AsyncMock(side_effect=[None,proof])):
+            result=await _assign_operator(
                 browser,{'name':'PrgssTeam','page_id':PAGE},BM,checkpoint,
                 relation_preconfirmed=True)
         browser.verify_page_attached.assert_not_awaited()
+        self.assertEqual(result,proof)
         self.assertEqual(events,['CLICK_ASSIGN','CHECK_YOU','CLICK_SAVE'])
         self.assertEqual(
             [row.get('phase') for row in patches],
             ['TARGET_PAGE_OPERATOR_ASSIGN_CLICK_INTENT',
-             'TARGET_PAGE_OPERATOR_ASSIGN_SUBMITTED'])
+             'TARGET_PAGE_OPERATOR_ASSIGN_SUBMITTED',
+             'TARGET_PAGE_OPERATOR_ASSIGN_CONFIRMED'])
         self.assertEqual(patches[0]['business_id'],BM)
         self.assertEqual(patches[0]['page_id'],PAGE)
 
