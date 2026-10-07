@@ -2486,22 +2486,37 @@ class FacebookBusinessBrowser:
                     );
                     const normalize = value =>
                         String(value || '').replace(/\s+/g, ' ').trim();
-                    const allow = text => {
+                    const score = text => {
                         const t = normalize(text);
-                        return /^Continue(?: as .+)?$/i.test(t)
-                            || /^Continue with Facebook$/i.test(t)
+                        if (
+                            /^Continue with Facebook$/i.test(t)
                             || /^Log in with Facebook$/i.test(t)
-                            || /^Continue to (?:Meta )?Business(?: Suite)?$/i.test(t)
-                            || /^Продолжить(?: как .+)?$/i.test(t)
                             || /^Войти через Facebook$/i.test(t)
-                            || /^Продовжити(?: як .+)?$/i.test(t)
                             || /^Увійти через Facebook$/i.test(t)
-                            || /^Weiter(?: als .+)?$/i.test(t)
                             || /^Mit Facebook anmelden$/i.test(t)
-                            || /^Continuer(?: en tant que .+)?$/i.test(t)
                             || /^Se connecter avec Facebook$/i.test(t)
-                            || /^Tiếp tục(?: với tư cách .+)?$/i.test(t)
-                            || /^Đăng nhập bằng Facebook$/i.test(t);
+                            || /^Đăng nhập bằng Facebook$/i.test(t)
+                        ) return 300;
+                        if (
+                            /^Continue as .+$/i.test(t)
+                            || /^Продолжить как .+$/i.test(t)
+                            || /^Продовжити як .+$/i.test(t)
+                            || /^Weiter als .+$/i.test(t)
+                            || /^Continuer en tant que .+$/i.test(t)
+                            || /^Tiếp tục với tư cách .+$/i.test(t)
+                        ) return 250;
+                        if (
+                            /^Continue to (?:Meta )?Business(?: Suite)?$/i.test(t)
+                        ) return 200;
+                        if (
+                            /^Continue$/i.test(t)
+                            || /^Продолжить$/i.test(t)
+                            || /^Продовжити$/i.test(t)
+                            || /^Weiter$/i.test(t)
+                            || /^Continuer$/i.test(t)
+                            || /^Tiếp tục$/i.test(t)
+                        ) return 100;
+                        return 0;
                     };
                     const controls = [
                         ...document.querySelectorAll(
@@ -2515,11 +2530,19 @@ class FacebookBusinessBrowser:
                             || el.getAttribute('aria-label')
                             || ''
                         )
-                    })).filter(row => allow(row.text));
+                    })).map(row => ({...row, score: score(row.text)}))
+                        .filter(row => row.score > 0);
+                    const topScore = controls.reduce(
+                        (best,row) => Math.max(best,row.score), 0
+                    );
+                    const best = controls.filter(row => row.score === topScore);
                     return {
                         hasCredentialInput,
                         candidateCount: controls.length,
                         labels: controls.slice(0, 8).map(row => row.text),
+                        topScore,
+                        bestCount: best.length,
+                        bestLabel: best.length === 1 ? best[0].text : '',
                     };
                 }"""
             )
@@ -2535,19 +2558,22 @@ class FacebookBusinessBrowser:
             for value in (probe.get("labels") or [])
             if str(value or "").strip()
         ]
-        # Live Meta Business login handoff currently advertises login_options
-        # FB/IG/SSO. Choosing the explicit Facebook option is safe because we
-        # never enter credentials: the existing profile cookie session either
-        # succeeds, or the normal auth classifier stops on Facebook login.
-        if int(probe.get("candidateCount") or 0)!=1:
+        # Live Meta Business login handoff may expose more than one
+        # continuation. Prefer one unique Facebook-specific handoff over generic
+        # Continue controls; never click credentials/IG/SSO or an ambiguous tie.
+        if int(probe.get("bestCount") or 0)!=1:
             self._last_selector_diagnostic={
                 **(self._last_selector_diagnostic or {}),
-                "business_login_gate_continuation_candidates":
-                    labels,
+                "business_login_gate_continuation_candidates": labels,
                 "business_login_gate_continuation_count":
                     int(probe.get("candidateCount") or 0),
+                "business_login_gate_top_score":
+                    int(probe.get("topScore") or 0),
+                "business_login_gate_best_count":
+                    int(probe.get("bestCount") or 0),
             }
             return False
+        preferred_label=str(probe.get("bestLabel") or "").strip()
 
         try:
             clicked=await self.page.evaluate(
@@ -2562,35 +2588,58 @@ class FacebookBusinessBrowser:
                     };
                     const normalize = value =>
                         String(value || '').replace(/\s+/g, ' ').trim();
-                    const allow = text => {
+                    const score = text => {
                         const t = normalize(text);
-                        return /^Continue(?: as .+)?$/i.test(t)
-                            || /^Continue with Facebook$/i.test(t)
+                        if (
+                            /^Continue with Facebook$/i.test(t)
                             || /^Log in with Facebook$/i.test(t)
-                            || /^Continue to (?:Meta )?Business(?: Suite)?$/i.test(t)
-                            || /^Продолжить(?: как .+)?$/i.test(t)
                             || /^Войти через Facebook$/i.test(t)
-                            || /^Продовжити(?: як .+)?$/i.test(t)
                             || /^Увійти через Facebook$/i.test(t)
-                            || /^Weiter(?: als .+)?$/i.test(t)
                             || /^Mit Facebook anmelden$/i.test(t)
-                            || /^Continuer(?: en tant que .+)?$/i.test(t)
                             || /^Se connecter avec Facebook$/i.test(t)
-                            || /^Tiếp tục(?: với tư cách .+)?$/i.test(t)
-                            || /^Đăng nhập bằng Facebook$/i.test(t);
+                            || /^Đăng nhập bằng Facebook$/i.test(t)
+                        ) return 300;
+                        if (
+                            /^Continue as .+$/i.test(t)
+                            || /^Продолжить как .+$/i.test(t)
+                            || /^Продовжити як .+$/i.test(t)
+                            || /^Weiter als .+$/i.test(t)
+                            || /^Continuer en tant que .+$/i.test(t)
+                            || /^Tiếp tục với tư cách .+$/i.test(t)
+                        ) return 250;
+                        if (
+                            /^Continue to (?:Meta )?Business(?: Suite)?$/i.test(t)
+                        ) return 200;
+                        if (
+                            /^Continue$/i.test(t)
+                            || /^Продолжить$/i.test(t)
+                            || /^Продовжити$/i.test(t)
+                            || /^Weiter$/i.test(t)
+                            || /^Continuer$/i.test(t)
+                            || /^Tiếp tục$/i.test(t)
+                        ) return 100;
+                        return 0;
                     };
                     const rows = [
                         ...document.querySelectorAll(
                             'button,a,[role="button"],[role="link"]'
                         )
-                    ].filter(visible).filter(el => allow(
-                        el.innerText
-                        || el.textContent
-                        || el.getAttribute('aria-label')
-                        || ''
-                    ));
-                    if (rows.length !== 1) return false;
-                    rows[0].click();
+                    ].filter(visible).map(el => ({
+                        el,
+                        text: normalize(
+                            el.innerText
+                            || el.textContent
+                            || el.getAttribute('aria-label')
+                            || ''
+                        )
+                    })).map(row => ({...row, score: score(row.text)}))
+                        .filter(row => row.score > 0);
+                    const topScore = rows.reduce(
+                        (best,row) => Math.max(best,row.score), 0
+                    );
+                    const best = rows.filter(row => row.score === topScore);
+                    if (best.length !== 1) return false;
+                    best[0].el.click();
                     return true;
                 }"""
             )
@@ -2621,13 +2670,34 @@ class FacebookBusinessBrowser:
             )
         except Exception:
             still_gate=True
+        if still_gate and _clean(return_url):
+            # Some loginpage variants commit the Facebook handoff cookie first
+            # and only navigate on the next document request. Re-open the
+            # original read-only Business URL once; never submit credentials.
+            try:
+                await self.page.goto(
+                    return_url,
+                    wait_until="domcontentloaded",
+                    timeout=min(max(3000, int(self.timeout_ms)), 12000),
+                )
+                await self.page.wait_for_timeout(450)
+                current=_clean(getattr(self.page,"url",""))
+                parsed=urlsplit(current)
+                still_gate=(
+                    _clean(parsed.hostname).lower()=="business.facebook.com"
+                    and _clean(parsed.path).lower().rstrip("/")
+                        =="/business/loginpage"
+                )
+            except Exception:
+                still_gate=True
         if still_gate:
             return False
 
         self._last_selector_diagnostic={
             **(self._last_selector_diagnostic or {}),
             "business_login_gate_resolved":True,
-            "business_login_gate_choice":labels[0][:120] if labels else "",
+            "business_login_gate_choice":
+                (preferred_label or (labels[0] if labels else ""))[:120],
             "business_login_gate_return_url":_clean(return_url)[:700],
             "business_login_gate_final_url":current[:700],
         }
