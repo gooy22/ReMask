@@ -36,6 +36,13 @@ def _auth_gate(url: str, body: str) -> str:
     return ""
 
 
+def _payloads_text(payloads: list[Any]) -> str:
+    try:
+        return json.dumps(payloads, ensure_ascii=False, separators=(",", ":"))
+    except Exception:
+        return ""
+
+
 def _json_payloads(body: str) -> list[Any]:
     payloads: list[Any] = []
     for match in _JSON_SCRIPT_RE.finditer(str(body or "")):
@@ -119,12 +126,23 @@ async def private_inventory_snapshot(
         authoritative_container = False
         business_diags: list[dict[str, Any]] = []
 
-        urls = (
+        urls = [
             "https://business.facebook.com/latest/settings/ad_accounts/"
             f"?nav_ref=bm_settings_redirect_migration&bm_redirect_migration=true&business_id={business_id}",
             "https://adsmanager.facebook.com/adsmanager/manage/campaigns"
             f"?business_id={business_id}",
-        )
+        ]
+        # Exact RK revalidation: when we already have a last-live-confirmed
+        # BM->RK pair, ask Ads Manager to open that exact account under the BM.
+        # We still require fresh authenticated response evidence; the hint is
+        # never accepted from storage alone.
+        for expected_id in sorted(expected)[:4]:
+            urls.extend([
+                "https://www.facebook.com/adsmanager/manage/campaigns"
+                f"?act={expected_id}&business_id={business_id}",
+                "https://adsmanager.facebook.com/adsmanager/manage/campaigns"
+                f"?act={expected_id}&business_id={business_id}",
+            ])
         for url in urls:
             try:
                 payloads, diag = await _fetch_payloads(web, url)
@@ -140,6 +158,10 @@ async def private_inventory_snapshot(
                 continue
 
             request_scoped = "settings/ad_accounts" in url
+            requested_expected = ""
+            match = re.search(r"[?&]act=(\d{5,30})", url)
+            if match:
+                requested_expected = _clean_id(match.group(1))
             for payload in payloads:
                 authoritative_container = (
                     authoritative_container
@@ -164,6 +186,32 @@ async def private_inventory_snapshot(
                     row["account_id"] = account_id
                     row.setdefault("business_id", business_id)
                     account_rows[account_id] = row
+
+            # Some Ads Manager HTML bootstraps expose the selected account only
+            # in the final authenticated URL while the Relay row is deferred.
+            # Accept this only for an exact expected hint and only when the
+            # response is clearly authenticated (DTSG/current-user markers).
+            if requested_expected and requested_expected in expected and not diag.get("auth_gate"):
+                final_url = str(diag.get("final_url") or "")
+                final_act = re.findall(r"(?:[?&]act=|act[_:=/%-]+)(\d{5,30})", final_url, flags=re.I)
+                authenticated = any(
+                    marker in str(body_marker)
+                    for marker in ("DTSGInitialData", "DTSGInitData", "CurrentUserInitialData")
+                    for body_marker in [str(_payloads_text(payloads))]
+                )
+                if requested_expected in final_act and authenticated and requested_expected not in account_rows:
+                    account_rows[requested_expected] = {
+                        "id": requested_expected,
+                        "account_id": requested_expected,
+                        "name": "",
+                        "business_id": business_id,
+                        "_source": "private_ads_manager_exact_act",
+                    }
+                    business_diags.append({
+                        "url": url,
+                        "phase": "exact_act_live_confirmed",
+                        "account_id": requested_expected,
+                    })
 
         confirmed_expected = sorted(expected.intersection(account_rows))
         ready = bool(account_rows) and (
