@@ -111,6 +111,16 @@ class PrivateInventoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result["ready"])
         self.assertEqual(result["businesses"][0]["ad_accounts"], [])
 
+    async def test_nested_foreign_business_does_not_scope_its_accounts_or_empty_collection(self):
+        for accounts in ([], [account(business="")]):
+            payload = {"data": {"business": {"__typename": "Business", "id": "111111", "name": "BM One",
+                "related_business": inventory(accounts, business="444444")["data"]["business"]}}}
+            result = await self.snapshot(FakeWeb(payload), known=False)
+            target = next(row for row in result["businesses"] if row["id"] == "111111")
+            self.assertFalse(target["ad_accounts_ready"])
+            self.assertFalse(target["confirmed_empty"])
+            self.assertEqual(target["ad_accounts"], [])
+
 
 if __name__ == "__main__":
     unittest.main()

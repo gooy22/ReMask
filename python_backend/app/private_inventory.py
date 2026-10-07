@@ -70,6 +70,20 @@ def _business_payloads(payload: Any, business_id: str) -> list[dict[str, Any]]:
     output: list[dict[str, Any]] = []
     ignored = {"variables", "params", "request", "input", "query", "preloadparams"}
 
+    def portfolio_only(value, key=""):
+        if isinstance(value, dict):
+            typename = str(value.get("__typename") or "").replace("_", "").lower()
+            is_business = typename in {"business", "businessportfolio"} or key.lower() in {
+                "business", "bizkit_business", "business_portfolio", "businessportfolio",
+            }
+            if is_business and _clean_id(value.get("id")) not in {"", business_id}:
+                return {}
+            return {child_key: portfolio_only(child, str(child_key))
+                    for child_key, child in value.items()}
+        if isinstance(value, list):
+            return [portfolio_only(child, key) for child in value]
+        return value
+
     def walk(value, key=""):
         if isinstance(value, dict):
             typename = str(value.get("__typename") or "").replace("_", "").lower()
@@ -77,7 +91,7 @@ def _business_payloads(payload: Any, business_id: str) -> list[dict[str, Any]]:
                 "business", "bizkit_business", "business_portfolio", "businessportfolio",
             }
             if business_node and _clean_id(value.get("id")) == business_id:
-                output.append(value)
+                output.append(portfolio_only(value, key))
                 return
             for child_key, child in value.items():
                 if str(child_key).replace("_", "").lower() not in ignored:
