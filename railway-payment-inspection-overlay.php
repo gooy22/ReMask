@@ -103,7 +103,7 @@ foreach (['accounts.php', 'workspace.php'] as $name) {
     // The workspace bundle is cached by browsers. Every card UI change must
     // produce a new URL, including deployments that leave the worker UI version
     // unchanged. A content hash also stays stable across identical builds.
-    $html = str_replace('python-worker-ui-v219-cookie-only-v1', 'python-worker-ui-v219-cookie-only-v1-payment-cards-' . substr(hash('sha256', $cardUi), 0, 12), $html);
+    $html = str_replace('python-worker-ui-v220-cookie-only-v1', 'python-worker-ui-v220-cookie-only-v1-payment-cards-' . substr(hash('sha256', $cardUi), 0, 12), $html);
     file_put_contents($path, $html);
 }
 fwrite(STDERR, "[private-payment] profile browser inspection and canonical RK display installed\n");
