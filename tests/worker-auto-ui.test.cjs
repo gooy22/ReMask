@@ -175,7 +175,12 @@ vm.createContext(sandbox); vm.runInContext(source.slice(start,end), sandbox);
   const withPage=bmRequests[1].profiles[0].tasks[0].payload;
   assert.equal(withPage.parameters.BUSINESS.attach_page,false);
   assert.equal(withPage.parameters.BUSINESS.page_id,'222222222');
-  assert.equal(withPage.scope_key,'add-bm-page-222222222');
+  assert.match(withPage.scope_key,/^add-bm-[0-9]+-/);
+  assert.notEqual(withPage.scope_key,bm.scope_key);
+  state.busy=false;
+  await sandbox.pythonWorkerStartBusiness('',{profiles:['7'],configs:{'7':{name:'Another independent BM',page_id:'222222222'}}});
+  assert.notEqual(bmRequests[2].profiles[0].tasks[0].payload.scope_key,withPage.scope_key,
+    'two explicit independent BM creations must not collapse to the selected Page scope');
   // Exercise the actual capture-phase interceptor with the production menu
   // caption. "Добавить RK" previously fell through to legacy Graph create.
   const interceptStart=source.indexOf('function pythonWorkerInstallBusinessAddRkInterceptor()');
