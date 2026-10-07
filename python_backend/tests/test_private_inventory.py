@@ -46,6 +46,34 @@ class PrivateInventoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result["ready"])
         self.assertEqual(result["inconclusive_business_ids"], ["111111"])
 
+    async def test_exact_expected_act_can_confirm_authenticated_private_surface(self):
+        class ExactWeb:
+            async def fetch_text(self, url, max_bytes=0):
+                body=(
+                    '<script type="application/json">'
+                    '{"CurrentUserInitialData":{"ACCOUNT_ID":"999999"},'
+                    '"DTSGInitialData":{"token":"x"}}'
+                    '</script>'
+                )
+                if "act=222222" in url:
+                    return 200, body, url
+                return 200, body, url
+
+        with patch("app.private_inventory._extract_business_inventory_rows", return_value=[]), \
+             patch("app.private_inventory._extract_inventory_ad_account_rows", return_value=[]), \
+             patch("app.private_inventory._has_ad_account_inventory_container", return_value=False):
+            result=await private_inventory_snapshot(
+                ExactWeb(),
+                known_accounts_by_business={"111111":{"222222"}},
+                known_business_ids={"111111"},
+            )
+
+        self.assertTrue(result["ready"])
+        self.assertEqual(
+            result["businesses"][0]["confirmed_expected_account_ids"],
+            ["222222"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
