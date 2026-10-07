@@ -71,10 +71,14 @@ class PrivateLaunchContractStore:
         *,
         path: str | Path | None = None,
     ) -> None:
+        default_registry = (
+            Path(os.getenv("REMASK_DATA_DIR") or "/var/lib/remask")
+            / "private-launch-contracts.json"
+        )
         self.path = Path(
             path
             or os.getenv("REMASK_PRIVATE_LAUNCH_CONTRACTS_PATH")
-            or "/var/lib/remask/private-launch-contracts.json"
+            or default_registry
         )
         if raw is not None:
             parsed = self._decode(raw)
