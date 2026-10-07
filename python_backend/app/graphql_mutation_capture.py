@@ -192,21 +192,24 @@ class GraphqlMutationCapture:
         self.armed = False
         self._future: asyncio.Future[dict[str, Any]] | None = None
         self._installed = False
+        self._handler: Any = None
 
     async def __aenter__(self) -> "GraphqlMutationCapture":
         loop = asyncio.get_running_loop()
         self._future = loop.create_future()
-        await self.page.route("**/*graphql*", self._intercept)
+        self._handler = self._intercept
+        await self.page.route("**/*graphql*", self._handler)
         self._installed = True
         return self
 
     async def __aexit__(self, exc_type, exc, tb) -> None:
         if self._installed:
             try:
-                await self.page.unroute("**/*graphql*", self._intercept)
+                await self.page.unroute("**/*graphql*", self._handler)
             except Exception:
                 pass
             self._installed = False
+            self._handler = None
         if self._future is not None and not self._future.done():
             self._future.cancel()
 

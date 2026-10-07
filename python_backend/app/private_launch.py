@@ -45,6 +45,8 @@ STEP_ORDER = [
     PrivateLaunchStep.AD,
 ]
 
+AUTO_RESULT_ID_PATH = "__AUTO_UNIQUE_CREATED_ID__"
+
 LAUNCH_DOCID_OPERATION = {
     PrivateLaunchStep.CAMPAIGN: "LAUNCH_CAMPAIGN",
     PrivateLaunchStep.ADSET: "LAUNCH_ADSET",
@@ -131,6 +133,51 @@ def _record_contract_result(
             step.value,
             exc.__class__.__name__,
         )
+
+
+_CAPTURE_PLACEHOLDER_KEY = re.compile(
+    r"^(?:business_id|ad_account_id|page_id|campaign_id|adset_id|creative_id|"
+    r"payload(?:\.[A-Za-z0-9_-]+)+)$"
+)
+
+
+def _capture_template(
+    value: Any,
+    replacements: dict[str, str],
+) -> Any:
+    """Replace exact captured values with reusable Launch placeholders."""
+    if isinstance(value, dict):
+        return {
+            str(key): _capture_template(child, replacements)
+            for key, child in value.items()
+        }
+    if isinstance(value, list):
+        return [_capture_template(child, replacements) for child in value]
+
+    text = str(value) if isinstance(value, (str, int)) else None
+    if text is None:
+        return value
+
+    exact = replacements.get(text)
+    if exact:
+        return exact
+
+    if isinstance(value, str):
+        rendered = value
+        for raw, placeholder in sorted(
+            replacements.items(),
+            key=lambda row: len(row[0]),
+            reverse=True,
+        ):
+            if raw.isdigit() and len(raw) >= 5:
+                rendered = re.sub(
+                    rf"(?<!\d){re.escape(raw)}(?!\d)",
+                    placeholder,
+                    rendered,
+                )
+        return rendered
+
+    return value
 
 
 class PrivateLaunchContractStore:
@@ -398,6 +445,122 @@ class PrivateLaunchContractStore:
                 }
         return output
 
+    def register_capture(
+        self,
+        step: PrivateLaunchStep,
+        captured: dict[str, Any],
+        *,
+        placeholder_values: dict[str, Any],
+        result_id_paths: list[str] | tuple[str, ...] | None = None,
+    ) -> MutationContract:
+        """Normalize one browser-captured mutation into a reusable contract."""
+        if not isinstance(captured, dict):
+            raise ProvisioningError(
+                "PRIVATE_LAUNCH_CAPTURE_INVALID",
+                "Captured mutation must be an object",
+                retryable=False,
+            )
+        variables = captured.get("variables")
+        if not isinstance(variables, dict) or not variables:
+            raise ProvisioningError(
+                "PRIVATE_LAUNCH_CAPTURE_INVALID",
+                "Captured mutation does not contain GraphQL variables",
+                retryable=False,
+            )
+        if not isinstance(placeholder_values, dict):
+            raise ProvisioningError(
+                "PRIVATE_LAUNCH_CAPTURE_INVALID",
+                "Capture placeholder values must be an object",
+                retryable=False,
+            )
+
+        replacements: dict[str, str] = {}
+        for raw_key, raw_value in placeholder_values.items():
+            key = str(raw_key or "").strip()
+            if not _CAPTURE_PLACEHOLDER_KEY.fullmatch(key):
+                raise ProvisioningError(
+                    "PRIVATE_LAUNCH_CAPTURE_INVALID",
+                    f"Unsupported capture placeholder: {key}",
+                    retryable=False,
+                )
+            value = str(raw_value or "").strip()
+            if not value:
+                continue
+            placeholder = "{{" + key + "}}"
+            current = replacements.get(value)
+            if current and current != placeholder:
+                raise ProvisioningError(
+                    "PRIVATE_LAUNCH_CAPTURE_AMBIGUOUS",
+                    "Two Launch placeholders map to the same captured scalar value",
+                    retryable=False,
+                )
+            replacements[value] = placeholder
+
+        templated = _capture_template(variables, replacements)
+
+        paths = [
+            str(path).strip()
+            for path in (result_id_paths or [])
+            if str(path or "").strip()
+        ]
+        if not paths:
+            try:
+                paths = list(self.get(step).result_id_paths)
+            except ProvisioningError:
+                paths = [AUTO_RESULT_ID_PATH]
+
+        row = {
+            "doc_id": str(captured.get("doc_id") or "").strip(),
+            "friendly_name": str(captured.get("friendly_name") or "").strip(),
+            "endpoint_url": str(
+                captured.get("endpoint_url")
+                or "https://business.facebook.com/api/graphql/"
+            ).strip(),
+            "variables": templated,
+            "result_id_paths": paths,
+            "request_envelope": (
+                captured.get("request_envelope")
+                if isinstance(captured.get("request_envelope"), dict)
+                else {}
+            ),
+            "source": str(
+                captured.get("source") or "browser_graphql_capture"
+            ).strip(),
+            "observed_at": str(captured.get("observed_at") or "").strip(),
+        }
+        return self.register(step, row)
+
+    def promote_result_path(
+        self,
+        step: PrivateLaunchStep,
+        response_path: str,
+    ) -> MutationContract:
+        clean_path = str(response_path or "").strip()
+        if not clean_path or clean_path == AUTO_RESULT_ID_PATH:
+            raise ProvisioningError(
+                "PRIVATE_LAUNCH_RESULT_PATH_INVALID",
+                "A concrete response ID path is required",
+                retryable=False,
+            )
+        row = self._raw.get(step.value)
+        if not isinstance(row, dict):
+            raise ProvisioningError(
+                "PRIVATE_LAUNCH_CONTRACT_REQUIRED",
+                f"No captured private mutation contract for {step.value}",
+                retryable=False,
+            )
+        updated = dict(row)
+        existing = [
+            str(path).strip()
+            for path in (updated.get("result_id_paths") or [])
+            if str(path or "").strip()
+            and str(path).strip() != AUTO_RESULT_ID_PATH
+        ]
+        if clean_path not in existing:
+            existing.insert(0, clean_path)
+        updated["result_id_paths"] = existing
+        return self.register(step, updated)
+
     def register(
         self,
         step: PrivateLaunchStep,
@@ -639,6 +802,71 @@ def _render(value: Any, context: dict[str, Any]) -> Any:
         return str(resolved)
 
     return _PLACEHOLDER.sub(replace, value)
+
+
+def _normalize_entity_id(value: Any) -> str:
+    candidate = str(value or "").removeprefix("act_").strip()
+    return candidate if re.fullmatch(r"\d{5,40}", candidate) else ""
+
+
+def _auto_entity_id(
+    payload: Any,
+    step: PrivateLaunchStep,
+    *,
+    excluded_ids: set[str],
+) -> tuple[str, str]:
+    """Return one unambiguous new entity ID and its response path."""
+    aliases = {
+        PrivateLaunchStep.CAMPAIGN: {
+            "campaign_id", "campaignid",
+        },
+        PrivateLaunchStep.ADSET: {
+            "adset_id", "ad_set_id", "adsetid", "ad_setid",
+        },
+        PrivateLaunchStep.CREATIVE: {
+            "creative_id", "creativeid", "adcreative_id", "adcreativeid",
+        },
+        PrivateLaunchStep.AD: {
+            "ad_id", "adid",
+        },
+    }[step]
+    specific: list[tuple[str, str]] = []
+    generic: list[tuple[str, str]] = []
+
+    def walk(value: Any, path: str = "") -> None:
+        if isinstance(value, dict):
+            for raw_key, child in value.items():
+                key = str(raw_key)
+                child_path = f"{path}.{key}" if path else key
+                normalized_key = re.sub(r"[^a-z0-9_]", "", key.casefold())
+                entity_id = _normalize_entity_id(child)
+                if entity_id and entity_id not in excluded_ids:
+                    if normalized_key in aliases:
+                        specific.append((entity_id, child_path))
+                    elif normalized_key == "id":
+                        generic.append((entity_id, child_path))
+                walk(child, child_path)
+        elif isinstance(value, list):
+            for index, child in enumerate(value):
+                child_path = f"{path}.{index}" if path else str(index)
+                walk(child, child_path)
+
+    walk(payload)
+
+    def unique(rows: list[tuple[str, str]]) -> tuple[str, str]:
+        by_id: dict[str, list[str]] = {}
+        for entity_id, path in rows:
+            by_id.setdefault(entity_id, []).append(path)
+        if len(by_id) != 1:
+            return "", ""
+        entity_id = next(iter(by_id))
+        paths = by_id[entity_id]
+        return entity_id, paths[0] if paths else ""
+
+    entity_id, response_path = unique(specific)
+    if entity_id:
+        return entity_id, response_path
+    return unique(generic)
 
 
 def _extract_entity_id(payload: Any, paths: tuple[str, ...]) -> tuple[str, str]:
@@ -1430,8 +1658,47 @@ class PrivateLaunchService:
 
             entity_id, response_path = _extract_entity_id(
                 response,
-                contract.result_id_paths,
+                tuple(
+                    path
+                    for path in contract.result_id_paths
+                    if path != AUTO_RESULT_ID_PATH
+                ),
             )
+            if (
+                not entity_id
+                and AUTO_RESULT_ID_PATH in contract.result_id_paths
+            ):
+                excluded_ids = {
+                    value
+                    for value in (
+                        _normalize_entity_id(business_id),
+                        _normalize_entity_id(ad_account_id),
+                        _normalize_entity_id(page_id),
+                        _normalize_entity_id(values.get("campaign_id")),
+                        _normalize_entity_id(values.get("adset_id")),
+                        _normalize_entity_id(values.get("creative_id")),
+                        _normalize_entity_id(values.get("ad_id")),
+                    )
+                    if value
+                }
+                entity_id, response_path = _auto_entity_id(
+                    response,
+                    step,
+                    excluded_ids=excluded_ids,
+                )
+                if entity_id and response_path:
+                    try:
+                        self.contracts.promote_result_path(
+                            step,
+                            response_path,
+                        )
+                    except Exception as exc:
+                        log.warning(
+                            "private Launch result path promotion failed "
+                            "step=%s type=%s",
+                            step.value,
+                            exc.__class__.__name__,
+                        )
             if not entity_id:
                 _record_contract_result(
                     step,

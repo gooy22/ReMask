@@ -7,8 +7,11 @@ from unittest.mock import AsyncMock, patch
 from fb_worker import RemoteRequestError
 
 from app.private_launch import (
+    AUTO_RESULT_ID_PATH,
     PrivateLaunchContractStore,
     PrivateLaunchService,
+    PrivateLaunchStep,
+    _auto_entity_id,
     _payment_selector,
     _select_payment_method,
 )
@@ -117,6 +120,146 @@ class PrivateLaunchContractRegistryTests(unittest.TestCase):
         self.assertEqual(
             status["registry_operation"],
             "LAUNCH_CAMPAIGN",
+        )
+
+    def test_register_capture_templates_ids_and_payload_values(self):
+        step = __import__(
+            "app.private_launch",
+            fromlist=["PrivateLaunchStep"],
+        ).PrivateLaunchStep.CAMPAIGN
+        store = PrivateLaunchContractStore("{}", path=self.path)
+        store.register(step, contracts()["CAMPAIGN"])
+
+        captured = {
+            "doc_id": "999999",
+            "friendly_name": "RotatedCampaignCreateMutation",
+            "endpoint_url": "https://business.facebook.com/api/graphql/",
+            "variables": {
+                "input": {
+                    "account_id": "act_123456789",
+                    "owner_id": 123456789,
+                    "name": "ReMask Capture Canary",
+                    "objective": "OUTCOME_TRAFFIC",
+                }
+            },
+            "request_envelope": {"__req": "a", "dpr": "1"},
+            "source": "browser_graphql_capture",
+        }
+        contract = store.register_capture(
+            step,
+            captured,
+            placeholder_values={
+                "ad_account_id": "123456789",
+                "payload.campaign.name": "ReMask Capture Canary",
+            },
+        )
+        self.assertEqual(contract.doc_id, "999999")
+        self.assertEqual(
+            contract.variables["input"]["account_id"],
+            "act_{{ad_account_id}}",
+        )
+        self.assertEqual(
+            contract.variables["input"]["owner_id"],
+            "{{ad_account_id}}",
+        )
+        self.assertEqual(
+            contract.variables["input"]["name"],
+            "{{payload.campaign.name}}",
+        )
+        self.assertEqual(
+            contract.result_id_paths,
+            ("data.create.id",),
+        )
+        disk = self.path.read_text(encoding="utf-8")
+        self.assertNotIn("ReMask Capture Canary", disk)
+        self.assertNotIn("123456789", disk)
+
+    def test_first_capture_uses_safe_auto_result_path_bootstrap(self):
+        store = PrivateLaunchContractStore("{}", path=self.path)
+        contract = store.register_capture(
+            PrivateLaunchStep.CAMPAIGN,
+            {
+                "doc_id": "999999",
+                "friendly_name": "CampaignCreateMutation",
+                "variables": {
+                    "input": {
+                        "account_id": "123456789",
+                        "name": "Canary",
+                    }
+                },
+            },
+            placeholder_values={
+                "ad_account_id": "123456789",
+                "payload.campaign.name": "Canary",
+            },
+        )
+        self.assertEqual(
+            contract.result_id_paths,
+            (AUTO_RESULT_ID_PATH,),
+        )
+        self.assertTrue(self.path.exists())
+
+    def test_auto_entity_id_prefers_one_step_specific_new_id(self):
+        payload = {
+            "data": {
+                "create": {
+                    "campaign_id": "500000000000001",
+                    "account_id": "1569487661117197",
+                },
+                "actor": {"id": "61594993341059"},
+            }
+        }
+        entity_id, path = _auto_entity_id(
+            payload,
+            PrivateLaunchStep.CAMPAIGN,
+            excluded_ids={
+                "1569487661117197",
+                "61594993341059",
+            },
+        )
+        self.assertEqual(entity_id, "500000000000001")
+        self.assertEqual(path, "data.create.campaign_id")
+
+        ambiguous, ambiguous_path = _auto_entity_id(
+            {
+                "data": {
+                    "first": {"id": "500000000000002"},
+                    "second": {"id": "500000000000003"},
+                }
+            },
+            PrivateLaunchStep.CAMPAIGN,
+            excluded_ids=set(),
+        )
+        self.assertEqual((ambiguous, ambiguous_path), ("", ""))
+
+    def test_capture_rejects_ambiguous_placeholder_scalar(self):
+        step = __import__(
+            "app.private_launch",
+            fromlist=["PrivateLaunchStep"],
+        ).PrivateLaunchStep.CREATIVE
+        store = PrivateLaunchContractStore("{}", path=self.path)
+        with self.assertRaises(ProvisioningError) as caught:
+            store.register_capture(
+                step,
+                {
+                    "doc_id": "999999",
+                    "friendly_name": "CreativeCreateMutation",
+                    "variables": {
+                        "input": {
+                            "account_id": "123456789",
+                            "page_id": "123456789",
+                        }
+                    },
+                },
+                placeholder_values={
+                    "ad_account_id": "123456789",
+                    "page_id": "123456789",
+                },
+                result_id_paths=["data.create.id"],
+            )
+        self.assertEqual(
+            caught.exception.code,
+            "PRIVATE_LAUNCH_CAPTURE_AMBIGUOUS",
         )
 
     def test_registry_rejects_missing_target_placeholder_and_auth_material(self):
@@ -352,6 +495,55 @@ class PrivateLaunchTests(unittest.IsolatedAsyncioTestCase):
             )
         self.web.graphql.assert_not_awaited()
         self.assertTrue(all(step["skipped"] for step in rerun["steps"]))
+
+    async def test_first_live_response_promotes_auto_result_path(self):
+        cfg = contracts()
+        cfg["CAMPAIGN"]["result_id_paths"] = [AUTO_RESULT_ID_PATH]
+        path = Path(self.tmp.name) / "auto-contracts.json"
+        self.service = PrivateLaunchService(
+            self.state,
+            contracts=PrivateLaunchContractStore(
+                __import__("json").dumps(cfg),
+                path=path,
+            ),
+        )
+        self.web.graphql.side_effect = [
+            {
+                "data": {
+                    "create": {
+                        "campaign_id": "500000000000101",
+                        "account_id": self.payload["ad_account_id"],
+                    }
+                }
+            },
+            {"data": {"create": {"id": "500000000000102"}}},
+            {"data": {"create": {"id": "500000000000103"}}},
+            {"data": {"create": {"id": "500000000000104"}}},
+        ]
+        with patch.object(
+            self.service,
+            "_live_preflight",
+            AsyncMock(return_value=self.preflight),
+        ):
+            result = await self.service.run(
+                item_id="item-auto-path",
+                profile_id="7",
+                context=self.context,
+                session=self.session,
+                payload={**self.payload, "launch_key": "auto-path"},
+            )
+        self.assertEqual(result["status"], "SUCCESS")
+        promoted = self.service.contracts.get(
+            PrivateLaunchStep.CAMPAIGN
+        )
+        self.assertEqual(
+            promoted.result_id_paths,
+            ("data.create.campaign_id",),
+        )
+        self.assertNotIn(
+            AUTO_RESULT_ID_PATH,
+            path.read_text(encoding="utf-8"),
+        )
 
     async def test_per_rk_override_is_merged_before_contract_render(self):
         payload = {
