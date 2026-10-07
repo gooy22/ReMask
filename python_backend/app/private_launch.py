@@ -135,7 +135,7 @@ def _record_contract_result(
 
 _CAPTURE_PLACEHOLDER_KEY = re.compile(
     r"^(?:business_id|ad_account_id|page_id|campaign_id|adset_id|creative_id|"
-    r"payload(?:\\.[A-Za-z0-9_-]+)+)$"
+    r"payload(?:\.[A-Za-z0-9_-]+)+)$"
 )
 
 
@@ -169,7 +169,7 @@ def _capture_template(
         ):
             if raw.isdigit() and len(raw) >= 5:
                 rendered = re.sub(
-                    rf"(?<!\\d){re.escape(raw)}(?!\\d)",
+                    rf"(?<!\d){re.escape(raw)}(?!\d)",
                     placeholder,
                     rendered,
                 )
