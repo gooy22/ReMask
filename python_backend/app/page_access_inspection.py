@@ -52,6 +52,23 @@ def request_accounts(variables: Any) -> set[str]:
     return out
 
 
+def blocked_write_summary(request: Any) -> dict[str, Any]:
+    """Safe metadata for a write request that the read-only probe aborted."""
+    meta = _request_graphql_meta(request)
+    parsed = urlsplit(str(meta.get("url") or getattr(request, "url", "") or ""))
+    variables = meta.get("variables") if isinstance(meta.get("variables"), dict) else {}
+    doc_id = str(meta.get("doc_id") or "").strip()
+    return {
+        "method": str(getattr(request, "method", "") or "").upper()[:12],
+        "host": parsed.hostname or "",
+        "path": parsed.path[:180],
+        "operation": str(meta.get("friendly_name") or "")[:180],
+        "doc_id": doc_id if re.fullmatch(r"\d{5,40}", doc_id) else "",
+        "variable_keys": sorted(str(key) for key in variables.keys())[:40],
+        "account_ids": sorted(request_accounts(variables))[:20],
+    }
+
+
 def allowed_readonly_request(request: Any) -> bool:
     """The identity-form probe may send queries, never a Meta asset mutation."""
     meta = _request_graphql_meta(request)
@@ -179,10 +196,11 @@ async def inspect_browser_pages(browser: Any, target: str, business: str, *, tim
                 batch = body.get('batch') or parse_qs(parsed.query).get('batch') or []
                 try: rows = json.loads(batch[0]) if len(batch)==1 else []
                 except (ValueError,TypeError): rows = []
-                blocked.append({'method':str(request.method), 'host':parsed.hostname, 'path':parsed.path[:180],
-                    'operation':str(meta.get('friendly_name') or '')[:180],
+                blocked.append({
+                    **blocked_write_summary(request),
                     'method_overrides':body.get('method',[])[:3],
-                    'batch_methods':[str(row.get('method') or '')[:12] for row in rows[:10] if isinstance(row,dict)] if isinstance(rows,list) else []})
+                    'batch_methods':[str(row.get('method') or '')[:12] for row in rows[:10] if isinstance(row,dict)] if isinstance(rows,list) else [],
+                })
             await route.abort()
 
     await page.route('**/*', readonly_route)
