@@ -984,6 +984,7 @@ class FacebookWebSession:
         friendly_name: str = "",
         endpoint_url: str | None = None,
         request_envelope: dict[str, Any] | None = None,
+        before_submit: Any | None = None,
     ) -> dict[str, Any]:
 
         effective_doc_id = str(doc_id or "").strip()
@@ -1114,7 +1115,17 @@ class FacebookWebSession:
         if friendly_name:
             headers["X-FB-Friendly-Name"] = friendly_name
 
+        request_may_have_been_sent = False
+        transport_stage = "before_graphql_submit"
+
         try:
+            if callable(before_submit):
+                await before_submit()
+
+            transport_stage = "graphql_submit"
+            # From this point an exception is conservatively treated as
+            # ambiguous: the POST may already have reached Meta.
+            request_may_have_been_sent = True
             async with session.post(
                 endpoint,
                 data=form,
@@ -1169,22 +1180,35 @@ class FacebookWebSession:
                         f"Meta HTTP {response.status}: {diagnostic}",
                         http_status=response.status,
                         meta_payload=payload,
+                        request_may_have_been_sent=True,
+                        transport_stage="graphql_response",
                     )
 
                 return payload
 
-        except (AuthenticationError, RemoteRequestError):
+        except AuthenticationError:
+            raise
+
+        except RemoteRequestError as exc:
+            if exc.request_may_have_been_sent is None:
+                exc.request_may_have_been_sent = request_may_have_been_sent
+            if not exc.transport_stage:
+                exc.transport_stage = transport_stage
             raise
 
         except asyncio.TimeoutError as exc:
             raise RemoteRequestError(
-                "Facebook GraphQL request timeout"
+                "Facebook GraphQL request timeout",
+                request_may_have_been_sent=request_may_have_been_sent,
+                transport_stage=transport_stage,
             ) from exc
 
         except aiohttp.ClientError as exc:
             raise RemoteRequestError(
                 "Facebook GraphQL network failure: "
-                f"{exc.__class__.__name__}"
+                f"{exc.__class__.__name__}",
+                request_may_have_been_sent=request_may_have_been_sent,
+                transport_stage=transport_stage,
             ) from exc
 
     async def graphql_browser_native(
