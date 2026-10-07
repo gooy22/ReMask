@@ -2,7 +2,7 @@ import inspect
 import unittest
 from unittest.mock import AsyncMock
 
-from fb_worker import FacebookBootstrap, FacebookWebSession, WebProfile
+from fb_worker import AuthenticationError, RemoteRequestError, FacebookBootstrap, FacebookWebSession, WebProfile
 
 
 class FacebookRequestEnvelopeTests(unittest.IsolatedAsyncioTestCase):
@@ -174,3 +174,77 @@ class FacebookBrowserGraphqlExactlyOnceTests(unittest.TestCase):
             "exc.request_may_have_been_sent = request_may_have_been_sent",
             source,
         )
+
+
+class BusinessAuthenticationPrecheckTests(unittest.IsolatedAsyncioTestCase):
+    def session(self, payload='{"data":{"ok":true}}', source="https://www.facebook.com/marketplace/"):
+        class Response:
+            status = 200
+            headers = {}
+            async def text(self):
+                return payload
+            async def __aenter__(self):
+                return self
+            async def __aexit__(self, *args):
+                return False
+        class HTTP:
+            def __init__(self):
+                self.posts = []
+            def post(self, endpoint, **kwargs):
+                self.posts.append(kwargs)
+                return Response()
+        session = FacebookWebSession(WebProfile(name="fixture",cookies={"c_user":"123456789"},proxy=None,user_agent="fixture"))
+        http = HTTP()
+        session._ensure_session = AsyncMock(return_value=http)
+        session.bootstrap = AsyncMock(return_value=FacebookBootstrap(
+            actor_id="123456789", fb_dtsg="marketplace-token",source_url=source,
+            request_context={"__hsi":"marketplace-context"}))
+        return session, http
+
+    async def test_business_login_redirect_blocks_submit_before_checkpoint(self):
+        session, http = self.session()
+        session.fetch_text = AsyncMock(return_value=(200,'<form id="login_form">','https://www.facebook.com/login.php?next=business'))
+        checkpoint = AsyncMock()
+        with self.assertRaises(AuthenticationError) as caught:
+            await session.graphql("123456789",{},before_submit=checkpoint)
+        self.assertFalse(caught.exception.request_may_have_been_sent)
+        self.assertEqual(http.posts, [])
+        checkpoint.assert_not_awaited()
+
+    async def test_fresh_business_precheck_supplies_business_token_and_context(self):
+        session, http = self.session()
+        session.fetch_text = AsyncMock(return_value=(200,
+            '["DTSGInitialData",[],{"token":"business-token"}] ["LSD",[],{"token":"business-lsd"}] {"__hsi":"business-context"}',
+            'https://business.facebook.com/latest/home?asset_id=1234567890'))
+        result = await session.graphql("123456789",{})
+        self.assertTrue(result["data"]["ok"])
+        self.assertEqual(len(http.posts), 1)
+        self.assertEqual(http.posts[0]["data"]["fb_dtsg"], "business-token")
+        self.assertEqual(http.posts[0]["data"]["lsd"], "business-lsd")
+        self.assertEqual(http.posts[0]["data"]["__hsi"], "business-context")
+        self.assertIn("asset_id=1234567890", http.posts[0]["headers"]["Referer"])
+
+    async def test_missing_business_token_is_retryable_transport_without_submit(self):
+        session, http = self.session()
+        session.fetch_text = AsyncMock(return_value=(200,"not hydrated","https://business.facebook.com/latest/home"))
+        with self.assertRaises(RemoteRequestError) as caught:
+            await session.graphql("123456789",{})
+        self.assertFalse(caught.exception.request_may_have_been_sent)
+        self.assertEqual(http.posts, [])
+
+    async def test_http_200_login_error_invalidates_session_without_retry(self):
+        session, http = self.session(payload='{"error":1357001,"errorSummary":"Log in to continue","payload":null}',
+                                    source="https://business.facebook.com/latest/home")
+        session._bootstrap = await session.bootstrap()
+        with self.assertRaises(AuthenticationError) as caught:
+            await session.graphql("123456789",{})
+        self.assertTrue(caught.exception.request_rejected)
+        self.assertEqual(caught.exception.meta_payload["error"], 1357001)
+        self.assertIsNone(session._bootstrap)
+        self.assertEqual(len(http.posts), 1)
+
+    async def test_generic_processing_error_is_not_mislabeled_session_expired(self):
+        session, http = self.session(payload='{"error":1357054,"payload":null}',
+                                    source="https://business.facebook.com/latest/home")
+        self.assertEqual((await session.graphql("123456789",{}))["error"], 1357054)
+        self.assertEqual(len(http.posts), 1)

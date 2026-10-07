@@ -841,6 +841,20 @@ async def business_handler(
                          "private_create_error_code": private_error.code},
                     )
 
+                if private_error is not None and private_error.code == "SESSION_EXPIRED":
+                    auth_not_sent = any(row.get("request_may_have_been_sent") is False
+                                        for row in private_error_diagnostics if isinstance(row, dict))
+                    auth_rejected = any(row.get("request_rejected") is True
+                                        for row in private_error_diagnostics if isinstance(row, dict))
+                    if auth_not_sent or auth_rejected:
+                        await provisioning_state.checkpoint(
+                            item_id, profile_id, scope_key, ProvisioningStep.BUSINESS,
+                            {"phase": "CREATE_NOT_SUBMITTED" if auth_not_sent else "CREATE_REJECTED",
+                             "activity": "BUSINESS_SESSION_RESTORATION_REQUIRED",
+                             "private_create_error_code": private_error.code,
+                             "private_create_diagnostics": private_error_diagnostics},
+                        )
+
                 # Transport fallback is centrally policy-gated. A
                 # RESULT_UNKNOWN / post-submit state must never be replayed
                 # through Chromium as a second CREATE.

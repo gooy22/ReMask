@@ -978,6 +978,49 @@ class FacebookWebSession:
     # Unified private GraphQL transport
     # ------------------------------------------------------------------
 
+    async def _business_bootstrap(self, bootstrap: FacebookBootstrap) -> FacebookBootstrap:
+        """Require Business auth before reusing a token from another Facebook surface."""
+        source = str(getattr(bootstrap, "source_url", "") or "").strip()
+        if not source or urlsplit(source).hostname == "business.facebook.com":
+            return bootstrap
+        try:
+            status, body, final_url = await self.fetch_text(self.ADS_MANAGER_URL)
+        except RemoteRequestError as exc:
+            exc.request_may_have_been_sent = False
+            exc.transport_stage = "business_auth_precheck"
+            raise
+        parts = urlsplit(final_url)
+        gated = (
+            parts.hostname != "business.facebook.com"
+            or "/login" in parts.path.lower()
+            or "/checkpoint" in parts.path.lower()
+            or "login_form" in body.lower()
+            or status in {401, 403}
+        )
+        if gated:
+            self.invalidate_bootstrap()
+            error = AuthenticationError(
+                "Facebook profile is reachable, but Meta Business requires login/session restoration. No GraphQL POST was sent."
+            )
+            error.request_may_have_been_sent = False
+            error.transport_stage = "business_auth_precheck"
+            raise error
+        token = self._first_match(body, list(self.FB_DTSG_PATTERNS))
+        if status != 200 or not token:
+            raise RemoteRequestError(
+                "Meta Business authentication precheck did not confirm a usable session. No GraphQL POST was sent.",
+                http_status=status, request_may_have_been_sent=False,
+                transport_stage="business_auth_precheck",
+            )
+        current = FacebookBootstrap(
+            fb_dtsg=token, actor_id=bootstrap.actor_id,
+            lsd=self._first_match(body, [r'"LSD".{0,1800}?"token"\s*:\s*"([^"]+)"']),
+            jazoest=self._first_match(body, [r"""name=["']jazoest["'][^>]*value=["']([^"']+)["']"""]),
+            request_context=self._extract_request_context(body), source_url=final_url,
+        )
+        self._bootstrap = current
+        return current
+
     async def graphql(
         self,
         doc_id: str,
@@ -1007,6 +1050,8 @@ class FacebookWebSession:
         )
 
         bootstrap = await self.bootstrap()
+        if urlsplit(endpoint).hostname == "business.facebook.com":
+            bootstrap = await self._business_bootstrap(bootstrap)
         session = await self._ensure_session()
 
         form: dict[str, str] = {
@@ -1207,6 +1252,16 @@ class FacebookWebSession:
                         transport_stage="graphql_response",
                     )
 
+                # Meta can return HTTP 200 with a login rejection instead of
+                # redirecting. Never let that become a generic mutation error.
+                if str(payload.get("error") or "") == "1357001":
+                    self.invalidate_bootstrap()
+                    error = AuthenticationError("Meta Business rejected the session: Log in to continue.")
+                    error.meta_payload = payload
+                    error.request_rejected = True
+                    error.request_may_have_been_sent = True
+                    error.transport_stage = "graphql_response"
+                    raise error
                 return payload
 
         except AuthenticationError:

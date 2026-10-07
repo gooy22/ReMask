@@ -9261,17 +9261,21 @@ class FacebookBusinessBrowser:
                         value
                         for value in normalized_labels
                         if (
-                            value.casefold() in create_words
-                            or any(
-                                value.casefold().startswith(word + " ")
-                                for word in create_words
-                                if len(word) >= 5
-                            )
+                            " ".join(value.split()).casefold() in create_words
                         )
                     ),
                     "",
                 )
                 if not matched_label:
+                    continue
+                # A mounted chooser behind the wizard is visible to Playwright
+                # but is not an actionable final submit control.
+                exposed = await item.evaluate("""el => {
+                    const r = el.getBoundingClientRect();
+                    const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+                    return !!hit && (hit === el || el.contains(hit));
+                }""")
+                if not exposed:
                     continue
                 text = matched_label
                 role = _clean(await item.get_attribute("role"))
@@ -9499,7 +9503,11 @@ class FacebookBusinessBrowser:
                             return r.width > 0 && r.height > 0
                                 && s.display !== 'none'
                                 && s.visibility !== 'hidden'
-                                && s.pointerEvents !== 'none';
+                                && s.pointerEvents !== 'none'
+                                && (() => {
+                                    const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+                                    return !!hit && (hit === el || el.contains(hit));
+                                })();
                         };
                         const clean = text => (text || '')
                             .normalize('NFKC')
@@ -9565,7 +9573,7 @@ class FacebookBusinessBrowser:
                                 );
                                 if (!text) continue;
                                 const exactCreate = createWords.some(word =>
-                                    text === word || text.startsWith(word + ' ')
+                                    text === word
                                 );
                                 const accountAction = accountWords.some(word =>
                                     text.includes(word)
@@ -9682,7 +9690,11 @@ class FacebookBusinessBrowser:
                             return r.width > 0 && r.height > 0
                                 && s.display !== 'none'
                                 && s.visibility !== 'hidden'
-                                && s.pointerEvents !== 'none';
+                                && s.pointerEvents !== 'none'
+                                && (() => {
+                                    const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+                                    return !!hit && (hit === el || el.contains(hit));
+                                })();
                         };
                         const clean = text => (text || '')
                             .normalize('NFKC')
@@ -9749,12 +9761,11 @@ class FacebookBusinessBrowser:
                             if (ai.some(word => text.includes(word))) continue;
                             const createMatch = createWords.some(
                                 word => text === word
-                                    || text.startsWith(word + ' ')
                             );
                             const accountMatch = accountWords.some(
                                 word => text.includes(word)
                             );
-                            if (!createMatch && !(accountMatch && text.includes('créer'))) {
+                            if (!createMatch) {
                                 continue;
                             }
 
@@ -9987,46 +9998,31 @@ class FacebookBusinessBrowser:
                     const dialogRoots = [...document.querySelectorAll(
                         '[role="dialog"],[aria-modal="true"]'
                     )].filter(visible);
-                    const wizardRoot = dialogRoots.find(root => {
-                        const t = clean(
-                            (root.getAttribute('aria-label') || '') + ' ' +
-                            (root.getAttribute('title') || '') + ' ' +
-                            (root.innerText || root.textContent || '')
-                        );
-                        if (aiMarkers.some(word => t.includes(word))) {
-                            return false;
-                        }
-                        if (wizardMarkers.some(word => t.includes(word))) {
-                            return true;
-                        }
-
-                        // Current Meta confirmation screens can drop the
-                        // earlier wizard labels entirely. Bind the dialog by
-                        // the final enabled Create-Ad-Account control instead
-                        // of requiring a locale-specific heading.
+                    const exposed = el => {
+                        const r = el.getBoundingClientRect();
+                        const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+                        return !!hit && (hit === el || el.contains(hit));
+                    };
+                    const labelsOf = el => [
+                        el.getAttribute('aria-label') || '',
+                        el.getAttribute('title') || '',
+                        el.innerText || el.textContent || ''
+                    ].map(clean).filter(Boolean);
+                    // Meta keeps the chooser mounted behind Details/Usage/Confirm.
+                    // Bind to an exposed wizard action, never the first dialog.
+                    const wizardRoot = dialogRoots.slice().reverse().find(root => {
+                        const t = clean(root.innerText || root.textContent || '');
+                        if (aiMarkers.some(word => t.includes(word))) return false;
+                        const contextual = wizardMarkers.some(word => t.includes(word))
+                            || dialogAccountWords.some(word => t.includes(word));
+                        if (!contextual) return false;
                         return [...root.querySelectorAll(
-                            'button,a,[role="button"],'
-                            + '[tabindex]:not([tabindex="-1"])'
-                        )].some(el => {
-                            if (!visible(el)) return false;
-                            if (
-                                el.hasAttribute('disabled')
-                                || el.getAttribute('aria-disabled') === 'true'
-                            ) {
-                                return false;
-                            }
-                            const actionText = clean(
-                                (el.getAttribute('aria-label') || '') + ' ' +
-                                (el.getAttribute('title') || '') + ' ' +
-                                (el.innerText || el.textContent || '')
-                            );
-                            return createWords.some(
-                                word => actionText === word
-                                    || actionText.startsWith(word + ' ')
-                            ) && dialogAccountWords.some(
-                                word => actionText.includes(word)
-                            );
-                        });
+                            'button,a,[role="button"],[role="radio"],[role="option"],'
+                            + '[role="menuitem"],[tabindex]:not([tabindex="-1"])'
+                        )].some(el => visible(el) && exposed(el) && labelsOf(el).some(label =>
+                            nextWords.includes(label) || createWords.includes(label)
+                            || ownWords.some(word => label === word)
+                        ));
                     }) || null;
 
                     const nodes = wizardRoot
@@ -10125,17 +10121,12 @@ class FacebookBusinessBrowser:
                         );
                         if (!text || text.length > 180) continue;
 
+                        const actionLabels = labelsOf(el);
                         let match = false;
                         if (mode === 'next') {
-                            match = nextWords.some(
-                                word => text === word
-                                    || text.startsWith(word + ' ')
-                            );
+                            match = actionLabels.some(label => nextWords.includes(label));
                         } else if (mode === 'final') {
-                            match = createWords.some(
-                                word => text === word
-                                    || text.startsWith(word + ' ')
-                            );
+                            match = actionLabels.some(label => createWords.includes(label));
                         } else {
                             match = ownWords.some(
                                 word => text === word
@@ -10152,7 +10143,7 @@ class FacebookBusinessBrowser:
                             + '[tabindex]:not([tabindex="-1"])'
                         );
                         const clickable = clickableAncestor || el;
-                        if (!visible(clickable)) continue;
+                        if (!visible(clickable) || !exposed(clickable)) continue;
                         if (!belongsToWizardSurface(clickable)) continue;
                         if (
                             clickable.hasAttribute('disabled')
@@ -18592,40 +18583,42 @@ timeout_seconds=4.0,
                     )
                     await self.page.wait_for_timeout(200)
 
-                capture.arm()
-                self._ad_account_final_capture_armed = True
-                self._mark_ad_account_phase("CAPTURE_FINAL_ARMED")
-                if checkpoint is not None:
-                    await checkpoint({
-                        "phase": "CREATE_CLICK_INTENT", "resume_from": "RECONCILE_CREATE",
-                        "business_id": business, "account_name": name,
-                        "activity": "AD_ACCOUNT_CAPTURE_FINAL_INTENT",
-                        "final_capture_armed": True,
-                    })
-                final_meta = await self._click_ad_account_final_interactive()
-                final_clicked = bool(final_meta.get("clicked"))
-                final_attempted = bool(
-                    final_meta.get("attempted") or final_clicked
-                )
-                if not final_clicked and not final_attempted:
-                    fallback = (
-                        await self._click_ad_account_form_action_by_visible_text(
-                            "final"
-                        )
-                    )
-                    final_clicked = bool(fallback.get("clicked"))
-                    final_attempted = bool(
-                        final_attempted
-                        or fallback.get("attempted")
-                        or final_clicked
-                    )
-                    if fallback:
-                        final_meta["fallback"] = fallback
+                async def arm_final() -> None:
+                    if checkpoint is not None:
+                        await checkpoint({
+                            "phase": "CREATE_CLICK_INTENT", "resume_from": "RECONCILE_CREATE",
+                            "business_id": business, "account_name": name,
+                            "activity": "AD_ACCOUNT_CAPTURE_FINAL_INTENT",
+                            "final_capture_armed": True,
+                        })
+                    capture.arm()
+                    self._ad_account_final_capture_armed = True
+                    self._mark_ad_account_phase("CAPTURE_FINAL_ARMED")
 
+                final_meta = await self._click_ad_account_final_interactive(
+                    before_click=arm_final,
+                )
+                final_clicked = bool(final_meta.get("clicked"))
+                final_attempted = bool(final_meta.get("attempted") or final_clicked)
                 if not final_attempted:
                     capture.disarm()
                     self._ad_account_final_capture_armed = False
                     self._mark_ad_account_phase("CAPTURE_FORM_READY")
+                    diag = await self._diagnostic("ad_account_wizard_action_missing")
+                    diag.update({
+                        "ui_state": await self._ad_account_ui_state(),
+                        "form_setup": form_setup,
+                        "submit_attempts": submit_attempts[-12:],
+                        "final_meta": final_meta,
+                        "final_capture_armed": False,
+                        "create_may_have_been_sent": False,
+                    })
+                    raise BrowserBusinessError(
+                        "AD_ACCOUNT_CREATE_UI_CHANGED",
+                        "No exposed Next or final Create action was found in the active RK wizard. No CREATE was attempted.",
+                        retryable=True,
+                        diagnostic=diag,
+                    )
 
                 submit_attempts.append(
                     {

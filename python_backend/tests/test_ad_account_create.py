@@ -351,7 +351,7 @@ class AdAccountCreateTransportTests(unittest.TestCase):
         self.assertIn("GraphqlMutationCapture(", source)
         self.assertIn("capture.arm()", source)
         self.assertIn("await route.abort()", primitive)
-        self.assertIn("_click_ad_account_final_interactive()", source)
+        self.assertIn("before_click=arm_final", source)
 
     def test_private_create_has_no_docid_fallback(self) -> None:
         source = inspect.getsource(create_ad_account_with_docids)

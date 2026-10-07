@@ -69,3 +69,24 @@ jobs:
 
       - name: Honest Meta sync outcomes
         run: php tests/sync-outcome.test.php
+
+  browser_regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Chromium fixture dependencies
+        run: |
+          python3 -m venv /tmp/remask-browser-regression
+          /tmp/remask-browser-regression/bin/pip install -r python_backend/requirements.txt
+          /tmp/remask-browser-regression/bin/python -m playwright install --with-deps chromium
+      - name: Reproduce original stacked-dialog failure
+        run: |
+          git fetch --depth=1 origin 554fff1cfac8913e815821c2601842ca8744dfdf
+          git worktree add --detach /tmp/remask-before 554fff1cfac8913e815821c2601842ca8744dfdf
+          if PYTHONPATH=/tmp/remask-before/python_backend /tmp/remask-browser-regression/bin/python tests/meta-ad-account-dialogs.browser.py StackedDialogsTests.test_next_uses_foreground_details_dialog; then
+            echo "Expected the original foreground-dialog reproduction to fail"
+            exit 1
+          fi
+      - name: Verify Details to Confirm capture and duplicate guards in Chromium
+        run: PYTHONPATH=python_backend /tmp/remask-browser-regression/bin/python tests/meta-ad-account-dialogs.browser.py

@@ -446,6 +446,9 @@ async def _create_business_via_web(
                 "transport": "facebook_web_graphql",
                 "code": "SESSION_EXPIRED",
                 "message": str(exc),
+                "request_rejected": bool(getattr(exc, "request_rejected", False)),
+                "request_may_have_been_sent": getattr(exc, "request_may_have_been_sent", None),
+                "response_summary": _mutation_payload_summary(getattr(exc, "meta_payload", None)),
             }
         )
         raise BusinessCreateError(

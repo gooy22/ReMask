@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from app.facebook_business_browser import BrowserBusinessError
+from fb_worker import AuthenticationError
 
 from app.facebook_business_create import BusinessMutationError
 from app.provisioning.business_handler import business_handler
@@ -94,6 +95,34 @@ class BusinessResumeCheckpointTests(unittest.IsolatedAsyncioTestCase):
 
     async def asyncTearDown(self):
         self.tmp.cleanup()
+
+    async def test_auth_rejection_does_not_leave_ambiguous_create_checkpoint(self):
+        for sent in (False, True):
+            with self.subTest(sent=sent):
+                item = "auth-item-" + str(sent)
+                await self.state_store.set_running(item, "profile-1", "auth-scope-" + str(sent), ProvisioningStep.BUSINESS)
+                controller = _Controller()
+                async def reject(**kwargs):
+                    if sent:
+                        await kwargs["before_submit"]()
+                    error = AuthenticationError("Meta Business requires login")
+                    error.request_may_have_been_sent = sent
+                    error.request_rejected = sent
+                    error.meta_payload = {"error": 1357001} if sent else {}
+                    raise error
+                controller.create_business_manager_detailed = reject
+                session = _Session(controller)
+                snapshot = await self.state_store.snapshot("profile-1", "auth-scope-" + str(sent))
+                with self.assertRaises(ProvisioningError) as caught:
+                    await business_handler(
+                        session, {"name": "Test Business", "user_email": "owner@example.com"},
+                        snapshot.as_dict(), provisioning_state=self.state_store,
+                        item_id=item, profile_id="profile-1", scope_key="auth-scope-" + str(sent))
+                self.assertEqual(caught.exception.code, "SESSION_EXPIRED")
+                step = await self.state_store.step(item, ProvisioningStep.BUSINESS)
+                self.assertEqual(step["result"]["phase"], "CREATE_REJECTED" if sent else "CREATE_NOT_SUBMITTED")
+                session.browser.add_existing_page.assert_not_awaited()
+                session.browser.create_business.assert_not_awaited()
 
     async def test_retry_resumes_attach_without_second_create(self):
         item_id = "item-1"
