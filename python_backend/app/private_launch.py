@@ -878,14 +878,15 @@ class PrivateLaunchService:
                 })
                 continue
             if prior and str(prior.get("status") or "").upper() in {
+                "SUBMITTING",
                 "RECONCILE_REQUIRED",
                 "BLOCKED",
             }:
                 previous_status = str(prior.get("status") or "").upper()
                 code = (
-                    "PRIVATE_LAUNCH_RECONCILE_REQUIRED"
-                    if previous_status == "RECONCILE_REQUIRED"
-                    else "PRIVATE_LAUNCH_BLOCKED_REPLAY"
+                    "PRIVATE_LAUNCH_BLOCKED_REPLAY"
+                    if previous_status == "BLOCKED"
+                    else "PRIVATE_LAUNCH_RECONCILE_REQUIRED"
                 )
                 raise ProvisioningError(
                     code,
@@ -908,6 +909,43 @@ class PrivateLaunchService:
             )
 
             web = await session.facebook_web()
+            try:
+                await web.bootstrap()
+            except AuthenticationError as exc:
+                raise ProvisioningError(
+                    f"PRIVATE_LAUNCH_{step.value}_AUTH_PRECHECK",
+                    "Facebook session is not ready before the private mutation",
+                    retryable=False,
+                ) from exc
+            except RemoteRequestError as exc:
+                raise ProvisioningError(
+                    f"PRIVATE_LAUNCH_{step.value}_PRE_SUBMIT_TRANSPORT",
+                    "Private Launch transport failed before the submit checkpoint",
+                    retryable=True,
+                ) from exc
+
+            intent = ActionResult.reconcile(
+                step.value,
+                code=f"PRIVATE_LAUNCH_{step.value}_SUBMITTING",
+                message=f"{step.value} mutation crossed the durable submit checkpoint",
+                submitted=None,
+                evidence={
+                    "friendly_name": contract.friendly_name,
+                    "variable_keys": sorted(str(key) for key in variables.keys())[:40],
+                },
+            )
+            await self.state.save(
+                launch_key=launch_key,
+                profile_id=profile_id,
+                business_id=business_id,
+                ad_account_id=ad_account_id,
+                step=step,
+                status="SUBMITTING",
+                result=intent.as_dict(),
+                error_code=intent.code,
+                submitted=None,
+            )
+
             try:
                 response = await web.graphql(
                     contract.doc_id,
@@ -943,6 +981,7 @@ class PrivateLaunchService:
                         step.value,
                         code=f"PRIVATE_LAUNCH_{step.value}_REJECTED",
                         message=f"Meta rejected {step.value} private mutation",
+                        submitted=True,
                         evidence={
                             "http_status": http_status,
                             "friendly_name": contract.friendly_name,
