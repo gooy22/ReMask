@@ -40,6 +40,94 @@ loadFunding=async function(force=false) {
 const remaskPrivateLaunchNotice='Private Launch: перед CREATE ReMask проверяет exact BM/RK, доступ выбранной FP, ACTIVE RK, карту и полный серверный mutation contract.';
 let remaskPrivateLaunchBusy=false;
 const remaskPrivateLaunchPendingKey='remask_private_launch_pending_v1';
+const remaskPrivatePaymentSelections={};
+
+function remaskPrivatePaymentKey(profile,accountId){
+    return String(profile||'').trim()+'|'+remaskPrivateAccountId(accountId);
+}
+function remaskPrivateSelectedPayment(profile,accountId){
+    const row=remaskPrivatePaymentSelections[
+        remaskPrivatePaymentKey(profile,accountId)
+    ];
+    return row&&/^\d{4}$/.test(String(row.last4||''))
+        ?{type:String(row.type||''),last4:String(row.last4)}
+        :null;
+}
+function remaskPrivatePaymentSelectorContainer(){
+    if(typeof document==='undefined'||!document.createElement)return null;
+    let container=$('remaskPrivatePaymentSelectors');
+    if(container)return container;
+    const anchor=$('fundingStatus')||$('reviewStatus')||$('launchResult');
+    if(!anchor?.parentNode)return null;
+    container=document.createElement('div');
+    container.id='remaskPrivatePaymentSelectors';
+    container.className='mt-2';
+    anchor.parentNode.insertBefore(container,anchor.nextSibling);
+    return container;
+}
+function remaskPrivateRenderPaymentSelector(row,methods){
+    const safe=(Array.isArray(methods)?methods:[]).filter(method=>
+        method&&/^\d{4}$/.test(String(method.last4||'')));
+    const container=remaskPrivatePaymentSelectorContainer();
+    if(!container||!safe.length)return;
+    const key=remaskPrivatePaymentKey(row.profile,row.ad_account_id);
+    let block=Array.from(container.children||[]).find(
+        node=>node?.dataset?.paymentKey===key
+    );
+    if(!block){
+        block=document.createElement('div');
+        block.dataset.paymentKey=key;
+        block.className='mb-2';
+        const label=document.createElement('label');
+        label.textContent='RK '+row.ad_account_id+' · карта для Launch';
+        const select=document.createElement('select');
+        select.className='form-select';
+        select.dataset.paymentSelect='1';
+        block.appendChild(label);
+        block.appendChild(select);
+        container.appendChild(block);
+        select.addEventListener('change',()=>{
+            const option=select.options[select.selectedIndex];
+            if(!option||!option.dataset.last4){
+                delete remaskPrivatePaymentSelections[key];
+            }else{
+                remaskPrivatePaymentSelections[key]={
+                    type:String(option.dataset.type||''),
+                    last4:String(option.dataset.last4||'')
+                };
+            }
+            remaskPrivatePendingClear();
+            if(typeof validateReady==='function')validateReady();
+        });
+    }
+    const select=Array.from(block.children||[]).find(
+        node=>node?.dataset?.paymentSelect==='1'
+    );
+    if(!select)return;
+    const current=remaskPrivateSelectedPayment(
+        row.profile,row.ad_account_id
+    );
+    select.textContent='';
+    const placeholder=document.createElement('option');
+    placeholder.value='';
+    placeholder.textContent='Выберите карту';
+    select.appendChild(placeholder);
+    safe.forEach((method,index)=>{
+        const option=document.createElement('option');
+        option.value=String(index+1);
+        option.dataset.type=String(method.type||'');
+        option.dataset.last4=String(method.last4||'');
+        option.textContent=(method.type?String(method.type)+' ':'')+
+            '•••• '+String(method.last4);
+        if(
+            current
+            && current.last4===String(method.last4)
+            && (!current.type||current.type===String(method.type||''))
+        ) option.selected=true;
+        select.appendChild(option);
+    });
+}
+
 
 function remaskPrivateAccountId(value) {
     const id=String(value||'').replace(/^act_/i,'').trim();
@@ -70,11 +158,17 @@ function remaskPrivateTargetRows(config) {
         if(!profile)throw new Error('Private Launch: Facebook profile is missing for RK '+accountId+'.');
         if(!/^\d{5,30}$/.test(businessId))throw new Error('Private Launch: BM is missing for RK '+accountId+'.');
         if(!/^\d{5,30}$/.test(pageId))throw new Error('Private Launch: select a Page for RK '+accountId+'.');
+        const selectedPaymentMethod=remaskPrivateSelectedPayment(
+            profile,accountId
+        );
         return {
             profile,
             business_id:businessId,
             ad_account_id:accountId,
             page_id:pageId,
+            ...(selectedPaymentMethod
+                ?{selected_payment_method:selectedPaymentMethod}
+                :{}),
             launch:{
                 base:config.payload||{},
                 override:overrides[accountId]||overrides['act_'+accountId]||{}
@@ -148,7 +242,9 @@ function remaskPrivateNonce() {
 function remaskPrivateFingerprint(rows) {
     return JSON.stringify(rows.map(row=>({
         profile:row.profile,business_id:row.business_id,ad_account_id:row.ad_account_id,
-        page_id:row.page_id,launch:row.launch
+        page_id:row.page_id,
+        selected_payment_method:row.selected_payment_method||null,
+        launch:row.launch
     })));
 }
 function remaskPrivatePendingRead(fingerprint) {
@@ -183,10 +279,43 @@ async function remaskPrivateReviewConfig(config,{render=true}={}) {
             business_id:row.business_id,
             ad_account_id:row.ad_account_id,
             page_id:row.page_id,
+            ...(row.selected_payment_method
+                ?{selected_payment_method:row.selected_payment_method}
+                :{}),
             launch:row.launch
         });
         const review=response?.review||{};
-        if(review.ready!==true)throw new Error('Private Launch Review did not confirm RK '+row.ad_account_id+'.');
+        const preflight=review?.preflight||{};
+        if(
+            review.ready!==true
+            && preflight.payment_selection_required===true
+        ){
+            remaskPrivateRenderPaymentSelector(
+                row,
+                preflight.payment_methods||[]
+            );
+            throw new Error(
+                'Private Launch: выберите карту для RK '+
+                row.ad_account_id+' и повторите Review.'
+            );
+        }
+        if(review.ready!==true)throw new Error(
+            'Private Launch Review did not confirm RK '+
+            row.ad_account_id+'.'
+        );
+        const selected=preflight.selected_payment_method;
+        if(selected&&/^\d{4}$/.test(String(selected.last4||''))){
+            remaskPrivatePaymentSelections[
+                remaskPrivatePaymentKey(row.profile,row.ad_account_id)
+            ]={
+                type:String(selected.type||''),
+                last4:String(selected.last4)
+            };
+            row.selected_payment_method={
+                type:String(selected.type||''),
+                last4:String(selected.last4)
+            };
+        }
         results.push({row,review});
     }
     if(render)remaskPrivateShow(
@@ -230,6 +359,9 @@ function remaskPrivateJobRequest(config,reviewed) {
                         business_id:row.business_id,
                         ad_account_id:row.ad_account_id,
                         page_id:row.page_id,
+                        ...(row.selected_payment_method
+                            ?{selected_payment_method:row.selected_payment_method}
+                            :{}),
                         launch:row.launch
                     }
                 }]

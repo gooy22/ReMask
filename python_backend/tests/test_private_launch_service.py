@@ -9,6 +9,8 @@ from fb_worker import RemoteRequestError
 from app.private_launch import (
     PrivateLaunchContractStore,
     PrivateLaunchService,
+    _payment_selector,
+    _select_payment_method,
 )
 from app.provisioning.models import ProvisioningError
 from app.provisioning.state import ProvisioningStateStore
@@ -119,6 +121,97 @@ class PrivateLaunchContractRegistryTests(unittest.TestCase):
         with self.assertRaises(ProvisioningError):
             store.register(step, row)
         self.assertFalse(self.path.exists())
+
+
+class PrivateLaunchPaymentSelectionTests(unittest.TestCase):
+    def test_single_live_method_is_selected_without_explicit_choice(self):
+        module = __import__("app.private_launch", fromlist=["_select_payment_method"])
+        selected, source = module._select_payment_method(
+            [{"type": "Visa", "last4": "1234", "linkage_status": "OBSERVED"}],
+            None,
+        )
+        self.assertEqual(selected["last4"], "1234")
+        self.assertEqual(source, "single_live_method")
+
+    def test_multiple_live_methods_require_explicit_masked_choice(self):
+        module = __import__("app.private_launch", fromlist=["_select_payment_method"])
+        methods = [
+            {"type": "Visa", "last4": "1234"},
+            {"type": "Mastercard", "last4": "5678"},
+        ]
+        with self.assertRaises(ProvisioningError) as caught:
+            module._select_payment_method(methods, None)
+        self.assertEqual(
+            caught.exception.code,
+            "PRIVATE_LAUNCH_PAYMENT_SELECTION_REQUIRED",
+        )
+        selected, source = module._select_payment_method(
+            methods,
+            {"type": "Mastercard", "last4": "5678"},
+        )
+        self.assertEqual(selected["type"], "Mastercard")
+        self.assertEqual(selected["last4"], "5678")
+        self.assertEqual(source, "explicit_masked_selection")
+
+    def test_selection_rejects_raw_payment_fields(self):
+        module = __import__("app.private_launch", fromlist=["_payment_selector"])
+        with self.assertRaises(ProvisioningError) as caught:
+            module._payment_selector(
+                {
+                    "selected_payment_method": {
+                        "type": "Visa",
+                        "last4": "1234",
+                        "card_number": "4111111111111111",
+                    }
+                }
+            )
+        self.assertEqual(
+            caught.exception.code,
+            "PRIVATE_LAUNCH_PAYMENT_SELECTION_INVALID",
+        )
+
+
+class PrivateLaunchPaymentSelectionTests(unittest.TestCase):
+    def test_single_live_method_is_selected_automatically(self):
+        selected, source = _select_payment_method(
+            [{"type": "Visa", "last4": "1234", "linkage_status": "OBSERVED"}],
+            None,
+        )
+        self.assertEqual(selected["type"], "Visa")
+        self.assertEqual(selected["last4"], "1234")
+        self.assertEqual(source, "single_live_method")
+
+    def test_multiple_methods_require_explicit_masked_selection(self):
+        methods = [
+            {"type": "Visa", "last4": "1234"},
+            {"type": "Mastercard", "last4": "5678"},
+        ]
+        with self.assertRaises(ProvisioningError) as caught:
+            _select_payment_method(methods, None)
+        self.assertEqual(
+            caught.exception.code,
+            "PRIVATE_LAUNCH_PAYMENT_SELECTION_REQUIRED",
+        )
+
+        selected, source = _select_payment_method(
+            methods,
+            {"type": "Mastercard", "last4": "5678"},
+        )
+        self.assertEqual(selected["last4"], "5678")
+        self.assertEqual(source, "explicit_masked_selection")
+
+    def test_selector_rejects_raw_or_unsupported_payment_fields(self):
+        with self.assertRaises(ProvisioningError) as caught:
+            _payment_selector({
+                "selected_payment_method": {
+                    "last4": "1234",
+                    "card_number": "4111111111111111",
+                }
+            })
+        self.assertEqual(
+            caught.exception.code,
+            "PRIVATE_LAUNCH_PAYMENT_SELECTION_INVALID",
+        )
 
 
 class PrivateLaunchTests(unittest.IsolatedAsyncioTestCase):
@@ -338,6 +431,81 @@ class PrivateLaunchTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(second["ready"])
         self.assertIs(second["preflight"]["review_cache_reused"], True)
         self.assertEqual(probe.await_count, 1)
+
+    async def test_review_passes_exact_masked_payment_selection_to_preflight(self):
+        payload = {
+            **self.payload,
+            "selected_payment_method": {
+                "type": "Visa",
+                "last4": "1234",
+            },
+        }
+        probe = AsyncMock(return_value={
+            **self.preflight,
+            "selected_payment_method": {
+                "type": "Visa",
+                "last4": "1234",
+                "linkage_status": "OBSERVED",
+            },
+            "payment_selection_source": "explicit_masked_selection",
+        })
+        with patch.object(self.service, "_live_preflight", probe):
+            result = await self.service.review(
+                profile_id="7",
+                context=self.context,
+                payload=payload,
+            )
+        self.assertTrue(result["ready"])
+        self.assertEqual(
+            probe.await_args.kwargs["payment_selector"],
+            {"type": "Visa", "last4": "1234"},
+        )
+
+    async def test_review_returns_masked_choices_when_payment_selection_is_required(self):
+        choices = [
+            {"type": "Visa", "last4": "1234", "linkage_status": "OBSERVED"},
+            {"type": "Mastercard", "last4": "5678", "linkage_status": "OBSERVED"},
+        ]
+        probe = AsyncMock(return_value={
+            **self.preflight,
+            "payment_selection_required": True,
+            "payment_methods": choices,
+            "selected_payment_method": {},
+            "payment_selection_source": "selection_required",
+        })
+        with patch.object(self.service, "_live_preflight", probe):
+            result = await self.service.review(
+                profile_id="7",
+                context=self.context,
+                payload=self.payload,
+            )
+        self.assertFalse(result["ready"])
+        self.assertEqual(result["preflight"]["payment_methods"], choices)
+
+    async def test_run_blocks_before_private_mutation_when_payment_selection_is_required(self):
+        probe = AsyncMock(return_value={
+            **self.preflight,
+            "payment_selection_required": True,
+            "payment_methods": [
+                {"type": "Visa", "last4": "1234"},
+                {"type": "Mastercard", "last4": "5678"},
+            ],
+        })
+        with patch.object(self.service, "_live_preflight", probe):
+            with self.assertRaises(ProvisioningError) as caught:
+                await self.service.run(
+                    item_id="item-payment-choice",
+                    profile_id="7",
+                    context=self.context,
+                    session=self.session,
+                    payload={**self.payload, "launch_key": "payment-choice"},
+                )
+        self.assertEqual(
+            caught.exception.code,
+            "PRIVATE_LAUNCH_PAYMENT_SELECTION_REQUIRED",
+        )
+        self.web.bootstrap.assert_not_awaited()
+        self.web.graphql.assert_not_awaited()
 
     async def test_explicit_meta_rejection_is_durable_and_never_replayed(self):
         self.web.graphql.side_effect = RemoteRequestError(

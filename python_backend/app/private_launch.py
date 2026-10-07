@@ -15,10 +15,10 @@ from urllib.parse import urlsplit
 from fb_worker import AuthenticationError, RemoteRequestError
 
 from .action_result import ActionResult
-from .facebook_business_browser import FacebookBusinessBrowser
 from .page_access_inspection import inspect_browser_pages
 from .payment_inspection import inspect_payment_methods
 from .provisioning.models import ProvisioningError
+from .provisioning.meta_transport import MetaTransportRouter
 from .provisioning.state import ProvisioningStateStore
 
 
@@ -550,6 +550,126 @@ def _effective_launch_payload(value: Any) -> dict[str, Any]:
     return _deep_merge(base, override)
 
 
+def _payment_selector(payload: dict[str, Any]) -> dict[str, str] | None:
+    raw = (
+        payload.get("selected_payment_method")
+        if "selected_payment_method" in payload
+        else payload.get("payment_method")
+    )
+    if raw in (None, {}):
+        return None
+    if not isinstance(raw, dict):
+        raise ProvisioningError(
+            "PRIVATE_LAUNCH_PAYMENT_SELECTION_INVALID",
+            "selected payment method must be a masked object",
+            retryable=False,
+        )
+    allowed = {"type", "brand", "last4"}
+    unknown = sorted(str(key) for key in raw if str(key) not in allowed)
+    if unknown:
+        raise ProvisioningError(
+            "PRIVATE_LAUNCH_PAYMENT_SELECTION_INVALID",
+            "selected payment method contains unsupported fields: "
+            + ", ".join(unknown[:10]),
+            retryable=False,
+        )
+    brand = str(raw.get("brand") or raw.get("type") or "").strip()
+    last4 = str(raw.get("last4") or "").strip()
+    if brand and (
+        len(brand) > 40
+        or not re.fullmatch(r"[A-Za-z][A-Za-z .+-]{0,39}", brand)
+    ):
+        raise ProvisioningError(
+            "PRIVATE_LAUNCH_PAYMENT_SELECTION_INVALID",
+            "selected payment method brand is invalid",
+            retryable=False,
+        )
+    if not re.fullmatch(r"\d{4}", last4):
+        raise ProvisioningError(
+            "PRIVATE_LAUNCH_PAYMENT_SELECTION_INVALID",
+            "selected payment method requires masked last4",
+            retryable=False,
+        )
+    return {"type": brand, "last4": last4}
+
+
+def _safe_payment_methods(methods: Any) -> list[dict[str, str]]:
+    safe_methods: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for row in methods if isinstance(methods, list) else []:
+        if not isinstance(row, dict):
+            continue
+        brand = str(row.get("type") or row.get("brand") or "").strip()
+        last4 = str(row.get("last4") or "").strip()
+        if not re.fullmatch(r"\d{4}", last4):
+            continue
+        if brand and (
+            len(brand) > 40
+            or not re.fullmatch(r"[A-Za-z][A-Za-z .+-]{0,39}", brand)
+        ):
+            continue
+        key = (brand.casefold(), last4)
+        if key in seen:
+            continue
+        seen.add(key)
+        safe_methods.append({
+            "type": brand,
+            "last4": last4,
+            "linkage_status": str(
+                row.get("linkage_status") or "OBSERVED"
+            )[:32],
+        })
+    return safe_methods
+
+
+def _select_payment_method(
+    methods: Any,
+    selector: dict[str, str] | None,
+) -> tuple[dict[str, str], str]:
+    safe_methods = _safe_payment_methods(methods)
+
+    if not safe_methods:
+        raise ProvisioningError(
+            "PRIVATE_LAUNCH_PAYMENT_UNVERIFIED",
+            "Launch requires a live linked payment method on the exact RK",
+            retryable=False,
+        )
+
+    if selector is None:
+        if len(safe_methods) != 1:
+            raise ProvisioningError(
+                "PRIVATE_LAUNCH_PAYMENT_SELECTION_REQUIRED",
+                "Multiple live payment methods are linked; select one masked card for this RK",
+                retryable=False,
+            )
+        return safe_methods[0], "single_live_method"
+
+    wanted_brand = str(selector.get("type") or "").casefold()
+    wanted_last4 = str(selector.get("last4") or "")
+    matches = [
+        row
+        for row in safe_methods
+        if row["last4"] == wanted_last4
+        and (
+            not wanted_brand
+            or str(row.get("type") or "").casefold() == wanted_brand
+        )
+    ]
+    if not matches:
+        raise ProvisioningError(
+            "PRIVATE_LAUNCH_PAYMENT_SELECTION_UNAVAILABLE",
+            "Selected masked payment method is not live-linked to the exact RK",
+            retryable=False,
+        )
+    if len(matches) != 1:
+        raise ProvisioningError(
+            "PRIVATE_LAUNCH_PAYMENT_SELECTION_AMBIGUOUS",
+            "Selected masked payment method is not unique for the exact RK",
+            retryable=False,
+        )
+    return matches[0], "explicit_masked_selection"
+
+
 def _response_summary(payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict):
         return {"response_type": type(payload).__name__}
@@ -572,7 +692,7 @@ class PrivateLaunchService:
         self.contracts = contracts or PrivateLaunchContractStore()
         self.state = PrivateLaunchStateStore(provisioning_state.path)
         self._preflight_cache: dict[
-            tuple[str, str, str, str],
+            tuple[str, str, str, str, str, str],
             tuple[float, int, dict[str, Any]],
         ] = {}
 
@@ -611,6 +731,8 @@ class PrivateLaunchService:
         business_id: str,
         ad_account_id: str,
         page_id: str,
+        transport: MetaTransportRouter | None = None,
+        payment_selector: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         row = self._inventory_row(context, business_id, ad_account_id)
         if row is None:
@@ -657,8 +779,9 @@ class PrivateLaunchService:
             )
 
         account_name = str(row.get("name") or row.get("account_name") or ad_account_id).strip()
+        transport = transport or MetaTransportRouter(context=context)
         progress: dict[str, Any] = {}
-        async with FacebookBusinessBrowser(context, v8_old_space_mb=256) as browser:
+        async with transport.browser_lease(v8_old_space_mb=256) as browser:
             pages = await asyncio.wait_for(
                 inspect_browser_pages(
                     browser,
@@ -690,7 +813,7 @@ class PrivateLaunchService:
         # inspect_browser_pages intentionally keeps a write barrier installed
         # until its browser context closes. Billing therefore gets a fresh
         # context so read-only payment hydration cannot inherit that route gate.
-        async with FacebookBusinessBrowser(context, v8_old_space_mb=256) as browser:
+        async with transport.browser_lease(v8_old_space_mb=256) as browser:
             funding = await asyncio.wait_for(
                 inspect_payment_methods(
                     browser,
@@ -718,6 +841,24 @@ class PrivateLaunchService:
                 retryable=False,
             )
 
+        safe_payment_methods = _safe_payment_methods(
+            funding.get("payment_methods")
+        )
+        payment_selection_required = (
+            payment_selector is None
+            and len(safe_payment_methods) > 1
+        )
+        if payment_selection_required:
+            selected_payment_method: dict[str, str] = {}
+            payment_selection_source = "selection_required"
+        else:
+            selected_payment_method, payment_selection_source = (
+                _select_payment_method(
+                    safe_payment_methods,
+                    payment_selector,
+                )
+            )
+
         return {
             "profile_id": profile_id,
             "business_id": business_id,
@@ -728,6 +869,14 @@ class PrivateLaunchService:
             "page_access_checked_live": True,
             "payment_checked_live": True,
             "payment_method_count": len(funding.get("payment_methods") or []),
+            "selected_payment_method": selected_payment_method,
+            "payment_selection_source": payment_selection_source,
+            "payment_selection_required": payment_selection_required,
+            "payment_methods": (
+                safe_payment_methods
+                if payment_selection_required
+                else []
+            ),
         }
 
     async def _review_preflight(
@@ -738,6 +887,8 @@ class PrivateLaunchService:
         business_id: str,
         ad_account_id: str,
         page_id: str,
+        transport: MetaTransportRouter | None = None,
+        payment_selector: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         try:
             ttl = max(
@@ -750,7 +901,16 @@ class PrivateLaunchService:
         except (TypeError, ValueError):
             ttl = 60.0
         inventory_at = int(getattr(context, "inventory_updated_at", 0) or 0)
-        key = (profile_id, business_id, ad_account_id, page_id)
+        selector_type = str((payment_selector or {}).get("type") or "").casefold()
+        selector_last4 = str((payment_selector or {}).get("last4") or "")
+        key = (
+            profile_id,
+            business_id,
+            ad_account_id,
+            page_id,
+            selector_type,
+            selector_last4,
+        )
         cached = self._preflight_cache.get(key)
         now = time.monotonic()
         if cached is not None:
@@ -768,6 +928,8 @@ class PrivateLaunchService:
             business_id=business_id,
             ad_account_id=ad_account_id,
             page_id=page_id,
+            transport=transport,
+            payment_selector=payment_selector,
         )
         self._preflight_cache[key] = (now, inventory_at, dict(proof))
         return proof
@@ -778,6 +940,7 @@ class PrivateLaunchService:
         profile_id: str,
         context: Any,
         payload: dict[str, Any],
+        transport: MetaTransportRouter | None = None,
     ) -> dict[str, Any]:
         if not isinstance(payload, dict):
             raise ProvisioningError(
@@ -789,6 +952,7 @@ class PrivateLaunchService:
         ad_account_id = self._id(payload.get("ad_account_id"), "ad_account_id")
         page_id = self._id(payload.get("page_id"), "page_id")
         launch_payload = _effective_launch_payload(payload.get("launch"))
+        payment_selector = _payment_selector(payload)
 
         # Validate the complete mutation chain before the first irreversible
         # request. A missing downstream contract must never leave an orphaned
@@ -800,9 +964,11 @@ class PrivateLaunchService:
             business_id=business_id,
             ad_account_id=ad_account_id,
             page_id=page_id,
+            transport=transport,
+            payment_selector=payment_selector,
         )
         return {
-            "ready": True,
+            "ready": preflight.get("payment_selection_required") is not True,
             "profile_id": profile_id,
             "business_id": business_id,
             "ad_account_id": ad_account_id,
@@ -857,6 +1023,7 @@ class PrivateLaunchService:
             )
 
         await self.state.init()
+        meta_transport = MetaTransportRouter(session)
         prior_by_step: dict[PrivateLaunchStep, dict[str, Any] | None] = {}
         current_target = (profile_id, business_id, ad_account_id)
         for step in STEP_ORDER:
@@ -895,7 +1062,14 @@ class PrivateLaunchService:
             profile_id=profile_id,
             context=context,
             payload=payload,
+            transport=meta_transport,
         )
+        if review.get("ready") is not True:
+            raise ProvisioningError(
+                "PRIVATE_LAUNCH_PAYMENT_SELECTION_REQUIRED",
+                "Select one live masked payment method for the exact RK before Launch",
+                retryable=False,
+            )
         business_id = str(review["business_id"])
         ad_account_id = str(review["ad_account_id"])
         page_id = str(review["page_id"])
@@ -938,7 +1112,7 @@ class PrivateLaunchService:
                 },
             )
 
-            web = await session.facebook_web()
+            web = await meta_transport.facebook_web()
             try:
                 await web.bootstrap()
             except AuthenticationError as exc:
