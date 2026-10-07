@@ -4,11 +4,17 @@ import asyncio
 import logging
 import re
 from typing import Any
+from urllib.parse import urlsplit
 
 from ..facebook_business_browser import FacebookBusinessBrowser, BrowserBusinessError, _cgroup_memory_snapshot_mb
 from ..page_access_inspection import inspect_browser_pages
 from ..facebook_page_search import page_lookup_url
 from ..session_auth_refresh import refresh_saved_auth_context
+from ..graphql_mutation_capture import GraphqlMutationCapture
+from ..private_page_access import (
+    PageAccessContractStore,
+    page_access_request_match,
+)
 from .advertising_page import AdvertisingPageStore, _PAGE_LOCK, ensure_common_page
 from .models import ProvisioningError, ProvisioningStep
 from .ad_account_handler import _normalize_ad_account_id
@@ -275,7 +281,17 @@ async def _ads_only(dialog) -> None:
     raise BrowserBusinessError('PAGE_SHARE_PERMISSION_UI_CHANGED','Ads permission control is unavailable',retryable=True)
 
 
-async def _request_target_page_access(browser, config: dict, business: str, checkpoint, prior: dict) -> bool:
+async def _request_target_page_access(
+    browser,
+    config: dict,
+    business: str,
+    checkpoint,
+    prior: dict,
+    *,
+    private_web: Any | None=None,
+    contract_store: PageAccessContractStore | None=None,
+    profile_id: str="",
+) -> bool:
     """Request Ads task access from the target BM; never claim Page ownership."""
     phase=str(prior.get('phase') or '')
     if phase in {
@@ -337,13 +353,110 @@ async def _request_target_page_access(browser, config: dict, business: str, chec
     submit=dialog.get_by_role('button',name=re.compile(r'^(Confirm|Request access|Send request)$',re.I))
     if not await _one(submit) or not await submit.is_enabled():
         raise BrowserBusinessError('PAGE_SHARE_UI_UNAVAILABLE','Shared-access final request action is unavailable',retryable=True)
-    await checkpoint({'phase':'TARGET_PAGE_ACCESS_CLICK_INTENT','requested_tasks':['ADVERTISE'],
-        'page_id':config['page_id'],'business_id':business})
+    await checkpoint({
+        'phase':'TARGET_PAGE_ACCESS_CLICK_INTENT',
+        'requested_tasks':['ADVERTISE'],
+        'page_id':config['page_id'],
+        'business_id':business,
+    })
+
+    if private_web is not None and contract_store is not None:
+        capture=GraphqlMutationCapture(
+            browser.page,
+            matcher=lambda request,meta: page_access_request_match(
+                meta,
+                business_id=business,
+                page_id=str(config['page_id']),
+            ),
+            # Once the final submit is armed, block every GraphQL POST until
+            # the exact request is classified. This prevents an unclassified
+            # mutation from escaping while contract discovery is in progress.
+            plausible_matcher=lambda request,meta: True,
+            max_candidates=32,
+        )
+        await capture.__aenter__()
+        try:
+            capture.arm()
+            try:
+                await submit.click(timeout=5000)
+            except Exception:
+                # A matched GraphQL request is intentionally aborted, so the
+                # UI click itself may surface a navigation/request error.
+                pass
+
+            try:
+                captured=await capture.wait(4.5)
+            except asyncio.TimeoutError as exc:
+                diagnostic={
+                    'stage':'private_page_access_capture',
+                    'blocked_unclassified':capture.blocked_unclassified,
+                    'candidates':capture.candidates[-12:],
+                }
+                await checkpoint({
+                    'phase':'TARGET_PAGE_ACCESS_CAPTURE_INCONCLUSIVE',
+                    'diagnostic':diagnostic,
+                })
+                raise BrowserBusinessError(
+                    'PAGE_SHARE_CAPTURE_INCONCLUSIVE',
+                    (
+                        'Meta did not expose one definitive shared Page-access '
+                        'GraphQL mutation at the final submit gate'
+                    ),
+                    retryable=True,
+                    diagnostic=diagnostic,
+                ) from exc
+        finally:
+            capture.disarm()
+            await capture.__aexit__(None,None,None)
+
+        contract=contract_store.register_capture(
+            captured,
+            business_id=business,
+            page_id=str(config['page_id']),
+        )
+        await checkpoint({
+            'phase':'TARGET_PAGE_ACCESS_PRIVATE_CONTRACT_CAPTURED',
+            'private_contract':{
+                'doc_id':contract.doc_id,
+                'friendly_name':contract.friendly_name,
+                'endpoint_host':urlsplit(contract.endpoint_url).hostname or '',
+            },
+        })
+        try:
+            await contract_store.execute(
+                private_web,
+                business_id=business,
+                page_id=str(config['page_id']),
+                profile_id=profile_id,
+            )
+        except ProvisioningError:
+            raise
+        await checkpoint({
+            'phase':'TARGET_PAGE_ACCESS_SUBMITTED',
+            'requested_tasks':['ADVERTISE'],
+            'transport':'private_graphql',
+            'private_contract_doc_id':contract.doc_id,
+        })
+        # The request is pending owner reconciliation. Do not bounce back into
+        # Business Suite just to prove a relation that the owner-side flow is
+        # about to approve.
+        return False
+
+    # Compatibility fallback for non-profile test doubles or explicit legacy
+    # browser-only use. Normal production ProfileSession has private_web.
     await submit.click(timeout=5000)
     await browser.page.wait_for_timeout(1000)
-    await checkpoint({'phase':'TARGET_PAGE_ACCESS_SUBMITTED',
-        'diagnostic':await browser._diagnostic('target_page_access_submit_response')})
-    return await browser.verify_page_attached(business_id=business,page_id=config['page_id'])
+    await checkpoint({
+        'phase':'TARGET_PAGE_ACCESS_SUBMITTED',
+        'transport':'chromium_legacy_submit',
+        'diagnostic':await browser._diagnostic(
+            'target_page_access_submit_response'
+        ),
+    })
+    return await browser.verify_page_attached(
+        business_id=business,
+        page_id=config['page_id'],
+    )
 
 
 async def _resolve_owner_page_actor(browser, config: dict) -> tuple[str, dict]:
@@ -696,8 +809,23 @@ async def _approve_owner_page_access(browser, config: dict, business: str, check
     """Approve one exact pending Ads-access request as the Page owner, then restore the user actor."""
     page_id=str(config['page_id'])
     await checkpoint({'activity':'APPROVE_TARGET_PAGE_ACCESS'})
-    if await browser.verify_page_attached(business_id=business,page_id=page_id):
-        return True
+    try:
+        if await browser.verify_page_attached(
+            business_id=business,
+            page_id=page_id,
+        ):
+            return True
+    except BrowserBusinessError as exc:
+        if exc.code not in {
+            'BUSINESS_LOGIN_GATE',
+            'FACEBOOK_NAVIGATION_FAILED',
+        }:
+            raise
+        log.info(
+            'PAGE_OWNER skipping Business relation precheck after browser gate '
+            'page=%s business=%s code=%s',
+            page_id,business,exc.code,
+        )
 
     business_name,business_evidence=await _resolve_target_business_name(
         browser,business,config.get('target_business_identity'))
@@ -826,9 +954,25 @@ async def _approve_owner_page_access(browser, config: dict, business: str, check
     # then prove its current access in this exact Page's owner-side Ads row.
     if owner_relation_proof is not None:
         return True
-    if await browser.verify_page_attached(business_id=business,page_id=page_id):
-        await checkpoint({'phase':'TARGET_PAGE_ACCESS_OWNER_CONFIRMED',
-            'requested_tasks':['ADVERTISE'],'page_id':page_id,'business_id':business})
+    try:
+        verified=await browser.verify_page_attached(
+            business_id=business,
+            page_id=page_id,
+        )
+    except BrowserBusinessError as exc:
+        if exc.code not in {
+            'BUSINESS_LOGIN_GATE',
+            'FACEBOOK_NAVIGATION_FAILED',
+        }:
+            raise
+        verified=False
+    if verified:
+        await checkpoint({
+            'phase':'TARGET_PAGE_ACCESS_OWNER_CONFIRMED',
+            'requested_tasks':['ADVERTISE'],
+            'page_id':page_id,
+            'business_id':business,
+        })
         return True
     if approval_error is not None:
         raise approval_error
@@ -1199,6 +1343,60 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
                 relation_proof=False
                 operator_proof={}
                 auth_refresh_attempted=False
+                private_web=None
+                private_contract_store=PageAccessContractStore()
+                facebook_web_factory=getattr(session,'facebook_web',None)
+                if callable(facebook_web_factory):
+                    private_web=await facebook_web_factory()
+
+                request_submitted_phase={
+                    'TARGET_PAGE_ACCESS_SUBMITTED',
+                    'TARGET_PAGE_ACCESS_OWNER_APPROVE_CLICK_INTENT',
+                    'TARGET_PAGE_ACCESS_OWNER_APPROVED',
+                    'TARGET_PAGE_ACCESS_OWNER_CONFIRMED',
+                    'TARGET_PAGE_ACCESS_RK_CONFIRMED',
+                    'TARGET_PAGE_OPERATOR_ASSIGN_CLICK_INTENT',
+                    'TARGET_PAGE_OPERATOR_ASSIGN_SUBMITTED',
+                    'TARGET_PAGE_OPERATOR_ASSIGN_CONFIRMED',
+                }
+                phase=str(resume_state.get('phase') or '')
+                private_request_submitted=phase in request_submitted_phase
+
+                if (
+                    not private_request_submitted
+                    and private_web is not None
+                    and private_contract_store.get() is not None
+                ):
+                    await checkpoint({
+                        'phase':'TARGET_PAGE_ACCESS_PRIVATE_PRECHECK',
+                        'transport':'private_graphql',
+                    })
+                    try:
+                        await private_contract_store.execute(
+                            private_web,
+                            business_id=business,
+                            page_id=str(config['page_id']),
+                            profile_id=str(profile),
+                        )
+                    except ProvisioningError as exc:
+                        if exc.code!='PRIVATE_PAGE_ACCESS_CONTRACT_STALE':
+                            raise
+                        await checkpoint({
+                            'phase':'TARGET_PAGE_ACCESS_PRIVATE_CONTRACT_STALE',
+                            'transport':'private_graphql',
+                        })
+                    else:
+                        await checkpoint({
+                            'phase':'TARGET_PAGE_ACCESS_SUBMITTED',
+                            'requested_tasks':['ADVERTISE'],
+                            'transport':'private_graphql',
+                        })
+                        private_request_submitted=True
+                        resume_state={
+                            **resume_state,
+                            'phase':'TARGET_PAGE_ACCESS_SUBMITTED',
+                            'transport':'private_graphql',
+                        }
 
                 for browser_attempt in range(2):
                     try:
@@ -1212,8 +1410,20 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
                                 settle_ms=450,
                                 attempts=1,
                             )
-                            relation_proof=await _request_target_page_access(
-                                browser,config,business,checkpoint,resume_state)
+                            relation_proof=(
+                                False
+                                if private_request_submitted
+                                else await _request_target_page_access(
+                                    browser,
+                                    config,
+                                    business,
+                                    checkpoint,
+                                    resume_state,
+                                    private_web=private_web,
+                                    contract_store=private_contract_store,
+                                    profile_id=str(profile),
+                                )
+                            )
                             if not relation_proof:
                                 relation_proof=await _approve_owner_page_access(
                                     browser,config,business,checkpoint)
