@@ -742,6 +742,19 @@ async def business_handler(
                     if isinstance(private_error.diagnostics, list)
                     else []
                 )
+                log.warning(
+                    "[%s] BUSINESS private CREATE failed item=%s code=%s "
+                    "retryable=%s diagnostics=%s",
+                    profile_id,
+                    item_id,
+                    private_error.code,
+                    private_error.retryable,
+                    json.dumps(
+                        private_error_diagnostics[-4:],
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )[:6000],
+                )
 
                 # If CREATE itself succeeded and only the private primary-Page
                 # attach failed, recover the Business ID from our own
