@@ -18081,8 +18081,6 @@ timeout_seconds=4.0,
             await self._capture_ad_account_wizard_rect()
         )
 
-        capture_final_armed = False
-
         def plausible_final_create(request_meta: dict[str, Any]) -> bool:
             """Conservative safety gate for an unknown final CREATE mutation.
 
@@ -18229,7 +18227,6 @@ timeout_seconds=4.0,
                     )
                     await self.page.wait_for_timeout(200)
 
-                capture_final_armed = True
                 capture.arm()
                 self._ad_account_final_capture_armed = True
                 self._mark_ad_account_phase("CAPTURE_FINAL_ARMED")
@@ -18261,7 +18258,6 @@ timeout_seconds=4.0,
                         final_meta["fallback"] = fallback
 
                 if not final_attempted:
-                    capture_final_armed = False
                     capture.disarm()
                     self._ad_account_final_capture_armed = False
                     self._mark_ad_account_phase("CAPTURE_FORM_READY")
