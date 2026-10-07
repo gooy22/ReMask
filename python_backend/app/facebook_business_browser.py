@@ -18081,11 +18081,7 @@ timeout_seconds=4.0,
             await self._capture_ad_account_wizard_rect()
         )
 
-        loop = asyncio.get_running_loop()
-        captured: asyncio.Future[dict[str, Any]] = loop.create_future()
-        graphql_candidates: list[dict[str, Any]] = []
         capture_final_armed = False
-        blocked_unclassified_create = False
 
         def plausible_final_create(request_meta: dict[str, Any]) -> bool:
             """Conservative safety gate for an unknown final CREATE mutation.
@@ -18156,75 +18152,24 @@ timeout_seconds=4.0,
             )
             return mutationish and immutable_hits >= 2
 
-        async def intercept(route: Any, request: Any) -> None:
-            nonlocal blocked_unclassified_create
-            request_meta = _request_graphql_meta(request)
-            definitive_match = self._request_matches_ad_account_create(
-                request,
-                business_id=business,
-                account_name=name,
-            )
-            plausible_unknown = bool(
-                capture_final_armed
-                and not definitive_match
-                and plausible_final_create(request_meta)
-            )
-
-            if (
-                _clean(request_meta.get("method")).upper() == "POST"
-                and "graphql" in _clean(request_meta.get("url")).lower()
-            ):
-                summary = self._safe_graphql_request_summary(request)
-                summary["matched_create"] = bool(definitive_match)
-                summary["plausible_final_create"] = bool(plausible_unknown)
-                summary["final_gate_armed"] = bool(capture_final_armed)
-                graphql_candidates.append(summary)
-                if len(graphql_candidates) > 24:
-                    del graphql_candidates[:-24]
-
-            if plausible_unknown:
-                # Critical exactly-once invariant: a strong unknown mutation
-                # observed after the final CTA is never allowed to escape the
-                # capture pass. We abort it, but deliberately do not replay it
-                # because the matcher could not prove its identity.
-                blocked_unclassified_create = True
-                await route.abort()
-                return
-
-            if not definitive_match:
-                await route.continue_()
-                return
-
-            envelope = safe_request_envelope(request)
-            row = {
-                "doc_id": _clean(request_meta.get("doc_id")),
-                "friendly_name": _clean(
-                    request_meta.get("friendly_name")
-                ),
-                "endpoint_url": _clean(getattr(request, "url", "")),
-                "variables": (
-                    request_meta.get("variables")
-                    if isinstance(request_meta.get("variables"), dict)
-                    else {}
-                ),
-                "request_envelope": envelope,
-                "canary_name": name,
-                "business_id": business,
-                "currency": currency_code,
-                "timezone_id": timezone,
-                "source": "live_business_settings_capture",
-            }
-
-            # Critical invariant: the capture pass NEVER sends CREATE to Meta.
-            await route.abort()
-            if not captured.done():
-                captured.set_result(row)
-
-        await self.page.route("**/*graphql*", intercept)
+        capture = GraphqlMutationCapture(
+            self.page,
+            matcher=lambda request, meta: (
+                self._request_matches_ad_account_create(
+                    request,
+                    business_id=business,
+                    account_name=name,
+                )
+            ),
+            plausible_matcher=lambda request, meta: (
+                plausible_final_create(meta)
+            ),
+        )
+        await capture.__aenter__()
         submit_attempts: list[dict[str, Any]] = []
         try:
             for step in range(12):
-                if captured.done():
+                if capture.done:
                     break
 
                 before_state = await self._ad_account_ui_state()
@@ -18285,6 +18230,7 @@ timeout_seconds=4.0,
                     await self.page.wait_for_timeout(200)
 
                 capture_final_armed = True
+                capture.arm()
                 self._ad_account_final_capture_armed = True
                 self._mark_ad_account_phase("CAPTURE_FINAL_ARMED")
                 if checkpoint is not None:
@@ -18316,6 +18262,7 @@ timeout_seconds=4.0,
 
                 if not final_attempted:
                     capture_final_armed = False
+                    capture.disarm()
                     self._ad_account_final_capture_armed = False
                     self._mark_ad_account_phase("CAPTURE_FORM_READY")
 
@@ -18332,13 +18279,10 @@ timeout_seconds=4.0,
                     # Observe this attempt only; a second final click is forbidden.
                     self._ad_account_create_sent = True
                     try:
-                        await asyncio.wait_for(
-                            asyncio.shield(captured),
-                            timeout=3.0,
-                        )
+                        await capture.wait(3.0)
                     except asyncio.TimeoutError:
                         await self.page.wait_for_timeout(250)
-                    if captured.done():
+                    if capture.done:
                         break
 
                     # Meta can occasionally submit the actual CREATE through a
@@ -18377,12 +18321,9 @@ timeout_seconds=4.0,
                 if not final_clicked:
                     break
 
-            if not captured.done():
+            if not capture.done:
                 try:
-                    row = await asyncio.wait_for(
-                        asyncio.shield(captured),
-                        timeout=5.0,
-                    )
+                    row = await capture.wait(5.0)
                 except asyncio.TimeoutError as exc:
                     diag = await self._diagnostic(
                         "ad_account_create_request_missing"
@@ -18391,9 +18332,9 @@ timeout_seconds=4.0,
                     diag["account_name"] = name
                     diag["form_setup"] = form_setup
                     diag["submit_attempts"] = submit_attempts[-12:]
-                    diag["graphql_candidates"] = graphql_candidates[-12:]
+                    diag["graphql_candidates"] = capture.candidates[-12:]
                     diag["blocked_unclassified_create"] = bool(
-                        blocked_unclassified_create
+                        capture.blocked_unclassified
                     )
                     diag["final_capture_armed"] = self._ad_account_final_capture_armed
                     diag["create_may_have_been_sent"] = self._ad_account_create_sent
@@ -18412,12 +18353,18 @@ timeout_seconds=4.0,
                         diagnostic=diag,
                     ) from exc
             else:
-                row = captured.result()
+                row = capture.result_nowait()
         finally:
-            try:
-                await self.page.unroute("**/*graphql*", intercept)
-            except Exception:
-                pass
+            await capture.__aexit__(None, None, None)
+
+        row = {
+            **row,
+            "canary_name": name,
+            "business_id": business,
+            "currency": currency_code,
+            "timezone_id": timezone,
+            "source": "live_business_settings_capture",
+        }
 
         if (
             not _digits(row.get("doc_id"))
