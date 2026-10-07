@@ -2561,7 +2561,13 @@ class FacebookBusinessBrowser:
         # Live Meta Business login handoff may expose more than one
         # continuation. Prefer one unique Facebook-specific handoff over generic
         # Continue controls; never click credentials/IG/SSO or an ambiguous tie.
-        if int(probe.get("bestCount") or 0)!=1:
+        raw_best_count=probe.get("bestCount")
+        best_count=(
+            int(raw_best_count or 0)
+            if raw_best_count is not None
+            else int(probe.get("candidateCount") or 0)
+        )
+        if best_count!=1:
             self._last_selector_diagnostic={
                 **(self._last_selector_diagnostic or {}),
                 "business_login_gate_continuation_candidates": labels,
@@ -2569,11 +2575,13 @@ class FacebookBusinessBrowser:
                     int(probe.get("candidateCount") or 0),
                 "business_login_gate_top_score":
                     int(probe.get("topScore") or 0),
-                "business_login_gate_best_count":
-                    int(probe.get("bestCount") or 0),
+                "business_login_gate_best_count":best_count,
             }
             return False
-        preferred_label=str(probe.get("bestLabel") or "").strip()
+        preferred_label=str(
+            probe.get("bestLabel")
+            or (labels[0] if len(labels)==1 else "")
+        ).strip()
 
         try:
             clicked=await self.page.evaluate(
