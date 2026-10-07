@@ -159,7 +159,7 @@ async def private_inventory_snapshot(
 
             request_scoped = "settings/ad_accounts" in url
             requested_expected = ""
-            match = re.search(r"[?&]act=(\\d{5,30})", url)
+            match = re.search(r"[?&]act=(\d{5,30})", url)
             if match:
                 requested_expected = _clean_id(match.group(1))
             for payload in payloads:
@@ -193,7 +193,7 @@ async def private_inventory_snapshot(
             # response is clearly authenticated (DTSG/current-user markers).
             if requested_expected and requested_expected in expected and not diag.get("auth_gate"):
                 final_url = str(diag.get("final_url") or "")
-                final_act = re.findall(r"(?:[?&]act=|act[_:=/%-]+)(\\d{5,30})", final_url, flags=re.I)
+                final_act = re.findall(r"(?:[?&]act=|act[_:=/%-]+)(\d{5,30})", final_url, flags=re.I)
                 authenticated = any(
                     marker in str(body_marker)
                     for marker in ("DTSGInitialData", "DTSGInitData", "CurrentUserInitialData")
