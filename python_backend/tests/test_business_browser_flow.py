@@ -3913,7 +3913,14 @@ class BrowserAuthenticationStateTests(unittest.IsolatedAsyncioTestCase):
         page.goto=AsyncMock(side_effect=goto)
         browser.page=page
         browser._resolve_facebook_cookie_consent=AsyncMock()
-        browser._assert_authenticated=AsyncMock(return_value=None)
+        gate=BrowserBusinessError(
+            'BUSINESS_LOGIN_GATE',
+            'gate',
+            retryable=True,
+        )
+        browser._assert_authenticated=AsyncMock(
+            side_effect=[gate,None]
+        )
         async def resolve(**kwargs):
             page.url='https://business.facebook.com/latest/home'
             return True
