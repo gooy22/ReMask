@@ -235,6 +235,8 @@ RUN set -eux; \
     grep -q 'business_settings_ui_capture_current_attempt' /opt/remask-python/app/provisioning/ad_account_handler.py; \
     grep -q 'list_ad_accounts_for_business' /opt/remask-python/app/facebook_graph_api.py; \
     grep -q 'pythonWorkerOpenOwnBmModal' /var/www/html/scripts/workspace.js; \
+    grep -Fq "scope_key: 'add-bm-' + nonce + '-' + index" /var/www/html/scripts/workspace.js; \
+    ! grep -Fq "scope_key: pageId ? 'add-bm-page-'" /var/www/html/scripts/workspace.js; \
     grep -q 'REMASK_BM_MENU_PYTHON_ONLY_V1' /var/www/html/scripts/workspace.js; \
     grep -q 'data-python-worker-bm-menu' /var/www/html/scripts/workspace.js; \
     grep -q 'REMASK_PYTHON_WORKER_URL' /var/www/html/ajax/pythonWorkerJobs.php; \
