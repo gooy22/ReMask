@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -15,6 +16,14 @@ from urllib.parse import urlsplit
 from fb_worker import AuthenticationError, RemoteRequestError
 
 from .action_result import ActionResult
+from .facebook_docids import (
+    DocIdCandidate,
+    classify_cache_failure,
+    list_candidates,
+    record_result,
+    registry_view,
+    upsert_candidate,
+)
 from .page_access_inspection import inspect_browser_pages
 from .payment_inspection import inspect_payment_methods
 from .provisioning.models import ProvisioningError
@@ -36,6 +45,15 @@ STEP_ORDER = [
     PrivateLaunchStep.AD,
 ]
 
+LAUNCH_DOCID_OPERATION = {
+    PrivateLaunchStep.CAMPAIGN: "LAUNCH_CAMPAIGN",
+    PrivateLaunchStep.ADSET: "LAUNCH_ADSET",
+    PrivateLaunchStep.CREATIVE: "LAUNCH_CREATIVE",
+    PrivateLaunchStep.AD: "LAUNCH_AD",
+}
+
+log = logging.getLogger("remask.private_launch")
+
 
 @dataclass(slots=True, frozen=True)
 class MutationContract:
@@ -46,6 +64,73 @@ class MutationContract:
     variables: dict[str, Any]
     result_id_paths: tuple[str, ...]
     request_envelope: dict[str, Any]
+
+
+def _contract_variables_mode(step: PrivateLaunchStep) -> str:
+    return f"private_launch_{step.value.lower()}_v1"
+
+
+def _contract_candidate(
+    step: PrivateLaunchStep,
+    contract: MutationContract,
+    *,
+    source: str = "private_launch_contract",
+) -> DocIdCandidate:
+    return upsert_candidate(
+        LAUNCH_DOCID_OPERATION[step],
+        doc_id=contract.doc_id,
+        friendly_name=contract.friendly_name,
+        endpoint_url=contract.endpoint_url,
+        variables_mode=_contract_variables_mode(step),
+        source=source or "private_launch_contract",
+        priority=8_000,
+    )
+
+
+def _candidate_is_active(
+    step: PrivateLaunchStep,
+    candidate: DocIdCandidate,
+) -> bool:
+    for row in list_candidates(
+        LAUNCH_DOCID_OPERATION[step],
+        confirmed_only=False,
+    ):
+        if (
+            row.doc_id == candidate.doc_id
+            and row.friendly_name == candidate.friendly_name
+            and row.variables_mode == candidate.variables_mode
+            and row.endpoint_url == candidate.endpoint_url
+        ):
+            return True
+    return False
+
+
+def _record_contract_result(
+    step: PrivateLaunchStep,
+    candidate: DocIdCandidate,
+    *,
+    success: bool,
+    profile_id: str,
+    reason: str = "",
+    response_path: str = "",
+    failure_kind: str = "",
+) -> None:
+    try:
+        record_result(
+            LAUNCH_DOCID_OPERATION[step],
+            candidate,
+            success=success,
+            reason=reason,
+            response_path=response_path,
+            profile_id=profile_id,
+            failure_kind=failure_kind,
+        )
+    except Exception as exc:
+        log.warning(
+            "private Launch doc_id result registry failed step=%s type=%s",
+            step.value,
+            exc.__class__.__name__,
+        )
 
 
 class PrivateLaunchContractStore:
