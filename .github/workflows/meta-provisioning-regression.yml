@@ -25,6 +25,9 @@ jobs:
           /tmp/remask-regression/bin/pip install -r python_backend/requirements.txt
           node --version
           php --version
+      - name: Critical capture and authentication contracts
+        working-directory: python_backend
+        run: /tmp/remask-regression/bin/python -m unittest tests.test_business_browser_flow.BrowserAdAccountFinalCaptureGateRegressionTests tests.test_business_browser_flow.BrowserAdAccountFinalDialogAnchorRegressionTests tests.test_business_browser_flow.BrowserAdAccountFinalLabelMatchingTests tests.test_business_browser_flow.BrowserAdAccountSubmitScopeRegressionTests tests.test_ad_account_details_recovery.AdAccountDetailsChromiumTests.test_dispatched_click_timeout_is_observed_without_second_final_click tests.test_fb_worker_request_envelope.BusinessAuthenticationPrecheckTests tests.test_business_resume_checkpoint.BusinessResumeCheckpointTests.test_auth_rejection_does_not_leave_ambiguous_create_checkpoint tests.test_graphql_mutation_capture
       - name: Backend regression suite
         working-directory: python_backend
         run: |

@@ -204,7 +204,9 @@ class AdAccountDetailsChromiumTests(unittest.IsolatedAsyncioTestCase):
         self.browser._click_ad_account_form_action_by_visible_text = AsyncMock(return_value={"clicked":False})
         self.browser._accept_ad_account_terms_if_present = AsyncMock(return_value={"clicked":False})
         if timeout_after_click:
-            async def timed_out():
+            async def timed_out(*, before_click=None):
+                if before_click is not None:
+                    await before_click()
                 await self.page.locator("#create").click()
                 return {"attempted":True,"clicked":False}
             self.browser._click_ad_account_final_interactive = timed_out

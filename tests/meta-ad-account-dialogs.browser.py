@@ -105,6 +105,8 @@ class StackedDialogsTests(unittest.IsolatedAsyncioTestCase):
         result = await self.driver._click_ad_account_final_interactive()
         self.assertFalse(result["attempted"])
         self.assertEqual(await self.page.evaluate("window.entryClicks"), 0)
+        semantic = await self.driver._click_ad_account_form_action_by_visible_text("final")
+        self.assertFalse(semantic["clicked"])
 
     async def test_capture_route_matches_slash_and_query_endpoints(self):
         for url in ("https://wizard.test/api/graphql/", "https://wizard.test/api/graphql/?method=post", "https://wizard.test/api/graphql"):

@@ -2063,11 +2063,11 @@ class BrowserAdAccountSubmitScopeRegressionTests(unittest.TestCase):
         self.assertNotIn("await self._click_named(", source)
         self.assertIn("return False", source)
 
-    def test_final_matcher_accepts_prefixed_create_label(self):
+    def test_final_matcher_rejects_chooser_prefix_as_submit(self):
         source = inspect.getsource(
             FacebookBusinessBrowser._click_ad_account_final_interactive
         )
-        self.assertIn("startswith(word + \" \")", source)
+        self.assertNotIn("startswith(word + \" \")", source)
 
 
 class BrowserAdAccountZeroWidthSubmitRegressionTests(unittest.TestCase):
@@ -2460,7 +2460,7 @@ class BrowserAdAccountFinalLabelMatchingTests(unittest.TestCase):
         self.assertIn("aria_label =", source)
         self.assertIn("inner_text =", source)
         self.assertIn("matched_label = next", source)
-        self.assertNotIn('" ".join(', source)
+        self.assertNotIn('" ".join(labels)', source)
 
 
 class BrowserAdAccountUiStateDialogGuardTests(unittest.TestCase):
@@ -5675,10 +5675,11 @@ class BrowserAdAccountFinalCaptureGateRegressionTests(unittest.TestCase):
         primitive = inspect.getsource(GraphqlMutationCapture._intercept)
         armed_pos = source.index("capture.arm()")
         click_pos = source.index(
-            "await self._click_ad_account_final_interactive()",
+            "await self._click_ad_account_final_interactive(",
             armed_pos,
         )
         self.assertLess(armed_pos, click_pos)
+        self.assertIn("before_click=arm_final", source)
         self.assertIn("def plausible_final_create(", source)
         self.assertIn("capture.blocked_unclassified", source)
         self.assertIn("await route.abort()", primitive)
@@ -5747,7 +5748,7 @@ class BrowserAdAccountFinalDialogAnchorRegressionTests(unittest.TestCase):
         )
         self.assertIn("dialogAccountWords", source)
         self.assertIn("root.querySelectorAll", source)
-        self.assertIn("createWords.some", source)
+        self.assertIn("createWords.includes(label)", source)
         self.assertIn("dialogAccountWords.some", source)
 
 
