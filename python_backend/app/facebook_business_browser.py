@@ -14,6 +14,12 @@ from urllib.parse import parse_qs, unquote, unquote_plus, urlencode, urlsplit
 
 from .facebook_fan_page_create import FAN_PAGE_CREATE_NAMES
 from .facebook_ad_account_identity import ad_account_route, read_ad_account_identity
+from .graphql_mutation_capture import (
+    GraphqlMutationCapture,
+    graphql_request_meta,
+    safe_graphql_request_summary,
+    safe_request_envelope,
+)
 
 CheckpointCallback = Callable[[dict[str, Any]], Awaitable[None]]
 
@@ -224,97 +230,8 @@ def _digits(value: Any) -> str:
 
 
 def _request_graphql_meta(request: Any) -> dict[str, Any]:
-    """Parse Meta GraphQL request metadata without exposing auth fields."""
-    method = ""
-    url = ""
-    raw = ""
-    body_decodable = True
-
-    try:
-        method = _clean(getattr(request, "method", "")).upper()
-        url = _clean(getattr(request, "url", ""))
-        raw_buffer = getattr(request, "post_data_buffer", None)
-        if raw_buffer:
-            if isinstance(raw_buffer, bytes):
-                raw = raw_buffer.decode("utf-8")
-            else:
-                raw = str(raw_buffer)
-        else:
-            raw = str(getattr(request, "post_data", "") or "")
-    except (UnicodeDecodeError, UnicodeError):
-        body_decodable = False
-        try:
-            raw = str(getattr(request, "post_data", "") or "")
-        except Exception:
-            raw = ""
-    except Exception:
-        body_decodable = False
-        try:
-            raw = str(getattr(request, "post_data", "") or "")
-        except Exception:
-            raw = ""
-
-    parsed = parse_qs(raw, keep_blank_values=True) if raw else {}
-    try:
-        url_query = parse_qs(
-            urlsplit(url).query,
-            keep_blank_values=True,
-        )
-    except Exception:
-        url_query = {}
-
-    # Meta may encode Relay GraphQL metadata in the URL query even when the
-    # browser-level request method is GET (for example graph.facebook.com/graphql
-    # with method=post). Merge query params without overwriting an explicit
-    # request-body value.
-    for key, values in url_query.items():
-        if key not in parsed and isinstance(values, list):
-            parsed[key] = values
-
-    effective_method = method
-    query_method = _clean((parsed.get("method") or [""])[0]).upper()
-    if method == "GET" and query_method == "POST":
-        effective_method = "POST"
-
-    friendly = _clean(
-        (parsed.get("fb_api_req_friendly_name") or [""])[0]
-    )
-    if not friendly:
-        try:
-            headers = getattr(request, "headers", {}) or {}
-            friendly = _clean(
-                headers.get("x-fb-friendly-name")
-                or headers.get("X-FB-Friendly-Name")
-            )
-        except Exception:
-            friendly = ""
-    doc_id = _clean((parsed.get("doc_id") or [""])[0])
-
-    variables: dict[str, Any] = {}
-    variables_raw = _clean((parsed.get("variables") or [""])[0])
-    if variables_raw:
-        try:
-            decoded_variables = json.loads(variables_raw)
-            if isinstance(decoded_variables, dict):
-                variables = decoded_variables
-        except (ValueError, json.JSONDecodeError):
-            variables = {}
-
-    raw_input = variables.get("input")
-    input_data = raw_input if isinstance(raw_input, dict) else {}
-
-    return {
-        "method": effective_method,
-        "browser_method": method,
-        "url": url,
-        "friendly_name": friendly,
-        "doc_id": doc_id,
-        "variables": variables,
-        "input": input_data,
-        "decoded_raw": unquote_plus(raw) if raw else "",
-        "body_decodable": body_decodable,
-    }
-
+    """Compatibility wrapper around the shared capture parser."""
+    return graphql_request_meta(request)
 
 def _ad_account_required_attribution_post_data(
     request: Any,
@@ -18164,12 +18081,6 @@ timeout_seconds=4.0,
             await self._capture_ad_account_wizard_rect()
         )
 
-        loop = asyncio.get_running_loop()
-        captured: asyncio.Future[dict[str, Any]] = loop.create_future()
-        graphql_candidates: list[dict[str, Any]] = []
-        capture_final_armed = False
-        blocked_unclassified_create = False
-
         def plausible_final_create(request_meta: dict[str, Any]) -> bool:
             """Conservative safety gate for an unknown final CREATE mutation.
 
@@ -18239,92 +18150,24 @@ timeout_seconds=4.0,
             )
             return mutationish and immutable_hits >= 2
 
-        async def intercept(route: Any, request: Any) -> None:
-            nonlocal blocked_unclassified_create
-            request_meta = _request_graphql_meta(request)
-            definitive_match = self._request_matches_ad_account_create(
-                request,
-                business_id=business,
-                account_name=name,
-            )
-            plausible_unknown = bool(
-                capture_final_armed
-                and not definitive_match
-                and plausible_final_create(request_meta)
-            )
-
-            if (
-                _clean(request_meta.get("method")).upper() == "POST"
-                and "graphql" in _clean(request_meta.get("url")).lower()
-            ):
-                summary = self._safe_graphql_request_summary(request)
-                summary["matched_create"] = bool(definitive_match)
-                summary["plausible_final_create"] = bool(plausible_unknown)
-                summary["final_gate_armed"] = bool(capture_final_armed)
-                graphql_candidates.append(summary)
-                if len(graphql_candidates) > 24:
-                    del graphql_candidates[:-24]
-
-            if plausible_unknown:
-                # Critical exactly-once invariant: a strong unknown mutation
-                # observed after the final CTA is never allowed to escape the
-                # capture pass. We abort it, but deliberately do not replay it
-                # because the matcher could not prove its identity.
-                blocked_unclassified_create = True
-                await route.abort()
-                return
-
-            if not definitive_match:
-                await route.continue_()
-                return
-
-            raw = _clean(getattr(request, "post_data", ""))
-            parsed = parse_qs(raw, keep_blank_values=True) if raw else {}
-            allowed = {
-                "__aaid","__bid","__hs","__hblp","__hsdp","__rev","__s",
-                "__hsi","__dyn","__csr","__comet_req","__spin_r","__spin_b",
-                "__spin_t","__jssesw","__crn","__req","__ccg","dpr",
-                "server_timestamps","fb_api_caller_class",
-            }
-            envelope = {
-                key: _clean(values[0])
-                for key, values in parsed.items()
-                if (
-                    key in allowed
-                    and isinstance(values, list)
-                    and values
-                    and _clean(values[0])
+        capture = GraphqlMutationCapture(
+            self.page,
+            matcher=lambda request, meta: (
+                self._request_matches_ad_account_create(
+                    request,
+                    business_id=business,
+                    account_name=name,
                 )
-            }
-            row = {
-                "doc_id": _clean(request_meta.get("doc_id")),
-                "friendly_name": _clean(
-                    request_meta.get("friendly_name")
-                ),
-                "endpoint_url": _clean(getattr(request, "url", "")),
-                "variables": (
-                    request_meta.get("variables")
-                    if isinstance(request_meta.get("variables"), dict)
-                    else {}
-                ),
-                "request_envelope": envelope,
-                "canary_name": name,
-                "business_id": business,
-                "currency": currency_code,
-                "timezone_id": timezone,
-                "source": "live_business_settings_capture",
-            }
-
-            # Critical invariant: the capture pass NEVER sends CREATE to Meta.
-            await route.abort()
-            if not captured.done():
-                captured.set_result(row)
-
-        await self.page.route("**/*graphql*", intercept)
+            ),
+            plausible_matcher=lambda request, meta: (
+                plausible_final_create(meta)
+            ),
+        )
+        await capture.__aenter__()
         submit_attempts: list[dict[str, Any]] = []
         try:
             for step in range(12):
-                if captured.done():
+                if capture.done:
                     break
 
                 before_state = await self._ad_account_ui_state()
@@ -18384,7 +18227,7 @@ timeout_seconds=4.0,
                     )
                     await self.page.wait_for_timeout(200)
 
-                capture_final_armed = True
+                capture.arm()
                 self._ad_account_final_capture_armed = True
                 self._mark_ad_account_phase("CAPTURE_FINAL_ARMED")
                 if checkpoint is not None:
@@ -18415,7 +18258,7 @@ timeout_seconds=4.0,
                         final_meta["fallback"] = fallback
 
                 if not final_attempted:
-                    capture_final_armed = False
+                    capture.disarm()
                     self._ad_account_final_capture_armed = False
                     self._mark_ad_account_phase("CAPTURE_FORM_READY")
 
@@ -18432,13 +18275,10 @@ timeout_seconds=4.0,
                     # Observe this attempt only; a second final click is forbidden.
                     self._ad_account_create_sent = True
                     try:
-                        await asyncio.wait_for(
-                            asyncio.shield(captured),
-                            timeout=3.0,
-                        )
+                        await capture.wait(3.0)
                     except asyncio.TimeoutError:
                         await self.page.wait_for_timeout(250)
-                    if captured.done():
+                    if capture.done:
                         break
 
                     # Meta can occasionally submit the actual CREATE through a
@@ -18477,12 +18317,9 @@ timeout_seconds=4.0,
                 if not final_clicked:
                     break
 
-            if not captured.done():
+            if not capture.done:
                 try:
-                    row = await asyncio.wait_for(
-                        asyncio.shield(captured),
-                        timeout=5.0,
-                    )
+                    row = await capture.wait(5.0)
                 except asyncio.TimeoutError as exc:
                     diag = await self._diagnostic(
                         "ad_account_create_request_missing"
@@ -18491,9 +18328,9 @@ timeout_seconds=4.0,
                     diag["account_name"] = name
                     diag["form_setup"] = form_setup
                     diag["submit_attempts"] = submit_attempts[-12:]
-                    diag["graphql_candidates"] = graphql_candidates[-12:]
+                    diag["graphql_candidates"] = capture.candidates[-12:]
                     diag["blocked_unclassified_create"] = bool(
-                        blocked_unclassified_create
+                        capture.blocked_unclassified
                     )
                     diag["final_capture_armed"] = self._ad_account_final_capture_armed
                     diag["create_may_have_been_sent"] = self._ad_account_create_sent
@@ -18512,12 +18349,18 @@ timeout_seconds=4.0,
                         diagnostic=diag,
                     ) from exc
             else:
-                row = captured.result()
+                row = capture.result_nowait()
         finally:
-            try:
-                await self.page.unroute("**/*graphql*", intercept)
-            except Exception:
-                pass
+            await capture.__aexit__(None, None, None)
+
+        row = {
+            **row,
+            "canary_name": name,
+            "business_id": business,
+            "currency": currency_code,
+            "timezone_id": timezone,
+            "source": "live_business_settings_capture",
+        }
 
         if (
             not _digits(row.get("doc_id"))
@@ -20454,39 +20297,7 @@ timeout_seconds=4.0,
 
     @staticmethod
     def _safe_graphql_request_summary(request: Any) -> dict[str, Any]:
-        """Return non-secret request metadata for diagnostics/canaries."""
-        meta = _request_graphql_meta(request)
-        variables = (
-            meta["variables"]
-            if isinstance(meta.get("variables"), dict)
-            else {}
-        )
-        raw_input = variables.get("input")
-        input_keys = (
-            sorted(str(key) for key in raw_input)
-            if isinstance(raw_input, dict)
-            else []
-        )
-        recursive_keys: set[str] = set()
-        def collect_keys(value: Any) -> None:
-            if isinstance(value, dict):
-                for key, child in value.items():
-                    recursive_keys.add(str(key))
-                    collect_keys(child)
-            elif isinstance(value, list):
-                for child in value:
-                    collect_keys(child)
-        collect_keys(variables)
-        return {
-            "url": _clean(meta.get("url")),
-            "method": _clean(meta.get("method")),
-            "friendly_name": _clean(meta.get("friendly_name")),
-            "doc_id": _clean(meta.get("doc_id")),
-            "variable_keys": sorted(str(key) for key in variables),
-            "input_keys": input_keys,
-            "recursive_keys": sorted(recursive_keys)[:80],
-            "body_decodable": bool(meta.get("body_decodable")),
-        }
+        return safe_graphql_request_summary(request)
 
     @staticmethod
     def _request_matches_page_add(

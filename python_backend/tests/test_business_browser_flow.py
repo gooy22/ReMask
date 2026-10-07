@@ -22,6 +22,7 @@ from app.facebook_business_browser import (
     _extract_inventory_ad_account_rows,
     _graphql_request_ad_account_inventory_scope,
 )
+from app.graphql_mutation_capture import GraphqlMutationCapture
 from app.provisioning.business_handler import business_handler
 from app.provisioning.models import ProvisioningError, ProvisioningStep
 from app.provisioning.state import ProvisioningStateStore
@@ -5368,26 +5369,25 @@ class BrowserAdAccountFinalCaptureGateRegressionTests(unittest.TestCase):
         source = inspect.getsource(
             FacebookBusinessBrowser.capture_ad_account_create_request
         )
-        armed_pos = source.index("capture_final_armed = True")
+        primitive = inspect.getsource(GraphqlMutationCapture._intercept)
+        armed_pos = source.index("capture.arm()")
         click_pos = source.index(
             "await self._click_ad_account_final_interactive()",
             armed_pos,
         )
         self.assertLess(armed_pos, click_pos)
         self.assertIn("def plausible_final_create(", source)
-        self.assertIn("blocked_unclassified_create", source)
-        self.assertIn("await route.abort()", source)
-        self.assertIn('"plausible_final_create"', source)
+        self.assertIn("capture.blocked_unclassified", source)
+        self.assertIn("await route.abort()", primitive)
+        self.assertIn("plausible_matcher", source)
 
     def test_unknown_final_candidate_is_not_made_replayable(self):
-        source = inspect.getsource(
-            FacebookBusinessBrowser.capture_ad_account_create_request
-        )
-        plausible_pos = source.index("if plausible_unknown:")
-        definitive_pos = source.index("if not definitive_match:", plausible_pos)
-        blocked_section = source[plausible_pos:definitive_pos]
+        primitive = inspect.getsource(GraphqlMutationCapture._intercept)
+        plausible_pos = primitive.index("if plausible:")
+        continue_pos = primitive.index("await route.continue_()", plausible_pos)
+        blocked_section = primitive[plausible_pos:continue_pos]
         self.assertIn("await route.abort()", blocked_section)
-        self.assertNotIn("captured.set_result", blocked_section)
+        self.assertNotIn("set_result", blocked_section)
 
 
 class BrowserAdAccountFullFlowHardeningTests(unittest.TestCase):

@@ -22,6 +22,7 @@ from app.facebook_business_browser import (
     _extract_inventory_ad_account_ids,
     _extract_named_ad_account_ids,
 )
+from app.graphql_mutation_capture import GraphqlMutationCapture
 from app.provisioning.ad_account_handler import (
     AD_ACCOUNT_SAFE_CAPTURE_RETRY_CODES,
     _inventory_repeatedly_confirms_empty,
@@ -323,10 +324,13 @@ class AdAccountCreateTransportTests(unittest.TestCase):
         source = inspect.getsource(
             FacebookBusinessBrowser.capture_ad_account_create_request
         )
+        primitive = inspect.getsource(GraphqlMutationCapture._intercept)
         self.assertIn("_open_ad_account_create_form(", source)
         self.assertIn("_prepare_ad_account_form_fields(", source)
         self.assertIn("_request_matches_ad_account_create(", source)
-        self.assertIn("await route.abort()", source)
+        self.assertIn("GraphqlMutationCapture(", source)
+        self.assertIn("capture.arm()", source)
+        self.assertIn("await route.abort()", primitive)
         self.assertIn("_click_ad_account_final_interactive()", source)
 
     def test_private_create_has_no_docid_fallback(self) -> None:
