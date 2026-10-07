@@ -481,7 +481,7 @@ class WorkerPool:
                             elif action=='prepare':
                                 payload=task['payload']
                                 desired=(payload.get('desired') or {}) if isinstance(payload,dict) else {}
-                                hard_timeout=prepare_hard_timeout(desired.get('ad_accounts',2))
+                                hard_timeout=prepare_hard_timeout(desired.get('ad_accounts',1))
                                 result=await _await_with_hard_watchdog(
                                     self.prepare.run(
                                         item_id=item_id,
