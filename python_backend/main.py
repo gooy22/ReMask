@@ -23,6 +23,7 @@ from app.facebook_page_discovery import PageDiscoveryError, list_pages_via_priva
 from app.private_inventory import private_inventory_snapshot
 from app.provisioning.models import ProvisioningError, ProvisioningStep
 from app.provisioning.meta_transport import MetaTransportRouter
+from app.provisioning.service import normalize_add_bm_payload
 from app.facebook_docids import (
     list_candidates,
     registry_view,
@@ -3382,6 +3383,18 @@ async def private_launch_review(profile_id: str, payload: dict = Body(...)):
 
 @app.post('/api/v1/jobs',response_model=JobAccepted,dependencies=[Depends(require_key)])
 async def create_job(request: CreateJobRequest) -> JobAccepted:
+    # Server-side canonicalization: stale Workspace tabs are not allowed to
+    # turn ordinary Add BM back into a Page/RK flow. Persist the normalized
+    # task so retries use the same clean contract.
+    for profile in request.profiles:
+        for task in profile.tasks:
+            if str(task.action or '').strip().lower() != 'provisioning':
+                continue
+            task.payload = normalize_add_bm_payload(
+                task.payload,
+                task_idempotency_key=task.idempotency_key,
+            )
+
     fp_profiles=_request_fan_page_profile_ids(request)
     automatic=bool(fp_profiles) and all(_automatic_profile_page_tasks(profile.tasks)
         for profile in request.profiles if str(profile.profile_id) in fp_profiles)
@@ -3402,12 +3415,29 @@ async def create_job(request: CreateJobRequest) -> JobAccepted:
     else:
         enqueued=0
 
+    safe_plan = []
+    for profile in request.profiles:
+        for task in profile.tasks:
+            payload = task.payload if isinstance(task.payload, dict) else {}
+            params = payload.get('parameters') if isinstance(payload.get('parameters'), dict) else {}
+            business = params.get('BUSINESS') if isinstance(params.get('BUSINESS'), dict) else {}
+            safe_plan.append({
+                'profile_id': str(profile.profile_id),
+                'action': str(task.action),
+                'steps': list(payload.get('steps') or []) if isinstance(payload.get('steps'), list) else [],
+                'scope_key': str(payload.get('scope_key') or ''),
+                'task_key': str(task.idempotency_key or ''),
+                'business_attach_page': business.get('attach_page'),
+                'business_has_page_id': bool(str(business.get('page_id') or business.get('primary_page_id') or '').strip()),
+            })
+
     log.info(
-        'job accepted id=%s created=%s profiles=%d enqueued=%d',
+        'job accepted id=%s created=%s profiles=%d enqueued=%d plan=%s',
         job_id,
         created,
         len(request.profiles),
         enqueued,
+        json.dumps(safe_plan, ensure_ascii=False, separators=(',', ':'))[:7000],
     )
 
     return JobAccepted(
