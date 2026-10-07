@@ -302,7 +302,12 @@ class PrivateLaunchTests(unittest.IsolatedAsyncioTestCase):
 
         self.web.graphql.reset_mock()
         self.web.graphql.return_value = {"data": {"create": {"id": "599999999999999"}}}
-        with patch.object(self.service, "_live_preflight", AsyncMock(return_value=self.preflight)):
+        fresh_preflight = AsyncMock(
+            side_effect=AssertionError(
+                "durable submitted uncertainty must block before live preflight"
+            )
+        )
+        with patch.object(self.service, "_live_preflight", fresh_preflight):
             with self.assertRaises(ProvisioningError) as caught:
                 await self.service.run(
                     item_id="item-retry",
@@ -312,6 +317,7 @@ class PrivateLaunchTests(unittest.IsolatedAsyncioTestCase):
                     payload=self.payload,
                 )
         self.assertEqual(caught.exception.code, "PRIVATE_LAUNCH_RECONCILE_REQUIRED")
+        fresh_preflight.assert_not_awaited()
         self.web.graphql.assert_not_awaited()
 
     async def test_review_cache_reuses_exact_recent_live_proof(self):
