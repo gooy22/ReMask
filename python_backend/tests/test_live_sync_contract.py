@@ -310,7 +310,7 @@ class LiveSyncContractTests(unittest.TestCase):
             page_phase,
         )
         self.assertIn(
-            "if not pages_live_verified:\n                try:\n                    ads_pages_timeout",
+            "if not pages_live_verified and not page_live_probe_auth_blocked:\n                try:\n                    ads_pages_timeout",
             page_phase,
         )
 
