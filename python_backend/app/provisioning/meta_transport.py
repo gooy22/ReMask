@@ -65,13 +65,14 @@ class MetaTransportRouter:
         ),
     }
 
-    def __init__(self, session: Any) -> None:
+    def __init__(self, session: Any = None, *, context: Any = None) -> None:
         self.session = session
+        self._context = context if context is not None else getattr(session, "context", None)
         self._shared_browser: Any = None
 
     @property
     def context(self) -> Any:
-        return getattr(self.session, "context", None)
+        return self._context
 
     def policy(self, capability: str) -> TransportPolicy:
         key = str(capability or "").strip().upper()
@@ -119,8 +120,9 @@ class MetaTransportRouter:
         return callable(getattr(self.session, "facebook_web", None))
 
     def browser_available(self) -> bool:
-        return callable(
-            getattr(self.session, "facebook_business_browser", None)
+        return bool(
+            callable(getattr(self.session, "facebook_business_browser", None))
+            or self.context is not None
         )
 
     async def facebook_web(self):
@@ -141,11 +143,19 @@ class MetaTransportRouter:
 
     async def facebook_business_browser(self):
         factory = getattr(self.session, "facebook_business_browser", None)
-        if not callable(factory):
+        if callable(factory):
+            browser = await factory()
+            self._shared_browser = browser
+            return browser
+        if self.context is None:
             raise RuntimeError(
                 "PROFILE_BROWSER_TRANSPORT_UNAVAILABLE"
             )
-        browser = await factory()
+
+        from ..facebook_business_browser import FacebookBusinessBrowser
+
+        browser = FacebookBusinessBrowser(self.context)
+        await browser.open()
         self._shared_browser = browser
         return browser
 
@@ -177,7 +187,7 @@ class MetaTransportRouter:
 
         # Compatibility for lightweight test/legacy sessions which expose the
         # cached browser slot but not close_business_browser().
-        if hasattr(self.session, "_business_browser"):
+        if self.session is not None and hasattr(self.session, "_business_browser"):
             try:
                 setattr(self.session, "_business_browser", None)
             except Exception:
@@ -186,6 +196,8 @@ class MetaTransportRouter:
     def __getattr__(self, name: str) -> Any:
         # Transitional compatibility: handlers can be moved behind the router
         # incrementally without losing profile-session capabilities.
+        if self.session is None:
+            raise AttributeError(name)
         return getattr(self.session, name)
 
 
