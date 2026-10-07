@@ -684,7 +684,7 @@ class PrivateLaunchService:
         self.contracts = contracts or PrivateLaunchContractStore()
         self.state = PrivateLaunchStateStore(provisioning_state.path)
         self._preflight_cache: dict[
-            tuple[str, str, str, str],
+            tuple[str, str, str, str, str, str],
             tuple[float, int, dict[str, Any]],
         ] = {}
 
@@ -724,6 +724,7 @@ class PrivateLaunchService:
         ad_account_id: str,
         page_id: str,
         transport: MetaTransportRouter | None = None,
+        payment_selector: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         row = self._inventory_row(context, business_id, ad_account_id)
         if row is None:
@@ -832,6 +833,11 @@ class PrivateLaunchService:
                 retryable=False,
             )
 
+        selected_payment_method, payment_selection_source = _select_payment_method(
+            funding.get("payment_methods"),
+            payment_selector,
+        )
+
         return {
             "profile_id": profile_id,
             "business_id": business_id,
@@ -842,6 +848,8 @@ class PrivateLaunchService:
             "page_access_checked_live": True,
             "payment_checked_live": True,
             "payment_method_count": len(funding.get("payment_methods") or []),
+            "selected_payment_method": selected_payment_method,
+            "payment_selection_source": payment_selection_source,
         }
 
     async def _review_preflight(
@@ -853,6 +861,7 @@ class PrivateLaunchService:
         ad_account_id: str,
         page_id: str,
         transport: MetaTransportRouter | None = None,
+        payment_selector: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         try:
             ttl = max(
@@ -865,7 +874,16 @@ class PrivateLaunchService:
         except (TypeError, ValueError):
             ttl = 60.0
         inventory_at = int(getattr(context, "inventory_updated_at", 0) or 0)
-        key = (profile_id, business_id, ad_account_id, page_id)
+        selector_type = str((payment_selector or {}).get("type") or "").casefold()
+        selector_last4 = str((payment_selector or {}).get("last4") or "")
+        key = (
+            profile_id,
+            business_id,
+            ad_account_id,
+            page_id,
+            selector_type,
+            selector_last4,
+        )
         cached = self._preflight_cache.get(key)
         now = time.monotonic()
         if cached is not None:
@@ -884,6 +902,7 @@ class PrivateLaunchService:
             ad_account_id=ad_account_id,
             page_id=page_id,
             transport=transport,
+            payment_selector=payment_selector,
         )
         self._preflight_cache[key] = (now, inventory_at, dict(proof))
         return proof
@@ -906,6 +925,7 @@ class PrivateLaunchService:
         ad_account_id = self._id(payload.get("ad_account_id"), "ad_account_id")
         page_id = self._id(payload.get("page_id"), "page_id")
         launch_payload = _effective_launch_payload(payload.get("launch"))
+        payment_selector = _payment_selector(payload)
 
         # Validate the complete mutation chain before the first irreversible
         # request. A missing downstream contract must never leave an orphaned
@@ -918,6 +938,7 @@ class PrivateLaunchService:
             ad_account_id=ad_account_id,
             page_id=page_id,
             transport=transport,
+            payment_selector=payment_selector,
         )
         return {
             "ready": True,
