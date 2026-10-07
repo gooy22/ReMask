@@ -65,6 +65,62 @@ def contracts():
     }
 
 
+class PrivateLaunchContractRegistryTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = Path(self.tmp.name) / "contracts.json"
+
+    def test_registry_persists_valid_contract_and_reloads_it(self):
+        store = PrivateLaunchContractStore("{}", path=self.path)
+        contract = store.register(
+            __import__("app.private_launch", fromlist=["PrivateLaunchStep"]).PrivateLaunchStep.CAMPAIGN,
+            contracts()["CAMPAIGN"],
+        )
+        self.assertEqual(contract.friendly_name, "CampaignCreateMutation")
+        self.assertTrue(self.path.is_file())
+
+        reloaded = PrivateLaunchContractStore(path=self.path)
+        status = reloaded.status()
+        self.assertTrue(status["CAMPAIGN"]["configured"])
+        self.assertFalse(status["ADSET"]["configured"])
+
+    def test_registry_rejects_missing_target_placeholder_and_auth_material(self):
+        step = __import__("app.private_launch", fromlist=["PrivateLaunchStep"]).PrivateLaunchStep.CAMPAIGN
+        store = PrivateLaunchContractStore("{}", path=self.path)
+
+        missing = {**contracts()["CAMPAIGN"], "variables": {"input": {"name": "fixture"}}}
+        with self.assertRaises(ProvisioningError) as caught:
+            store.register(step, missing)
+        self.assertEqual(caught.exception.code, "PRIVATE_LAUNCH_CONTRACT_CONFIG_ERROR")
+        self.assertFalse(self.path.exists())
+
+        auth = {
+            **contracts()["CAMPAIGN"],
+            "variables": {
+                "input": {
+                    "account_id": "{{ad_account_id}}",
+                    "fb_dtsg": "must-never-persist",
+                }
+            },
+        }
+        with self.assertRaises(ProvisioningError) as caught:
+            store.register(step, auth)
+        self.assertEqual(caught.exception.code, "PRIVATE_LAUNCH_CONTRACT_CONFIG_ERROR")
+        self.assertFalse(self.path.exists())
+
+    def test_registry_rejects_auth_fields_in_request_envelope(self):
+        step = __import__("app.private_launch", fromlist=["PrivateLaunchStep"]).PrivateLaunchStep.CAMPAIGN
+        store = PrivateLaunchContractStore("{}", path=self.path)
+        row = {
+            **contracts()["CAMPAIGN"],
+            "request_envelope": {"__req": "1", "fb_dtsg": "secret"},
+        }
+        with self.assertRaises(ProvisioningError):
+            store.register(step, row)
+        self.assertFalse(self.path.exists())
+
+
 class PrivateLaunchTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.tmp = tempfile.TemporaryDirectory()
