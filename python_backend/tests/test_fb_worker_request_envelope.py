@@ -1,7 +1,8 @@
 import inspect
 import unittest
+from unittest.mock import AsyncMock
 
-from fb_worker import FacebookWebSession, WebProfile
+from fb_worker import FacebookBootstrap, FacebookWebSession, WebProfile
 
 
 class FacebookRequestEnvelopeTests(unittest.TestCase):
@@ -69,6 +70,65 @@ class FacebookRequestEnvelopeTests(unittest.TestCase):
             [row["message"] for row in payload["errors"]],
             ["first", "second"],
         )
+
+    async def test_direct_graphql_uses_asset_scoped_bootstrap_referer(self):
+        class FakeResponse:
+            status = 200
+            headers = {}
+
+            async def text(self):
+                return '{"data":{"ok":true}}'
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        class FakeSession:
+            def __init__(self):
+                self.calls = []
+
+            def post(self, url, **kwargs):
+                self.calls.append((url, kwargs))
+                return FakeResponse()
+
+        session = self._session()
+        fake = FakeSession()
+        session._ensure_session = AsyncMock(return_value=fake)
+        session.bootstrap = AsyncMock(
+            return_value=FacebookBootstrap(
+                fb_dtsg="dtsg",
+                actor_id="123456789",
+                lsd="lsd-token",
+                request_context={"__aaid": "42"},
+                source_url=(
+                    "https://business.facebook.com/latest/home"
+                    "?asset_id=1348798761652037&ir_qe_exposed=1"
+                ),
+            )
+        )
+
+        payload = await session.graphql(
+            "28057338880523368",
+            {"input": {"actor_id": "123456789"}},
+            friendly_name="useBusinessCreationMutationMutation",
+        )
+
+        self.assertTrue(payload["data"]["ok"])
+        self.assertEqual(len(fake.calls), 1)
+        _, kwargs = fake.calls[0]
+        headers = kwargs["headers"]
+        self.assertEqual(
+            headers["Referer"],
+            (
+                "https://business.facebook.com/latest/home"
+                "?asset_id=1348798761652037&ir_qe_exposed=1"
+            ),
+        )
+        self.assertEqual(headers["Sec-Fetch-Dest"], "empty")
+        self.assertEqual(headers["Sec-Fetch-Mode"], "cors")
+        self.assertEqual(headers["Sec-Fetch-Site"], "same-origin")
 
 
 if __name__ == "__main__":
