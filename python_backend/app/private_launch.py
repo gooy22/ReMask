@@ -867,6 +867,22 @@ class PrivateLaunchService:
 
         for step in STEP_ORDER:
             prior = await self.state.step(launch_key, step)
+            if prior:
+                prior_target = (
+                    str(prior.get("profile_id") or "").strip(),
+                    str(prior.get("business_id") or "").strip(),
+                    str(prior.get("ad_account_id") or "").removeprefix("act_").strip(),
+                )
+                current_target = (profile_id, business_id, ad_account_id)
+                if prior_target != current_target:
+                    raise ProvisioningError(
+                        "PRIVATE_LAUNCH_KEY_TARGET_MISMATCH",
+                        (
+                            "Private Launch key is already bound to a different "
+                            "profile/BM/RK target"
+                        ),
+                        retryable=False,
+                    )
             if prior and str(prior.get("status") or "").upper() == "SUCCESS":
                 entity_id = str(prior.get("entity_id") or "").strip()
                 values[f"{step.value.lower()}_id"] = entity_id
