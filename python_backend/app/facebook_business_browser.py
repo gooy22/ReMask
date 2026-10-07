@@ -2490,12 +2490,18 @@ class FacebookBusinessBrowser:
                         const t = normalize(text);
                         return /^Continue(?: as .+)?$/i.test(t)
                             || /^Continue with Facebook$/i.test(t)
+                            || /^Log in with Facebook$/i.test(t)
                             || /^Continue to (?:Meta )?Business(?: Suite)?$/i.test(t)
                             || /^Продолжить(?: как .+)?$/i.test(t)
+                            || /^Войти через Facebook$/i.test(t)
                             || /^Продовжити(?: як .+)?$/i.test(t)
+                            || /^Увійти через Facebook$/i.test(t)
                             || /^Weiter(?: als .+)?$/i.test(t)
+                            || /^Mit Facebook anmelden$/i.test(t)
                             || /^Continuer(?: en tant que .+)?$/i.test(t)
-                            || /^Tiếp tục(?: với tư cách .+)?$/i.test(t);
+                            || /^Se connecter avec Facebook$/i.test(t)
+                            || /^Tiếp tục(?: với tư cách .+)?$/i.test(t)
+                            || /^Đăng nhập bằng Facebook$/i.test(t);
                     };
                     const controls = [
                         ...document.querySelectorAll(
@@ -2524,11 +2530,20 @@ class FacebookBusinessBrowser:
             return False
         if bool(probe.get("hasCredentialInput")):
             return False
+        labels=[
+            str(value or "").strip()
+            for value in (probe.get("labels") or [])
+            if str(value or "").strip()
+        ]
+        # Live Meta Business login handoff currently advertises login_options
+        # FB/IG/SSO. Choosing the explicit Facebook option is safe because we
+        # never enter credentials: the existing profile cookie session either
+        # succeeds, or the normal auth classifier stops on Facebook login.
         if int(probe.get("candidateCount") or 0)!=1:
             self._last_selector_diagnostic={
                 **(self._last_selector_diagnostic or {}),
                 "business_login_gate_continuation_candidates":
-                    probe.get("labels") or [],
+                    labels,
                 "business_login_gate_continuation_count":
                     int(probe.get("candidateCount") or 0),
             }
@@ -2551,12 +2566,18 @@ class FacebookBusinessBrowser:
                         const t = normalize(text);
                         return /^Continue(?: as .+)?$/i.test(t)
                             || /^Continue with Facebook$/i.test(t)
+                            || /^Log in with Facebook$/i.test(t)
                             || /^Continue to (?:Meta )?Business(?: Suite)?$/i.test(t)
                             || /^Продолжить(?: как .+)?$/i.test(t)
+                            || /^Войти через Facebook$/i.test(t)
                             || /^Продовжити(?: як .+)?$/i.test(t)
+                            || /^Увійти через Facebook$/i.test(t)
                             || /^Weiter(?: als .+)?$/i.test(t)
+                            || /^Mit Facebook anmelden$/i.test(t)
                             || /^Continuer(?: en tant que .+)?$/i.test(t)
-                            || /^Tiếp tục(?: với tư cách .+)?$/i.test(t);
+                            || /^Se connecter avec Facebook$/i.test(t)
+                            || /^Tiếp tục(?: với tư cách .+)?$/i.test(t)
+                            || /^Đăng nhập bằng Facebook$/i.test(t);
                     };
                     const rows = [
                         ...document.querySelectorAll(
@@ -2606,6 +2627,7 @@ class FacebookBusinessBrowser:
         self._last_selector_diagnostic={
             **(self._last_selector_diagnostic or {}),
             "business_login_gate_resolved":True,
+            "business_login_gate_choice":labels[0][:120] if labels else "",
             "business_login_gate_return_url":_clean(return_url)[:700],
             "business_login_gate_final_url":current[:700],
         }
