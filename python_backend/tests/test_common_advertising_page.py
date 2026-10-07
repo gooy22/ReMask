@@ -265,6 +265,197 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
                     provisioning_state=self.state,profile_id='9',item_id='personal',scope_key='personal')
         verify.assert_not_awaited()
 
+    async def _shared_access_handler_fixture(
+        self,
+        *,
+        request_side_effect=True,
+        approve_side_effect=True,
+        refresh_side_effect=None,
+    ):
+        item='shared-'+str(getattr(self,'shared_fixture_count',0))
+        self.shared_fixture_count=getattr(self,'shared_fixture_count',0)+1
+        await AdvertisingPageStore(self.state,'8','61594882851656').patch(
+            page_id=PAGE,name='PrgssTeam',owner_profile_id='8')
+        await self.state.complete(
+            item,'8',item,ProvisioningStep.AD_ACCOUNT,
+            {'business_id':BM,'ad_account_id':'act_'+RK,'account_name':'Fixture Ads'}
+        )
+        await self.state.set_running(
+            item,'8',item,ProvisioningStep.PAGE_ACCESS
+        )
+
+        browser=SimpleNamespace(
+            page=SimpleNamespace(url='https://www.facebook.com/'),
+            context=SimpleNamespace(cookies={'c_user':'61594882851656'}),
+            _goto=AsyncMock(return_value='https://www.facebook.com/'),
+            _diagnostic=AsyncMock(return_value={}),
+        )
+        class Lease:
+            async def __aenter__(self): return browser
+            async def __aexit__(self,*args): return False
+
+        session=SimpleNamespace(
+            context=SimpleNamespace(
+                profile_id='8',
+                cookies={'c_user':'61594882851656'},
+                pages=[],
+                ad_accounts=[],
+                inventory_updated_at=0,
+            ),
+            browser_lease=lambda **kwargs: Lease(),
+        )
+        resolver=SimpleNamespace(resolve=AsyncMock())
+
+        request=AsyncMock()
+        if isinstance(request_side_effect,(list,tuple,BaseException)):
+            request.side_effect=request_side_effect
+        else:
+            request.return_value=request_side_effect
+        approve=AsyncMock()
+        if isinstance(approve_side_effect,(list,tuple,BaseException)):
+            approve.side_effect=approve_side_effect
+        else:
+            approve.return_value=approve_side_effect
+        assign=AsyncMock(return_value={
+            'source':'exact_page_people_ads_access',
+            'operator_uid':'61594882851656',
+            'row':'You Ads',
+        })
+        refresh=AsyncMock(
+            return_value=bool(refresh_side_effect)
+            if refresh_side_effect is not None else False
+        )
+
+        with patch(
+            'app.provisioning.page_access_handler.ensure_common_page',
+            new=AsyncMock(),
+        ), patch(
+            'app.provisioning.page_access_handler._request_target_page_access',
+            request,
+        ), patch(
+            'app.provisioning.page_access_handler._approve_owner_page_access',
+            approve,
+        ), patch(
+            'app.provisioning.page_access_handler._assign_operator',
+            assign,
+        ), patch(
+            'app.provisioning.page_access_handler.ensure_existing_page_full_control',
+            new=AsyncMock(),
+        ) as ownership, patch(
+            'app.provisioning.page_access_handler.ensure_ad_account_full_control',
+            new=AsyncMock(),
+        ) as rk_full, patch(
+            'app.provisioning.page_access_handler.refresh_saved_auth_context',
+            refresh,
+        ):
+            result=await page_access_handler(
+                session,{},
+                {'business_id':BM,'ad_account_id':'act_'+RK},
+                provisioning_state=self.state,profile_id='8',
+                item_id=item,scope_key=item,profile_resolver=resolver,
+            )
+        return result,request,approve,assign,ownership,rk_full,refresh,browser
+
+    async def test_default_page_access_uses_shared_ads_not_ownership(self):
+        result,request,approve,assign,ownership,rk_full,refresh,browser=(
+            await self._shared_access_handler_fixture(
+                request_side_effect=True,
+            )
+        )
+        request.assert_awaited_once()
+        approve.assert_not_awaited()
+        assign.assert_awaited_once()
+        ownership.assert_not_awaited()
+        rk_full.assert_not_awaited()
+        refresh.assert_not_awaited()
+        browser._goto.assert_awaited_once()
+        self.assertEqual(result['access_mode'],'shared_ads_access')
+        self.assertEqual(
+            result['transport'],
+            'target_business_page_advertising_access',
+        )
+        self.assertTrue(result['page_shared_to_business'])
+        self.assertTrue(result['operator_ads_access_assigned'])
+        config=await AdvertisingPageStore(
+            self.state,'8','61594882851656'
+        ).get()
+        self.assertFalse(bool(config.get('owner_business_confirmed')))
+        self.assertNotEqual(str(config.get('owner_business_id') or ''),BM)
+
+    async def test_business_login_gate_refreshes_same_profile_once_then_retries(self):
+        gate=BrowserBusinessError(
+            'BUSINESS_LOGIN_GATE',
+            'Meta Business login gate',
+            retryable=True,
+            diagnostic={'login_path':'/business/loginpage/'},
+        )
+        result,request,approve,assign,ownership,rk_full,refresh,browser=(
+            await self._shared_access_handler_fixture(
+                request_side_effect=[gate,True],
+                refresh_side_effect=True,
+            )
+        )
+        self.assertEqual(request.await_count,2)
+        refresh.assert_awaited_once()
+        approve.assert_not_awaited()
+        assign.assert_awaited_once()
+        self.assertTrue(result['page_shared_to_business'])
+
+    async def test_business_login_gate_without_fresh_session_does_not_loop(self):
+        gate=BrowserBusinessError(
+            'BUSINESS_LOGIN_GATE',
+            'Meta Business login gate',
+            retryable=True,
+            diagnostic={'login_path':'/business/loginpage/'},
+        )
+        item='shared-no-refresh'
+        await AdvertisingPageStore(self.state,'8','61594882851656').patch(
+            page_id=PAGE,name='PrgssTeam',owner_profile_id='8')
+        await self.state.complete(
+            item,'8',item,ProvisioningStep.AD_ACCOUNT,
+            {'business_id':BM,'ad_account_id':'act_'+RK,'account_name':'Fixture Ads'}
+        )
+        await self.state.set_running(item,'8',item,ProvisioningStep.PAGE_ACCESS)
+        browser=SimpleNamespace(
+            page=SimpleNamespace(url='https://www.facebook.com/'),
+            context=SimpleNamespace(cookies={'c_user':'61594882851656'}),
+            _goto=AsyncMock(return_value='https://www.facebook.com/'),
+            _diagnostic=AsyncMock(return_value={}),
+        )
+        class Lease:
+            async def __aenter__(self): return browser
+            async def __aexit__(self,*args): return False
+        session=SimpleNamespace(
+            context=SimpleNamespace(
+                profile_id='8',cookies={'c_user':'61594882851656'},
+                pages=[],ad_accounts=[],inventory_updated_at=0,
+            ),
+            browser_lease=lambda **kwargs: Lease(),
+        )
+        resolver=SimpleNamespace(resolve=AsyncMock())
+        request=AsyncMock(side_effect=gate)
+        refresh=AsyncMock(return_value=False)
+        with patch(
+            'app.provisioning.page_access_handler.ensure_common_page',
+            new=AsyncMock(),
+        ), patch(
+            'app.provisioning.page_access_handler._request_target_page_access',
+            request,
+        ), patch(
+            'app.provisioning.page_access_handler.refresh_saved_auth_context',
+            refresh,
+        ):
+            with self.assertRaises(ProvisioningError) as caught:
+                await page_access_handler(
+                    session,{},
+                    {'business_id':BM,'ad_account_id':'act_'+RK},
+                    provisioning_state=self.state,profile_id='8',
+                    item_id=item,scope_key=item,profile_resolver=resolver,
+                )
+        self.assertEqual(caught.exception.code,'BUSINESS_LOGIN_GATE')
+        self.assertEqual(request.await_count,1)
+        refresh.assert_awaited_once()
+
     async def _full_access_handler_fixture(self, prior=None, failure=None):
         item='full-'+str(getattr(self,'full_fixture_count',0))
         self.full_fixture_count=getattr(self,'full_fixture_count',0)+1
@@ -298,8 +489,12 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
              patch('app.provisioning.page_access_handler.ensure_ad_account_full_control',new=AsyncMock(return_value={'rk_operator_full_control_verified':True})) as rk_access, \
              patch('app.provisioning.page_access_handler._request_target_page_access',new=AsyncMock()) as partial, \
              patch('app.provisioning.page_access_handler.inspect_browser_pages',new=AsyncMock()) as inspect:
-            result=await page_access_handler(session,{}, {'business_id':BM,'ad_account_id':'act_'+RK},
-                provisioning_state=self.state,profile_id='8',item_id=item,scope_key=item)
+            result=await page_access_handler(
+                session,
+                {'access_mode':'existing_page_full_control'},
+                {'business_id':BM,'ad_account_id':'act_'+RK},
+                provisioning_state=self.state,profile_id='8',item_id=item,scope_key=item
+            )
         self.assertEqual(factory.call_count,1)
         partial.assert_not_awaited()
         inspect.assert_not_awaited()
@@ -452,6 +647,7 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
             async def is_enabled(self): return self._count>0
             async def click(self,**kwargs): events.append('CLICK_'+self.label)
             async def check(self,**kwargs): events.append('CHECK_'+self.label)
+            def filter(self,**kwargs): return self
             def get_by_role(self,role,**kwargs):
                 pattern=getattr(kwargs.get('name'),'pattern',str(kwargs.get('name') or ''))
                 if role=='checkbox' and 'You' in pattern: return Locator(1,'YOU')
@@ -468,23 +664,30 @@ class CommonPageTests(unittest.IsolatedAsyncioTestCase):
         page=SimpleNamespace(get_by_role=page_role,wait_for_timeout=AsyncMock())
         browser=SimpleNamespace(
             page=page,
+            context=SimpleNamespace(cookies={'c_user':'61594882851656'}),
             verify_page_attached=AsyncMock(side_effect=AssertionError('redundant relation navigation')),
             _diagnostic=AsyncMock(return_value={'stage':'operator_submitted'}),
         )
         patches=[]
         async def checkpoint(patch): patches.append(patch)
+        proof={'source':'exact_page_people_ads_access',
+            'operator_uid':'61594882851656','row':'You Ads'}
         with patch('app.provisioning.page_access_handler._select_page',
                    new=AsyncMock(return_value={'source':'row_exact_page_id'})), \
-             patch('app.provisioning.page_access_handler._ads_only',new=AsyncMock()):
-            await _assign_operator(
+             patch('app.provisioning.page_access_handler._ads_only',new=AsyncMock()), \
+             patch('app.provisioning.page_access_handler._operator_ads_proof',
+                   new=AsyncMock(side_effect=[None,proof])):
+            result=await _assign_operator(
                 browser,{'name':'PrgssTeam','page_id':PAGE},BM,checkpoint,
                 relation_preconfirmed=True)
         browser.verify_page_attached.assert_not_awaited()
+        self.assertEqual(result,proof)
         self.assertEqual(events,['CLICK_ASSIGN','CHECK_YOU','CLICK_SAVE'])
         self.assertEqual(
             [row.get('phase') for row in patches],
             ['TARGET_PAGE_OPERATOR_ASSIGN_CLICK_INTENT',
-             'TARGET_PAGE_OPERATOR_ASSIGN_SUBMITTED'])
+             'TARGET_PAGE_OPERATOR_ASSIGN_SUBMITTED',
+             'TARGET_PAGE_OPERATOR_ASSIGN_CONFIRMED'])
         self.assertEqual(patches[0]['business_id'],BM)
         self.assertEqual(patches[0]['page_id'],PAGE)
 
