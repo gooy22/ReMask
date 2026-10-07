@@ -14,6 +14,7 @@ from ..graphql_mutation_capture import GraphqlMutationCapture
 from ..private_page_access import (
     PageAccessContractStore,
     page_access_request_match,
+    page_access_request_plausible,
 )
 from .advertising_page import AdvertisingPageStore, _PAGE_LOCK, ensure_common_page
 from .models import ProvisioningError, ProvisioningStep
@@ -371,7 +372,11 @@ async def _request_target_page_access(
             # Once the final submit is armed, block every GraphQL POST until
             # the exact request is classified. This prevents an unclassified
             # mutation from escaping while contract discovery is in progress.
-            plausible_matcher=lambda request,meta: True,
+            plausible_matcher=lambda request,meta: page_access_request_plausible(
+                meta,
+                business_id=business,
+                page_id=str(config['page_id']),
+            ),
             max_candidates=32,
         )
         await capture.__aenter__()
@@ -409,10 +414,17 @@ async def _request_target_page_access(
             capture.disarm()
             await capture.__aexit__(None,None,None)
 
+        actor_id=str(
+            (
+                getattr(getattr(browser,'context',None),'cookies',{})
+                or {}
+            ).get('c_user') or ''
+        ).strip()
         contract=contract_store.register_capture(
             captured,
             business_id=business,
             page_id=str(config['page_id']),
+            actor_id=actor_id,
         )
         await checkpoint({
             'phase':'TARGET_PAGE_ACCESS_PRIVATE_CONTRACT_CAPTURED',
@@ -428,6 +440,7 @@ async def _request_target_page_access(
                 business_id=business,
                 page_id=str(config['page_id']),
                 profile_id=profile_id,
+                actor_id=actor_id,
             )
         except ProvisioningError:
             raise
@@ -1377,6 +1390,12 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
                             business_id=business,
                             page_id=str(config['page_id']),
                             profile_id=str(profile),
+                            actor_id=str(
+                                (
+                                    getattr(session.context,'cookies',{})
+                                    or {}
+                                ).get('c_user') or ''
+                            ).strip(),
                         )
                     except ProvisioningError as exc:
                         if exc.code!='PRIVATE_PAGE_ACCESS_CONTRACT_STALE':
