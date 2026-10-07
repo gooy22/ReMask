@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from app.facebook_business_browser import BrowserBusinessError
-from app.payment_card_binding import _open_card_form, _resolve_payment_account_name, _selected_account_disabled, _payment_surface, _setup_control, _unique_visible, card_brand_aliases, card_values, configure_payment_account, field_kind, form_action_guard, missing_card_fields, payment_account_setup_required, payment_card_flow, profile_payment_card, selected_payment_asset
+from app.payment_card_binding import _open_card_form, _resolve_payment_account_name, _selected_account_disabled, _payment_surface, _setup_control, _unique_visible, active_card_form_text, card_brand_aliases, card_values, configure_payment_account, field_kind, form_action_guard, missing_card_fields, payment_account_setup_required, payment_card_flow, profile_payment_card, selected_payment_asset
 from app.payment_inspection import settings_payment_summary, select_settings_payment_tab
 
 ID='123456789'
@@ -356,9 +356,31 @@ class CardBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('secret',str(result))
         save.click.assert_not_awaited()
 
+    async def test_action_guard_ignores_background_page_text_without_visible_payment_scope(self):
+        card_control=SimpleNamespace(evaluate=AsyncMock(return_value=''))
+        fields=[{'kind':'number','required':True,'type':'text','tag':'input','control':card_control}]
+
+        empty_scopes=SimpleNamespace(count=AsyncMock(return_value=0))
+        page=SimpleNamespace(
+            locator=lambda selector: empty_scopes if selector.startswith('[role="dialog"]')
+                else SimpleNamespace(inner_text=AsyncMock(return_value='Help: temporary authorization and verification charge')),
+        )
+        text=await active_card_form_text(page,fields)
+        self.assertEqual(text,'')
+        self.assertEqual(form_action_guard(text,fields),'')
+
+    async def test_action_guard_reads_visible_payment_dialog_before_pan_mounts(self):
+        dialog=SimpleNamespace(inner_text=AsyncMock(return_value='Add payment method\nTemporary authorization may apply'))
+        scopes=SimpleNamespace(count=AsyncMock(return_value=1),nth=lambda index: dialog)
+        page=SimpleNamespace(locator=lambda selector: scopes)
+        text=await active_card_form_text(page,[])
+        self.assertIn('Temporary authorization',text)
+        self.assertEqual(form_action_guard(text,[]),'PAYMENT_FINANCIAL_ACTION_REQUIRED')
+
     async def test_financial_action_or_unaccepted_terms_stops_before_secret_entry(self):
         for body,checkbox in [('Verification charge',False),('Payment methods',True)]:
             browser,save=self.browser(body);fields=self.fields()
+            fields[0]['control'].evaluate=AsyncMock(return_value=body)
             if checkbox:fields.append({'kind':'','required':True,'type':'checkbox','tag':'input','checked':False})
             with patch('app.payment_card_binding._open_card_form',AsyncMock(return_value={'status':'FORM_READY','_fields':fields})),patch('app.payment_card_binding._unique_visible',AsyncMock(return_value=save)):
                 result=await payment_card_flow(browser,ID,{},operation='bind',card=CARD,cvv='123')
