@@ -14,8 +14,9 @@ try {
     }
     $overlay=file_get_contents(__DIR__.'/../railway-payment-inspection-overlay.php');
     $overlay=strtr($overlay,["'/var/www/html'"=>var_export($directory.'/html',true),"'/tmp/"=>"'".$directory.'/input/']);
-    $overlay=str_replace("['accounts.php', 'workspace.php']", "['accounts.php', 'workspace.php', 'escaped.php']", $overlay);
+    $overlay=str_replace("['accounts.php', 'workspace.php']", "['accounts.php', 'workspace.php', 'escaped.php', 'no-bundle.php']", $overlay);
     file_put_contents($directory.'/install.php',$overlay);
+    file_put_contents($directory.'/html/no-bundle.php','<script src="scripts/unrelated.js?v=keep"></script>');
     $ui=file_get_contents(__DIR__.'/../railway-payment-inspection-ui.js');
     $urls=[];
     foreach([$ui,$ui."\n// fixture release change\n",$ui."\n// fixture release change\n"] as $index=>$source){
@@ -50,6 +51,7 @@ JS);
         $output=[];$exit=0;
         exec(escapeshellarg(PHP_BINARY).' '.escapeshellarg($directory.'/install.php').' 2>&1',$output,$exit);
         if($exit!==0)throw new RuntimeException('Installer failed: '.implode("\n",$output));
+        if(file_get_contents($directory.'/html/no-bundle.php')!=='<script src="scripts/unrelated.js?v=keep"></script>')throw new RuntimeException('Page without workspace bundle was changed');
         foreach(['accounts.php','workspace.php','escaped.php'] as $page){
             $markup=str_replace('\\"','"',file_get_contents($directory.'/html/'.$page));
             preg_match('/src="([^"]+)"/',$markup,$match);

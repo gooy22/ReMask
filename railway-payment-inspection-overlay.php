@@ -129,7 +129,8 @@ foreach (['accounts.php', 'workspace.php'] as $name) {
         -1,
         $count,
     );
-    if ($count < 1 || !is_string($html)) throw new RuntimeException('Workspace card cache boundary missing for ' . $name);
+    // Some pages do not load workspace.js; leave their asset references alone.
+    if (!is_string($html)) throw new RuntimeException('Workspace card cache rewrite failed for ' . $name);
     file_put_contents($path, $html);
 }
 fwrite(STDERR, "[private-payment] profile browser inspection and canonical RK display installed\n");
