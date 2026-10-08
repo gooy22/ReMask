@@ -182,6 +182,8 @@ class PageActionTests(unittest.IsolatedAsyncioTestCase):
         self.meta.owner, self.meta.incorrect_read = BM, True
         with self.assertRaises(ProvisioningError) as caught: await self.run_action()
         self.assertEqual(caught.exception.code, 'PRIVATE_ASSIGNMENT_TARGET_UNCONFIRMED'); self.assertEqual(self.meta.posts, [])
+        self.assertEqual(self.saved['diagnostic']['code'], 'PRIVATE_ASSIGNMENT_TARGET_UNCONFIRMED')
+        self.assertTrue(self.saved['diagnostic']['response_shape'])
     async def test_existing_full_rights_do_not_mutate(self):
         self.meta.owner, self.meta.tasks = BM, {FP: [P, PARTIAL], RK: [R, PARTIAL]}
         self.assertTrue((await self.run_action())['operator_full_control_verified']); self.assertEqual(self.meta.posts, [])

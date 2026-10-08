@@ -354,10 +354,19 @@ async def ensure_private_page_full_control(web, *, page_id, business_id, ad_acco
     for key, asset, tasks in (("assign_page", page, page_tasks), ("assign_rk", _id(rk_asset_id) or account, rk_tasks)):
         async def verify(asset=asset, tasks=tasks):
             payload = await read(RIGHTS, {"assetID": asset, "businessID": business, "userID": user, "surface": "LWI"})
-            _assert_assignment_targets(payload, asset, user)
+            diagnostic = {"stage": key + "_verification", "response_shape": response_shape(payload)}
+            try:
+                _assert_assignment_targets(payload, asset, user)
+            except ProvisioningError as exc:
+                await checkpoint({"diagnostic": {**diagnostic, "code": exc.code}})
+                log.info('[%s] PAGE_ACCESS rights_read rejected=%s', profile_id,
+                    json.dumps({**diagnostic, 'code': exc.code}, separators=(',', ':')))
+                raise
             proof = assignment_proof(payload, asset_id=asset, user_id=user, required_tasks=tasks)
             if not proof:
-                await checkpoint({"diagnostic": {"stage": key + "_verification", "response_shape": response_shape(payload)}})
+                await checkpoint({"diagnostic": diagnostic})
+                log.info('[%s] PAGE_ACCESS rights_read unconfirmed=%s', profile_id,
+                    json.dumps(diagnostic, separators=(',', ':')))
             return proof
         proof = await verify()
         if not proof:
