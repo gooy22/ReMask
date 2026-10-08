@@ -16,16 +16,17 @@ modules={}
 for index,source,error in concurrent.futures.ThreadPoolExecutor(max_workers=4).map(fetch,enumerate(urls)):
  print("BUNDLE_REPORT="+json.dumps({"index":index,"bytes":len(source.encode()),"error":error}),flush=True)
  for name,node in _module_nodes(source):modules[name]=node
-candidates=[n for n in modules if any(x in n for x in ("ClaimPage","AddUserAssetConnection","CurrentBusinessUserID","AssignedPermissionsRelayUpdater"))]
-reads=[n for n in modules if n.endswith("Query.graphql") and any(x in n.lower() for x in ("assetdetail","assigned","permission","businessuser","people","page"))]
+candidates=[n for n in modules if any(x in n for x in ("AddUserAssetConnection","CurrentBusinessUserID","AssignedPermissions","TaskID","TaskIds","TaskPermissions","AssetPeople","AssetUser","UserAsset","BusinessScopeSelector","BusinessConfig","XFBBusinessClaimAssetEntryPoint"))]
+reads=[n for n in modules if n.endswith("Query.graphql") and any(x in n.lower() for x in ("assetdetail","assigned","permission","businessuser","assetuser","businessinfo","scopeselector"))]
 print("CANDIDATE_NAMES="+json.dumps(candidates),flush=True)
 print("READ_NAMES="+json.dumps(reads),flush=True)
+print("SETTINGS_CATALOG="+json.dumps([n for n in modules if any(x in n.lower() for x in ("settings","permission","businessuser","fullcontrol","taskid","claimassetentrypoint","scopeselector"))]),flush=True)
 selected=set(candidates+reads)
-related={n:node for n,node in modules.items() if n in selected or any(q in node.text.decode() for q in selected if q.endswith(".graphql"))}
+related={n:node for n,node in modules.items() if n in selected or any(q in node.text.decode() for q in selected)}
 exported=0
 for name,node in related.items():
  print("MODULE_REPORT="+json.dumps({"name":name,"bytes":len(node.text)}),flush=True)
- if exported<65 and len(node.text)<60000:
+ if exported<120 and len(node.text)<60000:
   wrapped="__d("+json.dumps(name)+",[],"+node.text.decode()+");"
   print("RELAY_MODULE_BASE64="+base64.b64encode(wrapped.encode()).decode(),flush=True)
   exported+=1
