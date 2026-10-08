@@ -366,3 +366,52 @@ HTML shell → query complete-empty → один CREATE → query exact-RK → c
 без browser/native GraphQL. Дополнительно compiler imports/aliases, scopes,
 partial/foreign/errors, cache reuse и zero query_posts при auth precheck.
 Это синтетические проверки, не заявление об успехе нового Meta job.
+
+
+## Job c3631e6e на 79413c4: фактический discovery failure
+
+Job `c3631e6e66ca40028bf88cada9801952`, профиль 15, принят
+2026-10-08 11:05:47 UTC (14:05:47 Kyiv), повтор того же item 11:06:31.
+В обоих trace Settings HTTP/2 200, Ads Manager 400, 24 CDN GET,
+11 576 045 / 11 575 962 байта discovery, modules=6000, contracts=0,
+query_attempts=0, query_posts=0. Нет read POST и CREATE POST.
+Это сбой нашего discovery, а не отказ Meta на выполнение запроса.
+
+Исследованы публичные CDN URLs именно из этого runtime trace через
+изолированный CI без cookies/CSRF/proxy профиля. Runs 37768388066,
+37768640109, 37768885233 подтвердили реальные Query и route/preload modules.
+Один CDN bundle превышает 3 MiB и не принимается diagnostic reader;
+нужный query/route найден в остальных доступных bundles. Только снятие
+лимита не решает проблему: публичный разбор без cap также дал contracts=0.
+
+Реальные дефекты:
+- cap учитывал все UI modules и делал break после 6000, теряя поздние query;
+- Relay operation содержит minified boolean !0/!1; прежний literal reader
+  отклонял operation целиком (synthetic JSON fixture этого не покрывала);
+- реальная коллекция — AdBusiness.connected_objects, не ad_accounts/assets;
+- nullable assetTypes в artifact получает AD_ACCOUNT из literal route
+  entryPointParams.assetType → View getPreloadProps → query variables.
+
+Исправленный reader хранит query/id/entrypoint modules, продолжает scan
+без generic UI cap, безопасно читает !0/!1, доказывает текущую цепочку
+route → preload → exact query. В production нет нового hardcoded doc_id.
+Смена doc_id в observed fixture меняет исполняемый контракт. Сформирован
+BusinessCometBizSuiteSettingsAdAccountsRootQuery для exact BM,
+assetTypes=[AD_ACCOUNT], first/count=100. Nullable search/asset/global
+filters остаются null: UI status filter не доказывает отсутствие всех РК.
+includeDiscoveryAssets=false исключает suggestions из actual inventory.
+Discovery останавливается после доказанного read contract и кеширует
+его только в текущей профильной сессии; все новые ответы проверяются.
+
+connected_objects normalizer требует response exact BM, канонический
+business_object_id/assetID, тип AD_ACCOUNT, полный page_info. Relay UI id
+не подменяет RK id. Противоречивые/неизвестные rows, foreign BM, errors,
+pagination не доказывают отсутствие. Отдельный business_ad_accounts
+(first:1) existence signal блокирует CREATE, если полный connected list
+пуст, но Meta сообщает существующий RK.
+
+В fixture сохранены четыре публичных generated Relay/entrypoint modules
+из этого job, без данных профиля. Regression проверяет compiler на этом
+образце и FacebookWebSession flow query-empty → один CREATE → query-RK
+→ commit, без Chromium. Синтетический response fixture всё ещё не равен
+новой живой Meta операции; до её trace live успех не заявляется.

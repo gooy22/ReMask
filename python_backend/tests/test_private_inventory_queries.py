@@ -1,6 +1,7 @@
 import json
 import unittest
 from types import SimpleNamespace
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 from app.private_inventory import private_inventory_snapshot, inventory_diagnostic_summary
@@ -8,6 +9,21 @@ from app.private_inventory_queries import QueryArtifacts, read_private_inventory
 from fb_worker import RemoteRequestError
 from tests import test_private_create_handlers as actions
 from tests.test_ad_account_private_contract import BM, RK
+
+
+def observed_settings_modules():
+    return (Path(__file__).parent / "fixtures/meta_settings_rk_observed_20261008.js").read_text()
+
+
+def connected_response(*, business=BM, accounts=(), partial=False):
+    edges = [{"node": {"__typename": "AdAccount", "assetType": "AD_ACCOUNT", "assetID": value,
+        "business_object_id": value, "id": "relay-ui-id", "business_object_relationship_to_business": "OWNED"},
+        "nameColumn": {"bizkit_settings_render_strategy_no_business_id": {"business_object": {
+            "__typename": "AdAccount", "business_object_id": value, "business_object_name": "ReMask RK 1"}}}}
+        for value in accounts]
+    return {"data": {"business": {"__typename": "AdBusiness", "id": business,
+        "connected_objects": {"edges": edges, "page_info": {"has_next_page": partial, "end_cursor": "cursor"}},
+        "business_ad_accounts": {"edges": [{"__typename": "BusinessToAdAccountsEdge"}] if accounts else []}}}}
 
 
 def artifact(*, kind="query", collection="ad_accounts", imported=False, extra_args=None, defaults=None):
@@ -47,6 +63,38 @@ class QueryCompilerTests(unittest.TestCase):
             self.assertEqual(row["variables"], {"businessID": BM, "count": 100})
             self.assertEqual(row["operation_kind"], "query")
             self.assertTrue(row["module_sha256"])
+
+    def test_query_after_six_thousand_ui_modules_is_not_lost(self):
+        unrelated = ''.join('__d("UI%d",[],function(a,b,c,d,e,f,g){g.exports=null;});' % i for i in range(6005))
+        observed = QueryArtifacts()
+        observed.observe(unrelated + artifact(imported=True))
+        self.assertEqual(len(observed.contracts(BM)), 1)
+        self.assertEqual(len(observed.modules), 2)
+        self.assertEqual(observed.modules_scanned, 6007)
+
+    def test_minified_relay_boolean_flags_are_literal_data(self):
+        source = artifact().replace('"name": "ad_accounts",', '"name": "ad_accounts", "plural": !1, "flag": !0,')
+        self.assertEqual(len(self.compile(source)), 1)
+        for changed in (source.replace('!1', '!someRuntime'), source.replace('!1', 'executeSomething()')):
+            self.assertEqual(self.compile(changed), [])
+
+    def test_actual_meta_route_query_and_preload_bind_exact_inventory_contract(self):
+        rows = self.compile(observed_settings_modules())
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["friendly_name"], "BusinessCometBizSuiteSettingsAdAccountsRootQuery")
+        self.assertEqual(rows[0]["response_collection"], "connected_objects")
+        self.assertEqual(rows[0]["variables"], {"businessID": BM, "assetTypes": ["AD_ACCOUNT"], "searchTerm": None,
+            "orderBy": None, "assetFilters": None, "globalFilters": None, "count": 100, "includeDiscoveryAssets": False})
+        self.assertEqual(self.compile(observed_settings_modules().replace('26033539376343649', '6666666666666'))[0]["doc_id"], '6666666666666')
+
+    def test_observed_route_asset_type_is_required_and_other_types_or_mutable_binding_fail(self):
+        source = observed_settings_modules()
+        for changed in (source.replace('assetType:"AD_ACCOUNT"', 'assetType:"PAGE"'),
+                source.replace('assetType:"AD_ACCOUNT"', 'assetType:unknownRuntime'),
+                source.replace('assetTypes:[e]', 'assetTypes:[differentType]'),
+                source.replace('return o!=null', 'e=otherType;return o!=null'),
+                source.replace('BusinessCometBizSuiteSettingsAdAccountsRootQuery$Parameters', 'UnrelatedQuery$Parameters')):
+            self.assertEqual(self.compile(changed), [])
 
     def test_immutable_relay_argument_aliases_resolve_without_evaluation(self):
         source = artifact().replace('var node=', 'var args=[{"kind":"Variable","name":"id","variableName":"businessID"}];var node=')
@@ -108,6 +156,36 @@ class ReadInventoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("_document", repr(result))
         self.assertEqual(inventory_diagnostic_summary(result)[-1]["query_posts"], 1)
 
+    async def test_observed_connected_objects_confirm_empty_and_exact_rk_without_ui_ids(self):
+        for accounts in ((), (RK,)):
+            web = self.web(connected_response(accounts=accounts), observed_settings_modules())
+            result = await self.snapshot(web, list(accounts))
+            self.assertTrue(result["ready"])
+            self.assertEqual(result["businesses"][0]["confirmed_empty"], not bool(accounts))
+            if accounts:
+                self.assertEqual(result["businesses"][0]["ad_accounts"][0]["id"], RK)
+                self.assertEqual(result["businesses"][0]["ad_accounts"][0]["name"], "ReMask RK 1")
+            self.assertEqual(web.posts[0][1]["assetFilters"], None)
+            self.assertEqual(web.posts[0][1]["includeDiscoveryAssets"], False)
+
+    async def test_connected_objects_malformed_foreign_partial_or_hidden_account_blocks_absence(self):
+        hidden = connected_response()
+        hidden["data"]["business"]["business_ad_accounts"]["edges"] = [{"__typename": "BusinessToAdAccountsEdge"}]
+        unknown = connected_response()
+        unknown["data"]["business"]["connected_objects"]["edges"] = [{"node": {"id": RK}}]
+        for payload in (hidden, unknown, connected_response(partial=True), connected_response(business="888888888888")):
+            result = await self.snapshot(self.web(payload, observed_settings_modules()))
+            self.assertFalse(result["ready"])
+            self.assertFalse(result["businesses"][0]["confirmed_empty"])
+
+    async def test_connected_objects_conflicting_canonical_ids_never_confirm_target(self):
+        for key, value in (("assetID", "555555555555"), ("business_object_id", "malformed"), ("assetType", "PAGE"), ("__typename", "Page")):
+            payload = connected_response(accounts=[RK])
+            payload["data"]["business"]["connected_objects"]["edges"][0]["node"][key] = value
+            result = await self.snapshot(self.web(payload, observed_settings_modules()), [RK])
+            self.assertFalse(result["ready"])
+            self.assertEqual(result["businesses"][0]["confirmed_expected_account_ids"], [])
+
     async def test_query_cache_is_profile_local_and_reused_for_fresh_verification(self):
         web = self.web(response(accounts=[RK]))
         self.assertTrue((await self.snapshot(web, [RK]))["ready"])
@@ -146,29 +224,35 @@ class QueryCreateFlowTests(unittest.IsolatedAsyncioTestCase):
         await actions.RKActionTests.asyncSetUp(self)
 
     async def test_query_precheck_one_create_query_verify_commit_without_chromium(self):
+        await self.query_create_flow(artifact(), "BusinessAdAccountsQuery", response)
+
+    async def test_actual_meta_schema_query_create_verify_commit_without_chromium(self):
+        await self.query_create_flow(observed_settings_modules(), "BusinessCometBizSuiteSettingsAdAccountsRootQuery", connected_response)
+
+    async def query_create_flow(self, source, query_name, build_response):
         original_post = self.meta.post
         operations = []
         def post(url, **kwargs):
             friendly = kwargs["data"].get("fb_api_req_friendly_name")
             operations.append(friendly)
-            if friendly != "BusinessAdAccountsQuery":
+            if friendly != query_name:
                 return original_post(url, **kwargs)
             owner = self.meta
             class Response:
                 status = 200
                 headers = {}
-                async def text(self): return json.dumps(response(accounts=[RK] if owner.created else []))
+                async def text(self): return json.dumps(build_response(accounts=[RK] if owner.created else []))
                 async def __aenter__(self): return self
                 async def __aexit__(self, *args): return False
             return Response()
         self.meta.post = post
         async def fetch(url, **kwargs):
-            body = '<script>' + artifact() + '</script> ["DTSGInitialData",[],{"token":"CURRENT"}]'
+            body = '<script>' + source + '</script> ["DTSGInitialData",[],{"token":"CURRENT"}]'
             return 200, body, url
         self.web.fetch_text = fetch
         result = await actions.RKActionTests.run_action(self)
         self.assertEqual(result["ad_account_id"], "act_" + RK)
-        self.assertEqual(operations, ["BusinessAdAccountsQuery", "BizKitSettingsCreateAdAccountMutation", "BusinessAdAccountsQuery"])
+        self.assertEqual(operations, [query_name, "BizKitSettingsCreateAdAccountMutation", query_name])
         self.assertEqual(len(self.meta.posts), 1)
         self.session.facebook_business_browser.assert_not_awaited()
         self.web.graphql_browser_native.assert_not_awaited()

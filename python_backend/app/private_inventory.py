@@ -89,10 +89,10 @@ def _inventory_shape(payloads: list[Any]) -> list[dict[str, Any]]:
     output = []
     semantic_keys = {"business", "businesses", "businessportfolios", "ownedbusinesses",
         "clientbusinesses", "adaccounts", "ownedadaccounts", "clientadaccounts",
-        "advertisingaccounts", "assets", "businessassets", "bizkitbusiness"}
+        "advertisingaccounts", "assets", "businessassets", "bizkitbusiness", "connectedobjects"}
     allowed_fields = {"id", "__typename", "page_info", "pageInfo", "edges", "nodes",
         "items", "results", "ad_accounts", "owned_ad_accounts", "client_ad_accounts",
-        "business_id", "business", "businesses", "assets"}
+        "business_id", "business", "businesses", "assets", "connected_objects"}
     pending = list(payloads)
     visited = 0
     while pending and visited < 10000 and len(output) < 20:
@@ -121,7 +121,7 @@ def inventory_diagnostic_summary(snapshot: dict[str, Any]) -> list[dict[str, Any
         diagnostics.extend(business.get("diagnostics", []))
     return [{key: row[key] for key in ("requested_url", "final_url", "http_status",
         "auth_gate", "bytes", "usable", "payload_count", "inventory_shape", "error_type",
-        "phase", "operation_kind", "contracts", "query_posts", "query_attempts", "query_names", "modules", "scripts") if key in row}
+        "phase", "operation_kind", "contracts", "query_posts", "query_attempts", "query_names", "modules", "modules_scanned", "scripts") if key in row}
         for row in diagnostics if isinstance(row, dict)][-12:]
 
 
@@ -137,7 +137,7 @@ def _business_payloads(payload: Any, business_id: str) -> list[dict[str, Any]]:
     def portfolio_only(value, key=""):
         if isinstance(value, dict):
             typename = str(value.get("__typename") or "").replace("_", "").lower()
-            is_business = typename in {"business", "businessportfolio"} or key.lower() in {
+            is_business = typename in {"business", "businessportfolio", "adbusiness"} or key.lower() in {
                 "business", "bizkit_business", "business_portfolio", "businessportfolio",
             }
             if is_business and _clean_id(value.get("id")) not in {"", business_id}:
@@ -151,7 +151,7 @@ def _business_payloads(payload: Any, business_id: str) -> list[dict[str, Any]]:
     def walk(value, key=""):
         if isinstance(value, dict):
             typename = str(value.get("__typename") or "").replace("_", "").lower()
-            business_node = typename in {"business", "businessportfolio"} or key.lower() in {
+            business_node = typename in {"business", "businessportfolio", "adbusiness"} or key.lower() in {
                 "business", "bizkit_business", "business_portfolio", "businessportfolio",
             }
             if business_node and _clean_id(value.get("id")) == business_id:
@@ -164,6 +164,71 @@ def _business_payloads(payload: Any, business_id: str) -> list[dict[str, Any]]:
             for child in value:
                 walk(child, key)
     walk(payload)
+    return output
+
+
+def _normalize_connected_inventory(payloads: list[Any], business_id: str) -> list[dict[str, Any]]:
+    """Normalize Meta's observed AdBusiness.connected_objects RK read schema.
+
+    Only exact response Business nodes count. Relay's UI/node id never takes
+    precedence over explicit business_object_id/assetID. Unknown or conflicting
+    edges make absence inconclusive; nested owner/Page/phone nodes are not RK.
+    """
+    output = []
+    for payload in payloads:
+        for business in _business_payloads(payload, business_id):
+            connection = business.get("connected_objects")
+            if not isinstance(connection, dict) or not isinstance(connection.get("edges"), list):
+                continue
+            accounts, invalid = [], False
+            for edge in connection["edges"]:
+                node = edge.get("node") if isinstance(edge, dict) else None
+                if not isinstance(node, dict):
+                    invalid = True
+                    continue
+                typename = str(node.get("__typename") or "").lower()
+                kind = str(node.get("assetType") or node.get("business_asset_type") or "")
+                if any(node.get(key) and not _clean_id(node.get(key)) for key in ("business_object_id", "assetID")):
+                    invalid = True
+                    continue
+                explicit_ids = {_clean_id(node.get(key)) for key in ("business_object_id", "assetID") if node.get(key)}
+                explicit_ids.discard("")
+                account_id = next(iter(explicit_ids), "") if len(explicit_ids) == 1 else ""
+                if not explicit_ids and typename == "adaccount":
+                    account_id = _clean_id(node.get("id"))
+                relationship = str(node.get("business_object_relationship_to_business") or "").upper()
+                if (len(explicit_ids) > 1 or not account_id or account_id == business_id
+                        or typename in {"page", "user", "adbusiness", "business", "pixel", "instagramaccount"}
+                        or (kind and kind != "AD_ACCOUNT") or (not kind and typename != "adaccount")
+                        or relationship in {"NONE", "REQUESTED", "PENDING", "DISCOVERED"}):
+                    invalid = True
+                    continue
+                name = str(node.get("business_object_name") or node.get("name") or "")
+                pending = [edge.get("nameColumn", {})]
+                visited = 0
+                while pending and visited < 64:
+                    value = pending.pop()
+                    visited += 1
+                    if not isinstance(value, dict):
+                        continue
+                    value_id = _clean_id(value.get("business_object_id") or value.get("assetID") or value.get("id"))
+                    if value_id == account_id:
+                        name = str(value.get("business_object_name") or value.get("name") or name)
+                    pending.extend(child for key, child in value.items() if isinstance(child, dict)
+                        and key not in {"owning_business", "business", "phone_numbers"})
+                accounts.append({"node": {"__typename": "AdAccount", "id": account_id, "name": name,
+                    "business_id": business_id}})
+            existence = business.get("business_ad_accounts")
+            if isinstance(existence, dict) and existence.get("edges") and not accounts:
+                # The observed query separately reports first:1 RK existence.
+                # A hidden/excluded RK must not become complete absence.
+                invalid = True
+            page_info = connection.get("page_info", {})
+            page_info = dict(page_info) if isinstance(page_info, dict) else {}
+            if invalid:
+                page_info["has_next_page"] = True
+            output.append({"data": {"business": {"__typename": "Business", "id": business_id,
+                "ad_accounts": {"edges": accounts, "page_info": page_info}}}})
     return output
 
 
