@@ -6,6 +6,7 @@ legacy UI handlers remain isolated for compatibility with historical traces.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import time
@@ -17,7 +18,7 @@ from ..facebook_business_create import create_business_with_docids
 from ..private_contract_discovery import discover_private_ad_account_contract
 from ..private_inventory import (
     _auth_gate, _extract_business_inventory_rows, _json_payloads,
-    private_inventory_snapshot,
+    private_inventory_snapshot, inventory_diagnostic_summary,
 )
 from .models import ProvisioningError, ProvisioningStep
 from .state import ProvisioningStateStore
@@ -66,8 +67,10 @@ class _Action:
     async def checkpoint(self, patch):
         self.saved = await self.store.checkpoint(self.item, self.profile, self.scope, self.step,
             {"transport": "private_http", "browser_started": False, "activity_at": int(time.time()), **patch})
-        log.info("[%s] %s private stage=%s business=%s", self.profile, self.step.value,
-            patch.get("phase", patch.get("activity", "checkpoint")), self.saved.get("business_id", ""))
+        historical = bool(patch.get("recovered_from_item_id"))
+        log.info("[%s] %s private stage=%s business=%s checkpoint_origin=%s browser_started=False", self.profile, self.step.value,
+            "RESTORE_PREVIOUS_CHECKPOINT" if historical else patch.get("phase", patch.get("activity", "checkpoint")),
+            self.saved.get("business_id", ""), "history" if historical else "current")
 
     async def commit(self, result):
         # Inventory proof precedes the first confirmed entity write.
@@ -115,7 +118,10 @@ async def _business_inventory(web, expected=""):
         status, body, final = await web.fetch_text(url, max_bytes=5_000_000)
         gate = _auth_gate(final, body)
         if gate:
-            raise ProvisioningError(gate, "Private BM inventory requires the profile session to be restored.", retryable=True)
+            parts = urlsplit(final)
+            log.info("BM private inventory auth_stop code=%s status=%s final_host=%s final_path=%s", gate, status, parts.hostname, parts.path)
+            raise ProvisioningError(gate, "Private BM inventory reached " + (parts.hostname or "") + parts.path
+                + "; authentication verification stopped and CREATE checkpoint was retained.", retryable=True)
         if not 200 <= status < 300 or urlsplit(final).hostname != "business.facebook.com":
             continue
         for payload in _json_payloads(body):
@@ -133,12 +139,17 @@ async def _rk_inventory(web, business, name, expected=""):
     snapshot = await asyncio.wait_for(private_inventory_snapshot(web,
         known_business_ids={business}, known_accounts_by_business={business: {expected}} if expected else {},
         discover_businesses=False), timeout=15)
-    for diagnostic in snapshot.get("diagnostics", []):
+    diagnostics = inventory_diagnostic_summary(snapshot)
+    log.info("RK private inventory business=%s verification=%s", business, json.dumps(diagnostics, separators=(",", ":")))
+    for diagnostic in diagnostics:
         if diagnostic.get("auth_gate"):
-            raise ProvisioningError(diagnostic["auth_gate"], "Private RK inventory requires the profile session to be restored.", retryable=True)
+            error = ProvisioningError(diagnostic["auth_gate"], "Private RK inventory reached "
+                + diagnostic.get("final_url", "an authentication gate") + "; CREATE checkpoint was retained.", retryable=True)
+            error.inventory_diagnostics = diagnostics
+            raise error
     portfolios = [row for row in snapshot.get("businesses", []) if _id(row.get("id")) == business]
     if len(portfolios) != 1:
-        return {"id": "", "ids": [], "named": [], "complete": False}
+        return {"id": "", "ids": [], "named": [], "complete": False, "diagnostics": diagnostics}
     row = portfolios[0]
     # An account in another selected Ads Manager scope is never confirmation.
     accounts = [item for item in row.get("ad_accounts", []) if _id(item.get("business_id")) == business and _id(item.get("id"))]
@@ -146,7 +157,8 @@ async def _rk_inventory(web, business, name, expected=""):
     named = sorted({_id(item["id"]) for item in accounts if _clean(item.get("name")).casefold() == name.casefold()})
     confirmed = expected if expected and expected in ids else (named[0] if not expected and len(named) == 1 else "")
     return {"id": confirmed, "ids": ids, "named": named,
-        "complete": row.get("inventory_complete") is True, "source": "private_http_exact_business_inventory"}
+        "complete": row.get("inventory_complete") is True, "source": "private_http_exact_business_inventory",
+        "diagnostics": diagnostics}
 
 
 async def _verify_rk(action, business, name, expected):
@@ -155,7 +167,10 @@ async def _verify_rk(action, business, name, expected):
             proof = await _rk_inventory(action.web, business, name, expected)
             if proof["id"]:
                 return proof
-        except ProvisioningError:
+        except ProvisioningError as exc:
+            if getattr(exc, "inventory_diagnostics", None):
+                await action.checkpoint({"inventory_verification": exc.inventory_diagnostics,
+                    "inventory_auth_error": exc.code})
             raise
         except Exception as exc:
             log.info("RK private verify business=%s error_type=%s", business, type(exc).__name__)
@@ -267,7 +282,15 @@ async def ad_account_handler(session, params, state, *args, **kwargs):
     if saved_name and saved_name.casefold() != name.casefold():
         raise ProvisioningError("AD_ACCOUNT_CHECKPOINT_MISMATCH", "An existing or pending RK operation in this BM belongs to another name; verify that operation first.")
     expected = _id(action.saved.get("ad_account_id") or action.saved.get("create_response_ad_account_id") or state.get("ad_account_id"))
-    before = await _rk_inventory(action.web, business, name, expected)
+    try:
+        before = await _rk_inventory(action.web, business, name, expected)
+    except ProvisioningError as exc:
+        if getattr(exc, "inventory_diagnostics", None):
+            await action.checkpoint({"inventory_verification": exc.inventory_diagnostics,
+                "inventory_auth_error": exc.code})
+        raise
+    await action.checkpoint({"activity": "RK_PRIVATE_INVENTORY_PRECHECK", "business_id": business,
+        "inventory_verification": before.get("diagnostics", []), "inventory_complete": before["complete"]})
     pending = _clean(action.saved.get("phase")).upper() in _PENDING
     if before["id"]:
         return await action.commit({"business_id": business, "ad_account_id": "act_" + before["id"],

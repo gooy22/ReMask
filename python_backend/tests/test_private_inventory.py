@@ -1,7 +1,7 @@
 import json
 import unittest
 
-from app.private_inventory import private_inventory_snapshot
+from app.private_inventory import private_inventory_snapshot, inventory_diagnostic_summary
 
 
 class FakeWeb:
@@ -117,6 +117,61 @@ class PrivateInventoryTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_request_variables_are_not_response_evidence(self):
         result = await self.snapshot(FakeWeb({"variables": inventory([account()])}))
+        self.assertFalse(result["ready"])
+        self.assertEqual(result["businesses"][0]["ad_accounts"], [])
+
+    async def test_packed_relay_response_is_decoded_without_losing_exact_scope(self):
+        web = FakeWeb({"require": [["RelayPrefetchedStreamCache", "next", [],
+            ["query", {"__bbox": {"result": json.dumps(inventory([account()]))}}]]]})
+        result = await self.snapshot(web)
+        self.assertTrue(result["ready"])
+        self.assertEqual(result["businesses"][0]["confirmed_expected_account_ids"], ["222222"])
+
+    async def test_packed_request_or_foreign_response_never_proves_exact_inventory(self):
+        for payload in ({"request": json.dumps(inventory([account()]))},
+                {"response": json.dumps(inventory([account(business="444444")], business="444444"))}):
+            result = await self.snapshot(FakeWeb(payload))
+            self.assertFalse(result["ready"])
+            self.assertEqual(result["businesses"][0]["ad_accounts"], [])
+
+    async def test_plain_json_script_and_json_response_are_data_but_js_is_not(self):
+        raw = json.dumps(inventory([account()]))
+        for body, ready in (("<script>" + raw + "</script>", True),
+                ("for (;;);" + raw, True),
+                ("<script>var response=" + raw + ";</script>", False)):
+            web = FakeWeb({})
+            async def fetch(url, max_bytes=0):
+                return 200, body, url
+            web.fetch_text = fetch
+            self.assertEqual((await self.snapshot(web))["ready"], ready)
+
+    async def test_completeness_requires_all_same_business_response_fragments(self):
+        owned = inventory([])
+        owned["data"]["business"]["owned_ad_accounts"] = owned["data"]["business"].pop("ad_accounts")
+        client = inventory([], paginated=True)
+        client["data"]["business"]["client_ad_accounts"] = client["data"]["business"].pop("ad_accounts")
+        result = await self.snapshot(FakeWeb([owned, client]), known=False)
+        self.assertFalse(result["ready"])
+        self.assertFalse(result["businesses"][0]["confirmed_empty"])
+
+    async def test_diagnostic_shapes_do_not_expose_payload_values_or_url_tokens(self):
+        payload = inventory([account()])
+        payload.update(cookies={"xs": "SECRET"}, fb_dtsg="SECRET")
+        web = FakeWeb(payload, final_url="https://business.facebook.com/latest/settings/ad_accounts/?fb_dtsg=SECRET")
+        result = await self.snapshot(web)
+        summary = inventory_diagnostic_summary(result)
+        self.assertTrue(summary[-1]["payload_count"])
+        self.assertTrue(summary[-1]["inventory_shape"])
+        self.assertNotIn("SECRET", repr(summary))
+        self.assertNotIn("fb_dtsg", repr(summary))
+
+    async def test_foreign_redirect_cannot_supply_inventory_even_with_matching_response_ids(self):
+        result = await self.snapshot(FakeWeb(inventory([account()]), final_url="https://other.example/"))
+        self.assertFalse(result["ready"])
+
+    async def test_json_looking_name_is_user_text_not_a_response_carrier(self):
+        payload = {"data": {"viewer": {"name": json.dumps(inventory([account()]))}}}
+        result = await self.snapshot(FakeWeb(payload))
         self.assertFalse(result["ready"])
         self.assertEqual(result["businesses"][0]["ad_accounts"], [])
 

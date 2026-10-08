@@ -288,3 +288,42 @@ runtime-поля и отсутствующий sender не дают контра
 независимость HTTP таймаутов от 1/100/500 workers и неизменяемость hook binding.
 После deployment 085c3ea/d327ab78 в доступных логах нет нового Prepare/CREATE
 trace. Успешный CI и healthcheck не заменяют live Meta verification.
+
+
+## Живой Prepare 1771fb5: 8 октября 09:50:46 UTC
+
+Job `6ccfc748173e423da8335173adb47e81`, профили 14/15:
+- 14: GET Business home → HTTP/2 302 → `/business/loginpage/` HTTP/2 200.
+  Итог BUSINESS_LOGIN_GATE до нового POST. CREATE_SUBMITTED в этом trace —
+  восстановленный старый checkpoint, а не отправка в текущем job.
+- 15: exact-BM Settings/ad_accounts HTTP/2 200; Ads Manager HTTP/2 400;
+  итог PRIVATE_RK_INVENTORY_INCONCLUSIVE до contract discovery и нового POST.
+
+Эти логи подтверждают применение private HTTP транспорта, но не причину
+неподтверждённого inventory профиля 15: значения и форма JSON ответа там
+не были доступны. Не утверждаем, что профиль 14 забанен или что HTML профиля
+15 обязательно имеет упакованную Relay форму.
+
+Проверенные дефекты слоя inventory:
+- Auth gates находились в business-specific diagnostics, а RK action смотрел
+  только на общие discovery diagnostics. Теперь код и безопасный trace
+  auth-gate сохраняются и передаются до CREATE.
+- Ответные JSON carrier поля result/response/payload/data/json могли содержать
+  вложенный JSON string; теперь декодируются только эти carrier поля. JSON в
+  пользовательском name/title не становится объектом inventory. Plain JSON
+  scripts и целиком JSON HTTP responses также разбираются как данные; JS
+  не исполняется. Request/input/variables/params по-прежнему не доказательство.
+- Полнота учитывается по всем наблюдённым коллекциям exact-BM response
+  fragments. Полный пустой owned список не скрывает paginated client fragment.
+- Redirect на посторонний host не может подтвердить inventory.
+
+HTTP inventory trace содержит status, final host/path без query, размер
+ответа, payload_count и разрешённые имена/типы/количество inventory
+containers. Cookies, tokens, имена объектов и полный body в trace не пишутся.
+RK precheck сохраняет эти детали в durable checkpoint без изменения pending
+CREATE phase. Restore trace помечается RESTORE_PREVIOUS_CHECKPOINT и
+checkpoint_origin=history вместо имитации нового CREATE_SUBMITTED.
+
+Все изменения проверяются на синтетических ответах и полном CI. Они
+исправляют дефекты decoder/proof/diagnostics, но не являются подтверждением
+успешного комплекта на живых профилях 14/15 и не обходят Business login gate.

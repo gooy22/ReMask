@@ -197,6 +197,32 @@ class RKActionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.meta.posts, [])
         self.session.facebook_business_browser.assert_not_awaited()
 
+    async def test_packed_relay_inventory_runs_exact_verify_commit_without_browser(self):
+        original = self.meta.fetch_text
+        async def packed(url, **kwargs):
+            status, body, final = await original(url, **kwargs)
+            payloads = actions._json_payloads(body)
+            if payloads:
+                body = '<script>' + json.dumps({"RelayPrefetchedStreamCache": {
+                    "__bbox": {"result": json.dumps(payloads[0])}}}) + '</script>'
+            return status, body, final
+        self.web.fetch_text = packed
+        result = await self.run_action()
+        self.assertEqual(result["ad_account_id"], "act_" + RK)
+        self.assertEqual(len(self.meta.posts), 1)
+        self.session.facebook_business_browser.assert_not_awaited()
+
+    async def test_scoped_auth_gate_is_preserved_instead_of_inventory_inconclusive(self):
+        self.web.fetch_text = AsyncMock(return_value=(200, '<form id="login_form"></form>',
+            'https://business.facebook.com/business/loginpage/?session=SECRET'))
+        with self.assertRaises(ProvisioningError) as error:
+            await self.run_action()
+        self.assertEqual(error.exception.code, "BUSINESS_LOGIN_GATE")
+        self.assertEqual(self.meta.posts, [])
+        saved = await self.state.step("job-1", ProvisioningStep.AD_ACCOUNT)
+        self.assertEqual(saved["result"]["inventory_auth_error"], "BUSINESS_LOGIN_GATE")
+        self.assertNotIn("SECRET", repr(saved["result"]["inventory_verification"]))
+
     async def test_database_intent_failure_prevents_post(self):
         original = self.state.checkpoint
         async def checkpoint(*args):
@@ -251,6 +277,18 @@ class BMActionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["verification"]["exact_business_id"], BM)
         self.assertEqual(len(self.posts), 1)
         self.session.facebook_business_browser.assert_not_awaited()
+
+    async def test_restored_submitted_phase_is_not_logged_as_a_new_submit(self):
+        await self.store.set_running("bm-old", "14", "old-scope", ProvisioningStep.BUSINESS)
+        await self.store.checkpoint("bm-old", "14", "old-scope", ProvisioningStep.BUSINESS,
+            {"phase": "CREATE_SUBMITTED", "business_name": "Test Business",
+             "baseline_complete": True, "baseline_business_ids": []})
+        with self.assertLogs("remask_worker", level="INFO") as logs:
+            with self.assertRaises(ProvisioningError):
+                await self.run_action()
+        self.assertTrue(any("RESTORE_PREVIOUS_CHECKPOINT" in line for line in logs.output))
+        self.assertFalse(any("stage=CREATE_SUBMITTED" in line for line in logs.output))
+        self.assertEqual(self.posts, [])
 
     async def test_full_service_retains_proof_for_prepare_and_workspace(self):
         with patch("app.provisioning.service._await_profile_mutation_cooldown", new=AsyncMock()):
