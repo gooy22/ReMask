@@ -21,7 +21,7 @@ print("CANDIDATE_NAMES="+json.dumps(names),flush=True)
 mutations=[n for n in modules if n.endswith("Mutation.graphql")]
 print("MUTATION_NAMES="+json.dumps(mutations),flush=True)
 selected=[n for n in names if n.endswith(".graphql")]
-related={n:node for n,node in modules.items() if n in names or any(s in node.text.decode() for s in selected)}
+related={n:node for n,node in modules.items() if n in {"useMutationWithReauthHandling","BizKitSettingsAddUserAssetConnectionMutation","BizKitSettingsAddUserAssetConnectionMutation.graphql","BizKitSettingsAddUserAssetConnectionMutation_facebookRelayOperation"}}
 exported=0
 for name,node in related.items():
  print("MODULE_REPORT="+json.dumps({"name":name,"bytes":len(node.text)}),flush=True)
