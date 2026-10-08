@@ -128,6 +128,15 @@ class FanPagePrivateContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(self.rendered()["contract_status"], "captured")
 
+    async def test_explicit_stale_schema_invalidates_cache_without_blind_resubmission(self):
+        web = SimpleNamespace(graphql=AsyncMock(return_value={"errors": [{
+            "code": 1357054, "message": "Persisted query not found"}]}))
+        with self.assertRaises(BrowserBusinessError) as caught:
+            await self.execute(web, verify=AsyncMock(return_value=[]))
+        self.assertEqual(caught.exception.code, "FAN_PAGE_CREATE_RESULT_UNKNOWN")
+        web.graphql.assert_awaited_once()
+        self.assertIsNone(self.rendered())
+
     async def test_lost_response_preserves_uncertainty_without_a_second_post(self):
         web, calls = self.web(timeout=True)
         with self.assertRaises(BrowserBusinessError) as caught:

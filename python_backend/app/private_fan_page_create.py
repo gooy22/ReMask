@@ -8,6 +8,7 @@ from typing import Any, Callable
 from .fan_page_contracts import valid_page_create
 from .facebook_business_browser import BrowserBusinessError
 from .facebook_fan_page_create import confirmed_created_page
+from .facebook_docids import classify_cache_failure
 
 log = logging.getLogger("remask.python_worker")
 
@@ -22,6 +23,16 @@ async def create_fan_page_private(
                                    "Page CREATE contract is not scoped to this profile and name; no POST was sent.",
                                    retryable=False, diagnostic={"safe_before_submit": True})
     submitted = False
+
+    def retire_stale(payload: Any, exception: Exception | None = None) -> None:
+        if (isinstance(payload, dict) and not payload.get("data")
+                and (payload.get("errors") or payload.get("error"))
+                and classify_cache_failure(payload=payload, exception=exception) == "stale_schema"):
+            try:
+                store.set_status(category=category, doc_id=contract["doc_id"], status="stale")
+                log.info("FP contract stage=invalidated doc_id=%s reason=stale_schema", contract["doc_id"])
+            except OSError:
+                log.warning("FP stale contract cache write failed")
 
     async def intent() -> None:
         nonlocal submitted
@@ -39,6 +50,7 @@ async def create_fan_page_private(
             endpoint_url=contract["endpoint_url"], before_submit=intent,
         )
     except Exception as exc:
+        retire_stale(getattr(exc, "meta_payload", None), exc)
         may_sent = getattr(exc, "request_may_have_been_sent", None)
         if type(exc).__name__ == "AuthenticationError":
             raise BrowserBusinessError("SESSION_EXPIRED",
@@ -58,6 +70,7 @@ async def create_fan_page_private(
                                                               "error_type": type(exc).__name__,
                                                               "page_name": page_name}) from exc
 
+    retire_stale(payload)
     meta = {"method": "POST", "url": contract["endpoint_url"],
             "friendly_name": contract["friendly_name"], "body_decodable": True,
             "input": contract["variables"].get("input"), "actor_ids": [actor_id]}
