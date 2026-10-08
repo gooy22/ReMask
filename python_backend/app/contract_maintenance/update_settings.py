@@ -17,7 +17,7 @@ import re
 from ..static_meta_contracts import MANIFEST, command
 from ..private_asset_contracts import AssetContracts, CONFIG, PAGE, RIGHTS, CLAIM, ASSIGN
 from ..private_inventory_queries import QueryArtifacts
-from ..private_contract_discovery import WebModuleContracts
+from ..private_contract_discovery import WebModuleContracts, _module_nodes, _pairs, _walk
 
 
 def compile_candidate(sources_dir):
@@ -67,6 +67,36 @@ def compile_candidate(sources_dir):
     ids = re.findall(r'__d\("'+re.escape(friendly)+r'_facebookRelayOperation".*?exports="(\d{5,40})"',source,re.S)
     if len(set(ids))!=1 or friendly+'$Parameters' not in source or 'allFirstLevelScopesQueryRef' not in source:
         raise ValueError('Observed BM preload is unavailable or ambiguous')
+    metadata = QueryArtifacts()
+    metadata.observe(source)
+    versions = metadata.modules.get('NorthStarBusinessUnifiedScopingSelectorPopoverContainer.entrypoint', {})
+    if len(versions) != 1:
+        raise ValueError('BM preload sender is ambiguous')
+    schemas = []
+    for node in _walk(next(iter(versions.values()))):
+        if node.type != 'object':
+            continue
+        try:
+            pairs = _pairs(node)
+            if 'allFirstLevelScopesQueryRef' not in pairs:
+                continue
+            preload = _pairs(pairs['allFirstLevelScopesQueryRef'])
+            expression = preload['variables']
+            if expression.child_by_field_name('function').text != b'babelHelpers.extends':
+                raise ValueError('BM preload variable construction changed')
+            args = expression.child_by_field_name('arguments').named_children
+            if len(args) != 3 or _pairs(args[0]):
+                raise ValueError('BM preload variable construction changed')
+            base = _pairs(metadata._alias(args[1]))
+            extra = _pairs(args[2])
+            names = set(base) | set(extra) | {'__relay_internal__pv__IsBusinessPortfolioOverviewLinkEnabledrelayprovider'}
+            if len(base) + len(extra) + 1 != len(names):
+                raise ValueError('BM preload contains duplicate variables')
+            schemas.append(names)
+        except (KeyError, AttributeError):
+            continue
+    if schemas != [set(output['operations']['READ_BM']['variables'])]:
+        raise ValueError('Observed top-level BM enumeration schema changed')
     output['operations']['READ_BM']['doc_id']=ids[0]
     output['operations']['READ_BM']['source_sha256']=hashlib.sha256(source.removeprefix('// Public selector metadata, preload sender and providers. Response not yet observed.\n').encode()).hexdigest()
     return output

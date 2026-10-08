@@ -35,6 +35,19 @@ class StaticContractTests(unittest.TestCase):
             self.assertEqual(candidate['operations'][op]['variables'],row['variables'])
         self.assertIn('response_unverified',candidate['operations']['READ_BM']['evidence'])
 
+    def test_offline_compiler_rejects_bm_sender_schema_drift(self):
+        import shutil
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory)
+            source = Path(__file__).with_name('fixtures')
+            for name in ('meta_page_access_observed_20261008.js', 'meta_settings_rk_observed_20261008.js',
+                         'meta_create_rk_observed_20261008.js', 'meta_bm_scoping_observed_20261008.js'):
+                shutil.copy(source/name, target/name)
+            file = target/'meta_bm_scoping_observed_20261008.js'
+            file.write_text(file.read_text().replace('fetchNumberForBusinessScopes:t.fetchNumberForBusinessScopes',
+                'changedVariable:t.fetchNumberForBusinessScopes'))
+            with self.assertRaises(ValueError): compile_candidate(target)
+
     def test_operation_variables_and_mutation_id_types_are_exact(self):
         rk=rk_create_contract(business_id=BM, account_name=NAME,currency='USD',timezone_id=137,actor_id='123456789')
         self.assertNotIn('input',rk['variables'])
