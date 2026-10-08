@@ -56,6 +56,18 @@ Tests cover this observed structure with synthetic values, foreign relations,
 malformed/partial task lists and cross-job verification without duplicate POST.
 Live completion after this parser correction is still unconfirmed.
 
+In live job `7b22813724aa4e168ec0fc612653c653`, the corrected parser confirmed
+Page assignment without another ASSIGN POST. The next RK rights read stopped
+before RK assignment. The executor had been using the inventory-bound UI ID for
+both transport and response identity proof. These roles are now separate: the
+query/mutation uses the fresh inventory's UI ID, and response verification uses
+the canonical RK ID from the same exact-BM inventory row. An explicit canonical
+ID cannot be replaced by a matching UI/Relay ID. Diagnostics now retain the
+precise relation rejection reason and both requested identity roles. The old log
+recorded only response structure, so it cannot establish which field caused that
+live RK rejection; the distinct-ID regression reproduces the code defect without
+claiming new live RK success.
+
 ## Maintenance is separate from action execution
 
 `python -m app.contract_maintenance.update_settings --sources-dir tests/fixtures

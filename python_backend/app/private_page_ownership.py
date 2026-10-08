@@ -55,8 +55,12 @@ def _standalone_assignment(data, asset_id, user_id, business_id=None):
     if not isinstance(record, dict):
         return None, 'missing_permissions_record'
     asset, user, business = (record.get(key) for key in ('asset', 'user', 'current_business'))
-    if not isinstance(asset, dict) or asset_id not in {
-            _id(asset.get(key)) for key in ('id', 'business_object_id', 'business_object_ui_id')}:
+    # The transport uses business_object_ui_id, while this response's nested
+    # asset identifies the canonical account. An explicit canonical ID must not
+    # be replaced by a matching Relay/UI id from another asset.
+    returned_asset = (_id(asset.get('business_object_id')) if isinstance(asset, dict)
+        and 'business_object_id' in asset else _id(asset.get('id')) if isinstance(asset, dict) else '')
+    if returned_asset != asset_id:
         return None, 'asset_mismatch'
     if not isinstance(user, dict) or _id(user.get('id')) != user_id:
         return None, 'business_user_mismatch'
@@ -384,21 +388,26 @@ async def ensure_private_page_full_control(web, *, page_id, business_id, ad_acco
         await save("claim_page", "CONFIRMED", proof=owned)
 
     proofs = {}
-    for key, asset, tasks in (("assign_page", page, page_tasks), ("assign_rk", _id(rk_asset_id) or account, rk_tasks)):
-        async def verify(asset=asset, tasks=tasks):
+    for key, asset, canonical_asset, tasks in (("assign_page", page, page, page_tasks),
+            ("assign_rk", _id(rk_asset_id) or account, account, rk_tasks)):
+        async def verify(asset=asset, canonical_asset=canonical_asset, tasks=tasks):
             payload = await read(RIGHTS, {"assetID": asset, "businessID": business, "userID": user, "surface": "LWI"})
             diagnostic = {"stage": key + "_verification", "response_shape": response_shape(payload)}
+            if 'business_object_rendered_in_ui' in _data(payload):
+                _, reason = _standalone_assignment(_data(payload), canonical_asset, user, business)
+                diagnostic['target_check'] = {'reason': reason, 'canonical_asset_id': canonical_asset,
+                    'request_asset_ui_id': asset}
             try:
-                _assert_assignment_targets(payload, asset, user, business)
+                _assert_assignment_targets(payload, canonical_asset, user, business)
             except ProvisioningError as exc:
                 await checkpoint({"diagnostic": {**diagnostic, "code": exc.code}})
                 log.info('[%s] PAGE_ACCESS rights_read rejected=%s', profile_id,
                     json.dumps({**diagnostic, 'code': exc.code}, separators=(',', ':')))
                 raise
-            proof = assignment_proof(payload, asset_id=asset, user_id=user, required_tasks=tasks, business_id=business)
+            proof = assignment_proof(payload, asset_id=canonical_asset, user_id=user, required_tasks=tasks, business_id=business)
             if not proof:
                 if 'business_object_rendered_in_ui' in _data(payload):
-                    assignment, reason = _standalone_assignment(_data(payload), asset, user, business)
+                    assignment, reason = _standalone_assignment(_data(payload), canonical_asset, user, business)
                     assigned = set(assignment['assigned_task_ids']) if assignment else set()
                     diagnostic['assignment_check'] = {'relation_confirmed': assignment is not None,
                         'reason': reason, 'required_count': len(tasks), 'assigned_count': len(assigned),

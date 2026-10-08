@@ -48,6 +48,7 @@ class MetaFixture:
         self.lost, self.defer, self.incorrect_read = '', False, False
         self.permissions = config()
         self.standalone = False
+        self.rk_ui_id = RK
     async def graphql(self, doc, variables, *, friendly_name, before_submit=None, **kwargs):
         if friendly_name == CONFIG:
             return {'data': {'business': {'__typename': 'AdBusiness', 'id': BM,
@@ -57,6 +58,7 @@ class MetaFixture:
                 'ownerBusiness': {'id': self.owner} if self.owner else None, 'permission_to_claim_to_business': 'ALLOWED'}}}
         if friendly_name == RIGHTS:
             asset = variables['assetID']
+            if asset == self.rk_ui_id: asset = RK
             return (standalone_rights if self.standalone else rights)(
                 '999999999999999' if self.incorrect_read else asset, USER, self.tasks[asset])
         assert before_submit is not None
@@ -64,7 +66,10 @@ class MetaFixture:
         self.posts.append((friendly_name, copy.deepcopy(variables)))
         if not self.defer:
             if friendly_name == CLAIM: self.owner = variables['businessID']
-            else: self.tasks[variables['assetID']] = list(variables['taskIDs'])
+            else:
+                asset = variables['assetID']
+                if asset == self.rk_ui_id: asset = RK
+                self.tasks[asset] = list(variables['taskIDs'])
         if self.lost == friendly_name: raise TimeoutError('lost response')
         return {'data': {}}
 
@@ -92,6 +97,12 @@ class ContractTests(unittest.TestCase):
             payload['data']['business_object_rendered_in_ui']['user_assigned_permissions']['assigned_permission_task_ids'] = assigned
             with self.subTest(assigned=assigned):
                 self.assertIsNone(assignment_proof(payload, asset_id=FP, user_id=USER, business_id=BM, required_tasks=[P, PARTIAL]))
+
+    def test_canonical_id_is_not_replaced_by_a_matching_ui_id_on_a_foreign_asset(self):
+        payload = standalone_rights(RK, USER, [R, PARTIAL])
+        asset = payload['data']['business_object_rendered_in_ui']['user_assigned_permissions']['asset']
+        asset.update(business_object_id=FP, id=RK, business_object_ui_id=RK)
+        self.assertIsNone(assignment_proof(payload, asset_id=RK, user_id=USER, business_id=BM, required_tasks=[R]))
 
     def observed(self, source=SOURCE):
         value = AssetContracts(); value.observe(source); return value
@@ -205,6 +216,20 @@ class PageActionTests(unittest.IsolatedAsyncioTestCase):
         result = await self.run_action(retained)
         self.assertTrue(result['operator_full_control_verified'])
         self.assertEqual(len(self.meta.posts), 1)
+
+    async def test_distinct_rk_ui_and_canonical_ids_verify_the_same_inventory_bound_account(self):
+        self.meta.standalone, self.meta.rk_ui_id = True, '123123123123123'
+        self.meta.lost = ASSIGN
+        async def run(prior):
+            return await ensure_private_page_full_control(self.meta, page_id=FP, business_id=BM,
+                ad_account_id=RK, rk_asset_id=self.meta.rk_ui_id, profile_id='15',
+                checkpoint=self.checkpoint, prior=prior)
+        result = await run({})
+        self.assertEqual(result['rk_operator_full_control_proof']['asset_id'], RK)
+        self.assertEqual(self.meta.posts[-1][1]['assetID'], self.meta.rk_ui_id)
+        self.assertEqual(self.saved['private_target']['rk_asset_id'], self.meta.rk_ui_id)
+        self.assertTrue((await run(copy.deepcopy(self.saved)))['rk_operator_full_control_verified'])
+        self.assertEqual(len(self.meta.posts), 3)
     async def test_lost_claim_response_reconciles_without_resubmit(self):
         self.meta.lost = CLAIM
         self.assertTrue((await self.run_action())['page_owned_by_business'])
