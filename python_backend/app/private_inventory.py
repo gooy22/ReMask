@@ -120,7 +120,8 @@ def inventory_diagnostic_summary(snapshot: dict[str, Any]) -> list[dict[str, Any
     for business in snapshot.get("businesses", []):
         diagnostics.extend(business.get("diagnostics", []))
     return [{key: row[key] for key in ("requested_url", "final_url", "http_status",
-        "auth_gate", "bytes", "usable", "payload_count", "inventory_shape", "error_type") if key in row}
+        "auth_gate", "bytes", "usable", "payload_count", "inventory_shape", "error_type",
+        "phase", "operation_kind", "contracts", "query_posts", "query_attempts", "query_names", "modules", "scripts") if key in row}
         for row in diagnostics if isinstance(row, dict)][-12:]
 
 
@@ -166,13 +167,15 @@ def _business_payloads(payload: Any, business_id: str) -> list[dict[str, Any]]:
     return output
 
 
-def _scoped_collection_observations(payload: Any) -> list[bool]:
+def _scoped_collection_observations(payload: Any, asset_scope: bool = False) -> list[bool]:
     """Require every observed relevant collection to be complete.
 
     An empty owned collection cannot prove absence while the client collection
     is paginated or unhydrated. Request/input branches never supply evidence.
     """
     collection_keys = {"adaccounts", "ownedadaccounts", "clientadaccounts", "advertisingaccounts"}
+    if asset_scope:
+        collection_keys.update({"assets", "businessassets", "assignedassets", "businesssettingsassets"})
     observations: list[bool] = []
     def visit(value):
         if isinstance(value, dict):
@@ -221,6 +224,7 @@ async def _fetch_payloads(web, url: str) -> tuple[list[Any], dict[str, Any]]:
         "usable": 200 <= int(status) < 300 and not gate and trusted,
         "payload_count": len(payloads),
         "inventory_shape": _inventory_shape(payloads) if trusted and not gate else [],
+        "_document": body if trusted and not gate and 200 <= int(status) < 300 else "",
     }
 
 
@@ -231,6 +235,7 @@ async def private_inventory_snapshot(
     known_business_ids: set[str],
     personal_scope_id: str = "",
     discover_businesses: bool = True,
+    execute_read_queries: bool = False,
 ) -> dict[str, Any]:
     """Read Meta inventory without Chromium.
 
@@ -257,6 +262,7 @@ async def private_inventory_snapshot(
                 "error_type": exc.__class__.__name__,
             })
             continue
+        diag.pop("_document", None)
         diagnostics.append({"phase": "business_discovery", **diag})
         if not diag.get("usable"):
             continue
@@ -285,6 +291,33 @@ async def private_inventory_snapshot(
         authoritative_container = False
         collection_observations: list[bool] = []
         business_diags: list[dict[str, Any]] = []
+        settings_document = ""
+        settings_url = ""
+
+        def accept(payloads, *, request_scoped, asset_scope=False, has_errors=False):
+            nonlocal authoritative_container
+            for payload in payloads:
+                scoped = _business_payloads(payload, business_id)
+                for value in scoped:
+                    collection_observations.extend(_scoped_collection_observations(value, asset_scope))
+                if has_errors:
+                    collection_observations.append(False)
+                authoritative_container = bool(collection_observations) and all(collection_observations)
+                scoped_ids = {
+                    _clean_id(account.get("id") or account.get("account_id"))
+                    for value in scoped
+                    for account in _extract_inventory_ad_account_rows(value, request_scoped=request_scoped)
+                }
+                for account in _extract_inventory_ad_account_rows(payload, request_scoped=request_scoped):
+                    account_id = _clean_id(account.get("id") or account.get("account_id") or account.get("ad_account_id"))
+                    if not account_id:
+                        continue
+                    row_business = _clean_id(account.get("business_id"))
+                    if row_business and row_business != business_id:
+                        continue
+                    if not row_business and account_id not in scoped_ids:
+                        continue
+                    account_rows[account_id] = {**account, "id": account_id, "account_id": account_id, "business_id": business_id}
 
         urls = [
             "https://business.facebook.com/latest/settings/ad_accounts/"
@@ -314,47 +347,29 @@ async def private_inventory_snapshot(
                 })
                 continue
 
+            document = diag.pop("_document", "")
+            if "settings/ad_accounts" in url and diag.get("usable"):
+                settings_document, settings_url = document, url
             business_diags.append(diag)
             if not diag.get("usable"):
                 continue
 
-            request_scoped = "settings/ad_accounts" in url
-            for payload in payloads:
-                scoped = _business_payloads(payload, business_id)
-                for value in scoped:
-                    collection_observations.extend(_scoped_collection_observations(value))
-                authoritative_container = bool(collection_observations) and all(collection_observations)
-                scoped_ids = {
-                    _clean_id(account.get("id") or account.get("account_id"))
-                    for value in scoped
-                    for account in _extract_inventory_ad_account_rows(value, request_scoped=request_scoped)
-                }
-                for account in _extract_inventory_ad_account_rows(
-                    payload,
-                    request_scoped=request_scoped,
-                ):
-                    account_id = _clean_id(
-                        account.get("id")
-                        or account.get("account_id")
-                        or account.get("ad_account_id")
-                    )
-                    if not account_id:
-                        continue
-                    row_business = _clean_id(account.get("business_id"))
-                    if row_business and row_business != business_id:
-                        continue
-                    if not row_business and account_id not in scoped_ids:
-                        continue
-                    row = dict(account)
-                    row["id"] = account_id
-                    row["account_id"] = account_id
-                    row["business_id"] = business_id
-                    account_rows[account_id] = row
+            accept(payloads, request_scoped="settings/ad_accounts" in url)
 
             # Stop read-only probes as soon as all exact known pairs are
             # confirmed, or this portfolio exposes an authoritative inventory.
             if (expected and expected.issubset(account_rows)) or authoritative_container:
                 break
+
+        if (execute_read_queries and settings_document and not authoritative_container
+                and not (expected and expected.issubset(account_rows))
+                and not any(row.get("auth_gate") for row in business_diags)):
+            from .private_inventory_queries import read_private_inventory_queries
+            query_results, query_diagnostic = await read_private_inventory_queries(web,
+                business_id=business_id, document=settings_document, entry_url=settings_url)
+            business_diags.append(query_diagnostic)
+            for result in query_results:
+                accept(result["payloads"], request_scoped=True, asset_scope=result["asset_scope"], has_errors=result["has_errors"])
 
         confirmed_expected = sorted(expected.intersection(account_rows))
         ready = bool(account_rows) and (

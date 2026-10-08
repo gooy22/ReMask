@@ -138,7 +138,7 @@ async def _business_inventory(web, expected=""):
 async def _rk_inventory(web, business, name, expected=""):
     snapshot = await asyncio.wait_for(private_inventory_snapshot(web,
         known_business_ids={business}, known_accounts_by_business={business: {expected}} if expected else {},
-        discover_businesses=False), timeout=15)
+        discover_businesses=False, execute_read_queries=True), timeout=90)
     diagnostics = inventory_diagnostic_summary(snapshot)
     log.info("RK private inventory business=%s verification=%s", business, json.dumps(diagnostics, separators=(",", ":")))
     for diagnostic in diagnostics:

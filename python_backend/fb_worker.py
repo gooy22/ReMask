@@ -1156,6 +1156,7 @@ class FacebookWebSession:
         endpoint_url: str | None = None,
         request_envelope: dict[str, Any] | None = None,
         before_submit: Any | None = None,
+        business_context_id: str = "",
     ) -> dict[str, Any]:
 
         effective_doc_id = str(doc_id or "").strip()
@@ -1178,6 +1179,10 @@ class FacebookWebSession:
         bootstrap = await self.bootstrap()
         if urlsplit(endpoint).hostname == "business.facebook.com":
             scoped_ids: set[str] = set()
+            if business_context_id:
+                if not str(business_context_id).isdigit():
+                    raise RemoteRequestError("Invalid Business HTTP context.", request_may_have_been_sent=False)
+                scoped_ids.add(str(business_context_id))
             def collect_business(value):
                 if isinstance(value, dict):
                     for key, child in value.items():
@@ -1188,7 +1193,7 @@ class FacebookWebSession:
                 elif isinstance(value, list):
                     for child in value:
                         collect_business(child)
-            if "adaccount" in friendly_name.lower() and "create" in friendly_name.lower():
+            if business_context_id or ("adaccount" in friendly_name.lower() and "create" in friendly_name.lower()):
                 collect_business(variables)
             if len(scoped_ids) > 1:
                 raise RemoteRequestError("Ambiguous Business context; no CREATE POST was sent.",

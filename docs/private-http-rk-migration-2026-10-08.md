@@ -327,3 +327,42 @@ checkpoint_origin=history вместо имитации нового CREATE_SUBM
 Все изменения проверяются на синтетических ответах и полном CI. Они
 исправляют дефекты decoder/proof/diagnostics, но не являются подтверждением
 успешного комплекта на живых профилях 14/15 и не обходят Business login gate.
+
+
+## Живой job 55ea2792: HTTP inventory должен выполнять Relay read
+
+Job `55ea279288f84deaa63e6f3e12ae2fae` принят 2026-10-08 10:17:59 UTC
+на ced3157. Профиль 15, exact BM 1428816905866955. Settings HTTP/2 200,
+1 709 705 байт, 364 JSON payloads. Inventory shape содержит пять business
+с одним полем id, без коллекций РК. Ads Manager HTTP/2 400, 1542 байта,
+0 payloads. Новый CREATE не отправлялся: RK_PRIVATE_INVENTORY_PRECHECK.
+Это подтверждает пробел HTML-only reader, а не отсутствие РК и не бан.
+Предыдущая правка декодирования не восстановила живой inventory.
+
+Добавлен private_inventory_queries: current HTML и JS artifacts читаются
+без JS execution/Chromium. Требуются exact Query.graphql artifact,
+operationKind=query, literal persisted id или однозначный импорт текущего
+facebookRelayOperation модуля, literal defaults и доказуемая связь Business
+id variable → exact BM. Typed first count=100; неизвестный contract,
+mutation, чужой scope, restrictive search/status/filter/cursor, owned-only
+список без client coverage отклоняются. Generic assets допустимы только
+с наблюдённым AD_ACCOUNT type argument. Doc ID/schema не угадываются.
+
+Canonical RK precheck/verify включает read-only GraphQL POST, когда HTML
+не дал inventory. Каждый ответ по-прежнему должен назвать exact BM и
+подтвердить РК или полную непагинированную пустую коллекцию. Ответ с errors
+не подтверждает отсутствие. Query POST не устанавливает CREATE intent.
+Его diagnostic различает query_attempts и query_posts на реальной границе
+HTTP submit; module counts, payload shapes не содержат cookies/CSRF/body.
+Новый business_context_id удерживает read POST bootstrap в exact BM,
+конфликт ID останавливается до POST. GET artifacts ограничены 24 MiB/65s;
+доказанные contracts кешируются только в текущем профильном WebSession.
+Полная загрузка произвольных lazy chunks и pagination ещё не заявлены:
+если текущий contract нельзя доказать или next page существует, CREATE
+остаётся заблокированным. RK snapshot budget 90s внутри прежнего 240s step.
+
+Regression fixtures проверяют настоящий FacebookWebSession request path:
+HTML shell → query complete-empty → один CREATE → query exact-RK → commit,
+без browser/native GraphQL. Дополнительно compiler imports/aliases, scopes,
+partial/foreign/errors, cache reuse и zero query_posts при auth precheck.
+Это синтетические проверки, не заявление об успехе нового Meta job.
