@@ -32,8 +32,8 @@ for index, source, error in concurrent.futures.ThreadPoolExecutor(max_workers=4)
         if name.endswith("Query.graphql") or name.endswith("_facebookRelayOperation"):
             key=hashlib.sha256(node.text).hexdigest()
             all_queries.modules.setdefault(name, {})[key] = node
-        if (re.search(r"(adaccount|businessasset|settingsasset)", name, re.I)
-                and (name.endswith("Query.graphql") or name.endswith("_facebookRelayOperation"))):
+        if ("BusinessCometBizSuiteSettingsAdAccountsRootQuery" in node.text.decode()
+                and not name.endswith("Query.graphql")):
             modules[name]=node
 print("TOTAL_REPORT=" + json.dumps({"old_modules":len(old.modules), "old_contracts":old.contracts("1428816905866955"),
     "query_modules":len(all_queries.modules), "uncapped_contracts":all_queries.contracts("1428816905866955")}), flush=True)
@@ -56,7 +56,7 @@ for name,node in modules.items():
         except Exception as exc:
             report["metadata_error"]=str(exc)[:120]
     print("MODULE_REPORT=" + json.dumps(report), flush=True)
-    if exported < 12 and len(node.text) < 45000:
+    if exported < 20 and len(node.text) < 70000:
         wrapped="__d(" + json.dumps(name) + ",[]," + node.text.decode() + ");"
         print("RELAY_MODULE_BASE64=" + base64.b64encode(wrapped.encode()).decode(),flush=True)
         exported+=1
