@@ -16,7 +16,7 @@ modules={}
 for index,source,error in concurrent.futures.ThreadPoolExecutor(max_workers=4).map(fetch,enumerate(urls)):
  print("BUNDLE_REPORT="+json.dumps({"index":index,"bytes":len(source.encode()),"error":error}),flush=True)
  for name,node in _module_nodes(source):modules[name]=node
-selected={n for n in modules if any(x in n for x in ("AllFirstLevelScopes","FirstLevelScope","UnifiedScopeSelectorEntrypointGatingUtils","IsBusinessPortfolioOverviewLinkEnabled","BusinessToolNameEnumUtils","useAvailablePermissionTasksUIConfigsForAsset","useImplied","ImpliedTask","PermissionTasks","BusinessConsoleDynamicFields"))}
+selected={n for n in modules if n in {"BusinessToolName","MetaBusinessScopeType","$InternalEnumUtils"} or "AllFirstLevel" in n}
 print("READ_CATALOG="+json.dumps(sorted(selected)),flush=True)
 for name in sorted(selected):
  node=modules[name]
