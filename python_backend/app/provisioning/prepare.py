@@ -132,6 +132,39 @@ class PrepareService:
                 continue
             merged[business_id] = dict(value)
 
+        # A confirmed RK bound to a Business also proves an existing container.
+        # Imported/previously created BMs need not have a ReMask BM CREATE row.
+        # Preserve this positive relation even if the next live sync is partial;
+        # execution still verifies the exact target before assigning any assets.
+        personal_scope = str((getattr(context, "cookies", {}) or {}).get("c_user") or "")
+        for account in await self.state.confirmed_ad_accounts_for_profile(profile_id):
+            business_id = str(account.get("business_id") or "").strip()
+            if business_id.isdigit() and business_id != personal_scope and business_id not in merged:
+                merged[business_id] = {
+                    "business_id": business_id,
+                    "business_name": str(account.get("business_name") or business_id),
+                    "source": "confirmed_rk_business_relation",
+                    "updated_at": int(account.get("updated_at") or 0),
+                }
+
+        # A last-confirmed Workspace RK relation can survive an inconclusive BM
+        # refresh too. Do not erase or replace that container merely because its
+        # standalone Business record is absent from this context snapshot.
+        for account in (getattr(context, "ad_accounts", None) or []):
+            if not isinstance(account, dict):
+                continue
+            business_id = str(account.get("business_id") or "").strip()
+            account_id = str(account.get("ad_account_id") or account.get("account_id")
+                or account.get("id") or "").removeprefix("act_").strip()
+            if (business_id.isdigit() and business_id != personal_scope
+                    and account_id.isdigit() and business_id not in merged):
+                merged[business_id] = {
+                    "business_id": business_id,
+                    "business_name": str(account.get("business_name") or business_id),
+                    "source": "workspace_last_confirmed_rk_business_relation",
+                    "updated_at": int(getattr(context, "inventory_updated_at", 0) or 0),
+                }
+
         live_updated_at = int(
             getattr(context, "inventory_updated_at", 0) or 0
         ) if context is not None else 0

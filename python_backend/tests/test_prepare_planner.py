@@ -5,8 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from app.provisioning.advertising_page import AdvertisingPageStore
-from app.provisioning.models import ProvisioningStep
-from app.provisioning.models import ProvisioningError
+from app.provisioning.models import ProvisioningError, ProvisioningStep
 from app.provisioning.prepare import PrepareService
 from app.provisioning.state import ProvisioningStateStore
 
@@ -451,6 +450,49 @@ class PreparePlannerTests(unittest.IsolatedAsyncioTestCase):
                 context=self.context, session=self.session,
                 payload=self._payload(bundles=2, page_access=True))
         self.assertEqual(provisioning.run.await_count, 1)
+
+    async def test_confirmed_rk_relation_restores_bundle_without_bm_create_history(self):
+        account = "111111111111111"
+        await self._confirmed_rk(account)
+        self.assertEqual(await self.state.confirmed_business_binding_groups(), {})
+
+        async def execute(**kwargs):
+            self.assertEqual(kwargs["payload"]["steps"], ["PAGE_ACCESS"])
+            params = kwargs["payload"]["parameters"]["PAGE_ACCESS"]
+            self.assertEqual((params["business_id"], params["ad_account_id"]),
+                (self.business_id, account))
+            await self._confirmed_access(account, item=kwargs["item_id"])
+            return {"state": {}}
+        provisioning = SimpleNamespace(run=AsyncMock(side_effect=execute))
+        service = PrepareService(self.state, provisioning)
+        for item in ("repair-imported", "repeat-imported"):
+            result = await service.run(item_id=item, profile_id=self.profile_id,
+                context=self.context, session=self.session,
+                payload=self._payload(bundles=1, page_access=True))
+            self.assertEqual(result["actual"]["business_ids"], [self.business_id])
+        self.assertEqual(provisioning.run.await_count, 1)
+
+    async def test_workspace_rk_relations_count_existing_bundles_when_bm_snapshot_is_missing(self):
+        self.context.ad_accounts = [
+            {"business_id": self.business_id, "id": "act_111111111111111"},
+            {"business_id": self.business_id_2, "ad_account_id": "222222222222222"},
+            {"business_id": "999999999999999", "ad_account_id": ""},
+            {"business_id": "", "ad_account_id": "333333333333333"},
+        ]
+        provisioning = SimpleNamespace(run=AsyncMock())
+        result = await PrepareService(self.state, provisioning).run(
+            item_id="workspace-partial", profile_id=self.profile_id,
+            context=self.context, session=self.session, payload=self._payload(bundles=2))
+        provisioning.run.assert_not_awaited()
+        self.assertEqual(set(result["actual"]["business_ids"]),
+            {self.business_id, self.business_id_2})
+
+    async def test_personal_rk_scope_does_not_imply_a_business_portfolio(self):
+        personal_scope = self.context.cookies["c_user"]
+        await self._confirmed_rk("111111111111111", personal_scope)
+        self.context.ad_accounts = [{"business_id": personal_scope, "id": "222222222222222"}]
+        service = PrepareService(self.state, SimpleNamespace(run=AsyncMock()))
+        self.assertEqual(await service._bundle_inventory(self.profile_id, self.context), [])
 
     async def test_workspace_inventory_with_two_bm_rk_pairs_suppresses_duplicate_create(self):
         self.context.businesses = [
