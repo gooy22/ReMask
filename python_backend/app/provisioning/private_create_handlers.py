@@ -12,13 +12,11 @@ import re
 import time
 from typing import Any
 
-from ..ad_account_contracts import AdAccountContractStore
 from ..facebook_ad_account_create import create_ad_account_with_docids
-from ..facebook_business_create import create_business_with_docids
-from ..private_contract_discovery import discover_private_ad_account_contract
+from ..static_meta_contracts import create_business_static as create_business_with_docids, rk_create_contract
+from ..static_meta_inventory import read_business_inventory, read_ad_account_inventory
 from ..private_inventory import (
     _auth_gate, _extract_business_inventory_rows, _json_payloads,
-    private_inventory_snapshot, inventory_diagnostic_summary,
 )
 from .models import ProvisioningError, ProvisioningStep
 from .state import ProvisioningStateStore
@@ -62,6 +60,10 @@ class _Action:
         self.saved = dict((prior or {}).get("result") or {})
         self.web = await self.session.facebook_web()
         self.web.private_only = True
+        current = _clean((getattr(self.context, 'cookies', {}) or {}).get('c_user'))
+        bootstrap = await self.web.bootstrap()
+        if not current.isdigit() or _clean(getattr(bootstrap, 'actor_id', '')) != current:
+            raise ProvisioningError('SESSION_EXPIRED', 'Static action actor does not match the selected profile; no POST was sent.', retryable=True)
         return self
 
     async def checkpoint(self, patch):
@@ -115,65 +117,25 @@ def _business_collection_complete(payload):
 
 
 async def _business_inventory(web, expected=""):
-    from urllib.parse import urlsplit
-    rows = {}
-    complete = False
-    diagnostics = []
-    urls = ["https://business.facebook.com/latest/home", "https://business.facebook.com/latest/overview"]
-    if expected:
-        urls.insert(0, "https://business.facebook.com/latest/settings/business_info/?business_id=" + expected)
-    for url in urls:
-        status, body, final = await web.fetch_text(url, max_bytes=5_000_000)
-        gate = _auth_gate(final, body)
-        if gate:
-            parts = urlsplit(final)
-            log.info("BM private inventory auth_stop code=%s status=%s final_host=%s final_path=%s", gate, status, parts.hostname, parts.path)
-            raise ProvisioningError(gate, "Private BM inventory reached " + (parts.hostname or "") + parts.path
-                + "; authentication verification stopped and CREATE checkpoint was retained.", retryable=True)
-        if not 200 <= status < 300 or urlsplit(final).hostname != "business.facebook.com":
-            continue
-        payloads = list(_json_payloads(body))
-        for payload in payloads:
-            complete = complete or _business_collection_complete(payload)
-            for row in _extract_business_inventory_rows(payload):
-                business = _id(row.get("id"))
-                if business:
-                    rows[business] = _clean(row.get("name"))
-        diagnostic = {"path": urlsplit(final).path, "status": status,
-            "payload_count": len(payloads), "business_ids": sorted(rows), "complete": complete}
-        diagnostics.append(diagnostic)
-        log.info("BM private inventory expected=%s verification=%s", expected,
-            json.dumps(diagnostic, separators=(",", ":")))
-        if expected and expected in rows:
-            break
-    return {"rows": rows, "complete": complete, "source": "private_http_business_response", "diagnostics": diagnostics}
+    try:
+        return await read_business_inventory(web, expected)
+    except Exception as exc:
+        if type(exc).__name__ == "AuthenticationError":
+            code = "CHECKPOINT_REQUIRED" if "checkpoint" in str(exc).lower() else "SESSION_EXPIRED"
+            raise ProvisioningError(code, "Static BM inventory requires session restoration; CREATE intent was retained.", retryable=True) from exc
+        raise
 
 
 async def _rk_inventory(web, business, name, expected=""):
-    snapshot = await asyncio.wait_for(private_inventory_snapshot(web,
-        known_business_ids={business}, known_accounts_by_business={business: {expected}} if expected else {},
-        discover_businesses=False, execute_read_queries=True), timeout=90)
-    diagnostics = inventory_diagnostic_summary(snapshot)
-    log.info("RK private inventory business=%s verification=%s", business, json.dumps(diagnostics, separators=(",", ":")))
-    for diagnostic in diagnostics:
-        if diagnostic.get("auth_gate"):
-            error = ProvisioningError(diagnostic["auth_gate"], "Private RK inventory reached "
-                + diagnostic.get("final_url", "an authentication gate") + "; CREATE checkpoint was retained.", retryable=True)
-            error.inventory_diagnostics = diagnostics
-            raise error
-    portfolios = [row for row in snapshot.get("businesses", []) if _id(row.get("id")) == business]
-    if len(portfolios) != 1:
-        return {"id": "", "ids": [], "named": [], "complete": False, "diagnostics": diagnostics}
-    row = portfolios[0]
-    # An account in another selected Ads Manager scope is never confirmation.
-    accounts = [item for item in row.get("ad_accounts", []) if _id(item.get("business_id")) == business and _id(item.get("id"))]
-    ids = sorted({_id(item["id"]) for item in accounts})
-    named = sorted({_id(item["id"]) for item in accounts if _clean(item.get("name")).casefold() == name.casefold()})
-    confirmed = expected if expected and expected in ids else (named[0] if not expected and len(named) == 1 else "")
-    return {"id": confirmed, "ids": ids, "named": named,
-        "asset_ui_id": next((_id(item.get("business_object_ui_id")) for item in accounts if _id(item.get("id")) == confirmed), ""),
-        "complete": row.get("inventory_complete") is True, "source": "private_http_exact_business_inventory",
-        "diagnostics": diagnostics}
+    try:
+        return await asyncio.wait_for(read_ad_account_inventory(web, business, name, expected), timeout=90)
+    except Exception as exc:
+        if type(exc).__name__ == "AuthenticationError":
+            code = "CHECKPOINT_REQUIRED" if "checkpoint" in str(exc).lower() else "SESSION_EXPIRED"
+            error = ProvisioningError(code, "Exact-BM static inventory requires session restoration; CREATE intent was retained.", retryable=True)
+            error.inventory_diagnostics = [{"operation": "READ_RK", "auth_gate": code}]
+            raise error from exc
+        raise
 
 
 async def _verify_rk(action, business, name, expected):
@@ -218,7 +180,7 @@ async def business_handler(session, params, state, *args, **kwargs):
     await action.checkpoint({"activity": "BM_PRIVATE_INVENTORY_PRECHECK",
         "inventory_verification": before.get("diagnostics", []), "inventory_complete": before["complete"]})
     named = [business for business, row_name in before["rows"].items() if row_name.casefold() == name.casefold()]
-    confirmed = expected if expected in before["rows"] else (named[0] if not expected and len(named) == 1 else "")
+    confirmed = expected if expected in before["rows"] else (named[0] if not expected and before["complete"] and len(named) == 1 else "")
     pending = _clean(action.saved.get("phase")).upper() in _PENDING
     # An uncertain name-only CREATE requires evidence that this was absent in
     # the complete pre-submit response, rather than attributing an old BM to it.
@@ -321,15 +283,10 @@ async def ad_account_handler(session, params, state, *args, **kwargs):
         raise ProvisioningError("PRIVATE_RK_INVENTORY_INCONCLUSIVE", "Exact-BM HTTP inventory did not confirm complete absence. No CREATE was sent.", retryable=True)
     await action.checkpoint({"phase": "CREATE_NOT_SUBMITTED", "business_id": business, "account_name": name,
         "baseline_account_ids": before["ids"], "baseline_complete": True, "currency": currency, "timezone_id": timezone})
-    contracts = AdAccountContractStore()
-    contract = contracts.get(business_id=business, account_name=name, currency=currency, timezone_id=timezone, actor_id=actor)
-    if contract is None:
-        await action.checkpoint({"activity": "RK_PRIVATE_CONTRACT_DISCOVERY"})
-        contract = await discover_private_ad_account_contract(action.web, business_id=business,
-            account_name=name, currency=currency, timezone_id=timezone, actor_id=actor)
-        if contract is None or not contracts.register_capture(contract):
-            raise ProvisioningError("PRIVATE_AD_ACCOUNT_CONTRACT_UNAVAILABLE", "Current Meta HTTP modules did not provide a complete RK mutation contract. No Chromium was started and no CREATE was sent.", retryable=True)
-        contract = contracts.get(business_id=business, account_name=name, currency=currency, timezone_id=timezone, actor_id=actor)
+    contract = rk_create_contract(business_id=business, account_name=name, currency=currency,
+        timezone_id=timezone, actor_id=actor)
+    await action.checkpoint({"activity": "RK_STATIC_CONTRACT_READY", "capture_doc_id": contract["doc_id"],
+        "contract_revision": "meta-settings-2026-10-08"})
     submitted = False
     async def before_submit():
         nonlocal submitted
@@ -344,8 +301,6 @@ async def ad_account_handler(session, params, state, *args, **kwargs):
     except Exception as exc:
         payload = getattr(exc, "payload", getattr(exc, "meta_payload", {}))
         rejected = isinstance(payload, dict) and bool(payload.get("errors") or payload.get("error")) and not payload.get("data")
-        if getattr(exc, "code", "") == "CREATE_AD_ACCOUNT_LIVE_CAPTURE_STALE":
-            contracts.invalidate(contract["doc_id"])
         if not submitted or getattr(exc, "request_may_have_been_sent", None) is False or rejected:
             await action.checkpoint({"phase": "CREATE_REJECTED" if rejected else "CREATE_NOT_SUBMITTED"})
             raise ProvisioningError(getattr(exc, "code", "PRIVATE_RK_NOT_SUBMITTED"), str(exc), retryable=bool(getattr(exc, "retryable", True))) from exc
@@ -353,7 +308,6 @@ async def ad_account_handler(session, params, state, *args, **kwargs):
     proof = await _verify_rk(action, business, name, expected)
     if proof is None:
         raise ProvisioningError("CREATE_AD_ACCOUNT_RESULT_UNKNOWN", "RK submit is retained; independent exact-BM HTTP inventory has not confirmed it. Retry verifies before any POST.", retryable=True)
-    contracts.confirm(contract["doc_id"])
     return await action.commit({"business_id": business, "ad_account_id": "act_" + proof["id"],
         "name": name, "currency": currency, "timezone_id": timezone, "verification": proof,
         "create_response_ad_account_id": expected})

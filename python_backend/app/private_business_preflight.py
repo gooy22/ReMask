@@ -5,8 +5,7 @@ import asyncio
 import time
 from urllib.parse import urlsplit
 
-from .facebook_business_create import CREATE_BM_OPERATION, discover_current_scope_selector_create_candidate
-from .facebook_docids import list_candidates
+from .static_meta_contracts import contract_metadata
 from .provisioning.private_create_handlers import _business_inventory
 
 
@@ -31,18 +30,10 @@ async def _inspect(session, context):
             inventory = await asyncio.wait_for(_business_inventory(web), timeout=25)
             state.update(inventory_complete=inventory["complete"],
                 businesses=[{"id": key, "name": value} for key, value in inventory["rows"].items()])
-            try:
-                candidate = await asyncio.wait_for(discover_current_scope_selector_create_candidate(web), timeout=15)
-            except Exception as exc:
-                if (exc.__class__.__name__ == "AuthenticationError"
-                        or getattr(exc, "code", "") in {"SESSION_EXPIRED", "CHECKPOINT_REQUIRED", "BUSINESS_LOGIN_GATE"}):
-                    raise
-                candidate = None
-            confirmed = list_candidates(CREATE_BM_OPERATION, confirmed_only=True)
-            candidates = [candidate] if candidate is not None else confirmed
-            state["candidates"] = [{"doc_id": row.doc_id, "friendly_name": row.friendly_name,
-                "source": row.source} for row in candidates]
-            state["contract_ready"] = bool(candidates)
+            candidate = contract_metadata("CREATE_BM")
+            candidates = [candidate]
+            state["candidates"] = [candidate]
+            state["contract_ready"] = True
             if not inventory["complete"]:
                 state.update(error_code="PRIVATE_BM_INVENTORY_INCONCLUSIVE",
                     error="Private BM inventory did not confirm completeness; CREATE readiness is unconfirmed.")

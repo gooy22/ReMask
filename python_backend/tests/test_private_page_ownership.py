@@ -89,7 +89,7 @@ class ContractTests(unittest.TestCase):
         with self.assertRaises(ProvisioningError): full_control_tasks(value, 'PAGE')
         self.assertEqual(full_control_tasks(value, 'PAGE', variant='PAGE_PLUS'), sorted([P, PARTIAL]))
         row['assetVariantConfig']['assetVariantPermissionConfig'][0]['availablePermissionTaskIDsForVariant'] = [P]
-        with self.assertRaises(ProvisioningError): full_control_tasks(value, 'PAGE', variant='PAGE_PLUS')
+        self.assertEqual(full_control_tasks(value, 'PAGE', variant='PAGE_PLUS'), sorted([P, PARTIAL]))
     def test_conflicting_or_malformed_task_config_is_rejected(self):
         for change in ('duplicate', 'invalid_implied'):
             value = config(); rows = value['assetConfigs'][0]['permissionTasksConfig']
@@ -137,7 +137,6 @@ class PageActionTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.meta, self.saved = MetaFixture(), {}
         self.addCleanup(patch.stopall)
-        patch('app.private_page_ownership._discover_web_modules', new=discover).start()
         patch('app.private_page_ownership.asyncio.sleep', new=AsyncMock()).start()
     async def checkpoint(self, patch): self.saved.update(copy.deepcopy(patch))
     async def run_action(self, prior=None):
@@ -224,8 +223,7 @@ class PrepareHTTPTests(unittest.IsolatedAsyncioTestCase):
             await state.complete('funding', '15', 'funding', ProvisioningStep.FUNDING,
                 {'business_id': BM, 'ad_account_id': RK, 'funding_source_id': 'existing-funding', 'funding_verified': True})
             prepare = PrepareService(state, ProvisioningService(state))
-            with patch('app.private_page_ownership._discover_web_modules', new=discover), \
-                 patch('app.provisioning.private_create_handlers._rk_inventory', new=AsyncMock(return_value={'id': RK, 'diagnostics': []})), \
+            with patch('app.provisioning.private_create_handlers._rk_inventory', new=AsyncMock(return_value={'id': RK, 'diagnostics': []})), \
                  patch('app.provisioning.service._await_profile_mutation_cooldown', new=AsyncMock()):
                 for job in ['first', 'repeat']:
                     result = await prepare.run(item_id=job, profile_id='15', context=context, session=session,

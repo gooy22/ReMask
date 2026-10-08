@@ -155,8 +155,8 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as directory:
             cert, key = Path(directory) / "cert.pem", Path(directory) / "key.pem"
             subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048",
-                "-nodes", "-days", "1", "-subj", "/CN=localhost",
-                "-addext", "subjectAltName=DNS:localhost", "-keyout", str(key),
+                "-nodes", "-days", "1", "-subj", "/CN=business.facebook.com",
+                "-addext", "subjectAltName=DNS:business.facebook.com", "-keyout", str(key),
                 "-out", str(cert)], check=True, capture_output=True)
             server_ssl = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
             server_ssl.load_cert_chain(cert, key)
@@ -211,7 +211,7 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
                 with patch("app.private_http.httpx.AsyncHTTPTransport", side_effect=trusted_transport):
                     client = self.make(proxy_url)
                 for method in ("GET", "POST"):
-                    async with client.request(method, f"https://localhost:{origin_port}/", proxy=proxy_url) as response:
+                    async with client.request(method, f"https://business.facebook.com:{origin_port}/", proxy=proxy_url) as response:
                         self.assertEqual(response.http_version, "HTTP/2")
                         self.assertEqual(await response.text(), "confirmed")
                 await client.close()
@@ -219,7 +219,7 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(len(tunnels), 1)
                 self.assertTrue(tunnels[0].endswith(b" HTTP/1.1"))
                 self.assertEqual([row[":method"] for row in streams], ["GET", "POST"])
-                self.assertTrue(all("cookie" not in row for row in streams))
+                self.assertTrue(all(row.get("cookie") == "c_user=123" for row in streams))
             finally:
                 proxy_server.close()
                 origin_server.close()
@@ -248,3 +248,12 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
         finally:
             server.close()
             await server.wait_closed()
+
+    async def test_business_origin_has_http2_only_transport_without_retries(self):
+        client = self.make()
+        transport = client._client._transport_for_url(httpx.URL('https://business.facebook.com/api/graphql/'))
+        self.assertTrue(transport._pool._http2)
+        self.assertFalse(transport._pool._http1)
+        self.assertEqual(transport._pool._retries, 0)
+        other = client._client._transport_for_url(httpx.URL('https://api.ipify.org'))
+        self.assertTrue(other._pool._http1)

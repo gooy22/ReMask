@@ -225,7 +225,7 @@ class QueryCreateFlowTests(unittest.IsolatedAsyncioTestCase):
         await actions.RKActionTests.asyncSetUp(self)
 
     async def test_query_precheck_one_create_query_verify_commit_without_chromium(self):
-        await self.query_create_flow(artifact(), "BusinessAdAccountsQuery", response)
+        await self.query_create_flow(observed_settings_modules(), "BusinessCometBizSuiteSettingsAdAccountsRootQuery", connected_response)
 
     async def test_actual_meta_schema_query_create_verify_commit_without_chromium(self):
         await self.query_create_flow(observed_settings_modules(), "BusinessCometBizSuiteSettingsAdAccountsRootQuery", connected_response)
@@ -286,7 +286,7 @@ class QueryCreateFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(request["data"]["av"], UID)
         self.assertEqual(request["proxy"], "http://profile-proxy:8080")
         self.assertNotIn("input", variables)
-        self.assertEqual(self.cache.diagnostic()["state"], "available")
+        self.assertEqual(self.cache.diagnostic()["state"], "missing")
         saved = await self.state.step("job-1", ProvisioningStep.AD_ACCOUNT)
         self.assertEqual(saved["result"]["phase"], "CREATE_CONFIRMED")
         self.assertEqual(saved["result"]["verification"]["id"], RK)

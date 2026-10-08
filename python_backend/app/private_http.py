@@ -77,8 +77,14 @@ class PrivateHttpClient:
                 path_specified=True, secure=True, expires=None, discard=True,
                 comment=None, comment_url=None, rest={}, rfc2109=False,
             ))
+        # Business Settings operations must negotiate HTTP/2. Disallow HTTP/1
+        # at the origin transport, with no application replay. CONNECT
+        # to the profile proxy may still use its own supported protocol.
+        business_transport = httpx.AsyncHTTPTransport(
+            proxy=proxy, http1=False, http2=True, retries=0, limits=limits, trust_env=False,
+        )
         self._client = httpx.AsyncClient(
-            transport=transport, http2=True, trust_env=False,
+            transport=transport, mounts={"https://business.facebook.com": business_transport}, http2=True, trust_env=False,
             timeout=httpx.Timeout(timeout_seconds), cookies=jar,
             headers={"User-Agent": user_agent,
                      "Accept-Language": "en-US,en;q=0.9", "Accept": "*/*"},

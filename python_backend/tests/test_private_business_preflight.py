@@ -21,9 +21,8 @@ class PrivateBusinessPreflightTests(unittest.IsolatedAsyncioTestCase):
             facebook_web=AsyncMock(return_value=self.web), facebook_business_browser=AsyncMock(side_effect=AssertionError("Chromium forbidden")))
         self.addCleanup(patch.stopall)
         self.inventory = patch("app.private_business_preflight._business_inventory", new=AsyncMock(return_value={"rows": {}, "complete": True})).start()
-        self.discovery = patch("app.private_business_preflight.discover_current_scope_selector_create_candidate", new=AsyncMock(return_value=SimpleNamespace(
-            doc_id="12345678999", friendly_name="useBusinessCreationMutationMutation", source="dynamic_html"))).start()
-        patch("app.private_business_preflight.list_candidates", return_value=[]).start()
+        self.contract = patch('app.private_business_preflight.contract_metadata', return_value={
+            'doc_id':'28057338880523368','friendly_name':'useBusinessCreationMutationMutation','evidence':'static_capture'}).start()
 
     async def test_readiness_needs_no_chromium_page_inventory_or_mutation(self):
         result = await private_business_preflight(self.session, self.context, "14")
@@ -57,20 +56,18 @@ class PrivateBusinessPreflightTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["auth_blocked"])
 
     async def test_missing_contract_is_not_claimed_ready_from_bootstrap_alone(self):
-        self.discovery.return_value = None
+        self.contract.side_effect = ValueError('missing contract')
         result = await private_business_preflight(self.session, self.context, "14")
         self.assertFalse(result["bm_route_ready"])
         self.assertTrue(result["facebook_session_ready"])
-        self.assertEqual(result["private_business"]["error_code"], "PRIVATE_BM_CONTRACT_UNCONFIRMED")
+        self.assertEqual(result["private_business"]["error_code"], "PRIVATE_BM_PREFLIGHT_INCONCLUSIVE")
 
-    async def test_auth_gate_during_contract_discovery_cannot_be_hidden_by_cached_contract(self):
-        self.discovery.side_effect = AuthenticationError("Facebook checkpoint required")
-        with patch("app.private_business_preflight.list_candidates", return_value=[SimpleNamespace(
-                doc_id="12345678999", friendly_name="useBusinessCreationMutationMutation", source="confirmed")]):
-            result = await private_business_preflight(self.session, self.context, "14")
-        self.assertFalse(result["bm_route_ready"])
-        self.assertFalse(result["facebook_session_ready"])
-        self.assertEqual(result["auth_error_code"], "CHECKPOINT_REQUIRED")
+    async def test_auth_gate_during_inventory_cannot_be_hidden_by_static_contract(self):
+        self.inventory.side_effect = AuthenticationError('Facebook checkpoint required')
+        result = await private_business_preflight(self.session, self.context, '14')
+        self.assertFalse(result['bm_route_ready'])
+        self.assertFalse(result['facebook_session_ready'])
+        self.assertEqual(result['auth_error_code'], 'CHECKPOINT_REQUIRED')
 
     async def test_api_business_purpose_never_enters_browser_path(self):
         factory = MagicMock()

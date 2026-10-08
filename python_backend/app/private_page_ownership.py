@@ -7,10 +7,11 @@ import logging
 import re
 import uuid
 
-from .private_asset_contracts import AssetContracts, CONFIG, PAGE, RIGHTS, CLAIM, ASSIGN
-from .private_contract_discovery import _discover_web_modules
+from .static_meta_contracts import StaticAssetContracts, contract_metadata
 from .private_inventory import _auth_gate
 from .provisioning.models import ProvisioningError
+
+CONFIG, PAGE, RIGHTS, CLAIM, ASSIGN = (contract_metadata(op)['friendly_name'] for op in ('CONFIG', 'PAGE', 'RIGHTS', 'CLAIM', 'ASSIGN'))
 
 log = logging.getLogger("remask_worker")
 _PENDING = {"SUBMIT_INTENT", "RESULT_UNKNOWN", "RESULT_UNVERIFIED"}
@@ -153,11 +154,14 @@ def full_control_tasks(config, asset_type, *, variant=None):
         implied = _tasks(raw_implied)
         if not isinstance(raw_implied, list) or len(implied) != len(raw_implied):
             raise ProvisioningError("PRIVATE_FULL_CONTROL_CONFIG_UNCONFIRMED", "Meta returned malformed implied permission tasks.", retryable=True)
+        # Meta filters visible task controls by variant, but the implication
+        # helper adds explicit implied IDs even when they have no visible control.
+        # Missing controls simply have no further implications. Reject malformed
+        # IDs above, not a valid dependency declared by an allowed full-control task.
         for implied_id in implied - tasks:
-            if implied_id not in allowed:
-                raise ProvisioningError("PRIVATE_FULL_CONTROL_CONFIG_UNCONFIRMED", "An implied full-control task is not in the current Meta configuration.", retryable=True)
             tasks.add(implied_id)
-            pending.append(implied_id)
+            if implied_id in allowed:
+                pending.append(implied_id)
     return sorted(tasks)
 
 
@@ -215,25 +219,16 @@ async def ensure_private_page_full_control(web, *, page_id, business_id, ad_acco
     bootstrap = await web.bootstrap()
     if str(getattr(bootstrap, "actor_id", "")) != uid:
         raise ProvisioningError("SESSION_EXPIRED", "The HTTP actor does not match the selected profile.", retryable=True)
-    observed = AssetContracts()
-    entry = "https://business.facebook.com/latest/settings/pages/?business_id=" + business
-    # Inspect the document for real session gates before module discovery.
-    def inspect_document(body):
-        gate = _auth_gate(entry, body)
-        if gate:
-            raise ProvisioningError(gate, "Meta requires session restoration before Page ownership verification.", retryable=True)
-    await checkpoint({"activity": "PAGE_ACCESS_PRIVATE_CONTRACT_DISCOVERY", "transport": "private_http", "browser_started": False})
-    try:
-        ready = await _discover_web_modules(web, entry=entry, observed=observed, label="PAGE_ACCESS", prepare_document=inspect_document)
-    except TimeoutError as exc:
-        raise ProvisioningError("PRIVATE_PAGE_ACCESS_CONTRACT_TIMEOUT", "Current Meta asset contract discovery exceeded its HTTP budget.", retryable=True) from exc
-    if ready is None:
-        raise ProvisioningError("PRIVATE_PAGE_ACCESS_CONTRACT_UNAVAILABLE", "Current Meta modules did not confirm all ownership, assignment and verification contracts. No asset mutation was sent.", retryable=True)
+    observed = StaticAssetContracts()
+    await checkpoint({"activity": "PAGE_ACCESS_STATIC_CONTRACT_READY", "transport": "private_http",
+        "contract_revision": contract_metadata("CLAIM")["revision"], "browser_started": False})
 
     async def read(friendly, variables):
         command = observed.query(friendly, variables)
         if command is None:
-            raise ProvisioningError("PRIVATE_ASSET_READ_CONTRACT_UNAVAILABLE", "Current Meta query schema is unavailable: " + friendly, retryable=True)
+            raise ProvisioningError("PRIVATE_ASSET_READ_CONTRACT_UNAVAILABLE", "Pinned Meta query schema is unavailable: " + friendly, retryable=True)
+        log.info('[%s] static_contract operation=%s doc_id=%s revision=%s kind=query browser_started=False',
+            profile_id, friendly, command['doc_id'], contract_metadata('CONFIG')['revision'])
         payload = await web.graphql(command["doc_id"], command["variables"], friendly_name=friendly,
             endpoint_url="https://business.facebook.com/api/graphql/", business_context_id=business)
         _data(payload)
@@ -283,13 +278,15 @@ async def ensure_private_page_full_control(web, *, page_id, business_id, ad_acco
             raise ProvisioningError("PRIVATE_ASSET_RESULT_UNKNOWN", "Previous " + key + " submit is retained; fresh verification is inconclusive. No duplicate POST was sent.", retryable=True)
         command = observed.mutation(friendly, variables)
         if command is None:
-            raise ProvisioningError("PRIVATE_ASSET_MUTATION_CONTRACT_UNAVAILABLE", "Current Meta sender does not certify the exact " + key + " variables. No mutation was sent.", retryable=True)
+            raise ProvisioningError("PRIVATE_ASSET_MUTATION_CONTRACT_UNAVAILABLE", "Pinned Meta contract does not certify the exact " + key + " variables. No mutation was sent.", retryable=True)
         sent = False
         async def before_submit():
             nonlocal sent
             await save(key, "SUBMIT_INTENT")
             sent = True
         try:
+            log.info('[%s] static_contract operation=%s doc_id=%s revision=%s kind=mutation browser_started=False',
+                profile_id, friendly, command['doc_id'], contract_metadata('CLAIM')['revision'])
             response = await web.graphql(command["doc_id"], command["variables"], friendly_name=friendly,
                 endpoint_url="https://business.facebook.com/api/graphql/", business_context_id=business, before_submit=before_submit)
             rejected = isinstance(response, dict) and bool(response.get("errors") or response.get("error")) and not response.get("data")

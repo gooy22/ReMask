@@ -162,8 +162,29 @@ class RKActionTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         await fixtures.PrivateTransportTests.asyncSetUp(self)
         self.session.facebook_business_browser = AsyncMock(side_effect=AssertionError("Chromium forbidden"))
-        self.cache_patch = patch("app.provisioning.private_create_handlers.AdAccountContractStore", return_value=self.cache)
-        self.cache_patch.start()
+        original_post = self.meta.post
+        web = self.web
+        def post(url, **kwargs):
+            if kwargs['data'].get('fb_api_req_friendly_name') != 'BusinessCometBizSuiteSettingsAdAccountsRootQuery':
+                return original_post(url, **kwargs)
+            class Response:
+                status = 200
+                headers = {}
+                async def text(inner):
+                    _, body, _ = await web.fetch_text('https://business.facebook.com/latest/settings/ad_accounts/?business_id=' + BM)
+                    payloads = actions._json_payloads(body)
+                    data = payloads[0].get('data', {}) if payloads else {}
+                    business = data.get('business', {})
+                    edges = business.get('ad_accounts', {}).get('edges', [])
+                    nodes = [{'node': {'__typename':'AdAccount','assetType':'AD_ACCOUNT',
+                        'assetID':e['node']['id'],'business_object_id':e['node']['id'],
+                        'business_object_ui_id':e['node']['id'],'business_object_name':e['node'].get('name', NAME)}} for e in edges]
+                    return json.dumps({'data': {'business': {'__typename':'AdBusiness','id':business.get('id'),
+                        'connected_objects':{'edges':nodes,'page_info':business.get('ad_accounts',{}).get('page_info',{})}}}})
+                async def __aenter__(inner): return inner
+                async def __aexit__(inner, *args): return False
+            return Response()
+        self.meta.post = post
 
     async def run_action(self, item="job-1", **overrides):
         return await get_handler("AD_ACCOUNT")(self.session,
@@ -253,44 +274,33 @@ class RKActionTests(unittest.IsolatedAsyncioTestCase):
         self.web.fetch_text = document
         result = await self.run_action()
         self.assertEqual(result["ad_account_id"], "act_" + RK)
-        sent = json.loads(self.meta.posts[0][1]["data"]["variables"])["input"]
+        sent = json.loads(self.meta.posts[0][1]["data"]["variables"])
         self.assertNotIn("media_agency", sent)
-        self.assertEqual(sent["business_id"], int(BM))
+        self.assertEqual(sent["businessID"], BM)
         self.session.facebook_business_browser.assert_not_awaited()
 
-    async def test_missing_schema_never_starts_browser_or_posts(self):
+    async def test_missing_dynamic_schema_does_not_affect_pinned_create(self):
         self.cache.path.unlink()
-        with self.assertRaises(ProvisioningError) as error:
-            await self.run_action()
-        self.assertEqual(error.exception.code, "PRIVATE_AD_ACCOUNT_CONTRACT_UNAVAILABLE")
-        self.assertEqual(self.meta.posts, [])
+        result = await self.run_action()
+        self.assertEqual(result['ad_account_id'], 'act_' + RK)
+        self.assertEqual(len(self.meta.posts), 1)
         self.session.facebook_business_browser.assert_not_awaited()
 
-    async def test_packed_relay_inventory_runs_exact_verify_commit_without_browser(self):
-        original = self.meta.fetch_text
-        async def packed(url, **kwargs):
-            status, body, final = await original(url, **kwargs)
-            payloads = actions._json_payloads(body)
-            if payloads:
-                body = '<script>' + json.dumps({"RelayPrefetchedStreamCache": {
-                    "__bbox": {"result": json.dumps(payloads[0])}}}) + '</script>'
-            return status, body, final
-        self.web.fetch_text = packed
+    async def test_static_json_inventory_runs_exact_verify_commit_without_browser(self):
         result = await self.run_action()
-        self.assertEqual(result["ad_account_id"], "act_" + RK)
+        self.assertEqual(result['ad_account_id'], 'act_' + RK)
         self.assertEqual(len(self.meta.posts), 1)
         self.session.facebook_business_browser.assert_not_awaited()
 
     async def test_scoped_auth_gate_is_preserved_instead_of_inventory_inconclusive(self):
-        self.web.fetch_text = AsyncMock(return_value=(200, '<form id="login_form"></form>',
-            'https://business.facebook.com/business/loginpage/?session=SECRET'))
+        from fb_worker import AuthenticationError
+        self.web.graphql = AsyncMock(side_effect=AuthenticationError('Meta Business login required'))
         with self.assertRaises(ProvisioningError) as error:
             await self.run_action()
-        self.assertEqual(error.exception.code, "BUSINESS_LOGIN_GATE")
+        self.assertEqual(error.exception.code, 'SESSION_EXPIRED')
         self.assertEqual(self.meta.posts, [])
-        saved = await self.state.step("job-1", ProvisioningStep.AD_ACCOUNT)
-        self.assertEqual(saved["result"]["inventory_auth_error"], "BUSINESS_LOGIN_GATE")
-        self.assertNotIn("SECRET", repr(saved["result"]["inventory_verification"]))
+        saved = await self.state.step('job-1', ProvisioningStep.AD_ACCOUNT)
+        self.assertEqual(saved['result']['inventory_auth_error'], 'SESSION_EXPIRED')
 
     async def test_database_intent_failure_prevents_post(self):
         original = self.state.checkpoint
@@ -329,6 +339,17 @@ class BMActionTests(unittest.IsolatedAsyncioTestCase):
         return 200, '<script type="application/json">' + json.dumps({"data": {"businesses": rows}}) + '</script>', url
 
     async def graphql(self, doc, variables, **kwargs):
+        if kwargs.get('friendly_name') in {'NorthStarBusinessUnifiedScopingSelectorPopoverContainerAllFirstLevelScopesQuery', 'BizKitSettingsConfigProviderQuery'}:
+            _, body, final = await self.web.fetch_text('https://business.facebook.com/latest/home')
+            gate = actions._auth_gate(final, body)
+            if gate:
+                raise ProvisioningError(gate, 'Fixture auth gate', retryable=True)
+            rows = actions._json_payloads(body)[0]['data']['businesses']
+            if kwargs['friendly_name'] == 'BizKitSettingsConfigProviderQuery':
+                return {'data': {'business': rows[0] if rows else None}}
+            return {'data': {'viewer': {'meta_business_scoping': {'business_scopes': {
+                'nodes':[{'scope_id':row['id'],'scope_name':row['name'],'scope_type':'BUSINESS'} for row in rows],
+                'page_info':{'has_next_page':False}}}}}}
         await kwargs["before_submit"]()
         saved = await self.store.step("bm-1", ProvisioningStep.BUSINESS)
         self.assertEqual(saved["result"]["phase"], "CREATE_SUBMIT_INTENT")
@@ -372,8 +393,10 @@ class BMActionTests(unittest.IsolatedAsyncioTestCase):
     async def test_bm_lost_response_recovers_by_new_name_and_complete_baseline(self):
         original = self.graphql
         async def lost(*args, **kwargs):
-            await original(*args, **kwargs)
-            raise TimeoutError("response lost")
+            response = await original(*args, **kwargs)
+            if kwargs.get('friendly_name') == 'useBusinessCreationMutationMutation':
+                raise TimeoutError("response lost")
+            return response
         self.web.graphql = lost
         result = await self.run_action()
         self.assertEqual(result["business_id"], BM)
@@ -382,9 +405,11 @@ class BMActionTests(unittest.IsolatedAsyncioTestCase):
     async def test_bm_unknown_across_jobs_never_reposts(self):
         original = self.graphql
         async def lost(*args, **kwargs):
-            await original(*args, **kwargs)
-            self.created = False
-            raise TimeoutError("response lost")
+            response = await original(*args, **kwargs)
+            if kwargs.get('friendly_name') == 'useBusinessCreationMutationMutation':
+                self.created = False
+                raise TimeoutError("response lost")
+            return response
         self.web.graphql = lost
         with self.assertRaises(ProvisioningError):
             await self.run_action()
