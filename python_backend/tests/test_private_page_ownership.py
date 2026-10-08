@@ -29,6 +29,17 @@ def rights(asset, user, tasks):
         'assigned_users': {'edges': [{'node': {'__typename': 'BusinessUser', 'id': user}, 'task_ids': list(tasks)}]}},
         'user': {'__typename': 'BusinessUser', 'id': user}}}
 
+def standalone_rights(asset, user, tasks, business=BM):
+    # Shape observed in live job d4bdd7d6dbe243838677db5149fe5fb4;
+    # identities and permission values below are synthetic test data.
+    return {'data': {'business_object_rendered_in_ui': {
+        'id': asset, 'user_assigned_permissions': {
+            'asset': {'business_object_id': asset, 'id': asset,
+                'available_permission_tasks_ui_configs': [{'task_id': P}]},
+            'user': {'__typename': 'BusinessUser', 'id': user},
+            'current_business': {'id': business, 'business_user_for_viewer': {'id': USER}},
+            'assigned_permission_task_ids': list(tasks)}}}}
+
 class MetaFixture:
     def __init__(self):
         self.profile = SimpleNamespace(cookies={'c_user': UID}, name='15')
@@ -36,6 +47,7 @@ class MetaFixture:
         self.owner, self.tasks, self.posts = None, {FP: [], RK: []}, []
         self.lost, self.defer, self.incorrect_read = '', False, False
         self.permissions = config()
+        self.standalone = False
     async def graphql(self, doc, variables, *, friendly_name, before_submit=None, **kwargs):
         if friendly_name == CONFIG:
             return {'data': {'business': {'__typename': 'AdBusiness', 'id': BM,
@@ -45,7 +57,8 @@ class MetaFixture:
                 'ownerBusiness': {'id': self.owner} if self.owner else None, 'permission_to_claim_to_business': 'ALLOWED'}}}
         if friendly_name == RIGHTS:
             asset = variables['assetID']
-            return rights('999999999999999' if self.incorrect_read else asset, USER, self.tasks[asset])
+            return (standalone_rights if self.standalone else rights)(
+                '999999999999999' if self.incorrect_read else asset, USER, self.tasks[asset])
         assert before_submit is not None
         await before_submit()
         self.posts.append((friendly_name, copy.deepcopy(variables)))
@@ -60,6 +73,26 @@ async def discover(web, *, observed, **kwargs):
     return observed.result()
 
 class ContractTests(unittest.TestCase):
+    def test_live_standalone_sibling_relation_proves_exact_assignment(self):
+        payload = standalone_rights(FP, USER, [P, PARTIAL])
+        proof = assignment_proof(payload, asset_id=FP, user_id=USER, business_id=BM, required_tasks=[P, PARTIAL])
+        self.assertEqual(proof['assigned_task_ids'], sorted([P, PARTIAL]))
+
+    def test_standalone_foreign_relations_do_not_use_unrelated_matching_branches(self):
+        for key, value in [('asset', {'id': RK}), ('user', {'id': UID}), ('current_business', {'id': RK})]:
+            payload = standalone_rights(FP, USER, [P, PARTIAL])
+            payload['data']['business_object_rendered_in_ui']['user_assigned_permissions'][key] = value
+            payload['data'].update(rights(FP, USER, [P, PARTIAL])['data'])
+            with self.subTest(key=key):
+                self.assertIsNone(assignment_proof(payload, asset_id=FP, user_id=USER, business_id=BM, required_tasks=[P]))
+
+    def test_standalone_available_tasks_and_partial_or_malformed_assignments_fail_closed(self):
+        for assigned in [[], [PARTIAL], [P, 'invalid'], None, [P, {'id': PARTIAL}]]:
+            payload = standalone_rights(FP, USER, [])
+            payload['data']['business_object_rendered_in_ui']['user_assigned_permissions']['assigned_permission_task_ids'] = assigned
+            with self.subTest(assigned=assigned):
+                self.assertIsNone(assignment_proof(payload, asset_id=FP, user_id=USER, business_id=BM, required_tasks=[P, PARTIAL]))
+
     def observed(self, source=SOURCE):
         value = AssetContracts(); value.observe(source); return value
     def test_actual_artifacts_and_flat_senders_compile(self):
@@ -151,6 +184,27 @@ class PageActionTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(self.meta.posts[1][1]['userID'], UID)
         self.assertEqual(self.meta.posts[0][1]['shouldRemoveDirectUsersBeforeClaiming'], 'KEEP')
         self.assertNotIn('SECRET', repr(self.saved))
+    async def test_observed_standalone_shape_completes_page_and_rk_assignments(self):
+        self.meta.standalone = True
+        result = await self.run_action()
+        self.assertTrue(result['operator_full_control_verified'])
+        self.assertTrue(result['rk_operator_full_control_verified'])
+        self.assertEqual([name for name, _ in self.meta.posts], [CLAIM, ASSIGN, ASSIGN])
+        self.assertTrue((await self.run_action(copy.deepcopy(self.saved)))['rk_operator_full_control_verified'])
+        self.assertEqual(len(self.meta.posts), 3)
+
+    async def test_retained_live_assignment_reconciles_standalone_without_duplicate_post(self):
+        self.meta.standalone, self.meta.owner = True, BM
+        self.meta.defer = True
+        with self.assertRaises(ProvisioningError):
+            await self.run_action()
+        retained = copy.deepcopy(self.saved)
+        self.assertEqual(retained['private_operations']['assign_page']['status'], 'RESULT_UNVERIFIED')
+        self.assertEqual(retained['diagnostic']['assignment_check']['missing_task_ids'], sorted([P, PARTIAL]))
+        self.meta.defer, self.meta.tasks = False, {FP: [P, PARTIAL], RK: [R, PARTIAL]}
+        result = await self.run_action(retained)
+        self.assertTrue(result['operator_full_control_verified'])
+        self.assertEqual(len(self.meta.posts), 1)
     async def test_lost_claim_response_reconciles_without_resubmit(self):
         self.meta.lost = CLAIM
         self.assertTrue((await self.run_action())['page_owned_by_business'])

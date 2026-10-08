@@ -44,13 +44,42 @@ def _tasks(value):
     return result
 
 
-def assignment_proof(payload, *, asset_id, user_id, required_tasks):
+def _standalone_assignment(data, asset_id, user_id, business_id=None):
+    """Bind the sibling fields in the observed Settings permissions record.
+
+    Do not collect an asset, user and tasks from unrelated branches. Meta's
+    standalone query puts all three under one user_assigned_permissions record.
+    """
+    root = data.get('business_object_rendered_in_ui')
+    record = root.get('user_assigned_permissions') if isinstance(root, dict) else None
+    if not isinstance(record, dict):
+        return None, 'missing_permissions_record'
+    asset, user, business = (record.get(key) for key in ('asset', 'user', 'current_business'))
+    if not isinstance(asset, dict) or asset_id not in {
+            _id(asset.get(key)) for key in ('id', 'business_object_id', 'business_object_ui_id')}:
+        return None, 'asset_mismatch'
+    if not isinstance(user, dict) or _id(user.get('id')) != user_id:
+        return None, 'business_user_mismatch'
+    if business_id is not None and (not isinstance(business, dict) or _id(business.get('id')) != business_id):
+        return None, 'business_mismatch'
+    raw_tasks = record.get('assigned_permission_task_ids')
+    tasks = _tasks(raw_tasks)
+    if not isinstance(raw_tasks, list) or any(not _id(value) for value in raw_tasks):
+        return None, 'assigned_tasks_malformed'
+    return {'asset_id': asset_id, 'business_user_id': user_id,
+            'assigned_task_ids': sorted(tasks)}, ''
+
+
+def assignment_proof(payload, *, asset_id, user_id, required_tasks, business_id=None):
     """Require numeric assigned tasks under this exact asset/person relation.
 
     Configured/available tasks and business-wide permissions never prove an
     asset assignment. A read error or a conflicting relation fails closed.
     """
     data = _data(payload)
+    if 'business_object_rendered_in_ui' in data:
+        proof, _ = _standalone_assignment(data, asset_id, user_id, business_id)
+        return proof if proof and set(required_tasks).issubset(proof['assigned_task_ids']) else None
     proofs = []
     def walk(value, in_asset=False, in_user=False):
         if isinstance(value, list):
@@ -87,7 +116,14 @@ def assignment_proof(payload, *, asset_id, user_id, required_tasks):
     return proofs[0] if proofs and all(row == proofs[0] for row in proofs) else None
 
 
-def _assert_assignment_targets(payload, asset, user):
+def _assert_assignment_targets(payload, asset, user, business_id=None):
+    data = _data(payload)
+    if 'business_object_rendered_in_ui' in data:
+        proof, reason = _standalone_assignment(data, asset, user, business_id)
+        if proof is not None:
+            return
+        raise ProvisioningError('PRIVATE_ASSIGNMENT_TARGET_UNCONFIRMED',
+            'Meta standalone permissions relation is unconfirmed: ' + reason + '. No assignment was sent.', retryable=True)
     found_asset, found_user = False, False
     def walk(value):
         nonlocal found_asset, found_user
@@ -102,7 +138,7 @@ def _assert_assignment_targets(payload, asset, user):
         elif isinstance(value, list):
             for child in value:
                 walk(child)
-    walk(_data(payload))
+    walk(data)
     if not (found_asset and found_user):
         raise ProvisioningError('PRIVATE_ASSIGNMENT_TARGET_UNCONFIRMED',
             'Meta rights read did not return the exact asset and Business user. No assignment was sent.', retryable=True)
@@ -353,14 +389,20 @@ async def ensure_private_page_full_control(web, *, page_id, business_id, ad_acco
             payload = await read(RIGHTS, {"assetID": asset, "businessID": business, "userID": user, "surface": "LWI"})
             diagnostic = {"stage": key + "_verification", "response_shape": response_shape(payload)}
             try:
-                _assert_assignment_targets(payload, asset, user)
+                _assert_assignment_targets(payload, asset, user, business)
             except ProvisioningError as exc:
                 await checkpoint({"diagnostic": {**diagnostic, "code": exc.code}})
                 log.info('[%s] PAGE_ACCESS rights_read rejected=%s', profile_id,
                     json.dumps({**diagnostic, 'code': exc.code}, separators=(',', ':')))
                 raise
-            proof = assignment_proof(payload, asset_id=asset, user_id=user, required_tasks=tasks)
+            proof = assignment_proof(payload, asset_id=asset, user_id=user, required_tasks=tasks, business_id=business)
             if not proof:
+                if 'business_object_rendered_in_ui' in _data(payload):
+                    assignment, reason = _standalone_assignment(_data(payload), asset, user, business)
+                    assigned = set(assignment['assigned_task_ids']) if assignment else set()
+                    diagnostic['assignment_check'] = {'relation_confirmed': assignment is not None,
+                        'reason': reason, 'required_count': len(tasks), 'assigned_count': len(assigned),
+                        'missing_task_ids': sorted(set(tasks) - assigned)}
                 await checkpoint({"diagnostic": diagnostic})
                 log.info('[%s] PAGE_ACCESS rights_read unconfirmed=%s', profile_id,
                     json.dumps(diagnostic, separators=(',', ':')))

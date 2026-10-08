@@ -42,6 +42,20 @@ IDs without requiring a visible control for each dependency. The implementation
 now follows that rule; malformed IDs remain rejected and independently assigned
 full rights still must be confirmed for the exact asset and Business user.
 
+## Standalone permission response correction
+
+The next live job `d4bdd7d6dbe243838677db5149fe5fb4` confirmed Page ownership
+and submitted Page assignment over HTTP/2, but stopped during rights verification.
+The observed response keeps `asset`, `user`, `current_business` and
+`assigned_permission_task_ids` as siblings inside
+`data.business_object_rendered_in_ui.user_assigned_permissions`. The parser now
+binds that one record to the exact asset, scoped Business user and BM; available
+task definitions, viewer permissions and matching unrelated branches are never
+substitutes. Retained assignment intent is reconciled before another mutation.
+Tests cover this observed structure with synthetic values, foreign relations,
+malformed/partial task lists and cross-job verification without duplicate POST.
+Live completion after this parser correction is still unconfirmed.
+
 ## Maintenance is separate from action execution
 
 `python -m app.contract_maintenance.update_settings --sources-dir tests/fixtures
