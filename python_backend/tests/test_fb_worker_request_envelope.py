@@ -248,3 +248,80 @@ class BusinessAuthenticationPrecheckTests(unittest.IsolatedAsyncioTestCase):
                                     source="https://business.facebook.com/latest/home")
         self.assertEqual((await session.graphql("123456789",{}))["error"], 1357054)
         self.assertEqual(len(http.posts), 1)
+
+    async def test_create_business_recovers_home_400_with_authenticated_creation_page(self):
+        session, http = self.session()
+        session.fetch_text = AsyncMock(side_effect=[
+            (400, "Bad Request", session.ADS_MANAGER_URL),
+            (200, '["DTSGInitialData",[],{"token":"creation-token"}] {"__hsi":"creation-context"}',
+             "https://business.facebook.com/create"),
+        ])
+        checkpoint = AsyncMock()
+        result = await session.graphql("123456789", {},
+            friendly_name="useBusinessCreationMutationMutation", before_submit=checkpoint)
+        self.assertTrue(result["data"]["ok"])
+        self.assertEqual([call.args[0] for call in session.fetch_text.await_args_list],
+                         [session.ADS_MANAGER_URL, "https://business.facebook.com/create"])
+        checkpoint.assert_awaited_once()
+        self.assertEqual(len(http.posts), 1)
+        self.assertEqual(http.posts[0]["data"]["fb_dtsg"], "creation-token")
+        self.assertEqual(http.posts[0]["data"]["__hsi"], "creation-context")
+        self.assertEqual(http.posts[0]["headers"]["Referer"], "https://business.facebook.com/create")
+
+    async def test_create_business_unconfirmed_surfaces_keep_diagnostics_without_post(self):
+        session, http = self.session()
+        session.fetch_text = AsyncMock(side_effect=[
+            (400, "Bad Request", session.ADS_MANAGER_URL),
+            (200, "no auth context", "https://business.facebook.com/create?secret=not-for-logs"),
+        ])
+        checkpoint = AsyncMock()
+        with self.assertRaises(RemoteRequestError) as caught:
+            await session.graphql("123456789", {},
+                friendly_name="useBusinessCreationMutationMutation", before_submit=checkpoint)
+        error = caught.exception
+        self.assertFalse(error.request_may_have_been_sent)
+        self.assertEqual(len(error.meta_payload["business_precheck"]), 2)
+        self.assertNotIn("not-for-logs", str(error.meta_payload))
+        self.assertEqual(error.meta_payload["business_precheck"][0]["http_status"], 400)
+        checkpoint.assert_not_awaited()
+        self.assertEqual(http.posts, [])
+
+    async def test_business_auth_challenge_forbids_creation_surface_fallback(self):
+        for status, body, final_url in (
+            (403, "denied", "https://business.facebook.com/latest/home"),
+            (200, "login", "https://www.facebook.com/login.php"),
+            (200, "checkpoint", "https://business.facebook.com/checkpoint/"),
+        ):
+            with self.subTest(status=status, final_url=final_url):
+                session, http = self.session()
+                session.fetch_text = AsyncMock(return_value=(status, body, final_url))
+                checkpoint = AsyncMock()
+                with self.assertRaises(AuthenticationError) as caught:
+                    await session.graphql("123456789", {},
+                        friendly_name="useBusinessCreationMutationMutation", before_submit=checkpoint)
+                self.assertFalse(caught.exception.request_may_have_been_sent)
+                session.fetch_text.assert_awaited_once()
+                checkpoint.assert_not_awaited()
+                self.assertEqual(http.posts, [])
+
+    async def test_rk_exact_business_precheck_never_uses_generic_creation_surface(self):
+        session, http = self.session()
+        target = "https://business.facebook.com/latest/settings/ad_accounts/?business_id=444444444444"
+        session.fetch_text = AsyncMock(return_value=(400, "Bad Request", target))
+        checkpoint = AsyncMock()
+        with self.assertRaises(RemoteRequestError):
+            await session.graphql("123456789", {"input": {"business_id": "444444444444"}},
+                friendly_name="BizKitSettingsCreateAdAccountMutation", before_submit=checkpoint)
+        session.fetch_text.assert_awaited_once_with(target)
+        checkpoint.assert_not_awaited()
+        self.assertEqual(http.posts, [])
+
+    async def test_business_rate_limit_does_not_probe_another_surface(self):
+        session, http = self.session()
+        session.fetch_text = AsyncMock(return_value=(429, "rate limited", session.ADS_MANAGER_URL))
+        with self.assertRaises(RemoteRequestError) as caught:
+            await session.graphql("123456789", {}, friendly_name="useBusinessCreationMutationMutation")
+        self.assertEqual(caught.exception.http_status, 429)
+        session.fetch_text.assert_awaited_once()
+        self.assertEqual(http.posts, [])
+

@@ -63,6 +63,23 @@ Production release выполняется только после прохожд
 
 ## Остальные операции
 
+### Новый Prepare профиля 14: 8 октября, 05:53 UTC
+
+На сборке 6a614cf job ed952a84ef444c5b8241d2b9cdd9465e остановился на
+CREATE_BM_PRE_SUBMIT_TRANSPORT до CREATE POST. Facebook bootstrap был получен
+через Marketplace; Business precheck вернул HTTP 400 на /latest/home.
+Это подтверждает повтор ошибки, но не причину HTTP 400 и не наличие бана.
+
+Для известного useBusinessCreationMutationMutation после 400/404 либо
+неподтверждённого HTML главной страницы добавлена одна read-only HTTP проверка
+известной страницы /create. Отправка разрешена только при HTTP 200 и свежем
+Business DTSG. Login/checkpoint/401/403 и rate limit не запускают fallback.
+Точная BM-проверка CREATE_RK не переключается на общую страницу создания.
+Диагностика сохраняет две проверенные поверхности, статусы, размер ответа и
+наличие токена, без значений токенов и query-параметров конечного URL.
+Исправление покрывает route-level отказ главной страницы; доступность /create
+для реального профиля 14 должна подтверждаться отдельным live trace.
+
 | Операция | Исполнение после изменения |
 | --- | --- |
 | Create BM | Прямой cookie/proxy GraphQL, без browser POST fallback |

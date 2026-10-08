@@ -978,8 +978,11 @@ class FacebookWebSession:
     # Unified private GraphQL transport
     # ------------------------------------------------------------------
 
-    async def _business_bootstrap(self, bootstrap: FacebookBootstrap, *, business_id: str = "") -> FacebookBootstrap:
-        """Require Business auth before reusing a token from another Facebook surface."""
+    async def _business_bootstrap(
+        self, bootstrap: FacebookBootstrap, *, business_id: str = "",
+        business_create: bool = False,
+    ) -> FacebookBootstrap:
+        """Confirm Business auth using bounded, read-only operation surfaces."""
         source = str(getattr(bootstrap, "source_url", "") or "").strip()
         target = (
             "https://business.facebook.com/latest/settings/ad_accounts/?business_id=" + business_id
@@ -989,43 +992,66 @@ class FacebookWebSession:
             return bootstrap
         if business_id and source == target:
             return bootstrap
-        try:
-            status, body, final_url = await self.fetch_text(target)
-        except RemoteRequestError as exc:
-            exc.request_may_have_been_sent = False
-            exc.transport_stage = "business_auth_precheck"
-            raise
-        parts = urlsplit(final_url)
-        gated = (
-            parts.hostname != "business.facebook.com"
-            or "/login" in parts.path.lower()
-            or "/checkpoint" in parts.path.lower()
-            or "login_form" in body.lower()
-            or status in {401, 403}
-        )
-        if gated:
-            self.invalidate_bootstrap()
-            error = AuthenticationError(
-                "Facebook profile is reachable, but Meta Business requires login/session restoration. No GraphQL POST was sent."
+        # The Suite landing page is not the only authenticated creation surface.
+        # A route-level 400 or unhydrated home cannot prove CREATE is unavailable.
+        # Never change an exact RK scope or continue after an auth challenge.
+        targets = [target]
+        if business_create and not business_id:
+            targets.append("https://business.facebook.com/create")
+        attempts = []
+        for surface in targets:
+            try:
+                status, body, final_url = await self.fetch_text(surface)
+            except RemoteRequestError as exc:
+                exc.request_may_have_been_sent = False
+                exc.transport_stage = "business_auth_precheck"
+                exc.meta_payload = {**exc.meta_payload, "business_precheck": attempts}
+                raise
+            parts = urlsplit(final_url)
+            gated = (
+                parts.hostname != "business.facebook.com"
+                or "/login" in parts.path.lower()
+                or "/checkpoint" in parts.path.lower()
+                or "login_form" in body.lower()
+                or status in {401, 403}
             )
-            error.request_may_have_been_sent = False
-            error.transport_stage = "business_auth_precheck"
-            raise error
-        token = self._first_match(body, list(self.FB_DTSG_PATTERNS))
-        if status != 200 or not token:
-            raise RemoteRequestError(
-                "Meta Business authentication precheck did not confirm a usable session. No GraphQL POST was sent.",
-                http_status=status, request_may_have_been_sent=False,
-                transport_stage="business_auth_precheck",
-            )
-        current = FacebookBootstrap(
-            fb_dtsg=token, actor_id=bootstrap.actor_id,
-            lsd=self._first_match(body, [r'"LSD".{0,1800}?"token"\s*:\s*"([^"]+)"']),
-            jazoest=self._first_match(body, [r"""name=["']jazoest["'][^>]*value=["']([^"']+)["']"""]),
-            request_context=self._extract_request_context(body), source_url=final_url,
+            token = self._first_match(body, list(self.FB_DTSG_PATTERNS))
+            attempts.append({
+                "requested_url": surface,
+                "final_url": f"{parts.scheme}://{parts.hostname or ''}{parts.path}",
+                "http_status": status, "body_bytes": len(body.encode("utf-8")),
+                "token_present": bool(token), "auth_gated": gated,
+            })
+            if gated:
+                self.invalidate_bootstrap()
+                error = AuthenticationError(
+                    "Facebook profile is reachable, but Meta Business requires login/session restoration. No GraphQL POST was sent."
+                )
+                error.request_may_have_been_sent = False
+                error.transport_stage = "business_auth_precheck"
+                error.meta_payload = {"business_precheck": attempts}
+                raise error
+            if status == 200 and token:
+                current = FacebookBootstrap(
+                    fb_dtsg=token, actor_id=bootstrap.actor_id,
+                    lsd=self._first_match(body, [r'"LSD".{0,1800}?"token"\s*:\s*"([^"]+)"']),
+                    jazoest=self._first_match(body, [r"""name=["']jazoest["'][^>]*value=["']([^"']+)["']"""]),
+                    request_context=self._extract_request_context(body), source_url=final_url,
+                )
+                self._bootstrap = current
+                if len(attempts) > 1:
+                    log.info("[%s] BUSINESS precheck recovered through creation surface attempts=%s",
+                             self.profile.name, json.dumps(attempts, separators=(",", ":")))
+                return current
+            # Only a missing route or a document without usable auth may use
+            # the creation-page fallback. Rate limits/server errors stop here.
+            if status not in {200, 400, 404}:
+                break
+        raise RemoteRequestError(
+            "Meta Business authentication precheck did not confirm a usable session. No GraphQL POST was sent.",
+            http_status=status, meta_payload={"business_precheck": attempts},
+            request_may_have_been_sent=False, transport_stage="business_auth_precheck",
         )
-        self._bootstrap = current
-        return current
 
     async def graphql(
         self,
@@ -1073,7 +1099,10 @@ class FacebookWebSession:
             if len(scoped_ids) > 1:
                 raise RemoteRequestError("Ambiguous Business context; no CREATE POST was sent.",
                                          request_may_have_been_sent=False, transport_stage="business_auth_precheck")
-            bootstrap = await self._business_bootstrap(bootstrap, business_id=next(iter(scoped_ids), ""))
+            bootstrap = await self._business_bootstrap(
+                bootstrap, business_id=next(iter(scoped_ids), ""),
+                business_create=friendly_name == "useBusinessCreationMutationMutation",
+            )
         session = await self._ensure_session()
 
         form: dict[str, str] = {
