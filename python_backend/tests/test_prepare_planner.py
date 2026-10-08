@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 
 from app.provisioning.advertising_page import AdvertisingPageStore
 from app.provisioning.models import ProvisioningStep
+from app.provisioning.models import ProvisioningError
 from app.provisioning.prepare import PrepareService
 from app.provisioning.state import ProvisioningStateStore
 
@@ -378,6 +379,78 @@ class PreparePlannerTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result["ready_to_launch"])
         self.assertFalse(result["actual"]["ad_accounts"][0]["payment_confirmed"])
         self.assertTrue(result["actual"]["ad_accounts"][0]["page_access_confirmed"])
+
+    async def test_existing_bundle_is_repaired_before_missing_bundle_create(self):
+        account = "111111111111111"
+        await self._confirmed_business()
+        await self._confirmed_rk(account)
+        sequence = []
+
+        async def execute(**kwargs):
+            action = kwargs["payload"]["steps"][0]
+            sequence.append(action)
+            if action == "PAGE_ACCESS":
+                params = kwargs["payload"]["parameters"][action]
+                self.assertEqual((params["business_id"], params["ad_account_id"]),
+                    (self.business_id, account))
+                await self._confirmed_access(account, item=kwargs["item_id"])
+                return {"state": {}}
+            self.assertEqual(action, "BUSINESS")
+            raise ProvisioningError("PRIVATE_BM_INVENTORY_INCONCLUSIVE", "No CREATE was sent", retryable=True)
+
+        provisioning = SimpleNamespace(run=AsyncMock(side_effect=execute))
+        service = PrepareService(self.state, provisioning)
+        for item in ("attempt-1", "attempt-2"):
+            with self.assertRaises(ProvisioningError):
+                await service.run(item_id=item, profile_id=self.profile_id,
+                    context=self.context, session=self.session,
+                    payload=self._payload(bundles=2, page_access=True))
+        self.assertEqual(sequence, ["PAGE_ACCESS", "BUSINESS", "BUSINESS"])
+        self.assertTrue(await self.state.page_access_confirmed(
+            self.profile_id, self.business_id, account, full_control=True))
+        self.assertEqual(len(await self.state.confirmed_ad_accounts_for_profile(self.profile_id)), 1)
+
+    async def test_two_existing_incomplete_bundles_are_repaired_without_business_create(self):
+        await self._confirmed_business()
+        await self._confirmed_business(self.business_id_2)
+        sequence = []
+
+        async def execute(**kwargs):
+            action = kwargs["payload"]["steps"][0]
+            params = kwargs["payload"]["parameters"][action]
+            bm = params["business_id"]
+            sequence.append((action, bm))
+            if action == "AD_ACCOUNT":
+                account = "111111111111111" if bm == self.business_id else "222222222222222"
+                await self._confirmed_rk(account, bm, item=kwargs["item_id"])
+                return {"state": {"business_id": bm, "ad_account_id": account}}
+            self.assertEqual(action, "PAGE_ACCESS")
+            await self._confirmed_access(params["ad_account_id"], bm, item=kwargs["item_id"])
+            return {"state": {}}
+
+        service = PrepareService(self.state, SimpleNamespace(run=AsyncMock(side_effect=execute)))
+        result = await service.run(item_id="repair-two", profile_id=self.profile_id,
+            context=self.context, session=self.session,
+            payload=self._payload(bundles=2, page_access=True))
+        self.assertEqual(len(result["actual"]["bundles"]), 2)
+        self.assertEqual([a for a, _ in sequence], ["AD_ACCOUNT", "PAGE_ACCESS", "AD_ACCOUNT", "PAGE_ACCESS"])
+        self.assertEqual(sequence[0][1], sequence[1][1])
+        self.assertEqual(sequence[2][1], sequence[3][1])
+        self.assertNotEqual(sequence[0][1], sequence[2][1])
+
+    async def test_missing_rights_do_not_trigger_replacement_business_create(self):
+        await self._confirmed_business()
+        await self._confirmed_rk("111111111111111")
+        async def execute(**kwargs):
+            self.assertEqual(kwargs["payload"]["steps"], ["PAGE_ACCESS"])
+            raise ProvisioningError("PRIVATE_PERMISSION_UNVERIFIED", "rights incomplete", retryable=True)
+        provisioning = SimpleNamespace(run=AsyncMock(side_effect=execute))
+        service = PrepareService(self.state, provisioning)
+        with self.assertRaises(ProvisioningError):
+            await service.run(item_id="rights-incomplete", profile_id=self.profile_id,
+                context=self.context, session=self.session,
+                payload=self._payload(bundles=2, page_access=True))
+        self.assertEqual(provisioning.run.await_count, 1)
 
     async def test_workspace_inventory_with_two_bm_rk_pairs_suppresses_duplicate_create(self):
         self.context.businesses = [

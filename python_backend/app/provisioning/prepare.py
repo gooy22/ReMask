@@ -697,8 +697,10 @@ class PrepareService:
                 }
             )
 
-        if desired.require_page_access:
-            for bundle in selected:
+            # Repair this exact existing/new bundle before another BM CREATE.
+            # A later slot failure must not strand an earlier BM/RK without rights.
+            if desired.require_page_access:
+                bundle = selected[-1]
                 business_id = str(bundle["business_id"])
                 row = bundle["ad_account"]
                 account_id = str(row.get("ad_account_id") or "").strip()
