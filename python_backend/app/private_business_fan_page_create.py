@@ -178,11 +178,14 @@ async def create_business_page(session, params, *, state, item_id, profile_id, s
             rows, complete = await read_pages(web, business)
             if not complete:
                 raise ProvisioningError('PRIVATE_FAN_PAGE_INVENTORY_INCONCLUSIVE', 'Exact-Business Page inventory is incomplete; no CREATE was sent.', retryable=True)
-            matches = [row for row in rows if row['name'] == name and row['id'] not in reserved]
+            # Resolver history can already contain an eligible Page in THIS BM.
+            # Only foreign bundle reservations prohibit reuse. All known IDs
+            # still join the immutable baseline before an actual new CREATE.
+            matches = [row for row in rows if row['name'] == name and row['id'] not in foreign]
             if len(matches) > 1:
                 raise ProvisioningError('PRIVATE_FAN_PAGE_TARGET_AMBIGUOUS', 'Multiple unreserved Pages have the requested name in this Business; no CREATE was sent.', retryable=True)
             if matches:
-                proof = await prove_page(web, business, matches[0]['id'], name, reserved)
+                proof = await prove_page(web, business, matches[0]['id'], name, foreign)
                 if not proof:
                     raise ProvisioningError('PRIVATE_PAGE_OWNERSHIP_INCONCLUSIVE', 'Existing exact-Business Page ownership was not confirmed.', retryable=True)
                 reused = True

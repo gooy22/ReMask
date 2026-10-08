@@ -194,6 +194,7 @@ class BusinessPageHTTPTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_exact_existing_owned_page_is_reused_without_category_or_create(self):
         self.meta.owners[FP2] = BM2
+        self.params['reserved_page_ids'].append(FP2)
         self.assertTrue((await self.run_page())['pages'][0]['reused'])
         self.assertEqual(self.meta.posts, [])
         self.assertNotIn(OPS['FP_CATEGORY'], [name for name, _ in self.meta.calls])
