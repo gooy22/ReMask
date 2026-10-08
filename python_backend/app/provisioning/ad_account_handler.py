@@ -10,6 +10,7 @@ from typing import Any
 from fb_worker import AuthenticationError, ProxyError, RemoteRequestError
 
 from ..facebook_ad_account_identity import details_candidate
+from ..ad_account_contracts import AdAccountContractStore
 from ..facebook_ad_account_create import (
     AdAccountMutationError,
     _normalize_ad_account_id,
@@ -445,6 +446,15 @@ async def _reconcile_existing_browser_inventory(
     when Graph API is unavailable, so a single transient UI state cannot
     unlock a duplicate CREATE guard.
     """
+    # A fresh exact-portfolio response is authoritative without Chromium.
+    # A positive row is enough for exact-ID verification; absence requires a
+    # complete collection, never a URL hint, cache entry or truncated fragment.
+    private = await _read_private_ad_account_inventory(
+        session, business_id=business_id, account_name=account_name,
+        expected_ad_account_id=expected_ad_account_id,
+    )
+    if private is not None:
+        return private
     try:
         async with _browser_lease(session, timeout_seconds=45,
         ) as browser:
@@ -523,6 +533,49 @@ async def _reconcile_existing_browser_inventory(
             "source": "business_settings_inventory",
             "error": f"{exc.__class__.__name__}: {_clean(exc)}"[:500],
         }
+
+
+async def _read_private_ad_account_inventory(
+    session: Any, *, business_id: str, account_name: str,
+    expected_ad_account_id: str = "",
+) -> tuple[str, dict[str, Any]] | None:
+    factory = getattr(session, "facebook_web", None)
+    if not callable(factory):
+        return None
+    try:
+        from ..private_inventory import private_inventory_snapshot
+        expected = _normalize_ad_account_id(expected_ad_account_id)
+        snapshot = await asyncio.wait_for(private_inventory_snapshot(
+            await factory(), known_business_ids={business_id},
+            known_accounts_by_business={business_id: {expected.removeprefix("act_")}} if expected else {},
+            discover_businesses=False,
+        ), timeout=12.0)
+        portfolios = [row for row in snapshot.get("businesses", [])
+                      if _clean(row.get("id")) == business_id]
+        if len(portfolios) != 1:
+            return None
+        row = portfolios[0]
+        accounts = [item for item in row.get("ad_accounts", [])
+                    if _clean(item.get("business_id")) == business_id
+                    and _normalize_ad_account_id(item.get("id"))]
+        ids = sorted({_normalize_ad_account_id(item.get("id")) for item in accounts})
+        named = sorted({_normalize_ad_account_id(item.get("id")) for item in accounts
+                        if _clean(item.get("name")).casefold() == account_name.casefold()})
+        complete = row.get("inventory_complete") is True
+        confirmed_id = expected if expected and expected in ids else (named[0] if not expected and len(named) == 1 else "")
+        if not confirmed_id and not complete:
+            return None
+        evidence = {"exact_business_context": True, "inventory_observed": complete,
+                    "inventory_ids": ids, "exact_name_ids": named}
+        return confirmed_id, {
+            "confirmed": bool(confirmed_id), "ad_account_id": confirmed_id,
+            "confirmed_empty": bool(complete and not ids and not expected),
+            "source": "private_http_exact_business_inventory",
+            "business_id": business_id, "inventory_complete": complete, "evidence": evidence,
+        }
+    except Exception as exc:
+        log.info("RK private inventory inconclusive business=%s error_type=%s", business_id, type(exc).__name__)
+        return None
 
 
 def _browser_inventory_confirms_nonempty(value: Any) -> bool:
@@ -1597,6 +1650,12 @@ async def ad_account_handler(
             }
         )
 
+        if (not allow_multiple_in_business
+                and browser_inventory_before.get("source") == "private_http_exact_business_inventory"
+                and browser_inventory_before.get("inventory_complete") is True
+                and _browser_inventory_confirms_nonempty(browser_inventory_before)):
+            _raise_rk_already_exists(business_id=business_id, ad_account_id=browser_found_id)
+
         if browser_found_id:
             if not browser_candidate_id:
                 browser_candidate_id = browser_found_id
@@ -1868,7 +1927,7 @@ async def ad_account_handler(
                 "last_error": reason[:4000],
                 "activity": "AD_ACCOUNT_RESULT_UNCERTAIN",
                 "activity_at": int(time.time()),
-                "transport": "facebook_private_graphql_live_capture",
+                "transport": "facebook_private_http_contract",
             },
         )
 
@@ -1918,7 +1977,7 @@ async def ad_account_handler(
                     "inventory_proof": inventory_proof,
                     "activity": "AD_ACCOUNT_UNCERTAIN_RECONCILED_EMPTY",
                     "activity_at": int(time.time()),
-                    "transport": "facebook_private_graphql_live_capture",
+                    "transport": "facebook_private_http_contract",
                 },
             )
             return {
@@ -1944,7 +2003,7 @@ async def ad_account_handler(
                 "inventory_proof": inventory_proof,
                 "activity": "AD_ACCOUNT_RECONCILE_EXHAUSTED",
                 "activity_at": int(time.time()),
-                "transport": "facebook_private_graphql_live_capture",
+                "transport": "facebook_private_http_contract",
             },
         )
         raise ProvisioningError(
@@ -1965,13 +2024,23 @@ async def ad_account_handler(
     # CREATE request is observed is safe to retry because the interceptor never
     # lets the CREATE mutation reach Meta. A single flaky React render must not
     # force the operator to launch a brand-new Job manually.
-    captured_request: dict[str, Any] = {}
+    contract_store = AdAccountContractStore()
+    actor_id = _clean((getattr(context, "cookies", {}) or {}).get("c_user"))
+    captured_request: dict[str, Any] = contract_store.get(
+        business_id=business_id, account_name=rk_name, currency=currency,
+        timezone_id=timezone_id, actor_id=actor_id,
+    ) or {}
+    if captured_request:
+        log.info("[%s] AD_ACCOUNT reusable contract hit business=%s doc_id=%s transport=private_http",
+                 profile_id, business_id, captured_request.get("doc_id"))
     capture_failures: list[dict[str, Any]] = []
     capture_attempt_limit = 2
     capture_attempt_timeout_seconds = 75.0
     capture_stage_deadline = time.monotonic() + 150.0
 
     for capture_attempt in range(1, capture_attempt_limit + 1):
+        if captured_request:
+            break
         await browser_checkpoint(
             {
                 "phase": "CREATE_CAPTURE_PREPARING",
@@ -2696,12 +2765,17 @@ async def ad_account_handler(
             "capture_doc_id": capture_doc_id,
             "capture_friendly_name": capture_friendly,
             "capture_variable_keys": sorted(capture_variables.keys()),
-            "transport": "business_suite_live_capture",
+            "transport": ("reusable_private_contract" if captured_request.get("source") == "reusable_business_settings_contract" else "business_suite_live_capture"),
         },
     )
 
-    # Phase 2: replay exactly the request captured above through the same
-    # browser-native Facebook session. Safe failures that are explicitly
+    # Phase 2: execute the observed contract through direct cookie/proxy HTTP.
+    # Cache persistence is optional; failure cannot change submission safety.
+    try:
+        contract_store.register_capture(captured_request)
+    except OSError as cache_error:
+        log.warning("RK contract persistence unavailable error_type=%s", type(cache_error).__name__)
+    # Safe failures that are explicitly
     # proven PRE-SUBMIT are retried inside this Job; ambiguous failures are
     # never replayed and go straight to inventory reconciliation.
     result = None
@@ -2722,7 +2796,7 @@ async def ad_account_handler(
                     "capture_friendly_name": capture_friendly,
                     "replay_attempt": replay_attempt,
                     "replay_attempt_limit": replay_attempt_limit,
-                    "transport": "facebook_private_graphql_live_capture",
+                    "transport": "facebook_private_http_contract",
                 }
             )
             submit_started = True
@@ -2788,7 +2862,7 @@ async def ad_account_handler(
                     "replay_failures": replay_failures[-2:],
                     "last_error_code": failure["code"],
                     "last_error": failure["message"],
-                    "transport": "facebook_private_graphql_live_capture",
+                    "transport": "facebook_private_http_contract",
                 },
             )
             if replay_attempt < replay_attempt_limit:
@@ -2825,7 +2899,7 @@ async def ad_account_handler(
                 "CREATE_AD_ACCOUNT_LIVE_CAPTURE_INVALID",
                 "CREATE_AD_ACCOUNT_LIVE_CAPTURE_STALE",
                 "CREATE_AD_ACCOUNT_PRE_SUBMIT_TRANSPORT",
-                "CREATE_AD_ACCOUNT_BROWSER_TRANSPORT_UNAVAILABLE",
+                "CREATE_AD_ACCOUNT_PRIVATE_TRANSPORT_UNAVAILABLE",
                 "SESSION_EXPIRED",
             }
             if exc.code in pre_submit_codes:
@@ -2842,9 +2916,11 @@ async def ad_account_handler(
                     scope_key,
                     ProvisioningStep.AD_ACCOUNT,
                     {
-                        "phase": "CREATE_NOT_SUBMITTED",
+                        "phase": "CREATE_REJECTED" if exc.request_rejected else "CREATE_NOT_SUBMITTED",
                         "resume_from": "CREATE",
                         "business_id": business_id,
+                        "request_rejected": exc.request_rejected,
+                        "request_may_have_been_sent": exc.request_may_have_been_sent,
                         "replay_attempt": replay_attempt,
                         "replay_attempt_limit": replay_attempt_limit,
                         "replay_failures": replay_failures[-2:],
@@ -2855,7 +2931,7 @@ async def ad_account_handler(
                             if isinstance(exc.payload, dict)
                             else {}
                         ),
-                        "transport": "facebook_private_graphql_live_capture",
+                        "transport": "facebook_private_http_contract",
                     },
                 )
 
@@ -2882,6 +2958,10 @@ async def ad_account_handler(
                     and replay_attempt < replay_attempt_limit
                 )
                 if needs_fresh_capture:
+                    try:
+                        contract_store.invalidate(capture_doc_id)
+                    except OSError as cache_error:
+                        log.warning("RK contract invalidation unavailable error_type=%s", type(cache_error).__name__)
                     await browser_checkpoint(
                         {
                             "phase": "CREATE_CAPTURE_PREPARING",
@@ -2950,6 +3030,10 @@ async def ad_account_handler(
                         )
 
                     captured_request = refreshed_capture
+                    try:
+                        contract_store.register_capture(refreshed_capture)
+                    except OSError:
+                        pass
                     capture_doc_id = refreshed_doc_id
                     capture_friendly = _clean(
                         refreshed_capture.get("friendly_name")
@@ -2997,7 +3081,7 @@ async def ad_account_handler(
                     "capture_doc_id": capture_doc_id,
                     "capture_friendly_name": capture_friendly,
                     "replay_attempt": replay_attempt,
-                    "transport": "facebook_private_graphql_live_capture",
+                    "transport": "facebook_private_http_contract",
                 },
             )
             raise ProvisioningError(
@@ -3043,12 +3127,13 @@ async def ad_account_handler(
             "resume_from": "RECONCILE_CREATE",
             "business_id": business_id,
             "candidate_ad_account_id": rk_id,
+            "create_response_ad_account_id": rk_id,
             "create_response_friendly_name": result.candidate.friendly_name,
             "create_response_doc_id": result.candidate.doc_id,
             "create_response_path": result.response_path,
             "activity": "AD_ACCOUNT_RESPONSE_ID_AWAITING_INVENTORY",
             "activity_at": int(time.time()),
-            "transport": "facebook_private_graphql_live_capture",
+            "transport": "facebook_private_http_contract",
         },
     )
 
@@ -3076,7 +3161,7 @@ async def ad_account_handler(
                 "post_create_verification": post_evidence,
                 "activity": "AD_ACCOUNT_RESPONSE_ID_NOT_IN_BUSINESS",
                 "activity_at": int(time.time()),
-                "transport": "facebook_private_graphql_live_capture",
+                "transport": "facebook_private_http_contract",
             },
         )
         raise ProvisioningError(
@@ -3107,7 +3192,7 @@ async def ad_account_handler(
             "post_create_verification": post_evidence,
             "activity": "AD_ACCOUNT_POST_CREATE_VERIFIED",
             "activity_at": int(time.time()),
-            "transport": "facebook_private_graphql_live_capture",
+            "transport": "facebook_private_http_contract",
         },
     )
     await provisioning_state.remember_entity(
@@ -3116,6 +3201,10 @@ async def ad_account_handler(
         ProvisioningStep.AD_ACCOUNT,
         {"ad_account_id": rk_id},
     )
+    try:
+        contract_store.confirm(capture_doc_id)
+    except OSError:
+        log.warning("RK contract confirmation cache unavailable")
 
     return {
         "ad_account_id": rk_id,
@@ -3123,10 +3212,11 @@ async def ad_account_handler(
         "name": rk_name,
         "currency": currency,
         "timezone_id": timezone_id,
-        "transport": "facebook_private_graphql_live_capture_verified",
+        "transport": "facebook_private_http_contract_verified",
         "create_response_friendly_name": result.candidate.friendly_name,
         "create_response_doc_id": result.candidate.doc_id,
         "create_response_path": result.response_path,
         "post_create_verified": True,
         "post_create_verification": post_evidence,
     }
+

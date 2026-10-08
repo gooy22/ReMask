@@ -18396,7 +18396,7 @@ timeout_seconds=4.0,
         This mirrors the proven BM strategy: drive Meta's own Business Settings
         flow in the profile session, intercept the definitive CREATE request,
         abort it before Meta receives it, and return the exact doc_id, variables
-        and request envelope for one controlled browser-native replay.
+        and request envelope for one controlled direct HTTP execution.
         """
         business = _digits(business_id)
         name = _clean(account_name)
@@ -18440,11 +18440,12 @@ timeout_seconds=4.0,
         )
         self._mark_ad_account_phase("CAPTURE_FORM_READY")
 
-        # Put the wizard into the requested immutable state before capture.
-        form_setup = await self._prepare_ad_account_form_fields(
-            currency=currency_code,
-            timezone_id=timezone,
-        )
+        # This wizard only learns a contract; its CREATE is intercepted/aborted.
+        # Do not open currency/timezone popovers during discovery. They can
+        # cover Next and are irrelevant to the exact HTTP payload rewrite.
+        # Requested immutable values are validated again before the real POST.
+        form_setup = {"mode": "schema_capture_only", "currency": currency_code,
+                      "timezone_id": timezone}
         self._ad_account_wizard_rect = (
             await self._capture_ad_account_wizard_rect()
         )
@@ -18556,12 +18557,6 @@ timeout_seconds=4.0,
                 selected = await self._select_own_business_if_present()
                 if selected:
                     await self.page.wait_for_timeout(200)
-
-                # Re-apply immutable fields after every wizard transition.
-                form_setup = await self._prepare_ad_account_form_fields(
-                    currency=currency_code,
-                    timezone_id=timezone,
-                )
 
                 next_meta = (
                     await self._click_ad_account_form_action_by_visible_text(
@@ -21589,3 +21584,4 @@ __all__ = [
     "BrowserPreflightResult",
     "FacebookBusinessBrowser",
 ]
+

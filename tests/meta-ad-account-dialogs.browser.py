@@ -118,6 +118,21 @@ class StackedDialogsTests(unittest.IsolatedAsyncioTestCase):
                     row = await capture.wait(1.0)
                     self.assertEqual(row["doc_id"], "123456789000")
 
+    async def test_contract_capture_does_not_open_immutable_field_popovers(self):
+        await self.load()
+        async def open_form(**kwargs):
+            await self.page.locator("#name").fill(NAME)
+        self.driver._open_ad_account_create_form = open_form
+        self.driver._prepare_ad_account_form_fields = AsyncMock(side_effect=AssertionError("Discovery must not open a timezone menu"))
+        await self.page.unroute("**/*")
+        await self.page.route("https://wizard.test/", lambda route: route.fulfill(body=fixture(),content_type="text/html"))
+        await self.page.route("**/api/graphql/**", lambda route: route.abort())
+        await self.page.goto("https://wizard.test/")
+        row = await self.driver.capture_ad_account_create_request(
+            business_id=BUSINESS, account_name=NAME, currency="USD", timezone_id=137)
+        self.assertEqual(row["doc_id"], "123456789000")
+        self.driver._prepare_ad_account_form_fields.assert_not_awaited()
+
     async def test_capture_advances_next_then_aborts_exactly_one_create(self):
         await self.load()
         async def open_form(**kwargs):
@@ -162,3 +177,4 @@ class StackedDialogsTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+

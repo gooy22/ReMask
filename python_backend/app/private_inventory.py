@@ -104,27 +104,37 @@ def _business_payloads(payload: Any, business_id: str) -> list[dict[str, Any]]:
 
 
 def _has_complete_scoped_inventory(payload: Any) -> bool:
-    """A single account or a paginated fragment cannot prove an empty list."""
+    """Require every observed relevant collection to be complete.
+
+    An empty owned collection cannot prove absence while the client collection
+    is paginated or unhydrated. Request/input branches never supply evidence.
+    """
     collection_keys = {"adaccounts", "ownedadaccounts", "clientadaccounts", "advertisingaccounts"}
-    if isinstance(payload, dict):
-        for key, child in payload.items():
-            compact = str(key).replace("_", "").lower()
-            if compact in collection_keys:
-                if isinstance(child, list):
-                    return True
-                if isinstance(child, dict):
-                    page_info = child.get("page_info", child.get("pageInfo", {}))
-                    if isinstance(page_info, dict) and (
-                        page_info.get("has_next_page", page_info.get("hasNextPage")) is False
-                        and page_info.get("has_previous_page", page_info.get("hasPreviousPage", False)) is False
-                        and any(isinstance(child.get(field), list) for field in ("edges", "nodes", "items", "results"))
-                    ):
-                        return True
-            if compact not in {"variables", "params", "request", "input", "query"} and _has_complete_scoped_inventory(child):
-                return True
-    elif isinstance(payload, list):
-        return any(_has_complete_scoped_inventory(child) for child in payload)
-    return False
+    observations: list[bool] = []
+    def visit(value):
+        if isinstance(value, dict):
+            for key, child in value.items():
+                compact = str(key).replace("_", "").lower()
+                if compact in {"variables", "params", "request", "input", "query"}:
+                    continue
+                if compact in collection_keys:
+                    if isinstance(child, list):
+                        observations.append(True)
+                    elif isinstance(child, dict):
+                        page_info = child.get("page_info", child.get("pageInfo", {}))
+                        observations.append(bool(isinstance(page_info, dict)
+                            and page_info.get("has_next_page", page_info.get("hasNextPage")) is False
+                            and page_info.get("has_previous_page", page_info.get("hasPreviousPage", False)) is False
+                            and any(isinstance(child.get(field), list) for field in ("edges", "nodes", "items", "results"))))
+                    else:
+                        observations.append(False)
+                else:
+                    visit(child)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child)
+    visit(payload)
+    return bool(observations) and all(observations)
 
 
 async def _fetch_payloads(web, url: str) -> tuple[list[Any], dict[str, Any]]:
@@ -294,6 +304,7 @@ async def private_inventory_snapshot(
                 else "private_http_relay_inconclusive"
             ),
             "confirmed_empty": confirmed_empty,
+            "inventory_complete": bool(authoritative_container),
             "expected_account_ids": sorted(expected),
             "confirmed_expected_account_ids": confirmed_expected,
             "diagnostics": business_diags,
@@ -320,3 +331,4 @@ async def private_inventory_snapshot(
         "source": "private_http_relay_inventory",
         "diagnostics": diagnostics,
     }
+

@@ -9,6 +9,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
+from urllib.parse import urlsplit
 
 from .facebook_docids import (
     DocIdCandidate,
@@ -43,12 +44,16 @@ class AdAccountMutationError(RuntimeError):
         retryable: bool = False,
         payload: dict[str, Any] | None = None,
         candidate: DocIdCandidate | None = None,
+        request_may_have_been_sent: bool | None = None,
+        request_rejected: bool = False,
     ) -> None:
         super().__init__(message)
         self.code = str(code or "AD_ACCOUNT_MUTATION_FAILED")
         self.retryable = bool(retryable)
         self.payload = payload if isinstance(payload, dict) else {}
         self.candidate = candidate
+        self.request_may_have_been_sent = request_may_have_been_sent
+        self.request_rejected = request_rejected
 
 
 @dataclass(slots=True)
@@ -250,7 +255,7 @@ def _replace_capture_values(
                     out[key] = account_name
                 elif compact in {"currency", "currencycode"}:
                     out[key] = currency
-                elif compact == "timezoneid":
+                elif compact in {"timezoneid", "timezone"}:
                     out[key] = same_scalar_type(
                         child,
                         text=str(timezone_value),
@@ -517,12 +522,11 @@ async def create_ad_account_with_docids(
     captured_request: dict[str, Any] | None = None,
     before_submit: Callable[[], Awaitable[None]] | None = None,
 ) -> CreateAdAccountResult:
-    """Replay exactly one live-captured Meta Add-RK mutation.
+    """Execute one observed Add-RK contract through cookie/proxy HTTP.
 
-    There is deliberately no doc-id discovery, registry fallback, manual
-    override, or guessed variable schema in the CREATE path. The only request
-    allowed to reach Meta is the exact mutation captured from the same profile's
-    current Business Settings wizard immediately before this call.
+    Accept a fresh intercepted request or a validated, session-free template.
+    Never discover/guess a mutation in the submit path or switch transport after
+    a POST. Durable before_submit is the only boundary that authorizes CREATE.
     """
     del manual_doc_id
 
@@ -626,24 +630,54 @@ async def create_ad_account_with_docids(
             _clean(capture.get("endpoint_url"))
             or BUSINESS_GRAPHQL_URL
         ),
-        variables_mode="live_business_settings_capture_v2",
-        source="live_ui_capture",
+        variables_mode="observed_private_http_contract_v1",
+        source="reusable_contract" if capture.get("source") == "reusable_business_settings_contract" else "live_ui_capture",
         priority=50_000,
         observed_at=str(int(time.time())),
         enabled=True,
     )
 
-    browser_graphql = getattr(session, "graphql_browser_native", None)
-    if not callable(browser_graphql):
+    endpoint = urlsplit(candidate.endpoint_url)
+    if (endpoint.scheme != "https" or endpoint.hostname != "business.facebook.com"
+            or endpoint.path not in {"/api/graphql", "/api/graphql/"}
+            or endpoint.username or endpoint.password or endpoint.port
+            or endpoint.query or endpoint.fragment):
+        raise AdAccountMutationError("CREATE_AD_ACCOUNT_LIVE_CAPTURE_INVALID",
+                                     "Unsupported CREATE endpoint. No POST was sent.", retryable=False)
+
+    # The current profile supplies every actor field, including nested variants.
+    actor_keys = {"actorid", "userid"}
+    def bind_actor(value):
+        if isinstance(value, dict):
+            result = {}
+            for key, child in value.items():
+                compact = str(key).replace("_", "").lower()
+                if compact in {"fbdtsg", "lsd", "jazoest", "cookie", "cookies", "accesstoken", "authorization"}:
+                    raise AdAccountMutationError("CREATE_AD_ACCOUNT_LIVE_CAPTURE_INVALID",
+                                                 "Auth fields are not mutation variables. No POST was sent.")
+                if compact in actor_keys:
+                    current = str((getattr(getattr(session, "profile", None), "cookies", {}) or {}).get("c_user") or "")
+                    if not current.isdigit():
+                        raise AdAccountMutationError("SESSION_EXPIRED", "Current profile actor is unavailable. No POST was sent.")
+                    result[key] = int(current) if isinstance(child, int) and not isinstance(child, bool) else current
+                else:
+                    result[key] = bind_actor(child)
+            return result
+        if isinstance(value, list):
+            return [bind_actor(child) for child in value]
+        return value
+    captured_variables_rewritten = bind_actor(captured_variables_rewritten)
+    private_graphql = getattr(session, "graphql", None)
+    if not callable(private_graphql):
         raise AdAccountMutationError(
-            "CREATE_AD_ACCOUNT_BROWSER_TRANSPORT_UNAVAILABLE",
-            "CREATE_AD_ACCOUNT requires browser-native GraphQL transport",
+            "CREATE_AD_ACCOUNT_PRIVATE_TRANSPORT_UNAVAILABLE",
+            "CREATE_AD_ACCOUNT requires direct cookie/proxy GraphQL transport",
             retryable=False,
             candidate=candidate,
         )
 
     try:
-        response = await browser_graphql(
+        response = await private_graphql(
             candidate.doc_id,
             captured_variables_rewritten,
             friendly_name=candidate.friendly_name,
@@ -675,7 +709,9 @@ async def create_ad_account_with_docids(
             failure_kind=failure_kind,
         )
 
-        if failure_kind == "stale_schema":
+        if failure_kind == "stale_schema" and not payload.get("data") and (
+            _graphql_errors(payload) or getattr(exc, "request_may_have_been_sent", None) is False
+        ):
             raise AdAccountMutationError(
                 "CREATE_AD_ACCOUNT_LIVE_CAPTURE_STALE",
                 (
@@ -688,13 +724,20 @@ async def create_ad_account_with_docids(
                 candidate=candidate,
             ) from exc
 
-        if failure_kind == "account":
+        if failure_kind == "account" and (
+            getattr(exc, "request_may_have_been_sent", None) is False
+            or getattr(exc, "request_rejected", False)
+            or (payload.get("error") and not payload.get("data"))
+        ):
             raise AdAccountMutationError(
                 "SESSION_EXPIRED",
                 diagnostic,
                 retryable=False,
                 payload=payload,
                 candidate=candidate,
+                request_may_have_been_sent=getattr(exc, "request_may_have_been_sent", None),
+                request_rejected=bool(getattr(exc, "request_rejected", False)
+                                      or (payload.get("error") and not payload.get("data"))),
             ) from exc
 
         if getattr(exc, "request_may_have_been_sent", None) is False:
@@ -702,7 +745,7 @@ async def create_ad_account_with_docids(
             raise AdAccountMutationError(
                 "CREATE_AD_ACCOUNT_PRE_SUBMIT_TRANSPORT",
                 (
-                    "CREATE_AD_ACCOUNT was not submitted to Meta; browser "
+                    "CREATE_AD_ACCOUNT was not submitted to Meta; private HTTP "
                     "transport failed before GraphQL POST"
                     + (f" at stage={stage}. " if stage else ". ")
                     + diagnostic
@@ -725,14 +768,14 @@ async def create_ad_account_with_docids(
         ) from exc
 
     account_id, response_path = _extract_ad_account_id(response)
-    if account_id:
+    if account_id and not _graphql_errors(response):
         stored = upsert_candidate(
             CREATE_AD_ACCOUNT_OPERATION,
             doc_id=candidate.doc_id,
             friendly_name=candidate.friendly_name,
             endpoint_url=candidate.endpoint_url,
             variables_mode=candidate.variables_mode,
-            source="live_ui_capture_success",
+            source="private_http_contract_response",
             priority=9_900,
             observed_at=str(int(time.time())),
         )
@@ -774,6 +817,12 @@ async def create_ad_account_with_docids(
         failure_kind=failure_kind,
     )
 
+    if response.get("data") and errors:
+        raise AdAccountMutationError(
+            "CREATE_AD_ACCOUNT_RESULT_UNKNOWN",
+            "Meta returned partial mutation data with errors; verify inventory before retry.",
+            retryable=True, payload=response, candidate=candidate,
+        )
     if failure_kind == "stale_schema":
         raise AdAccountMutationError(
             "CREATE_AD_ACCOUNT_LIVE_CAPTURE_STALE",
@@ -811,9 +860,9 @@ async def create_ad_account_with_docids(
         )
 
     raise AdAccountMutationError(
-        "CREATE_AD_ACCOUNT_META_ERROR",
-        diagnostic,
-        retryable=False,
+        "CREATE_AD_ACCOUNT_RESULT_UNKNOWN",
+        "Meta returned no CREATE result or explicit rejection; reconcile before retry. " + diagnostic,
+        retryable=True,
         payload=response,
         candidate=candidate,
     )

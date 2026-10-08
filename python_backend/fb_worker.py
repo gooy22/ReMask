@@ -978,13 +978,19 @@ class FacebookWebSession:
     # Unified private GraphQL transport
     # ------------------------------------------------------------------
 
-    async def _business_bootstrap(self, bootstrap: FacebookBootstrap) -> FacebookBootstrap:
+    async def _business_bootstrap(self, bootstrap: FacebookBootstrap, *, business_id: str = "") -> FacebookBootstrap:
         """Require Business auth before reusing a token from another Facebook surface."""
         source = str(getattr(bootstrap, "source_url", "") or "").strip()
-        if not source or urlsplit(source).hostname == "business.facebook.com":
+        target = (
+            "https://business.facebook.com/latest/settings/ad_accounts/?business_id=" + business_id
+            if business_id else self.ADS_MANAGER_URL
+        )
+        if not business_id and (not source or urlsplit(source).hostname == "business.facebook.com"):
+            return bootstrap
+        if business_id and source == target:
             return bootstrap
         try:
-            status, body, final_url = await self.fetch_text(self.ADS_MANAGER_URL)
+            status, body, final_url = await self.fetch_text(target)
         except RemoteRequestError as exc:
             exc.request_may_have_been_sent = False
             exc.transport_stage = "business_auth_precheck"
@@ -1051,7 +1057,23 @@ class FacebookWebSession:
 
         bootstrap = await self.bootstrap()
         if urlsplit(endpoint).hostname == "business.facebook.com":
-            bootstrap = await self._business_bootstrap(bootstrap)
+            scoped_ids: set[str] = set()
+            def collect_business(value):
+                if isinstance(value, dict):
+                    for key, child in value.items():
+                        if str(key).replace("_", "").lower() == "businessid" and str(child).isdigit():
+                            scoped_ids.add(str(child))
+                        else:
+                            collect_business(child)
+                elif isinstance(value, list):
+                    for child in value:
+                        collect_business(child)
+            if "adaccount" in friendly_name.lower() and "create" in friendly_name.lower():
+                collect_business(variables)
+            if len(scoped_ids) > 1:
+                raise RemoteRequestError("Ambiguous Business context; no CREATE POST was sent.",
+                                         request_may_have_been_sent=False, transport_stage="business_auth_precheck")
+            bootstrap = await self._business_bootstrap(bootstrap, business_id=next(iter(scoped_ids), ""))
         session = await self._ensure_session()
 
         form: dict[str, str] = {
@@ -1188,7 +1210,14 @@ class FacebookWebSession:
 
         try:
             if callable(before_submit):
-                await before_submit()
+                try:
+                    await before_submit()
+                except Exception as exc:
+                    raise RemoteRequestError(
+                        "Durable GraphQL submit intent could not be saved; no POST was sent.",
+                        request_may_have_been_sent=False,
+                        transport_stage="before_graphql_submit",
+                    ) from exc
 
             transport_stage = "graphql_submit"
             # From this point an exception is conservatively treated as
@@ -1232,10 +1261,10 @@ class FacebookWebSession:
                         separators=(",", ":"),
                     )[:4000]
 
-                    raise AuthenticationError(
-                        f"Facebook authentication failure "
-                        f"HTTP {response.status}: {diagnostic}"
-                    )
+                    error = AuthenticationError(f"Facebook authentication failure HTTP {response.status}: {diagnostic}")
+                    error.meta_payload = payload
+                    error.request_rejected = True
+                    raise error
 
                 if response.status >= 400:
                     diagnostic = json.dumps(
@@ -1264,7 +1293,11 @@ class FacebookWebSession:
                     raise error
                 return payload
 
-        except AuthenticationError:
+        except AuthenticationError as exc:
+            if not hasattr(exc, "request_may_have_been_sent"):
+                exc.request_may_have_been_sent = request_may_have_been_sent
+            if not hasattr(exc, "transport_stage"):
+                exc.transport_stage = transport_stage
             raise
 
         except RemoteRequestError as exc:
@@ -2151,3 +2184,4 @@ __all__ = [
     "WebSessionManager",
     "BusinessLogicController",
 ]
+

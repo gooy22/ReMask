@@ -47,7 +47,7 @@ class MetaTransportRouter:
         ),
         "AD_ACCOUNT": TransportPolicy(
             capability="AD_ACCOUNT",
-            primary="facebook_private_graphql",
+            primary="facebook_private_http_contract",
             fallback="chromium_live_contract_capture",
         ),
         "FAN_PAGES": TransportPolicy(

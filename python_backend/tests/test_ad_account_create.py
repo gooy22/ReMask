@@ -337,7 +337,7 @@ class AdAccountCreateTransportTests(unittest.TestCase):
         source = inspect.getsource(ad_account_handler)
         self.assertIn("capture_ad_account_create_request(", source)
         self.assertIn("create_ad_account_with_docids(", source)
-        self.assertIn("facebook_private_graphql_live_capture", source)
+        self.assertIn("facebook_private_http_contract", source)
         self.assertNotIn("create_ad_account_for_business(", source)
 
     def test_browser_capture_aborts_real_create_before_meta(self) -> None:
@@ -346,7 +346,7 @@ class AdAccountCreateTransportTests(unittest.TestCase):
         )
         primitive = inspect.getsource(GraphqlMutationCapture._intercept)
         self.assertIn("_open_ad_account_create_form(", source)
-        self.assertIn("_prepare_ad_account_form_fields(", source)
+        self.assertNotIn("_prepare_ad_account_form_fields(", source)
         self.assertIn("_request_matches_ad_account_create(", source)
         self.assertIn("GraphqlMutationCapture(", source)
         self.assertIn("capture.arm()", source)
@@ -356,7 +356,7 @@ class AdAccountCreateTransportTests(unittest.TestCase):
     def test_private_create_has_no_docid_fallback(self) -> None:
         source = inspect.getsource(create_ad_account_with_docids)
         self.assertIn("CREATE_AD_ACCOUNT_LIVE_CAPTURE_REQUIRED", source)
-        self.assertIn('source="live_ui_capture"', source)
+        self.assertIn('else "live_ui_capture"', source)
         self.assertNotIn("discover_current_ad_account_create_candidate(", source)
         self.assertNotIn("list_candidates(", source)
         self.assertNotIn("create_ad_account_for_business(", source)
@@ -1497,10 +1497,8 @@ class AdAccountStructuralInventoryRegressionTests(unittest.TestCase):
             preflight_pos,
         )
         window = source[preflight_pos:preparing_pos]
-        self.assertNotIn(
-            "_browser_inventory_confirms_nonempty(browser_inventory_before)",
-            window,
-        )
+        self.assertIn('browser_inventory_before.get("source") == "private_http_exact_business_inventory"', window)
+        self.assertIn('browser_inventory_before.get("inventory_complete") is True', window)
         self.assertIn(
             "verify_ad_account_inventory_empty(",
             window,
@@ -1525,10 +1523,8 @@ class AdAccountButtonSemanticsRegressionTests(unittest.TestCase):
         )]
         self.assertIn("_raise_rk_already_exists(", preflight)
         self.assertNotIn('"reused": True', preflight)
-        self.assertNotIn(
-            "_browser_inventory_confirms_nonempty(browser_inventory_before)",
-            preflight,
-        )
+        self.assertIn('browser_inventory_before.get("source") == "private_http_exact_business_inventory"', preflight)
+        self.assertIn('browser_inventory_before.get("inventory_complete") is True', preflight)
         self.assertIn(
             "verify_ad_account_inventory_empty(",
             preflight,
@@ -1736,3 +1732,4 @@ class AdAccountRendererCrashRecoveryTests(unittest.TestCase):
             "capture_exception_uncertain_inventory_v2",
             uncertain_tail,
         )
+

@@ -227,6 +227,19 @@ def _find_created_page(
 
 
 async def _fresh_page_inventory(session: Any) -> list[dict[str, Any]]:
+    factory = getattr(session, "facebook_web", None)
+    if callable(factory):
+        try:
+            private = await asyncio.wait_for(
+                list_pages_via_private_graphql(await factory()), timeout=12.0,
+            )
+            # A partial list cannot establish the baseline for another CREATE.
+            if getattr(private, "inventory_complete", False) is True:
+                rows = _normalize_pages(private.pages)
+                session.context.pages = rows
+                return rows
+        except Exception as exc:
+            log.info("FP private inventory inconclusive error_type=%s", type(exc).__name__)
     async with _browser_lease(session, timeout_seconds=60,
     ) as browser:
         # REMASK_FP_INVENTORY_UNAVAILABLE_IS_NOT_EMPTY_V1

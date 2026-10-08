@@ -106,6 +106,15 @@ class PrivateInventoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result["ready"])
         self.assertFalse(result["businesses"][0]["confirmed_empty"])
 
+    async def test_complete_owned_empty_does_not_hide_paginated_client_accounts(self):
+        payload = inventory([])
+        business = payload["data"]["business"]
+        business["owned_ad_accounts"] = business.pop("ad_accounts")
+        business["client_ad_accounts"] = {"edges": [], "page_info": {"has_next_page": True}}
+        result = await self.snapshot(FakeWeb(payload), known=False)
+        self.assertFalse(result["businesses"][0]["inventory_complete"])
+        self.assertFalse(result["businesses"][0]["confirmed_empty"])
+
     async def test_request_variables_are_not_response_evidence(self):
         result = await self.snapshot(FakeWeb({"variables": inventory([account()])}))
         self.assertFalse(result["ready"])
@@ -124,3 +133,4 @@ class PrivateInventoryTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
