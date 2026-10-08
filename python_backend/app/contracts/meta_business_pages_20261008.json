@@ -1,0 +1,79 @@
+{
+  "version": 1,
+  "revision": "business-pages-2026-10-08",
+  "operations": {
+    "CREATE_FP": {
+      "doc_id": "37911097395202007",
+      "friendly_name": "BizKitSettingsCreateAdditionalProfilePlusMutation",
+      "operation_kind": "mutation",
+      "endpoint_url": "https://business.facebook.com/api/graphql/",
+      "variables": {
+        "input": {
+          "business_id": "$business",
+          "categories": "$categories",
+          "creation_source": "meta_business_suite",
+          "bio": "$bio",
+          "name": "$name",
+          "casd_bl_disclosure_acceptance_data": null,
+          "qpl_join_id": "$join"
+        }
+      },
+      "response_parser": "additional_profile_plus_create.additional_profile.delegate_page.id",
+      "source_sha256": "dfcd3ee7e683a40567e97bd4e3a8f61ec7433dd5078d7add268ec0cbfc4e3ee5",
+      "observed_at": "2026-10-08",
+      "evidence": "public_artifact_and_sender_live_response_unverified"
+    },
+    "FP_CATEGORY": {
+      "doc_id": "9327506520688752",
+      "friendly_name": "useBizKitSettingsPageCategorySearchSourceQuery",
+      "operation_kind": "query",
+      "endpoint_url": "https://business.facebook.com/api/graphql/",
+      "variables": {
+        "params": {
+          "search_string": "$category"
+        }
+      },
+      "response_parser": "page_creation_category_typeahead_search.results.nodes",
+      "source_sha256": "dfcd3ee7e683a40567e97bd4e3a8f61ec7433dd5078d7add268ec0cbfc4e3ee5",
+      "observed_at": "2026-10-08",
+      "evidence": "public_artifact_and_sender_live_response_unverified"
+    },
+    "FP_PRECHECK": {
+      "doc_id": "9501347186640687",
+      "friendly_name": "BizKitSettingsCreatePageModalQuery",
+      "operation_kind": "query",
+      "endpoint_url": "https://business.facebook.com/api/graphql/",
+      "variables": {
+        "businessID": "$business"
+      },
+      "response_parser": "business.showPageClaimBlockingDisclosures.passes_gk",
+      "source_sha256": "dfcd3ee7e683a40567e97bd4e3a8f61ec7433dd5078d7add268ec0cbfc4e3ee5",
+      "observed_at": "2026-10-08",
+      "evidence": "public_artifact_and_sender_live_response_unverified"
+    },
+    "READ_FP": {
+      "doc_id": "38189452834034346",
+      "friendly_name": "BizKitSettingsBusinessAssetsListPaginationQuery",
+      "operation_kind": "query",
+      "endpoint_url": "https://business.facebook.com/api/graphql/",
+      "variables": {
+        "id": "$business",
+        "businessID": "$business",
+        "assetTypes": [
+          "PAGE"
+        ],
+        "assetFilters": null,
+        "globalFilters": null,
+        "searchTerm": null,
+        "orderBy": null,
+        "count": 100,
+        "cursor": "$cursor",
+        "includeDiscoveryAssets": false
+      },
+      "response_parser": "node.connected_objects",
+      "source_sha256": "dfcd3ee7e683a40567e97bd4e3a8f61ec7433dd5078d7add268ec0cbfc4e3ee5",
+      "observed_at": "2026-10-08",
+      "evidence": "public_artifact_and_sender_live_response_unverified"
+    }
+  }
+}

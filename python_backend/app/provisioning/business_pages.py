@@ -191,7 +191,9 @@ async def ensure_business_page(session, params, state, resolver=None):
         await state.set_running(item, creator, scope, ProvisioningStep.FAN_PAGES)
         result = await fan_pages_handler(session, {
             'names': [config['name']], 'count': 1, 'business_id': store.business_id,
+            'business_suite_page_create': True,
             'defer_business_attach': True, 'reserved_page_ids': sorted(set(known) | excluded),
+            'foreign_page_ids': sorted(excluded),
             'category': params.get('category') or 'Digital creator', 'confirm_main_business': False,
             'require_policy_consent': True, 'policies_accepted': params.get('policies_accepted') is not False,
         }, {}, provisioning_state=state, item_id=item, profile_id=creator, scope_key=scope)

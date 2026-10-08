@@ -881,6 +881,13 @@ async def fan_pages_handler(
         )
     checkpoint = _checkpoint_result(step_state)
 
+    if params.get('business_suite_page_create') is True and getattr(session, 'private_only', False):
+        if mode != 'create' or params.get('defer_business_attach') is not True:
+            raise ProvisioningError('INVALID_INPUT', 'Business Suite CREATE must be followed by the full PAGE_ACCESS state machine.')
+        from ..private_business_fan_page_create import create_business_page
+        return await create_business_page(session, params, state=provisioning_state,
+            item_id=item_id, profile_id=profile_id, scope_key=scope_key, checkpoint=checkpoint)
+
     saved_names = checkpoint.get("target_names")
     if isinstance(saved_names, list):
         normalized_saved = [_clean(value) for value in saved_names]

@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from app.private_page_ownership import CONFIG, PAGE, RIGHTS, CLAIM, ASSIGN
+from app.business_fan_page_contracts import command as page_command
 from app.provisioning.advertising_page import AdvertisingPageStore
 from app.provisioning.business_pages import BusinessPageStore, ensure_business_page
 from app.provisioning.fan_pages_handler import fan_pages_handler
@@ -32,14 +33,49 @@ class TwoBundleMeta:
         self.tasks = {FP1: [P, PARTIAL], RK1: [R, PARTIAL], RK2: []}
         self.posts = []
         self.lose_claim = False
+        self.lose_page = False
+        self.page_read_available = True
+        self.calls = []
+        self.fetch_text = AsyncMock(side_effect=AssertionError('WWW/HTML discovery must not run'))
 
     async def graphql(self, doc, variables, *, friendly_name, before_submit=None, **kwargs):
+        self.calls.append((friendly_name, copy.deepcopy(variables)))
+        page_ops = {page_command(op, business=BM2, cursor=None, category='Digital creator',
+            categories=['242822000000000'], name='PrgssTeam', bio='', join='fixture')['friendly_name']: op
+            for op in ('READ_FP', 'FP_CATEGORY', 'FP_PRECHECK', 'CREATE_FP')}
+        op = page_ops.get(friendly_name)
+        if op == 'READ_FP':
+            bm = variables['businessID']
+            edges = [{'node': {'__typename': 'Page', 'assetID': page, 'assetType': 'PAGE'},
+                'nameColumn': {'bizkit_settings_render_strategy_no_business_id': {'business_object': {
+                    'business_object_id': page, 'business_object_name': 'PrgssTeam'}}}}
+                for page, owner in self.owners.items() if owner == bm]
+            return {'data': {'node': {'id': bm, 'connected_objects': {'edges': edges,
+                'page_info': {'has_next_page': False, 'end_cursor': None}}}}}
+        if op == 'FP_CATEGORY':
+            return {'data': {'page_creation_category_typeahead_search': {'results': {'nodes': [
+                {'category_id': '242822000000000', 'category_name': 'Digital creator'}]}}}}
+        if op == 'FP_PRECHECK':
+            return {'data': {'business': {'id': variables['businessID'],
+                'showPageClaimBlockingDisclosures': {'passes_gk': False}}}}
+        if op == 'CREATE_FP':
+            await before_submit()
+            self.posts.append(('FP_CREATE', copy.deepcopy(variables)))
+            self.owners[FP2] = variables['input']['business_id']
+            self.tasks[FP2] = []
+            if self.lose_page:
+                self.lose_page = False
+                raise TimeoutError('lost after Page commit')
+            return {'data': {'additional_profile_plus_create': {'additional_profile': {
+                'id': '61500012345678', 'delegate_page': {'id': FP2}}}}}
         bm = variables.get('businessID')
         if friendly_name == CONFIG:
             return {'data': {'business': {'id': bm, 'businessUser': {'id': USER}, 'bizKitSettingsConfig': config()}}}
         if friendly_name == PAGE:
             page = variables['pageID']
-            return {'data': {'page': {'id': page, 'ownerBusiness': {'id': self.owners[page]} if self.owners[page] else None,
+            if not self.page_read_available:
+                return {'data': {'page': None}}
+            return {'data': {'page': {'id': page, 'name': 'PrgssTeam', 'ownerBusiness': {'id': self.owners[page]} if self.owners[page] else None,
                 'permission_to_claim_to_business': 'ALLOWED'}}}
         if friendly_name == RIGHTS:
             return standalone_rights(variables['assetID'], USER, self.tasks.get(variables['assetID'], []), bm)
@@ -224,17 +260,17 @@ class BusinessPageTests(unittest.IsolatedAsyncioTestCase):
                 'operator_ads_access_assigned': True, 'page_owned_by_business': True,
                 'operator_full_control_verified': True, 'rk_operator_full_control_verified': True})
 
-    async def test_prepare_repairs_two_live_bundles_only_with_second_page_and_add_existing_full_rights(self):
+    async def test_prepare_repairs_two_live_bundles_with_uncached_business_page_http_and_full_rights(self):
         await self._seed_existing_bundles()
         prepare = PrepareService(self.state, ProvisioningService(self.state))
         async def inventory(web, business, name, account):
             return {'id': account, 'asset_ui_id': account}
         with patch('app.provisioning.private_create_handlers._rk_inventory', side_effect=inventory), \
-                patch('app.provisioning.fan_pages_handler._fresh_page_inventory', side_effect=self.meta.pages), \
-                patch('app.provisioning.fan_pages_handler._create_page_via_private_contract', side_effect=self.meta.create), \
+                patch('app.provisioning.fan_pages_handler._fresh_page_inventory', side_effect=AssertionError('WWW Page inventory forbidden')), \
+                patch('app.provisioning.fan_pages_handler._create_page_via_private_contract', side_effect=AssertionError('Legacy Page CREATE forbidden')), \
                 patch('app.provisioning.service._await_profile_mutation_cooldown', AsyncMock()):
             payload = {'desired': {'ad_accounts': 2}, 'parameters': {'AD_ACCOUNT': {'currency': 'USD', 'timezone_id': 1}}}
-            self.meta.lose_claim = True
+            self.meta.lose_page = True
             first = await prepare.run(item_id='repair', profile_id='15', context=self.context, session=self.session, payload=payload)
             posts = copy.deepcopy(self.meta.posts)
             # Explicitly reverse the selected order; Page identity follows BM.
@@ -246,7 +282,9 @@ class BusinessPageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({row['business_id']: row['page_id'] for row in second['actual']['bundles']}, {BM1: FP1, BM2: FP2})
         self.assertEqual(second['actual']['bundles'][0]['business_id'], BM2)
         self.assertEqual(self.meta.posts, posts)
-        self.assertEqual([row[0] for row in posts], ['FP_CREATE', CLAIM, ASSIGN, ASSIGN])
+        self.assertEqual([row[0] for row in posts], ['FP_CREATE', ASSIGN, ASSIGN])
+        self.assertEqual(posts[0][1]['input']['business_id'], BM2)
+        self.meta.fetch_text.assert_not_awaited()
         self.assertEqual(self.meta.owners, {FP1: BM1, FP2: BM2})
         self.assertEqual((await self.common.get())['page_id'], FP1)
         self.session.facebook_business_browser.assert_not_awaited()

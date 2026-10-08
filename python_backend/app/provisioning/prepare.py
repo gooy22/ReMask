@@ -384,7 +384,15 @@ class PrepareService:
         page = await page_store.get()
         page_id = str(page.get("page_id") or "").strip()
 
-        if desired.require_page and not page_id.isdigit():
+        business_owned_page = bool(getattr(session, 'private_only', False)
+            and desired.require_business and desired.require_page_access)
+        if desired.require_page and not page_id.isdigit() and business_owned_page:
+            # The observed Business Suite sender requires an exact Business.
+            # Allocate its Page in PAGE_ACCESS after BM/RK exist, rather than
+            # depending on the unrelated www.facebook.com creation surface.
+            self._trace(trace, 'FAN_PAGES', 'PRECHECK', status='DEFERRED_TO_BUSINESS',
+                topology='ONE_PAGE_PER_BUSINESS')
+        elif desired.require_page and not page_id.isdigit():
             self._trace(trace, "FAN_PAGES", "PRECHECK", status="MISSING")
             page_params = {
                 "common_page": True,
@@ -860,6 +868,10 @@ class PrepareService:
                     business_id=business_id,
                     ad_account_id=account_id,
                 )
+
+        if business_owned_page and not page_id.isdigit():
+            page = await page_store.get()
+            page_id = str(page.get('page_id') or '').strip()
 
         readiness: list[dict[str, Any]] = []
         bundle_rows: list[dict[str, Any]] = []
