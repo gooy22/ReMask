@@ -12,6 +12,9 @@ from typing import Any
 from urllib.parse import unquote, urlsplit
 
 import aiohttp
+import httpx
+
+from app.private_http import PrivateHttpClient
 
 
 log = logging.getLogger("remask_worker")
@@ -139,15 +142,7 @@ class FacebookWebSession:
         self.timeout_seconds = max(5, int(timeout_seconds))
         self.pool_size = max(1, int(pool_size))
 
-        self.timeout = aiohttp.ClientTimeout(
-            total=self.timeout_seconds,
-            connect=self.timeout_seconds,
-            sock_connect=self.timeout_seconds,
-            sock_read=self.timeout_seconds,
-        )
-
-        self.connector: aiohttp.TCPConnector | None = None
-        self.session: aiohttp.ClientSession | None = None
+        self.session: PrivateHttpClient | None = None
 
         self._session_lock = asyncio.Lock()
         self._bootstrap_lock = asyncio.Lock()
@@ -156,10 +151,10 @@ class FacebookWebSession:
         self._graphql_request_counter = 0
 
     # ------------------------------------------------------------------
-    # aiohttp lifecycle
+    # Profile HTTP/2 lifecycle
     # ------------------------------------------------------------------
 
-    async def _ensure_session(self) -> aiohttp.ClientSession:
+    async def _ensure_session(self) -> PrivateHttpClient:
         if self.session is not None and not self.session.closed:
             return self.session
 
@@ -167,21 +162,13 @@ class FacebookWebSession:
             if self.session is not None and not self.session.closed:
                 return self.session
 
-            self.connector = aiohttp.TCPConnector(
-                limit=self.pool_size,
-                limit_per_host=self.pool_size,
-                enable_cleanup_closed=True,
-            )
-
-            self.session = aiohttp.ClientSession(
-                timeout=self.timeout,
-                connector=self.connector,
+            self.session = PrivateHttpClient(
+                profile_name=self.profile.name,
                 cookies=self.profile.cookies,
-                headers={
-                    "User-Agent": self.profile.user_agent,
-                    "Accept-Language": "en-US,en;q=0.9",
-                    "Accept": "*/*",
-                },
+                proxy=self.profile.proxy,
+                user_agent=self.profile.user_agent,
+                timeout_seconds=self.timeout_seconds,
+                pool_size=self.pool_size,
             )
 
             return self.session
@@ -204,7 +191,6 @@ class FacebookWebSession:
                 await self.session.close()
 
             self.session = None
-            self.connector = None
 
         self._bootstrap = None
 
@@ -267,7 +253,7 @@ class FacebookWebSession:
         except asyncio.TimeoutError as exc:
             raise ProxyError("Proxy timeout") from exc
 
-        except aiohttp.ClientError as exc:
+        except (aiohttp.ClientError, httpx.HTTPError) as exc:
             raise ProxyError(
                 f"Proxy network error: {exc.__class__.__name__}"
             ) from exc
@@ -389,7 +375,7 @@ class FacebookWebSession:
 
     async def _fetch_dtsg_refresh_token(
         self,
-        session: aiohttp.ClientSession,
+        session: PrivateHttpClient,
         actor_id: str,
         attempts: list[str],
     ) -> tuple[str, str]:
@@ -473,7 +459,7 @@ class FacebookWebSession:
                     attempts.append(
                         f"{endpoint}?{query_key}={query_value}: timeout"
                     )
-                except aiohttp.ClientError as exc:
+                except (aiohttp.ClientError, httpx.HTTPError) as exc:
                     attempts.append(
                         f"{endpoint}?{query_key}={query_value}: network "
                         f"{exc.__class__.__name__}"
@@ -703,7 +689,7 @@ class FacebookWebSession:
                 except asyncio.TimeoutError:
                     attempts.append(f"{bootstrap_url}: timeout")
                     continue
-                except aiohttp.ClientError as exc:
+                except (aiohttp.ClientError, httpx.HTTPError) as exc:
                     attempts.append(
                         f"{bootstrap_url}: network {exc.__class__.__name__}"
                     )
@@ -874,7 +860,7 @@ class FacebookWebSession:
             raise RemoteRequestError(
                 f"Facebook fetch timeout: {target}"
             ) from exc
-        except aiohttp.ClientError as exc:
+        except (aiohttp.ClientError, httpx.HTTPError) as exc:
             raise RemoteRequestError(
                 "Facebook fetch network failure: "
                 f"{exc.__class__.__name__}"
@@ -1440,7 +1426,7 @@ class FacebookWebSession:
                 transport_stage=transport_stage,
             ) from exc
 
-        except aiohttp.ClientError as exc:
+        except (aiohttp.ClientError, httpx.HTTPError) as exc:
             raise RemoteRequestError(
                 "Facebook GraphQL network failure: "
                 f"{exc.__class__.__name__}",

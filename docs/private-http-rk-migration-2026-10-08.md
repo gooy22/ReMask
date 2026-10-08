@@ -170,3 +170,38 @@ Card binding требует свежего Meta payment encryption/session proto
 До наблюдения и проверки этих схем полный private-only Prepare + Payment
 не подтверждён. Browser capture и read-only fallback остаются явно указанными
 границами, а не скрываются под названием HTTP.
+
+
+## Outbound HTTP/2 transport
+
+The shared `FacebookWebSession` previously used aiohttp's HTTP/1.1 default.
+It now uses a profile-scoped HTTPX 0.28.1 transport with HTTP/2 enabled,
+connection pooling, HTTP/SOCKS proxy support, environment proxy settings disabled,
+and zero configured transport retries. HTTP/2 is negotiated with the origin;
+a proxy CONNECT request can correctly remain HTTP/1.1. A server without HTTP/2
+uses HTTP/1.1 on the same request, without an application-level retry.
+
+All existing private GraphQL and HTML requests in this shared session use the
+new transport. Existing bridge/resolver/internal HTTP clients remain independent.
+The state machine and durable-before-submit boundary are unchanged. POST
+redirects are not followed. Stream resets/timeouts after submit remain ambiguous
+and require reconciliation. Whole-request deadlines include streaming bodies;
+HTML reads remain bounded and text responses have a 16 MiB decompressed budget.
+Imported cookies are Secure and scoped to `.facebook.com`; Set-Cookie updates
+remain within the individual client's cookie jar. Credentials are not sent to
+IP-check or fbcdn hosts. Diagnostics record profile, method, host, HTTP status
+and negotiated response version, without query strings, cookies, or proxy secrets.
+
+Ten transport regressions cover real TLS ALPN HTTP/2 through a local HTTP/1.1
+CONNECT tunnel with connection reuse, HTTP/1.1-only fallback, profile isolation,
+Set-Cookie refresh, bounded streaming, safe diagnostics, proxy-change rejection,
+POST redirect protection, body deadlines, and durable intent / lost responses.
+No live Meta success or immunity from checkpoints is implied by these tests.
+
+Latest observed live job on the preceding 02ba0cd deployment:
+`f5c5e3f4fc8a4df0acb50014bf60fb74`, accepted 2026-10-08 07:03:54 UTC.
+Profile 14 stopped at Business authentication with SESSION_EXPIRED, before POST.
+Profile 15 reached BM 1428816905866955 but its RK cache was missing and bounded
+schema capture stopped on the Details screen with `ad_account_wizard_action_missing`,
+no CREATE attempted. HTTP/2 does not resolve these semantic/capture failures by
+itself. No working RK schema was observed in that job.
