@@ -33,9 +33,12 @@ def valid_page_create(meta: dict[str, Any], *, name: str, actor_id: str) -> bool
     except ValueError:
         return False
     friendly = str(meta.get("friendly_name") or "")
-    if not re.fullmatch(r"[A-Za-z0-9_]+", friendly) or not all(
-        word in friendly.lower() for word in ("page", "create", "mutation")
-    ) or any(word in friendly.lower() for word in ("draft", "preview", "suggest", "delete", "update")):
+    operation = friendly.lower()
+    if (not re.fullmatch(r"[A-Za-z0-9_]+", friendly)
+            or not ("page" in operation or "additionalprofile" in operation)
+            or not ("create" in operation or "creation" in operation)
+            or "mutation" not in operation
+            or any(word in operation for word in ("draft", "preview", "suggest", "delete", "update"))):
         return False
     doc = str(meta.get("doc_id") or "")
     if not doc.isdigit() or not 5 <= len(doc) <= 40 or not actor_id.isdigit():
@@ -54,7 +57,18 @@ def valid_page_create(meta: dict[str, Any], *, name: str, actor_id: str) -> bool
         return True
     if not session_free(variables):
         return False
-    names = [str(value).strip() for key, value in input_data.items() if compact(key) in {"name", "pagename"}]
+    # Meta's new Pages can be represented as additional profiles. Operation
+    # spelling alone cannot certify a Page: require the actual final form's
+    # exact name/actor plus numeric category selection before accepting it.
+    categories = [value for key, value in input_data.items() if compact(key) in {
+        "category", "categories", "categoryid", "categoryids", "categorylist"}]
+    def category_ids(value):
+        if isinstance(value, list):
+            return bool(value) and all(category_ids(child) for child in value)
+        return isinstance(value, (str, int)) and not isinstance(value, bool) and str(value).isdigit()
+    if not categories or not all(category_ids(value) for value in categories):
+        return False
+    names = [str(value).strip() for key, value in input_data.items() if compact(key) in {"name", "pagename", "additionalprofilename"}]
     actors = [str(value) for key, value in input_data.items() if compact(key) == "actorid"]
     return bool(names and all(value == name for value in names) and actors and set(actors) == {actor_id})
 
@@ -105,7 +119,7 @@ class FanPageContractStore:
                     normalized = compact(key)
                     if normalized in _AUTH or str(key).startswith(("__", "$fp_")):
                         raise ValueError("session material")
-                    argument = {"name": "name", "pagename": "name", "actorid": "actor",
+                    argument = {"name": "name", "pagename": "name", "additionalprofilename": "name", "actorid": "actor",
                                 "bio": "bio", "description": "bio", "clientmutationid": "mutation"}.get(normalized)
                     if argument:
                         if not isinstance(child, (str, int)) or isinstance(child, bool):

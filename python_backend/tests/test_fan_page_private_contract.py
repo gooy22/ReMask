@@ -68,6 +68,18 @@ class FanPagePrivateContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.store.register_capture(row, name=NAME, category=CATEGORY, bio="", actor_id="333333333333"))
         self.assertFalse(self.store.register_capture(capture(), name=NAME, category=CATEGORY, bio="", actor_id=UID))
 
+    def test_observed_additional_profile_page_schema_requires_exact_page_category(self):
+        row = capture()
+        row["friendly_name"] = "AdditionalProfilePlusCreationMutation"
+        row["variables"]["input"]["additional_profile_name"] = row["variables"]["input"].pop("name")
+        self.assertTrue(self.store.register_capture(row, name=NAME, category=CATEGORY,
+                                                    bio="", actor_id="333333333333"))
+        rendered = self.rendered()
+        self.assertEqual(rendered["variables"]["input"]["additional_profile_name"], NAME)
+        del row["variables"]["input"]["category_ids"]
+        self.assertFalse(self.store.register_capture(row, name=NAME, category=CATEGORY,
+                                                     bio="", actor_id="333333333333"))
+
     def web(self, *, timeout=False, partial=False, trace=None):
         calls = []
         trace = trace if trace is not None else []

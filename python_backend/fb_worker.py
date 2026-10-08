@@ -1109,10 +1109,10 @@ class FacebookWebSession:
                     exc.meta_payload = {**exc.meta_payload, "business_precheck": attempts}
                     raise
                 auth_parts = urlsplit(auth_final)
-                current_users = set(re.findall(
+                current_users = {user for variant in self._match_sources(auth_body) for user in re.findall(
                     r'CurrentUserInitialData.{0,2000}?"USER_ID"\s*:\s*"(\d+)"',
-                    auth_body, re.DOTALL,
-                ))
+                    variant, re.DOTALL,
+                )}
                 token = self._first_match(auth_body, list(self.FB_DTSG_PATTERNS))
                 expected_actor = str(self.profile.cookies.get("c_user") or "")
                 auth_gated = (auth_parts.hostname != "www.facebook.com"

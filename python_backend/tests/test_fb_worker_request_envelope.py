@@ -361,6 +361,19 @@ class BusinessAuthenticationPrecheckTests(unittest.IsolatedAsyncioTestCase):
             checkpoint.assert_not_awaited()
             self.assertEqual(http.posts, [])
 
+    async def test_escaped_authenticated_document_can_supply_exact_current_user_proof(self):
+        session, http = self.session()
+        document = '["CurrentUserInitialData",[],{"USER_ID":"123456789"}] '
+        document += '["DTSGInitialData",[],{"token":"fresh-profile-token"}]'
+        session.fetch_text = AsyncMock(side_effect=[
+            (400, "Bad Request", session.ADS_MANAGER_URL),
+            (400, "Bad Request", "https://business.facebook.com/create"),
+            (200, document.replace('"', '&quot;'), "https://www.facebook.com/marketplace/"),
+        ])
+        await session.graphql("123456789", {}, friendly_name="useBusinessCreationMutationMutation")
+        self.assertEqual(len(http.posts), 1)
+        self.assertEqual(http.posts[0]["data"]["fb_dtsg"], "fresh-profile-token")
+
     async def test_proxy_or_header_rejection_is_not_bypassed_by_facebook_auth(self):
         for body in ("Request header or cookie too large", "Proxy authentication required"):
             session, http = self.session()
