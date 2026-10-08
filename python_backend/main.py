@@ -968,7 +968,9 @@ async def ready():
             or os.getenv('REMASK_DEPLOY_REV')
             or ''
         )[:12],
-        'create_bm_payload_version':'business_suite_ui_v1',
+        'create_bm_payload_version':'private_http_contract_v1',
+        'create_bm_transport':'private_http',
+        'create_rk_transport':'private_http',
         'volume_mounted':bool(str(os.getenv('RAILWAY_VOLUME_MOUNT_PATH') or '').strip()),
         'volume_path':str(os.getenv('RAILWAY_VOLUME_MOUNT_PATH') or ''),
     }
@@ -990,6 +992,18 @@ async def profile_preflight(profile_id: str, purpose: str = 'business'):
         ) from exc
 
     try:
+        if purpose == 'business':
+            from app.private_business_preflight import private_business_preflight
+            async with ProfileSession(context) as profile_session:
+                try:
+                    result = await private_business_preflight(profile_session, context, clean_profile)
+                except ProxyCheckError as exc:
+                    raise HTTPException(status_code=422, detail='PROXY_DEAD: ' + str(exc)) from exc
+                log.info('business private preflight profile=%s ready=%s session_ready=%s contract_ready=%s inventory_complete=%s error=%s total_ms=%s browser_started=False',
+                    clean_profile, result['bm_route_ready'], result['facebook_session_ready'],
+                    result['private_business']['contract_ready'], result['private_business']['inventory_complete'],
+                    result['private_business']['error_code'], result['total_ms'])
+                return result
         async with ProfileSession(context) as profile_session:
             preflight_started=time.monotonic()
             proxy_started=time.monotonic()

@@ -1,8 +1,8 @@
 """Read Meta's persisted operation and its sender schema without executing JS.
 
 A nearby doc_id is insufficient: require the exact Relay artifact and a
-commitMutation config referring to that artifact with an explicit variables
-object. Dynamic fields must have a caller-supplied typed binding; unknown
+commitMutation config or immutable RelayHooks.useMutation sender referring to
+that artifact with an explicit variables object. Dynamic fields must have a caller-supplied typed binding; unknown
 expressions, spreads, computed properties and conflicting schemas fail closed.
 """
 from __future__ import annotations
@@ -89,34 +89,50 @@ def _read(node, bindings, *, key="", resolve=None):
     return _literal(node)
 
 
-def _alias_resolver(module):
-    """Follow only a single declaration with no write or parameter shadowing.
-
-    This supports Relay's imported artifact / input-object aliases without
-    executing code or treating a computed runtime object as observed schema.
-    """
+def _binding_metadata(module):
     declarations = {}
     blocked = set()
+    counts = {}
     for node in _walk(module):
         if node.type == "variable_declarator":
             name = node.child_by_field_name("name")
             value = node.child_by_field_name("value")
+            if name is not None:
+                for child in _walk(name):
+                    if child.type == "identifier":
+                        counts[child.text] = counts.get(child.text, 0) + 1
             if name is not None and name.type == "identifier" and value is not None:
                 declarations.setdefault(name.text, []).append(value)
         elif node.type == "formal_parameters":
             blocked.update(child.text for child in _walk(node) if child.type == "identifier")
+        elif node.type in {"arrow_function", "catch_clause"}:
+            parameter = node.child_by_field_name("parameter")
+            if parameter is not None:
+                blocked.update(child.text for child in _walk(parameter) if child.type == "identifier")
         elif node.type in {"assignment_expression", "augmented_assignment_expression", "update_expression"}:
             left = node.child_by_field_name("left") or node.child_by_field_name("argument")
             while left is not None and left.type in {"member_expression", "subscript_expression"}:
                 left = left.child_by_field_name("object")
             if left is not None and left.type == "identifier":
                 blocked.add(left.text)
+            elif left is not None and left.type in {"array_pattern", "object_pattern"}:
+                blocked.update(child.text for child in _walk(left) if child.type == "identifier")
+        elif node.type in {"function_declaration", "function_expression", "class_declaration"}:
+            name = node.child_by_field_name("name")
+            if name is not None:
+                blocked.add(name.text)
+    return declarations, blocked, counts
+
+
+def _alias_resolver(module):
+    """Follow a single declaration without writes or parameter shadowing."""
+    declarations, blocked, counts = _binding_metadata(module)
     def resolve(node):
         seen = set()
         while node.type == "identifier":
             name = node.text
             values = declarations.get(name, [])
-            if name in seen or name in blocked or len(values) != 1 or values[0].start_byte >= node.start_byte:
+            if name in seen or name in blocked or counts.get(name) != 1 or len(values) != 1 or values[0].start_byte >= node.start_byte:
                 raise ValueError("unresolved or mutable alias")
             seen.add(name)
             if len(seen) > 8:
@@ -124,6 +140,60 @@ def _alias_resolver(module):
             node = values[0]
         return node
     return resolve
+
+
+def _imports(node, name, resolve):
+    node = resolve(node)
+    if node.type != "call_expression":
+        return False
+    args = node.child_by_field_name("arguments")
+    return args is not None and len(args.named_children) == 1 and _literal(args.named_children[0]) == name
+
+
+def _hook_configs(module, friendly, resolve):
+    """Associate commit({variables}) with its exact immutable Relay hook.
+
+    Only a literal RelayHooks import and the first array return binding count;
+    similarly named helpers, reassignment and ambiguous bindings are rejected.
+    """
+    _, blocked, counts = _binding_metadata(module)
+    hooks = {}
+    for node in _walk(module):
+        if node.type != "variable_declarator":
+            continue
+        name = node.child_by_field_name("name")
+        value = node.child_by_field_name("value")
+        if name is None or name.type != "array_pattern" or len(name.children) < 2:
+            continue
+        first = name.children[1]
+        if first.type != "identifier" or first.text in blocked or counts.get(first.text) != 1:
+            continue
+        try:
+            value = resolve(value)
+            if value.type != "call_expression":
+                continue
+            function = value.child_by_field_name("function")
+            if function is None or function.type != "member_expression":
+                continue
+            prop = function.child_by_field_name("property")
+            if prop is None or prop.type != "property_identifier" or prop.text != b"useMutation":
+                continue
+            if not _imports(function.child_by_field_name("object"), "RelayHooks", resolve):
+                continue
+            args = value.child_by_field_name("arguments")
+            if args is None or len(args.named_children) != 1 or not _imports(args.named_children[0], friendly + ".graphql", resolve):
+                continue
+            hooks[first.text] = node.end_byte
+        except (ValueError, TypeError, AttributeError):
+            continue
+    for node in _walk(module):
+        if node.type != "call_expression":
+            continue
+        function = node.child_by_field_name("function")
+        args = node.child_by_field_name("arguments")
+        if (function is not None and function.type == "identifier" and function.text in hooks
+                and node.start_byte > hooks[function.text] and args is not None and len(args.named_children) == 1):
+            yield args.named_children[0]
 
 
 def _module_nodes(source):
@@ -188,20 +258,14 @@ class WebModuleContracts:
                             continue
                 if friendly + ".graphql" not in body:
                     continue
-                for node in _walk(module):
-                    if node.type != "object":
-                        continue
+                configs = [(node, False) for node in _walk(module) if node.type == "object"]
+                configs.extend((node, True) for node in _hook_configs(module, friendly, resolve))
+                for node, hook in configs:
                     try:
-                        pairs = _pairs(node)
-                        if not {"mutation", "variables"}.issubset(pairs):
+                        pairs = _pairs(resolve(node))
+                        if "variables" not in pairs or (not hook and "mutation" not in pairs):
                             continue
-                        mutation = resolve(pairs["mutation"])
-                        if mutation.type != "call_expression":
-                            continue
-                        arguments = mutation.child_by_field_name("arguments")
-                        if arguments is None or len(arguments.named_children) != 1:
-                            continue
-                        if _literal(arguments.named_children[0]) != friendly + ".graphql":
+                        if "mutation" in pairs and not _imports(pairs["mutation"], friendly + ".graphql", resolve):
                             continue
                         variables = _read(pairs["variables"], self.bindings, resolve=resolve)
                         if not isinstance(variables, dict) or not isinstance(variables.get("input"), dict):

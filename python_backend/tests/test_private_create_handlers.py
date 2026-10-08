@@ -27,6 +27,29 @@ def modules(doc="1234567890123"):
 
 
 class ModuleDiscoveryTests(unittest.IsolatedAsyncioTestCase):
+    def test_relay_hook_sender_binds_exact_artifact_and_typed_variables(self):
+        source = modules().replace('return commitMutation(env,{mutation:d("BizKitSettingsCreateAdAccountMutation.graphql"),',
+            'var [submit,pending]=d("RelayHooks").useMutation(d("BizKitSettingsCreateAdAccountMutation.graphql"));return submit({')
+        observer = WebModuleContracts(friendly_names=("BizKitSettingsCreateAdAccountMutation",),
+            bindings={"businessid": BM, "actorid": UID, "name": NAME, "currency": "USD",
+                "timezoneid": 137, "clientmutationid": "current"})
+        observer.observe(source)
+        self.assertEqual(observer.result()["variables"]["input"]["business_id"], int(BM))
+        for changed in (source.replace('return submit', 'submit=otherSubmit;return submit'),
+                source.replace('return submit', '[submit]=otherHook;return submit'),
+                source.replace('return submit', 'var submit=otherSubmit;return submit'),
+                source.replace('return submit', 'function nested(submit){};return submit'),
+                source.replace('return submit({', 'return submit=>submit({'),
+                source.replace('d("RelayHooks")', 'd("UnrelatedHooks")'),
+                source.replace('var [submit,pending]', 'var [,submit]'),
+                source.replace('.useMutation(d("BizKitSettingsCreateAdAccountMutation.graphql"))', '.useMutation(d("OtherMutation.graphql"))'),
+                source.replace('return submit', 'return unrelatedSubmit'),
+                source.replace('client_mutation_id:mutationID', 'unobserved_value:computedState')):
+            with self.subTest(source=changed):
+                rejected = WebModuleContracts(friendly_names=observer.names, bindings=observer.bindings)
+                rejected.observe(changed)
+                self.assertIsNone(rejected.result())
+
     def test_unique_unmodified_import_and_input_aliases_resolve_without_js_execution(self):
         source = modules().replace('return commitMutation(env,{mutation:d("BizKitSettingsCreateAdAccountMutation.graphql"),',
             'var artifact=d("BizKitSettingsCreateAdAccountMutation.graphql");return commitMutation(env,{mutation:artifact,')

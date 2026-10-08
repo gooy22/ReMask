@@ -1,5 +1,9 @@
 # ReMask: исполнение Create RK через прямой HTTP
 
+Этот файл сохраняет историю миграции. Актуальная production-регистрация БМ/РК
+описана в последних разделах: она не использует Chromium даже для получения
+контракта. Описание UI capture в ранних разделах относится к предыдущим этапам.
+
 ## Причина и граница изменения
 
 Последний подтверждённый Prepare на production 6229168:
@@ -250,3 +254,37 @@ HTTP fixtures, cold discovery, intent storage failure, independent inventory,
 lost responses and cross-Job reconciliation. CI/deployment success is not a live
 Meta bundle success. Page ownership/full operator rights and card attachment
 remain separate contracts and are not certified by this BM/RK change.
+
+
+## HTTP readiness и ограничения времени после 085c3ea
+
+Проверка `/api/v1/profiles/{profile_id}/preflight?purpose=business` теперь
+использует тот же профильный HTTP транспорт: proxy check, текущий actor/DTSG,
+полноту BM inventory и доступность текущего либо подтверждённого кандидата
+CREATE. Никакой browser factory, Page inventory, Graph API access token или
+CREATE POST в этой проверке нет. Это предварительная готовность, а не
+доказательство разрешения Meta на создание. Checkpoint/login при discovery
+не скрывается сохранённым контрактом. Последние сохранённые страницы остаются
+в ответе с явным `pages_source=saved_profile_pages`, без заявлений о live sync.
+
+`/ready` публикует `private_http_contract_v1` и transport для BM/RK вместо
+устаревшего `business_suite_ui_v1`. Бюджет каждого HTTP шага BM/RK по умолчанию
+240 секунд и не зависит от размера Chromium pool или количества профилей.
+Настройки `REMASK_PRIVATE_BUSINESS_STEP_TIMEOUT` и
+`REMASK_PRIVATE_AD_ACCOUNT_STEP_TIMEOUT` задают отдельные HTTP бюджеты.
+Standalone `REMASK_ADD_FP/BM/RK_HARD_TIMEOUT_SECONDS` сохранены. FP/PageAccess
+в смешанных задачах получают свой прежний UI budget; это не заявление о
+полном удалении Chromium из FP/PageAccess/payment.
+
+Разбор текущих JS модулей RK дополнен схемой RelayHooks.useMutation:
+immutable first-return commit binding должен указывать на точный graphql
+artifact. Переназначение, shadowing, другой hook/module/artifact, неизвестные
+runtime-поля и отсутствующий sender не дают контракт. JS не исполняется;
+распознавание покрыто синтетическими модулями, а не выдано за наблюдение
+нового живого контракта Meta.
+
+Проверки охватывают API entrypoint без browser startup, отсутствие секретов
+в preflight, inventory/contract readiness, checkpoint в позднем discovery,
+независимость HTTP таймаутов от 1/100/500 workers и неизменяемость hook binding.
+После deployment 085c3ea/d327ab78 в доступных логах нет нового Prepare/CREATE
+trace. Успешный CI и healthcheck не заменяют live Meta verification.

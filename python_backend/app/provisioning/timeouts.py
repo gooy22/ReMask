@@ -33,6 +33,33 @@ def browser_queue_waves() -> int:
     return max(1, math.ceil(workers / browsers))
 
 
+def private_create_step_timeout(step: ProvisioningStep) -> float:
+    """BM/RK HTTP budget independent of the Chromium pool and its queue."""
+    if step not in {ProvisioningStep.BUSINESS, ProvisioningStep.AD_ACCOUNT}:
+        raise ValueError(f"unsupported private CREATE step: {step}")
+    explicit = _env_float("REMASK_PRIVATE_" + step.value + "_STEP_TIMEOUT")
+    return max(60.0, min(explicit, 900.0)) if explicit is not None else 240.0
+
+
+def provisioning_hard_timeout(steps: Iterable[ProvisioningStep | str]) -> float:
+    normalized = {ProvisioningStep(str(step.value if isinstance(step, ProvisioningStep) else step).strip().upper()) for step in steps}
+    if not normalized:
+        return 0.0
+    single_overrides = {
+        ProvisioningStep.FAN_PAGES: "REMASK_ADD_FP_HARD_TIMEOUT_SECONDS",
+        ProvisioningStep.BUSINESS: "REMASK_ADD_BM_HARD_TIMEOUT_SECONDS",
+        ProvisioningStep.AD_ACCOUNT: "REMASK_ADD_RK_HARD_TIMEOUT_SECONDS",
+    }
+    if len(normalized) == 1:
+        name = single_overrides.get(next(iter(normalized)))
+        explicit = _env_float(name) if name else None
+        if explicit is not None:
+            return max(120.0, min(explicit, 7200.0))
+    return min(7200.0, sum(private_create_step_timeout(step)
+        if step in {ProvisioningStep.BUSINESS, ProvisioningStep.AD_ACCOUNT}
+        else browser_step_timeout(step) for step in normalized) + 120.0)
+
+
 def browser_step_timeout(step: ProvisioningStep) -> float:
     """Total queue + active-runtime guard for one browser-backed step.
 
@@ -81,9 +108,9 @@ def prepare_hard_timeout(ad_accounts: int = 2) -> float:
 
     total = (
         browser_step_timeout(ProvisioningStep.FAN_PAGES)
-        + browser_step_timeout(ProvisioningStep.BUSINESS)
+        + private_create_step_timeout(ProvisioningStep.BUSINESS)
         + rk_count * (
-            browser_step_timeout(ProvisioningStep.AD_ACCOUNT)
+            private_create_step_timeout(ProvisioningStep.AD_ACCOUNT)
             + browser_step_timeout(ProvisioningStep.PAGE_ACCESS)
         )
         + 180.0

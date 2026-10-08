@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import main as api
+from fb_worker import AuthenticationError
 from app.facebook_business_browser import BrowserBusinessError, BrowserPreflightResult, BROWSER_TERMINAL_ACCESS_CODES
 
 
@@ -56,7 +57,7 @@ class ProfileFpAuthGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(page_store.patch.call_args.kwargs['policies_owner_profile_id'],'9')
         worker.enqueue_job.assert_awaited_once_with('saved-job')
 
-    async def test_page_auth_failure_overrides_missing_bm_create_surface(self):
+    async def test_page_auth_failure_is_checked_independently_of_bm_preflight(self):
         for code in BROWSER_TERMINAL_ACCESS_CODES:
             with self.subTest(code=code):
                 browser = SimpleNamespace(
@@ -80,11 +81,11 @@ class ProfileFpAuthGateTests(unittest.IsolatedAsyncioTestCase):
                 factory.return_value.__aenter__ = AsyncMock(return_value=session)
                 factory.return_value.__aexit__ = AsyncMock(return_value=False)
                 with patch.object(api, 'pool', pool), patch.object(api, 'ProfileSession', factory), patch.dict(api._FP_AUTH_GATE_CACHE, {}, clear=True):
-                    result = await api.profile_preflight('9')
+                    result = await api.profile_preflight('9', purpose='fan_pages')
                     self.assertTrue(result['auth_blocked'])
                     self.assertFalse(result['facebook_session_ready'])
                     self.assertEqual(result['auth_error_code'], code)
-                    self.assertIsNone(api._cached_fp_auth_gate('9'))
+                    self.assertIsNotNone(api._cached_fp_auth_gate('9'))
                     with self.assertRaises(api.HTTPException) as failure:
                         await api._require_fp_auth_ready(['9'])
                     self.assertEqual(failure.exception.status_code, 409)
@@ -102,7 +103,7 @@ class ProfileFpAuthGateTests(unittest.IsolatedAsyncioTestCase):
         )
         context = SimpleNamespace(pages=[], email='', first_name='', last_name='', display_name='', access_token='')
         pool = SimpleNamespace(resolver=SimpleNamespace(resolve=AsyncMock(return_value=context)))
-        session = SimpleNamespace(proxy_check=AsyncMock(return_value={}), facebook_business_browser=AsyncMock(return_value=browser))
+        session = SimpleNamespace(proxy_check=AsyncMock(return_value={}), facebook_business_browser=AsyncMock(return_value=browser), facebook_web=AsyncMock(return_value=SimpleNamespace(bootstrap=AsyncMock(side_effect=AuthenticationError('Business login')))))
         factory = MagicMock()
         factory.return_value.__aenter__ = AsyncMock(return_value=session)
         factory.return_value.__aexit__ = AsyncMock(return_value=False)
@@ -115,6 +116,6 @@ class ProfileFpAuthGateTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(result['auth_blocked'])
             self.assertFalse(result['bm_route_ready'])
             await api._require_fp_auth_ready(['9'])
-            browser.preflight.assert_awaited_once()
+            browser.preflight.assert_not_awaited()
             browser.preflight_fan_pages.assert_awaited_once()
             browser.discover_managed_pages.assert_not_awaited()

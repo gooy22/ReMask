@@ -10,7 +10,7 @@ import aiohttp
 from ..session import MetaSession, ProfileContext, ProxyCheckError
 from .models import ENTITY_RESULT_KEYS, ProvisioningError, ProvisioningStep
 from .funding_handler import validate_funding_result
-from .timeouts import browser_step_timeout
+from .timeouts import browser_step_timeout, private_create_step_timeout
 from .proxy import ProxyChecker
 from .registry import get_handler
 from .state import ProvisioningStateStore
@@ -279,7 +279,8 @@ class ProvisioningService:
 
                     if step in _MUTATING_BROWSER_STEPS:
                         await _await_profile_mutation_cooldown(profile_id)
-                        step_timeout = browser_step_timeout(step)
+                        is_private_create = step in {ProvisioningStep.BUSINESS, ProvisioningStep.AD_ACCOUNT}
+                        step_timeout = private_create_step_timeout(step) if is_private_create else browser_step_timeout(step)
                         timeout_code = (
                             "PAGE_ACCESS_TIMEOUT"
                             if step is ProvisioningStep.PAGE_ACCESS else
@@ -298,6 +299,8 @@ class ProvisioningService:
                             if step is ProvisioningStep.BUSINESS
                             else "Meta Ad Account total queue/runtime watchdog"
                         )
+                        if is_private_create:
+                            timeout_label = "Meta " + step.value + " private HTTP runtime watchdog"
 
                         try:
                             try:

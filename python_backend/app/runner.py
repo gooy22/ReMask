@@ -13,7 +13,7 @@ from typing import Any, Awaitable, Callable
 from .mirror import MirrorError, SnapshotMirror
 from .provisioning import PrepareService, ProvisioningError, ProvisioningService, ProvisioningStateStore
 from .provisioning.models import ProvisioningStep
-from .provisioning.timeouts import browser_provisioning_hard_timeout, prepare_hard_timeout
+from .provisioning.timeouts import prepare_hard_timeout, provisioning_hard_timeout
 from .router import RoutePolicyError, TransparentPostRouter
 from .private_launch import PrivateLaunchService
 from .session import ProfileResolver, ProfileSession, ProfileContextError, ProxyCheckError
@@ -506,9 +506,9 @@ class WorkerPool:
                                     for value in (raw_steps or [])
                                 ] if isinstance(raw_steps,list) else []
 
-                                # FAN_PAGES, CREATE_BM and CREATE_AD_ACCOUNT
-                                # all use profile-bound Chromium and need a hard
-                                # wall-clock watchdog independent of Playwright.
+                                # All mutations need a hard wall-clock watchdog.
+                                # BM/RK use HTTP budgets; browser queue allowance
+                                # applies only to remaining UI-backed operations.
                                 fan_pages_guarded='FAN_PAGES' in normalized_steps
                                 business_guarded='BUSINESS' in normalized_steps
                                 ad_account_guarded='AD_ACCOUNT' in normalized_steps
@@ -519,13 +519,13 @@ class WorkerPool:
                                     if 'PAGE_ACCESS' not in normalized_steps: normalized_steps.append('PAGE_ACCESS')
 
                                 if fan_pages_guarded or business_guarded or ad_account_guarded or access_guarded:
-                                    browser_steps=[
+                                    guarded_steps=[
                                         value
                                         for value in normalized_steps
                                         if value in {'FAN_PAGES','BUSINESS','AD_ACCOUNT','PAGE_ACCESS'}
                                     ]
-                                    hard_timeout=browser_provisioning_hard_timeout(
-                                        browser_steps
+                                    hard_timeout=provisioning_hard_timeout(
+                                        guarded_steps
                                     )
                                     guarded_count=sum(
                                         1 for enabled in (
@@ -536,7 +536,7 @@ class WorkerPool:
                                         ) if enabled
                                     )
                                     if guarded_count > 1:
-                                        watchdog_code='BROWSER_PROVISIONING_HARD_TIMEOUT'
+                                        watchdog_code='PROVISIONING_HARD_TIMEOUT'
                                         watchdog_label='+'.join(
                                             value
                                             for value,enabled in (
@@ -572,11 +572,11 @@ class WorkerPool:
                                         timeout_seconds=hard_timeout,
                                         code=watchdog_code,
                                         message=(
-                                            f'{watchdog_label} total queue/runtime '
+                                            f'{watchdog_label} total action runtime '
                                             f'watchdog exceeded {int(hard_timeout)}s. '
                                             'Active Meta phases have separate shorter '
-                                            'timeouts; this guard includes browser-slot '
-                                            'queue time.'
+                                            'timeouts; browser queue allowance applies '
+                                            'only to UI-backed steps.'
                                         ),
                                     )
                                 else:
