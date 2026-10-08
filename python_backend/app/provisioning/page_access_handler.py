@@ -1260,8 +1260,27 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
         result=(rk_state or {}).get('result') or {}
         if str(result.get('business_id') or '')!=business or _normalize_ad_account_id(result.get('ad_account_id')).removeprefix('act_')!=account:
             raise ProvisioningError('CREATED_BUSINESS_RK_REQUIRED','RK creation result does not match this portfolio')
-    await ensure_common_page(session,{'page_id':params.get('page_id'),'reuse_only':params.get('reuse_only') is True,'policies_accepted':params.get('policies_accepted') is not False},state,resolver)
-    store=AdvertisingPageStore.for_context(state,session.context,profile); config=await store.get()
+    business_page = params.get('page_topology') == 'ONE_PAGE_PER_BUSINESS'
+    if business_page:
+        from .business_pages import BusinessPageStore, ensure_business_page
+        retained = ((await state.step(item, ProvisioningStep.PAGE_ACCESS)) or {}).get('result') or {}
+        target = retained.get('private_target') or {}
+        pending = any(isinstance(row, dict) and row.get('status') in {'SUBMIT_INTENT', 'RESULT_UNKNOWN', 'RESULT_UNVERIFIED'}
+            for row in (retained.get('private_operations') or {}).values())
+        if pending and target.get('page_id'):
+            # A topology migration may not discard a sent ownership request.
+            # Pin its exact Page; ownership/rights reconciliation remains first.
+            if str(target.get('business_id') or '') != business:
+                raise ProvisioningError('PRIVATE_PAGE_ACCESS_CHECKPOINT_MISMATCH', 'Retained Page operation belongs to another Business.')
+            params = {**params, 'page_id': str(target['page_id']), 'reuse_only': True}
+        await state.checkpoint(item, profile, scope, ProvisioningStep.PAGE_ACCESS,
+            {'phase': retained.get('phase') or 'BUNDLE_PAGE_PRECHECK', 'business_id': business,
+                'ad_account_id': account, 'page_topology': 'ONE_PAGE_PER_BUSINESS'})
+        config = await ensure_business_page(session, params, state, resolver)
+        store = BusinessPageStore(state, session.context, business)
+    else:
+        await ensure_common_page(session,{'page_id':params.get('page_id'),'reuse_only':params.get('reuse_only') is True,'policies_accepted':params.get('policies_accepted') is not False},state,resolver)
+        store=AdvertisingPageStore.for_context(state,session.context,profile); config=await store.get()
     businesses=((await state.confirmed_business_binding_groups()).get(str(profile)) or {}).get('businesses') or {}
     target_business_identity={**(businesses.get(business) or {}),'profile_id':str(profile),
         'known_business_names':{key:row.get('business_name') for key,row in businesses.items()}}
@@ -1320,8 +1339,15 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
                 checkpoint=checkpoint, prior=resume_state, rk_asset_id=rk_inventory.get('asset_ui_id', ''))
             await store.patch(owner_business_id=business, owner_business_confirmed=True,
                 ownership_phase='PAGE_OWNERSHIP_CONFIRMED')
+            if business_page:
+                common = AdvertisingPageStore.for_context(state, session.context, profile)
+                legacy = await common.get()
+                if legacy.get('page_id') == config['page_id']:
+                    await common.patch(owner_business_id=business, owner_business_confirmed=True,
+                        ownership_phase='PAGE_OWNERSHIP_CONFIRMED', grants=(await store.get()).get('grants') or {})
         return {**result, 'page_name': config['name'], 'identity_verification': 'not_requested',
-            'ad_account_page_access_verified': False}
+            'ad_account_page_access_verified': False,
+            'page_topology': 'ONE_PAGE_PER_BUSINESS' if business_page else 'PROFILE_COMMON_PAGE'}
     try:
         legacy_full_control=params.get('access_mode')=='existing_page_full_control'
         if legacy_full_control:

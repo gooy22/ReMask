@@ -135,7 +135,7 @@ vm.createContext(sandbox); vm.runInContext(source.slice(start,end), sandbox);
   const summary = elements.find(el=>el.className==='pwbm-status');
   assert.equal(create.disabled,false); assert.match(summary.textContent,/2 проф\., 1 FP \+ 1 BM \+ 1 РК на профиль \(1 BM = 1 РК\)\. Всего комплектов: 2/);
   inputs[0].value='21'; inputs[0].events.input(); assert.equal(create.disabled,true);
-  inputs[0].value='2'; inputs[0].events.input(); assert.match(summary.textContent,/Всего комплектов: 4/);
+  inputs[0].value='2'; inputs[0].events.input(); assert.match(summary.textContent,/2 FP \+ 2 BM \+ 2 РК/); assert.match(summary.textContent,/Всего комплектов: 4/);
   await create.events.click(); assert.equal(state.busy,false); assert.equal(create.textContent,'Повторить отправку');
   assert.equal(inputs.every(el=>el.disabled),true);
   assert.ok(storage.has('remask_python_worker_prepare_pending_v1'));

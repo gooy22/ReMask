@@ -75,13 +75,15 @@ class PreparePlannerTests(unittest.IsolatedAsyncioTestCase):
 
     async def _confirmed_access(self, account, business_id=None, item=None):
         business_id = business_id or self.business_id
+        # Meta Page ownership is exclusive. Each fixture bundle has its own FP.
+        page_id = "1289628847574478" if business_id == self.business_id else "1289628847574479"
         await self.state.complete(
             item or f"access-{account}",
             self.profile_id,
             f"access:{business_id}:{account}",
             ProvisioningStep.PAGE_ACCESS,
             {
-                "page_id": "1289628847574478",
+                "page_id": page_id,
                 "business_id": business_id,
                 "ad_account_id": account,
                 "page_shared_to_business": True,

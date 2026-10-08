@@ -965,8 +965,19 @@ function pythonWorkerRenderJob(job) {
             const resultParts = [
               String(prepareResult.status || 'PREPARED')
             ];
-            if (actual.page_id) resultParts.push('FP ' + actual.page_id);
-            if (actual.business_id) resultParts.push('BM ' + actual.business_id);
+            const bundles = Array.isArray(actual.bundles) ? actual.bundles : [];
+            if (bundles.length) {
+              bundles.forEach(function(bundle) {
+                resultParts.push([
+                  bundle.page_id ? 'FP ' + bundle.page_id : '',
+                  bundle.business_id ? 'BM ' + bundle.business_id : '',
+                  bundle.ad_account_id ? 'РК ' + bundle.ad_account_id : ''
+                ].filter(Boolean).join(' → '));
+              });
+            } else {
+              if (actual.page_id) resultParts.push('FP ' + actual.page_id);
+              if (actual.business_id) resultParts.push('BM ' + actual.business_id);
+            }
             resultParts.push('РК ' + accounts.length + '/' + String(desired.ad_accounts || accounts.length));
             if (prepareResult.reason) resultParts.push(String(prepareResult.reason));
             errorTd.className = 'pw-result';
@@ -984,6 +995,7 @@ function pythonWorkerRenderJob(job) {
                   row.phase,
                   row.status,
                   row.slot != null ? 'slot ' + row.slot : '',
+                  row.page_id ? 'FP ' + row.page_id : '',
                   row.business_id ? 'BM ' + row.business_id : '',
                   row.ad_account_id ? 'РК ' + row.ad_account_id : ''
                 ].filter(Boolean).join(' · ');
@@ -4103,7 +4115,7 @@ async function pythonWorkerOpenAutoModal() {
 
   const body = document.createElement('div'); body.className = 'pwbm-body';
   const note = document.createElement('div'); note.className = 'pwbm-note';
-  note.textContent = 'Цель задаётся один раз: одна FP на профиль и отдельный BM для каждого РК. Prepare проверяет подтверждённое состояние и создаёт только недостающие пары BM → РК. Payment остаётся отдельным readiness-gate перед Launch.';
+  note.textContent = 'Для каждого комплекта — отдельная FP, BM и РК. Prepare сохраняет готовые связки и дополняет недостающие объекты и полные права. Payment проверяется отдельно перед Launch.';
   body.appendChild(note);
 
   function field(label, input) {
@@ -4163,7 +4175,7 @@ async function pythonWorkerOpenAutoModal() {
       && timezone.value.trim();
     create.disabled = pythonWorkerUiState.busy || !valid;
     status.textContent = valid
-      ? 'Цель: ' + profiles.length + ' проф., 1 FP + ' + n + ' BM + ' + n + ' РК на профиль (1 BM = 1 РК). Всего комплектов: ' + totalRk + '. Создаются только недостающие пары.'
+      ? 'Цель: ' + profiles.length + ' проф., ' + n + ' FP + ' + n + ' BM + ' + n + ' РК на профиль (1 BM = 1 РК). Всего комплектов: ' + totalRk + '. Дополняются недостающие объекты и права.'
       : 'Нужны категория, 1–20 РК на профиль, валюта и часовой пояс.';
   }
 

@@ -774,10 +774,10 @@ class ProvisioningStateStore:
             "funding_source_id": funding_source_id,
         }
 
-    async def latest_uncertain_fan_page(self, profile_id: str, page_name: str, *, exclude_item_id: str = "") -> dict[str, Any]:
-        return await asyncio.to_thread(self._latest_uncertain_fan_page_sync, profile_id, page_name, exclude_item_id)
+    async def latest_uncertain_fan_page(self, profile_id: str, page_name: str, *, exclude_item_id: str = "", business_id: str | None = None) -> dict[str, Any]:
+        return await asyncio.to_thread(self._latest_uncertain_fan_page_sync, profile_id, page_name, exclude_item_id, business_id)
 
-    def _latest_uncertain_fan_page_sync(self, profile_id: str, page_name: str, exclude_item_id: str) -> dict[str, Any]:
+    def _latest_uncertain_fan_page_sync(self, profile_id: str, page_name: str, exclude_item_id: str, business_id: str | None = None) -> dict[str, Any]:
         # REMASK_FP_UNCERTAIN_TOMBSTONE_V1
         # This is a newest-state lookup, not a search for *any* historical
         # uncertainty. Once a newer same-name row proves CREATE_NOT_SUBMITTED
@@ -799,6 +799,10 @@ class ProvisioningStateStore:
             except (ValueError, TypeError):
                 continue
             if not isinstance(result, dict):
+                continue
+            # Same-name Pages for separate BMs have independent CREATE intents.
+            # Unscoped legacy ambiguity remains a guard until reconciled.
+            if business_id is not None and result.get('business_id') and str(result['business_id']) != business_id:
                 continue
             active = str(result.get("active_page_name") or "").strip().casefold()
             tombstone = str(
@@ -1342,6 +1346,7 @@ class ProvisioningStateStore:
         ad_account_id: str,
         *,
         full_control: bool = False,
+        page_id: str = "",
     ) -> bool:
         return await asyncio.to_thread(
             self._page_access_confirmed_sync,
@@ -1349,6 +1354,7 @@ class ProvisioningStateStore:
             str(business_id or "").strip(),
             str(ad_account_id or "").removeprefix("act_").strip(),
             full_control,
+            str(page_id or "").strip(),
         )
 
     def _page_access_confirmed_sync(
@@ -1357,6 +1363,7 @@ class ProvisioningStateStore:
         business_id: str,
         ad_account_id: str,
         full_control: bool = False,
+        page_id: str = "",
     ) -> bool:
         if not profile_id or not business_id.isdigit() or not ad_account_id.isdigit():
             return False
@@ -1383,6 +1390,7 @@ class ProvisioningStateStore:
             account = str(result.get("ad_account_id") or "").removeprefix("act_").strip()
             if (
                 str(result.get("business_id") or "").strip() == business_id
+                and (not page_id or str(result.get('page_id') or '') == page_id)
                 and account == ad_account_id
                 and result.get("page_shared_to_business") is True
                 and result.get("operator_ads_access_assigned") is True

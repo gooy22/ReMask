@@ -1055,6 +1055,7 @@ async def fan_pages_handler(
             for row in persisted_pages
             if isinstance(row, dict)
             and _clean(row.get("id") or row.get("page_id")).isdigit()
+            and _clean(row.get('id') or row.get('page_id')) not in {_clean(value) for value in (params.get('reserved_page_ids') or [])}
             and _clean(row.get("name")).casefold() == page_name.casefold()
             and (
                 not business_id
@@ -1182,7 +1183,7 @@ async def fan_pages_handler(
             continue
 
         previous_uncertain = await provisioning_state.latest_uncertain_fan_page(
-            profile_id, page_name, exclude_item_id=item_id,
+            profile_id, page_name, exclude_item_id=item_id, business_id=business_id or None,
         )
         if previous_uncertain:
             previous_result = previous_uncertain["result"]
@@ -1283,6 +1284,12 @@ async def fan_pages_handler(
 
         for create_attempt in range(1, 3):
             before_ids: set[str] = set()
+            # Include every already allocated Page even if Meta's transient
+            # list omitted it. A same-name Page in another BM is never new.
+            reserved_ids = {_clean(value) for value in (params.get('reserved_page_ids') or [])
+                if _clean(value).isdigit()}
+            baseline_pages = current_pages + [{'id': value, 'name': page_name} for value in reserved_ids
+                if not any(_clean(row.get('id')) == value for row in current_pages)]
 
             async def before_submit(patch: dict[str, Any]) -> None:
                 nonlocal before_ids
@@ -1290,7 +1297,7 @@ async def fan_pages_handler(
                     _clean(value)
                     for value in (patch.get("before_ids") or [])
                     if _clean(value).isdigit()
-                }
+                } | reserved_ids
                 await provisioning_state.checkpoint(
                     item_id,
                     profile_id,
@@ -1301,6 +1308,7 @@ async def fan_pages_handler(
                         "resume_from": "RECONCILE_CREATE",
                         "browser_diagnostic": {},
                         "target_names": names,
+                        "business_id": business_id,
                         "created_pages": created_pages,
                         "active_index": index,
                         "active_page_name": page_name,
@@ -1316,7 +1324,7 @@ async def fan_pages_handler(
             try:
                 create_result = await _create_page_via_private_contract(
                     session, page_name=page_name, category=category, bio=bio,
-                    before_pages=current_pages, before_submit=before_submit, params=params,
+                    before_pages=baseline_pages, before_submit=before_submit, params=params,
                 )
                 break
 
@@ -1529,7 +1537,7 @@ async def fan_pages_handler(
             provisioning_state=provisioning_state, item_id=item_id, profile_id=profile_id,
             scope_key=scope_key, target_names=names)
 
-    if business_id:
+    if business_id and params.get('defer_business_attach') is not True:
         for row in ordered:
             row_page_id = _clean(row.get("id"))
             relation_complete = (

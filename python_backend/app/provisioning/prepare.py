@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .advertising_page import AdvertisingPageStore
+from .business_pages import BusinessPageStore
 from .models import ProvisioningError
 from .service import ProvisioningService
 from .state import ProvisioningStateStore
@@ -640,10 +641,9 @@ class PrepareService:
                     "name",
                     f"ReMask {profile_id} RK {slot}",
                 )
-                rk_params.setdefault(
-                    "use_common_page",
-                    desired.require_page_access,
-                )
+                # Prepare assigns the exact bundle Page after RK verification.
+                # The legacy automatic common-Page step must not run here.
+                rk_params["use_common_page"] = False
 
                 rk_scope = f"{base_scope}:bundle:{slot}:rk"
                 self._trace(
@@ -749,11 +749,15 @@ class PrepareService:
                 business_id = str(bundle["business_id"])
                 row = bundle["ad_account"]
                 account_id = str(row.get("ad_account_id") or "").strip()
-                access_confirmed = await self.state.page_access_confirmed(
+                binding_store = BusinessPageStore(self.state, context, business_id)
+                binding = await binding_store.get()
+                bundle['page_id'] = str(binding.get('page_id') or '')
+                access_confirmed = bool(bundle['page_id']) and await self.state.page_access_confirmed(
                     profile_id,
                     business_id,
                     account_id,
                     full_control=True,
+                    page_id=bundle['page_id'],
                 )
                 if access_confirmed:
                     self._trace(
@@ -789,7 +793,13 @@ class PrepareService:
                         row.get("account_name") or ""
                     ).strip(),
                     "policies_accepted": True,
+                    "page_topology": "ONE_PAGE_PER_BUSINESS",
                 }
+                # A profile-wide Page selector is not a valid selector for
+                # every BM. Saved per-Business identity is authoritative.
+                access_params.pop('page_id', None)
+                if bundle['page_id']:
+                    access_params['page_id'] = bundle['page_id']
                 self._trace(
                     trace,
                     "PAGE_ACCESS",
@@ -811,11 +821,14 @@ class PrepareService:
                     parameters={"PAGE_ACCESS": access_params},
                     idempotency_key=access_scope,
                 )
-                access_confirmed = await self.state.page_access_confirmed(
+                binding = await binding_store.get()
+                bundle['page_id'] = str(binding.get('page_id') or '')
+                access_confirmed = bool(bundle['page_id']) and await self.state.page_access_confirmed(
                     profile_id,
                     business_id,
                     account_id,
                     full_control=True,
+                    page_id=bundle['page_id'],
                 )
                 self._trace(
                     trace,
@@ -857,12 +870,14 @@ class PrepareService:
             business_id = str(bundle["business_id"])
             row = bundle["ad_account"]
             account_id = str(row.get("ad_account_id") or "")
+            bundle_page = str((await BusinessPageStore(self.state, context, business_id).get()).get('page_id') or '')
             access = (
-                await self.state.page_access_confirmed(
+                bool(bundle_page) and await self.state.page_access_confirmed(
                     profile_id,
                     business_id,
                     account_id,
                     full_control=True,
+                    page_id=bundle_page,
                 )
             )
             payment = (
@@ -875,6 +890,7 @@ class PrepareService:
                 **row,
                 "business_id": business_id,
                 "slot": bundle["slot"],
+                "page_id": bundle_page,
                 "page_access_confirmed": access,
                 "payment_confirmed": payment,
             }
@@ -882,6 +898,7 @@ class PrepareService:
             bundle_rows.append(
                 {
                     "slot": bundle["slot"],
+                    "page_id": bundle_page,
                     "business_id": business_id,
                     "business_name": str(
                         (bundle.get("business") or {}).get("business_name")
@@ -948,11 +965,13 @@ class PrepareService:
                 "ad_accounts": desired.ad_accounts,
                 "businesses": desired.ad_accounts,
                 "topology": "ONE_RK_PER_BUSINESS",
+                "page_topology": "ONE_PAGE_PER_BUSINESS",
                 "page_access": desired.require_page_access,
                 "payment": desired.require_payment,
             },
             "actual": {
                 "page_id": page_id,
+                "page_ids": [row['page_id'] for row in bundle_rows if row['page_id']],
                 # Legacy single-value field retained for UI compatibility.
                 "business_id": business_ids[0] if business_ids else "",
                 "business_ids": business_ids,
