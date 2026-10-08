@@ -445,7 +445,19 @@ class PrepareService:
         # One infrastructure slot is exactly one Business + one RK.
         # REMASK_PREPARE_ONE_RK_PER_BUSINESS_V1
         inventory = await self._bundle_inventory(profile_id, context)
-        preferred = desired.preferred_business_id
+        confirmed_page_owner = str(page.get("owner_business_id") or "").strip()
+        if page.get("owner_business_confirmed") is not True or not confirmed_page_owner.isdigit():
+            confirmed_page_owner = ""
+        if confirmed_page_owner and not any(row["business_id"] == confirmed_page_owner for row in inventory):
+            inventory.append({
+                "business_id": confirmed_page_owner,
+                "business": {"business_id": confirmed_page_owner,
+                    "source": "last_confirmed_page_owner"},
+                "ad_accounts": await self._ad_account_inventory(profile_id, confirmed_page_owner, context),
+            })
+        # Repair the already bound Page/BM together. Selecting an unrelated RK
+        # container first would attempt to claim a Page owned by another BM.
+        preferred = desired.preferred_business_id or confirmed_page_owner
         preferred_bundle = next(
             (
                 row

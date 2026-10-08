@@ -494,6 +494,38 @@ class PreparePlannerTests(unittest.IsolatedAsyncioTestCase):
         service = PrepareService(self.state, SimpleNamespace(run=AsyncMock()))
         self.assertEqual(await service._bundle_inventory(self.profile_id, self.context), [])
 
+    async def test_page_owner_bundle_is_repaired_before_unrelated_rk_container(self):
+        await self.page_store.patch(owner_business_id=self.business_id, owner_business_confirmed=True)
+        await self._confirmed_business(self.business_id_2)
+        await self._confirmed_rk("222222222222222", self.business_id_2)
+        sequence = []
+        async def execute(**kwargs):
+            action = kwargs["payload"]["steps"][0]
+            params = kwargs["payload"]["parameters"][action]
+            sequence.append(action)
+            self.assertEqual(params["business_id"], self.business_id)
+            if action == "AD_ACCOUNT":
+                await self._confirmed_rk("111111111111111", item=kwargs["item_id"])
+                return {"state": {"ad_account_id": "111111111111111"}}
+            self.assertEqual(action, "PAGE_ACCESS")
+            await self._confirmed_access(params["ad_account_id"], item=kwargs["item_id"])
+            return {"state": {}}
+        service = PrepareService(self.state, SimpleNamespace(run=AsyncMock(side_effect=execute)))
+        result = await service.run(item_id="repair-owner", profile_id=self.profile_id,
+            context=self.context, session=self.session, payload=self._payload(bundles=1, page_access=True))
+        self.assertEqual(sequence, ["AD_ACCOUNT", "PAGE_ACCESS"])
+        self.assertEqual(result["actual"]["business_ids"], [self.business_id])
+
+    async def test_unverified_page_owner_is_not_counted_as_existing_business(self):
+        await self.page_store.patch(owner_business_id=self.business_id, owner_business_confirmed=False)
+        async def execute(**kwargs):
+            self.assertEqual(kwargs["payload"]["steps"], ["BUSINESS"])
+            raise ProvisioningError("PRIVATE_BM_INVENTORY_INCONCLUSIVE", "no create", retryable=True)
+        service = PrepareService(self.state, SimpleNamespace(run=AsyncMock(side_effect=execute)))
+        with self.assertRaises(ProvisioningError):
+            await service.run(item_id="unverified-owner", profile_id=self.profile_id,
+                context=self.context, session=self.session, payload=self._payload(bundles=1))
+
     async def test_workspace_inventory_with_two_bm_rk_pairs_suppresses_duplicate_create(self):
         self.context.businesses = [
             {
