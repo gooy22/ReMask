@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import weakref
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -24,6 +25,7 @@ from .page_full_control import ensure_existing_page_full_control
 from .ad_account_full_control import ensure_ad_account_full_control
 
 log=logging.getLogger('remask.page_access')
+_PRIVATE_PAGE_LOCKS = weakref.WeakValueDictionary()
 
 
 def _browser_lease(session: Any, **kwargs: Any):
@@ -1199,6 +1201,11 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
         elif context_binding:
             verified=True
             evidence=[context_binding]
+        elif getattr(session, 'private_only', False) is True:
+            from .private_create_handlers import _rk_inventory
+            proof = await _rk_inventory(await session.facebook_web(), business, rk_name, account)
+            verified = proof.get('id') == account
+            evidence = proof.get('diagnostics') or []
         else:
             verified,evidence=await _verify_expected_ad_account_in_business(
                 session,
@@ -1280,13 +1287,41 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
     prior=((await state.step(item,ProvisioningStep.PAGE_ACCESS)) or {}).get('result') or {}
     async def checkpoint(patch):
         phase=str(patch.get('phase') or '')
-        if phase.startswith('TARGET_PAGE_ACCESS_') or phase.startswith('TARGET_PAGE_OPERATOR_'):
+        if (phase.startswith('TARGET_PAGE_ACCESS_') or phase.startswith('TARGET_PAGE_OPERATOR_')
+                or phase.startswith('PRIVATE_ASSET_')):
             current=await store.get(); grants=current.get('grants') or {}
             await store.patch(grants={**grants,business:{**grants.get(business,{}),**patch}})
         await state.checkpoint(item,profile,scope,ProvisioningStep.PAGE_ACCESS,
             {'page_id':config['page_id'],'business_id':business,'ad_account_id':account,**patch})
+    private_http = getattr(session, 'private_only', False) is True
     await checkpoint({'diagnostic':{'stage':'target_page_access_start','business_id':business,
-        'ad_account_id':account,'owner_bm_required':False,'access_mode':'shared_ads_access'}})
+        'ad_account_id':account,'owner_bm_required':private_http,
+        'access_mode':'existing_page_full_control' if private_http else 'shared_ads_access'}})
+    if getattr(session, 'private_only', False) is True:
+        from ..private_page_ownership import ensure_private_page_full_control
+        lock_key = str(config['page_id'])
+        lock = _PRIVATE_PAGE_LOCKS.get(lock_key)
+        if lock is None:
+            lock = asyncio.Lock()
+            _PRIVATE_PAGE_LOCKS[lock_key] = lock
+        async with lock:
+            config = await store.get()
+            saved_grant = (config.get('grants') or {}).get(business) or {}
+            resume_state = {**saved_grant, **prior}
+            web = await session.facebook_web()
+            web.private_only = True
+            from .private_create_handlers import _rk_inventory
+            rk_inventory = await _rk_inventory(web, business, rk_name, account)
+            if rk_inventory.get('id') != account:
+                raise ProvisioningError('BUSINESS_RK_RELATION_INCONCLUSIVE',
+                    'Fresh HTTP inventory did not confirm the exact BM/RK relation for asset assignment.', retryable=True)
+            result = await ensure_private_page_full_control(web, page_id=config['page_id'],
+                business_id=business, ad_account_id=account, profile_id=profile,
+                checkpoint=checkpoint, prior=resume_state, rk_asset_id=rk_inventory.get('asset_ui_id', ''))
+            await store.patch(owner_business_id=business, owner_business_confirmed=True,
+                ownership_phase='PAGE_OWNERSHIP_CONFIRMED')
+        return {**result, 'page_name': config['name'], 'identity_verification': 'not_requested',
+            'ad_account_page_access_verified': False}
     try:
         legacy_full_control=params.get('access_mode')=='existing_page_full_control'
         if legacy_full_control:

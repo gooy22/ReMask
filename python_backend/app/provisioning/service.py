@@ -165,7 +165,12 @@ class ProvisioningService:
 
         for step in steps:
             prior = await self.state.step(item_id, step)
-            if prior and prior.get("status") == "SUCCESS":
+            access_params = parameters.get("PAGE_ACCESS", parameters.get("page_access", {}))
+            full_access = (step is ProvisioningStep.PAGE_ACCESS and isinstance(access_params, dict)
+                and access_params.get("access_mode") == "existing_page_full_control")
+            stale_access = full_access and prior and not all((prior.get("result") or {}).get(key) is True
+                for key in ("page_owned_by_business", "operator_full_control_verified", "rk_operator_full_control_verified"))
+            if prior and prior.get("status") == "SUCCESS" and not stale_access:
                 if step is ProvisioningStep.FUNDING:
                     snapshot = await self.state.snapshot(profile_id, scope_key)
                     funding_params = parameters.get("FUNDING", parameters.get("funding", {}))
@@ -497,6 +502,10 @@ class ProvisioningService:
                         f"PAGE_ACCESS VERIFY requires numeric {key}",
                         retryable=True,
                     )
+            if params.get("access_mode") == "existing_page_full_control" and not all(result.get(key) is True
+                    for key in ("page_owned_by_business", "operator_full_control_verified", "rk_operator_full_control_verified")):
+                raise ProvisioningError("VERIFY_FULL_CONTROL_UNCONFIRMED",
+                    "PAGE_ACCESS did not confirm BM ownership and full operator rights on both Page and RK.", retryable=True)
             # Current full-control flow proves both relation stages.
             # Older verified PAGE_ACCESS results may instead expose the
             # stronger aggregate ad_account_page_access_verified flag.

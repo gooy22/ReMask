@@ -86,6 +86,9 @@ class PreparePlannerTests(unittest.IsolatedAsyncioTestCase):
                 "ad_account_id": account,
                 "page_shared_to_business": True,
                 "operator_ads_access_assigned": True,
+                "page_owned_by_business": True,
+                "operator_full_control_verified": True,
+                "rk_operator_full_control_verified": True,
             },
         )
 

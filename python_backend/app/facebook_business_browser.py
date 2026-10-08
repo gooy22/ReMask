@@ -1169,7 +1169,7 @@ def _extract_business_inventory_rows(payload: Any) -> list[dict[str, str]]:
     def compact(value: str) -> str:
         return value.casefold().replace("_", "").replace("-", "").replace(" ", "")
 
-    business_types = {"business", "businessportfolio", "businessmanager", "bizkitbusiness"}
+    business_types = {"business", "adbusiness", "businessportfolio", "businessmanager", "bizkitbusiness"}
     business_slots = business_types | {"businesses", "businessportfolios", "businessmanagers", "ownedbusinesses", "clientbusinesses"}
     wrappers = {"edges", "nodes", "node", "items"}
     asset_keys = {"page_id", "pageId", "ad_account_id", "adAccountId", "account_id", "user_id", "userId"}
@@ -1503,6 +1503,7 @@ def _extract_inventory_ad_account_rows(
         row = {
             "id": account_id,
             "account_id": account_id,
+            "business_object_ui_id": _digits(first_value("business_object_ui_id")),
             "name": _clean(
                 first_value(
                     "name",

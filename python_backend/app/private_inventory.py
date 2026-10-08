@@ -204,6 +204,8 @@ def _normalize_connected_inventory(payloads: list[Any], business_id: str) -> lis
                     invalid = True
                     continue
                 name = str(node.get("business_object_name") or node.get("name") or "")
+                ui_ids = {_clean_id(node.get("business_object_ui_id"))}
+                ui_ids.discard("")
                 pending = [edge.get("nameColumn", {})]
                 visited = 0
                 while pending and visited < 64:
@@ -214,10 +216,17 @@ def _normalize_connected_inventory(payloads: list[Any], business_id: str) -> lis
                     value_id = _clean_id(value.get("business_object_id") or value.get("assetID") or value.get("id"))
                     if value_id == account_id:
                         name = str(value.get("business_object_name") or value.get("name") or name)
+                        ui_id = _clean_id(value.get("business_object_ui_id"))
+                        if ui_id:
+                            ui_ids.add(ui_id)
                     pending.extend(child for key, child in value.items() if isinstance(child, dict)
                         and key not in {"owning_business", "business", "phone_numbers"})
+                if len(ui_ids) > 1:
+                    invalid = True
+                    continue
                 accounts.append({"node": {"__typename": "AdAccount", "id": account_id, "name": name,
-                    "business_id": business_id}})
+                    "business_id": business_id,
+                    "business_object_ui_id": next(iter(ui_ids), "")}})
             existence = business.get("business_ad_accounts")
             if isinstance(existence, dict) and existence.get("edges") and not accounts:
                 # The observed query separately reports first:1 RK existence.

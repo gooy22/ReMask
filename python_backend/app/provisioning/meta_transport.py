@@ -77,7 +77,8 @@ class MetaTransportRouter:
     def policy(self, capability: str) -> TransportPolicy:
         key = str(capability or "").strip().upper()
         if self.private_only and key in self.POLICIES:
-            return TransportPolicy(key, self.POLICIES[key].primary, "none_private_only")
+            primary = "facebook_private_http_contract" if key == "PAGE_ACCESS" else self.POLICIES[key].primary
+            return TransportPolicy(key, primary, "none_private_only")
         return self.POLICIES.get(
             key,
             TransportPolicy(

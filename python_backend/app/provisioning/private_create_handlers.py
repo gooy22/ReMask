@@ -88,6 +88,8 @@ class _Action:
 
 
 def _business_collection_complete(payload):
+    if isinstance(payload, dict) and (payload.get('errors') or payload.get('error')):
+        return False
     observations = []
     def walk(value):
         if isinstance(value, dict):
@@ -95,10 +97,15 @@ def _business_collection_complete(payload):
                 compact = re.sub(r"[^a-z0-9]", "", key.lower())
                 if compact in {"businesses", "businessportfolios", "businessmanagers"}:
                     info = child.get("page_info", child.get("pageInfo", {})) if isinstance(child, dict) else {}
-                    observations.append(isinstance(child, list) or bool(isinstance(info, dict)
+                    items = child if isinstance(child, list) else next((child.get(field) for field in ('edges', 'nodes', 'items')
+                        if isinstance(child, dict) and isinstance(child.get(field), list)), None)
+                    valid = isinstance(items, list) and all(
+                        isinstance(item, dict) and len(_extract_business_inventory_rows(item)) == 1
+                        for item in items)
+                    observations.append(valid and (isinstance(child, list) or bool(isinstance(info, dict)
                         and info.get("has_next_page", info.get("hasNextPage")) is False
                         and info.get("has_previous_page", info.get("hasPreviousPage", False)) is False
-                        and any(isinstance(child.get(field), list) for field in ("edges", "nodes", "items"))))
+                        and any(isinstance(child.get(field), list) for field in ("edges", "nodes", "items")))))
                 walk(child)
         elif isinstance(value, list):
             for child in value:
@@ -111,6 +118,7 @@ async def _business_inventory(web, expected=""):
     from urllib.parse import urlsplit
     rows = {}
     complete = False
+    diagnostics = []
     urls = ["https://business.facebook.com/latest/home", "https://business.facebook.com/latest/overview"]
     if expected:
         urls.insert(0, "https://business.facebook.com/latest/settings/business_info/?business_id=" + expected)
@@ -124,15 +132,21 @@ async def _business_inventory(web, expected=""):
                 + "; authentication verification stopped and CREATE checkpoint was retained.", retryable=True)
         if not 200 <= status < 300 or urlsplit(final).hostname != "business.facebook.com":
             continue
-        for payload in _json_payloads(body):
+        payloads = list(_json_payloads(body))
+        for payload in payloads:
             complete = complete or _business_collection_complete(payload)
             for row in _extract_business_inventory_rows(payload):
                 business = _id(row.get("id"))
                 if business:
                     rows[business] = _clean(row.get("name"))
+        diagnostic = {"path": urlsplit(final).path, "status": status,
+            "payload_count": len(payloads), "business_ids": sorted(rows), "complete": complete}
+        diagnostics.append(diagnostic)
+        log.info("BM private inventory expected=%s verification=%s", expected,
+            json.dumps(diagnostic, separators=(",", ":")))
         if expected and expected in rows:
             break
-    return {"rows": rows, "complete": complete, "source": "private_http_business_response"}
+    return {"rows": rows, "complete": complete, "source": "private_http_business_response", "diagnostics": diagnostics}
 
 
 async def _rk_inventory(web, business, name, expected=""):
@@ -157,6 +171,7 @@ async def _rk_inventory(web, business, name, expected=""):
     named = sorted({_id(item["id"]) for item in accounts if _clean(item.get("name")).casefold() == name.casefold()})
     confirmed = expected if expected and expected in ids else (named[0] if not expected and len(named) == 1 else "")
     return {"id": confirmed, "ids": ids, "named": named,
+        "asset_ui_id": next((_id(item.get("business_object_ui_id")) for item in accounts if _id(item.get("id")) == confirmed), ""),
         "complete": row.get("inventory_complete") is True, "source": "private_http_exact_business_inventory",
         "diagnostics": diagnostics}
 
@@ -200,6 +215,8 @@ async def business_handler(session, params, state, *args, **kwargs):
         raise ProvisioningError("BUSINESS_CHECKPOINT_MISMATCH", "Saved CREATE belongs to another BM name.")
     expected = _id(action.saved.get("business_id") or action.saved.get("create_response_business_id") or state.get("business_id"))
     before = await asyncio.wait_for(_business_inventory(action.web, expected), timeout=30)
+    await action.checkpoint({"activity": "BM_PRIVATE_INVENTORY_PRECHECK",
+        "inventory_verification": before.get("diagnostics", []), "inventory_complete": before["complete"]})
     named = [business for business, row_name in before["rows"].items() if row_name.casefold() == name.casefold()]
     confirmed = expected if expected in before["rows"] else (named[0] if not expected and len(named) == 1 else "")
     pending = _clean(action.saved.get("phase")).upper() in _PENDING

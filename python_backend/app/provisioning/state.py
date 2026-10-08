@@ -1340,12 +1340,15 @@ class ProvisioningStateStore:
         profile_id: str,
         business_id: str,
         ad_account_id: str,
+        *,
+        full_control: bool = False,
     ) -> bool:
         return await asyncio.to_thread(
             self._page_access_confirmed_sync,
             str(profile_id or "").strip(),
             str(business_id or "").strip(),
             str(ad_account_id or "").removeprefix("act_").strip(),
+            full_control,
         )
 
     def _page_access_confirmed_sync(
@@ -1353,6 +1356,7 @@ class ProvisioningStateStore:
         profile_id: str,
         business_id: str,
         ad_account_id: str,
+        full_control: bool = False,
     ) -> bool:
         if not profile_id or not business_id.isdigit() or not ad_account_id.isdigit():
             return False
@@ -1382,6 +1386,11 @@ class ProvisioningStateStore:
                 and account == ad_account_id
                 and result.get("page_shared_to_business") is True
                 and result.get("operator_ads_access_assigned") is True
+                and (not full_control or (
+                    result.get("page_owned_by_business") is True
+                    and result.get("operator_full_control_verified") is True
+                    and result.get("rk_operator_full_control_verified") is True
+                ))
             ):
                 return True
         return False

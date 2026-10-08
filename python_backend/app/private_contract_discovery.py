@@ -440,6 +440,11 @@ async def _discover_web_modules(web, *, entry, observed, label, prepare_document
     # All operations here are GET. Mutation authorization is elsewhere.
     async with asyncio.timeout(55):
         status, body, final = await web.fetch_text(entry, max_bytes=3_000_000)
+        from .private_inventory import _auth_gate
+        gate = _auth_gate(final, body)
+        if gate:
+            from .provisioning.models import ProvisioningError
+            raise ProvisioningError(gate, 'Meta contract discovery requires the profile session to be restored.', retryable=True)
         final_parts = urlsplit(final)
         if (status != 200 or final_parts.hostname not in {urlsplit(entry).hostname, "facebook.com"}
                 or any(word in final_parts.path.lower() for word in ("/login", "/checkpoint"))):

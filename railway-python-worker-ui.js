@@ -4113,7 +4113,7 @@ async function pythonWorkerOpenAutoModal() {
   }
 
   const count = document.createElement('input');
-  count.type = 'number'; count.min = '1'; count.max = '20'; count.value = '2';
+  count.type = 'number'; count.min = '1'; count.max = '20'; count.value = '1';
   field('Комплектов BM + РК на профиль (1–20)', count);
 
   const category = document.createElement('input');
@@ -4144,7 +4144,7 @@ async function pythonWorkerOpenAutoModal() {
     const task = acceptedRequest.profiles[0].tasks[0];
     const desired = task.payload.desired || {};
     const params = task.payload.parameters || {};
-    count.value = String(desired.ad_accounts || 2);
+    count.value = String(desired.ad_accounts || 1);
     category.value = String((params.FAN_PAGES || {}).category || 'Digital creator');
     currency.value = String((params.AD_ACCOUNT || {}).currency || 'USD');
     timezone.value = String((params.AD_ACCOUNT || {}).timezone_id || 137);

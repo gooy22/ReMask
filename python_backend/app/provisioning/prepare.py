@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import logging
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
@@ -9,6 +11,8 @@ from .advertising_page import AdvertisingPageStore
 from .models import ProvisioningError
 from .service import ProvisioningService
 from .state import ProvisioningStateStore
+
+log = logging.getLogger('remask.prepare')
 
 
 @dataclass(slots=True, frozen=True)
@@ -108,6 +112,8 @@ class PrepareService:
         **extra: Any,
     ) -> None:
         trace.append({"action": action, "phase": phase, **extra})
+        log.info('Prepare action=%s phase=%s context=%s', action, phase,
+            json.dumps(extra, separators=(',', ':')))
 
     async def _business_inventory(
         self,
@@ -326,6 +332,8 @@ class PrepareService:
             )
 
         desired = self._desired(payload)
+        log.info('Prepare job=%s profile=%s desired_bundles=%s page_access=%s',
+            item_id, profile_id, desired.ad_accounts, desired.require_page_access)
         parameters = self._parameters(payload)
         base_scope = str(
             payload.get("scope_key")
@@ -698,6 +706,7 @@ class PrepareService:
                     profile_id,
                     business_id,
                     account_id,
+                    full_control=True,
                 )
                 if access_confirmed:
                     self._trace(
@@ -724,6 +733,7 @@ class PrepareService:
                     f"{base_scope}:bundle:{bundle['slot']}:access:{account_id}"
                 )
                 access_params = {
+                    "access_mode": "existing_page_full_control",
                     **parameters["PAGE_ACCESS"],
                     "existing_target": True,
                     "business_id": business_id,
@@ -758,6 +768,7 @@ class PrepareService:
                     profile_id,
                     business_id,
                     account_id,
+                    full_control=True,
                 )
                 self._trace(
                     trace,
@@ -804,6 +815,7 @@ class PrepareService:
                     profile_id,
                     business_id,
                     account_id,
+                    full_control=True,
                 )
             )
             payment = (
