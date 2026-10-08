@@ -110,6 +110,12 @@ class StaticReadTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(proof['complete']);self.assertEqual(len(proof['rows']),2)
         self.assertEqual([call.args[1]['fetchNumberForBusinessScopes'] for call in web.graphql.call_args_list],[200,400])
 
+    async def test_fresh_complete_prefix_does_not_keep_disappeared_scope(self):
+        web=self.web(None)
+        web.graphql.side_effect=[scopes([(BM,'Old')],next_page=True),scopes([(RK,'Current')])]
+        proof=await read_business_inventory(web)
+        self.assertTrue(proof['complete']);self.assertEqual(proof['rows'],{RK:'Current'})
+
     async def test_expected_bm_is_independently_verified_without_requiring_complete_list(self):
         web=self.web({'data':{'business':{'id':BM,'name':'BM','scheduledForDeletion':False}}})
         proof=await read_business_inventory(web,BM)

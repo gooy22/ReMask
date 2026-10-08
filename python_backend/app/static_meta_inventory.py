@@ -95,7 +95,9 @@ async def read_business_inventory(web, expected=''):
         variables['fetchNumberForBusinessScopes'] = count
         payload = await execute(web, 'READ_BM', variables=variables)
         found, complete, more = _bm_scopes(payload)
-        rows.update(found)
+        # Each request is a fresh full prefix, not a cursor page. Do not merge
+        # identities that disappeared between responses into a complete result.
+        rows = found
         diag = diagnostic('READ_BM', payload)
         diag.update(business_ids=sorted(found), complete=complete, requested_count=count)
         diagnostics.append(diag)
