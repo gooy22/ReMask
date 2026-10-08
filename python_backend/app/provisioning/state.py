@@ -246,9 +246,14 @@ class ProvisioningStateStore:
                 and result.get("recovered_after_create_uncertainty") is True
                 and phase == "CREATE_CONFIRMED"
             )
+            verification = result.get("verification") if isinstance(result.get("verification"), dict) else {}
+            private_inventory_verified = (row["status"] == "SUCCESS"
+                and result.get("private_inventory_verified") is True
+                and verification.get("source") == "private_http_business_response"
+                and str(verification.get("exact_business_id") or "") == business)
             if not profile or not business.isdigit() or not 5 <= len(business) <= 30:
                 continue
-            if not (exact_create or legacy_created_before_attach or inventory_recovered or phase == "PAGE_CONFIRMED"):
+            if not (exact_create or legacy_created_before_attach or inventory_recovered or private_inventory_verified or phase == "PAGE_CONFIRMED"):
                 continue
             businesses = groups.setdefault(profile, {"businesses": {}})["businesses"]
             if business in businesses:
@@ -261,6 +266,39 @@ class ProvisioningStateStore:
                 "updated_at": int(row["updated_at"] or 0),
             }
         return groups
+
+    async def latest_business_resume_for_name(self, profile_id: str, business_name: str, *, exclude_item_id: str = "") -> dict[str, Any]:
+        """Protect private BM CREATE across Jobs, including Page-independent BMs."""
+        return await asyncio.to_thread(self._latest_business_resume_for_name_sync,
+            profile_id, business_name, exclude_item_id)
+
+    def _latest_business_resume_for_name_sync(self, profile_id, business_name, exclude_item_id):
+        with self._connect() as con:
+            rows = con.execute(
+                "SELECT item_id,result_json FROM provisioning_steps WHERE profile_id=? AND step=? AND result_json IS NOT NULL ORDER BY updated_at DESC LIMIT 250",
+                (str(profile_id), ProvisioningStep.BUSINESS.value),
+            ).fetchall()
+        pending = {"CREATE_CLICK_INTENT", "CREATE_PENDING_SUBMIT", "CREATE_SUBMIT_INTENT",
+                   "CREATE_SUBMITTED", "CREATE_RESULT_UNKNOWN", "CREATE_RESULT_UNVERIFIED", "RECONCILE_CREATE"}
+        for row in rows:
+            if str(row["item_id"]) == exclude_item_id:
+                continue
+            try:
+                result = json.loads(row["result_json"])
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(result, dict):
+                continue
+            name = str(result.get("business_name") or result.get("name") or "").strip()
+            if name.casefold() != str(business_name).strip().casefold():
+                continue
+            phase = str(result.get("phase") or "").upper()
+            expected = str(result.get("business_id") or result.get("create_response_business_id") or "")
+            if expected.isdigit() or phase in pending:
+                return {"item_id": str(row["item_id"]), "result": result}
+            # An unrelated fresh precheck is not proof that an older POST was
+            # unsent. Keep searching until the original submitted intent.
+        return {}
 
     async def latest_business_resume_for_page(
         self,
@@ -399,6 +437,37 @@ class ProvisioningStateStore:
             exclude_item_id,
             str(account_name or "").strip(),
         )
+
+    async def latest_private_ad_account_resume(self, profile_id: str, business_id: str, *, exclude_item_id: str = "", account_name: str = "") -> dict[str, Any]:
+        """A later precheck cannot erase an earlier possibly dispatched POST."""
+        return await asyncio.to_thread(self._latest_private_ad_account_resume_sync,
+            profile_id, business_id, exclude_item_id, account_name)
+
+    def _latest_private_ad_account_resume_sync(self, profile_id, business_id, exclude_item_id, account_name):
+        with self._connect() as con:
+            rows = con.execute(
+                "SELECT item_id,result_json FROM provisioning_steps WHERE profile_id=? AND step=? AND result_json IS NOT NULL ORDER BY updated_at DESC LIMIT 250",
+                (str(profile_id), ProvisioningStep.AD_ACCOUNT.value),
+            ).fetchall()
+        pending = {"CREATE_CLICK_INTENT", "CREATE_SUBMIT_INTENT", "CREATE_SUBMITTED",
+                   "CREATE_RESULT_UNKNOWN", "CREATE_RESULT_UNVERIFIED", "RECONCILE_CREATE"}
+        for row in rows:
+            if str(row["item_id"]) == exclude_item_id:
+                continue
+            try:
+                result = json.loads(row["result_json"])
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(result, dict) or str(result.get("business_id") or "") != str(business_id):
+                continue
+            name = str(result.get("account_name") or result.get("name") or "").strip()
+            if account_name and name.casefold() != str(account_name).strip().casefold():
+                continue
+            phase = str(result.get("phase") or "").upper()
+            expected = str(result.get("ad_account_id") or result.get("create_response_ad_account_id") or "").removeprefix("act_")
+            if expected.isdigit() or phase in pending:
+                return {"item_id": str(row["item_id"]), "result": result}
+        return {}
 
     def _latest_ad_account_resume_for_business_sync(
         self,

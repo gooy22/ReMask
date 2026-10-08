@@ -158,7 +158,10 @@ class ProvisioningService:
         ).strip() or "default"
 
         completed: list[dict[str, Any]] = []
-        meta_transport = MetaTransportRouter(session)
+        meta_transport = MetaTransportRouter(session, private_only=(
+            payload.get("transport_mode") == "private_http_only" or scope_key.startswith("prepare:")
+            or any(step in {ProvisioningStep.BUSINESS, ProvisioningStep.AD_ACCOUNT} for step in steps)
+        ))
 
         for step in steps:
             prior = await self.state.step(item_id, step)
@@ -518,7 +521,7 @@ class ProvisioningService:
         if step is ProvisioningStep.FAN_PAGES and params.get('common_page') is True:
             from .advertising_page import ensure_common_page,AdvertisingPageStore
             try:
-                return await ensure_common_page(session,params,self.state,self.profile_resolver)
+                return await ensure_common_page(kwargs.get('meta_transport') or session,params,self.state,self.profile_resolver)
             except ProvisioningError:
                 config=await AdvertisingPageStore.for_context(self.state,session.context).get()
                 creation_item=str(config.get('creation_item_id') or '')

@@ -934,10 +934,10 @@ async def create_business_with_docids(
         }
     )
     create_payload_meta = (
-        "payload_version=scope_selector_footer_v6_browser_native "
-        f"transport=browser_native "
+        "payload_version=scope_selector_footer_v6_private_http "
+        f"transport=private_http "
         f"qpl={'captured' if _clean(qpl_join_id) else 'generated_uuid4'} "
-        f"envelope_source={'captured' if captured_envelope else 'browser_or_bootstrap'} "
+        f"envelope_source={'captured' if captured_envelope else 'profile_http_bootstrap'} "
         f"envelope={','.join(envelope_keys) if envelope_keys else '-'}"
     )
 
@@ -1060,42 +1060,10 @@ async def create_business_with_docids(
                     ),
                 )
             else:
-                # Legacy test/dummy sessions may expose only the previous
-                # browser-native method. Keep that compatibility path out of
-                # normal production sessions; never switch to it after a
-                # direct private POST has started.
-                browser_graphql = getattr(
-                    session,
-                    "graphql_browser_native",
-                    None,
-                )
-                if not callable(browser_graphql):
-                    raise BusinessMutationError(
-                        "CREATE_BM_PRIVATE_TRANSPORT_UNAVAILABLE",
-                        (
-                            "CREATE_BM requires the private cookie GraphQL "
-                            "transport, but the current session does not "
-                            "provide it."
-                        ),
-                        retryable=False,
-                    )
-                response = await browser_graphql(
-                    candidate.doc_id,
-                    variables,
-                    friendly_name=(
-                        candidate.friendly_name
-                    ),
-                    endpoint_url=(
-                        candidate.endpoint_url
-                    ),
-                    request_envelope=(
-                        captured_envelope
-                    ),
-                    **(
-                        {"before_submit": before_submit}
-                        if before_submit is not None
-                        else {}
-                    ),
+                raise BusinessMutationError(
+                    "CREATE_BM_PRIVATE_TRANSPORT_UNAVAILABLE",
+                    "CREATE_BM requires direct cookie/proxy GraphQL transport; no browser fallback is available.",
+                    retryable=False,
                 )
 
         except Exception as exc:
@@ -1155,6 +1123,10 @@ async def create_business_with_docids(
             if (
                 failure_kind
                 == "stale_schema"
+                and (
+                    getattr(exc, "request_may_have_been_sent", None) is False
+                    or (bool(_graphql_errors(payload)) and not payload.get("data"))
+                )
             ):
                 continue
 
@@ -1312,6 +1284,7 @@ async def create_business_with_docids(
         if (
             failure_kind
             == "stale_schema"
+            and not response.get("data")
         ):
             continue
 

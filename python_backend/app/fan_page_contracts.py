@@ -105,8 +105,13 @@ class FanPageContractStore:
 
     def register_capture(self, capture: dict[str, Any], *, name: str, category: str,
                          bio: str, actor_id: str) -> bool:
-        if capture.get("source") != "live_page_create_capture" or not category.strip():
+        if capture.get("source") not in {"live_page_create_capture", "live_private_web_modules"} or not category.strip():
             return False
+        if capture.get("source") == "live_private_web_modules":
+            proof = capture.get("module_sha256")
+            if (not isinstance(proof, list) or not proof
+                    or not all(isinstance(item, str) and re.fullmatch(r"[a-f0-9]{64}", item) for item in proof)):
+                return False
         if not valid_page_create(capture, name=name, actor_id=actor_id):
             return False
         arguments = set()

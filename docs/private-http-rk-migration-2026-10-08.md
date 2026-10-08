@@ -205,3 +205,48 @@ Profile 15 reached BM 1428816905866955 but its RK cache was missing and bounded
 schema capture stopped on the Details screen with `ad_account_wizard_action_missing`,
 no CREATE attempted. HTTP/2 does not resolve these semantic/capture failures by
 itself. No working RK schema was observed in that job.
+
+
+## Production BM/RK HTTP-only entrypoints (supersedes earlier fallback table)
+
+Latest job d45c6c11ba594bcc86a7d04e00c2980f on 60e1026, 07:28 UTC: Meta GETs
+negotiated HTTP/2. Profile 14 stopped at Business session verification before
+POST. Profile 15 had no cached RK schema and still called the Chromium cold
+capture path twice, failing on Details. No RK CREATE was attempted.
+
+The production registry now binds BUSINESS and AD_ACCOUNT to
+provisioning/private_create_handlers.py. These handlers have no browser factory,
+lease, UI action or native browser GraphQL call. Legacy UI handlers remain as
+compatibility code for historical observers and regression fixtures; the registry
+no longer executes them. All BM/RK jobs select private-only transport. The
+low-level BM submit function also removes its browser compatibility POST branch.
+
+Cold RK discovery uses authenticated HTML and Meta JS GETs with a 55-second,
+16 MB aggregate budget. Tree-sitter requires the exact persisted Relay artifact
+and sender variables. Unique immutable import/input aliases can be resolved;
+reassignment, shadowing, spreads, computed properties, unknown runtime fields and
+conflicting schemas are rejected. JavaScript is never evaluated. Profile values
+are typed bindings; cookies, auth fields and opaque foreign identities cannot
+enter the stored template. Unobserved input fields are not invented. Unsupported
+module shapes return PRIVATE_AD_ACCOUNT_CONTRACT_UNAVAILABLE before POST.
+
+Both actions persist CREATE_SUBMIT_INTENT before POST. Response IDs remain
+unverified until separate HTTP inventory proves their exact scope. Lost responses
+enter VERIFY, not another CREATE. New Jobs and new prechecks cannot erase an
+older possibly submitted intent. Complete empty inventory immediately after an
+ambiguous submit does not authorize re-submission. Last confirmed entities are
+not deleted on transient failures. RK commits preserve the BM-to-RK binding;
+BM proof survives service.complete so Prepare/Workspace can use it.
+
+Auth checks match actual login forms/redirects rather than incidental JavaScript
+login_form references. Safe Business precheck diagnostics identify the auth
+reason. This addresses false positives, but the old profile 14 log does not
+prove that this was its cause.
+
+HTTPX already negotiates HTTP/2 and decodes supported response compression.
+HPACK compresses headers, not the GraphQL body; unverified request-body gzip is
+not introduced. Tests exercise the production registry, real FacebookWebSession
+HTTP fixtures, cold discovery, intent storage failure, independent inventory,
+lost responses and cross-Job reconciliation. CI/deployment success is not a live
+Meta bundle success. Page ownership/full operator rights and card attachment
+remain separate contracts and are not certified by this BM/RK change.

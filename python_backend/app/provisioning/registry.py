@@ -3,8 +3,7 @@ from __future__ import annotations
 from typing import Any, Awaitable, Callable
 
 from .fan_pages_handler import fan_pages_handler
-from .business_handler import business_handler
-from .ad_account_handler import ad_account_handler
+from .private_create_handlers import business_handler, ad_account_handler
 from .funding_handler import funding_handler
 from .page_access_handler import page_access_handler
 

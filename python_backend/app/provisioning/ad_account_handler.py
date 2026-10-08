@@ -2035,6 +2035,23 @@ async def ad_account_handler(
     if captured_request:
         log.info("[%s] AD_ACCOUNT reusable contract hit business=%s doc_id=%s transport=private_http",
                  profile_id, business_id, captured_request.get("doc_id"))
+    if not captured_request and getattr(session, "private_only", False):
+        from ..private_contract_discovery import discover_private_ad_account_contract
+        await browser_checkpoint({"phase": "CREATE_CAPTURE_PREPARING",
+            "activity": "AD_ACCOUNT_PRIVATE_CONTRACT_DISCOVERY", "transport": "private_http"})
+        try:
+            captured_request = await discover_private_ad_account_contract(
+                await session.facebook_web(), business_id=business_id, account_name=rk_name,
+                currency=currency, timezone_id=timezone_id, actor_id=actor_id,
+            ) or {}
+        except Exception as discovery_error:
+            log.warning("[%s] RK private_discovery failed error_type=%s", profile_id, type(discovery_error).__name__)
+        if not captured_request:
+            await browser_checkpoint({"phase": "CREATE_NOT_SUBMITTED", "transport": "private_http",
+                "activity": "AD_ACCOUNT_PRIVATE_CONTRACT_UNAVAILABLE"})
+            raise ProvisioningError("PRIVATE_AD_ACCOUNT_CONTRACT_UNAVAILABLE",
+                "Current Meta web modules did not provide one complete Add-RK contract. No CREATE was sent.",
+                retryable=True)
     capture_failures: list[dict[str, Any]] = []
     capture_attempt_limit = 2
     capture_attempt_timeout_seconds = 75.0
@@ -2975,16 +2992,23 @@ async def ad_account_handler(
                         }
                     )
                     try:
-                        async with _browser_lease(session, timeout_seconds=90,
-                        ) as browser:
-                            refreshed_capture = (
-                                await browser.capture_ad_account_create_request(
-                                    business_id=business_id,
-                                    account_name=rk_name,
-                                    currency=currency,
-                                    timezone_id=timezone_id,
+                        if getattr(session, "private_only", False):
+                            from ..private_contract_discovery import discover_private_ad_account_contract
+                            refreshed_capture = await discover_private_ad_account_contract(
+                                await session.facebook_web(), business_id=business_id, account_name=rk_name,
+                                currency=currency, timezone_id=timezone_id, actor_id=actor_id,
+                            ) or {}
+                        else:
+                            async with _browser_lease(session, timeout_seconds=90,
+                            ) as browser:
+                                refreshed_capture = (
+                                    await browser.capture_ad_account_create_request(
+                                        business_id=business_id,
+                                        account_name=rk_name,
+                                        currency=currency,
+                                        timezone_id=timezone_id,
+                                    )
                                 )
-                            )
                     except BrowserBusinessError as recapture_exc:
                         recapture_diag = _compact_browser_diagnostic(
                             recapture_exc.diagnostic

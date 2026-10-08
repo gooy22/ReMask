@@ -129,12 +129,12 @@ class SystemAuditTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(evidence[0]["result"], "unavailable")
         self.session.graph_api.assert_not_awaited()
 
-    async def test_private_mutation_forwards_gate_to_native_transport(self):
+    async def test_private_mutation_forwards_gate_to_http_transport(self):
         gate = AsyncMock()
         native = AsyncMock(return_value={"data": {"bizkit_create_business": {"id": "555666777888999"}}})
         session = SimpleNamespace(profile=SimpleNamespace(name="audit-profile"),
             bootstrap=AsyncMock(return_value=SimpleNamespace(actor_id="123456789", request_context={})),
-            graphql_browser_native=native)
+            graphql=native)
         with patch("app.facebook_business_create.discover_current_scope_selector_create_candidate", new=AsyncMock(return_value=None)), patch("app.facebook_business_create.list_candidates", return_value=[]), patch("app.facebook_business_create.upsert_candidate"):
             await create_business_with_docids(session, business_name="Audit", user_email="owner@example.com",
                 manual_doc_id="28057338880523368", before_submit=gate)

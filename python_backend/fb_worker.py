@@ -1032,11 +1032,15 @@ class FacebookWebSession:
                 exc.meta_payload = {**exc.meta_payload, "business_precheck": attempts}
                 raise
             parts = urlsplit(final_url)
+            login_form = bool(re.search(
+                r"<form\b[^>]*(?:\bid\s*=\s*['\"]login_form['\"]|\baction\s*=\s*['\"][^'\"]*/login(?:[/?'\"]))",
+                body, re.I,
+            ))
             gated = (
                 parts.hostname != "business.facebook.com"
                 or "/login" in parts.path.lower()
                 or "/checkpoint" in parts.path.lower()
-                or "login_form" in body.lower()
+                or login_form
                 or status in {401, 403}
             )
             token = self._first_match(body, list(self.FB_DTSG_PATTERNS))
@@ -1045,12 +1049,19 @@ class FacebookWebSession:
                 "final_url": f"{parts.scheme}://{parts.hostname or ''}{parts.path}",
                 "http_status": status, "body_bytes": len(body.encode("utf-8")),
                 "token_present": bool(token), "auth_gated": gated,
+                "auth_reason": ("checkpoint_redirect" if "/checkpoint" in parts.path.lower()
+                    else "login_redirect" if "/login" in parts.path.lower()
+                    else "redirected_host" if parts.hostname != "business.facebook.com"
+                    else "login_form" if login_form else "http_auth" if status in {401, 403} else ""),
                 **self._document_failure_evidence(status, body),
             })
             if gated:
+                log.warning("[%s] BUSINESS auth precheck stopped before POST attempts=%s",
+                    self.profile.name, json.dumps(attempts, separators=(",", ":")))
                 self.invalidate_bootstrap()
                 error = AuthenticationError(
-                    "Facebook profile is reachable, but Meta Business requires login/session restoration. No GraphQL POST was sent."
+                    "Meta Business authentication was not confirmed. No GraphQL POST was sent. Verification: "
+                    + json.dumps(attempts, separators=(",", ":"))
                 )
                 error.request_may_have_been_sent = False
                 error.transport_stage = "business_auth_precheck"
@@ -1451,6 +1462,10 @@ class FacebookWebSession:
         This is intentionally a single-shot transport: CREATE_BM callers must
         not fall back to a second CREATE request after an ambiguous response.
         """
+
+        if getattr(self, "private_only", False):
+            raise RemoteRequestError("Prepare requires private HTTP; browser-native transport is disabled.",
+                request_may_have_been_sent=False, transport_stage="browser_transport_disabled")
 
         effective_doc_id = str(doc_id or "").strip()
         if not effective_doc_id:

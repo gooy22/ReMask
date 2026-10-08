@@ -49,13 +49,22 @@ async def _create_page_via_private_contract(session: Any, *, page_name: str, cat
             retryable=True, diagnostic={"safe_before_submit": True, "page_name": page_name})
     log.info("FP contract stage=resolve profile=%s hit=%s", profile_id, bool(contract))
     if contract is None:
-        # This lease only acquires an observed schema. The final
-        # POST is intercepted and aborted, never sent by Chromium.
-        async with _browser_lease(session, timeout_seconds=75) as browser:
-            observed = await browser.create_fan_page(
-                page_name=page_name, category=category, bio=bio[:255],
-                before_pages=before_pages, capture_only=True,
+        if getattr(session, "private_only", False):
+            from ..private_contract_discovery import discover_private_fan_page_contract
+            observed = await discover_private_fan_page_contract(
+                await session.facebook_web(), name=page_name, category=category, bio=bio[:255], actor_id=actor_id,
             )
+            if not observed:
+                raise BrowserBusinessError("PRIVATE_FAN_PAGE_CONTRACT_UNAVAILABLE",
+                    "Current Meta web modules did not confirm the Page schema and exact category; no CREATE was sent.",
+                    retryable=True, diagnostic={"safe_before_submit": True, "transport": "private_http"})
+        else:
+            # Legacy standalone flows may still explicitly use schema capture.
+            async with _browser_lease(session, timeout_seconds=75) as browser:
+                observed = await browser.create_fan_page(
+                    page_name=page_name, category=category, bio=bio[:255],
+                    before_pages=before_pages, capture_only=True,
+                )
         if observed.get("reused"):
             return observed
         try:

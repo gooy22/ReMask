@@ -79,8 +79,13 @@ class AdAccountContractStore:
     def register_capture(self, capture: dict[str, Any]) -> bool:
         """Return False for an unsupported shape, retaining direct fresh replay."""
         from .facebook_ad_account_create import _validate_rewritten_capture_variables, _replace_capture_values
-        if capture.get("source") != "live_business_settings_capture":
+        if capture.get("source") not in {"live_business_settings_capture", "live_private_web_modules"}:
             return False
+        if capture.get("source") == "live_private_web_modules":
+            proof = capture.get("module_sha256")
+            if (capture.get("schema_source") != "web_module" or not isinstance(proof, list)
+                    or not proof or not all(isinstance(item, str) and re.fullmatch(r"[a-f0-9]{64}", item) for item in proof)):
+                return False
         endpoint = str(capture.get("endpoint_url") or "https://business.facebook.com/api/graphql/")
         try:
             parts = urlsplit(endpoint)
@@ -104,6 +109,7 @@ class AdAccountContractStore:
                 variables, canary_name=str(capture["canary_name"]),
                 business_id=str(capture["business_id"]), account_name=str(capture["canary_name"]),
                 currency=str(capture["currency"]), timezone_id=int(capture["timezone_id"]),
+                include_attribution_defaults=capture.get("schema_source") != "web_module",
             )
             validation = _validate_rewritten_capture_variables(
                 variables, business_id=str(capture["business_id"]),
@@ -144,7 +150,7 @@ class AdAccountContractStore:
                 return False
             row = {"version": 1, "status": "captured", "observed_at": int(time.time()),
                    "doc_id": doc_id, "friendly_name": friendly, "endpoint_url": endpoint,
-                   "variables_template": shaped}
+                   "variables_template": shaped, "schema_source": capture.get("schema_source", "live_ui")}
             with _LOCK:
                 self._write(row)
             return True
@@ -188,7 +194,7 @@ class AdAccountContractStore:
         return {"doc_id": row["doc_id"], "friendly_name": row["friendly_name"],
                 "endpoint_url": row["endpoint_url"], "variables": variables,
                 "canary_name": account_name, "source": "reusable_business_settings_contract",
-                "contract_status": row["status"], "request_envelope": {}}
+                "contract_status": row["status"], "schema_source": row.get("schema_source", "live_ui"), "request_envelope": {}}
 
     def invalidate(self, doc_id: str) -> None:
         with _LOCK:

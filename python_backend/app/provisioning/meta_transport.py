@@ -26,10 +26,7 @@ class MetaTransportRouter:
         # a useful private diagnostic into BUSINESS_LOGIN_GATE and reintroduces
         # a second mutation transport.
         "BUSINESS": frozenset(),
-        "AD_ACCOUNT": frozenset({
-            "CREATE_AD_ACCOUNT_MUTATION_NOT_DISCOVERED",
-            "CREATE_AD_ACCOUNT_LIVE_CAPTURE_INVALID",
-        }),
+        "AD_ACCOUNT": frozenset(),
         "FAN_PAGES": frozenset({
             "FAN_PAGE_CREATE_NOT_SUBMITTED",
             "FAN_PAGE_CREATE_UI_CHANGED",
@@ -48,7 +45,7 @@ class MetaTransportRouter:
         "AD_ACCOUNT": TransportPolicy(
             capability="AD_ACCOUNT",
             primary="facebook_private_http_contract",
-            fallback="chromium_live_contract_capture",
+            fallback="none_private_only",
         ),
         "FAN_PAGES": TransportPolicy(
             capability="FAN_PAGES",
@@ -67,8 +64,9 @@ class MetaTransportRouter:
         ),
     }
 
-    def __init__(self, session: Any = None, *, context: Any = None) -> None:
+    def __init__(self, session: Any = None, *, context: Any = None, private_only: bool = False) -> None:
         self.session = session
+        self.private_only = private_only
         self._context = context if context is not None else getattr(session, "context", None)
         self._shared_browser: Any = None
 
@@ -78,6 +76,8 @@ class MetaTransportRouter:
 
     def policy(self, capability: str) -> TransportPolicy:
         key = str(capability or "").strip().upper()
+        if self.private_only and key in self.POLICIES:
+            return TransportPolicy(key, self.POLICIES[key].primary, "none_private_only")
         return self.POLICIES.get(
             key,
             TransportPolicy(
@@ -95,6 +95,8 @@ class MetaTransportRouter:
         submit_started: bool = False,
     ) -> bool:
         """Allow transport fallback only when the mutation is proven unsent."""
+        if self.private_only:
+            return False
         if submit_started:
             return False
         code = str(error_code or "").strip().upper()
@@ -122,6 +124,8 @@ class MetaTransportRouter:
         return callable(getattr(self.session, "facebook_web", None))
 
     def browser_available(self) -> bool:
+        if self.private_only:
+            return False
         return bool(
             callable(getattr(self.session, "facebook_business_browser", None))
             or self.context is not None
@@ -133,7 +137,10 @@ class MetaTransportRouter:
             raise RuntimeError(
                 "PROFILE_PRIVATE_WEB_TRANSPORT_UNAVAILABLE"
             )
-        return await factory()
+        web = await factory()
+        if self.private_only:
+            web.private_only = True
+        return web
 
     async def facebook_controller(self):
         factory = getattr(self.session, "facebook_controller", None)
@@ -141,9 +148,15 @@ class MetaTransportRouter:
             raise RuntimeError(
                 "PROFILE_PRIVATE_CONTROLLER_UNAVAILABLE"
             )
-        return await factory()
+        controller = await factory()
+        if self.private_only:
+            web = getattr(controller, "session", None)
+            if web is not None:
+                web.private_only = True
+        return controller
 
     async def facebook_business_browser(self):
+        self._require_browser_allowed()
         factory = getattr(self.session, "facebook_business_browser", None)
         if callable(factory):
             browser = await factory()
@@ -163,6 +176,7 @@ class MetaTransportRouter:
 
     def browser_lease(self, **kwargs: Any):
         """Create an isolated Chromium lease behind the transport facade."""
+        self._require_browser_allowed()
         factory = getattr(self.session, "browser_lease", None)
         if callable(factory):
             return factory(**kwargs)
@@ -173,6 +187,15 @@ class MetaTransportRouter:
             self.context,
             **kwargs,
         )
+
+    def _require_browser_allowed(self) -> None:
+        if self.private_only:
+            from ..facebook_business_browser import BrowserBusinessError
+            raise BrowserBusinessError(
+                "PRIVATE_CAPABILITY_UNAVAILABLE",
+                "The required private contract or inventory proof is unavailable; Prepare uses HTTP only.",
+                retryable=True, diagnostic={"transport": "private_http", "browser_started": False},
+            )
 
     async def close_business_browser(self) -> None:
         closer = getattr(self.session, "close_business_browser", None)

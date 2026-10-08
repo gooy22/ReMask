@@ -219,6 +219,7 @@ def _replace_capture_values(
     account_name: str,
     currency: str,
     timezone_id: int,
+    include_attribution_defaults: bool = True,
 ) -> dict[str, Any]:
     canary = _clean(canary_name)
     timezone_value = int(timezone_id)
@@ -341,7 +342,7 @@ def _replace_capture_values(
         if len(unique_candidates) == 1:
             attribution_target = unique_candidates[0]
 
-    if isinstance(attribution_target, dict):
+    if include_attribution_defaults and isinstance(attribution_target, dict):
         attribution_target.setdefault("end_advertiser", "NONE")
         attribution_target.setdefault("media_agency", "NONE")
         attribution_target.setdefault("partner", "NONE")
@@ -588,6 +589,7 @@ async def create_ad_account_with_docids(
         account_name=name,
         currency=currency_code,
         timezone_id=timezone,
+        include_attribution_defaults=capture.get("schema_source") != "web_module",
     )
     if not captured_variables_rewritten:
         raise AdAccountMutationError(

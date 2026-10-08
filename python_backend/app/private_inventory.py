@@ -41,7 +41,8 @@ def _auth_gate(url: str, body: str) -> str:
     folded_body = str(body or "").casefold()
     if "/checkpoint" in folded_url:
         return "CHECKPOINT_REQUIRED"
-    if "/login" in folded_url or "login_form" in folded_body:
+    login_form = bool(re.search(r"<form\b[^>]*(?:\bid\s*=\s*['\"]login_form['\"]|\baction\s*=\s*['\"][^'\"]*/login)", folded_body))
+    if "/login" in folded_url or login_form:
         if "business.facebook.com/business/loginpage" in folded_url:
             return "BUSINESS_LOGIN_GATE"
         return "SESSION_EXPIRED"

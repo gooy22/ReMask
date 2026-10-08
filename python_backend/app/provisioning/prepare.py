@@ -301,6 +301,7 @@ class PrepareService:
             session=session,
             payload={
                 "scope_key": scope_key,
+                "transport_mode": "private_http_only",
                 "steps": steps,
                 "parameters": parameters,
             },
@@ -903,4 +904,5 @@ class PrepareService:
             "ready_to_launch": ready_to_launch,
             "trace": trace,
         }
+
 
