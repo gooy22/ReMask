@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import uuid
@@ -118,13 +119,25 @@ def full_control_tasks(config, asset_type, *, variant=None):
     if len(table) != len(definitions):
         raise ProvisioningError("PRIVATE_FULL_CONTROL_CONFIG_UNCONFIRMED", "Meta returned conflicting permission tasks.", retryable=True)
     allowed = set(table)
-    if matches[0].get("hasAssetVariants") is True:
-        variants = (matches[0].get("assetVariantConfig") or {}).get("assetVariantPermissionConfig") or []
+    variant_config = matches[0].get("assetVariantConfig")
+    if matches[0].get("hasAssetVariants") is True and "assetVariantConfig" not in matches[0]:
+        raise ProvisioningError("PRIVATE_FULL_CONTROL_CONFIG_UNCONFIRMED", "Meta omitted the asset variant configuration field.", retryable=True)
+    if variant_config is not None:
+        if not isinstance(variant_config, dict):
+            raise ProvisioningError("PRIVATE_FULL_CONTROL_CONFIG_UNCONFIRMED", "Meta returned a malformed asset variant configuration.", retryable=True)
+        variants = variant_config.get("assetVariantPermissionConfig") or []
+        if not isinstance(variants, list):
+            raise ProvisioningError("PRIVATE_FULL_CONTROL_CONFIG_UNCONFIRMED", "Meta returned a malformed variant permission list.", retryable=True)
         selected = [row for row in variants if isinstance(row, dict) and variant is not None and row.get("assetVariantName") == variant]
         if len(selected) != 1:
             raise ProvisioningError("PRIVATE_FULL_CONTROL_CONFIG_UNCONFIRMED", "Meta did not confirm this asset's permission variant.", retryable=True)
-        allowed = _tasks(selected[0].get("availablePermissionTaskIDsForVariant"))
-        if not allowed or not allowed.issubset(table):
+        if "availablePermissionTaskIDsForVariant" not in selected[0]:
+            raise ProvisioningError("PRIVATE_FULL_CONTROL_CONFIG_UNCONFIRMED", "Meta omitted the variant task restriction field.", retryable=True)
+        restriction = selected[0]["availablePermissionTaskIDsForVariant"]
+        # The observed Meta SDK treats an explicit null as unrestricted;
+        # an empty list means no available tasks. Omission is inconclusive.
+        allowed = set(table) if restriction is None else _tasks(restriction)
+        if (restriction is not None and (not isinstance(restriction, list) or len(allowed) != len(restriction))) or not allowed.issubset(table):
             raise ProvisioningError("PRIVATE_FULL_CONTROL_CONFIG_UNCONFIRMED", "Meta returned incomplete variant permission tasks.", retryable=True)
     tasks = {key for key, row in table.items() if key in allowed and row.get("taskPermissionType") == "FULL_CONTROL_TASK"}
     if not tasks:
@@ -132,7 +145,11 @@ def full_control_tasks(config, asset_type, *, variant=None):
     pending = list(tasks)
     while pending:
         key = pending.pop()
-        raw_implied = table[key].get("impliedTaskIDs", [])
+        # BizKitSettingsConfigProvider normalizes a nullable impliedTaskIDs
+        # scalar to [], before any permission controls consume it.
+        raw_implied = table[key].get("impliedTaskIDs")
+        if raw_implied is None:
+            raw_implied = []
         implied = _tasks(raw_implied)
         if not isinstance(raw_implied, list) or len(implied) != len(raw_implied):
             raise ProvisioningError("PRIVATE_FULL_CONTROL_CONFIG_UNCONFIRMED", "Meta returned malformed implied permission tasks.", retryable=True)
@@ -159,6 +176,33 @@ def response_shape(payload):
             walk(value[0], path + "[]", depth + 1)
     walk((payload or {}).get("data", {}))
     return output
+
+
+def permission_config_shape(config, asset_type, variant):
+    """Only permission schema metadata; never include the complete config."""
+    asset_configs = config.get('assetConfigs')
+    rows = [row for row in (asset_configs if isinstance(asset_configs, list) else [])
+        if isinstance(row, dict) and row.get('assetType') == asset_type]
+    result = {'asset_type': asset_type, 'variant': str(variant)[:80] if variant is not None else None,
+        'matching_configs': len(rows)}
+    if len(rows) == 1:
+        row = rows[0]
+        tasks = row.get('permissionTasksConfig')
+        variants = row.get('assetVariantConfig')
+        result.update(task_config_type=type(tasks).__name__, has_user_permissions=row.get('hasUserPermissions') is True,
+            has_asset_variants=row.get('hasAssetVariants') is True,
+            variant_config_present='assetVariantConfig' in row, variant_config_type=type(variants).__name__)
+        result['task_shapes'] = [{'id': _id(task.get('taskID')), 'kind': str(task.get('taskPermissionType'))[:80],
+            'implied_type': type(task.get('impliedTaskIDs')).__name__,
+            'implied_count': len(task['impliedTaskIDs']) if isinstance(task.get('impliedTaskIDs'), list) else None}
+            for task in (tasks if isinstance(tasks, list) else [])[:100] if isinstance(task, dict)]
+        variant_rows = variants.get('assetVariantPermissionConfig') if isinstance(variants, dict) else []
+        result['variant_shapes'] = [{'name': str(item.get('assetVariantName'))[:80],
+            'restriction_present': 'availablePermissionTaskIDsForVariant' in item,
+            'restriction_type': type(item.get('availablePermissionTaskIDsForVariant')).__name__}
+            for item in (variant_rows if isinstance(variant_rows, list) else [])[:30]
+            if isinstance(item, dict)]
+    return result
 
 
 async def ensure_private_page_full_control(web, *, page_id, business_id, ad_account_id,
@@ -206,7 +250,19 @@ async def ensure_private_page_full_control(web, *, page_id, business_id, ad_acco
     config = node.get("bizKitSettingsConfig")
     if not isinstance(config, dict):
         raise ProvisioningError("PRIVATE_FULL_CONTROL_CONFIG_UNCONFIRMED", "Meta did not return current asset permission tasks.", retryable=True)
-    rk_tasks = full_control_tasks(config, "AD_ACCOUNT")
+    async def resolve_tasks(asset_type, variant=None):
+        try:
+            tasks = full_control_tasks(config, asset_type, variant=variant)
+        except ProvisioningError as exc:
+            diagnostic = {'stage': 'private_permission_config', 'code': exc.code,
+                'reason': str(exc), **permission_config_shape(config, asset_type, variant)}
+            await checkpoint({'diagnostic': diagnostic})
+            log.info('[%s] PAGE_ACCESS permission_config rejected=%s', profile_id,
+                json.dumps(diagnostic, separators=(',', ':')))
+            raise
+        log.info('[%s] PAGE_ACCESS permission_config asset=%s full_task_count=%d', profile_id, asset_type, len(tasks))
+        return tasks
+    rk_tasks = await resolve_tasks("AD_ACCOUNT")
     asset_types = sorted({row["assetType"] for row in config.get("assetConfigs", []) if isinstance(row, dict)
         and row.get("hasUserPermissions") is True and isinstance(row.get("assetType"), str)})
     target = {"business_id": business, "page_id": page, "ad_account_id": account, "rk_asset_id": _id(rk_asset_id) or account,
@@ -282,7 +338,7 @@ async def ensure_private_page_full_control(web, *, page_id, business_id, ad_acco
         return None
 
     owned = await ownership()
-    page_tasks = full_control_tasks(config, "PAGE", variant=page_variant)
+    page_tasks = await resolve_tasks("PAGE", page_variant)
     legacy_phase = str(prior.get("phase") or "")
     if not owned and legacy_phase in {"TARGET_PAGE_ACCESS_FULL_ADD_CLICK_INTENT", "TARGET_PAGE_ACCESS_FULL_ADD_SUBMITTED",
             "TARGET_PAGE_ACCESS_FULL_OWNER_APPROVE_CLICK_INTENT", "TARGET_PAGE_ACCESS_FULL_OWNER_APPROVE_SUBMITTED"}:

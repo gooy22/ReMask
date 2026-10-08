@@ -5,7 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from app.private_asset_contracts import AssetContracts, CONFIG, PAGE, RIGHTS, CLAIM, ASSIGN
-from app.private_page_ownership import ensure_private_page_full_control, assignment_proof, full_control_tasks
+from app.private_page_ownership import ensure_private_page_full_control, assignment_proof, full_control_tasks, permission_config_shape
 from app.provisioning.models import ProvisioningError, ProvisioningStep
 from app.provisioning.state import ProvisioningStateStore
 from app.provisioning.prepare import PrepareService
@@ -35,10 +35,11 @@ class MetaFixture:
         self.bootstrap = AsyncMock(return_value=SimpleNamespace(actor_id=UID))
         self.owner, self.tasks, self.posts = None, {FP: [], RK: []}, []
         self.lost, self.defer, self.incorrect_read = '', False, False
+        self.permissions = config()
     async def graphql(self, doc, variables, *, friendly_name, before_submit=None, **kwargs):
         if friendly_name == CONFIG:
             return {'data': {'business': {'__typename': 'AdBusiness', 'id': BM,
-                'businessUser': {'__typename': 'BusinessUser', 'id': USER}, 'bizKitSettingsConfig': config()}}}
+                'businessUser': {'__typename': 'BusinessUser', 'id': USER}, 'bizKitSettingsConfig': self.permissions}}}
         if friendly_name == PAGE:
             return {'data': {'page': {'__typename': 'Page', 'id': FP,
                 'ownerBusiness': {'id': self.owner} if self.owner else None, 'permission_to_claim_to_business': 'ALLOWED'}}}
@@ -102,6 +103,35 @@ class ContractTests(unittest.TestCase):
         payload = rights(FP, USER, [])
         payload['data']['asset']['permissionTasksConfig'] = {'task_ids': [P], '__typename': 'BusinessUser', 'id': USER}
         self.assertIsNone(assignment_proof(payload, asset_id=FP, user_id=USER, required_tasks=[P]))
+    def test_explicit_null_variant_restriction_is_unrestricted_but_omission_is_not(self):
+        value = config(); row = value['assetConfigs'][0]
+        variant = {'assetVariantName': 'PROFILE_PLUS_DELEGATE_PAGE', 'availablePermissionTaskIDsForVariant': None}
+        row.update(hasAssetVariants=True, assetVariantConfig={'assetVariantPermissionConfig': [variant]})
+        self.assertEqual(full_control_tasks(value, 'PAGE', variant='PROFILE_PLUS_DELEGATE_PAGE'), sorted([P, PARTIAL]))
+        variant.pop('availablePermissionTaskIDsForVariant')
+        with self.assertRaises(ProvisioningError): full_control_tasks(value, 'PAGE', variant='PROFILE_PLUS_DELEGATE_PAGE')
+    def test_explicit_null_variant_config_is_unrestricted_but_missing_config_is_not(self):
+        value = config(); row = value['assetConfigs'][0]
+        row.update(hasAssetVariants=True, assetVariantConfig=None)
+        self.assertEqual(full_control_tasks(value, 'PAGE'), sorted([P, PARTIAL]))
+        row.pop('assetVariantConfig')
+        with self.assertRaises(ProvisioningError): full_control_tasks(value, 'PAGE')
+    def test_nullable_implied_tasks_follow_observed_meta_config_normalization(self):
+        value = config(); row = value['assetConfigs'][0]['permissionTasksConfig'][0]
+        row['impliedTaskIDs'] = None
+        self.assertEqual(full_control_tasks(value, 'PAGE'), [P])
+        row['impliedTaskIDs'] = 'unresolved'
+        with self.assertRaises(ProvisioningError): full_control_tasks(value, 'PAGE')
+    def test_empty_variant_restriction_does_not_grant_full_control(self):
+        value = config(); row = value['assetConfigs'][0]
+        row.update(hasAssetVariants=True, assetVariantConfig={'assetVariantPermissionConfig': [
+            {'assetVariantName': 'PROFILE_PLUS_DELEGATE_PAGE', 'availablePermissionTaskIDsForVariant': []}]})
+        with self.assertRaises(ProvisioningError): full_control_tasks(value, 'PAGE', variant='PROFILE_PLUS_DELEGATE_PAGE')
+    def test_permission_diagnostics_exclude_config_secrets_and_handle_bad_shapes(self):
+        value = config()
+        value['assetConfigs'][0]['assetVariantConfig'] = {'assetVariantPermissionConfig': 'invalid'}
+        snapshot = permission_config_shape(value, 'PAGE', None)
+        self.assertNotIn('SECRET', repr(snapshot)); self.assertEqual(snapshot['variant_shapes'], [])
 
 class PageActionTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -155,6 +185,18 @@ class PageActionTests(unittest.IsolatedAsyncioTestCase):
     async def test_existing_full_rights_do_not_mutate(self):
         self.meta.owner, self.meta.tasks = BM, {FP: [P, PARTIAL], RK: [R, PARTIAL]}
         self.assertTrue((await self.run_action())['operator_full_control_verified']); self.assertEqual(self.meta.posts, [])
+    async def test_nullable_live_config_reaches_independent_assignment_verification(self):
+        row = self.meta.permissions['assetConfigs'][0]
+        row.update(hasAssetVariants=True, assetVariantConfig=None)
+        row['permissionTasksConfig'][0]['impliedTaskIDs'] = None
+        self.assertTrue((await self.run_action())['operator_full_control_verified'])
+        self.assertEqual(self.meta.posts[1][1]['taskIDs'], [P])
+    async def test_permission_error_retains_specific_schema_diagnostic_without_mutating(self):
+        self.meta.permissions['assetConfigs'][0].update(hasAssetVariants=True)
+        with self.assertRaises(ProvisioningError): await self.run_action()
+        self.assertEqual(self.saved['diagnostic']['asset_type'], 'PAGE')
+        self.assertIn('omitted', self.saved['diagnostic']['reason'])
+        self.assertNotIn('SECRET', repr(self.saved)); self.assertEqual(self.meta.posts, [])
     async def test_discovery_session_gate_is_not_contract_unavailable(self):
         from app.private_contract_discovery import _discover_web_modules
         self.meta.fetch_text = AsyncMock(return_value=(200, '<form id="login_form"></form>', 'https://www.facebook.com/login/'))
