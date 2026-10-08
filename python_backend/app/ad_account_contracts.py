@@ -58,6 +58,24 @@ class AdAccountContractStore:
             if os.path.exists(target):
                 os.unlink(target)
 
+    def diagnostic(self) -> dict[str, Any]:
+        """Expose cache availability, never its schema or captured values."""
+        with _LOCK:
+            row = self._read()
+        status = row.get("status")
+        try:
+            age = int(time.time() - int(row.get("observed_at") or 0))
+        except (ValueError, TypeError):
+            age = -1
+        reason = "missing" if not row else (
+            "invalid" if row.get("version") != 1 or status not in {"captured", "verified", "stale"}
+            else "stale" if status == "stale"
+            else "expired" if not 0 <= age <= self.max_age
+            else "available")
+        doc = str(row.get("doc_id") or "")
+        return {"state": reason, "age_seconds": age if row else None,
+                "doc_id": doc if doc.isdigit() and 5 <= len(doc) <= 40 else ""}
+
     def register_capture(self, capture: dict[str, Any]) -> bool:
         """Return False for an unsupported shape, retaining direct fresh replay."""
         from .facebook_ad_account_create import _validate_rewritten_capture_variables, _replace_capture_values

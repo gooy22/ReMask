@@ -268,7 +268,12 @@ class ReconciliationTests(unittest.IsolatedAsyncioTestCase):
                 },
             ]
 
-            with patch(
+            # Test legacy reconciliation/state independently of the HTTP executor.
+            async def private_fixture(session, *, params, **kwargs):
+                return await _FakeBrowser().create_fan_page(**kwargs)
+
+            with patch("app.provisioning.fan_pages_handler._create_page_via_private_contract",
+                       new=AsyncMock(side_effect=private_fixture)), patch(
                 "app.provisioning.fan_pages_handler._fresh_page_inventory",
                 AsyncMock(return_value=[]),
             ), patch(

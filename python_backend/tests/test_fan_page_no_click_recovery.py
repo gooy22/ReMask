@@ -73,7 +73,12 @@ class FanPageNoClickTests(unittest.IsolatedAsyncioTestCase):
                 return {"page_id": "2222222222", "name": "PrgssTeam", "reused": False}
             browser.create_fan_page.side_effect = create
             session = SimpleNamespace(context=SimpleNamespace(profile_id="13", pages=[]))
-            with patch("app.provisioning.fan_pages_handler.FacebookBusinessBrowser", return_value=browser) as factory, \
+            # Test legacy reconciliation/state independently of the HTTP executor.
+            async def private_fixture(session, *, params, **kwargs):
+                return await browser.create_fan_page(**kwargs)
+
+            with patch("app.provisioning.fan_pages_handler._create_page_via_private_contract",
+                       new=AsyncMock(side_effect=private_fixture)), patch("app.provisioning.fan_pages_handler.FacebookBusinessBrowser", return_value=browser) as factory, \
                  patch("app.provisioning.fan_pages_handler._fresh_page_inventory", new=AsyncMock(return_value=[])), \
                  patch("app.provisioning.fan_pages_handler._reconcile_uncertain_page", new=AsyncMock()) as reconcile:
                 factory.FAN_PAGE_CREATE_NAMES = NAMES
@@ -101,7 +106,12 @@ class FanPageNoClickTests(unittest.IsolatedAsyncioTestCase):
                     diagnostic={"click_meta": click_meta(), "safe_before_submit": True})
             browser.create_fan_page.side_effect = missing
             session = SimpleNamespace(context=SimpleNamespace(profile_id="fixture", pages=[]))
-            with patch("app.provisioning.fan_pages_handler.FacebookBusinessBrowser", return_value=browser) as factory, \
+            # Test legacy reconciliation/state independently of the HTTP executor.
+            async def private_fixture(session, *, params, **kwargs):
+                return await browser.create_fan_page(**kwargs)
+
+            with patch("app.provisioning.fan_pages_handler._create_page_via_private_contract",
+                       new=AsyncMock(side_effect=private_fixture)), patch("app.provisioning.fan_pages_handler.FacebookBusinessBrowser", return_value=browser) as factory, \
                  patch("app.provisioning.fan_pages_handler._fresh_page_inventory", new=AsyncMock(return_value=[])), \
                  patch("app.provisioning.fan_pages_handler._reconcile_uncertain_page", new=AsyncMock()) as reconcile:
                 factory.FAN_PAGE_CREATE_NAMES = NAMES

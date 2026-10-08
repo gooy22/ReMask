@@ -2025,6 +2025,8 @@ async def ad_account_handler(
     # lets the CREATE mutation reach Meta. A single flaky React render must not
     # force the operator to launch a brand-new Job manually.
     contract_store = AdAccountContractStore()
+    log.info("[%s] RK contract stage=resolve business=%s cache=%s",
+             profile_id, business_id, json.dumps(contract_store.diagnostic(), separators=(",", ":")))
     actor_id = _clean((getattr(context, "cookies", {}) or {}).get("c_user"))
     captured_request: dict[str, Any] = contract_store.get(
         business_id=business_id, account_name=rk_name, currency=currency,

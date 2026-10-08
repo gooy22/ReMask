@@ -5015,6 +5015,7 @@ class FacebookBusinessBrowser:
         before_submit: CheckpointCallback | None = None,
         require_policy_consent: bool = False,
         policies_accepted: bool = False,
+        capture_only: bool = False,
     ) -> dict[str, Any]:
         """Create one Facebook Page through Meta's own profile-bound UI."""
         name = _clean(page_name)
@@ -5152,6 +5153,42 @@ class FacebookBusinessBrowser:
 
         cookies = getattr(self.context, "cookies", None)
         actor_id = _digits(cookies.get("c_user")) if isinstance(cookies, dict) else ""
+        if capture_only:
+            from .fan_page_contracts import valid_page_create
+            from .graphql_mutation_capture import GraphqlMutationCapture
+            async with GraphqlMutationCapture(
+                self.page,
+                matcher=lambda request, meta: bool(capture.armed and valid_page_create(
+                    meta, name=name, actor_id=actor_id)),
+                # Every POST at the final gate is held locally. An unknown
+                # operation cannot escape and create an untracked Page.
+                plausible_matcher=lambda request, meta: True,
+            ) as capture:
+                click_meta = {}
+                for _submit_probe in range(9):
+                    async def arm_capture() -> None:
+                        capture.arm()
+                    click_meta = await self._click_named_single_attempt(
+                        self.FAN_PAGE_CREATE_NAMES, roles=("button",),
+                        before_click=arm_capture, click_timeout_ms=5000,
+                        trial_timeout_ms=750,
+                    )
+                    if capture.done or (click_meta.get("found") and not click_meta.get("actionability_failed")):
+                        break
+                    await self._assert_authenticated(body_timeout_ms=1200)
+                    await self.page.wait_for_timeout(350)
+                try:
+                    observed = await capture.wait(6.0)
+                except asyncio.TimeoutError as exc:
+                    raise BrowserBusinessError(
+                        "FAN_PAGE_CREATE_CONTRACT_UNAVAILABLE",
+                        "No supported Page CREATE contract was captured; no browser CREATE POST was sent.",
+                        retryable=True,
+                        diagnostic={"stage": "fan_page_contract_capture", "safe_before_submit": True,
+                                    "candidate_requests": capture.candidates,
+                                    "blocked_unclassified": capture.blocked_unclassified},
+                    ) from exc
+                return {**observed, "source": "live_page_create_capture"}
         async with FanPageCreateCapture(
             self.page, actor_id=actor_id, page_name=name, before_ids=before_ids,
             request_meta=_request_graphql_meta, decode=_decode_graphql_text,

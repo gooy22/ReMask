@@ -627,7 +627,12 @@ class FanPageProvisioningRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         browser.create_fan_page.side_effect = create_page
 
-        with patch(
+        # Test legacy reconciliation/state independently of the HTTP executor.
+        async def private_fixture(session, *, params, **kwargs):
+            return await browser.create_fan_page(**kwargs)
+
+        with patch("app.provisioning.fan_pages_handler._create_page_via_private_contract",
+                   new=AsyncMock(side_effect=private_fixture)), patch(
             "app.provisioning.fan_pages_handler.FacebookBusinessBrowser",
             return_value=browser,
         ):
@@ -733,7 +738,12 @@ class FanPageProvisioningRuntimeTests(unittest.IsolatedAsyncioTestCase):
             already_attached=False
         )
 
-        with patch(
+        # Test legacy reconciliation/state independently of the HTTP executor.
+        async def private_fixture(session, *, params, **kwargs):
+            return await browser.create_fan_page(**kwargs)
+
+        with patch("app.provisioning.fan_pages_handler._create_page_via_private_contract",
+                   new=AsyncMock(side_effect=private_fixture)), patch(
             "app.provisioning.fan_pages_handler._fresh_page_inventory",
             new=AsyncMock(
                 return_value=[
@@ -789,7 +799,12 @@ class FanPageProvisioningRuntimeTests(unittest.IsolatedAsyncioTestCase):
             already_attached=False
         )
 
-        with patch(
+        # Test legacy reconciliation/state independently of the HTTP executor.
+        async def private_fixture(session, *, params, **kwargs):
+            return await browser.create_fan_page(**kwargs)
+
+        with patch("app.provisioning.fan_pages_handler._create_page_via_private_contract",
+                   new=AsyncMock(side_effect=private_fixture)), patch(
             "app.provisioning.fan_pages_handler.FacebookBusinessBrowser",
             return_value=browser,
         ):

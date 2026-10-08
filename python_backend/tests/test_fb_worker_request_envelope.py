@@ -6,6 +6,39 @@ from fb_worker import AuthenticationError, RemoteRequestError, FacebookBootstrap
 
 
 class FacebookRequestEnvelopeTests(unittest.IsolatedAsyncioTestCase):
+    def test_error_document_evidence_is_classified_without_raw_body(self):
+        for body, expected in (
+            ("400 Request Header Or Cookie Too Large secret-cookie-value", "request_headers_rejected"),
+            ("Proxy authentication required secret-cookie-value", "proxy_error_document"),
+            ("Sorry, something went wrong. secret-cookie-value", "meta_error_document"),
+            ("Bad Request secret-cookie-value", "unclassified_http_error"),
+        ):
+            evidence = FacebookWebSession._document_failure_evidence(400, body)
+            self.assertEqual(evidence["document_kind"], expected)
+            self.assertEqual(len(evidence["body_sha256"]), 64)
+            self.assertNotIn("secret-cookie-value", str(evidence))
+
+    async def test_business_document_get_uses_navigation_headers_but_bundle_get_does_not(self):
+        calls = []
+        class Response:
+            status = 400
+            charset = "utf-8"
+            headers = {}
+            url = "https://business.facebook.com/create"
+            content = type("Content", (), {"read": AsyncMock(return_value=b"Bad Request")})()
+            async def __aenter__(self): return self
+            async def __aexit__(self, *args): return False
+        def get(url, **kwargs):
+            calls.append((url, kwargs)); return Response()
+        session = self._session()
+        session._ensure_session = AsyncMock(return_value=type("HTTP", (), {"get": staticmethod(get)})())
+        await session.fetch_text("https://business.facebook.com/create")
+        await session.fetch_text_with_headers("https://business.facebook.com/runtime.js")
+        self.assertEqual(calls[0][1]["headers"]["Sec-Fetch-Mode"], "navigate")
+        self.assertEqual(calls[0][1]["headers"]["Sec-Fetch-Dest"], "document")
+        self.assertEqual(calls[0][1]["proxy"], session.profile.proxy)
+        self.assertNotIn("Sec-Fetch-Mode", calls[1][1]["headers"])
+
     def _session(self):
         return FacebookWebSession(
             WebProfile(
@@ -273,6 +306,7 @@ class BusinessAuthenticationPrecheckTests(unittest.IsolatedAsyncioTestCase):
         session.fetch_text = AsyncMock(side_effect=[
             (400, "Bad Request", session.ADS_MANAGER_URL),
             (200, "no auth context", "https://business.facebook.com/create?secret=not-for-logs"),
+            (200, "no current-user proof", "https://www.facebook.com/marketplace/"),
         ])
         checkpoint = AsyncMock()
         with self.assertRaises(RemoteRequestError) as caught:
@@ -280,11 +314,64 @@ class BusinessAuthenticationPrecheckTests(unittest.IsolatedAsyncioTestCase):
                 friendly_name="useBusinessCreationMutationMutation", before_submit=checkpoint)
         error = caught.exception
         self.assertFalse(error.request_may_have_been_sent)
-        self.assertEqual(len(error.meta_payload["business_precheck"]), 2)
+        self.assertEqual(len(error.meta_payload["business_precheck"]), 3)
         self.assertNotIn("not-for-logs", str(error.meta_payload))
         self.assertEqual(error.meta_payload["business_precheck"][0]["http_status"], 400)
         checkpoint.assert_not_awaited()
         self.assertEqual(http.posts, [])
+
+    async def test_business_route_failures_do_not_block_one_create_with_fresh_exact_actor_auth(self):
+        session, http = self.session()
+        session.fetch_text = AsyncMock(side_effect=[
+            (400, "Bad Request", session.ADS_MANAGER_URL),
+            (400, "Bad Request", "https://business.facebook.com/create"),
+            (200, '["CurrentUserInitialData",[],{"USER_ID":"123456789"}] '
+                  '["DTSGInitialData",[],{"token":"fresh-profile-token"}]',
+             "https://www.facebook.com/marketplace/"),
+        ])
+        checkpoint = AsyncMock()
+        result = await session.graphql("123456789", {},
+            friendly_name="useBusinessCreationMutationMutation", before_submit=checkpoint)
+        self.assertTrue(result["data"]["ok"])
+        self.assertEqual(session.fetch_text.await_count, 3)
+        self.assertEqual(len(http.posts), 1)
+        checkpoint.assert_awaited_once()
+        self.assertEqual(http.posts[0]["data"]["fb_dtsg"], "fresh-profile-token")
+        self.assertEqual(http.posts[0]["data"]["av"], "123456789")
+
+    async def test_foreign_missing_or_challenged_facebook_identity_never_authorizes_create(self):
+        for body, final_url in (
+            ('["CurrentUserInitialData",[],{"USER_ID":"987654321"}] '
+             '["DTSGInitialData",[],{"token":"fresh-profile-token"}]', "https://www.facebook.com/marketplace/"),
+            ('["DTSGInitialData",[],{"token":"fresh-profile-token"}]', "https://www.facebook.com/marketplace/"),
+            ('["CurrentUserInitialData",[],{"USER_ID":"123456789"}]', "https://www.facebook.com/marketplace/"),
+            ('<form id="login_form">', "https://www.facebook.com/login.php"),
+        ):
+            session, http = self.session()
+            session.fetch_text = AsyncMock(side_effect=[
+                (400, "Bad Request", session.ADS_MANAGER_URL),
+                (400, "Bad Request", "https://business.facebook.com/create"),
+                (200, body, final_url),
+            ])
+            checkpoint = AsyncMock()
+            with self.assertRaises((RemoteRequestError, AuthenticationError)) as caught:
+                await session.graphql("123456789", {},
+                    friendly_name="useBusinessCreationMutationMutation", before_submit=checkpoint)
+            self.assertFalse(caught.exception.request_may_have_been_sent)
+            checkpoint.assert_not_awaited()
+            self.assertEqual(http.posts, [])
+
+    async def test_proxy_or_header_rejection_is_not_bypassed_by_facebook_auth(self):
+        for body in ("Request header or cookie too large", "Proxy authentication required"):
+            session, http = self.session()
+            session.fetch_text = AsyncMock(side_effect=[
+                (400, body, session.ADS_MANAGER_URL),
+                (400, body, "https://business.facebook.com/create"),
+            ])
+            with self.assertRaises(RemoteRequestError):
+                await session.graphql("123456789", {}, friendly_name="useBusinessCreationMutationMutation")
+            self.assertEqual(session.fetch_text.await_count, 2)
+            self.assertEqual(http.posts, [])
 
     async def test_business_auth_challenge_forbids_creation_surface_fallback(self):
         for status, body, final_url in (

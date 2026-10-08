@@ -86,7 +86,7 @@ Business DTSG. Login/checkpoint/401/403 и rate limit не запускают fa
 | Create RK | Прямой HTTP по наблюдённому контракту; Chromium получает отсутствующий/устаревший контракт |
 | RK verification/reconciliation | HTTP первым; ограниченный read-only browser при inconclusive |
 | FP inventory | Полная private inventory первым; partial/error сохраняют browser fallback |
-| Create FP | Существующий браузерный CREATE и защита от дублей |
+| Create FP | HTTP по наблюдённой схеме; Chromium только получает и отменяет исходный POST при отсутствии схемы |
 | Page-access REQUEST | Существующий приватный контракт; owner approval и operator assignment ещё browser |
 | Payment | Существующая Meta form; funding inspection/readiness отдельно |
 
@@ -94,3 +94,79 @@ Business DTSG. Login/checkpoint/401/403 и rate limit не запускают fa
 Meta теперь работают без Chromium. Он внедрён в существующий engine и SQLite
 state, без второй альтернативной системы. Успешный CI/health не считается
 успешным реальным комплектом: для этого нужен новый live job trace.
+
+
+## Дополнительный аудит контракта и новый отказ 09:12 Киева
+
+Production bb1f481, job b2117ac1bf5c43c395f92c6e26bd2bed, profile 14:
+06:12:39 UTC — Facebook bootstrap из Marketplace;
+06:12:41 UTC — обе Business HTML страницы (/latest/home и /create) вернули
+400, 1542 байта, без DTSG, без распознанного login/checkpoint redirect.
+CREATE_BM_PRE_SUBMIT_TRANSPORT; CREATE POST не отправлен. До загрузки,
+отправки и проверки RK-контракта эта задача не дошла. Нельзя называть это
+отказом RK-контракта или подтверждённым баном. Предыдущий запасной HTML
+маршрут этот реальный запуск не восстановил.
+
+Новая HTTP подготовка различает отказ HTML-маршрута и авторизацию операции:
+для одного известного CREATE BM, у которого ещё нет BM scope, допускается
+свежий authenticated Facebook document той же сессии. Это новый GET без
+повторного CREATE, с проверкой CurrentUserInitialData.USER_ID == c_user,
+наличия свежего DTSG и HTTP 200. Старый bootstrap/token сам по себе не
+разрешает отправку. Auth challenge, rate limit, proxy/header failure не
+разрешают эту ветку. RK сохраняет отдельную проверку точного Business.
+Это проверенный локальными HTTP fixtures путь; совместимость реального
+Business GraphQL с этим auth context требует live ответа, не выводится из CI.
+
+HTTP GET документов Business теперь передаёт navigation metadata;
+JS/query discovery сохраняет обычные GET headers. Диагностика precheck
+показывает document_kind и SHA256 тела вместо сырого HTML: можно отличить
+proxy/header rejection от Meta error document и сравнить ответы. Классификация
+не доказывает причины любого неизвестного HTTP 400 и не записывает cookies.
+RK cache resolve теперь отдельно показывает missing/stale/expired/available,
+возраст и doc_id без variables или session fields.
+
+## FP CREATE через существующий engine
+
+FanPageContractStore сохраняет наблюдённые category IDs и типизированные
+подстановки name/actor/bio/client_mutation_id. Шаблоны разделены по выбранной
+категории, TTL 24 часа, запись атомарная 0600. Нельзя взять схему одной категории
+и молча использовать её для другой; unknown IDs/auth fields запрещены.
+
+Handler сначала сохраняет старые same-job/cross-job guards. При отсутствии
+контракта bounded Chromium lease только заполняет реальную форму и перехватывает
+финальный POST: GraphqlMutationCapture отменяет его до Meta. Неизвестный POST
+на финальном gate также отменяется и не становится replayable. Отсутствие
+пригодной схемы — CONTRACT_UNAVAILABLE/INVALID до отправки, без выдуманного doc_id.
+
+Сохранённая схема исполняется только web.graphql с текущими cookies/proxy/auth.
+Durable intent записывается перед POST (legacy PAGE_CREATE_CLICK_INTENT остаётся
+именем фазы для совместимости SQLite history, transport=private HTTP). Свежая
+управляемая Page inventory должна уникально подтвердить имя и новый Page ID,
+а при известном ответе совпасть с response ID. Один ответ с Page ID не позволяет
+COMMIT при недоступном inventory. Partial response может быть подтверждён
+inventory, но не сертифицирует response schema. Timeout сохраняет неизвестный
+результат и существующую reconciliation-защиту, не переключает на browser POST.
+
+Поведенческие fixtures проверяют настоящий FacebookWebSession с HTTP peer,
+intent-before-POST, одну отправку, независимую verification, неизвестный ответ,
+partial response, отказ записи intent, current actor и category isolation.
+Cache-hit execution проходит с явным запретом Chromium CREATE. Отдельный
+browser-method fixture проверяет route.abort и отсутствие submit callback
+при schema capture. Старые reconciliation tests выполняют свой state fixture
+через границу нового executor, без сохранения legacy mutation в production.
+
+## Незавершённые контракты
+
+Этот выпуск не переводит owner approval, operator assignment и привязку карты
+на HTTP. Оригинальный runtime был извлечён и проверен: он содержит generic
+PrivateApiPost и payUnsettled schema, но не пригодные схемы этих операций.
+Page access request в текущем коде просит ADVERTISE; это не full control и
+не ownership transfer. Approval требует свежего request ID и owner actor proof;
+assignment — точной person/asset relation и проверенных task rights.
+Нельзя статически переносить request/person ID из чужого профиля.
+Card binding требует свежего Meta payment encryption/session protocol,
+проверки exact RK + masked instrument и отдельного 3DS состояния; нельзя
+придумать контракт из одного doc_id или повторно использовать чужой ciphertext.
+До наблюдения и проверки этих схем полный private-only Prepare + Payment
+не подтверждён. Browser capture и read-only fallback остаются явно указанными
+границами, а не скрываются под названием HTTP.

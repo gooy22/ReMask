@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import html
 import json
 import logging
@@ -824,6 +825,19 @@ class FacebookWebSession:
             "User-Agent": self.profile.user_agent,
             "Accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
         }
+        # Business bootstrap is a document navigation, not an AJAX request.
+        # Keep bundle/query discovery on its existing generic GET metadata.
+        if hostname == "business.facebook.com" and not (
+            parts.path.lower().endswith((".js", ".css", ".json"))
+            or "/api/" in parts.path.lower()
+        ):
+            request_headers.update({
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Sec-Fetch-Dest": "document", "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-Site": "none", "Sec-Fetch-User": "?1",
+                "Upgrade-Insecure-Requests": "1",
+            })
         if referer:
             request_headers["Referer"] = referer
 
@@ -978,6 +992,30 @@ class FacebookWebSession:
     # Unified private GraphQL transport
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _document_failure_evidence(status: int, body: str) -> dict[str, Any]:
+        """Classify failures without recording HTML, cookies or token values."""
+        lowered = body.lower()
+        if any(marker in lowered for marker in (
+            "request header or cookie too large", "request header too large",
+            "header field exceeds", "request headers too large",
+        )):
+            kind = "request_headers_rejected"
+        elif any(marker in lowered for marker in (
+            "proxy authentication required", "err_tunnel_connection_failed",
+            "squid error", "proxy error", "upstream connect error",
+        )):
+            kind = "proxy_error_document"
+        elif any(marker in lowered for marker in (
+            "sorry, something went wrong", "sorry, something went wrong.",
+            "facebook.com/help", 'id="facebook"',
+        )) and status >= 400:
+            kind = "meta_error_document"
+        else:
+            kind = "unclassified_http_error" if status >= 400 else "document"
+        return {"document_kind": kind,
+                "body_sha256": hashlib.sha256(body.encode("utf-8")).hexdigest()}
+
     async def _business_bootstrap(
         self, bootstrap: FacebookBootstrap, *, business_id: str = "",
         business_create: bool = False,
@@ -1021,6 +1059,7 @@ class FacebookWebSession:
                 "final_url": f"{parts.scheme}://{parts.hostname or ''}{parts.path}",
                 "http_status": status, "body_bytes": len(body.encode("utf-8")),
                 "token_present": bool(token), "auth_gated": gated,
+                **self._document_failure_evidence(status, body),
             })
             if gated:
                 self.invalidate_bootstrap()
@@ -1047,6 +1086,64 @@ class FacebookWebSession:
             # the creation-page fallback. Rate limits/server errors stop here.
             if status not in {200, 400, 404}:
                 break
+        # A Business HTML route failure is not an authentication verdict for
+        # its GraphQL operation. CREATE BM has no target-BM scope to establish.
+        # Permit that exact known operation to use fresh profile auth only if
+        # a new Facebook document independently proves c_user identity. Never
+        # apply this to scoped RK operations, auth challenges or rate limits.
+        if business_create and not business_id and attempts and all(
+            row["http_status"] in {200, 400, 404} and not row["auth_gated"]
+            and row["document_kind"] in {"document", "unclassified_http_error", "meta_error_document"}
+            for row in attempts
+        ):
+            source_parts = urlsplit(source)
+            if source_parts.hostname == "www.facebook.com" and source_parts.path in {
+                "/marketplace/", "/", "/me", "/settings",
+            }:
+                auth_url = f"https://www.facebook.com{source_parts.path}"
+                try:
+                    auth_status, auth_body, auth_final = await self.fetch_text(auth_url)
+                except RemoteRequestError as exc:
+                    exc.request_may_have_been_sent = False
+                    exc.transport_stage = "business_auth_precheck"
+                    exc.meta_payload = {**exc.meta_payload, "business_precheck": attempts}
+                    raise
+                auth_parts = urlsplit(auth_final)
+                current_users = set(re.findall(
+                    r'CurrentUserInitialData.{0,2000}?"USER_ID"\s*:\s*"(\d+)"',
+                    auth_body, re.DOTALL,
+                ))
+                token = self._first_match(auth_body, list(self.FB_DTSG_PATTERNS))
+                expected_actor = str(self.profile.cookies.get("c_user") or "")
+                auth_gated = (auth_parts.hostname != "www.facebook.com"
+                              or "/login" in auth_parts.path.lower()
+                              or "/checkpoint" in auth_parts.path.lower()
+                              or "login_form" in auth_body.lower() or auth_status in {401, 403})
+                attempts.append({"requested_url": auth_url,
+                    "final_url": f"{auth_parts.scheme}://{auth_parts.hostname or ''}{auth_parts.path}",
+                    "http_status": auth_status, "body_bytes": len(auth_body.encode("utf-8")),
+                    "token_present": bool(token), "auth_gated": auth_gated,
+                    "actor_verified": bool(expected_actor and current_users == {expected_actor}),
+                    **self._document_failure_evidence(auth_status, auth_body)})
+                if auth_gated:
+                    self.invalidate_bootstrap()
+                    error = AuthenticationError("Facebook session requires restoration; no GraphQL POST was sent.")
+                    error.request_may_have_been_sent = False
+                    error.transport_stage = "business_auth_precheck"
+                    error.meta_payload = {"business_precheck": attempts}
+                    raise error
+                if (auth_status == 200 and token and expected_actor == bootstrap.actor_id
+                        and current_users == {expected_actor}):
+                    current = FacebookBootstrap(fb_dtsg=token, actor_id=expected_actor,
+                        lsd=self._first_match(auth_body, [r'"LSD".{0,1800}?"token"\s*:\s*"([^"]+)"']),
+                        request_context=self._extract_request_context(auth_body), source_url=auth_url)
+                    self._bootstrap = current
+                    log.info("[%s] BUSINESS contract precheck verified current profile independently attempts=%s",
+                             self.profile.name, json.dumps(attempts, separators=(",", ":")))
+                    return current
+                status = auth_status
+        log.warning("[%s] BUSINESS precheck stopped before POST attempts=%s",
+                    self.profile.name, json.dumps(attempts, separators=(",", ":")))
         raise RemoteRequestError(
             "Meta Business authentication precheck did not confirm a usable session. No GraphQL POST was sent.",
             http_status=status, meta_payload={"business_precheck": attempts},

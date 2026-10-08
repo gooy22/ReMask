@@ -8,6 +8,8 @@ from typing import Any
 
 from ..facebook_business_browser import BrowserBusinessError, FacebookBusinessBrowser
 from ..facebook_fan_page_create import fan_page_pending_never_submitted, fan_page_click_never_resolved
+from ..fan_page_contracts import FanPageContractStore
+from ..private_fan_page_create import create_fan_page_private
 from ..facebook_page_discovery import (
     PageDiscoveryError, discover_current_list_pages_docid_by_marker,
     discover_pages_from_browser_html, list_pages_via_private_graphql,
@@ -28,6 +30,55 @@ def _browser_lease(session: Any, **kwargs: Any):
     return FacebookBusinessBrowser(
         session.context,
         **kwargs,
+    )
+
+
+async def _create_page_via_private_contract(session: Any, *, page_name: str, category: str,
+                                          bio: str, before_pages: list[dict[str, Any]],
+                                          before_submit: Any, params: dict[str, Any]) -> dict[str, Any]:
+    profile_id = _clean(getattr(session.context, "profile_id", ""))
+    actor_id = _clean((getattr(session.context, "cookies", {}) or {}).get("c_user"))
+    if not actor_id.isdigit():
+        raise BrowserBusinessError("SESSION_EXPIRED", "Current Facebook profile identity is missing; no CREATE POST was sent.",
+                                   retryable=False, diagnostic={"safe_before_submit": True})
+    contracts = FanPageContractStore()
+    contract = contracts.get(name=page_name, category=category, bio=bio[:255], actor_id=actor_id)
+    if params.get('require_policy_consent') is True and params.get('policies_accepted') is not True:
+        raise BrowserBusinessError("PAGE_POLICIES_CONFIRMATION_REQUIRED",
+            "Создание страницы требует подтверждения правил Meta; CREATE не отправлен.",
+            retryable=True, diagnostic={"safe_before_submit": True, "page_name": page_name})
+    log.info("FP contract stage=resolve profile=%s hit=%s", profile_id, bool(contract))
+    if contract is None:
+        # This lease only acquires an observed schema. The final
+        # POST is intercepted and aborted, never sent by Chromium.
+        async with _browser_lease(session, timeout_seconds=75) as browser:
+            observed = await browser.create_fan_page(
+                page_name=page_name, category=category, bio=bio[:255],
+                before_pages=before_pages, capture_only=True,
+            )
+        if observed.get("reused"):
+            return observed
+        try:
+            registered = contracts.register_capture(observed, name=page_name, category=category,
+                                                     bio=bio[:255], actor_id=actor_id)
+        except OSError as exc:
+            raise BrowserBusinessError("FAN_PAGE_CREATE_CONTRACT_STORE_UNAVAILABLE",
+                "Observed Page contract could not be saved; no CREATE POST was sent.",
+                retryable=True, diagnostic={"safe_before_submit": True}) from exc
+        if not registered:
+            raise BrowserBusinessError("FAN_PAGE_CREATE_CONTRACT_INVALID",
+                "Observed Page contract contains an unsupported field or category; no CREATE POST was sent.",
+                retryable=True, diagnostic={"safe_before_submit": True})
+        contract = contracts.get(name=page_name, category=category, bio=bio[:255], actor_id=actor_id)
+        if contract is None:
+            raise BrowserBusinessError("FAN_PAGE_CREATE_CONTRACT_INVALID",
+                "Observed Page contract could not be rendered; no CREATE POST was sent.", retryable=True)
+        log.info("FP contract stage=captured profile=%s doc_id=%s", profile_id, contract["doc_id"])
+    return await create_fan_page_private(
+        await session.facebook_web(), contract, actor_id=actor_id,
+        page_name=page_name, category=category,
+        before_ids={_clean(row.get("id")) for row in before_pages if _clean(row.get("id")).isdigit()},
+        before_submit=before_submit, verify=lambda: _fresh_page_inventory(session), store=contracts,
     )
 
 
@@ -1247,23 +1298,17 @@ async def fan_pages_handler(
                         "active_before_ids": sorted(before_ids),
                         "category": category,
                         "create_attempt": create_attempt,
+                        "transport": _clean(patch.get("transport")),
                         "activity": "FAN_PAGE_CREATE_CLICK_INTENT",
                         "activity_at": int(time.time()),
                     },
                 )
 
             try:
-                async with _browser_lease(session, timeout_seconds=75,
-                ) as browser:
-                    create_result = await browser.create_fan_page(
-                        page_name=page_name,
-                        category=category,
-                        bio=bio,
-                        before_pages=current_pages,
-                        before_submit=before_submit,
-                        **({'require_policy_consent':True,'policies_accepted':params.get('policies_accepted') is True}
-                           if params.get('require_policy_consent') is True else {}),
-                    )
+                create_result = await _create_page_via_private_contract(
+                    session, page_name=page_name, category=category, bio=bio,
+                    before_pages=current_pages, before_submit=before_submit, params=params,
+                )
                 break
 
             except BrowserBusinessError as exc:
@@ -1325,7 +1370,10 @@ async def fan_pages_handler(
                 if exc.code != "FAN_PAGE_CREATE_RESULT_UNKNOWN":
                     await provisioning_state.checkpoint(item_id,profile_id,scope_key,ProvisioningStep.FAN_PAGES,
                         {'last_error_code':exc.code,'last_error':str(exc)[:2000],
-                         'browser_diagnostic':exc.diagnostic or {}})
+                         'browser_diagnostic':exc.diagnostic or {},
+                         **({'phase':'CREATE_NOT_SUBMITTED','resume_from':'CREATE_NEXT',
+                             'tombstone_page_name':page_name,'active_page_name':'','active_before_ids':[]}
+                            if diagnostic.get('safe_before_submit') is True else {})})
                     raise ProvisioningError(
                         exc.code,
                         str(exc),
@@ -1376,7 +1424,8 @@ async def fan_pages_handler(
                     before_ids=before_ids,
                 )
                 await _record_reconciliation(provisioning_state, item_id, profile_id, scope_key, diagnostics)
-                if found:
+                expected_page_id = _clean(diagnostic.get("response_page_id"))
+                if found and (not expected_page_id or _clean(found.get("id")) == expected_page_id):
                     create_result = {
                         "page_id": found["id"],
                         "name": page_name,

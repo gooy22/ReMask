@@ -52,8 +52,8 @@ class MetaTransportRouter:
         ),
         "FAN_PAGES": TransportPolicy(
             capability="FAN_PAGES",
-            primary="facebook_private_inventory",
-            fallback="chromium_page_mutation",
+            primary="facebook_private_http_contract",
+            fallback="chromium_live_contract_capture",
         ),
         "PAGE_ACCESS": TransportPolicy(
             capability="PAGE_ACCESS",
