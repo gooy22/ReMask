@@ -1261,6 +1261,10 @@ async def page_access_handler(session: Any, params: dict, snapshot: dict, **kwar
         if str(result.get('business_id') or '')!=business or _normalize_ad_account_id(result.get('ad_account_id')).removeprefix('act_')!=account:
             raise ProvisioningError('CREATED_BUSINESS_RK_REQUIRED','RK creation result does not match this portfolio')
     business_page = params.get('page_topology') == 'ONE_PAGE_PER_BUSINESS'
+    if getattr(session, 'private_only', False) is True:
+        from .rk_access import ensure_existing_rk_full_control
+        await ensure_existing_rk_full_control(session, state=state, profile=profile, item=item,
+            scope=scope, business=business, account=account, account_name=rk_name)
     if business_page:
         from .business_pages import BusinessPageStore, ensure_business_page
         retained = ((await state.step(item, ProvisioningStep.PAGE_ACCESS)) or {}).get('result') or {}

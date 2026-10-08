@@ -251,16 +251,31 @@ def permission_config_shape(config, asset_type, variant):
 
 async def ensure_private_page_full_control(web, *, page_id, business_id, ad_account_id,
                                            profile_id, checkpoint, prior, rk_asset_id=""):
+    return await _ensure_private_full_control(web, page_id=page_id, business_id=business_id,
+        ad_account_id=ad_account_id, profile_id=profile_id, checkpoint=checkpoint,
+        prior=prior, rk_asset_id=rk_asset_id)
+
+
+async def ensure_private_ad_account_full_control(web, *, business_id, ad_account_id,
+                                                 profile_id, checkpoint, prior, rk_asset_id=""):
+    """Assign the exact Business user to its RK without depending on a Page."""
+    return await _ensure_private_full_control(web, page_id="", business_id=business_id,
+        ad_account_id=ad_account_id, profile_id=profile_id, checkpoint=checkpoint,
+        prior=prior, rk_asset_id=rk_asset_id, ad_account_only=True)
+
+
+async def _ensure_private_full_control(web, *, page_id, business_id, ad_account_id,
+                                      profile_id, checkpoint, prior, rk_asset_id="", ad_account_only=False):
     business, page, account = _id(business_id), _id(page_id), _id(ad_account_id)
     profile = getattr(web, "profile", None)
     uid = _id((getattr(profile, "cookies", {}) or {}).get("c_user"))
-    if not all((business, page, account, uid)) or business == uid:
+    if not all((business, account, uid)) or (not ad_account_only and not page) or business == uid:
         raise ProvisioningError("PRIVATE_PAGE_ACCESS_TARGET_INVALID", "Exact profile, BM, Page and RK identities are required.")
     bootstrap = await web.bootstrap()
     if str(getattr(bootstrap, "actor_id", "")) != uid:
         raise ProvisioningError("SESSION_EXPIRED", "The HTTP actor does not match the selected profile.", retryable=True)
     observed = StaticAssetContracts()
-    await checkpoint({"activity": "PAGE_ACCESS_STATIC_CONTRACT_READY", "transport": "private_http",
+    await checkpoint({"activity": "RK_ACCESS_STATIC_CONTRACT_READY" if ad_account_only else "PAGE_ACCESS_STATIC_CONTRACT_READY", "transport": "private_http",
         "contract_revision": contract_metadata("CLAIM")["revision"], "browser_started": False})
 
     async def read(friendly, variables):
@@ -302,15 +317,28 @@ async def ensure_private_page_full_control(web, *, page_id, business_id, ad_acco
         and row.get("hasUserPermissions") is True and isinstance(row.get("assetType"), str)})
     target = {"business_id": business, "page_id": page, "ad_account_id": account, "rk_asset_id": _id(rk_asset_id) or account,
         "operator_uid": uid, "business_user_id": user}
-    previous = prior.get("private_target") or {}
+    target_key = "private_rk_target" if ad_account_only else "private_target"
+    operations_key = "private_rk_operations" if ad_account_only else "private_operations"
+    if ad_account_only:
+        target.pop("page_id")
+    previous = prior.get(target_key) or {}
     if previous and previous != target:
         raise ProvisioningError("PRIVATE_PAGE_ACCESS_CHECKPOINT_MISMATCH", "The retained Page access operation belongs to another target or Business user.")
-    operations = dict(prior.get("private_operations") or {})
+    operations = dict(prior.get(operations_key) or {})
+    if ad_account_only:
+        legacy = (prior.get("private_operations") or {}).get("assign_rk") or {}
+        if legacy.get("status") in _PENDING:
+            legacy_target = {key: value for key, value in (prior.get("private_target") or {}).items() if key != "page_id"}
+            if legacy_target != target:
+                raise ProvisioningError("PRIVATE_PAGE_ACCESS_CHECKPOINT_MISMATCH",
+                    "A retained RK assignment belongs to another target or Business user. No assignment was sent.")
+            operations["assign_rk"] = dict(legacy)
 
     async def save(key, status, **extra):
         operations[key] = {**operations.get(key, {}), "status": status, **extra}
-        await checkpoint({"phase": "PRIVATE_ASSET_" + status, "access_mode": "existing_page_full_control",
-            "private_target": target, "private_operations": dict(operations), "transport": "private_http", "browser_started": False})
+        await checkpoint({"phase": "PRIVATE_ASSET_" + status,
+            **({"access_mode": "existing_page_full_control"} if not ad_account_only else {}),
+            target_key: target, operations_key: dict(operations), "transport": "private_http", "browser_started": False})
         log.info("[%s] PAGE_ACCESS private operation=%s phase=%s business=%s page=%s rk=%s", profile_id, key, status, business, page, account)
 
     async def submit(key, friendly, variables, verify):
@@ -374,22 +402,24 @@ async def ensure_private_page_full_control(web, *, page_id, business_id, ad_acco
             raise ProvisioningError("PRIVATE_PAGE_CLAIM_PERMISSION_UNCONFIRMED", "Meta did not confirm permission to add this existing Page.", retryable=True)
         return None
 
-    owned = await ownership()
-    page_tasks = await resolve_tasks("PAGE", page_variant)
+    owned = await ownership() if not ad_account_only else None
+    page_tasks = await resolve_tasks("PAGE", page_variant) if not ad_account_only else []
     legacy_phase = str(prior.get("phase") or "")
-    if not owned and legacy_phase in {"TARGET_PAGE_ACCESS_FULL_ADD_CLICK_INTENT", "TARGET_PAGE_ACCESS_FULL_ADD_SUBMITTED",
+    if not ad_account_only and not owned and legacy_phase in {"TARGET_PAGE_ACCESS_FULL_ADD_CLICK_INTENT", "TARGET_PAGE_ACCESS_FULL_ADD_SUBMITTED",
             "TARGET_PAGE_ACCESS_FULL_OWNER_APPROVE_CLICK_INTENT", "TARGET_PAGE_ACCESS_FULL_OWNER_APPROVE_SUBMITTED"}:
         raise ProvisioningError("PRIVATE_ASSET_RESULT_UNKNOWN", "Previous Page ownership submit is retained; fresh HTTP verification is inconclusive.", retryable=True)
-    if not owned:
+    if not ad_account_only and not owned:
         owned = await submit("claim_page", CLAIM, {"businessID": business, "pageID": page, "igAuthCode": None, "igOIDCToken": "",
             "shouldRemoveDirectUsersBeforeClaiming": "KEEP", "claimingEntryPoint": observed.claim_entrypoint(), "selectedFBUserID": None,
             "isMMAPageTransfer": False, "qplJoinID": str(uuid.uuid4())}, ownership)
-    else:
+    elif not ad_account_only:
         await save("claim_page", "CONFIRMED", proof=owned)
 
     proofs = {}
-    for key, asset, canonical_asset, tasks in (("assign_page", page, page, page_tasks),
-            ("assign_rk", _id(rk_asset_id) or account, account, rk_tasks)):
+    assignments = [("assign_rk", _id(rk_asset_id) or account, account, rk_tasks)]
+    if not ad_account_only:
+        assignments.insert(0, ("assign_page", page, page, page_tasks))
+    for key, asset, canonical_asset, tasks in assignments:
         async def verify(asset=asset, canonical_asset=canonical_asset, tasks=tasks):
             payload = await read(RIGHTS, {"assetID": asset, "businessID": business, "userID": user, "surface": "LWI"})
             diagnostic = {"stage": key + "_verification", "response_shape": response_shape(payload)}
@@ -423,6 +453,10 @@ async def ensure_private_page_full_control(web, *, page_id, business_id, ad_acco
         else:
             await save(key, "CONFIRMED", proof=proof)
         proofs[key] = proof
+    if ad_account_only:
+        return {"business_id": business, "ad_account_id": account,
+            "rk_operator_full_control_verified": True, "rk_operator_full_control_proof": proofs["assign_rk"],
+            "transport": "private_http", "browser_started": False}
     return {"page_id": page, "business_id": business, "ad_account_id": account,
         "page_owned_by_business": True, "page_shared_to_business": True, "operator_ads_access_assigned": True,
         "operator_full_control_verified": True, "rk_operator_full_control_verified": True,

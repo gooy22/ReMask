@@ -282,11 +282,51 @@ class BusinessPageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({row['business_id']: row['page_id'] for row in second['actual']['bundles']}, {BM1: FP1, BM2: FP2})
         self.assertEqual(second['actual']['bundles'][0]['business_id'], BM2)
         self.assertEqual(self.meta.posts, posts)
-        self.assertEqual([row[0] for row in posts], ['FP_CREATE', ASSIGN, ASSIGN])
-        self.assertEqual(posts[0][1]['input']['business_id'], BM2)
+        self.assertEqual([row[0] for row in posts], [ASSIGN, 'FP_CREATE', ASSIGN])
+        self.assertEqual(posts[0][1]['assetID'], RK2)
+        self.assertEqual(posts[1][1]['input']['business_id'], BM2)
         self.meta.fetch_text.assert_not_awaited()
         self.assertEqual(self.meta.owners, {FP1: BM1, FP2: BM2})
         self.assertEqual((await self.common.get())['page_id'], FP1)
         self.session.facebook_business_browser.assert_not_awaited()
         self.assertTrue(await self.state.page_access_confirmed('15', BM2, RK2, full_control=True, page_id=FP2))
         self.assertFalse(await self.state.page_access_confirmed('15', BM2, RK2, full_control=True, page_id=FP1))
+
+    async def test_page_failure_keeps_rk_full_control_and_next_job_repairs_only_page(self):
+        from fb_worker import AuthenticationError
+        await self._seed_existing_bundles()
+        prepare = PrepareService(self.state, ProvisioningService(self.state))
+        graphql = self.meta.graphql
+        page_read = page_command('READ_FP', business=BM2, cursor=None)['friendly_name']
+        blocked = True
+        async def response(*args, **kwargs):
+            if blocked and kwargs['friendly_name'] == page_read:
+                error = AuthenticationError('Business login required')
+                error.request_may_have_been_sent = False
+                error.transport_stage = 'business_auth_precheck'
+                error.meta_payload = {'business_precheck': [{'auth_reason': 'login_redirect',
+                    'final_url': 'https://business.facebook.com/business/loginpage/'}]}
+                raise error
+            return await graphql(*args, **kwargs)
+        self.meta.graphql = response
+        payload = {'desired': {'ad_accounts': 2}, 'parameters': {'AD_ACCOUNT': {'currency': 'USD', 'timezone_id': 1}}}
+        with patch('app.provisioning.private_create_handlers._rk_inventory',
+                side_effect=lambda web, business, name, account: {'id': account, 'asset_ui_id': account}), \
+                patch('app.provisioning.service._await_profile_mutation_cooldown', AsyncMock()):
+            with self.assertRaises(ProvisioningError) as caught:
+                await prepare.run(item_id='page-blocked', profile_id='15', context=self.context,
+                    session=self.session, payload=payload)
+            self.assertEqual(caught.exception.code, 'BUSINESS_LOGIN_GATE')
+            self.assertEqual(self.meta.tasks[RK2], [R, PARTIAL])
+            self.assertEqual([name for name, _ in self.meta.posts], [ASSIGN])
+            self.assertFalse(await self.state.page_access_confirmed('15', BM2, RK2, full_control=True))
+            self.assertNotIn(FP2, self.meta.owners)
+            # Simulate process restart and a new Job after session restoration.
+            blocked = False
+            result = await PrepareService(self.state, ProvisioningService(self.state)).run(
+                item_id='page-restored', profile_id='15', context=self.context, session=self.session, payload=payload)
+        self.assertTrue(result['ready_to_launch'])
+        self.assertEqual([name for name, _ in self.meta.posts], [ASSIGN, 'FP_CREATE', ASSIGN])
+        self.assertEqual(self.meta.posts[-1][1]['assetID'], FP2)
+        self.assertEqual(self.meta.owners[FP1], BM1)
+        self.session.facebook_business_browser.assert_not_awaited()

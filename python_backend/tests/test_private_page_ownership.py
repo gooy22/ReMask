@@ -308,7 +308,8 @@ class PrepareHTTPTests(unittest.IsolatedAsyncioTestCase):
                     result = await prepare.run(item_id=job, profile_id='15', context=context, session=session,
                         payload={'desired': {'payment': True}, 'parameters': {'AD_ACCOUNT': {'currency': 'USD', 'timezone_id': 137}}})
                     self.assertEqual(result['status'], 'READY_TO_LAUNCH')
-            self.assertEqual([name for name, _ in meta.posts], [CLAIM, ASSIGN, ASSIGN])
+            self.assertEqual([name for name, _ in meta.posts], [ASSIGN, CLAIM, ASSIGN])
+            self.assertEqual(meta.posts[0][1]['assetID'], RK)
             self.assertTrue(await state.page_access_confirmed('15', BM, RK, full_control=True))
             session.facebook_business_browser.assert_not_awaited()
     async def test_legacy_ads_only_success_is_not_full_readiness(self):

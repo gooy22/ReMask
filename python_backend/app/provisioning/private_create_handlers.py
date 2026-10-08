@@ -120,9 +120,10 @@ async def _business_inventory(web, expected=""):
     try:
         return await read_business_inventory(web, expected)
     except Exception as exc:
-        if type(exc).__name__ == "AuthenticationError":
-            code = "CHECKPOINT_REQUIRED" if "checkpoint" in str(exc).lower() else "SESSION_EXPIRED"
-            raise ProvisioningError(code, "Static BM inventory requires session restoration; CREATE intent was retained.", retryable=True) from exc
+        from ..private_auth import private_auth_error
+        error = private_auth_error(exc)
+        if error is not None:
+            raise error from exc
         raise
 
 
@@ -130,10 +131,10 @@ async def _rk_inventory(web, business, name, expected=""):
     try:
         return await asyncio.wait_for(read_ad_account_inventory(web, business, name, expected), timeout=90)
     except Exception as exc:
-        if type(exc).__name__ == "AuthenticationError":
-            code = "CHECKPOINT_REQUIRED" if "checkpoint" in str(exc).lower() else "SESSION_EXPIRED"
-            error = ProvisioningError(code, "Exact-BM static inventory requires session restoration; CREATE intent was retained.", retryable=True)
-            error.inventory_diagnostics = [{"operation": "READ_RK", "auth_gate": code}]
+        from ..private_auth import private_auth_error
+        error = private_auth_error(exc)
+        if error is not None:
+            error.inventory_diagnostics = [{"operation": "READ_RK", **row} for row in error.inventory_diagnostics]
             raise error from exc
         raise
 

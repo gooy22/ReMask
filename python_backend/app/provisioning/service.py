@@ -580,6 +580,10 @@ class ProvisioningService:
     def _classify(exc: Exception) -> ProvisioningError:
         if isinstance(exc, ProvisioningError):
             return exc
+        from ..private_auth import private_auth_error
+        auth_error = private_auth_error(exc)
+        if auth_error is not None:
+            return auth_error
         if isinstance(exc, TransportError):
             return ProvisioningError(exc.code, str(exc), retryable=exc.retryable)
         if isinstance(exc, ProxyCheckError):
