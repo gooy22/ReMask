@@ -44,6 +44,8 @@ def _literal(node):
         return json.loads(text)
     if node.type == "unary_expression" and re.fullmatch(r"-[0-9]+", text):
         return int(text)
+    if node.type == "unary_expression" and re.fullmatch(r"!\s*[01]", text):
+        return not bool(int(text[1:].strip()))
     raise ValueError("not a literal")
 
 
@@ -218,6 +220,25 @@ def _module_nodes(source):
     return result
 
 
+def _export_contains(metadata, module, node):
+    exports = []
+    for child in _walk(module):
+        if child.type != "assignment_expression":
+            continue
+        left = child.child_by_field_name("left")
+        if left.type == "member_expression" and left.child_by_field_name("property").text == b"exports":
+            exports.append(child.child_by_field_name("right"))
+    if len(exports) != 1:
+        return False
+    value, seen = exports[0], set()
+    while value.type == "identifier":
+        if value.text in seen:
+            return False
+        seen.add(value.text)
+        value = metadata._alias(value)
+    return value.start_byte <= node.start_byte and value.end_byte >= node.end_byte
+
+
 class WebModuleContracts:
     def __init__(self, *, friendly_names, bindings, name_filter=None):
         self.names = tuple(friendly_names)
@@ -226,10 +247,13 @@ class WebModuleContracts:
         self.ids = {name: set() for name in self.names}
         self.payloads = {name: {} for name in self.names}
         self.evidence = set()
+        self.modules = {}
+        self._compiled = False
 
     def observe(self, source: str):
-        if not source or len(source.encode()) > 2_000_000:
+        if not source or len(source.encode()) > 8_000_000:
             return
+        self._compiled = False
         if self.name_filter is not None:
             for name in re.findall(r"[\"']([A-Za-z0-9_]+)\.graphql[\"']", source):
                 if name not in self.names and self.name_filter(name):
@@ -237,46 +261,124 @@ class WebModuleContracts:
                     self.ids[name] = set()
                     self.payloads[name] = {}
         for module_name, module in _module_nodes(source):
-            body = module.text.decode()
-            resolve = _alias_resolver(module)
-            for friendly in self.names:
-                if module_name == friendly + ".graphql":
-                    for node in _walk(module):
-                        if node.type != "object":
-                            continue
+            # Keep complete generated artifacts and their sender dependencies.
+            # Their persisted IDs can arrive in a later HTTP bundle.
+            if (module_name.endswith("_facebookRelayOperation")
+                    or module_name in {"useMutationWithReauthHandling", "BizKitSettingsCreateAdAccountModal.react"}
+                    or any(friendly in module_name or friendly.encode() in module.text for friendly in self.names)):
+                self.modules.setdefault(module_name, {})[hashlib.sha256(module.text).hexdigest()] = module
+
+    def _compile(self):
+        from .private_inventory_queries import QueryArtifacts
+        metadata = QueryArtifacts()
+        metadata.modules = self.modules
+        self.ids = {name: set() for name in self.names}
+        self.payloads = {name: {} for name in self.names}
+        self.evidence = set()
+        from .private_mutation_schema import flat_configs, flat_timezone_is_string, _resolve
+        flat_string_timezone = flat_timezone_is_string(self.modules)
+        flat_schemas = {}
+        for friendly in self.names:
+            versions = self.modules.get(friendly + ".graphql", {})
+            if len(versions) != 1:
+                continue
+            for node in _walk(next(iter(versions.values()))):
+                if node.type != "object":
+                    continue
+                try:
+                    pairs = _pairs(node)
+                    if not {"params", "operation"}.issubset(pairs):
+                        continue
+                    if not _export_contains(metadata, next(iter(versions.values())), node):
+                        continue
+                    params, operation = metadata._read(pairs["params"]), metadata._read(pairs["operation"])
+                    selections = operation.get("selections", [])
+                    if (params.get("name") != friendly or params.get("operationKind") != "mutation"
+                            or operation.get("name") != friendly or len(selections) != 1):
+                        continue
+                    field = selections[0]
+                    if field.get("name") != "business_settings_create_ad_account" or field.get("concreteType") != "AdAccount":
+                        continue
+                    arguments = field.get("args", [])
+                    mapping = {a["variableName"]: a["name"] for a in arguments if a.get("kind") == "Variable"}
+                    if (len(mapping) != len(arguments) or set(mapping.values()) != {
+                            "business_id", "ad_account_name", "currency", "timezone_id", "end_advertiser_id", "qpl_join_id"}
+                            or set(mapping) != {a["name"] for a in operation.get("argumentDefinitions", [])}):
+                        continue
+                    flat_schemas[friendly] = mapping
+                except (ValueError, TypeError, KeyError):
+                    continue
+        for module_name, versions in self.modules.items():
+            for module in versions.values():
+                body = module.text.decode()
+                if not any(module_name == friendly + ".graphql" or friendly in body for friendly in self.names):
+                    continue
+                resolve = _alias_resolver(module)
+                for friendly in self.names:
+                    if module_name == friendly + ".graphql":
+                        for node in _walk(module):
+                            if node.type != "object":
+                                continue
+                            try:
+                                pairs = _pairs(node)
+                                if not {"id", "name", "operationKind"}.issubset(pairs):
+                                    continue
+                                if not _export_contains(metadata, module, node):
+                                    continue
+                                if _literal(pairs["name"]) != friendly or _literal(pairs["operationKind"]) != "mutation":
+                                    continue
+                                doc = metadata._read(pairs["id"])
+                                if isinstance(doc, str) and re.fullmatch(r"\d{5,40}", doc):
+                                    self.ids[friendly].add(doc)
+                                    self.evidence.add(hashlib.sha256(module.text).hexdigest())
+                            except (ValueError, TypeError):
+                                continue
+                    if friendly + ".graphql" not in body and friendly not in body:
+                        continue
+                    if friendly in flat_schemas:
+                        if flat_string_timezone:
+                            bindings = dict(self.bindings)
+                            bindings["timezoneid"] = str(bindings["timezoneid"])
+                            bindings["qpljoinid"] = "private-contract-discovery"
+                            for variables_node in flat_configs(self.modules, module, friendly):
+                                try:
+                                    variables = _read(variables_node, bindings, resolve=_resolve)
+                                    mapping = flat_schemas[friendly]
+                                    if set(variables) != set(mapping):
+                                        continue
+                                    # Certify variable names against the actual root arguments.
+                                    if any(re.sub(r"[^a-z0-9]", "", key.lower()) != re.sub(r"[^a-z0-9]", "", argument)
+                                            for key, argument in mapping.items()):
+                                        continue
+                                    encoded = json.dumps(variables, sort_keys=True, separators=(",", ":"))
+                                    self.payloads[friendly][encoded] = variables
+                                    for dependency in (friendly + ".graphql", friendly + "_facebookRelayOperation",
+                                            friendly, module_name, "useMutationWithReauthHandling", "BizKitSettingsCreateAdAccountModal.react"):
+                                        self.evidence.update(self.modules.get(dependency, {}))
+                                except (ValueError, TypeError, KeyError):
+                                    continue
+                    configs = [(node, False) for node in _walk(module) if node.type == "object"]
+                    configs.extend((node, True) for node in _hook_configs(module, friendly, resolve))
+                    for node, hook in configs:
                         try:
-                            pairs = _pairs(node)
-                            if not {"id", "name", "operationKind"}.issubset(pairs):
+                            pairs = _pairs(resolve(node))
+                            if "variables" not in pairs or (not hook and "mutation" not in pairs):
                                 continue
-                            if _literal(pairs["name"]) != friendly or _literal(pairs["operationKind"]) != "mutation":
+                            if "mutation" in pairs and not _imports(pairs["mutation"], friendly + ".graphql", resolve):
                                 continue
-                            doc = _literal(pairs["id"])
-                            if isinstance(doc, str) and re.fullmatch(r"\d{5,40}", doc):
-                                self.ids[friendly].add(doc)
-                                self.evidence.add(hashlib.sha256(module.text).hexdigest())
+                            variables = _read(pairs["variables"], self.bindings, resolve=resolve)
+                            if not isinstance(variables, dict) or not isinstance(variables.get("input"), dict):
+                                continue
+                            encoded = json.dumps(variables, sort_keys=True, separators=(",", ":"))
+                            self.payloads[friendly][encoded] = variables
+                            self.evidence.add(hashlib.sha256(module.text).hexdigest())
                         except (ValueError, TypeError):
                             continue
-                if friendly + ".graphql" not in body:
-                    continue
-                configs = [(node, False) for node in _walk(module) if node.type == "object"]
-                configs.extend((node, True) for node in _hook_configs(module, friendly, resolve))
-                for node, hook in configs:
-                    try:
-                        pairs = _pairs(resolve(node))
-                        if "variables" not in pairs or (not hook and "mutation" not in pairs):
-                            continue
-                        if "mutation" in pairs and not _imports(pairs["mutation"], friendly + ".graphql", resolve):
-                            continue
-                        variables = _read(pairs["variables"], self.bindings, resolve=resolve)
-                        if not isinstance(variables, dict) or not isinstance(variables.get("input"), dict):
-                            continue
-                        encoded = json.dumps(variables, sort_keys=True, separators=(",", ":"))
-                        self.payloads[friendly][encoded] = variables
-                        self.evidence.add(hashlib.sha256(module.text).hexdigest())
-                    except (ValueError, TypeError):
-                        continue
 
     def result(self):
+        if not self._compiled:
+            self._compile()
+            self._compiled = True
         results = []
         for name in self.names:
             if len(self.ids[name]) == 1 and len(self.payloads[name]) == 1:
@@ -337,7 +439,7 @@ async def discover_private_ad_account_contract(web, *, business_id, account_name
 async def _discover_web_modules(web, *, entry, observed, label, prepare_document=None):
     # All operations here are GET. Mutation authorization is elsewhere.
     async with asyncio.timeout(55):
-        status, body, final = await web.fetch_text(entry, max_bytes=2_000_000)
+        status, body, final = await web.fetch_text(entry, max_bytes=3_000_000)
         final_parts = urlsplit(final)
         if (status != 200 or final_parts.hostname not in {urlsplit(entry).hostname, "facebook.com"}
                 or any(word in final_parts.path.lower() for word in ("/login", "/checkpoint"))):
@@ -349,26 +451,30 @@ async def _discover_web_modules(web, *, entry, observed, label, prepare_document
         urls = _script_urls(body, final)
         total_bytes = len(body.encode())
         count = 0
-        for offset in range(0, len(urls), 4):
-            remaining_slots = (16_000_000 - total_bytes) // 2_000_000
+        offset = 0
+        contract = observed.result()
+        while contract is None and offset < len(urls):
+            remaining_slots = (40_000_000 - total_bytes) // 8_000_000
             if remaining_slots <= 0:
                 break
             async def read_script(url):
                 try:
-                    response = await web.fetch_text(url, max_bytes=2_000_000, referer=final)
+                    response = await web.fetch_text(url, max_bytes=8_000_001, referer=final)
                     parts = urlsplit(response[2])
                     host = parts.hostname or ""
                     if response[0] == 200 and (host in {"www.facebook.com", "business.facebook.com"} or host.endswith(".fbcdn.net")):
-                        return response[1]
+                        if len(response[1].encode()) <= 8_000_000:
+                            return response[1]
                 except Exception:
                     pass
                 return ""
             batch = await asyncio.gather(*(read_script(url) for url in urls[offset:offset + min(4, remaining_slots)]))
+            offset += len(batch)
             for script in batch:
                 count += 1
                 total_bytes += len(script.encode())
                 observed.observe(script)
-        contract = observed.result()
+            contract = observed.result()
         log.info("[%s] %s private_discovery scripts=%d bytes=%d artifacts=%d schemas=%d resolved=%s",
             getattr(getattr(web, "profile", None), "name", ""), label, count, total_bytes,
             sum(len(x) for x in observed.ids.values()), sum(len(x) for x in observed.payloads.values()), bool(contract))

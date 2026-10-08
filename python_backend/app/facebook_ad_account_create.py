@@ -120,6 +120,11 @@ def _extract_ad_account_id(payload: dict[str, Any]) -> tuple[str, str]:
             matches.append(row)
 
     def add_first_id_field(node: dict[str, Any], path: str) -> None:
+        # Current Settings CREATE returns separate canonical and UI IDs.
+        # Reconciliation uses the canonical business_object_id, not Relay id.
+        if "business_object_id" in node:
+            add(node["business_object_id"], f"{path}.business_object_id")
+            return
         for field in ("id", "account_id", "ad_account_id"):
             candidate = node.get(field)
             if _normalize_ad_account_id(candidate):
@@ -163,6 +168,7 @@ def _extract_ad_account_id(payload: dict[str, Any]) -> tuple[str, str]:
                 elif (
                     key_folded in {"account_id", "id"}
                     and parent_is_ad_account
+                    and not (parent_key in known_nodes and "business_object_id" in value)
                 ):
                     add(child, child_path)
 
@@ -270,6 +276,8 @@ def _replace_capture_values(
                     )
                 elif compact == "clientmutationid":
                     out[key] = uuid.uuid4().hex[:16]
+                elif compact == "qpljoinid":
+                    out[key] = str(uuid.uuid4())
                 else:
                     out[key] = walk(child)
             return out

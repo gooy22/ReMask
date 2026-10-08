@@ -25,7 +25,7 @@ _FIELDS = {"businessid": "business", "endadvertiserid": "business",
            "accountname": "name", "adaccountname": "name", "name": "name",
            "currency": "currency", "currencycode": "currency",
            "timezoneid": "timezone", "timezone": "timezone", "actorid": "actor", "userid": "actor",
-           "clientmutationid": "mutation"}
+           "clientmutationid": "mutation", "qpljoinid": "join"}
 
 
 def _compact(key: Any) -> str:
@@ -172,7 +172,8 @@ class AdAccountContractStore:
         if not str(actor_id).isdigit() or not str(business_id).isdigit():
             return None
         values = {"business": business_id, "name": account_name, "currency": currency,
-                  "timezone": timezone_id, "actor": actor_id, "mutation": uuid.uuid4().hex[:16]}
+                  "timezone": timezone_id, "actor": actor_id, "mutation": uuid.uuid4().hex[:16],
+                  "join": str(uuid.uuid4())}
 
         def render(value: Any) -> Any:
             if isinstance(value, dict):

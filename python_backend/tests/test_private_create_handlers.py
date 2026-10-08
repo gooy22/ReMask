@@ -26,7 +26,76 @@ def modules(doc="1234567890123"):
     });''' % doc
 
 
+def observed_create_modules():
+    return (Path(__file__).parent / "fixtures/meta_create_rk_observed_20261008.js").read_text()
+
+
 class ModuleDiscoveryTests(unittest.IsolatedAsyncioTestCase):
+    def observer(self):
+        return WebModuleContracts(friendly_names=("BizKitSettingsCreateAdAccountMutation",),
+            bindings={"businessid": BM, "endadvertiserid": BM, "adaccountname": NAME,
+                "currency": "USD", "timezoneid": 137})
+
+    def test_current_meta_flat_sender_imported_operation_and_string_timezone(self):
+        source = observed_create_modules()
+        for text in (source, source.replace("37914283651496237", "999888777666555")):
+            observer = self.observer()
+            observer.observe(text)
+            result = observer.result()
+            self.assertEqual(result["doc_id"], "999888777666555" if text != source else "37914283651496237")
+            self.assertEqual(result["variables"], {"businessID": BM, "adAccountName": NAME,
+                "currency": "USD", "timezoneID": "137", "endAdvertiserID": BM,
+                "qplJoinID": "private-contract-discovery"})
+            self.assertEqual(len(result["module_sha256"]), 6)
+
+    def test_current_meta_dependencies_can_arrive_in_separate_reversed_bundles(self):
+        from app.private_contract_discovery import _module_nodes
+        pieces = ["__d(" + json.dumps(name) + ",[]," + node.text.decode() + ");"
+            for name, node in _module_nodes(observed_create_modules())]
+        observer = self.observer()
+        for piece in reversed(pieces):
+            observer.observe(piece)
+        self.assertIsNotNone(observer.result())
+
+    def test_incomplete_foreign_mutable_or_reauth_variables_rewrite_has_no_contract(self):
+        source = observed_create_modules()
+        for changed in (
+                source.replace('a.exports="37914283651496237"', 'a.exports="bad"'),
+                source.replace('operationKind:"mutation"', 'operationKind:"query"'),
+                source.replace('name:"business_settings_create_ad_account"', 'name:"business_settings_claim_ad_account"'),
+                source.replace('timezoneID:d', 'timezoneID:d,unknownSetting:unknown'),
+                source.replace('BizKitSettingsCreateAdAccountMutation").createAdAccountMutation', 'OtherMutation").createAdAccountMutation'),
+                source.replace('X.toString()', 'X'),
+                source.replace('return[c,a||l]', 'return[a||l,c]'),
+                source.replace('{onError:t}', '{onError:t,variables:foreignVariables}'),
+                source.replace('f({variables:{businessID:a', 'f=otherCommit;f({variables:{businessID:a'),
+                source.replace('a.exports=e', 'e=otherArtifact;a.exports=e'),
+                source.replace('e=n("BizKitSettingsCreateAdAccountMutation.graphql")', 'e=n("OtherMutation.graphql")'),
+                source + '__d("BizKitSettingsCreateAdAccountMutation_facebookRelayOperation",[],function(a,b,c,d,e){e.exports="8888888888888"});'):
+            with self.subTest(change=changed[-90:]):
+                observer = self.observer()
+                observer.observe(changed)
+                self.assertIsNone(observer.result())
+
+    async def test_current_meta_full_large_bundle_is_read_without_skipping_urls(self):
+        large = "/*" + "x" * 2_100_000 + "*/" + observed_create_modules()
+        urls = ["https://static.xx.fbcdn.net/rsrc.php/v1/y/a%d.js" % i for i in range(12)]
+        entry = "https://business.facebook.com/latest/settings/ad_accounts/?business_id=" + BM
+        calls = []
+        async def fetch(url, **kwargs):
+            calls.append(url)
+            if url == entry:
+                return 200, "".join('<script src="' + u + '"></script>' for u in urls), url
+            index = urls.index(url)
+            body = large if index == 7 else "/*" + "x" * (2_000_000 if index < 4 else 100) + "*/"
+            return 200, body[:kwargs["max_bytes"]], url
+        result = await discover_private_ad_account_contract(SimpleNamespace(fetch_text=fetch),
+            business_id=BM, account_name=NAME, currency="USD", timezone_id=137, actor_id=UID)
+        self.assertIsNotNone(result)
+        self.assertIn(urls[7], calls)
+        self.assertEqual(calls[1:], urls[:len(calls)-1])
+        self.assertLess(len(calls), len(urls) + 1)
+
     def test_relay_hook_sender_binds_exact_artifact_and_typed_variables(self):
         source = modules().replace('return commitMutation(env,{mutation:d("BizKitSettingsCreateAdAccountMutation.graphql"),',
             'var [submit,pending]=d("RelayHooks").useMutation(d("BizKitSettingsCreateAdAccountMutation.graphql"));return submit({')

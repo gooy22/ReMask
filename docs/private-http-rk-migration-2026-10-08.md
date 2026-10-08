@@ -415,3 +415,45 @@ pagination не доказывают отсутствие. Отдельный bu
 образце и FacebookWebSession flow query-empty → один CREATE → query-RK
 → commit, без Chromium. Синтетический response fixture всё ещё не равен
 новой живой Meta операции; до её trace live успех не заявляется.
+
+
+## Последний Prepare 019f70a1: текущий контракт CREATE
+
+В запуске 8 октября 11:57:53–11:58:24 UTC на production 6e3fb13
+профиль 15 / BM 1428816905866955 получил HTTP/2 200 от Relay inventory
+BusinessCometBizSuiteSettingsAdAccountsRootQuery. Полная connected_objects
+collection подтвердила отсутствие RK. PRECHECK завершился; CREATE не отправлен.
+Следующая остановка: PRIVATE_AD_ACCOUNT_CONTRACT_UNAVAILABLE, artifacts=0,
+schemas=0. Это отдельный этап, не прежняя inventory-inconclusive ошибка.
+
+Публичные JS файлы именно этого запуска содержат реальный
+BizKitSettingsCreateAdAccountMutation: импортированный persisted operation ID,
+корневые variables businessID/adAccountName/timezoneID/currency/endAdvertiserID/
+qplJoinID, экспорт artifact через lazy cache и useMutationWithReauthHandling.
+Прежний разборщик принимал только literal ID и variables.input, читал лишь
+2 MB каждого файла. Два наблюдённых файла имеют 6.69 и 2.50 MB.
+
+Исправление статически связывает artifact, operation ID, экспорт, первый
+результат mutation hook и variables точного CREATE sender. Helper подтверждается
+по передаче исходного variables без изменений; reauth UI не исполняется.
+Ответ Meta, требующий reauth/checkpoint, обрабатывает действующий HTTP executor.
+Тип timezoneID=String подтверждается точным вызовом timezone.toString() в modal.
+QPL join ID генерируется заново для операции и типизируется в общем кэше.
+ID не зашит: смена ID в текущем модуле меняет извлечённый контракт.
+
+Полные файлы читаются до 8 MB с общим лимитом 40 MB и дедлайном 55 секунд.
+Неполный файл не принимается за контракт. Дисcovery останавливается при
+полном подтверждённом контракте, очередной пакет не пропускает URL при
+уменьшении оставшегося бюджета. Для анализа удерживаются только нужные
+модули, а не весь UI.
+
+business_settings_create_ad_account.business_object_id — canonical ID для
+reconciliation. business_object_ui_id и Relay id не подменяют его.
+Независимая inventory остаётся обязательной перед COMMIT.
+
+Регрессии используют наблюдённые публичные metadata/sender modules и проходят
+cold cache → inventory query → один CREATE → отдельный inventory query → COMMIT.
+Потерянный ответ CREATE также восстанавливается чтением без второй отправки.
+Заменённые artifact/helper, неизвестные переменные, mutable aliases и
+конфликтующие ID запрещают отправку. CI/public-source проверка не является
+доказательством успешного live CREATE; нужен соответствующий production trace.

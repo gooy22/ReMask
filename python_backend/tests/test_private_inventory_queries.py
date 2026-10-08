@@ -6,9 +6,10 @@ from unittest.mock import AsyncMock
 
 from app.private_inventory import private_inventory_snapshot, inventory_diagnostic_summary
 from app.private_inventory_queries import QueryArtifacts, read_private_inventory_queries
+from app.provisioning.models import ProvisioningStep
 from fb_worker import RemoteRequestError
 from tests import test_private_create_handlers as actions
-from tests.test_ad_account_private_contract import BM, RK
+from tests.test_ad_account_private_contract import BM, RK, UID, NAME
 
 
 def observed_settings_modules():
@@ -228,6 +229,71 @@ class QueryCreateFlowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_actual_meta_schema_query_create_verify_commit_without_chromium(self):
         await self.query_create_flow(observed_settings_modules(), "BusinessCometBizSuiteSettingsAdAccountsRootQuery", connected_response)
+
+    async def test_cold_current_meta_contract_create_and_independent_query_commit(self):
+        await self.cold_current_meta_flow()
+
+    async def test_cold_current_meta_lost_create_response_is_reconciled_without_second_post(self):
+        await self.cold_current_meta_flow(lost_response=True)
+
+    async def cold_current_meta_flow(self, lost_response=False):
+        import asyncio
+        import uuid
+        self.cache.path.unlink()
+        source = observed_settings_modules() + actions.observed_create_modules()
+        query = "BusinessCometBizSuiteSettingsAdAccountsRootQuery"
+        operations = []
+        owner = self.meta
+        def post(url, **kwargs):
+            friendly = kwargs["data"]["fb_api_req_friendly_name"]
+            operations.append(friendly)
+            creating = friendly == "BizKitSettingsCreateAdAccountMutation"
+            if creating:
+                owner.posts.append((url, kwargs))
+                owner.created = True
+            else:
+                self.assertEqual(friendly, query)
+            class Response:
+                status = 200
+                headers = {}
+                async def text(self):
+                    if creating:
+                        if lost_response:
+                            raise asyncio.TimeoutError()
+                        return json.dumps({"data": {"business_settings_create_ad_account": {
+                            "business_object_id": RK, "business_object_ui_id": "123123123123",
+                            "id": "AdAccount:opaque-relay-id"}}})
+                    return json.dumps(connected_response(accounts=[RK] if owner.created else []))
+                async def __aenter__(self): return self
+                async def __aexit__(self, *args): return False
+            return Response()
+        self.meta.post = post
+        async def fetch(url, **kwargs):
+            return 200, '<script>' + source + '</script> ["DTSGInitialData",[],{"token":"CURRENT"}]', url
+        self.web.fetch_text = fetch
+        result = await actions.RKActionTests.run_action(self)
+        self.assertEqual(result["ad_account_id"], "act_" + RK)
+        self.assertEqual(operations, [query, "BizKitSettingsCreateAdAccountMutation", query])
+        self.assertEqual(len(owner.posts), 1)
+        request = owner.posts[0][1]
+        variables = json.loads(request["data"]["variables"])
+        self.assertEqual(variables["businessID"], BM)
+        self.assertEqual(variables["adAccountName"], NAME)
+        self.assertEqual(variables["timezoneID"], "137")
+        self.assertEqual(variables["currency"], "USD")
+        self.assertEqual(variables["endAdvertiserID"], BM)
+        self.assertEqual(uuid.UUID(variables["qplJoinID"]).version, 4)
+        self.assertEqual(request["data"]["av"], UID)
+        self.assertEqual(request["proxy"], "http://profile-proxy:8080")
+        self.assertNotIn("input", variables)
+        self.assertEqual(self.cache.diagnostic()["state"], "available")
+        saved = await self.state.step("job-1", ProvisioningStep.AD_ACCOUNT)
+        self.assertEqual(saved["result"]["phase"], "CREATE_CONFIRMED")
+        self.assertEqual(saved["result"]["verification"]["id"], RK)
+        if not lost_response:
+            self.assertEqual(saved["result"]["create_response_ad_account_id"], RK)
+        self.session.facebook_business_browser.assert_not_awaited()
+        self.web.graphql_browser_native.assert_not_awaited()
 
     async def query_create_flow(self, source, query_name, build_response):
         original_post = self.meta.post
