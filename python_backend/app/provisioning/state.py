@@ -791,6 +791,7 @@ class ProvisioningStateStore:
                 (profile_id, ProvisioningStep.FAN_PAGES.value),
             ).fetchall()
         target = page_name.strip().casefold()
+        legacy_superseded = False
         for row in rows:
             if str(row["item_id"]) == exclude_item_id:
                 continue
@@ -823,6 +824,16 @@ class ProvisioningStateStore:
 
             phase = str(result.get("phase") or "").strip().upper()
             resume_from = str(result.get("resume_from") or "").strip().upper()
+            uncertain = (phase in {'PAGE_CREATE_CLICK_INTENT', 'PAGE_CREATE_RESULT_UNKNOWN'}
+                or resume_from == 'RECONCILE_CREATE')
+            if business_id is not None and not result.get('business_id'):
+                # A standalone same-name success can settle older standalone
+                # intents, but cannot clear another BM's independent submit.
+                if not uncertain or confirmed_same_name or fan_page_pending_never_submitted(result):
+                    legacy_superseded = True
+                    continue
+                if legacy_superseded:
+                    continue
 
             if confirmed_same_name or (
                 phase == "CREATE_NOT_SUBMITTED" and tombstone == target

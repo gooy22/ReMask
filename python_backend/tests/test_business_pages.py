@@ -200,6 +200,19 @@ class BusinessPageTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result['page_business_attached'])
         self.assertEqual((await self.state.step('fp2', ProvisioningStep.FAN_PAGES))['result']['business_id'], BM2)
 
+    async def test_standalone_same_name_success_cannot_clear_a_business_create_intent(self):
+        await self.state.set_running('pending', '15', 'pending', ProvisioningStep.FAN_PAGES)
+        await self.state.checkpoint('pending', '15', 'pending', ProvisioningStep.FAN_PAGES,
+            {'phase': 'PAGE_CREATE_CLICK_INTENT', 'business_id': BM2,
+                'active_page_name': 'PrgssTeam', 'active_before_ids': [FP1]})
+        await self.state.complete('standalone', '15', 'standalone', ProvisioningStep.FAN_PAGES,
+            {'phase': 'DONE', 'pages': [{'id': FP1, 'name': 'PrgssTeam'}]})
+        with self.state._connect() as db:
+            db.execute('UPDATE provisioning_steps SET updated_at=100 WHERE item_id=?', ('pending',))
+            db.execute('UPDATE provisioning_steps SET updated_at=200 WHERE item_id=?', ('standalone',))
+        result = await self.state.latest_uncertain_fan_page('15', 'PrgssTeam', business_id=BM2)
+        self.assertEqual(result['item_id'], 'pending')
+
     async def _seed_existing_bundles(self):
         for bm, rk in ((BM1, RK1), (BM2, RK2)):
             await self.state.complete('bm-'+bm, '15', bm, ProvisioningStep.BUSINESS, {'business_id': bm})
