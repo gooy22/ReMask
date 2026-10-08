@@ -16,7 +16,7 @@ modules={}
 for index,source,error in concurrent.futures.ThreadPoolExecutor(max_workers=4).map(fetch,enumerate(urls)):
  print("BUNDLE_REPORT="+json.dumps({"index":index,"bytes":len(source.encode()),"error":error}),flush=True)
  for name,node in _module_nodes(source):modules[name]=node
-selected={n for n in modules if any(x in n for x in ("CreateAdditionalProfilePlus", "CreatePageModalQuery", "PageCategorySearchSource", "useBizKitPageQuery"))}
+selected={n for n in modules if any(x in n for x in ("BizSuiteSettingsPagesRootQuery", "BizSuiteSettingsPagesViewContainer", "BusinessAssetsListPaginationQuery", "BusinessAssetsList_assets", "BusinessAssetsGeoList_assets", "BusinessAssetsListItemName", "BizSuiteSettingsPages.entrypoint", "BizSuiteSettingsPagesViewContainer.entrypoint", "BizSuiteSettingsPages.react"))}
 print("READ_CATALOG="+json.dumps(sorted(selected)),flush=True)
 for name in sorted(selected):
  node=modules[name]
