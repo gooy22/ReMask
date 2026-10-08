@@ -32,7 +32,7 @@ for index, source, error in concurrent.futures.ThreadPoolExecutor(max_workers=4)
         if name.endswith("Query.graphql") or name.endswith("_facebookRelayOperation"):
             key=hashlib.sha256(node.text).hexdigest()
             all_queries.modules.setdefault(name, {})[key] = node
-        if ("BusinessCometBizSuiteSettingsAdAccountsRootQuery" in node.text.decode()
+        if ("BusinessCometBizSuiteSettingsAdAccountsViewContainer.entrypoint" in node.text.decode()
                 and not name.endswith("Query.graphql")):
             modules[name]=node
 print("TOTAL_REPORT=" + json.dumps({"old_modules":len(old.modules), "old_contracts":old.contracts("1428816905866955"),
