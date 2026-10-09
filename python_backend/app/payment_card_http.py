@@ -10,7 +10,7 @@ import logging
 import uuid
 
 from .payment_card_input import build_save_input, card_auth_fields, validate_client_info
-from .payment_card_requirements import read_card_requirements, requirements_proof, country_policy_proof
+from .payment_card_requirements import read_card_requirements, requirements_proof, resolve_country_policy, confirm_bin_country
 from .payment_ptt import encrypt_card_token
 from .private_auth import private_auth_error
 from .static_payment_card import card_screen_proof, read_card_screen, save_response_proof, confirm_saved_card
@@ -105,8 +105,9 @@ Neither exceptions nor responses may export token/PAN/CVV/bank parameters.
         screen = card_screen_proof(screen_payload, account, account_evidence=evidence)
         if screen.get('card_form_verified') is not True:
             return {**base, 'code': screen['code']}
-        policy = country_policy_proof(screen_payload, country=context.country)
-        if policy.get('country_policy_verified') is not True:
+        policy = await resolve_country_policy(web, screen_payload, business_id=business_id,
+                                             evidence=evidence, country=context.country)
+        if policy.get('country_policy_verified') is not True and not policy.get('bin_country_required'):
             return {**base, 'code': policy['code']}
         if screen['options']['verify_tokenization_required'] and context.network_consent is not True:
             return {**base, 'code': 'CARD_TOKENIZATION_CONSENT_REQUIRED'}
@@ -127,6 +128,12 @@ Neither exceptions nor responses may export token/PAN/CVV/bank parameters.
             return {**base, 'code': 'CARD_PTT_KEY_RESPONSE_UNCONFIRMED'}
         stage('PTT_ENCRYPT')
         token = encrypt_card_token(auth, secret, root.get('trust_chain'))
+        if policy.get('bin_country_required'):
+            stage('PRECHECK_BIN_COUNTRY')
+            country_result = await confirm_bin_country(web, business_id=business_id,
+                payment=payment, number=values['number'], token=token, country=context.country)
+            if country_result.get('country_policy_verified') is not True:
+                return {**base, 'code': country_result['code']}
         input_value = build_save_input(values, payment=payment, country=context.country, currency=context.currency,
             token=token, client_info=context.client_info, logging_data=context.logging_data,
             usability_intent=context.usability_intent, network_consent=context.network_consent,

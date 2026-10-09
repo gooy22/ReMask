@@ -48,6 +48,11 @@ function paymentCardMessage(result){
     CARD_TOKENIZATION_CONSENT_REQUIRED:'Meta требует согласие на токенизацию карты. Согласие не проставлено; карта не отправлена.',
     CARD_COUNTRY_POLICY_INCONCLUSIVE:'Meta не подтвердила правила страны выбранного РК. Карта не отправлена.',
     CARD_TAX_COUNTRY_VALIDATION_REQUIRED:'Meta требует отдельную проверку страны РК. Карта не отправлена.',
+    CARD_TAX_COUNTRY_QUERY_UNCONFIRMED:'Meta не подтвердила ответ проверки страны выбранного РК. Карта не отправлена.',
+    CARD_TAX_COUNTRY_STEPUP_REQUIRED:'Meta требует подтверждение страны владельцем рекламного кабинета. Карта не отправлена.',
+    CARD_BIN_COUNTRY_CHECK_REQUIRED:'Перед сохранением Meta проверит страну карты. Карта ещё не отправлена.',
+    CARD_BIN_COUNTRY_UNCONFIRMED:'Meta не подтвердила страну карты. Карта не отправлена.',
+    CARD_COUNTRY_POLICY_CONFIRMED:'Проверка страны Meta пройдена.',
     CARD_BILLING_COUNTRY_MISMATCH:'Страна оплаты не совпала с подтверждённой страной Meta. Настройки не изменены; карта не отправлена.',
     CARD_PAYMENT_MODE_INCONCLUSIVE:'Meta не подтвердила режим оплаты РК. Карта не отправлена.',
     CARD_CLIENT_CONTEXT_REQUIRED:'Не подтверждены данные клиента для банковской проверки. Карта не отправлена.',
@@ -388,7 +393,8 @@ async function showFunding(restored=null){
     for(let i=0;i<rows.length;i++){
       const r=rows[i],data=await apiJson('ajax/paymentCards.php',post({action:'prepare',...(select.value?{card_id:select.value}:{}),profile:r.profile,account_id:r.id,...paymentAssetHint(r),...paymentSetupPayload()}));
       const line=document.createElement('div');line.className='ws-result '+(['FORM_READY','FORM_CONFIRMED'].includes(data.result.status)?'ok':'bad');
-      line.textContent=r.profile+' / '+r.id+': '+paymentCardMessage(data.result)+paymentCardAuthEvidence(data.result);container.appendChild(line);setProgress(i+1,rows.length);
+      line.textContent=r.profile+' / '+r.id+': '+paymentCardMessage(data.result)+paymentCardAuthEvidence(data.result)
+        +(data.result.country_policy?' '+paymentCardMessage(data.result.country_policy):'');container.appendChild(line);setProgress(i+1,rows.length);
       if(data.result.code==='CARD_BILLING_FIELDS_REQUIRED')showMissingBilling([...billingMissing,...(data.result.missing_fields||[])]);
       if(data.result.ui_preview&&/^[A-Za-z0-9+/=]+$/.test(data.result.ui_preview)){
         const preview=document.createElement('details'),summary=document.createElement('summary'),image=document.createElement('img');

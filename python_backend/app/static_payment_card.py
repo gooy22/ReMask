@@ -74,14 +74,21 @@ async def inspect_card_form(web, *, account, business_id):
     if not all(methods.get(k) is True for k in ('account_scope_verified',
             'business_scope_verified', 'payment_account_relation_verified', 'methods_query_verified')):
         return {**base, 'code': methods['code'], 'account_scope_verified': False}
-    proof = card_screen_proof(await read_card_screen(web, business_id=business_id,
-                             payment=evidence['payment_account_id']), account, account_evidence=evidence)
+    screen_payload = await read_card_screen(web, business_id=business_id,
+                                          payment=evidence['payment_account_id'])
+    proof = card_screen_proof(screen_payload, account, account_evidence=evidence)
     result = {**base, **proof, 'business_scope_verified': True,
               'payment_account_id': evidence['payment_account_id']}
     if proof.get('card_form_verified') is True:
         # FORM_READY is reserved for a fully prepared submission. The input
         # builder is still unverified; do not make the UI imply readiness.
         result.update(status='FORM_CONFIRMED', code='CARD_HTTP_FORM_CONFIRMED')
+        from .payment_card_requirements import resolve_country_policy
+        tax = screen_payload['data']['payment_account']['billable_account'].get('billable_account_tax_info')
+        country = tax.get('business_country_code') if isinstance(tax, dict) else None
+        if isinstance(country, str) and re.fullmatch(r'[A-Z]{2}', country):
+            result['country_policy'] = await resolve_country_policy(web, screen_payload,
+                business_id=business_id, evidence=evidence, country=country)
     return result
 
 

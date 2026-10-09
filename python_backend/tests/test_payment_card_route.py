@@ -26,6 +26,20 @@ def payment_route():
 
 
 class PaymentRouteErrorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_public_reconcile_reaches_http_service_without_card_data(self):
+        from app.payment_card_binding import profile_payment_card
+        payload={'account_id':'act_123456789','operation':'reconcile',
+                 'card_id':'card_'+'a'*24}
+        state=SimpleNamespace()
+        proof={'profile_id':'Fixture','account_id':'123456789','status':'BLOCKED',
+               'code':'CARD_HTTP_INTENT_NOT_FOUND','submitted':False}
+        with patch('app.payment_card_service.profile_payment_card_http',AsyncMock(return_value=proof)) as service:
+            result=await profile_payment_card(None,'Fixture',payload,state=state)
+        self.assertEqual(result,proof)
+        service.assert_awaited_once_with(None,'Fixture',payload,state=state)
+        self.assertNotIn('card',service.await_args.args[2])
+        self.assertNotIn('cvv',service.await_args.args[2])
+
     async def test_valid_canonical_target_keeps_actual_failure_and_no_secret_message(self):
         route=payment_route()
         for account in ('123456789','act_123456789'):

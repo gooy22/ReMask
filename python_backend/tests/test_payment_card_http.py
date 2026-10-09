@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, patch
 
 from app.payment_card_http import SaveContext, save_card_http, KEY_DOC_ID, SAVE_DOC_ID
 from app.payment_card_input import build_client_info
-from app.payment_card_requirements import BIN_DOC_ID
+from app.payment_card_requirements import BIN_DOC_ID, TAX_DOC_ID, COUNTRY_BIN_DOC_ID
 from tests.test_payment_ptt import VALUES
 from tests.test_static_payment_card import ACCOUNT, BUSINESS, PAYMENT, NODE, CREDENTIAL, save_payload, payment_node
 
@@ -44,6 +44,7 @@ class FakeHTTP:
         self.calls=[]; self.saved=False; self.lose_save=False; self.foreign_business=False
         self.key_error=False; self.auth_after_key=False; self.bank_required=False; self.lose_verification=False
         self.screen=read_screen();self.bin=read_bin()
+        self.tax_status='PENDING';self.tax_can_update=False;self.bin_country='US'
     async def graphql(self,doc,variables,**kwargs):
         self.calls.append((doc,copy.deepcopy(variables),kwargs))
         if doc=='28797973873175785':return read_account()
@@ -55,6 +56,13 @@ class FakeHTTP:
             return p
         if doc=='27759194723782263':return self.screen
         if doc==BIN_DOC_ID:return self.bin
+        if doc==TAX_DOC_ID:
+            return {'data':{'payment_account':{'id':NODE,
+                'tax_country_validation_info':{'status':self.tax_status},
+                'billable_account':{'__typename':'AdAccount','id':ACCOUNT,
+                    'billable_account_tax_info':{'can_update_tax_country':self.tax_can_update}}}}}
+        if doc==COUNTRY_BIN_DOC_ID:
+            return {'data':{'credit_card_bin_properties':{'country_code':self.bin_country}}}
         if doc==KEY_DOC_ID:
             return {'data':{'get_server_encryption_key':{'client_mutation_id':variables['input']['client_mutation_id'],
                 'trust_chain':['synthetic leaf','synthetic intermediate'],'payments_error':{} if self.key_error else None}}}
@@ -106,8 +114,37 @@ class PaymentHTTPTests(unittest.IsolatedAsyncioTestCase):
         web=FakeHTTP()
         web.screen['data']['payment_account']['billable_account']['billing_flags']=['TAX_COUNTRY_MISMATCH']
         result=await self.run_flow(web)
-        self.assertEqual(result['code'],'CARD_TAX_COUNTRY_VALIDATION_REQUIRED')
+        self.assertEqual(result['code'],'CARD_TAX_COUNTRY_STEPUP_REQUIRED')
         self.assertNotIn(BIN_DOC_ID,[x[0] for x in web.calls]);self.persist.assert_not_awaited()
+
+    async def test_confirmed_tax_status_allows_independent_save_even_with_mismatch_flag(self):
+        web=FakeHTTP();web.tax_status='CONFIRMED'
+        web.screen['data']['payment_account']['billable_account']['billing_flags']=['TAX_COUNTRY_MISMATCH']
+        result=await self.run_flow(web)
+        self.assertEqual(result['status'],'LINKED')
+        docs=[x[0] for x in web.calls]
+        self.assertLess(docs.index(TAX_DOC_ID),docs.index(SAVE_DOC_ID))
+        self.assertNotIn(COUNTRY_BIN_DOC_ID,docs)
+
+    async def test_pending_tax_status_checks_encrypted_bin_country_before_save(self):
+        web=FakeHTTP();web.tax_can_update=True
+        web.screen['data']['payment_account']['billable_account']['billing_flags']=['TAX_COUNTRY_MISMATCH']
+        result=await self.run_flow(web)
+        self.assertEqual(result['status'],'LINKED')
+        docs=[x[0] for x in web.calls]
+        self.assertLess(docs.index(KEY_DOC_ID),docs.index(COUNTRY_BIN_DOC_ID))
+        self.assertLess(docs.index(COUNTRY_BIN_DOC_ID),docs.index(SAVE_DOC_ID))
+        country_call=next(x for x in web.calls if x[0]==COUNTRY_BIN_DOC_ID)
+        self.assertEqual(country_call[1],{'bin':VALUES['number'][:6],
+            'paymentAccountID':PAYMENT,'ptt':'synthetic_token'})
+
+    async def test_country_mismatch_or_missing_country_never_submits_card(self):
+        for detected in ('UA',None,'','invalid'):
+            web=FakeHTTP();web.tax_can_update=True;web.bin_country=detected
+            web.screen['data']['payment_account']['billable_account']['billing_flags']=['TAX_COUNTRY_MISMATCH']
+            result=await self.run_flow(web)
+            self.assertFalse(result['submitted']);self.persist.assert_not_awaited()
+            self.assertNotIn(SAVE_DOC_ID,[x[0] for x in web.calls])
 
     async def test_missing_required_card_field_stops_before_key_and_save_without_exposing_bin(self):
         web=FakeHTTP();web.bin['data']['credit_card_bin_info_shim']['require_phone_number_or_email']=True
