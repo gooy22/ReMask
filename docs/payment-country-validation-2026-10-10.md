@@ -39,3 +39,14 @@ The supplied BillingVerifyCountryLocationMismatchState offers Verify Country
 it does not fabricate hasAcknowledgedCountryMismatch or complete identity
 verification. This live country mismatch is separate from the original
 missing country-query implementation.
+
+The exact live pair was US for the account and UA for the selected card.
+The operator's explicit country preference (Ukraine, preserving Meta's country
+only when change is locked) was not being applied by the HTTP service.
+The service now checks the exact BM/RK/payment relation, current country
+permissions and supported country options before applying the selected country
+through current mutation 29520642304190454. It retains the existing currency
+and timezone. It never invokes close/create-new or a country acknowledgement.
+Separate account and setup reads must confirm the same RK/payment pair and
+desired country before the card executor can continue. Query/selector failures
+do not qualify as a locked-country fallback.

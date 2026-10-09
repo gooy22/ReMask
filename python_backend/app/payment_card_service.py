@@ -15,6 +15,7 @@ from .payment_card_input import validate_client_info, card_auth_fields
 from .payment_card_intents import CardIntentLedger
 from .payment_inspection import account_id, resolve_payment_asset
 from .private_auth import private_auth_error
+from .payment_country_setup import configure_country
 from .static_payment_card import prepare_profile_card_form, confirm_saved_card
 from .static_payment_read import execute, account_proof, payment_page_proof, inspect_methods
 
@@ -116,9 +117,13 @@ async def profile_payment_card_http(resolver, profile, payload, *, state=None):
                 if evidence.get('account_scope_verified') is not True:
                     return {**base, 'code': evidence['code']}
                 payment = evidence['payment_account_id']
-                country, currency = setup_context(await execute(web, 'READ_SETUP', payment=payment,
-                                                                business_id=business), target, payment)
                 setup = payload.get('billing_setup')
+                setup_payload = await execute(web, 'READ_SETUP', payment=payment, business_id=business)
+                configured = await configure_country(web, target=target, business_id=business,
+                    evidence=evidence, current_payload=setup_payload, setup=setup)
+                if 'setup_payload' not in configured:
+                    return {**base, 'code':configured['code']}
+                country, currency = setup_context(configured['setup_payload'], target, payment)
                 if isinstance(setup, dict) and setup.get('country_mode') == 'strict' and setup.get('country') != country:
                     return {**base, 'code': 'CARD_BILLING_COUNTRY_MISMATCH'}
                 context = SaveContext(payment=payment, country=country, currency=currency,

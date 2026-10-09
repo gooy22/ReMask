@@ -71,6 +71,27 @@ class CardServiceTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn(secret, row['result'])
         self.assertNotIn('cvv', row['result']);self.assertNotIn('csc', row['result'])
 
+    async def test_preferred_country_is_applied_and_verified_before_card_save(self):
+        from tests.test_payment_country_setup import CountryHTTP
+        from app.payment_country_setup import UPDATE_DOC
+        from app.payment_card_http import SAVE_DOC_ID
+        self.web=CountryHTTP();self.session.facebook_web.return_value=self.web
+        result=await self.call({**self.payload,'billing_setup':{'country':'UA','country_mode':'prefer_ua'}})
+        self.assertEqual(result['status'],'LINKED')
+        docs=[c[0] for c in self.web.calls]
+        self.assertLess(docs.index(UPDATE_DOC),docs.index(SAVE_DOC_ID))
+        save=next(c for c in self.web.calls if c[0]==SAVE_DOC_ID)
+        self.assertEqual(save[1]['input']['billing_address']['country_code'],'UA')
+
+    async def test_unconfirmed_country_update_stops_before_save_and_card_ledger_submit(self):
+        from tests.test_payment_country_setup import CountryHTTP
+        from app.payment_card_http import SAVE_DOC_ID
+        self.web=CountryHTTP();self.web.readback_wrong=True;self.session.facebook_web.return_value=self.web
+        result=await self.call({**self.payload,'billing_setup':{'country':'UA','country_mode':'prefer_ua'}})
+        self.assertEqual(result['code'],'CARD_COUNTRY_UPDATE_VERIFY_PENDING')
+        self.assertFalse(result['submitted']);self.assertNotIn(SAVE_DOC_ID,[c[0] for c in self.web.calls])
+        self.state.set_payment_link_state.assert_not_awaited()
+
     async def test_lost_save_restart_never_replays(self):
         self.web.lose_save=True
         self.assertEqual((await self.call())['status'],'SUBMITTED_UNVERIFIED')
