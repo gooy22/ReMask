@@ -17,7 +17,7 @@ from .payment_inspection import account_id, resolve_payment_asset
 from .private_auth import private_auth_error
 from .payment_country_setup import configure_country
 from .static_payment_card import prepare_profile_card_form, confirm_saved_card
-from .static_payment_read import execute, account_proof, payment_page_proof, inspect_methods
+from .static_payment_read import execute, account_proof, payment_page_proof, inspect_methods, complete_methods
 
 # Explicit integration canary, not a blanket enablement of an archived builder.
 CANARY_SCOPE = ('15', '120251650486340295')
@@ -78,16 +78,24 @@ async def profile_payment_card_http(resolver, profile, payload, *, state=None):
                     return retained
                 profile_context = await resolver.resolve(profile)
                 async with ProfileSession(profile_context) as session:
-                    methods = await inspect_methods(await session.facebook_web(), account=target, business_id=asset['business_id'])
+                    web = await session.facebook_web()
+                    methods = await inspect_methods(web, account=target, business_id=asset['business_id'])
+                    methods = await complete_methods(web, methods, business_id=asset['business_id'])
+                    retained['funding'] = {**methods, 'profile_id': profile}
                     if not saved.get('credential'):
                         matches = [row for row in methods.get('payment_methods', [])
                             if row.get('last4') == saved.get('last4') and row.get('type') == saved.get('expected_card_type')
                             and row.get('credential_id') not in saved['preexisting_credential_ids']
-                            and row.get('needs_verification') is False]
+                            and (row.get('needs_verification') is False or methods.get('inventory_complete') is True)]
                         if len(matches) != 1:
                             return retained
                         row = matches[0]
                         saved['credential'] = {'id':row['credential_id'], 'type':row['type'], 'last4':row['last4']}
+                        if row.get('needs_verification') is True:
+                            result = {**saved, **retained, 'credential': saved['credential'],
+                                'status':'ACTION_REQUIRED', 'code':'CARD_BANK_CONFIRMATION_REQUIRED'}
+                            await ledger.finish(pending['attempt_id'], result)
+                            return result
                     if saved.get('status') == 'ACTION_REQUIRED' and not any(row.get('credential_id') == saved['credential']['id']
                             and row.get('needs_verification') is False for row in methods.get('payment_methods', [])):
                         return {**retained, 'status':'ACTION_REQUIRED','code':'CARD_BANK_CONFIRMATION_REQUIRED'}

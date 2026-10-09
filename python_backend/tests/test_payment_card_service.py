@@ -98,7 +98,7 @@ class CardServiceTests(unittest.IsolatedAsyncioTestCase):
         self.web.calls.clear()
         result=await self.call({**self.payload,'attempt_id':'c'*24})
         self.assertEqual(result['code'],'CARD_LINK_CONFIRMED')
-        self.assertEqual([x[0] for x in self.web.calls],['28797973873175785','28814526004898205'])
+        self.assertEqual([x[0] for x in self.web.calls],['28797973873175785','28814526004898205','28797973873175785','24871928132404465'])
         self.assertEqual(result['status'],'LINKED')
 
     async def test_lost_verify_reconciles_exact_credential_without_card_or_cvv(self):
@@ -108,7 +108,25 @@ class CardServiceTests(unittest.IsolatedAsyncioTestCase):
         self.web.calls.clear()
         result=await self.call({'operation':'reconcile','card_id':self.payload['card_id']})
         self.assertEqual(result['status'],'LINKED')
-        self.assertEqual([x[0] for x in self.web.calls],['28797973873175785','28814526004898205'])
+        self.assertEqual([x[0] for x in self.web.calls],['28797973873175785','28814526004898205','28797973873175785','24871928132404465'])
+
+    async def test_lost_save_reply_recovers_nonprimary_card_from_unfiltered_collection(self):
+        self.web.lose_save=True
+        await self.call()
+        original=self.web.graphql
+        async def only_primary(doc, variables, **kwargs):
+            if doc=='28814526004898205':
+                from tests.test_payment_card_http import read_methods
+                self.web.calls.append((doc,copy.deepcopy(variables),kwargs))
+                return read_methods([])
+            return await original(doc,variables,**kwargs)
+        self.web.graphql=only_primary
+        self.web.calls.clear()
+        result=await self.call({'operation':'reconcile','card_id':self.payload['card_id']})
+        self.assertEqual(result['status'],'LINKED')
+        self.assertTrue(result['funding']['inventory_complete'])
+        self.assertFalse(result['funding_verified'])
+        self.assertNotIn('28619313357728847',[c[0] for c in self.web.calls])
 
     async def test_lost_reply_never_commits_foreign_business_or_ambiguous_new_credentials(self):
         self.web.lose_save=True
@@ -175,7 +193,7 @@ class CardServiceTests(unittest.IsolatedAsyncioTestCase):
             result = await profile_payment_card(self.resolver, '15', {'operation':'reconcile',
                 'account_id':ACCOUNT, 'card_id':self.payload['card_id']}, state=self.state)
         self.assertEqual(result['status'], 'LINKED')
-        self.assertEqual([call[0] for call in self.web.calls], ['28797973873175785','28814526004898205'])
+        self.assertEqual([call[0] for call in self.web.calls], ['28797973873175785','28814526004898205','28797973873175785','24871928132404465'])
         for call in self.web.calls:
             self.assertNotIn('synthetic_token', json.dumps(call[1]))
             self.assertNotIn(VALUES['number'], json.dumps(call[1]))

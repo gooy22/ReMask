@@ -14,7 +14,7 @@ from .payment_card_requirements import read_card_requirements, requirements_proo
 from .payment_ptt import encrypt_card_token
 from .private_auth import private_auth_error
 from .static_payment_card import card_screen_proof, read_card_screen, save_response_proof, confirm_saved_card
-from .static_payment_read import ENDPOINT, _identity, _clean_payload, execute, account_proof, methods_proof, _brand
+from .static_payment_read import ENDPOINT, _identity, _clean_payload, execute, account_proof, methods_proof, complete_methods, _brand
 
 KEY_DOC_ID = '23994203586844376'
 SAVE_DOC_ID = '28619313357728847'
@@ -92,6 +92,9 @@ Neither exceptions nor responses may export token/PAN/CVV/bank parameters.
         if not all(methods.get(k) is True for k in ('account_scope_verified', 'business_scope_verified',
                 'payment_account_relation_verified', 'methods_query_verified')):
             return {**base, 'code': methods['code']}
+        methods = await complete_methods(web, methods, business_id=business_id)
+        if methods.get('inventory_complete') is not True:
+            return {**base, 'code': methods['code']}
         # Existing masked matches are ambiguous and cannot authorize another Save.
         if any(row.get('last4') == values['number'][-4:] for row in methods.get('payment_methods', [])):
             return {**base, 'code': 'CARD_MASK_COLLISION_PREEXISTING'}
@@ -99,7 +102,7 @@ Neither exceptions nor responses may export token/PAN/CVV/bank parameters.
             # Metadata needed to reconcile a lost Save reply, never card input.
             await retain_verification_context({**evidence, 'business_id':business_id,
                 'last4':values['number'][-4:], 'expected_card_type':number_brand(values['number']), 'preexisting_credential_ids':
-                [row['credential_id'] for row in methods.get('payment_methods', [])]})
+                methods['all_credential_ids']})
         stage('PRECHECK_CARD_SCREEN')
         screen_payload = await read_card_screen(web, business_id=business_id, payment=payment)
         screen = card_screen_proof(screen_payload, account, account_evidence=evidence)
@@ -164,6 +167,8 @@ Neither exceptions nor responses may export token/PAN/CVV/bank parameters.
                        else 'discover' if re.match(r'^(?:6011|65|64[4-9])', number) else '')
         saved = save_response_proof(payload, account, account_evidence=evidence,
                                     expected_card={'type': brand, 'last4': values['number'][-4:]})
+        logging.getLogger('remask.payment_card').info('card Save response account=%s stage=%s meta_error_codes=%s',
+            account, saved.get('save_response_stage', saved['status']), saved.get('meta_error_codes', []))
         if saved['status'] != 'VERIFYING':
             return {**base, **saved}
         stage('VERIFY_EXACT_CREDENTIAL')
@@ -171,6 +176,9 @@ Neither exceptions nor responses may export token/PAN/CVV/bank parameters.
                                               business_id=business_id), account, business_id=business_id,
                                               account_evidence=evidence)
         result = confirm_saved_card(saved, verified, business_id=business_id)
+        if result.get('status') != 'LINKED':
+            verified = await complete_methods(web, verified, business_id=business_id)
+            result = confirm_saved_card(saved, verified, business_id=business_id)
         if result.get('status') == 'LINKED':
             stage('COMMIT_LINKED')
             result['funding'] = verified
@@ -185,7 +193,8 @@ Neither exceptions nor responses may export token/PAN/CVV/bank parameters.
                 return {**base, **saved, 'status': 'SUBMITTED_UNVERIFIED',
                         'code': 'CARD_SAVE_LINK_VERIFICATION_PENDING'}
             return {**base, 'submitted': True, 'retry_blocked': True,
-                    'status': 'SUBMITTED_UNVERIFIED', 'code': 'CARD_SAVE_RESULT_UNKNOWN'}
+                    'status': 'SUBMITTED_UNVERIFIED', 'code': 'CARD_SAVE_RESULT_UNKNOWN',
+                    'save_response_stage': 'SAVE_TRANSPORT_EXCEPTION'}
         auth_error = private_auth_error(exc)
         allowed = {'CARD_DATA_INVALID', 'CARD_PTT_TRUST_CHAIN_INVALID', 'CARD_PTT_REQUIRED',
                    'CARD_BILLING_COUNTRY_REQUIRED', 'CARD_BILLING_CURRENCY_REQUIRED',

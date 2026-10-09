@@ -49,6 +49,12 @@ class FakeHTTP:
     async def graphql(self,doc,variables,**kwargs):
         self.calls.append((doc,copy.deepcopy(variables),kwargs))
         if doc=='28797973873175785':return read_account()
+        if doc=='24871928132404465':
+            return {'data':{'payment_account':{'id':NODE,'billing_payment_methods':
+                [{'credential':{'__typename':'ExternalCreditCard','id':CREDENTIAL}}] if self.saved else []}}}
+        if doc=='27586872297608269':
+            return {'data':{'node':{'__typename':'ExternalCreditCard','id':variables['paymentMethodID'],
+                'card_association_name':'VISA','last_four_digits':'1111'}}}
         if doc=='28814526004898205':
             if self.saved and self.lose_verification:raise TimeoutError('private read failure')
             card={'__typename':'ExternalCreditCard','id':CREDENTIAL,'card_association_name':'VISA','last_four_digits':'1111'}
@@ -95,7 +101,7 @@ class PaymentHTTPTests(unittest.IsolatedAsyncioTestCase):
         web=FakeHTTP(); result=await self.run_flow(web)
         self.assertEqual(result['status'],'LINKED');self.assertFalse(result['browser_started'])
         self.assertFalse(result['funding_verified']);self.persist.assert_awaited_once()
-        self.assertEqual([x[0] for x in web.calls],['28797973873175785','28814526004898205',
+        self.assertEqual([x[0] for x in web.calls],['28797973873175785','28814526004898205','28797973873175785','24871928132404465',
             '27759194723782263',BIN_DOC_ID,KEY_DOC_ID,SAVE_DOC_ID,'28814526004898205'])
         save=next(x for x in web.calls if x[0]==SAVE_DOC_ID)
         self.assertEqual(set(save[1]),{'input','getRiskVerificationInfoForAllCredentialsOnPaymentAccount',

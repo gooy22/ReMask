@@ -43,7 +43,13 @@ def command(operation, *, account='', credential='', payment='', now=None):
     supplied = {'account': account, 'credential': credential, 'payment': payment}
     for variable in row['variables'].values():
         if isinstance(variable, str) and variable.startswith('$') and variable[1:] in supplied:
-            values[variable[1:]] = _identity(supplied[variable[1:]])
+            key = variable[1:]
+            if key == 'credential':
+                if not _node_id(supplied[key]):
+                    raise ValueError('INVALID_PAYMENT_TARGET')
+                values[key] = supplied[key]
+            else:
+                values[key] = _identity(supplied[key])
     row['variables'] = {k: values[v[1:]] if isinstance(v, str) and v.startswith('$') else v
                         for k, v in row['variables'].items()}
     return row
@@ -190,7 +196,8 @@ async def inspect_methods(web, *, account, business_id):
 
 
 def credit_card_metadata(payload, target):
-    target = _identity(target)
+    if not _node_id(target):
+        raise ValueError('INVALID_PAYMENT_TARGET')
     if not isinstance(payload, dict) or payload.get('errors') or payload.get('error'):
         return None
     data = payload.get('data')
@@ -205,3 +212,51 @@ def credit_card_metadata(payload, target):
     if normalized is None:
         return None
     return {'id': target, 'type': normalized, 'last4': last4}
+
+
+async def complete_methods(web, methods, *, business_id):
+    """Expand the filtered UI list using the observed unfiltered query.
+
+    The payment node must equal a fresh exact-RK account read. Credential
+    metadata is read by the returned node IDs, never guessed from a mask.
+    Missing/error responses cannot prove absence or authorize a replay.
+    """
+    if not all(methods.get(k) is True for k in ('account_scope_verified',
+            'business_scope_verified', 'payment_account_relation_verified', 'methods_query_verified')):
+        return methods
+    account = methods['account_id']
+    evidence = account_proof(await execute(web, 'READ_ACCOUNT', account=account,
+                                         business_id=business_id), account)
+    if (evidence.get('account_scope_verified') is not True
+            or evidence.get('payment_account_id') != methods.get('payment_account_id')):
+        return {**methods, 'inventory_complete': False, 'code': 'PAYMENT_ALL_METHODS_SCOPE_UNVERIFIED'}
+    payload = await execute(web, 'READ_ALL_CREDENTIALS', payment=evidence['payment_account_id'],
+                            business_id=business_id)
+    payment = payload.get('data', {}).get('payment_account') if isinstance(payload.get('data'), dict) else None
+    rows = payment.get('billing_payment_methods') if isinstance(payment, dict) else None
+    if (not _clean_payload(payload) or not isinstance(payment, dict)
+            or payment.get('id') != evidence.get('payment_account_node_id')
+            or not isinstance(rows, list) or len(rows) > 500):
+        return {**methods, 'inventory_complete': False, 'code': 'PAYMENT_ALL_METHODS_UNCONFIRMED'}
+    credentials = {}
+    for row in rows:
+        card = row.get('credential') if isinstance(row, dict) else None
+        if (not isinstance(card, dict) or not _node_id(card.get('id'))
+                or not isinstance(card.get('__typename'), str) or card['id'] in credentials):
+            return {**methods, 'inventory_complete': False, 'code': 'PAYMENT_ALL_METHODS_UNCONFIRMED'}
+        credentials[card['id']] = card['__typename']
+    known = {row['credential_id']: row for row in methods['payment_methods']}
+    if any(credentials.get(key) != 'ExternalCreditCard' for key in known):
+        return {**methods, 'inventory_complete': False, 'code': 'PAYMENT_METHODS_CREDENTIAL_CONFLICT'}
+    for identity, typename in credentials.items():
+        if typename != 'ExternalCreditCard' or identity in known:
+            continue
+        metadata = credit_card_metadata(await execute(web, 'READ_CREDENTIAL', credential=identity,
+                                                     business_id=business_id), identity)
+        if metadata is None:
+            return {**methods, 'inventory_complete': False, 'code': 'PAYMENT_METHODS_CARD_METADATA_UNVERIFIED'}
+        known[identity] = {'credential_id': identity, 'type': metadata['type'],
+            'last4': metadata['last4'], 'linkage_status': 'OBSERVED', 'bank_verification_status': 'UNVERIFIED'}
+    return {**methods, 'payment_methods': list(known.values()), 'inventory_complete': True,
+        'all_credential_ids': list(credentials), 'verification_status': 'LINKED' if known else 'NONE' if not credentials else 'UNVERIFIED',
+        'card_linked': bool(known), 'code': 'PAYMENT_ALL_METHODS_OBSERVED' if known else 'PAYMENT_ALL_METHODS_NO_CARD'}

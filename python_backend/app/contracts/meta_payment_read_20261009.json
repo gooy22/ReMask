@@ -26,7 +26,9 @@
       "BillingSelectPaymentMethodPageViewManagerQuery.graphql": "f34c7bc8af1a65d5d6d1d5ac2e3a38ff1f44443e046ede81a7403faf8fb3130a",
       "BillingSelectPaymentMethodPageViewManagerQuery_facebookRelayOperation": "6db08a325508ffeaef36cf73960772fb2819b7eb0ba42e7410189f04cf69b5f4",
       "BillingAddPaymentMethodRoot.entrypoint": "84223f7684e2f99d01d6b2674c86a8dddeaadfa8015ac7a99b0fd9b668dcf7c8",
-      "buildBillingRootEntrypoint.entrypointutils": "12a518a8eed50a23a49db41e01c0e35a4bdb077c1408c691d72a0222133d077e"
+      "buildBillingRootEntrypoint.entrypointutils": "12a518a8eed50a23a49db41e01c0e35a4bdb077c1408c691d72a0222133d077e",
+      "BillingCheckPaymentMethodAndAmountPassedInStateQuery.graphql": "bfadcc3c82eb5505563d95683e3aed4c6b8f7afb8aa4c065313069df5ebb2be8",
+      "BillingCheckPaymentMethodAndAmountPassedInStateQuery_facebookRelayOperation": "d4a98baa0657611284c481dddcaf4da9c4da68278a2c281a47d24c4d291c0665"
     }
   },
   "operations": {
@@ -97,6 +99,17 @@
       },
       "response_parser": "exact_payment_page_v1",
       "read_options": "Root sender defaults userIntent to null. Remaining query defaults observed in artifact; no task/mutation execution."
+    },
+    "READ_ALL_CREDENTIALS": {
+      "doc_id": "24871928132404465",
+      "friendly_name": "BillingCheckPaymentMethodAndAmountPassedInStateQuery",
+      "endpoint_url": "https://business.facebook.com/api/graphql/",
+      "operation_kind": "query",
+      "variables": {
+        "paymentAccountID": "$payment"
+      },
+      "response_parser": "unfiltered_payment_node_credentials_v1",
+      "read_options": "Observed query has no filter, allowlist or pagination. Prove exact returned payment node against a fresh READ_ACCOUNT; hydrate card metadata separately."
     }
   }
 }

@@ -184,12 +184,26 @@ def save_response_proof(payload, account, *, account_evidence, expected_card):
     base = {'account_id': account, 'submitted': True, 'retry_blocked': True,
             'funding_verified': False, 'account_scope_verified': False,
             'status': 'SUBMITTED_UNVERIFIED', 'code': 'CARD_SAVE_RESULT_UNKNOWN'}
+    codes = []
+    if isinstance(payload, dict):
+        for error in (payload.get('errors') or []) if isinstance(payload.get('errors'), list) else []:
+            if not isinstance(error, dict):
+                continue
+            for source in (error, error.get('extensions') if isinstance(error.get('extensions'), dict) else {}):
+                for key in ('code', 'error_code', 'error_subcode'):
+                    value = source.get(key)
+                    if type(value) is int and 0 <= value <= 999999999:
+                        codes.append(value)
+        value = payload.get('error')
+        if type(value) is int and 0 <= value <= 999999999:
+            codes.append(value)
+    base['meta_error_codes'] = sorted(set(codes))[:10]
     if not _clean_payload(payload):
-        return base
+        return {**base, 'save_response_stage': 'GRAPHQL_UNCONFIRMED'}
     data = payload.get('data')
     root = data.get('xfb_billing_save_card_credential') if isinstance(data, dict) else None
     if not isinstance(root, dict):
-        return base
+        return {**base, 'save_response_stage': 'SAVE_ROOT_MISSING'}
     # Saving to a business and linking to an RK are distinct. Do not infer
     # RK linkage from a returned business payment account.
     scoped = any(_payment_scope(root.get(k), account, account_evidence)
@@ -198,11 +212,11 @@ def save_response_proof(payload, account, *, account_evidence, expected_card):
         return {**base, 'code': 'CARD_SAVE_SCOPE_UNVERIFIED'}
     card = root.get('credit_card')
     if not isinstance(card, dict) or card.get('__typename') != 'ExternalCreditCard':
-        return base
+        return {**base, 'save_response_stage': 'CARD_MISSING'}
     brand, last4 = _brand(card.get('card_association_name')), card.get('last_four_digits')
     if (not _node_id(card.get('id')) or not _node_id(card.get('credential_id'))
             or not brand or not isinstance(last4, str) or not re.fullmatch(r'\d{4}', last4)):
-        return base
+        return {**base, 'save_response_stage': 'CARD_METADATA_INCOMPLETE'}
     if (not isinstance(expected_card, dict) or expected_card.get('type') != brand
             or expected_card.get('last4') != last4):
         return {**base, 'code': 'CARD_SAVE_CREDENTIAL_MISMATCH'}
@@ -216,7 +230,7 @@ def save_response_proof(payload, account, *, account_evidence, expected_card):
         return {**safe, 'status': 'ACTION_REQUIRED', 'code': 'CARD_BANK_CONFIRMATION_REQUIRED'}
     if status == 'SUCCESS':
         return {**safe, 'status': 'VERIFYING', 'code': 'CARD_SAVE_REQUIRES_LINK_VERIFICATION'}
-    return safe
+    return {**safe, 'save_response_stage': 'VERIFICATION_STATUS_UNCONFIRMED'}
 
 
 def confirm_saved_card(saved, methods, *, business_id):
