@@ -46,7 +46,7 @@ function card_worker_inspect(string $profile,string $account,array $assetHint=[]
     // The inspection route returns a deliberately sanitized code for auth gates.
     // Preserve only known codes; arbitrary response bodies never reach the UI.
     $known=['SESSION_EXPIRED','CHECKPOINT_REQUIRED','TWO_FACTOR_REQUIRED','PROFILE_CONTEXT_ERROR',
-        'PAYMENT_INSPECTION_TIMEOUT','PAYMENT_BROWSER_CRASHED','PAYMENT_UI_UNAVAILABLE',
+        'PAYMENT_INSPECTION_TIMEOUT','PAYMENT_BROWSER_CRASHED','PAYMENT_UI_UNAVAILABLE','PAYMENT_HTTP_UNAVAILABLE',
         'PAYMENT_ACCOUNT_BINDING_MISSING','PERSONAL_AD_ACCOUNT_EXCLUDED','INVALID_PAYMENT_TARGET'];
     if(is_array($result)&&is_string($result['detail']??null)&&in_array($result['detail'],$known,true))throw new RuntimeException($result['detail']);
     if(!is_array($result)||($result['profile_id']??'')!==$profile||($result['account_id']??'')!==$account)throw new RuntimeException('CARD_WORKER_RESULT_UNKNOWN');

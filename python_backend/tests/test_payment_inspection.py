@@ -81,22 +81,25 @@ class PaymentSummaryTests(unittest.TestCase):
 class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
     async def test_live_payment_inspection_receives_workspace_bm_hint(self):
         asset={'business_id':'987654321','business_asset_id':'','name':'Fixture RK'}
-        browser=SimpleNamespace(page=SimpleNamespace(url=URL,frames=[],screenshot=AsyncMock(return_value=b'preview')))
+        web=object()
         resolver=SimpleNamespace(resolve=AsyncMock(return_value=SimpleNamespace(cookies={})))
         class Session:
             async def __aenter__(self):return self
             async def __aexit__(self,*args):return None
-            async def facebook_business_browser(self):return browser
+            async def facebook_web(self):return web
+            async def facebook_business_browser(self):raise AssertionError('HTTP inspection must never open Chromium')
         state=object()
-        observed={'account_id':ID,'account_scope_verified':False,'verification_status':'UNVERIFIED','payment_methods':[]}
+        observed={'account_id':ID,'account_scope_verified':False,'verification_status':'UNVERIFIED','payment_methods':[],
+                  'code':'PAYMENT_METHODS_SCOPE_UNVERIFIED'}
         with patch('app.session.ProfileSession',return_value=Session()), \
              patch('app.payment_inspection.resolve_payment_asset',AsyncMock(return_value=asset)) as resolve, \
-             patch('app.payment_inspection.inspect_payment_methods',AsyncMock(return_value=observed)) as inspect:
+             patch('app.static_payment_read.inspect_methods',AsyncMock(return_value=observed)) as inspect:
             result=await inspect_profile_payment_methods(resolver,'Fixture',ID,state=state,
                 asset_hint={'business_id':'987654321','business_asset_id':'','name':'Fixture RK'})
         resolve.assert_awaited_once_with('Fixture',ID,state,{'business_id':'987654321','business_asset_id':'','name':'Fixture RK'})
         inspect.assert_awaited_once()
-        self.assertEqual(inspect.await_args.kwargs['business_id'],'987654321')
+        self.assertEqual(inspect.await_args.kwargs,{'business_id':'987654321','account':ID})
+        self.assertIs(inspect.await_args.args[0],web)
         self.assertEqual(result['account_id'],ID)
 
     def browser(self, links):

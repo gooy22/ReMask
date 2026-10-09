@@ -150,6 +150,13 @@ final class RemaskPaymentCardVault {
             ($funding['verification_status']??'')==='NONE'&&($funding['payment_methods']??null)===[]&&
             in_array($funding['source']??'',['private_facebook_billing_ui','private_facebook_selected_rk_payment_tab'],true);
     }
+    private static function liveLinkSource(array $funding): bool {
+        if(in_array($funding['source']??'',['private_facebook_billing_ui','private_facebook_selected_rk_payment_tab'],true))return true;
+        return ($funding['source']??'')==='private_facebook_billing_static_methods'&&
+            ($funding['business_scope_verified']??false)===true&&
+            ($funding['payment_account_relation_verified']??false)===true&&
+            ($funding['methods_query_verified']??false)===true&&($funding['browser_started']??null)===false;
+    }
     private static function reviewable(?array $row): bool {
         return is_array($row)&&in_array($row['status'],['IN_PROGRESS','SUBMITTED_UNVERIFIED'],true)&&
             time()-(strtotime((string)$row['updated_at'])?:time())>=180;
@@ -213,13 +220,19 @@ final class RemaskPaymentCardVault {
                 time()-(strtotime((string)$current['updated_at'])?:time())<180)throw new InvalidArgumentException('CARD_BINDING_IN_PROGRESS');
             $scope=($funding['profile_id']??null)===$profile&&($funding['account_id']??null)===$account&&
                 ($funding['account_scope_verified']??false)===true&&($funding['checked_live']??false)===true&&
-                in_array($funding['source']??'',['private_facebook_billing_ui','private_facebook_selected_rk_payment_tab'],true);
+                self::liveLinkSource($funding);
             $brand=static fn(string $value)=>self::cardBrand($value);
             $matches=array_filter($data['cards'],static fn($c)=>$c['last4']===$card['last4']&&$brand((string)$c['brand'])===$brand((string)$card['brand']));
             $observed=false;
             if($scope&&count($matches)===1&&($funding['verification_status']??'')==='LINKED'){
+                $observedMatches=[];
                 foreach($funding['payment_methods']??[] as $method){
-                    if(is_array($method)&&($method['last4']??null)===$card['last4']&&$brand((string)($method['type']??''))===$brand($card['brand']))$observed=true;
+                    if(is_array($method)&&($method['last4']??null)===$card['last4']&&$brand((string)($method['type']??''))===$brand($card['brand']))$observedMatches[]=$method;
+                }
+                $observed=count($observedMatches)===1;
+                if(($funding['source']??'')==='private_facebook_billing_static_methods'){
+                    $observed=$observed&&is_string($observedMatches[0]['credential_id']??null)&&
+                        preg_match('/^[A-Za-z0-9_:+\/=.-]{1,200}$/D',$observedMatches[0]['credential_id'])===1;
                 }
             }
             if(!$observed){
@@ -228,7 +241,8 @@ final class RemaskPaymentCardVault {
                 // Keep the original attempt time and submission metadata: this
                 // read does not submit anything or unlock an automatic retry.
                 if(is_array($current)&&$current['status']==='LINKED'&&$scope&&
-                    (self::exactEmpty($profile,$account,$funding)||($funding['verification_status']??'')==='LINKED')){
+                    (self::exactEmpty($profile,$account,$funding)||
+                     (($funding['verification_status']??'')==='LINKED'&&($funding['source']??'')!=='private_facebook_billing_static_methods'))){
                     $current['status']='SUBMITTED_UNVERIFIED';
                     $current['checked_live']=false;
                     $current['last_result_code']=$result['code'];

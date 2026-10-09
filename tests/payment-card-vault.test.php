@@ -183,6 +183,33 @@ try{
         expect($result['status']==='SUBMITTED_UNVERIFIED'&&$result['submitted']===false&&$result['funding_verified']===false,'Unsafe reconciliation claim');
         expect(file_get_contents($directory.'/cards.json')===$before,'Unproven inspection unlocked retry');
     }
+    // Native HTTP proof needs all fresh RK/BM/payment relation gates, and a
+    // single observed credential. Filtered emptiness never unlocks resubmit.
+    $native=array_replace($proof,['source'=>'private_facebook_billing_static_methods',
+        'business_scope_verified'=>true,'payment_account_relation_verified'=>true,
+        'methods_query_verified'=>true,'browser_started'=>false,'inventory_complete'=>false,
+        'payment_methods'=>[['type'=>'Visa','last4'=>'1111','credential_id'=>'native-card-node']]]);
+    foreach([['business_scope_verified'=>false],['business_scope_verified'=>1],
+        ['payment_account_relation_verified'=>false],['methods_query_verified'=>false],['browser_started'=>true],
+        ['payment_methods'=>[['type'=>'Visa','last4'=>'1111']]],
+        ['payment_methods'=>[['type'=>'Visa','last4'=>'1111','credential_id'=>'native-card-node'],
+                             ['type'=>'Visa','last4'=>'1111','credential_id'=>'second-card-node']]],
+        ['verification_status'=>'NONE','payment_methods'=>[]]
+    ] as $invalid){
+        $result=$vault->reconcile($card['id'],'Fixture','123456789',$expected,array_replace($native,$invalid));
+        expect($result['status']==='SUBMITTED_UNVERIFIED'&&!isset($result['retry_review']),'Unsafe native HTTP proof reconciled');
+        expect(file_get_contents($directory.'/cards.json')===$before,'Incomplete native proof changed durable binding');
+    }
+    $vault->begin($card['id'],'HTTP profile','423456789');
+    $vault->finish($card['id'],'HTTP profile','423456789','SUBMITTED_UNVERIFIED');
+    $nativeExpected=$vault->binding($card['id'],'HTTP profile','423456789');
+    $nativeScope=array_replace($native,['profile_id'=>'HTTP profile','account_id'=>'423456789']);
+    $nativeResult=$vault->reconcile($card['id'],'HTTP profile','423456789',$nativeExpected,$nativeScope);
+    expect($nativeResult['status']==='LINKED'&&$nativeResult['funding_verified']===false,'Native positive proof not reconciled');
+    $nativeExpected=$vault->binding($card['id'],'HTTP profile','423456789');
+    $nativeOther=array_replace($nativeScope,['payment_methods'=>[['type'=>'Visa','last4'=>'9999','credential_id'=>'other-node']]]);
+    $vault->reconcile($card['id'],'HTTP profile','423456789',$nativeExpected,$nativeOther);
+    expect($vault->linkedBinding($card['id'],'HTTP profile','423456789')!==null,'Filtered native read erased last verified link');
     rejected(fn()=>$vault->reconcile($card['id'],'Fixture','123456789',null,$proof),'CARD_BINDING_CHANGED');
     $result=$vault->reconcile($card['id'],'Fixture','123456789',$expected,$proof);
     expect($result['status']==='LINKED'&&$result['submitted']===false&&$result['funding_verified']===false,'Read-only positive proof not reconciled');

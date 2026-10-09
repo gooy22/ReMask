@@ -1,6 +1,7 @@
-"""Read-only payment inspection through the existing profile-bound browser.
+"""Read-only payment inspection through static profile-bound HTTP queries.
 
-No card entry, payment submission, Graph calls or raw payment data persistence.
+No card entry, payment submission or raw payment data persistence.
+Legacy UI readers remain internal to the existing binder until ATTACH is proven.
 An observed masked method proves linkage only, never charge/verification success.
 """
 from __future__ import annotations
@@ -391,44 +392,44 @@ async def inspect_payment_methods(browser: Any, target: str, *, business_id: str
 
 async def inspect_profile_payment_methods(resolver: Any, profile_id: str, target: str, *, state: Any = None,
                                           asset_hint: dict[str,Any] | None = None) -> dict[str, Any]:
+    """Static private HTTP reads only; never open a browser on failure."""
     from .session import ProfileSession
+    from .static_payment_read import inspect_methods
+    from fb_worker import AuthenticationError
 
     target = account_id(target)
+    asset = await resolve_payment_asset(profile_id, target, state, asset_hint)
+    if not asset or not re.fullmatch(r'\d{5,30}', asset.get('business_id', '')):
+        raise ValueError('PAYMENT_ACCOUNT_BINDING_MISSING')
     context = await resolver.resolve(profile_id)
-    asset=await resolve_payment_asset(profile_id,target,state,asset_hint)
-    if asset.get('business_id') == str(context.cookies.get('c_user') or ''):
+    if asset['business_id'] == str(context.cookies.get('c_user') or ''):
         raise ValueError('PERSONAL_AD_ACCOUNT_EXCLUDED')
-    async with ProfileSession(context) as session:
-        browser = await session.facebook_business_browser()
-        # Existing browser profile lock/global semaphore limits concurrent load.
-        try:
-            result=await asyncio.wait_for(inspect_payment_methods(browser, target,
-                business_id=asset.get('business_id') or saved_payment_business(profile_id,target),asset=asset,fresh_billing_context=True), timeout=65)
-            result['diagnostic']={'stage':'payment_methods_observed' if result['account_scope_verified'] else 'payment_account_scope_unverified',
-                'path':urlsplit(str(browser.page.url)).path,'masked_method_count':len(result['payment_methods'])}
-            if (
-                state is not None
-                and result.get('account_scope_verified') is True
-                and result.get('card_linked') in {True, False}
-                and hasattr(state,'set_payment_link_state')
-            ):
-                await state.set_payment_link_state(
-                    profile_id,target,bool(result.get('card_linked')),
-                    source='payment_methods_live_inspection'
-                )
-            try:
-                import base64
-                masks=[frame.locator('input,textarea') for frame in browser.page.frames]
-                result['ui_preview']=base64.b64encode(await browser.page.screenshot(type='jpeg',quality=65,mask=masks,timeout=4000)).decode('ascii')
-            except Exception as exc:result['ui_preview_unavailable']=type(exc).__name__
-            logging.getLogger('remask.payment_inspection').info('payment inspection profile=%s status=%s scope_verified=%s diagnostic=%s',profile_id,result['verification_status'],result['account_scope_verified'],result['diagnostic'])
-            return result
-        except BrowserBusinessError:
-            raise
-        except Exception as exc:
-            if 'Target crashed' not in str(exc):
-                raise
-            from .facebook_business_browser import _cgroup_memory_snapshot_mb
-            logging.getLogger('remask.payment_inspection').warning('payment browser crashed profile=%s account=%s memory=%s',profile_id,target,_cgroup_memory_snapshot_mb())
-            raise BrowserBusinessError('PAYMENT_BROWSER_CRASHED',
-                'Meta payment browser crashed before payment methods were read.',retryable=False) from exc
+    try:
+        async with ProfileSession(context) as session:
+            async with asyncio.timeout(40):
+                web = await session.facebook_web()
+                result = await inspect_methods(web, account=target, business_id=asset['business_id'])
+        result['profile_id'] = profile_id
+        result['diagnostic'] = {'stage': result['code'], 'transport': 'private_http',
+                                'masked_method_count': len(result['payment_methods'])}
+        if (state is not None and result.get('account_scope_verified') is True
+                and result.get('card_linked') is True and hasattr(state, 'set_payment_link_state')):
+            await state.set_payment_link_state(profile_id, target, True, source='payment_methods_static_http_inspection')
+        logging.getLogger('remask.payment_inspection').info(
+            'payment HTTP inspection profile=%s account=%s stage=%s masked_methods=%d browser_started=False',
+            profile_id, target, result['code'], len(result['payment_methods']))
+        return result
+    except asyncio.TimeoutError:
+        raise
+    except AuthenticationError as exc:
+        # Classify in memory; never return raw HTTP exception/payload text.
+        text = str(exc).lower()
+        code = ('TWO_FACTOR_REQUIRED' if 'two_factor' in text or 'two-factor' in text
+                else 'CHECKPOINT_REQUIRED' if 'checkpoint' in text and 'login' not in text
+                else 'SESSION_EXPIRED')
+        raise BrowserBusinessError(code, 'Meta payment HTTP session requires restoration.', retryable=True) from None
+    except BrowserBusinessError:
+        raise
+    except Exception:
+        raise BrowserBusinessError('PAYMENT_HTTP_UNAVAILABLE',
+            'Meta payment HTTP read did not complete; no card was submitted.', retryable=True) from None

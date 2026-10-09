@@ -74,10 +74,10 @@ class PaymentReadTests(unittest.IsolatedAsyncioTestCase):
 
     def test_pinned_ids_kinds_argument_names_and_module_hashes_match_observed_sources(self):
         fixture = Path(__file__).with_name('fixtures') / 'meta_payment_read_observed_20261009.js'
-        source = fixture.read_text()
+        source = fixture.read_text() + '\n' + fixture.with_name('meta_payment_methods_observed_20261009.js').read_text()
         nodes = dict(_module_nodes(source))
         manifest = json.loads(MANIFEST.read_text())
-        for name, expected in manifest['evidence']['module_hashes'].items():
+        for name, expected in {**manifest['evidence']['module_hashes'], **manifest['evidence']['additional_module_hashes']}.items():
             definition = '__d(' + json.dumps(name) + ',[],' + nodes[name].text.decode() + ');'
             self.assertEqual(hashlib.sha256(definition.encode()).hexdigest(), expected, name)
         metadata = QueryArtifacts()

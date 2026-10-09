@@ -23,10 +23,11 @@ log = logging.getLogger('remask.payment_maintenance')
 MAX_SCRIPT_BYTES = 8_000_000
 MAX_TOTAL_BYTES = 40_000_000
 MAX_EXPORT_BYTES = 8_000_000
+MAX_SCRIPTS = 128
 REQUIRED_SOURCE_MODULES = (
     'BillingHubPaymentSettingsPaymentMethodsListQuery.graphql',
     'BillingSaveCardCredentialStateMutation.graphql',
-    'BillingCountryCurrencyScreenQuery.graphql',
+    'BillingCountryCurrencyPageViewManagerQuery.graphql',
 )
 
 
@@ -81,7 +82,41 @@ def payment_deferred_script_urls(document):
             url = row.get('src')
             if _public_js_url(url) and url not in result:
                 result.append(url)
-    return result[:96]
+    return result[:MAX_SCRIPTS]
+
+
+def payment_loader_documents(payload):
+    """Use only observed loader maps from query extensions, never card data.
+
+    Some read queries return deferred resource maps in Relay extensions. This
+    is source maintenance, not a request-schema search in the normal card path.
+    """
+    if not isinstance(payload, dict) or not isinstance(payload.get('extensions'), dict):
+        return []
+    pending, documents, visited = [payload['extensions']], [], 0
+    while pending and visited < 2000 and len(documents) < 8:
+        value = pending.pop(); visited += 1
+        if isinstance(value, dict):
+            maps = {k: value[k] for k in ('rsrcMap', 'compMap') if isinstance(value.get(k), dict)}
+            if maps:
+                text = json.dumps(maps)
+                if len(text.encode()) <= 1_000_000:
+                    documents.append(text)
+            pending.extend(v for k, v in value.items() if k not in ('rsrcMap', 'compMap')
+                           and isinstance(v, (dict, list, str)))
+        elif isinstance(value, list):
+            pending.extend(value[:1000])
+        elif isinstance(value, str) and len(value.encode()) <= 1_000_000 and ('rsrcMap' in value or 'compMap' in value):
+            try:
+                decoded = json.loads(value)
+            except ValueError:
+                # Literal maps inside a loader wrapper are parsed as data by
+                # payment_deferred_script_urls. Never execute the wrapper.
+                documents.append(value)
+            else:
+                if isinstance(decoded, (dict, list)):
+                    pending.append(decoded)
+    return documents
 
 
 def source_export(rows, *, max_bytes=MAX_EXPORT_BYTES):
@@ -119,7 +154,7 @@ def public_payment_modules(source):
     return result
 
 
-async def capture_payment_sources(web, *, account_id, business_id):
+async def capture_payment_sources(web, *, account_id, business_id, loader_documents=()):
     if not re.fullmatch(r'\d{5,30}', str(account_id)) or not re.fullmatch(r'\d{5,30}', str(business_id)):
         raise ValueError('INVALID_PAYMENT_TARGET')
     query = urlencode({'asset_id': account_id, 'business_id': business_id})
@@ -136,9 +171,11 @@ async def capture_payment_sources(web, *, account_id, business_id):
     # Deferred card/form resources must be fetched before generic UI bundles
     # consume the fixed maintenance budget. Every URL is observed in Meta's
     # document; this path remains completely separate from card execution.
-    deferred = payment_deferred_script_urls(body)
-    eager = [u for u in _script_urls(body, final, limit=96) if _public_js_url(u)]
-    urls = list(dict.fromkeys([*deferred, *eager]))[:96]
+    deferred = payment_deferred_script_urls('\n'.join([body, *loader_documents]))
+    eager = [u for u in _script_urls(body, final, limit=384) if _public_js_url(u)]
+    urls = list(dict.fromkeys([*deferred, *eager]))
+    observed = set(urls)
+    deferred_observed = set(deferred)
     del body
     modules, total, count, errors = {}, 0, 0, 0
 
@@ -152,8 +189,8 @@ async def capture_payment_sources(web, *, account_id, business_id):
             return None
 
     offset = 0
-    while offset < len(urls):
-        slots = min(4, (MAX_TOTAL_BYTES - total) // MAX_SCRIPT_BYTES)
+    while offset < len(urls) and count < MAX_SCRIPTS:
+        slots = min(4, MAX_SCRIPTS - count, (MAX_TOTAL_BYTES - total) // MAX_SCRIPT_BYTES)
         if slots <= 0:
             break
         batch = await asyncio.gather(*(read(url) for url in urls[offset:offset + slots]))
@@ -164,6 +201,13 @@ async def capture_payment_sources(web, *, account_id, business_id):
                 errors += 1
                 continue
             total += len(source.encode())
+            # Public JS may itself carry another literal loader map. Prioritize
+            # these observed deferred resources over unrelated eager bundles.
+            nested = payment_deferred_script_urls(source)
+            deferred_observed.update(nested)
+            additions = [url for url in nested if url not in observed]
+            observed.update(additions)
+            urls[offset:offset] = additions
             for row in public_payment_modules(source):
                 key = (row['name'], row['sha256'])
                 if key not in modules:
@@ -175,7 +219,8 @@ async def capture_payment_sources(web, *, account_id, business_id):
             'source': 'explicit_payment_contract_maintenance', 'browser_started': False,
             'submitted': False, 'contract_verified': False, 'account_id': account_id,
             'scripts_read': count, 'bytes_read': total, 'script_errors': errors,
-            'deferred_scripts_observed': len(deferred), 'scripts_not_read': len(urls) - count,
+            'deferred_scripts_observed': len(deferred_observed), 'scripts_not_read': len(urls) - count,
+            'scripts_observed': len(observed), 'script_limit_reached': count >= MAX_SCRIPTS and offset < len(urls),
             **exported}
 
 
@@ -191,18 +236,40 @@ async def inspect_profile_payment_sources(resolver, profile, target, *, state):
         raise ValueError('PERSONAL_AD_ACCOUNT_EXCLUDED')
     async with ProfileSession(context) as session:
         web = await session.facebook_web()
-        async with asyncio.timeout(65):
-            result = await capture_payment_sources(web, account_id=target, business_id=asset['business_id'])
-        # Independent pinned query: a GET document URL is never proof of the
-        # payment-account relation. It cannot submit a card. A probe timeout
-        # must not discard the already collected public source evidence.
-        from ..static_payment_read import execute, account_proof
+        from ..static_payment_read import execute, account_proof, methods_proof, payment_page_proof
+        evidence = {'account_id': target, 'account_scope_verified': False,
+                    'code': 'PAYMENT_ACCOUNT_QUERY_UNAVAILABLE', 'card_linked': None,
+                    'funding_verified': False, 'inventory_complete': False}
+        methods, options_probe, loaders = None, None, []
+        # All three operations are pinned queries. No wizard task, input,
+        # tokenization or card save mutation is dispatched by maintenance.
         try:
-            async with asyncio.timeout(15):
+            async with asyncio.timeout(20):
                 payload = await execute(web, 'READ_ACCOUNT', account=target, business_id=asset['business_id'])
-                result['payment_account_probe'] = account_proof(payload, target)
+                evidence = account_proof(payload, target)
+                if evidence['account_scope_verified'] is True:
+                    results = await asyncio.gather(
+                        execute(web, 'READ_METHODS', account=target, payment=evidence['payment_account_id'], business_id=asset['business_id']),
+                        execute(web, 'READ_OPTIONS', payment=evidence['payment_account_id'], business_id=asset['business_id']),
+                        return_exceptions=True)
+                    if isinstance(results[0], dict):
+                        methods = methods_proof(results[0], target, business_id=asset['business_id'], account_evidence=evidence)
+                    if isinstance(results[1], dict):
+                        verified = payment_page_proof(results[1], target, evidence['payment_account_id'])
+                        options_probe = {'account_scope_verified': verified, 'submitted': False}
+                        if verified:
+                            loaders = payment_loader_documents(results[1])
+                            options_probe['loader_maps_observed'] = len(loaders)
         except Exception:
-            result['payment_account_probe'] = {'account_id': target, 'account_scope_verified': False,
-                'code': 'PAYMENT_ACCOUNT_QUERY_UNAVAILABLE', 'card_linked': None,
-                'funding_verified': False, 'inventory_complete': False}
+            # Keep only sanitized completed probes; failure cannot start a
+            # browser or discard the public source capture that follows.
+            pass
+        async with asyncio.timeout(65):
+            result = await capture_payment_sources(web, account_id=target, business_id=asset['business_id'],
+                                                   loader_documents=loaders)
+        result['payment_account_probe'] = evidence
+        if methods is not None:
+            result['payment_methods_probe'] = methods
+        if options_probe is not None:
+            result['payment_options_probe'] = options_probe
     return {'profile_id': profile, **result}

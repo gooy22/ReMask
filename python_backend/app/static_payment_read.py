@@ -1,7 +1,7 @@
 """Pinned billing reads; no JS discovery, browser, card fields or mutations.
 
-This catalog proves the payment-account identity and masked credential metadata.
-It does NOT yet contain a methods inventory or an ATTACH/TOKENIZE contract.
+This catalog proves scoped positive card linkage and reads setup/options.
+Filtered empty collections do not prove absence. No ATTACH/TOKENIZE contract.
 """
 from __future__ import annotations
 
@@ -34,14 +34,16 @@ def _manifest():
     return value
 
 
-def command(operation, *, account='', credential='', now=None):
+def command(operation, *, account='', credential='', payment='', now=None):
     # The immutable catalog contains queries only. No dynamic doc_id fallback.
     row = copy.deepcopy(_manifest()['operations'][operation])
     day = int(time.time() if now is None else now) // 86400 * 86400
     values = {'transactions_start': day - 14 * 86400, 'summary_end': day,
               'summary_start': day - 7 * 86400, 'pending_start': day - 30 * 86400}
-    values['account' if operation == 'READ_ACCOUNT' else 'credential'] = _identity(
-        account if operation == 'READ_ACCOUNT' else credential)
+    supplied = {'account': account, 'credential': credential, 'payment': payment}
+    for variable in row['variables'].values():
+        if isinstance(variable, str) and variable.startswith('$') and variable[1:] in supplied:
+            values[variable[1:]] = _identity(supplied[variable[1:]])
     row['variables'] = {k: values[v[1:]] if isinstance(v, str) and v.startswith('$') else v
                         for k, v in row['variables'].items()}
     return row
@@ -50,6 +52,7 @@ def command(operation, *, account='', credential='', now=None):
 async def execute(web, operation, *, business_id, **bindings):
     business_id = _identity(business_id)
     row = command(operation, **bindings)
+    web.private_only = True
     return await web.graphql(row['doc_id'], row['variables'], friendly_name=row['friendly_name'],
                              endpoint_url=row['endpoint_url'], business_context_id=business_id)
 
@@ -60,7 +63,7 @@ def account_proof(payload, target):
             'payment_methods': [], 'card_linked': None, 'funding_verified': False,
             'source': 'private_facebook_billing_static_read', 'checked_live': True,
             'inventory_complete': False}
-    if not isinstance(payload, dict) or payload.get('errors') or payload.get('error'):
+    if not _clean_payload(payload):
         return {**base, 'code': 'PAYMENT_ACCOUNT_QUERY_REJECTED'}
     data = payload.get('data')
     node = data.get('billable_account_by_asset_id') if isinstance(data, dict) else None
@@ -73,8 +76,117 @@ def account_proof(payload, target):
         return {**base, 'code': 'PAYMENT_ACCOUNT_ID_UNVERIFIED'}
     # Account identity is confirmed. No card absence/linkage is inferred from
     # a query that does not fetch the complete methods collection.
-    return {**base, 'account_scope_verified': True, 'payment_account_id': identity,
-            'code': 'PAYMENT_ACCOUNT_CONFIRMED'}
+    proof = {**base, 'account_scope_verified': True, 'payment_account_id': identity,
+             'code': 'PAYMENT_ACCOUNT_CONFIRMED'}
+    if _node_id(payment.get('id')):
+        proof['payment_account_node_id'] = payment['id']
+    return proof
+
+
+def _node_id(value):
+    # Relay node IDs can be opaque. They are identity data, never card fields.
+    return isinstance(value, str) and bool(re.fullmatch(r'[A-Za-z0-9_:+/=.-]{1,200}', value))
+
+
+def _clean_payload(payload):
+    return (isinstance(payload, dict) and not payload.get('errors') and not payload.get('error')
+            and payload.get('hasNext') is not True
+            and not (isinstance(payload.get('extensions'), dict)
+                     and payload['extensions'].get('is_final') is False))
+
+
+def _brand(value):
+    if not isinstance(value, str):
+        return None
+    return {'visa': 'Visa', 'mastercard': 'Mastercard', 'americanexpress': 'Amex',
+            'amex': 'Amex', 'discover': 'Discover'}.get(re.sub(r'[^a-z]', '', value.lower()))
+
+
+def methods_proof(payload, target, *, business_id, account_evidence):
+    target, business_id = _identity(target), _identity(business_id)
+    base = {'account_id': target, 'business_id': business_id, 'account_scope_verified': False,
+            'business_scope_verified': False, 'payment_account_relation_verified': False,
+            'methods_query_verified': False, 'inventory_complete': False,
+            'verification_status': 'UNVERIFIED', 'payment_methods': [], 'card_linked': None,
+            'funding_verified': False, 'checked_live': True, 'browser_started': False,
+            'source': 'private_facebook_billing_static_methods'}
+    if not _clean_payload(payload):
+        return {**base, 'code': 'PAYMENT_METHODS_QUERY_REJECTED'}
+    data = payload.get('data')
+    node = data.get('billable_account_by_asset_id') if isinstance(data, dict) else None
+    owner = node.get('owning_business') if isinstance(node, dict) else None
+    if (not isinstance(node, dict) or node.get('__typename') != 'AdAccount'
+            or not isinstance(node.get('id'), str) or node['id'].removeprefix('act_') != target
+            or not isinstance(owner, dict) or owner.get('id') != business_id):
+        return {**base, 'code': 'PAYMENT_METHODS_SCOPE_UNVERIFIED'}
+    payment = node.get('billing_payment_account')
+    evidence = account_evidence if isinstance(account_evidence, dict) else {}
+    if (evidence.get('account_id') != target or evidence.get('account_scope_verified') is not True
+            or not _node_id(evidence.get('payment_account_node_id'))
+            or not isinstance(payment, dict) or payment.get('id') != evidence['payment_account_node_id']):
+        return {**base, 'code': 'PAYMENT_ACCOUNT_RELATION_UNVERIFIED'}
+    collections = [payment.get(key) for key in
+                   ('primary', 'billing_payment_methods_allowlist_customized', 'primary_funding_source_customized')]
+    if any(not isinstance(rows, list) or len(rows) > 500 for rows in collections):
+        return {**base, 'code': 'PAYMENT_METHODS_RESPONSE_INCOMPLETE'}
+    cards = {}
+    for rows in collections[1:]:
+        for row in rows:
+            credential = row.get('credential') if isinstance(row, dict) else None
+            if (not isinstance(credential, dict) or not _node_id(credential.get('id'))
+                    or not isinstance(credential.get('__typename'), str)):
+                return {**base, 'code': 'PAYMENT_METHODS_RESPONSE_INCOMPLETE'}
+            if credential['__typename'] != 'ExternalCreditCard':
+                continue
+            brand, last4 = _brand(credential.get('card_association_name')), credential.get('last_four_digits')
+            if not brand or not isinstance(last4, str) or not re.fullmatch(r'\d{4}', last4):
+                return {**base, 'code': 'PAYMENT_METHODS_CARD_METADATA_UNVERIFIED'}
+            card = {'credential_id': credential['id'], 'type': brand, 'last4': last4,
+                    'linkage_status': 'OBSERVED'}
+            for key in ('is_expired', 'needs_verification', 'supports_recurring'):
+                if type(credential.get(key)) is bool:
+                    card[key] = credential[key]
+            old = cards.get(card['credential_id'])
+            if old is not None and old != card:
+                return {**base, 'code': 'PAYMENT_METHODS_CREDENTIAL_CONFLICT'}
+            cards[card['credential_id']] = card
+    for row in collections[0]:
+        credential = row.get('credential') if isinstance(row, dict) else None
+        if (not isinstance(credential, dict) or not _node_id(credential.get('id'))
+                or not isinstance(credential.get('__typename'), str)
+                or (credential['__typename'] == 'ExternalCreditCard' and credential['id'] not in cards)):
+            return {**base, 'code': 'PAYMENT_METHODS_RESPONSE_INCOMPLETE'}
+    # PRIMARY_ONLY and an explicit allowlist are filtered collections. They
+    # prove returned instruments, but empty results cannot authorize resubmit.
+    proof = {**base, 'account_scope_verified': True, 'business_scope_verified': True,
+             'payment_account_relation_verified': True, 'methods_query_verified': True,
+             'payment_methods': list(cards.values()), 'payment_account_id': evidence['payment_account_id'],
+             'code': 'PAYMENT_METHODS_OBSERVED' if cards else 'PAYMENT_METHODS_FILTERED_NO_CARD'}
+    if cards:
+        proof.update(verification_status='LINKED', card_linked=True)
+    return proof
+
+
+def payment_page_proof(payload, target, payment_id):
+    """Prove only the exact payment-account/RK pair of setup/options queries."""
+    target, payment_id = _identity(target), _identity(payment_id)
+    if not _clean_payload(payload):
+        return False
+    data = payload.get('data')
+    payment = data.get('payment_account') if isinstance(data, dict) else None
+    node = payment.get('billable_account') if isinstance(payment, dict) else None
+    return (isinstance(payment, dict) and payment.get('payment_legacy_account_id') == payment_id
+            and isinstance(node, dict) and node.get('__typename') == 'AdAccount'
+            and isinstance(node.get('id'), str) and node['id'].removeprefix('act_') == target)
+
+
+async def inspect_methods(web, *, account, business_id):
+    evidence = account_proof(await execute(web, 'READ_ACCOUNT', account=account, business_id=business_id), account)
+    if evidence['account_scope_verified'] is not True:
+        return {**evidence, 'source': 'private_facebook_billing_static_methods', 'browser_started': False}
+    payload = await execute(web, 'READ_METHODS', account=account, payment=evidence['payment_account_id'],
+                            business_id=business_id)
+    return methods_proof(payload, account, business_id=business_id, account_evidence=evidence)
 
 
 def credit_card_metadata(payload, target):

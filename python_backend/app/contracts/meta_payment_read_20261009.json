@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "revision": "20261009-payment-read-v1",
+  "revision": "20261009-payment-read-v2",
   "scope": "read_only_no_card_submission",
   "evidence": {
     "source": "Safari PDF of explicit maintenance export",
@@ -12,6 +12,21 @@
       "BillingPaymentMethodDisplayUtilsQuery_facebookRelayOperation": "1be055b9d56a54a8e4e12d4d370d154384b22ed46c0f6446b4ef8d9aa30fa546",
       "BillingPaymentMethodDisplayUtils": "1cd0920411a8644029710b5da88d47c21216d9a62ace5f842e8a6ca65507a272",
       "BillingTokenProxyFallbackPolicy": "ffb32a93748aed464c440e69ac1f3685f7d797d533d7a497e6cce4370f2f0ecd"
+    },
+    "additional_source": "Operator JSON maintenance export: 1070 modules, no truncation, all SHA-256 verified",
+    "additional_module_hashes": {
+      "BillingHubPaymentSettingsPaymentMethodsListQuery.graphql": "2bec40cf8a26ed5bab787619947e2b046dcaa69f385a94cd8adb7afd51de1323",
+      "BillingHubPaymentSettingsPaymentMethodsListQuery_facebookRelayOperation": "9d89d310d406d8bfb68505bc1969b8b5ce5f3a36295ad33c3501c70526884c34",
+      "BillingHubPaymentSettingsPaymentMethodsList.react": "955a01a48fa118bf08770cf9694258c18bae0b58c6953ce1c040d41113000206",
+      "useBillingHubPaymentMethods": "d127406896c9d9240d2bb2ee7df14495ac4b7fb32f4c989c0c200a5aa9447036",
+      "BillingCountryCurrencyPageViewManagerQuery.graphql": "b57f6c7491a8194604ce0a009536d89cdd23ceb61b127eeed5f6afc2cdc6457a",
+      "BillingCountryCurrencyPageViewManagerQuery_facebookRelayOperation": "35c4e6a726002f03120704272f3e53ddd0a9c853bb785a6b6cc5f93e59030662",
+      "BillingCountryCurrencyPageViewManager.react": "550c39414741fe34ca18eab4b4fac9c65c419401899f40dd2f817698ae20e799",
+      "BillingCountryCurrencyFormUtils": "686a4ec1154bf8684e11d76c68e3e8d4c36cf6f11b82c7ed55e057dfd02bd138",
+      "BillingSelectPaymentMethodPageViewManagerQuery.graphql": "f34c7bc8af1a65d5d6d1d5ac2e3a38ff1f44443e046ede81a7403faf8fb3130a",
+      "BillingSelectPaymentMethodPageViewManagerQuery_facebookRelayOperation": "6db08a325508ffeaef36cf73960772fb2819b7eb0ba42e7410189f04cf69b5f4",
+      "BillingAddPaymentMethodRoot.entrypoint": "84223f7684e2f99d01d6b2674c86a8dddeaadfa8015ac7a99b0fd9b668dcf7c8",
+      "buildBillingRootEntrypoint.entrypointutils": "12a518a8eed50a23a49db41e01c0e35a4bdb077c1408c691d72a0222133d077e"
     }
   },
   "operations": {
@@ -44,6 +59,44 @@
       },
       "response_parser": "exact_credit_card_metadata_v1",
       "read_options": "Credential metadata alone never proves attachment to an RK."
+    },
+    "READ_METHODS": {
+      "doc_id": "28814526004898205",
+      "friendly_name": "BillingHubPaymentSettingsPaymentMethodsListQuery",
+      "endpoint_url": "https://business.facebook.com/api/graphql/",
+      "operation_kind": "query",
+      "variables": {
+        "assetID": "$account",
+        "paymentAccountID": "$payment"
+      },
+      "response_parser": "scoped_positive_card_methods_v1",
+      "read_options": "PRIMARY_ONLY and allowlist collections prove presence only; no absence or charge proof."
+    },
+    "READ_SETUP": {
+      "doc_id": "28388533884149241",
+      "friendly_name": "BillingCountryCurrencyPageViewManagerQuery",
+      "endpoint_url": "https://business.facebook.com/api/graphql/",
+      "operation_kind": "query",
+      "variables": {
+        "paymentAccountID": "$payment",
+        "skipDeferredFragments": false
+      },
+      "response_parser": "exact_payment_page_v1",
+      "read_options": "Observed default includes deferred country, currency and timezone options; read-only."
+    },
+    "READ_OPTIONS": {
+      "doc_id": "29195809800004536",
+      "friendly_name": "BillingSelectPaymentMethodPageViewManagerQuery",
+      "endpoint_url": "https://business.facebook.com/api/graphql/",
+      "operation_kind": "query",
+      "variables": {
+        "paymentAccountID": "$payment",
+        "userIntent": null,
+        "intent": null,
+        "skipDeferredFragments": false
+      },
+      "response_parser": "exact_payment_page_v1",
+      "read_options": "Root sender defaults userIntent to null. Remaining query defaults observed in artifact; no task/mutation execution."
     }
   }
 }

@@ -100,3 +100,73 @@ class PaymentSourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(web.fetch_text.await_args_list[1].args[0], 'https://static.xx.fbcdn.net/card.js')
         self.assertEqual(result['deferred_scripts_observed'], 1); self.assertEqual(result['scripts_not_read'], 0)
         self.assertFalse(result['export_truncated']); self.assertFalse(result['contract_verified'])
+
+    def test_loader_extensions_extract_only_literal_maps_not_payment_data(self):
+        from app.contract_maintenance.payment_sources import payment_loader_documents
+        maps={'rsrcMap':{'x':{'type':'js','src':'https://static.xx.fbcdn.net/card.js'}},
+              'compMap':{'BillingAddCreditCardPage.react':{'r':['x']}}}
+        payload={'data':{'pan':'PRIVATE CARD',**maps},'extensions':{'sr_payload':json.dumps(maps)}}
+        documents=payment_loader_documents(payload)
+        self.assertEqual(payment_deferred_script_urls('\n'.join(documents)),['https://static.xx.fbcdn.net/card.js'])
+        self.assertNotIn('PRIVATE CARD','\n'.join(documents))
+        self.assertEqual(payment_loader_documents({'data':maps}),[])
+
+    async def test_nested_public_loader_map_is_read_before_remaining_eager_scripts_and_cycle_is_bounded(self):
+        entry='https://business.facebook.com/billing_hub/payment_settings/'
+        maps={'rsrcMap':{'x':{'type':'js','src':'https://static.xx.fbcdn.net/card.js'}},
+              'compMap':{'BillingAddCreditCardPage.react':{'r':['x']}}}
+        html=''.join('<script src="https://static.xx.fbcdn.net/'+name+'.js"></script>'
+                     for name in ('root','eager1','eager2','eager3','remaining'))
+        async def fetch(url,**kwargs):
+            if url.startswith('https://business.facebook.com/'):return 200,html,entry
+            if url.endswith('root.js'):return 200,json.dumps(maps),url
+            return 200,json.dumps(maps)+'__d("BillingCardModule",[],function(){});',url
+        web=SimpleNamespace(profile=SimpleNamespace(name='fixture'),fetch_text=AsyncMock(side_effect=fetch))
+        result=await capture_payment_sources(web,account_id='123456789',business_id='987654321')
+        urls=[c.args[0] for c in web.fetch_text.await_args_list]
+        self.assertEqual(urls.count('https://static.xx.fbcdn.net/card.js'),1)
+        self.assertLess(urls.index('https://static.xx.fbcdn.net/card.js'),urls.index('https://static.xx.fbcdn.net/remaining.js'))
+        self.assertEqual(result['scripts_read'],6);self.assertEqual(result['scripts_not_read'],0)
+        self.assertFalse(result['browser_started']);self.assertFalse(result['submitted'])
+
+    async def test_script_budget_omissions_are_explicit(self):
+        from unittest.mock import patch
+        entry='https://business.facebook.com/billing_hub/payment_settings/'
+        html=''.join('<script src="https://static.xx.fbcdn.net/'+name+'.js"></script>' for name in ('a','b','c'))
+        async def fetch(url,**kwargs):
+            if url.startswith('https://business.facebook.com/'):return 200,html,entry
+            return 200,'__d("BillingModule",[],function(){});',url
+        web=SimpleNamespace(profile=SimpleNamespace(name='fixture'),fetch_text=AsyncMock(side_effect=fetch))
+        with patch('app.contract_maintenance.payment_sources.MAX_SCRIPTS',2):
+            result=await capture_payment_sources(web,account_id='123456789',business_id='987654321')
+        self.assertEqual(result['scripts_observed'],3);self.assertEqual(result['scripts_not_read'],1)
+        self.assertTrue(result['script_limit_reached'])
+
+    async def test_maintenance_uses_pinned_read_probes_and_passes_only_verified_loader_maps(self):
+        from unittest.mock import patch
+        from app.contract_maintenance.payment_sources import inspect_profile_payment_sources
+        from tests.test_payment_static_methods import account_response,methods_response,ACCOUNT,BM,PAYMENT
+        maps={'rsrcMap':{'x':{'type':'js','src':'https://static.xx.fbcdn.net/card.js'}},
+              'compMap':{'BillingAddCreditCardPage.react':{'r':['x']}}}
+        options={'data':{'payment_account':{'payment_legacy_account_id':PAYMENT,
+                    'billable_account':{'__typename':'AdAccount','id':ACCOUNT}}},'extensions':maps}
+        web=object()
+        class Session:
+            async def __aenter__(self):return self
+            async def __aexit__(self,*args):return None
+            async def facebook_web(self):return web
+            async def facebook_business_browser(self):raise AssertionError('No browser')
+        resolver=SimpleNamespace(resolve=AsyncMock(return_value=SimpleNamespace(cookies={'c_user':'111222333'})))
+        async def execute(web,operation,**kwargs):
+            return {'READ_ACCOUNT':account_response(),'READ_METHODS':methods_response(),'READ_OPTIONS':options}[operation]
+        with patch('app.session.ProfileSession',return_value=Session()), \
+             patch('app.payment_inspection.resolve_payment_asset',AsyncMock(return_value={'business_id':BM})), \
+             patch('app.static_payment_read.execute',AsyncMock(side_effect=execute)) as query, \
+             patch('app.contract_maintenance.payment_sources.capture_payment_sources',AsyncMock(return_value={'submitted':False})) as capture:
+            result=await inspect_profile_payment_sources(resolver,'fixture',ACCOUNT,state=None)
+        self.assertEqual({c.args[1] for c in query.await_args_list},{'READ_ACCOUNT','READ_METHODS','READ_OPTIONS'})
+        self.assertTrue(result['payment_methods_probe']['card_linked'])
+        self.assertTrue(result['payment_options_probe']['account_scope_verified'])
+        self.assertFalse(result['submitted'])
+        documents=capture.await_args.kwargs['loader_documents']
+        self.assertEqual(payment_deferred_script_urls('\n'.join(documents)),['https://static.xx.fbcdn.net/card.js'])
