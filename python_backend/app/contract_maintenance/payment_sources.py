@@ -146,7 +146,8 @@ def public_payment_modules(source):
     for name, factory in _module_nodes(source):
         if not re.fullmatch(r'[A-Za-z0-9_.$-]{1,200}', name):
             continue
-        if not any(part in name.lower() for part in ('billing', 'payment', 'creditcard', 'encrypt', 'tokenization')):
+        if not any(part in name.lower() for part in ('billing', 'payment', 'creditcard', 'encrypt', 'tokenization',
+                                                    'bootloader', 'jsresource', 'requiredeferred', 'moduleresource', 'haste')):
             continue
         definition = '__d(' + json.dumps(name) + ',[],' + factory.text.decode() + ');'
         result.append({'name': name, 'sha256': hashlib.sha256(definition.encode()).hexdigest(),

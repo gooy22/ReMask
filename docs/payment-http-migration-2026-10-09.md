@@ -70,6 +70,10 @@ observed in the billing document, verified options-query Relay extensions and
 public JS loader maps. It fetches deferred payment JS before remaining eager
 bundles, deduplicates URLs across recursive maps and bounds total reads to 128
 scripts/40 MB. Script omissions are explicit.
+Public Bootloader/JSResource/ModuleResource/Haste runtime definitions are also
+retained as source evidence, so an unavailable deeper component can be diagnosed
+from its observed loader implementation. This does not execute that runtime or
+introduce discovery into the normal card inspection path.
 It never guesses CDN addresses, executes JS, opens Chromium or submits a card.
 Conflicting resource definitions and foreign/credential-bearing URLs are
 rejected. Artifact definitions and card/tokenization senders have export

@@ -55,6 +55,10 @@ class PaymentSourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(result), 2)
         self.assertNotEqual(result[0]['sha256'], result[1]['sha256'])
 
+    def test_public_loader_runtime_is_retained_without_executing_or_exporting_unrelated_code(self):
+        source='__d("BootloaderEndpoint",[],function(){throw new Error("must not execute")});__d("UnrelatedModule",[],function(){});'
+        self.assertEqual([row['name'] for row in public_payment_modules(source)],['BootloaderEndpoint'])
+
     def test_deferred_loader_uses_only_observed_public_js_resources_for_payment_components(self):
         maps = {'rsrcMap': {
             'card': {'type': 'js', 'src': 'https://static.xx.fbcdn.net/card.js'},
