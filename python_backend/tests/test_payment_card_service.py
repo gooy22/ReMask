@@ -101,6 +101,42 @@ class CardServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([x[0] for x in self.web.calls],['28797973873175785','28814526004898205','28797973873175785','24871928132404465'])
         self.assertEqual(result['status'],'LINKED')
 
+    async def test_reconcile_reports_missing_intent_metadata_without_a_network_call(self):
+        from tests.test_static_payment_card import ACCOUNT
+        ledger = CardIntentLedger(self.state.path)
+        await ledger.submit('15', ACCOUNT, self.payload['card_id'], 'b'*24, {})
+        result = await self.call({'operation':'reconcile','card_id':self.payload['card_id']})
+        self.assertEqual(result['code'], 'CARD_RECONCILE_CONTEXT_MISSING')
+        self.assertEqual(result['status'], 'SUBMITTED_UNVERIFIED')
+        self.resolver.resolve.assert_not_awaited()
+
+    async def test_reconcile_can_use_the_original_verified_business_as_a_read_selector(self):
+        from tests.test_static_payment_card import ACCOUNT
+        self.web.lose_save = True
+        self.assertEqual((await self.call())['status'], 'SUBMITTED_UNVERIFIED')
+        self.web.calls.clear()
+        with patch('app.payment_card_service.resolve_payment_asset', AsyncMock(return_value={})), \
+             patch('app.session.ProfileSession', return_value=self.cm):
+            result = await profile_payment_card_http(self.resolver, '15',
+                {'operation':'reconcile', 'account_id':ACCOUNT, 'card_id':self.payload['card_id']},
+                state=self.state)
+        self.assertEqual(result['status'], 'LINKED')
+        self.assertEqual(result['code'], 'CARD_LINK_CONFIRMED')
+        self.assertNotIn('28619313357728847', [x[0] for x in self.web.calls])
+
+    async def test_reconcile_rejects_moved_business_before_external_requests(self):
+        from tests.test_static_payment_card import ACCOUNT
+        self.web.lose_save=True
+        await self.call()
+        self.web.calls.clear()
+        with patch('app.payment_card_service.resolve_payment_asset',
+                   AsyncMock(return_value={'business_id':'99999999999999'})):
+            result = await profile_payment_card_http(self.resolver,'15',
+                {'operation':'reconcile','account_id':ACCOUNT,'card_id':self.payload['card_id']},
+                state=self.state)
+        self.assertEqual(result['code'],'CARD_RECONCILE_SCOPE_CHANGED')
+        self.assertEqual(self.web.calls, [])
+
     async def test_lost_verify_reconciles_exact_credential_without_card_or_cvv(self):
         self.web.lose_verification=True
         self.assertEqual((await self.call())['code'],'CARD_SAVE_LINK_VERIFICATION_PENDING')
