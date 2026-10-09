@@ -29,6 +29,20 @@ operator JSON. Its four-field schema is ported and compared with the original
 function. The executor requires declared profile viewport/depth values; it does
 not invent a browser measurement or treat null client info as verified.
 
+The operator TXT also supplies `useBillingBinInfoQuery` (37633143606284498).
+Before requesting a PTT key or sending Save, the executor now queries the exact
+payment/country/currency/BIN tuple and checks card support, postal/contact fields
+and recurring consent. The e-mandate rule matches the supplied
+`BillingEMandateConsentUtils` across all prepaid/recurring/mandate branches.
+Its CVV exemption flag never removes mandatory CVV from this implementation.
+
+Country approval is no longer an internal manually enabled context flag.
+After proving the screen's exact payment/RK scope, the executor reads its live
+tax country, predicted country, billing flags and payment modes. The current
+caller passes TAX_COUNTRY_MISMATCH as inCountrySpoofingExperiment. A confirmed
+no-mismatch branch can proceed; mismatch or incomplete policy stops before
+key/Save. The missing tax-validation contract is not bypassed.
+
 The public `prepare` action now uses pinned account/methods/form reads and
 returns FORM_CONFIRMED, which means form availability only, not Save readiness.
 
@@ -57,10 +71,14 @@ concern but does not prove the current builder or live server accepts our Save.
 
 Public card `bind` still uses the legacy implementation. The new HTTP Save
 executor is intentionally not wired to it. Its internal SaveContext defaults
-to unverified; current country/tax policy, profile client-info values, consent state and
+to unverified; current builder compatibility, profile client-info values, consent state and
 runtime fragment flag must be confirmed before an adapter can construct a
 verified context. The existing manifest execution flags remain false.
 Offline parity does not establish live card attachment.
+
+The no-mismatch country branch and recurring-consent rule now have source and
+fixture coverage. Accounts flagged for tax-country validation still need the
+separate current contract. No live Save or payment was performed by these tests.
 
 Latest uploaded `remask-payment-contracts (4)(5).json` still reports 128 scripts
 read out of 387, 259 unread, 1134 definitions, and no current builder/getPTTUtils

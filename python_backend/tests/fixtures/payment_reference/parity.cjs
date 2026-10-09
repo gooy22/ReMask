@@ -51,6 +51,11 @@ const context = vm.createContext({Promise,Date,TextEncoder,Uint8Array,Uint32Arra
 });
 function load(file){vm.runInContext(fs.readFileSync(path.join(__dirname,file),'utf8'),context,{timeout:1000});}
 async function run(input){
+  if(input.mode==='consent') {
+    load('BillingEMandateConsentUtils.current.js');
+    return modules.BillingEMandateConsentUtils.isRecurringConsentRequired(input.bin_info,
+      {inSaveAndPayFlow:false,isPrepayOnly:input.prepaid});
+  }
   if(input.mode==='client') {
     context.window.screen={colorDepth:input.color_depth};context.window.innerWidth=input.viewport_width;
     context.window.innerHeight=input.viewport_height;

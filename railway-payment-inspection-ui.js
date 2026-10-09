@@ -33,13 +33,25 @@ function remaskClearPaymentSecrets(){
 }
 
 function paymentCardMessage(result){
-  const names={number:'номер карты',cvv:'CVV',holder:'имя владельца',expiry:'срок действия',month:'месяц',year:'год',country:'страна',currency:'валюта',timezone:'часовой пояс',address:'платёжный адрес',city:'город',region:'область / штат',postal_code:'индекс',unknown_required_field:'дополнительное поле Meta'};
+  const names={number:'номер карты',cvv:'CVV',holder:'имя владельца',expiry:'срок действия',month:'месяц',year:'год',country:'страна',currency:'валюта',timezone:'часовой пояс',address:'платёжный адрес',city:'город',region:'область / штат',postal_code:'индекс',email_or_phone:'email или телефон владельца',unknown_required_field:'дополнительное поле Meta'};
   const messages={
     CARD_FORM_READY:'Форма Meta доступна для выбранного РК.',
     CARD_HTTP_FORM_CONFIRMED:'Meta подтвердила доступность формы карты у выбранного РК. Карта не отправлена; готовность сохранения ещё не подтверждена.',
     CARD_SCREEN_QUERY_REJECTED:'Meta не подтвердила запрос формы карты. Карта не отправлена.',
     CARD_SCREEN_SCOPE_UNVERIFIED:'Meta не подтвердила форму именно выбранного РК. Карта не отправлена.',
     CARD_SCREEN_OPTIONS_INCONCLUSIVE:'Meta подтвердила РК, но не подтвердила доступность добавления карты.',
+    CARD_BIN_UNSUPPORTED:'Meta не поддерживает эту карту для выбранных настроек оплаты. Карта не отправлена.',
+    CARD_BIN_QUERY_REJECTED:'Meta не подтвердила требования к этой карте. Карта не отправлена.',
+    CARD_BIN_REQUIREMENTS_INCONCLUSIVE:'Ответ Meta о требованиях карты неполный. Карта не отправлена.',
+    CARD_REQUIRED_FIELDS_MISSING:'Meta требует дополнительные данные владельца карты. Карта не отправлена.',
+    CARD_RECURRING_CONSENT_REQUIRED:'Для этой карты Meta требует согласие на регулярные платежи. Согласие не проставлено; карта не отправлена.',
+    CARD_TOKENIZATION_CONSENT_REQUIRED:'Meta требует согласие на токенизацию карты. Согласие не проставлено; карта не отправлена.',
+    CARD_COUNTRY_POLICY_INCONCLUSIVE:'Meta не подтвердила правила страны выбранного РК. Карта не отправлена.',
+    CARD_TAX_COUNTRY_VALIDATION_REQUIRED:'Meta требует отдельную проверку страны РК. Карта не отправлена.',
+    CARD_BILLING_COUNTRY_MISMATCH:'Страна оплаты не совпала с подтверждённой страной Meta. Настройки не изменены; карта не отправлена.',
+    CARD_PAYMENT_MODE_INCONCLUSIVE:'Meta не подтвердила режим оплаты РК. Карта не отправлена.',
+    CARD_CLIENT_CONTEXT_REQUIRED:'Не подтверждены данные клиента для банковской проверки. Карта не отправлена.',
+    CARD_PRIVATE_RUNTIME_CONTEXT_UNCONFIRMED:'HTTP-сохранение карты ещё не готово к отправке: текущий контракт не подтверждён.',
     PAYMENT_HTTP_TIMEOUT:'Проверка Meta не завершилась вовремя. Карта не отправлена.',
     PAYMENT_HTTP_UNAVAILABLE:'Не удалось завершить проверку оплаты в Meta. Карта не отправлена.',
     CARD_LINK_OBSERVED:'Meta показывает карту у выбранного РК. Проверена только привязка: платёж и подтверждение банка не проверялись.',

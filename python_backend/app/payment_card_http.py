@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 import uuid
 
 from .payment_card_input import build_save_input, card_auth_fields, validate_client_info
+from .payment_card_requirements import read_card_requirements, requirements_proof, country_policy_proof
 from .payment_ptt import encrypt_card_token
 from .private_auth import private_auth_error
 from .static_payment_card import card_screen_proof, read_card_screen, save_response_proof, confirm_saved_card
@@ -29,7 +30,6 @@ class SaveContext:
     include_new_fragment: bool
     # Remains false until the current billing builder/caller context is confirmed.
     runtime_verified: bool = False
-    country_policy_verified: bool = False
     usability_intent: str | None = None
     network_consent: bool | None = None
     recurring_consent: bool | None = None
@@ -52,7 +52,6 @@ Neither exceptions nor responses may export token/PAN/CVV/bank parameters.
     base = {'account_id': account, 'business_id': business_id, 'submitted': False,
             'browser_started': False, 'funding_verified': False, 'status': 'BLOCKED'}
     if (not isinstance(context, SaveContext) or context.runtime_verified is not True
-            or context.country_policy_verified is not True
             or type(context.include_new_fragment) is not bool):
         return {**base, 'code': 'CARD_PRIVATE_RUNTIME_CONTEXT_UNCONFIRMED'}
     if not callable(persist_submit_intent):
@@ -83,12 +82,20 @@ Neither exceptions nor responses may export token/PAN/CVV/bank parameters.
         # Existing masked matches are ambiguous and cannot authorize another Save.
         if any(row.get('last4') == values['number'][-4:] for row in methods.get('payment_methods', [])):
             return {**base, 'code': 'CARD_MASK_COLLISION_PREEXISTING'}
-        screen = card_screen_proof(await read_card_screen(web, business_id=business_id, payment=payment),
-                                  account, account_evidence=evidence)
+        screen_payload = await read_card_screen(web, business_id=business_id, payment=payment)
+        screen = card_screen_proof(screen_payload, account, account_evidence=evidence)
         if screen.get('card_form_verified') is not True:
             return {**base, 'code': screen['code']}
+        policy = country_policy_proof(screen_payload, country=context.country)
+        if policy.get('country_policy_verified') is not True:
+            return {**base, 'code': policy['code']}
         if screen['options']['verify_tokenization_required'] and context.network_consent is not True:
             return {**base, 'code': 'CARD_TOKENIZATION_CONSENT_REQUIRED'}
+        requirements = requirements_proof(await read_card_requirements(web, business_id=business_id,
+            payment=payment, number=values['number'], country=context.country, currency=context.currency),
+            values=values, is_prepaid_only=policy['is_prepaid_only'], recurring_consent=context.recurring_consent)
+        if requirements.get('card_requirements_verified') is not True:
+            return {**base, 'code': requirements['code'], 'missing_fields': requirements['required_fields']}
         key_vars = key_command(payment, str(uuid.uuid4()))
         payload = await web.graphql(KEY_DOC_ID, key_vars,
             friendly_name='PaymentsCometGetServerEncryptionKeyMutation', endpoint_url=ENDPOINT,

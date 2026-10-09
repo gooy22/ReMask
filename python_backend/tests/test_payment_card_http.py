@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, patch
 
 from app.payment_card_http import SaveContext, save_card_http, KEY_DOC_ID, SAVE_DOC_ID
 from app.payment_card_input import build_client_info
+from app.payment_card_requirements import BIN_DOC_ID
 from tests.test_payment_ptt import VALUES
 from tests.test_static_payment_card import ACCOUNT, BUSINESS, PAYMENT, NODE, CREDENTIAL, save_payload, payment_node
 
@@ -23,9 +24,18 @@ def read_methods(cards=None):
 
 def read_screen():
     node=payment_node()
+    node['billable_account'].update(billing_flags=[], payment_modes=['SUPPORTS_POSTPAY'],
+        billable_account_tax_info={'business_country_code':'US',
+            'predicated_business_country_code':'US','can_update_tax_country':False})
     node['billing_payment_method_options']=[{'__typename':'AdAccountNewCreditCardOption',
         'check_make_default':True,'can_save_to_business':False,'verify_tokenization_required':False}]
     return {'data':{'payment_account':node}}
+
+
+def read_bin():
+    return {'data':{'credit_card_bin_info_shim':{'is_supported':True,'request_postal_code':False,
+        'require_3ds':False,'require_emandate':False,'require_phone_number_or_email':False,
+        'skip_cvv_for_eea_save':False,'supports_recurring':True}}}
 
 
 class FakeHTTP:
@@ -33,6 +43,7 @@ class FakeHTTP:
     def __init__(self):
         self.calls=[]; self.saved=False; self.lose_save=False; self.foreign_business=False
         self.key_error=False; self.auth_after_key=False; self.bank_required=False; self.lose_verification=False
+        self.screen=read_screen();self.bin=read_bin()
     async def graphql(self,doc,variables,**kwargs):
         self.calls.append((doc,copy.deepcopy(variables),kwargs))
         if doc=='28797973873175785':return read_account()
@@ -42,7 +53,8 @@ class FakeHTTP:
             p=read_methods([card] if self.saved else [])
             if self.foreign_business:p['data']['billable_account_by_asset_id']['owning_business']['id']='999888777'
             return p
-        if doc=='27759194723782263':return read_screen()
+        if doc=='27759194723782263':return self.screen
+        if doc==BIN_DOC_ID:return self.bin
         if doc==KEY_DOC_ID:
             return {'data':{'get_server_encryption_key':{'client_mutation_id':variables['input']['client_mutation_id'],
                 'trust_chain':['synthetic leaf','synthetic intermediate'],'payments_error':{} if self.key_error else None}}}
@@ -61,8 +73,7 @@ class PaymentHTTPTests(unittest.IsolatedAsyncioTestCase):
     def context(self):
         return SaveContext(payment=PAYMENT,country='US',currency='USD',
             client_info=build_client_info(color_depth=24,viewport_width=1440,viewport_height=1000),
-            logging_data={'session_id':'synthetic-session'},include_new_fragment=False,runtime_verified=True,
-            country_policy_verified=True)
+            logging_data={'session_id':'synthetic-session'},include_new_fragment=False,runtime_verified=True)
     async def run_flow(self,web,**kwargs):
         self.persist=AsyncMock()
         # Crypto is separately checked byte-for-byte against supplied JS.
@@ -75,7 +86,7 @@ class PaymentHTTPTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['status'],'LINKED');self.assertFalse(result['browser_started'])
         self.assertFalse(result['funding_verified']);self.persist.assert_awaited_once()
         self.assertEqual([x[0] for x in web.calls],['28797973873175785','28814526004898205',
-            '27759194723782263',KEY_DOC_ID,SAVE_DOC_ID,'28814526004898205'])
+            '27759194723782263',BIN_DOC_ID,KEY_DOC_ID,SAVE_DOC_ID,'28814526004898205'])
         save=next(x for x in web.calls if x[0]==SAVE_DOC_ID)
         self.assertEqual(set(save[1]),{'input','getRiskVerificationInfoForAllCredentialsOnPaymentAccount',
                                      'paymentAccountID','includeCreateNewFromOldFragment'})
@@ -86,10 +97,25 @@ class PaymentHTTPTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('payment_product_id',key[1]['input'])
 
     async def test_runtime_context_gate_prevents_all_network_calls(self):
-        for context in (replace(self.context(),runtime_verified=False),replace(self.context(),country_policy_verified=False)):
+        for context in (replace(self.context(),runtime_verified=False),):
             web=FakeHTTP();result=await self.run_flow(web,context=context)
             self.assertEqual(result['code'],'CARD_PRIVATE_RUNTIME_CONTEXT_UNCONFIRMED')
             self.assertEqual(web.calls,[]);self.persist.assert_not_awaited()
+
+    async def test_live_country_mismatch_cannot_be_bypassed_by_verified_runtime_context(self):
+        web=FakeHTTP()
+        web.screen['data']['payment_account']['billable_account']['billing_flags']=['TAX_COUNTRY_MISMATCH']
+        result=await self.run_flow(web)
+        self.assertEqual(result['code'],'CARD_TAX_COUNTRY_VALIDATION_REQUIRED')
+        self.assertNotIn(BIN_DOC_ID,[x[0] for x in web.calls]);self.persist.assert_not_awaited()
+
+    async def test_missing_required_card_field_stops_before_key_and_save_without_exposing_bin(self):
+        web=FakeHTTP();web.bin['data']['credit_card_bin_info_shim']['require_phone_number_or_email']=True
+        result=await self.run_flow(web)
+        self.assertEqual(result['code'],'CARD_REQUIRED_FIELDS_MISSING')
+        self.assertEqual(result['missing_fields'],['email_or_phone'])
+        self.assertNotIn(KEY_DOC_ID,[x[0] for x in web.calls]);self.persist.assert_not_awaited()
+        self.assertNotIn(VALUES['number'][:8],str(result))
 
     async def test_foreign_bm_and_foreign_payment_never_request_key_or_save(self):
         for foreign in ('business','payment'):
