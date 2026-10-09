@@ -107,9 +107,10 @@ async def profile_payment_card_http(resolver, profile, payload, *, state=None):
                         target, methods.get('code'), methods.get('inventory_complete'),
                         len(methods.get('all_credential_ids', [])), len(methods.get('payment_methods', [])))
                     retained['funding'] = {**methods, 'profile_id': profile}
-                    if (methods.get('payment_account_id') != saved.get('payment_account_id')
-                            or methods.get('account_scope_verified') is not True
+                    if (methods.get('account_scope_verified') is not True
                             or methods.get('business_scope_verified') is not True):
+                        return {**retained, 'code': 'CARD_RECONCILE_METHODS_UNVERIFIED'}
+                    if methods.get('payment_account_id') != saved.get('payment_account_id'):
                         return {**retained, 'code': 'CARD_RECONCILE_SCOPE_CHANGED'}
                     if (operation == 'bind' and payload.get('reviewed_attempt_id') == pending['attempt_id']
                             and methods.get('inventory_complete') is True
