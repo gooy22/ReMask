@@ -56,11 +56,13 @@ final class RemaskPaymentCardVault {
         $month = (int)($input['month'] ?? 0); $year = (int)($input['year'] ?? 0); if($year<100)$year+=2000;
         if($month<1 || $month>12 || $year>2100 || sprintf('%04d%02d',$year,$month)<gmdate('Ym')) throw new InvalidArgumentException('CARD_EXPIRY_INVALID');
         $card=['number'=>$pan,'month'=>$month,'year'=>$year];
-        foreach (['holder','country','address','city','region','postal_code'] as $field) {
+        foreach (['holder','country','address','city','region','postal_code','email','phone'] as $field) {
             $value=trim((string)($input[$field]??''));
             if(strlen($value)>200 || preg_match('/[\x00-\x1f]/',$value)) throw new InvalidArgumentException('CARD_BILLING_INVALID');
             $card[$field]=$value;
         }
+        if ($card['email']!=='' && !filter_var($card['email'],FILTER_VALIDATE_EMAIL)) throw new InvalidArgumentException('CARD_BILLING_INVALID');
+        if ($card['phone']!=='' && !preg_match('/^\+?[\d ()-]{6,30}$/D',$card['phone'])) throw new InvalidArgumentException('CARD_BILLING_INVALID');
         $card['label']=trim((string)($input['label']??''));
         if(strlen($card['label'])>80 || preg_match('/\d{12,19}/',preg_replace('/[\s-]+/','',$card['label']))) throw new InvalidArgumentException('CARD_LABEL_INVALID');
         return $card;
@@ -123,7 +125,7 @@ final class RemaskPaymentCardVault {
         return json_decode($raw,true,16,JSON_THROW_ON_ERROR);
     }
     public function updateBilling(string $id,array $patch): array {
-        if(array_diff(array_keys($patch),['holder','country','address','city','region','postal_code','label']))throw new InvalidArgumentException('CARD_BILLING_PATCH_INVALID');
+        if(array_diff(array_keys($patch),['holder','country','address','city','region','postal_code','email','phone','label']))throw new InvalidArgumentException('CARD_BILLING_PATCH_INVALID');
         return $this->locked(function(array &$data)use($id,$patch){
             $row=$data['cards'][$id]??null;
             if(!is_array($row))throw new InvalidArgumentException('CARD_NOT_FOUND');
@@ -139,6 +141,7 @@ final class RemaskPaymentCardVault {
         $card=$this->secret($id);$missing=[];
         foreach($fields as $field){
             $kind=(string)($field['kind']??'');
+            if($kind==='email_or_phone'&&empty($card['email'])&&empty($card['phone'])){$missing[]='email_or_phone';continue;}
             if(in_array($kind,['holder','country','address','city','region','postal_code'],true)&&
                 (($field['required']??false)===true||$kind==='holder')&&trim((string)($card[$kind]??''))==='')$missing[]=$kind;
         }
