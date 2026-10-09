@@ -58,7 +58,7 @@ function paymentCardMessage(result){
     CARD_BIN_COUNTRY_CHECK_REQUIRED:'Перед сохранением Meta проверит страну карты. Карта ещё не отправлена.',
     CARD_BIN_COUNTRY_UNCONFIRMED:'Meta не подтвердила страну карты. Карта не отправлена.',
     CARD_COUNTRY_POLICY_CONFIRMED:'Проверка страны Meta пройдена.',
-    CARD_BILLING_COUNTRY_MISMATCH:'Страна оплаты не совпала с подтверждённой страной Meta. Настройки не изменены; карта не отправлена.',
+    CARD_BILLING_COUNTRY_MISMATCH:'Meta обнаружила несовпадение страны карты со страной РК. В Meta подтвердите страну бизнеса другим способом либо измените его местонахождение. Сохранение карты не отправлено.',
     CARD_PAYMENT_MODE_INCONCLUSIVE:'Meta не подтвердила режим оплаты РК. Карта не отправлена.',
     CARD_CLIENT_CONTEXT_REQUIRED:'Не подтверждены данные клиента для банковской проверки. Карта не отправлена.',
     CARD_HTTP_CANARY_SCOPE_REQUIRED:'HTTP-привязка проходит проверку на выбранном РК профиля 15. Этот РК ещё не включён.',
@@ -116,7 +116,9 @@ function paymentCardMessage(result){
     (setup.country_preserved?' — сохранён текущий выбор'+(setup.country_reason==='meta_control_locked'?' (поле заблокировано Meta)':''):'')+
     '. Сохранение настроек в Meta пока не подтверждено.':'';
   const availability=result.card_availability==='only_this_account'?' В форме выбрано «Только этот РК».':'';
-  return (messages[result.code]||result.code||'Не удалось подтвердить результат')+country+availability+
+  const countryMismatch=result.code==='CARD_BILLING_COUNTRY_MISMATCH'&&/^[A-Z]{2}$/.test(result.billing_country||'')&&/^[A-Z]{2}$/.test(result.card_issuing_country||'')
+    ?' Страна РК: '+result.billing_country+'; страна выпуска карты: '+result.card_issuing_country+'.':'';
+  return (messages[result.code]||result.code||'Не удалось подтвердить результат')+country+availability+countryMismatch+
     (result.missing_fields?.length?' Поля: '+result.missing_fields.map(f=>names[f]||f).join(', ')+'.':'')+
     (fields.length?' Поля формы Meta: '+fields.join(', ')+'.':'');
 }
@@ -328,7 +330,7 @@ async function showFunding(restored=null){
       const line=document.createElement('div');
       const status={LINKED:'видна в Meta у этого РК',BLOCKED:'не привязана',FAILED:'ошибка',IN_PROGRESS:'операция начата',SUBMITTED_UNVERIFIED:'результат требует проверки',ACTION_REQUIRED:'требуется подтверждение'}[binding.status]||binding.status;
       line.textContent=binding.profile+' / act_'+binding.account_id+' · •••• '+binding.last4+' · '+status+
-        (binding.last_result_code?' · '+paymentCardMessage({code:binding.last_result_code}):'');assignments.appendChild(line);
+        (binding.last_result_code?' · '+paymentCardMessage({...binding,code:binding.last_result_code}):'');assignments.appendChild(line);
     });
     if(preferred)select.value=preferred;
     else if(!select.value&&rows.length===1&&bindings.length===1)select.value=bindings[0].card_id;

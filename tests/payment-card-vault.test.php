@@ -354,6 +354,16 @@ try{
     $old=$vault->binding($card['id'],'Other profile','123456789');
     expect(!isset($vault->reconcile($card['id'],'Other profile','123456789',$old,$empty)['retry_review']),'Bank action was made retryable');
     // Pre-submit Meta gates remain actionable; bank/unknown submissions do not.
+    $countryAttempt=$vault->begin($card['id'],'Country mismatch','123456789');
+    $vault->finish($card['id'],'Country mismatch','123456789','BLOCKED',
+        ['submitted'=>false,'code'=>'CARD_BILLING_COUNTRY_MISMATCH','billing_country'=>'UA','card_issuing_country'=>'US'],$countryAttempt['attempt_id']);
+    $countryRow=$vault->binding($card['id'],'Country mismatch','123456789');
+    expect($countryRow['billing_country']==='UA'&&$countryRow['card_issuing_country']==='US','Country evidence was lost across reload');
+    $countryAttempt=$vault->begin($card['id'],'Country mismatch','123456789');
+    $vault->finish($card['id'],'Country mismatch','123456789','BLOCKED',
+        ['submitted'=>false,'code'=>'CARD_BILLING_COUNTRY_MISMATCH','billing_country'=>'invalid private data','card_issuing_country'=>'US-private'],$countryAttempt['attempt_id']);
+    $countryRow=$vault->binding($card['id'],'Country mismatch','123456789');
+    expect(!isset($countryRow['billing_country'],$countryRow['card_issuing_country']),'Malformed country diagnostic leaked or retained stale evidence');
     $pre=$vault->begin($card['id'],'Before save','123456789');
     $vault->finish($card['id'],'Before save','123456789','ACTION_REQUIRED',
         ['code'=>'PAYMENT_ACCOUNT_SETUP_REQUIRED','submitted'=>false],$pre['attempt_id']);

@@ -142,7 +142,7 @@ Neither exceptions nor responses may export token/PAN/CVV/bank parameters.
             country_result = await confirm_bin_country(web, business_id=business_id,
                 payment=payment, number=values['number'], token=token, country=context.country)
             if country_result.get('country_policy_verified') is not True:
-                return {**base, 'code': country_result['code']}
+                return {**base, **country_result}
         input_value = build_save_input(values, payment=payment, country=context.country, currency=context.currency,
             token=token, client_info=context.client_info, logging_data=context.logging_data,
             usability_intent=context.usability_intent, network_consent=context.network_consent,

@@ -72,8 +72,11 @@ async def confirm_bin_country(web, *, business_id, payment, number, token, count
     detected = row.get('country_code') if isinstance(row, dict) else None
     if not _clean_payload(payload) or not isinstance(detected, str) or not re.fullmatch(r'[A-Z]{2}', detected):
         return {'country_policy_verified': False, 'code': 'CARD_BIN_COUNTRY_UNCONFIRMED'}
-    return {'country_policy_verified': detected == country,
-            'code': 'CARD_COUNTRY_POLICY_CONFIRMED' if detected == country else 'CARD_BILLING_COUNTRY_MISMATCH'}
+    result = {'country_policy_verified': detected == country,
+              'code': 'CARD_COUNTRY_POLICY_CONFIRMED' if detected == country else 'CARD_BILLING_COUNTRY_MISMATCH'}
+    if detected != country:
+        result.update(billing_country=country, card_issuing_country=detected)
+    return result
 
 
 def bin_command(*, payment, number, country, currency):

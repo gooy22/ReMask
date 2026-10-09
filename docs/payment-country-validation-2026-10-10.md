@@ -26,3 +26,16 @@ artifact hashes/schema, foreign tax scope, and both permitted country branches.
 Offline tests and deployment health do not establish live card attachment.
 Live Save still requires the exact returned credential and a separate scoped
 payment-methods read before LINKED is committed.
+
+Live verification on 2026-10-09 22:18 UTC passed account, methods, form,
+requirements, key retrieval and certificate-validated PTT encryption. Meta's
+BIN-country query returned a country different from the account country;
+the attempt stopped with CARD_BILLING_COUNTRY_MISMATCH and submitted=false.
+No Save was sent. Only the two validated ISO country codes are returned and
+persisted for the operator; card input, BIN and PTT remain request-local.
+
+The supplied BillingVerifyCountryLocationMismatchState offers Verify Country
+(SHOW_STEPUP_OPTIONS) or Change Business Location. ReMask reports that choice;
+it does not fabricate hasAcknowledgedCountryMismatch or complete identity
+verification. This live country mismatch is separate from the original
+missing country-query implementation.

@@ -55,6 +55,9 @@ vm.createContext(sandbox);vm.runInContext(fs.readFileSync('railway-payment-inspe
   assert.ok(countryMessage.includes('Bangladesh'));assert.ok(countryMessage.includes('заблокировано Meta'));assert.ok(countryMessage.includes('пока не подтверждено'));
   assert.ok(sandbox.paymentCardMessage({code:'CARD_FORM_READY',card_availability:'only_this_account'}).includes('Только этот РК'));
   assert.ok(sandbox.paymentCardMessage({code:'PAYMENT_UI_UNAVAILABLE'}).includes('Billing / Payments'));
+  const countryMismatchMessage=sandbox.paymentCardMessage({code:'CARD_BILLING_COUNTRY_MISMATCH',billing_country:'UA',card_issuing_country:'US'});
+  assert.ok(countryMismatchMessage.includes('Страна РК: UA; страна выпуска карты: US'));
+  assert.ok(countryMismatchMessage.includes('подтвердите страну бизнеса другим способом'));
   assert.ok(sandbox.paymentCardMessage({code:'PERSONAL_AD_ACCOUNT_EXCLUDED'}).includes('внутри BM'));
   assert.ok(sandbox.paymentCardMessage({code:'INVALID_PAYMENT_TARGET'}).includes('проверку идентификатора'));
   assert.ok(sandbox.paymentCardMessage({code:'CARD_MASK_COLLISION_PREEXISTING'}).includes('Save не нажат'));

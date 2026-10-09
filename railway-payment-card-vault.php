@@ -268,6 +268,10 @@ final class RemaskPaymentCardVault {
             $data['bindings'][$key]['status']=$status;$data['bindings'][$key]['updated_at']=gmdate('c');
             if(preg_match('/^[A-Z0-9_]{1,64}$/D',(string)($result['code']??'')))$data['bindings'][$key]['last_result_code']=$result['code'];
             if(array_key_exists('submitted',$result)&&in_array($result['submitted'],[true,false,null],true))$data['bindings'][$key]['submitted']=$result['submitted'];
+            foreach(['billing_country','card_issuing_country'] as $field){
+                unset($data['bindings'][$key][$field]);
+                if(($result['code']??'')==='CARD_BILLING_COUNTRY_MISMATCH'&&preg_match('/^[A-Z]{2}$/D',(string)($result[$field]??'')))$data['bindings'][$key][$field]=$result[$field];
+            }
         });
     }
 }

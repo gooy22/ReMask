@@ -161,6 +161,10 @@ class PaymentHTTPTests(unittest.IsolatedAsyncioTestCase):
             result=await self.run_flow(web)
             self.assertFalse(result['submitted']);self.persist.assert_not_awaited()
             self.assertNotIn(SAVE_DOC_ID,[x[0] for x in web.calls])
+            if detected=='UA':
+                self.assertEqual(result['billing_country'],'US')
+                self.assertEqual(result['card_issuing_country'],'UA')
+            else:self.assertNotIn('card_issuing_country',result)
 
     async def test_missing_required_card_field_stops_before_key_and_save_without_exposing_bin(self):
         web=FakeHTTP();web.bin['data']['credit_card_bin_info_shim']['require_phone_number_or_email']=True
