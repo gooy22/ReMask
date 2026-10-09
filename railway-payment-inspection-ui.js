@@ -115,7 +115,10 @@ async function inspectFundingRows(rows,container){
       r.funding=f;
       const methods=(f.payment_methods||[]).map(m=>m.type+' •••• '+m.last4).join(', ');
       const status=f.verification_status==='LINKED'?'Карта присутствует; платёжная проверка не подтверждена':
-        f.verification_status==='NONE'?'Meta показывает отсутствие платёжных методов':'Платёжный метод или соответствие выбранному РК не удалось подтвердить';
+        f.verification_status==='NONE'?'Meta показывает отсутствие платёжных методов':
+        f.code==='PAYMENT_METHODS_FILTERED_NO_CARD'&&f.account_scope_verified===true&&f.business_scope_verified===true&&f.methods_query_verified===true
+          ?'РК и BM подтверждены. В полученном списке Meta привязанная карта пока не обнаружена.'
+          :'Платёжный метод или соответствие выбранному РК не удалось подтвердить';
       line.textContent=r.profile+' / '+r.id+': '+status+(methods?' — '+methods:'');
     }
     container.appendChild(line);setProgress(d,t);
