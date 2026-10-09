@@ -20,6 +20,16 @@ def artifact(kind='query', doc='123456789', name='BillingTaxCountryQuery'):
 
 
 class PaymentContractAuditTests(unittest.IsolatedAsyncioTestCase):
+    def test_country_dependencies_are_prioritized_without_a_save_or_generic_root(self):
+        from app.contract_maintenance.payment_sources import payment_deferred_script_urls, REQUIRED_SOURCE_MODULES
+        doc = json.dumps({'rsrcMap': {'country': {'type': 'js', 'src': 'https://static.xx.fbcdn.net/country.js'},
+            'generic': {'type': 'js', 'src': 'https://static.xx.fbcdn.net/generic.js'}},
+            'compMap': {'BillingPaymentMethods.react': {'r': ['generic']},
+                'BillingCountryVerificationUtils': {'rds': {'r': ['country']}}}})
+        self.assertEqual(payment_deferred_script_urls(doc), ['https://static.xx.fbcdn.net/country.js',
+            'https://static.xx.fbcdn.net/generic.js'])
+        self.assertIn('BillingCountryVerificationUtils', REQUIRED_SOURCE_MODULES)
+
     def test_only_public_query_schema_is_exported_never_sources_literals_or_runtime_data(self):
         row = artifact()
         snapshot = {'modules': [row, {'name': 'BillingCountryVerificationUtils',
