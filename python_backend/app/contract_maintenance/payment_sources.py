@@ -29,6 +29,8 @@ REQUIRED_SOURCE_MODULES = (
     'BillingHubPaymentSettingsPaymentMethodsListQuery.graphql',
     'BillingSaveCardCredentialStateMutation.graphql',
     'BillingCountryCurrencyPageViewManagerQuery.graphql',
+    'modularGeneratePTT',
+    'FBPayAuthLibraryCommon',
 )
 
 
@@ -105,7 +107,7 @@ def payment_deferred_script_urls(document):
     for name, component in components.items():
         if name in conflicts['compMap'] or not isinstance(component, dict):
             continue
-        if not re.search(r'(?:Billing.*(?:Card|Credential|PaymentMethod|CountryCurrency)|Payment.*(?:Card|Token))', name):
+        if not re.search(r'(?:Billing.*(?:Card|Credential|PaymentMethod|CountryCurrency|PTT)|Payment.*(?:Card|Token)|FBPay.*|PlatformTrustToken.*|modularGeneratePTT)', name):
             continue
         ids = component.get('r')
         if not isinstance(ids, list):
@@ -163,7 +165,7 @@ def source_export(rows, *, max_bytes=MAX_EXPORT_BYTES):
         name = row['name']
         if name.endswith(('.graphql', '_facebookRelayOperation', '$Parameters')):
             return 0
-        if any(word in name.lower() for word in ('savecard', 'creditcard', 'token', 'encrypt')):
+        if any(word in name.lower() for word in ('savecard', 'creditcard', 'token', 'encrypt', 'fbpay', 'generateptt')):
             return 1
         return 2 if name.endswith('.entrypoint') else 3
     result, used = [], 0
@@ -184,7 +186,7 @@ def public_payment_modules(source):
     for name, factory in _module_nodes(source):
         if not re.fullmatch(r'[A-Za-z0-9_.$-]{1,200}', name):
             continue
-        if not any(part in name.lower() for part in ('billing', 'payment', 'creditcard', 'encrypt', 'tokenization',
+        if not any(part in name.lower() for part in ('billing', 'payment', 'creditcard', 'encrypt', 'tokenization', 'fbpay', 'platformtrusttoken', 'generateptt',
                                                     'bootloader', 'jsresource', 'requiredeferred', 'moduleresource', 'haste')):
             continue
         definition = '__d(' + json.dumps(name) + ',[],' + factory.text.decode() + ');'

@@ -89,6 +89,19 @@ class PaymentSourceTests(unittest.IsolatedAsyncioTestCase):
         source='__d("BootloaderEndpoint",[],function(){throw new Error("must not execute")});__d("UnrelatedModule",[],function(){});'
         self.assertEqual([row['name'] for row in public_payment_modules(source)],['BootloaderEndpoint'])
 
+    def test_observed_ptt_and_fbpay_sources_and_resource_maps_are_not_filtered_out(self):
+        source='__d("modularGeneratePTT",[],function(){throw new Error("must not execute")});__d("FBPayAuthLibraryCommon",[],function(){});__d("PlatformTrustTokenUPLLogger",[],function(){});__d("UnrelatedModule",[],function(){});'
+        self.assertEqual([row['name'] for row in public_payment_modules(source)],
+                         ['modularGeneratePTT','FBPayAuthLibraryCommon','PlatformTrustTokenUPLLogger'])
+        maps={'rsrcMap':{'ptt':{'type':'js','src':'https://static.xx.fbcdn.net/ptt.js'},
+                         'fbpay':{'type':'js','src':'https://static.xx.fbcdn.net/fbpay.js'}},
+              'compMap':{'modularGeneratePTT':{'r':['ptt']},'FBPayAuthLibraryCommon':{'r':['fbpay']}}}
+        self.assertEqual(payment_deferred_script_urls(json.dumps(maps)),
+                         ['https://static.xx.fbcdn.net/ptt.js','https://static.xx.fbcdn.net/fbpay.js'])
+        exported=source_export(public_payment_modules(source))
+        self.assertNotIn('modularGeneratePTT',exported['missing_required_sources'])
+        self.assertNotIn('FBPayAuthLibraryCommon',exported['missing_required_sources'])
+
     def test_deferred_loader_uses_only_observed_public_js_resources_for_payment_components(self):
         maps = {'rsrcMap': {
             'card': {'type': 'js', 'src': 'https://static.xx.fbcdn.net/card.js'},
