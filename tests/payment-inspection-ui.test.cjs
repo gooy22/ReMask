@@ -16,6 +16,7 @@ let requests=[],bindings=[],reviewResult=null,prepareResult=null,bindResult=null
 const resumeStorage=new Map();
 const resumeLocalStorage=new Map();
 const sandbox={
+  window:{screen:{colorDepth:24},innerHeight:900,innerWidth:1440,addEventListener:()=>{}},
   sessionStorage:{getItem:k=>resumeStorage.get(k)||null,setItem:(k,v)=>resumeStorage.set(k,v),removeItem:k=>resumeStorage.delete(k)},
   localStorage:{getItem:k=>resumeLocalStorage.get(k)||null,setItem:(k,v)=>resumeLocalStorage.set(k,v),removeItem:k=>resumeLocalStorage.delete(k)},
   selectedRows:()=>rows,esc:x=>x,openModal:()=>{},$:id=>elements[id]||(elements[id]=element()),
@@ -44,6 +45,7 @@ vm.createContext(sandbox);vm.runInContext(fs.readFileSync('railway-payment-inspe
   assert.equal(requests[0].body.business_id,'123450001');assert.equal(requests[0].body.account_name,'Fixture RK');
   assert.equal(requests[1].body.business_id,'987650001');assert.equal(requests[1].body.account_name,'Other RK');
   assert.equal(requests[0].body.setup_country,'UA');assert.equal(requests[0].body.setup_country_mode,'prefer_ua');
+  assert.deepEqual(JSON.parse(requests[0].body.client_info),{color_depth:'24',java_enabled:false,screen_height:'900',screen_width:'1440'});
   assert.equal(requests[0].body.setup_currency,'USD');assert.equal(requests[0].body.setup_timezone,'Europe/Kyiv');
   bindResult=null;
   sandbox.$('paymentSetupCountry').value='CURRENT';

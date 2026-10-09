@@ -67,10 +67,24 @@ The supplied current BillingPTTUtils caller does not pass this option, so the
 extra argument is undefined for this observed path. This narrows the revision
 concern but does not prove the current builder or live server accepts our Save.
 
-## Remaining release gate
+## Public integration and bounded live verification
 
-Public card `bind` still uses the legacy implementation. The new HTTP Save
-executor is intentionally not wired to it. Its internal SaveContext defaults
+Public prepare/bind/reconcile now delegate exclusively to `payment_card_service`.
+PHP forwards the vault's attempt ID and saved-card ID; browser client-info comes
+from the actual operator viewport. The worker's metadata-only SQLite ledger
+persists before Save, prevents concurrent or restarted duplicate submits, and
+reconciles a retained exact credential through independent scoped reads.
+No PAN, CVV, PTT or bank challenge is stored in the ledger.
+
+Initial live Save is confined to profile 15 / RK 120251650486340295. This is an
+integration canary for the operator's selected saved card, not evidence of live
+success or blanket enablement for other accounts. Country/currency must come
+from the exact payment account; unknown setup, country mismatch, missing client
+context or required consent stops before Save. No country mutation, consent
+inference, Chromium fallback or charge is performed. The reference manifest's
+general execution flags remain false until independent live confirmation.
+
+The internal SaveContext defaults
 to unverified; current builder compatibility, profile client-info values, consent state and
 runtime fragment flag must be confirmed before an adapter can construct a
 verified context. The existing manifest execution flags remain false.

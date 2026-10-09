@@ -728,7 +728,7 @@ async def payment_card_flow(browser:Any,target:str,asset:dict[str,str],*,operati
 async def _profile_payment_card_execute(resolver:Any,profile:str,payload:dict[str,Any],state:Any=None) -> dict[str,Any]:
     from .session import ProfileSession
     target=account_id(payload.get('account_id',''));operation=payload.get('operation','')
-    if operation not in {'prepare','bind'}:raise ValueError('CARD_OPERATION_INVALID')
+    if operation not in {'prepare','bind','reconcile'}:raise ValueError('CARD_OPERATION_INVALID')
     if operation=='prepare':
         from .static_payment_card import prepare_profile_card_form
         return await prepare_profile_card_form(resolver,profile,target,state=state,
@@ -765,9 +765,8 @@ async def profile_payment_card(resolver:Any,profile:str,payload:dict[str,Any],*,
     target=account_id(payload.get('account_id',''));operation=payload.get('operation','')
     if operation not in {'prepare','bind'}:raise ValueError('CARD_OPERATION_INVALID')
     try:
-        # PHP waits 130s. Resolution, browser-slot acquisition, the form and
-        # cancellation/cleanup must all fit inside that transport boundary.
-        result=await asyncio.wait_for(_profile_payment_card_execute(resolver,profile,payload,state),timeout=110)
+        from .payment_card_service import profile_payment_card_http
+        result=await asyncio.wait_for(profile_payment_card_http(resolver,profile,payload,state=state),timeout=110)
         funding=result.get('funding') if isinstance(result.get('funding'),dict) else {}
         if (
             state is not None

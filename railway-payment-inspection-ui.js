@@ -51,6 +51,10 @@ function paymentCardMessage(result){
     CARD_BILLING_COUNTRY_MISMATCH:'Страна оплаты не совпала с подтверждённой страной Meta. Настройки не изменены; карта не отправлена.',
     CARD_PAYMENT_MODE_INCONCLUSIVE:'Meta не подтвердила режим оплаты РК. Карта не отправлена.',
     CARD_CLIENT_CONTEXT_REQUIRED:'Не подтверждены данные клиента для банковской проверки. Карта не отправлена.',
+    CARD_HTTP_CANARY_SCOPE_REQUIRED:'HTTP-привязка проходит проверку на выбранном РК профиля 15. Этот РК ещё не включён.',
+    CARD_LINK_CONFIRMED:'Meta подтвердила точную карту у выбранного РК. Подтверждена только привязка; списания и доступность рекламы не проверялись.',
+    CARD_SAVE_RESULT_UNKNOWN:'Карта могла быть отправлена. Повторное добавление заблокировано; нажмите «Проверить результат».',
+    CARD_SAVE_LINK_VERIFICATION_PENDING:'Meta приняла сохранение карты; точная привязка проверяется. Повторное добавление заблокировано.',
     CARD_PRIVATE_RUNTIME_CONTEXT_UNCONFIRMED:'HTTP-сохранение карты ещё не готово к отправке: текущий контракт не подтверждён.',
     PAYMENT_HTTP_TIMEOUT:'Проверка Meta не завершилась вовремя. Карта не отправлена.',
     PAYMENT_HTTP_UNAVAILABLE:'Не удалось завершить проверку оплаты в Meta. Карта не отправлена.',
@@ -157,13 +161,15 @@ async function bindPaymentCard(rows,card,cvv,container,reviews={}){
   let stopAfterBilling=false,stopAfterUncertain=false;
   if(!card?.id)throw new Error('Выберите сохранённую карту или добавьте новую.');
   if(cvv&&!/^\d{3,4}$/.test(cvv))throw new Error('CVV должен содержать 3 или 4 цифры.');
-  // One browser at a time; uncertain submission never triggers a retry.
+  // One Save at a time; uncertain submission never triggers a retry.
   await concurrent(rows,1,async r=>{
     if(stopAfterBilling)return {skipped:true,code:'BATCH_STOPPED_BILLING_FIELDS'};
     if(stopAfterUncertain)return {skipped:true,code:'BATCH_STOPPED_UNCERTAIN_RESULT'};
     const review=reviews[r.profile+'|'+String(r.id).replace(/^act_/,'')];
     try{
       const response=await apiJson('ajax/paymentCards.php',post({action:'bind',card_id:card.id,...(cvv?{cvv}:{}),
+      client_info:JSON.stringify({color_depth:String(window.screen.colorDepth),java_enabled:false,
+        screen_height:String(window.innerHeight),screen_width:String(window.innerWidth)}),
       ...(review?{retry_confirmed:'1',retry_review:review.token}:{}),profile:r.profile,account_id:r.id,...paymentAssetHint(r),...paymentSetupPayload()}));
       const result=response?.result||{};
       if(result.status==='SUBMITTED_UNVERIFIED'&&result.submitted!==false){

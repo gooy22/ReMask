@@ -108,6 +108,12 @@ try {
         if(!preg_match('/^card_[a-f0-9]{24}$/D',$id))throw new InvalidArgumentException('CARD_NOT_FOUND');
         $expected=$vault->binding($id,$profile,$account);
         if(is_array($expected)&&$expected['status']==='IN_PROGRESS'&&time()-(strtotime((string)$expected['updated_at'])?:time())<180)throw new InvalidArgumentException('CARD_BINDING_IN_PROGRESS');
+        $httpResult=card_worker($profile,['operation'=>'reconcile','account_id'=>$account,'card_id'=>$id,'asset_hint'=>$assetHint]);
+        if(($httpResult['profile_id']??'')!==$profile||($httpResult['account_id']??'')!==$account)throw new RuntimeException('CARD_WORKER_RESULT_UNKNOWN');
+        if(($httpResult['code']??'')!=='CARD_HTTP_INTENT_NOT_FOUND'){
+            if(($httpResult['status']??'')==='LINKED'&&is_array($expected))$vault->finish($id,$profile,$account,'LINKED',$httpResult,$expected['attempt_id']??null);
+            card_out(['ok'=>true,'data'=>['result'=>$httpResult]]);
+        }
         $funding=card_worker_inspect($profile,$account,$assetHint);
         $result=$vault->reconcile($id,$profile,$account,$expected,$funding);
         card_out(['ok'=>true,'data'=>['result'=>['profile_id'=>$profile,'account_id'=>$account]+$result]]);
@@ -135,6 +141,10 @@ try {
         // and this does not claim a fresh Meta/payment verification.
         if($vault->linkedBinding($id,$profile,$account)!==null)card_out(['ok'=>true,'data'=>['result'=>['profile_id'=>$profile,'account_id'=>$account,'status'=>'LINKED','code'=>'ALREADY_LINKED','submitted'=>false,'funding_verified'=>false]]]);
         if(!preg_match('/^\d{3,4}$/D',$cvv))throw new InvalidArgumentException('CARD_AND_CVV_REQUIRED');
+        $clientInfo=$input['client_info']??null;
+        if(is_string($clientInfo))$clientInfo=json_decode($clientInfo,true,4,JSON_THROW_ON_ERROR);
+        if(!is_array($clientInfo)||array_diff(array_keys($clientInfo),['color_depth','java_enabled','screen_height','screen_width'])||count($clientInfo)!==4||($clientInfo['java_enabled']??null)!==false)throw new InvalidArgumentException('CARD_CLIENT_CONTEXT_REQUIRED');
+        $payload['client_info']=$clientInfo;
         $reviewed=($input['retry_confirmed']??'')==='1';
         if($reviewed){
             $expected=$vault->binding($id,$profile,$account);
@@ -147,6 +157,7 @@ try {
         }
         $attemptId=$binding['attempt_id']??null;
         if($binding['status']==='LINKED')card_out(['ok'=>true,'data'=>['result'=>['profile_id'=>$profile,'account_id'=>$account,'status'=>'LINKED','code'=>'ALREADY_LINKED','submitted'=>false]]]);
+        $payload['card_id']=$id;$payload['attempt_id']=$attemptId;
         $payload['card']=$secret;$payload['cvv']=$cvv;unset($secret,$cvv,$input);
     }
     try {

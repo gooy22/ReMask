@@ -266,13 +266,13 @@ class CardBrowserTests(unittest.IsolatedAsyncioTestCase):
         original_wait=asyncio.wait_for
         for operation,expected in [('prepare','BLOCKED'),('bind','SUBMITTED_UNVERIFIED')]:
             cancelled=[]
-            async def setup(*args):
+            async def setup(*args, **kwargs):
                 try:await asyncio.Event().wait()
                 finally:cancelled.append(True)
             async def short_wait(task,timeout):
                 self.assertEqual(timeout,110)
                 return await original_wait(task,0.01)
-            with patch('app.payment_card_binding._profile_payment_card_execute',setup),patch('app.payment_card_binding.asyncio.wait_for',short_wait):
+            with patch('app.payment_card_service.profile_payment_card_http',setup),patch('app.payment_card_binding.asyncio.wait_for',short_wait):
                 result=await profile_payment_card(None,'Fixture',{'account_id':ID,'operation':operation})
             self.assertEqual(result['status'],expected);self.assertEqual(result['code'],'CARD_FLOW_TIMEOUT')
             self.assertEqual(cancelled,[True]);self.assertFalse(result['funding_verified'])
