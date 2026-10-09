@@ -74,7 +74,7 @@ def _standalone_assignment(data, asset_id, user_id, business_id=None):
             'assigned_task_ids': sorted(tasks)}, ''
 
 
-def assignment_proof(payload, *, asset_id, user_id, required_tasks, business_id=None):
+def assignment_proof(payload, *, asset_id, user_id, required_tasks, business_id=None, permission_plan=None):
     """Require numeric assigned tasks under this exact asset/person relation.
 
     Configured/available tasks and business-wide permissions never prove an
@@ -83,7 +83,37 @@ def assignment_proof(payload, *, asset_id, user_id, required_tasks, business_id=
     data = _data(payload)
     if 'business_object_rendered_in_ui' in data:
         proof, _ = _standalone_assignment(data, asset_id, user_id, business_id)
-        return proof if proof and set(required_tasks).issubset(proof['assigned_task_ids']) else None
+        if not proof:
+            return None
+        assigned = set(proof['assigned_task_ids'])
+        if set(required_tasks).issubset(assigned):
+            return proof
+        # Configured tasks alone never prove access. Every full-control root
+        # must be explicitly assigned on this exact asset/user/BM relation.
+        # Meta can omit its declared implied tasks from the explicit ID list.
+        if permission_plan is None or set(required_tasks) != set(permission_plan['required_task_ids']):
+            return None
+        roots = set(permission_plan['full_control_task_ids'])
+        if not roots or not roots.issubset(assigned):
+            return None
+        effective, pending, visited = set(assigned), list(roots), set()
+        while pending:
+            task = pending.pop()
+            if task in visited:
+                continue
+            visited.add(task)
+            for implied in permission_plan['hard_implications'].get(task, []):
+                effective.add(implied)
+                if implied not in visited:
+                    pending.append(implied)
+        if not set(required_tasks).issubset(effective):
+            return None
+        return {**proof, 'full_control_task_ids': sorted(roots),
+            'effective_task_ids': sorted(effective),
+            'implied_assigned_task_ids': sorted(effective - assigned),
+            'required_task_ids': sorted(required_tasks),
+            'hard_implications': permission_plan['hard_implications'],
+            'permission_proof_source': 'explicit_full_control_with_meta_implied_tasks'}
     proofs = []
     def walk(value, in_asset=False, in_user=False):
         if isinstance(value, list):
@@ -149,6 +179,10 @@ def _assert_assignment_targets(payload, asset, user, business_id=None):
 
 
 def full_control_tasks(config, asset_type, *, variant=None):
+    return full_control_plan(config, asset_type, variant=variant)['required_task_ids']
+
+
+def full_control_plan(config, asset_type, *, variant=None):
     rows = config.get("assetConfigs") or []
     matches = [row for row in rows if isinstance(row, dict) and row.get("assetType") == asset_type and row.get("hasUserPermissions") is True]
     if len(matches) != 1:
@@ -183,6 +217,8 @@ def full_control_tasks(config, asset_type, *, variant=None):
     tasks = {key for key, row in table.items() if key in allowed and row.get("taskPermissionType") == "FULL_CONTROL_TASK"}
     if not tasks:
         raise ProvisioningError("PRIVATE_FULL_CONTROL_TASKS_UNAVAILABLE", "Meta did not expose full-control tasks for " + asset_type, retryable=True)
+    roots = sorted(tasks)
+    implications = {}
     pending = list(tasks)
     while pending:
         key = pending.pop()
@@ -194,6 +230,7 @@ def full_control_tasks(config, asset_type, *, variant=None):
         implied = _tasks(raw_implied)
         if not isinstance(raw_implied, list) or len(implied) != len(raw_implied):
             raise ProvisioningError("PRIVATE_FULL_CONTROL_CONFIG_UNCONFIRMED", "Meta returned malformed implied permission tasks.", retryable=True)
+        implications[key] = sorted(implied)
         # Meta filters visible task controls by variant, but the implication
         # helper adds explicit implied IDs even when they have no visible control.
         # Missing controls simply have no further implications. Reject malformed
@@ -202,7 +239,11 @@ def full_control_tasks(config, asset_type, *, variant=None):
             tasks.add(implied_id)
             if implied_id in allowed:
                 pending.append(implied_id)
-    return sorted(tasks)
+    return {'asset_type': asset_type, 'variant': variant,
+        'full_control_task_ids': roots, 'required_task_ids': sorted(tasks),
+        'hard_implications': implications,
+        'task_labels': {key: str(row.get('taskLabel') or row.get('taskName') or key)[:120]
+            for key, row in table.items() if key in tasks}}
 
 
 def response_shape(payload):
@@ -302,7 +343,8 @@ async def _ensure_private_full_control(web, *, page_id, business_id, ad_account_
         raise ProvisioningError("PRIVATE_FULL_CONTROL_CONFIG_UNCONFIRMED", "Meta did not return current asset permission tasks.", retryable=True)
     async def resolve_tasks(asset_type, variant=None):
         try:
-            tasks = full_control_tasks(config, asset_type, variant=variant)
+            plan = full_control_plan(config, asset_type, variant=variant)
+            tasks = plan['required_task_ids']
         except ProvisioningError as exc:
             diagnostic = {'stage': 'private_permission_config', 'code': exc.code,
                 'reason': str(exc), **permission_config_shape(config, asset_type, variant)}
@@ -311,8 +353,9 @@ async def _ensure_private_full_control(web, *, page_id, business_id, ad_account_
                 json.dumps(diagnostic, separators=(',', ':')))
             raise
         log.info('[%s] PAGE_ACCESS permission_config asset=%s full_task_count=%d', profile_id, asset_type, len(tasks))
-        return tasks
-    rk_tasks = await resolve_tasks("AD_ACCOUNT")
+        return plan
+    rk_plan = await resolve_tasks("AD_ACCOUNT")
+    rk_tasks = rk_plan['required_task_ids']
     asset_types = sorted({row["assetType"] for row in config.get("assetConfigs", []) if isinstance(row, dict)
         and row.get("hasUserPermissions") is True and isinstance(row.get("assetType"), str)})
     target = {"business_id": business, "page_id": page, "ad_account_id": account, "rk_asset_id": _id(rk_asset_id) or account,
@@ -325,6 +368,7 @@ async def _ensure_private_full_control(web, *, page_id, business_id, ad_account_
     if previous and previous != target:
         raise ProvisioningError("PRIVATE_PAGE_ACCESS_CHECKPOINT_MISMATCH", "The retained Page access operation belongs to another target or Business user.")
     operations = dict(prior.get(operations_key) or {})
+    assignment_checks = {}
     if ad_account_only:
         legacy = (prior.get("private_operations") or {}).get("assign_rk") or {}
         if legacy.get("status") in _PENDING:
@@ -343,7 +387,8 @@ async def _ensure_private_full_control(web, *, page_id, business_id, ad_account_
 
     async def submit(key, friendly, variables, verify):
         if operations.get(key, {}).get("status") in _PENDING:
-            raise ProvisioningError("PRIVATE_ASSET_RESULT_UNKNOWN", "Previous " + key + " submit is retained; fresh verification is inconclusive. No duplicate POST was sent.", retryable=True)
+            raise ProvisioningError("PRIVATE_ASSET_RESULT_UNKNOWN", incomplete_assignment_message(key,
+                "Previous " + key + " submit is retained; fresh verification is inconclusive. No duplicate POST was sent."), retryable=True)
         command = observed.mutation(friendly, variables)
         if command is None:
             raise ProvisioningError("PRIVATE_ASSET_MUTATION_CONTRACT_UNAVAILABLE", "Pinned Meta contract does not certify the exact " + key + " variables. No mutation was sent.", retryable=True)
@@ -380,7 +425,20 @@ async def _ensure_private_full_control(web, *, page_id, business_id, ad_account_
                 return proof
             if attempt < 2:
                 await asyncio.sleep(0.4 * (attempt + 1))
-        raise ProvisioningError("PRIVATE_ASSET_RESULT_UNKNOWN", "Meta did not independently confirm " + key + ". The submitted operation is retained.", retryable=True)
+        raise ProvisioningError("PRIVATE_ASSET_RESULT_UNKNOWN", incomplete_assignment_message(key,
+            "Meta did not independently confirm " + key + ". The submitted operation is retained."), retryable=True)
+
+    def incomplete_assignment_message(key, fallback):
+        check = assignment_checks.get(key)
+        if not check:
+            return fallback
+        missing = check['missing_full_control_task_ids'] or check['missing_task_ids']
+        labels = [check['missing_task_labels'].get(task, task) for task in missing]
+        asset = 'FP ' + page if key == 'assign_page' else 'РК ' + account
+        return ('Не подтверждён полный доступ к ' + asset + ': Meta вернула '
+            + str(check['required_explicit_count']) + '/' + str(check['required_count'])
+            + ' явно назначенных прав. Не подтверждены: ' + ', '.join(labels)
+            + '. Запрос назначения сохранён; повтор сначала проверит его результат.')
 
     page_variant = None
     async def ownership():
@@ -403,7 +461,8 @@ async def _ensure_private_full_control(web, *, page_id, business_id, ad_account_
         return None
 
     owned = await ownership() if not ad_account_only else None
-    page_tasks = await resolve_tasks("PAGE", page_variant) if not ad_account_only else []
+    page_plan = await resolve_tasks("PAGE", page_variant) if not ad_account_only else None
+    page_tasks = page_plan['required_task_ids'] if page_plan else []
     legacy_phase = str(prior.get("phase") or "")
     if not ad_account_only and not owned and legacy_phase in {"TARGET_PAGE_ACCESS_FULL_ADD_CLICK_INTENT", "TARGET_PAGE_ACCESS_FULL_ADD_SUBMITTED",
             "TARGET_PAGE_ACCESS_FULL_OWNER_APPROVE_CLICK_INTENT", "TARGET_PAGE_ACCESS_FULL_OWNER_APPROVE_SUBMITTED"}:
@@ -416,11 +475,11 @@ async def _ensure_private_full_control(web, *, page_id, business_id, ad_account_
         await save("claim_page", "CONFIRMED", proof=owned)
 
     proofs = {}
-    assignments = [("assign_rk", _id(rk_asset_id) or account, account, rk_tasks)]
+    assignments = [("assign_rk", _id(rk_asset_id) or account, account, rk_tasks, rk_plan)]
     if not ad_account_only:
-        assignments.insert(0, ("assign_page", page, page, page_tasks))
-    for key, asset, canonical_asset, tasks in assignments:
-        async def verify(asset=asset, canonical_asset=canonical_asset, tasks=tasks):
+        assignments.insert(0, ("assign_page", page, page, page_tasks, page_plan))
+    for key, asset, canonical_asset, tasks, plan in assignments:
+        async def verify(asset=asset, canonical_asset=canonical_asset, tasks=tasks, plan=plan):
             payload = await read(RIGHTS, {"assetID": asset, "businessID": business, "userID": user, "surface": "LWI"})
             diagnostic = {"stage": key + "_verification", "response_shape": response_shape(payload)}
             if 'business_object_rendered_in_ui' in _data(payload):
@@ -434,14 +493,26 @@ async def _ensure_private_full_control(web, *, page_id, business_id, ad_account_
                 log.info('[%s] PAGE_ACCESS rights_read rejected=%s', profile_id,
                     json.dumps({**diagnostic, 'code': exc.code}, separators=(',', ':')))
                 raise
-            proof = assignment_proof(payload, asset_id=canonical_asset, user_id=user, required_tasks=tasks, business_id=business)
+            proof = assignment_proof(payload, asset_id=canonical_asset, user_id=user, required_tasks=tasks,
+                business_id=business, permission_plan=plan)
+            if proof and proof.get('implied_assigned_task_ids'):
+                log.info('[%s] PAGE_ACCESS effective_permissions operation=%s business=%s asset=%s explicit=%s implied=%s full_control=%s',
+                    profile_id, key, business, canonical_asset, proof['assigned_task_ids'],
+                    proof['implied_assigned_task_ids'], proof['full_control_task_ids'])
             if not proof:
                 if 'business_object_rendered_in_ui' in _data(payload):
                     assignment, reason = _standalone_assignment(_data(payload), canonical_asset, user, business)
                     assigned = set(assignment['assigned_task_ids']) if assignment else set()
                     diagnostic['assignment_check'] = {'relation_confirmed': assignment is not None,
                         'reason': reason, 'required_count': len(tasks), 'assigned_count': len(assigned),
-                        'missing_task_ids': sorted(set(tasks) - assigned)}
+                        'required_explicit_count': len(set(tasks) & assigned),
+                        'missing_task_ids': sorted(set(tasks) - assigned),
+                        'full_control_task_ids': plan['full_control_task_ids'],
+                        'missing_full_control_task_ids': sorted(set(plan['full_control_task_ids']) - assigned),
+                        'hard_implications': plan['hard_implications'],
+                        'missing_task_labels': {task: plan['task_labels'].get(task, task)
+                            for task in sorted(set(tasks) - assigned)}}
+                    assignment_checks[key] = diagnostic['assignment_check']
                 await checkpoint({"diagnostic": diagnostic})
                 log.info('[%s] PAGE_ACCESS rights_read unconfirmed=%s', profile_id,
                     json.dumps(diagnostic, separators=(',', ':')))

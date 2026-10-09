@@ -5,7 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from app.private_asset_contracts import AssetContracts, CONFIG, PAGE, RIGHTS, CLAIM, ASSIGN
-from app.private_page_ownership import ensure_private_page_full_control, assignment_proof, full_control_tasks, permission_config_shape
+from app.private_page_ownership import ensure_private_page_full_control, assignment_proof, full_control_tasks, full_control_plan, permission_config_shape
 from app.provisioning.models import ProvisioningError, ProvisioningStep
 from app.provisioning.state import ProvisioningStateStore
 from app.provisioning.prepare import PrepareService
@@ -78,6 +78,52 @@ async def discover(web, *, observed, **kwargs):
     return observed.result()
 
 class ContractTests(unittest.TestCase):
+    def test_explicit_full_control_proves_hard_implied_tasks_without_fabricating_assigned_ids(self):
+        plan = full_control_plan(config(), 'PAGE')
+        proof = assignment_proof(standalone_rights(FP, USER, [P]), asset_id=FP, user_id=USER,
+            business_id=BM, required_tasks=[P, PARTIAL], permission_plan=plan)
+        self.assertEqual(proof['assigned_task_ids'], [P])
+        self.assertEqual(proof['effective_task_ids'], sorted([P, PARTIAL]))
+        self.assertEqual(proof['implied_assigned_task_ids'], [PARTIAL])
+        self.assertEqual(proof['full_control_task_ids'], [P])
+
+    def test_implied_verification_never_uses_partial_tasks_foreign_relations_or_soft_implications(self):
+        value = config()
+        row = value['assetConfigs'][0]['permissionTasksConfig'][0]
+        row.update(impliedTaskIDs=[], softImpliedTaskIDs=[PARTIAL])
+        hard_plan = full_control_plan(config(), 'PAGE')
+        soft_plan = full_control_plan(value, 'PAGE')
+        for payload, plan in [(standalone_rights(FP, USER, [PARTIAL]), hard_plan),
+                (standalone_rights(FP, UID, [P]), hard_plan),
+                (standalone_rights(RK, USER, [P]), hard_plan),
+                (standalone_rights(FP, USER, [P], business=RK), hard_plan),
+                (standalone_rights(FP, USER, [P]), soft_plan)]:
+            with self.subTest(payload=payload, plan=plan):
+                self.assertIsNone(assignment_proof(payload, asset_id=FP, user_id=USER,
+                    business_id=BM, required_tasks=[P, PARTIAL], permission_plan=plan))
+
+    def test_all_full_control_roots_are_required_and_dependency_cycles_terminate(self):
+        value = config()
+        rows = value['assetConfigs'][0]['permissionTasksConfig']
+        rows.append({'taskID': R, 'taskPermissionType': 'FULL_CONTROL_TASK', 'impliedTaskIDs': [P]})
+        rows[1]['impliedTaskIDs'] = [P]
+        plan = full_control_plan(value, 'PAGE')
+        self.assertIsNone(assignment_proof(standalone_rights(FP, USER, [P]), asset_id=FP, user_id=USER,
+            business_id=BM, required_tasks=plan['required_task_ids'], permission_plan=plan))
+        proof = assignment_proof(standalone_rights(FP, USER, [P, R]), asset_id=FP, user_id=USER,
+            business_id=BM, required_tasks=plan['required_task_ids'], permission_plan=plan)
+        self.assertEqual(proof['implied_assigned_task_ids'], [PARTIAL])
+
+    def test_transitive_implied_tasks_expand_even_when_intermediate_task_is_explicitly_assigned(self):
+        value = config()
+        rows = value['assetConfigs'][0]['permissionTasksConfig']
+        rows[1]['impliedTaskIDs'] = [R]
+        rows.append({'taskID': R, 'taskPermissionType': 'PARTIAL_ACCESS_TASK', 'impliedTaskIDs': [P]})
+        plan = full_control_plan(value, 'PAGE')
+        proof = assignment_proof(standalone_rights(FP, USER, [P, PARTIAL]), asset_id=FP, user_id=USER,
+            business_id=BM, required_tasks=plan['required_task_ids'], permission_plan=plan)
+        self.assertEqual(proof['implied_assigned_task_ids'], [R])
+
     def test_live_standalone_sibling_relation_proves_exact_assignment(self):
         payload = standalone_rights(FP, USER, [P, PARTIAL])
         proof = assignment_proof(payload, asset_id=FP, user_id=USER, business_id=BM, required_tasks=[P, PARTIAL])
@@ -215,6 +261,32 @@ class PageActionTests(unittest.IsolatedAsyncioTestCase):
         self.meta.defer, self.meta.tasks = False, {FP: [P, PARTIAL], RK: [R, PARTIAL]}
         result = await self.run_action(retained)
         self.assertTrue(result['operator_full_control_verified'])
+        self.assertEqual(len(self.meta.posts), 1)
+
+    async def test_pending_assignment_with_explicit_full_control_recovers_hard_implied_rights_without_post(self):
+        self.meta.standalone, self.meta.owner = True, BM
+        self.meta.defer = True
+        with self.assertRaises(ProvisioningError):
+            await self.run_action()
+        retained = copy.deepcopy(self.saved)
+        self.meta.tasks = {FP: [P], RK: [R, PARTIAL]}
+        result = await self.run_action(retained)
+        self.assertTrue(result['operator_full_control_verified'])
+        self.assertEqual(result['operator_full_control_proof']['assigned_task_ids'], [P])
+        self.assertEqual(result['operator_full_control_proof']['implied_assigned_task_ids'], [PARTIAL])
+        self.assertEqual(self.saved['private_operations']['assign_page']['status'], 'CONFIRMED')
+        self.assertEqual(len(self.meta.posts), 1)
+
+    async def test_missing_full_control_stays_failed_with_specific_message_and_retained_post(self):
+        self.meta.standalone, self.meta.owner = True, BM
+        self.meta.defer = True
+        self.meta.tasks = {FP: [PARTIAL], RK: [R, PARTIAL]}
+        for prior in [{}, self.saved]:
+            with self.assertRaises(ProvisioningError) as caught:
+                await self.run_action(copy.deepcopy(prior))
+            self.assertIn('Не подтверждён полный доступ к FP', str(caught.exception))
+            self.assertIn(P, str(caught.exception))
+            self.assertEqual(self.saved['diagnostic']['assignment_check']['missing_full_control_task_ids'], [P])
         self.assertEqual(len(self.meta.posts), 1)
 
     async def test_distinct_rk_ui_and_canonical_ids_verify_the_same_inventory_bound_account(self):

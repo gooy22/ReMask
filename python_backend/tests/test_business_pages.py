@@ -297,6 +297,52 @@ class BusinessPageTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await self.state.page_access_confirmed('15', BM2, RK2, full_control=True, page_id=FP2))
         self.assertFalse(await self.state.page_access_confirmed('15', BM2, RK2, full_control=True, page_id=FP1))
 
+    async def test_prepare_pending_second_page_with_nine_explicit_and_three_implied_rights_commits_success_without_mutation(self):
+        await self._seed_existing_bundles()
+        assigned = ['1646638482463332', '2565488997052663', '270956550540539',
+            '275298030109664', '290727579301631', '461340961883703',
+            '556750461849806', '696659004201852', '794616964377599']
+        implied = ['1370797498202499', '967977242754531', '997951390947110']
+        # IDs/counts match the observed failure; the dependency graph below is
+        # synthetic. Production must confirm its own roots/edges from Meta.
+        permissions = config()
+        permissions['assetConfigs'][0]['permissionTasksConfig'] = [
+            {'taskID': task, 'taskPermissionType': 'FULL_CONTROL_TASK' if task == assigned[0] else 'PARTIAL_ACCESS_TASK',
+                'impliedTaskIDs': assigned[1:] + implied if task == assigned[0] else []}
+            for task in assigned + implied]
+        self.meta.owners[FP2], self.meta.names[FP2] = BM2, 'PrgsTeam'
+        self.meta.tasks[FP2], self.meta.tasks[RK2] = assigned, [R, PARTIAL]
+        target = {'business_id': BM2, 'page_id': FP2, 'ad_account_id': RK2,
+            'rk_asset_id': RK2, 'operator_uid': UID, 'business_user_id': USER}
+        retained = {'private_target': target, 'private_operations': {
+            'assign_page': {'status': 'RESULT_UNVERIFIED'}}}
+        store = BusinessPageStore(self.state, self.context, BM2)
+        await store.patch(page_id=FP2, name='PrgsTeam', grants={BM2: retained})
+        original = self.meta.graphql
+        async def response(doc, variables, **kwargs):
+            payload = await original(doc, variables, **kwargs)
+            if kwargs['friendly_name'] == CONFIG:
+                payload['data']['business']['bizKitSettingsConfig'] = copy.deepcopy(permissions)
+            return payload
+        self.meta.graphql = response
+        payload = {'desired': {'ad_accounts': 2}, 'parameters': {'AD_ACCOUNT': {'currency': 'USD', 'timezone_id': 1}}}
+        with patch('app.provisioning.private_create_handlers._rk_inventory',
+                side_effect=lambda web, business, name, account: {'id': account, 'asset_ui_id': account}), \
+                patch('app.provisioning.service._await_profile_mutation_cooldown', AsyncMock()):
+            prepare = PrepareService(self.state, ProvisioningService(self.state))
+            result = await prepare.run(item_id='rights-reconciled', profile_id='15', context=self.context, session=self.session, payload=payload)
+            await self.state.init()
+            await prepare.run(item_id='rights-reconciled-repeat', profile_id='15', context=self.context, session=self.session, payload=payload)
+        self.assertTrue(result['ready_to_launch'])
+        self.assertEqual(self.meta.posts, [])
+        self.assertTrue(await self.state.page_access_confirmed('15', BM2, RK2, full_control=True, page_id=FP2))
+        grant = (await store.get())['grants'][BM2]
+        self.assertEqual(grant['private_operations']['assign_page']['status'], 'CONFIRMED')
+        proof = grant['private_operations']['assign_page']['proof']
+        self.assertEqual(proof['assigned_task_ids'], sorted(assigned))
+        self.assertEqual(proof['implied_assigned_task_ids'], sorted(implied))
+        self.session.facebook_business_browser.assert_not_awaited()
+
     async def test_prepare_replaces_rejected_second_name_keeps_audit_and_completes_full_rights(self):
         from app.business_page_response import inspect_create_response
         await self._seed_existing_bundles()
