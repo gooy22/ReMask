@@ -9,6 +9,33 @@ from app.provisioning.models import ProvisioningError
 
 
 class PaymentSourceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_maintenance_reads_missing_sources_after_legacy_script_128(self):
+        # Regression: the original 128-script ceiling hid the card input builder
+        # and PTT implementation in a later, public JS chunk.
+        from app.contract_maintenance.payment_sources import MAX_SCRIPTS
+        self.assertGreaterEqual(MAX_SCRIPTS, 387)
+        entry = 'https://business.facebook.com/billing_hub/payment_settings/'
+        html = ''.join(
+            '<script src="https://static.xx.fbcdn.net/%03d.js"></script>' % i
+            for i in range(170)
+        )
+        async def fetch(url, **kwargs):
+            if url.startswith('https://business.facebook.com/'):
+                return 200, html, entry
+            index = int(url.rsplit('/', 1)[-1][:-3])
+            name = ('BillingCreditCardUtils' if index == 168 else
+                    'getPTTUtils' if index == 169 else
+                    'BillingDecoy%03d' % index)
+            return 200, '__d("' + name + '",[],function(){});', url
+        web = SimpleNamespace(fetch_text=AsyncMock(side_effect=fetch))
+        result = await capture_payment_sources(web, account_id='123456789', business_id='987654321')
+        self.assertEqual(result['scripts_read'], 170)
+        self.assertEqual(result['scripts_not_read'], 0)
+        self.assertFalse(result['script_limit_reached'])
+        self.assertFalse(result['byte_limit_reached'])
+        self.assertNotIn('BillingCreditCardUtils', result['missing_required_sources'])
+        self.assertNotIn('getPTTUtils', result['missing_required_sources'])
+
     def test_current_card_screen_and_input_builder_are_required_instead_of_legacy_page_query(self):
         from pathlib import Path
         from app.contract_maintenance.payment_sources import REQUIRED_SOURCE_MODULES
