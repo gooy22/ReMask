@@ -23,9 +23,9 @@ from ..provisioning.models import ProvisioningError
 
 log = logging.getLogger('remask.payment_maintenance')
 MAX_SCRIPT_BYTES = 8_000_000
-MAX_TOTAL_BYTES = 40_000_000
+MAX_TOTAL_BYTES = 120_000_000
 MAX_EXPORT_BYTES = 8_000_000
-MAX_SCRIPTS = 128
+MAX_SCRIPTS = 400
 OPTIONAL_DOCUMENT_TIMEOUT = 12
 REQUIRED_SOURCE_MODULES = (
     'BillingHubPaymentSettingsPaymentMethodsListQuery.graphql',
@@ -289,7 +289,10 @@ async def capture_payment_sources(web, *, account_id, business_id, loader_docume
 
     offset = 0
     while offset < len(urls) and count < MAX_SCRIPTS:
-        slots = min(4, MAX_SCRIPTS - count, (MAX_TOTAL_BYTES - total) // MAX_SCRIPT_BYTES)
+        # This is a read-only maintenance pass, not the normal payment route.
+        # Keep a worst-case byte reservation for each concurrent CDN read.
+        # More concurrency permits larger inventories inside the existing time cap.
+        slots = min(12, MAX_SCRIPTS - count, (MAX_TOTAL_BYTES - total) // MAX_SCRIPT_BYTES)
         if slots <= 0:
             break
         batch = await asyncio.gather(*(read(url) for url in urls[offset:offset + slots]))
@@ -320,6 +323,7 @@ async def capture_payment_sources(web, *, account_id, business_id, loader_docume
             'scripts_read': count, 'bytes_read': total, 'script_errors': errors,
             'deferred_scripts_observed': len(deferred_observed), 'scripts_not_read': len(urls) - count,
             'scripts_observed': len(observed), 'script_limit_reached': count >= MAX_SCRIPTS and offset < len(urls),
+            'byte_limit_reached': ((MAX_TOTAL_BYTES - total) // MAX_SCRIPT_BYTES <= 0) and offset < len(urls) and count < MAX_SCRIPTS,
             'document_audit': document_audit,
             **exported}
 
