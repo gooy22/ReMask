@@ -164,7 +164,7 @@ try {
 }catch(Throwable $e){
     // Raw request bodies, browser errors, PAN and CVV must never reach logs.
     $message=$e->getMessage();
-    $code=preg_match('/^(?:CARD|PAYMENT|PROFILE|PERSONAL|INVALID|PRIVATE_LAUNCH|SESSION|CHECKPOINT|TWO_FACTOR)_[A-Z0-9_]{1,80}$/D',$message)
+    $code=($message==='BUSINESS_LOGIN_GATE'||preg_match('/^(?:CARD|PAYMENT|PROFILE|PERSONAL|INVALID|PRIVATE_LAUNCH|SESSION|CHECKPOINT|TWO_FACTOR)_[A-Z0-9_]{1,80}$/D',$message))
         ? $message : 'CARD_OPERATION_FAILED';
     error_log(sprintf('[payment-card] operation=%s profile=%s account=%s exception=%s code=%s',
         preg_replace('/[^A-Za-z0-9_.-]/','_', (string)($input['action']??'')),

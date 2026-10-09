@@ -82,6 +82,30 @@ INSPECT);
             expect(($response['error']['message']??'')===$expectedCode,'Inspection hid known gate or leaked raw worker message');
             expect(file_get_contents($path)===$before,'Inspection failure mutated binding');
         }
+        // Maintenance errors preserve only exact allowlisted codes. No card
+        // fields, credentials or binding mutations enter this GET route.
+        $inspectScript=file_get_contents($root.'/inspect.php');
+        $exportScript=substr($inspectScript,0,strpos($inspectScript,"\n\$_SERVER="));
+        $exportScript.="\n\$_SERVER=['REQUEST_METHOD'=>'GET'];\n\$_GET=['action'=>'contract_sources','profile'=>'Fixture','account_id'=>'123456789'];\nrequire \$argv[1].'/ajax/paymentCards.php';\n";
+        file_put_contents($root.'/export.php',$exportScript);
+        $invokeExport=function()use($root):array{
+            $output=[];$exit=0;exec(escapeshellarg(PHP_BINARY).' '.escapeshellarg($root.'/export.php').' '.escapeshellarg($root),$output,$exit);
+            expect($exit===0,'Source export endpoint failed');return json_decode(implode("\n",$output),true);
+        };
+        foreach(['SESSION_EXPIRED','BUSINESS_LOGIN_GATE','CHECKPOINT_REQUIRED','PAYMENT_CONTRACT_SOURCE_TIMEOUT',
+            'PAYMENT_SOURCE_NETWORK_UNAVAILABLE','PROFILE_CONTEXT_ERROR','sensitive fixture message'] as $detail){
+            file_put_contents($root.'/funding.json',json_encode(['detail'=>$detail]));
+            $response=$invokeExport();$expected=str_contains($detail,'sensitive')?'PAYMENT_CONTRACT_SOURCE_UNAVAILABLE':$detail;
+            expect(($response['error']['message']??'')===$expected,'Source export hid safe cause or leaked worker text');
+            expect(file_get_contents($path)===$before,'Source export failure mutated payment binding');
+        }
+        file_put_contents($root.'/funding.json',json_encode(['profile_id'=>'Fixture','account_id'=>'123456789','modules'=>[]]));
+        expect(($invokeExport()['ok']??false)===true,'Valid scoped source result was rejected');
+        $request=json_decode(file_get_contents($root.'/request.json'),true);
+        expect($request['http']['method']==='GET'&&!isset($request['http']['content']),'Source export forwarded a financial payload');
+        expect(str_ends_with($request['url'],'/profiles/Fixture/payment-contract-sources?account_id=123456789'),'Source export target mismatch');
+        file_put_contents($root.'/funding.json',json_encode(['profile_id'=>'Other','account_id'=>'123456789','modules'=>[]]));
+        expect(($invokeExport()['error']['message']??'')==='PAYMENT_CONTRACT_SOURCE_UNAVAILABLE','Foreign profile source was exported');
         // Exercise the endpoint with synthetic credentials and an isolated stream wrapper.
         file_put_contents($root.'/operation.php', <<<'OPERATION'
 <?php
