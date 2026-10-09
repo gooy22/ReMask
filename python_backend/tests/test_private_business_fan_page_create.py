@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from app.business_fan_page_contracts import MANIFEST, command, execute
+from app.business_page_response import inspect_create_response
 from app.contract_maintenance.update_business_pages import compile_candidate
 from app.private_business_fan_page_create import create_business_page, read_pages
 from app.provisioning.business_pages import BusinessPageStore, ensure_business_page
@@ -95,6 +96,28 @@ class BusinessPageHTTPTests(unittest.IsolatedAsyncioTestCase):
         await self.run_page()
         self.assertEqual(len(self.meta.posts), 1)
 
+    async def test_streamed_create_keeps_delegate_when_post_submit_inventory_is_unavailable(self):
+        from fb_worker import FacebookWebSession
+        original = self.meta.graphql
+        submitted = False
+        async def response(doc, variables, **kwargs):
+            nonlocal submitted
+            if submitted and kwargs['friendly_name'] == OPS['READ_FP']:
+                raise TimeoutError('Inventory not yet available after commit')
+            payload = await original(doc, variables, **kwargs)
+            if kwargs['friendly_name'] == OPS['CREATE_FP']:
+                submitted = True
+                return FacebookWebSession._decode_graphql_body(json.dumps(payload) +
+                    '\n{"data":null,"extensions":{"is_final":true}}')
+            return payload
+        self.meta.graphql = response
+        result = await self.run_page()
+        self.assertEqual(result['page_ids'], [FP2])
+        evidence = (await self.state.step('create', ProvisioningStep.FAN_PAGES))['result']['create_response']
+        self.assertEqual(evidence['page_id'], FP2)
+        self.assertEqual(evidence['outcome'], 'RESULT_UNVERIFIED')
+        self.assertEqual(len(self.meta.posts), 1)
+
     async def test_unavailable_verify_retains_submit_and_retry_ignores_new_inventory_as_baseline(self):
         self.meta.page_read_available = False
         with self.assertRaises(ProvisioningError) as exc:
@@ -140,6 +163,99 @@ class BusinessPageHTTPTests(unittest.IsolatedAsyncioTestCase):
                 response['errors'] = [{'message': 'partial response'}]
             return response
         self.meta.graphql = partial
+        self.assertEqual((await self.run_page())['page_ids'], [FP2])
+
+    def rejection(self, response):
+        original = self.meta.graphql
+        async def wrapped(doc, variables, **kwargs):
+            if kwargs['friendly_name'] == OPS['CREATE_FP']:
+                await kwargs['before_submit']()
+                self.meta.posts.append(('FP_CREATE', copy.deepcopy(variables)))
+                return copy.deepcopy(response)
+            return await original(doc, variables, **kwargs)
+        self.meta.graphql = wrapped
+
+    async def test_explicit_name_rejection_is_retained_without_unknown_or_repeated_create(self):
+        self.rejection({'data': {'additional_profile_plus_create': {'additional_profile': None,
+            'name_error': 'This Page name is not allowed.', 'error_message': None,
+            'error_code': 1234, 'error_category': 'user'}}})
+        for _ in range(2):
+            with self.assertRaises(ProvisioningError) as caught:
+                await self.run_page()
+            self.assertEqual(caught.exception.code, 'FAN_PAGE_NAME_REJECTED')
+            self.assertFalse(caught.exception.retryable)
+            self.assertIn('not allowed', str(caught.exception))
+        checkpoint = (await self.state.step('create', ProvisioningStep.FAN_PAGES))['result']
+        self.assertEqual(checkpoint['phase'], 'PAGE_CREATE_REJECTED')
+        self.assertEqual(checkpoint['create_response']['meta_error_code'], '1234')
+        self.assertEqual(len(self.meta.posts), 1)
+
+    async def test_server_error_or_missing_profile_field_does_not_clear_submit_intent(self):
+        for result in ({'additional_profile': None, 'error_message': 'Temporary failure', 'error_category': 'system'},
+                {'error_message': 'Rejected', 'error_category': 'user'}, {'additional_profile': None}):
+            with self.subTest(result=result):
+                await self.state.checkpoint('create', '15', 'page', ProvisioningStep.FAN_PAGES,
+                    {'phase': 'CREATE_NOT_SUBMITTED', 'resume_from': 'CREATE_NEXT', 'create_response': {}})
+                self.rejection({'data': {'additional_profile_plus_create': result}})
+                with self.assertRaises(ProvisioningError) as caught:
+                    await self.run_page()
+                self.assertEqual(caught.exception.code, 'FAN_PAGE_CREATE_RESULT_UNKNOWN')
+                checkpoint = (await self.state.step('create', ProvisioningStep.FAN_PAGES))['result']
+                self.assertEqual(checkpoint['phase'], 'PAGE_CREATE_RESULT_UNKNOWN')
+                self.assertEqual(checkpoint['create_response']['outcome'], 'RESULT_UNKNOWN')
+
+    async def test_graphql_error_details_are_saved_but_do_not_authorize_another_create(self):
+        self.rejection({'data': None, 'errors': [{'message': 'Variable input is invalid', 'code': 1675030}]})
+        for _ in range(2):
+            with self.assertRaises(ProvisioningError):
+                await self.run_page()
+        evidence = (await self.state.step('create', ProvisioningStep.FAN_PAGES))['result']['create_response']
+        self.assertEqual(evidence['graphql_errors'], [{'code': '1675030', 'message': 'Variable input is invalid'}])
+        self.assertEqual(evidence['data_fields'], [])
+        self.assertEqual(len(self.meta.posts), 1)
+
+    async def test_created_unowned_page_returns_claim_required_without_false_ownership(self):
+        original = self.meta.graphql
+        async def response(doc, variables, **kwargs):
+            payload = await original(doc, variables, **kwargs)
+            if kwargs['friendly_name'] == OPS['CREATE_FP']:
+                self.meta.owners[FP2] = None
+            return payload
+        self.meta.graphql = response
+        result = await self.run_page()
+        self.assertEqual(result['page_ids'], [FP2])
+        self.assertFalse(result['page_business_attached'])
+        self.assertEqual(result['attached_count'], 0)
+        self.assertTrue(result['pages'][0]['requires_business_claim'])
+        self.assertFalse(result['pages'][0]['attached'])
+        self.assertFalse(result['ad_account_page_access_verified'])
+        await self.run_page()
+        self.assertEqual(len(self.meta.posts), 1)
+
+    def test_response_evidence_does_not_persist_auth_values_or_arbitrary_response_scalars(self):
+        evidence = inspect_create_response({'fb_dtsg': 'secret', 'data': {'extra': 'secret'},
+            'errors': [{'code': 123, 'message': 'cookie=secret access_token=secret https://host/?token=secret'}]})
+        self.assertNotIn('secret', json.dumps(evidence))
+        self.assertNotIn('fb_dtsg', evidence['response_fields'])
+        self.assertEqual(len(evidence['response_sha256']), 64)
+
+    async def test_auth_rejection_before_submit_preserves_auth_error_and_can_resume(self):
+        from fb_worker import AuthenticationError
+        original = self.meta.graphql
+        async def gated(doc, variables, **kwargs):
+            if kwargs['friendly_name'] == OPS['CREATE_FP']:
+                error = AuthenticationError('Business login required')
+                error.request_may_have_been_sent = False
+                error.meta_payload = {'business_precheck': [{'auth_reason': 'login_redirect',
+                    'final_url': 'https://business.facebook.com/business/loginpage/'}]}
+                raise error
+            return await original(doc, variables, **kwargs)
+        self.meta.graphql = gated
+        with self.assertRaises(ProvisioningError) as caught:
+            await self.run_page()
+        self.assertEqual(caught.exception.code, 'BUSINESS_LOGIN_GATE')
+        self.assertEqual(self.meta.posts, [])
+        self.meta.graphql = original
         self.assertEqual((await self.run_page())['page_ids'], [FP2])
 
     async def test_multiple_new_same_name_pages_cannot_reconcile_lost_response(self):

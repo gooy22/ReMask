@@ -330,3 +330,32 @@ class BusinessPageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.meta.posts[-1][1]['assetID'], FP2)
         self.assertEqual(self.meta.owners[FP1], BM1)
         self.session.facebook_business_browser.assert_not_awaited()
+
+    async def test_create_without_business_owner_continues_add_existing_page_and_full_rights(self):
+        await self._seed_existing_bundles()
+        original = self.meta.graphql
+        create = page_command('CREATE_FP', business=BM2, name='PrgssTeam',
+            categories=['242822000000000'], bio='', join='fixture')['friendly_name']
+        async def response(*args, **kwargs):
+            payload = await original(*args, **kwargs)
+            if kwargs['friendly_name'] == create:
+                self.meta.owners[FP2] = None
+            return payload
+        self.meta.graphql = response
+        prepare = PrepareService(self.state, ProvisioningService(self.state))
+        with patch('app.provisioning.private_create_handlers._rk_inventory',
+                side_effect=lambda web, business, name, account: {'id': account, 'asset_ui_id': account}), \
+                patch('app.provisioning.service._await_profile_mutation_cooldown', AsyncMock()):
+            result = await prepare.run(item_id='claim-created', profile_id='15', context=self.context,
+                session=self.session, payload={'desired': {'ad_accounts': 2},
+                    'parameters': {'AD_ACCOUNT': {'currency': 'USD', 'timezone_id': 1}}})
+            posts = copy.deepcopy(self.meta.posts)
+            await prepare.run(item_id='repeat-created', profile_id='15', context=self.context,
+                session=self.session, payload={'desired': {'ad_accounts': 2},
+                    'parameters': {'AD_ACCOUNT': {'currency': 'USD', 'timezone_id': 1}}})
+        self.assertTrue(result['ready_to_launch'])
+        self.assertEqual([name for name, _ in posts], [ASSIGN, 'FP_CREATE', CLAIM, ASSIGN])
+        self.assertEqual(self.meta.posts, posts)
+        self.assertEqual(self.meta.owners, {FP1: BM1, FP2: BM2})
+        self.assertTrue(await self.state.page_access_confirmed('15', BM2, RK2, full_control=True, page_id=FP2))
+        self.session.facebook_business_browser.assert_not_awaited()

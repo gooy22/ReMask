@@ -896,83 +896,14 @@ class FacebookWebSession:
         raw_body: str,
     ) -> dict[str, Any]:
 
-        body = str(raw_body or "").strip()
-
-        # Facebook occasionally prefixes JSON responses.
-        if body.startswith("for (;;);"):
-            body = body[len("for (;;);"):].lstrip()
-
-        if not body:
-            raise RemoteRequestError(
-                "Facebook returned an empty response"
-            )
-
+        from app.graphql_response import decode_relay_response
         try:
-            payload = json.loads(body)
-
-        except (json.JSONDecodeError, ValueError):
-            # Relay may stream one JSON object per line. The browser observer
-            # already handles this shape; the private transport must normalize
-            # it too or a valid CREATE response can be misclassified as
-            # "non-JSON".
-            chunks: list[dict[str, Any]] = []
-            for raw_line in body.splitlines():
-                line = str(raw_line or "").strip()
-                if not line:
-                    continue
-                if line.startswith("for (;;);"):
-                    line = line[len("for (;;);"):].lstrip()
-                if not line:
-                    continue
-                try:
-                    decoded = json.loads(line)
-                except (json.JSONDecodeError, ValueError):
-                    continue
-                if isinstance(decoded, dict):
-                    chunks.append(decoded)
-
-            if not chunks:
-                preview = re.sub(
-                    r"\s+",
-                    " ",
-                    body,
-                )[:1000]
-
-                raise RemoteRequestError(
-                    "Facebook returned non-JSON response: "
-                    f"{preview}"
-                )
-
-            def merge_dicts(
-                target: dict[str, Any],
-                source: dict[str, Any],
-            ) -> None:
-                for key, value in source.items():
-                    if (
-                        key in target
-                        and isinstance(target[key], dict)
-                        and isinstance(value, dict)
-                    ):
-                        merge_dicts(target[key], value)
-                    elif (
-                        key == "errors"
-                        and isinstance(target.get(key), list)
-                        and isinstance(value, list)
-                    ):
-                        target[key] = [*target[key], *value]
-                    else:
-                        target[key] = value
-
-            payload = {}
-            for chunk in chunks:
-                merge_dicts(payload, chunk)
-
-        if not isinstance(payload, dict):
+            return decode_relay_response(raw_body)
+        except (ValueError, TypeError) as exc:
+            # Do not put raw mutation/credential values in transport errors.
             raise RemoteRequestError(
-                "Facebook returned unexpected JSON response type"
-            )
-
-        return payload
+                "Facebook returned an invalid or unsupported GraphQL response"
+            ) from exc
 
     # ------------------------------------------------------------------
     # Unified private GraphQL transport

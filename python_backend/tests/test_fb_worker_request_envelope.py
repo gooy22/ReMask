@@ -104,6 +104,44 @@ class FacebookRequestEnvelopeTests(unittest.IsolatedAsyncioTestCase):
             ["first", "second"],
         )
 
+    def test_terminal_null_frame_does_not_erase_page_create_response(self):
+        payload = FacebookWebSession._decode_graphql_body(
+            'for (;;);{"data":{"additional_profile_plus_create":{"additional_profile":'
+            '{"id":"61500012345678","delegate_page":{"id":"2348798761652037"}}}}}\n'
+            '{"data":null,"extensions":{"is_final":true}}'
+        )
+        self.assertEqual(payload['data']['additional_profile_plus_create']['additional_profile']['delegate_page']['id'],
+            '2348798761652037')
+
+    def test_incremental_page_delegate_is_applied_at_exact_path(self):
+        payload = FacebookWebSession._decode_graphql_body(
+            '{"data":{"additional_profile_plus_create":{"additional_profile":'
+            '{"id":"61500012345678","delegate_page":{}}}}}\n'
+            '{"path":["additional_profile_plus_create","additional_profile","delegate_page"],'
+            '"data":{"id":"2348798761652037"},"label":"delegate"}\n'
+            '{"extensions":{"is_final":true}}'
+        )
+        self.assertEqual(payload['data']['additional_profile_plus_create']['additional_profile']['delegate_page']['id'],
+            '2348798761652037')
+        self.assertNotIn('id', payload['data'])
+
+    def test_incremental_envelope_retains_partial_errors(self):
+        payload = FacebookWebSession._decode_graphql_body(
+            '{"data":{"asset":{}},"hasNext":true}\n'
+            '{"incremental":[{"path":["asset"],"data":{"id":"123456789"},'
+            '"errors":[{"message":"partial"}]}],"hasNext":false}'
+        )
+        self.assertEqual(payload['data']['asset']['id'], '123456789')
+        self.assertEqual(payload['errors'], [{'message': 'partial'}])
+
+    def test_malformed_trailing_data_or_unknown_patch_cannot_prove_complete_inventory(self):
+        for body in ('{"data":{"edges":[]}}\n{"data":',
+                '{"data":{"asset":{}}}\n{"path":["wrong"],"data":{"id":"123456789"}}',
+                '{"data":{"asset":{}}}\n{"incremental":[{"path":["asset"],"items":[]}]}',
+                '{"data":{"edges":[]},"hasNext":true}'):
+            with self.subTest(body=body), self.assertRaises(RemoteRequestError):
+                FacebookWebSession._decode_graphql_body(body)
+
     async def test_direct_graphql_uses_asset_scoped_bootstrap_referer(self):
         class FakeResponse:
             status = 200
