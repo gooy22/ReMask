@@ -1317,6 +1317,24 @@ async def profile_payment_contract_sources(profile_id: str, account_id: str):
         raise HTTPException(status_code=502, detail='PAYMENT_CONTRACT_SOURCE_UNAVAILABLE') from None
 
 
+@app.post('/api/v1/profiles/{profile_id}/payment-contract-audit',dependencies=[Depends(require_key)])
+async def profile_payment_contract_audit(profile_id: str, payload: dict = Body(...)):
+    from app.contract_maintenance.payment_contract_audit import inspect_payment_contract_audit
+    profile = str(profile_id or '').strip()
+    target = payload.get('account_id')
+    if (not profile or len(profile) > 160 or set(payload) != {'account_id'}
+            or not isinstance(target, str) or not re.fullmatch(r'\d{5,30}', target)):
+        raise HTTPException(status_code=400, detail='INVALID_PAYMENT_TARGET')
+    try:
+        return await inspect_payment_contract_audit(pool.resolver, profile, target, state=pool.provisioning_state)
+    except ValueError:
+        raise HTTPException(status_code=400, detail='INVALID_PAYMENT_TARGET') from None
+    except ProvisioningError as exc:
+        raise HTTPException(status_code=409, detail=exc.code) from None
+    except Exception:
+        raise HTTPException(status_code=502, detail='PAYMENT_CONTRACT_AUDIT_UNAVAILABLE') from None
+
+
 @app.post('/api/v1/profiles/{profile_id}/payment-card',dependencies=[Depends(require_key)])
 async def profile_payment_card_action(profile_id: str, payload: dict = Body(...)):
     from app.payment_card_binding import profile_payment_card
