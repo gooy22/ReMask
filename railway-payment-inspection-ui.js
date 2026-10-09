@@ -33,9 +33,31 @@ function remaskClearPaymentSecrets(){
 }
 
 function paymentCardMessage(result){
-  const names={number:'номер карты',cvv:'CVV',holder:'имя владельца',expiry:'срок действия',month:'месяц',year:'год',country:'страна',currency:'валюта',timezone:'часовой пояс',address:'платёжный адрес',city:'город',region:'область / штат',postal_code:'индекс',unknown_required_field:'дополнительное поле Meta'};
+  const names={number:'номер карты',cvv:'CVV',holder:'имя владельца',expiry:'срок действия',month:'месяц',year:'год',country:'страна',currency:'валюта',timezone:'часовой пояс',address:'платёжный адрес',city:'город',region:'область / штат',postal_code:'индекс',email_or_phone:'email или телефон владельца',unknown_required_field:'дополнительное поле Meta'};
   const messages={
     CARD_FORM_READY:'Форма Meta доступна для выбранного РК.',
+    CARD_HTTP_FORM_CONFIRMED:'Meta подтвердила доступность формы карты у выбранного РК. Карта не отправлена; готовность сохранения ещё не подтверждена.',
+    CARD_SCREEN_QUERY_REJECTED:'Meta не подтвердила запрос формы карты. Карта не отправлена.',
+    CARD_SCREEN_SCOPE_UNVERIFIED:'Meta не подтвердила форму именно выбранного РК. Карта не отправлена.',
+    CARD_SCREEN_OPTIONS_INCONCLUSIVE:'Meta подтвердила РК, но не подтвердила доступность добавления карты.',
+    CARD_BIN_UNSUPPORTED:'Meta не поддерживает эту карту для выбранных настроек оплаты. Карта не отправлена.',
+    CARD_BIN_QUERY_REJECTED:'Meta не подтвердила требования к этой карте. Карта не отправлена.',
+    CARD_BIN_REQUIREMENTS_INCONCLUSIVE:'Ответ Meta о требованиях карты неполный. Карта не отправлена.',
+    CARD_REQUIRED_FIELDS_MISSING:'Meta требует дополнительные данные владельца карты. Карта не отправлена.',
+    CARD_RECURRING_CONSENT_REQUIRED:'Для этой карты Meta требует согласие на регулярные платежи. Согласие не проставлено; карта не отправлена.',
+    CARD_TOKENIZATION_CONSENT_REQUIRED:'Meta требует согласие на токенизацию карты. Согласие не проставлено; карта не отправлена.',
+    CARD_COUNTRY_POLICY_INCONCLUSIVE:'Meta не подтвердила правила страны выбранного РК. Карта не отправлена.',
+    CARD_TAX_COUNTRY_VALIDATION_REQUIRED:'Meta требует отдельную проверку страны РК. Карта не отправлена.',
+    CARD_BILLING_COUNTRY_MISMATCH:'Страна оплаты не совпала с подтверждённой страной Meta. Настройки не изменены; карта не отправлена.',
+    CARD_PAYMENT_MODE_INCONCLUSIVE:'Meta не подтвердила режим оплаты РК. Карта не отправлена.',
+    CARD_CLIENT_CONTEXT_REQUIRED:'Не подтверждены данные клиента для банковской проверки. Карта не отправлена.',
+    CARD_HTTP_CANARY_SCOPE_REQUIRED:'HTTP-привязка проходит проверку на выбранном РК профиля 15. Этот РК ещё не включён.',
+    CARD_LINK_CONFIRMED:'Meta подтвердила точную карту у выбранного РК. Подтверждена только привязка; списания и доступность рекламы не проверялись.',
+    CARD_SAVE_RESULT_UNKNOWN:'Карта могла быть отправлена. Повторное добавление заблокировано; нажмите «Проверить результат».',
+    CARD_SAVE_LINK_VERIFICATION_PENDING:'Meta приняла сохранение карты; точная привязка проверяется. Повторное добавление заблокировано.',
+    CARD_PRIVATE_RUNTIME_CONTEXT_UNCONFIRMED:'HTTP-сохранение карты ещё не готово к отправке: текущий контракт не подтверждён.',
+    PAYMENT_HTTP_TIMEOUT:'Проверка Meta не завершилась вовремя. Карта не отправлена.',
+    PAYMENT_HTTP_UNAVAILABLE:'Не удалось завершить проверку оплаты в Meta. Карта не отправлена.',
     CARD_LINK_OBSERVED:'Meta показывает карту у выбранного РК. Проверена только привязка: платёж и подтверждение банка не проверялись.',
     ALREADY_LINKED:'ReMask уже сохранил эту связь с РК. Для повторной live-проверки нажмите «Проверить привязанные карты».',
     CARD_AND_CVV_REQUIRED:'Для новой привязки нужен CVV. Введите его один раз для выбранной группы РК.',
@@ -139,13 +161,15 @@ async function bindPaymentCard(rows,card,cvv,container,reviews={}){
   let stopAfterBilling=false,stopAfterUncertain=false;
   if(!card?.id)throw new Error('Выберите сохранённую карту или добавьте новую.');
   if(cvv&&!/^\d{3,4}$/.test(cvv))throw new Error('CVV должен содержать 3 или 4 цифры.');
-  // One browser at a time; uncertain submission never triggers a retry.
+  // One Save at a time; uncertain submission never triggers a retry.
   await concurrent(rows,1,async r=>{
     if(stopAfterBilling)return {skipped:true,code:'BATCH_STOPPED_BILLING_FIELDS'};
     if(stopAfterUncertain)return {skipped:true,code:'BATCH_STOPPED_UNCERTAIN_RESULT'};
     const review=reviews[r.profile+'|'+String(r.id).replace(/^act_/,'')];
     try{
       const response=await apiJson('ajax/paymentCards.php',post({action:'bind',card_id:card.id,...(cvv?{cvv}:{}),
+      client_info:JSON.stringify({color_depth:String(window.screen.colorDepth),java_enabled:false,
+        screen_height:String(window.innerHeight),screen_width:String(window.innerWidth)}),
       ...(review?{retry_confirmed:'1',retry_review:review.token}:{}),profile:r.profile,account_id:r.id,...paymentAssetHint(r),...paymentSetupPayload()}));
       const result=response?.result||{};
       if(result.status==='SUBMITTED_UNVERIFIED'&&result.submitted!==false){
@@ -363,7 +387,7 @@ async function showFunding(restored=null){
   $('paymentCardPrepare').addEventListener('click',()=>run(async()=>{
     for(let i=0;i<rows.length;i++){
       const r=rows[i],data=await apiJson('ajax/paymentCards.php',post({action:'prepare',...(select.value?{card_id:select.value}:{}),profile:r.profile,account_id:r.id,...paymentAssetHint(r),...paymentSetupPayload()}));
-      const line=document.createElement('div');line.className='ws-result '+(data.result.status==='FORM_READY'?'ok':'bad');
+      const line=document.createElement('div');line.className='ws-result '+(['FORM_READY','FORM_CONFIRMED'].includes(data.result.status)?'ok':'bad');
       line.textContent=r.profile+' / '+r.id+': '+paymentCardMessage(data.result)+paymentCardAuthEvidence(data.result);container.appendChild(line);setProgress(i+1,rows.length);
       if(data.result.code==='CARD_BILLING_FIELDS_REQUIRED')showMissingBilling([...billingMissing,...(data.result.missing_fields||[])]);
       if(data.result.ui_preview&&/^[A-Za-z0-9+/=]+$/.test(data.result.ui_preview)){
@@ -388,3 +412,4 @@ if(typeof window!=='undefined'){
   if(document.readyState==='complete')queueMicrotask(restorePaymentCardBatch);
   else window.addEventListener('load',restorePaymentCardBatch,{once:true});
 }
+

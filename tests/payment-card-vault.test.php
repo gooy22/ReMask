@@ -51,6 +51,11 @@ class FixtureInspectionStream {
     function stream_open($path,$mode,$options,&$opened): bool {
         if(session_status()===PHP_SESSION_ACTIVE)throw new RuntimeException('Worker read held the UI session lock');
         $http=stream_context_get_options($this->context)['http'];
+        if(($http['method']??'')==='POST'){
+            $payload=json_decode($http['content']??'',true);
+            if(($payload['operation']??'')!=='reconcile'||isset($payload['cvv'])||isset($payload['card']))throw new RuntimeException('Unexpected financial payload on reconciliation');
+            $this->body=json_encode(['profile_id'=>'Fixture','account_id'=>'123456789','status'=>'BLOCKED','code'=>'CARD_HTTP_INTENT_NOT_FOUND','submitted'=>false]);return true;
+        }
         file_put_contents($GLOBALS['argv'][1].'/request.json',json_encode(['url'=>$path,'http'=>$http]));
         $this->body=file_get_contents($GLOBALS['argv'][1].'/funding.json');return true;
     }
@@ -175,7 +180,8 @@ OPERATION);
         $old=$v->binding($c['id'],'Fixture','123456789');$empty=array_replace($proof,['verification_status'=>'NONE','payment_methods'=>[]]);
         $review=$v->reconcile($c['id'],'Fixture','123456789',$old,$empty)['retry_review'];
         file_put_contents($root.'/funding.json',json_encode($empty));file_put_contents($root.'/result.json',json_encode(['profile_id'=>'Fixture','account_id'=>'123456789','status'=>'BLOCKED','code'=>'CARD_SAVE_CONTROL_UNAVAILABLE','submitted'=>false]));
-        $bind=['action'=>'bind','profile'=>'Fixture','account_id'=>'123456789','card_id'=>$c['id'],'cvv'=>'123','retry_confirmed'=>'1','retry_review'=>$review['token']];
+        $bind=['action'=>'bind','profile'=>'Fixture','account_id'=>'123456789','card_id'=>$c['id'],'cvv'=>'123','retry_confirmed'=>'1','retry_review'=>$review['token'],
+            'client_info'=>json_encode(['color_depth'=>'24','java_enabled'=>false,'screen_height'=>'900','screen_width'=>'1440'])];
         $result=$invoke(array_replace($bind,['retry_confirmed'=>true]));expect(($result['error']['message']??'')==='CARD_BINDING_RECONCILE_REQUIRED','Nonexplicit retry accepted');
         expect(file_get_contents($root.'/operations.jsonl')==='','Blocked retry reached worker');
         file_put_contents($root.'/funding.json',json_encode(array_replace($empty,['verification_status'=>'UNVERIFIED'])));
@@ -187,6 +193,22 @@ OPERATION);
         expect(count($operations)===2&&$operations[0]['http']['method']==='GET'&&$operations[1]['http']['method']==='POST','Reviewed retry did not recheck first or submitted repeatedly');
         $payload=json_decode($operations[1]['http']['content'],true);
         expect($payload['operation']==='bind'&&!isset($payload['retry_review'],$payload['retry_confirmed']),'Review leaked into worker transport');
+        expect(($payload['card_id']??null)===$c['id']&&preg_match('/^[a-f0-9]{24}$/D',$payload['attempt_id']??'')===1,'Durable Save identity missing');
+        expect(($payload['client_info']['screen_width']??null)==='1440'&&($payload['client_info']['java_enabled']??null)===false,'Client context missing');
+        // Exact worker proof can finish an ambiguous attempt without submitting
+        // the card again, and without an IN_PROGRESS-only finish lease.
+        $v->finish($c['id'],'Fixture','123456789','SUBMITTED_UNVERIFIED');
+        $httpFunding=$proof+['business_scope_verified'=>true,'payment_account_relation_verified'=>true,'methods_query_verified'=>true,'browser_started'=>false];
+        $httpFunding['source']='private_facebook_billing_static_methods';
+        $httpFunding['payment_methods']=[['type'=>'Visa','last4'=>'1111','credential_id'=>'fixture-exact-card']];
+        file_put_contents($root.'/result.json',json_encode(['profile_id'=>'Fixture','account_id'=>'123456789','status'=>'LINKED',
+            'code'=>'CARD_LINK_CONFIRMED','submitted'=>true,'funding'=>$httpFunding]));
+        $result=$invoke(['action'=>'reconcile','profile'=>'Fixture','account_id'=>'123456789','card_id'=>$c['id']]);
+        expect(($result['data']['result']['status']??'')==='LINKED'&&$v->linkedBinding($c['id'],'Fixture','123456789')!==null,'Exact HTTP reconciliation failed to commit');
+        $operations=array_map(fn($line)=>json_decode($line,true),file($root.'/operations.jsonl'));
+        expect(count($operations)===1,'Exact HTTP reconciliation repeated or fell back');
+        $payload=json_decode($operations[0]['http']['content'],true);
+        expect($payload['operation']==='reconcile'&&!isset($payload['card'])&&!isset($payload['cvv']),'Reconciliation sent financial credentials');
     } finally {
         $files=new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root,FilesystemIterator::SKIP_DOTS),RecursiveIteratorIterator::CHILD_FIRST);
         foreach($files as $file){if($file->isDir())rmdir($file->getPathname());else unlink($file->getPathname());}rmdir($root);

@@ -115,7 +115,7 @@ class CardBrowserTests(unittest.IsolatedAsyncioTestCase):
     async def test_personal_rk_is_blocked_before_any_card_browser_opens(self):
         from app.payment_card_binding import _profile_payment_card_execute
         resolver=SimpleNamespace(resolve=AsyncMock(return_value=SimpleNamespace(cookies={'c_user':'987654321'})))
-        with patch('app.payment_card_binding.resolve_payment_asset',AsyncMock(return_value={'business_id':'987654321'})), \
+        with patch('app.payment_inspection.resolve_payment_asset',AsyncMock(return_value={'business_id':'987654321'})), \
              patch('app.session.ProfileSession') as session:
             result=await _profile_payment_card_execute(resolver,'Fixture',{'account_id':ID,'operation':'prepare'})
         self.assertEqual(result['code'],'PERSONAL_AD_ACCOUNT_EXCLUDED')
@@ -266,13 +266,13 @@ class CardBrowserTests(unittest.IsolatedAsyncioTestCase):
         original_wait=asyncio.wait_for
         for operation,expected in [('prepare','BLOCKED'),('bind','SUBMITTED_UNVERIFIED')]:
             cancelled=[]
-            async def setup(*args):
+            async def setup(*args, **kwargs):
                 try:await asyncio.Event().wait()
                 finally:cancelled.append(True)
             async def short_wait(task,timeout):
                 self.assertEqual(timeout,110)
                 return await original_wait(task,0.01)
-            with patch('app.payment_card_binding._profile_payment_card_execute',setup),patch('app.payment_card_binding.asyncio.wait_for',short_wait):
+            with patch('app.payment_card_service.profile_payment_card_http',setup),patch('app.payment_card_binding.asyncio.wait_for',short_wait):
                 result=await profile_payment_card(None,'Fixture',{'account_id':ID,'operation':operation})
             self.assertEqual(result['status'],expected);self.assertEqual(result['code'],'CARD_FLOW_TIMEOUT')
             self.assertEqual(cancelled,[True]);self.assertFalse(result['funding_verified'])
@@ -868,3 +868,4 @@ class RealCardSelectorTests(unittest.IsolatedAsyncioTestCase):
                 await page.set_content('<label><input type="radio">Credit/debit card</label><label><input type="radio">Credit/debit card</label>')
                 self.assertIsNone(await _unique_visible(page,'radio',r'^Credit/debit card$'))
             finally:await browser.close()
+

@@ -1,12 +1,13 @@
-"""Observed card screen and Save response; no executable Save/PTT contract yet.
+"""Pinned card screen and Save response proof; public Save remains gated.
 
 The supplied Save sender establishes the persisted operation and envelope,
-but delegates the entire mutation input to a missing tokenization builder.
-Never turn this evidence into an invented card submission request.
+The PTT/input reference has offline parity checks, but the current runtime
+Save context has not yet been independently confirmed.
 """
 from __future__ import annotations
 
 import copy
+import asyncio
 from functools import lru_cache
 import json
 from pathlib import Path
@@ -52,12 +53,74 @@ async def read_card_screen(web, *, business_id, payment):
                              endpoint_url=row['endpoint_url'], business_context_id=business_id)
 
 
+async def inspect_card_form(web, *, account, business_id):
+    """Confirm the selected account's card option using pinned reads only.
+
+    A form confirmation is not a completed Save input, absence proof,
+    bank verification or authorization to replay an earlier submission.
+    """
+    from .static_payment_read import execute, account_proof, methods_proof
+    account, business_id = _identity(account), _identity(business_id)
+    base = {'account_id': account, 'business_id': business_id, 'submitted': False,
+            'browser_started': False, 'funding_verified': False,
+            'execution_enabled': False, 'status': 'BLOCKED'}
+    evidence = account_proof(await execute(web, 'READ_ACCOUNT', account=account,
+                                          business_id=business_id), account)
+    if evidence.get('account_scope_verified') is not True:
+        return {**base, 'code': evidence['code'], 'account_scope_verified': False}
+    methods = methods_proof(await execute(web, 'READ_METHODS', account=account,
+                           payment=evidence['payment_account_id'], business_id=business_id),
+                           account, business_id=business_id, account_evidence=evidence)
+    if not all(methods.get(k) is True for k in ('account_scope_verified',
+            'business_scope_verified', 'payment_account_relation_verified', 'methods_query_verified')):
+        return {**base, 'code': methods['code'], 'account_scope_verified': False}
+    proof = card_screen_proof(await read_card_screen(web, business_id=business_id,
+                             payment=evidence['payment_account_id']), account, account_evidence=evidence)
+    result = {**base, **proof, 'business_scope_verified': True,
+              'payment_account_id': evidence['payment_account_id']}
+    if proof.get('card_form_verified') is True:
+        # FORM_READY is reserved for a fully prepared submission. The input
+        # builder is still unverified; do not make the UI imply readiness.
+        result.update(status='FORM_CONFIRMED', code='CARD_HTTP_FORM_CONFIRMED')
+    return result
+
+
+async def prepare_profile_card_form(resolver, profile, target, *, state=None, asset_hint=None):
+    """Public Cards prepare path, without a browser fallback or card values."""
+    from .payment_inspection import account_id, resolve_payment_asset
+    from .session import ProfileSession
+    from .private_auth import private_auth_error
+    target = account_id(target)
+    base = {'profile_id': profile, 'account_id': target, 'submitted': False,
+            'browser_started': False, 'funding_verified': False,
+            'execution_enabled': False, 'status': 'BLOCKED'}
+    try:
+        async with asyncio.timeout(40):
+            asset = await resolve_payment_asset(profile, target, state, asset_hint)
+            if not asset:
+                return {**base, 'code': 'PAYMENT_ACCOUNT_BINDING_MISSING'}
+            context = await resolver.resolve(profile)
+            if asset['business_id'] == str(context.cookies.get('c_user') or ''):
+                return {**base, 'code': 'PERSONAL_AD_ACCOUNT_EXCLUDED'}
+            async with ProfileSession(context) as session:
+                result = await inspect_card_form(await session.facebook_web(), account=target,
+                                                 business_id=asset['business_id'])
+            return {**result, 'profile_id': profile}
+    except TimeoutError:
+        return {**base, 'code': 'PAYMENT_HTTP_TIMEOUT'}
+    except Exception as exc:
+        auth = private_auth_error(exc)
+        return {**base, 'code': auth.code if auth is not None else 'PAYMENT_HTTP_UNAVAILABLE'}
+
+
 def submission_contract_status():
     row = _manifest()['operations']['SAVE_CARD']
     return {'code': 'CARD_PRIVATE_INPUT_CONTRACT_UNAVAILABLE', 'save_operation_verified': True,
             'input_schema_verified': False, 'tokenization_verified': False,
             'execution_enabled': False, 'submitted': False, 'browser_started': False,
-            'missing_source_modules': list(row['missing_source_modules'])}
+            'missing_source_modules': list(row['missing_source_modules']),
+            'reference_input_implemented': True, 'reference_ptt_implemented': True,
+            'runtime_context_verified': False}
 
 
 def _payment_scope(payment, account, evidence):
@@ -175,3 +238,4 @@ def confirm_saved_card(saved, methods, *, business_id):
     return {**copy.deepcopy(saved), 'status': 'LINKED', 'code': 'CARD_LINK_CONFIRMED',
             'business_id': business_id, 'business_scope_verified': True,
             'payment_account_relation_verified': True, 'card_linked': True}
+
