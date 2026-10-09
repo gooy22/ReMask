@@ -36,6 +36,12 @@ function paymentCardMessage(result){
   const names={number:'номер карты',cvv:'CVV',holder:'имя владельца',expiry:'срок действия',month:'месяц',year:'год',country:'страна',currency:'валюта',timezone:'часовой пояс',address:'платёжный адрес',city:'город',region:'область / штат',postal_code:'индекс',unknown_required_field:'дополнительное поле Meta'};
   const messages={
     CARD_FORM_READY:'Форма Meta доступна для выбранного РК.',
+    CARD_HTTP_FORM_CONFIRMED:'Meta подтвердила доступность формы карты у выбранного РК. Карта не отправлена; готовность сохранения ещё не подтверждена.',
+    CARD_SCREEN_QUERY_REJECTED:'Meta не подтвердила запрос формы карты. Карта не отправлена.',
+    CARD_SCREEN_SCOPE_UNVERIFIED:'Meta не подтвердила форму именно выбранного РК. Карта не отправлена.',
+    CARD_SCREEN_OPTIONS_INCONCLUSIVE:'Meta подтвердила РК, но не подтвердила доступность добавления карты.',
+    PAYMENT_HTTP_TIMEOUT:'Проверка Meta не завершилась вовремя. Карта не отправлена.',
+    PAYMENT_HTTP_UNAVAILABLE:'Не удалось завершить проверку оплаты в Meta. Карта не отправлена.',
     CARD_LINK_OBSERVED:'Meta показывает карту у выбранного РК. Проверена только привязка: платёж и подтверждение банка не проверялись.',
     ALREADY_LINKED:'ReMask уже сохранил эту связь с РК. Для повторной live-проверки нажмите «Проверить привязанные карты».',
     CARD_AND_CVV_REQUIRED:'Для новой привязки нужен CVV. Введите его один раз для выбранной группы РК.',
@@ -363,7 +369,7 @@ async function showFunding(restored=null){
   $('paymentCardPrepare').addEventListener('click',()=>run(async()=>{
     for(let i=0;i<rows.length;i++){
       const r=rows[i],data=await apiJson('ajax/paymentCards.php',post({action:'prepare',...(select.value?{card_id:select.value}:{}),profile:r.profile,account_id:r.id,...paymentAssetHint(r),...paymentSetupPayload()}));
-      const line=document.createElement('div');line.className='ws-result '+(data.result.status==='FORM_READY'?'ok':'bad');
+      const line=document.createElement('div');line.className='ws-result '+(['FORM_READY','FORM_CONFIRMED'].includes(data.result.status)?'ok':'bad');
       line.textContent=r.profile+' / '+r.id+': '+paymentCardMessage(data.result)+paymentCardAuthEvidence(data.result);container.appendChild(line);setProgress(i+1,rows.length);
       if(data.result.code==='CARD_BILLING_FIELDS_REQUIRED')showMissingBilling([...billingMissing,...(data.result.missing_fields||[])]);
       if(data.result.ui_preview&&/^[A-Za-z0-9+/=]+$/.test(data.result.ui_preview)){
@@ -388,3 +394,4 @@ if(typeof window!=='undefined'){
   if(document.readyState==='complete')queueMicrotask(restorePaymentCardBatch);
   else window.addEventListener('load',restorePaymentCardBatch,{once:true});
 }
+

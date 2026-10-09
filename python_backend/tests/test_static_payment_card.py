@@ -4,12 +4,13 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from app.private_contract_discovery import _module_nodes, _pairs, _walk
 from app.private_inventory_queries import QueryArtifacts
 from app.static_payment_card import (MANIFEST, card_screen_command, read_card_screen,
-    card_screen_proof, save_response_proof, confirm_saved_card, submission_contract_status)
+    card_screen_proof, save_response_proof, confirm_saved_card, submission_contract_status,
+    inspect_card_form, prepare_profile_card_form)
 from app.static_payment_read import account_proof, methods_proof
 
 ACCOUNT, BUSINESS, PAYMENT = '123456789', '987654321', '555666777'
@@ -56,6 +57,31 @@ def linked_methods(credential=CREDENTIAL, last4='1234'):
 
 
 class StaticPaymentCardTests(unittest.IsolatedAsyncioTestCase):
+    async def test_prepare_http_checks_exact_scope_then_screen_and_does_not_claim_save_ready(self):
+        from tests.test_payment_card_http import read_account, read_methods
+        web=SimpleNamespace(graphql=AsyncMock(side_effect=[read_account(),read_methods(),self.screen()]))
+        result=await inspect_card_form(web,account=ACCOUNT,business_id=BUSINESS)
+        self.assertEqual(result['status'],'FORM_CONFIRMED');self.assertFalse(result['submitted'])
+        self.assertFalse(result['execution_enabled']);self.assertFalse(result['browser_started'])
+        self.assertEqual([c.args[0] for c in web.graphql.await_args_list],
+                         ['28797973873175785','28814526004898205','27759194723782263'])
+        self.assertNotIn('private',json.dumps(result))
+
+    async def test_prepare_foreign_bm_never_reads_form(self):
+        from tests.test_payment_card_http import read_account, read_methods
+        foreign=read_methods();foreign['data']['billable_account_by_asset_id']['owning_business']['id']='999888777'
+        web=SimpleNamespace(graphql=AsyncMock(side_effect=[read_account(),foreign]))
+        result=await inspect_card_form(web,account=ACCOUNT,business_id=BUSINESS)
+        self.assertEqual(result['status'],'BLOCKED');self.assertEqual(web.graphql.await_count,2)
+
+    async def test_prepare_session_failure_stays_http_and_diagnostics_exclude_secrets(self):
+        resolver=SimpleNamespace(resolve=AsyncMock(side_effect=RuntimeError('private credentials')))
+        with patch('app.payment_inspection.resolve_payment_asset',AsyncMock(return_value={'business_id':BUSINESS})), \
+             patch('app.session.ProfileSession') as session:
+            result=await prepare_profile_card_form(resolver,'Fixture',ACCOUNT)
+        session.assert_not_called();self.assertEqual(result['code'],'PAYMENT_HTTP_UNAVAILABLE')
+        self.assertFalse(result['browser_started']);self.assertNotIn('private',json.dumps(result))
+
     async def test_card_screen_read_uses_exact_observed_nullable_arguments_and_no_browser(self):
         web = SimpleNamespace(graphql=AsyncMock(return_value={}))
         await read_card_screen(web, business_id=BUSINESS, payment=PAYMENT)
@@ -185,3 +211,4 @@ class StaticPaymentCardTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == '__main__':
     unittest.main()
+

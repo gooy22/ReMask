@@ -729,6 +729,10 @@ async def _profile_payment_card_execute(resolver:Any,profile:str,payload:dict[st
     from .session import ProfileSession
     target=account_id(payload.get('account_id',''));operation=payload.get('operation','')
     if operation not in {'prepare','bind'}:raise ValueError('CARD_OPERATION_INVALID')
+    if operation=='prepare':
+        from .static_payment_card import prepare_profile_card_form
+        return await prepare_profile_card_form(resolver,profile,target,state=state,
+                                               asset_hint=payload.get('asset_hint'))
     asset=await resolve_payment_asset(profile,target,state,payload.get('asset_hint'))
     base={'profile_id':profile,'account_id':target,'submitted':False,'funding_verified':False}
     if not asset:return {**base,'status':'BLOCKED','code':'PAYMENT_ACCOUNT_BINDING_MISSING'}
@@ -789,3 +793,4 @@ async def profile_payment_card(resolver:Any,profile:str,payload:dict[str,Any],*,
             profile,target,operation,result['status'],result['code'],result['submitted'],
         )
         return result
+
