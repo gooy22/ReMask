@@ -78,6 +78,9 @@ function paymentCardMessage(result){
     ALREADY_LINKED:'ReMask уже сохранил эту связь с РК. Для повторной live-проверки нажмите «Проверить привязанные карты».',
     CARD_AND_CVV_REQUIRED:'Для новой привязки нужен CVV. Введите его один раз для выбранной группы РК.',
     CARD_BINDING_RECONCILE_REQUIRED:'Предыдущая привязка ещё не подтверждена. Сначала проверьте состояние карты в Meta; повтор остановлен.',
+    CARD_RECONCILE_CONTEXT_MISSING:'Для предыдущей попытки не хватает метаданных проверки. Карта повторно не отправлена.',
+    CARD_RECONCILE_TARGET_UNRESOLVED:'Не удалось определить BM предыдущей попытки для проверки результата. Карта повторно не отправлена.',
+    CARD_RECONCILE_SCOPE_CHANGED:'Meta не подтвердила прежнее соответствие BM, РК и платёжного аккаунта. Повтор остановлен.',
     CARD_RECONCILE_UNVERIFIED:'Meta пока не подтвердила эту карту у выбранного РК. Повторное добавление остаётся заблокированным.',
     CARD_RECONCILE_NO_METHOD:'Meta показывает отсутствие способа оплаты у выбранного РК. Карта не привязана; результат предыдущей отправки требует разбора.',
     CARD_META_REJECTED:'Meta показала ошибку сохранения карты. Привязка не подтверждена; повторная отправка остановлена.',
@@ -176,7 +179,7 @@ async function savePaymentCard(){
   const expiry=$('paymentCardExpiry').value.trim().match(/^(\d{1,2})\s*\/\s*(\d{2}|\d{4})$/);
   if(!expiry)throw new Error('Срок действия: ММ/ГГ.');
   const payload={action:'add',number:$('paymentCardNumber').value,month:expiry[1],year:expiry[2]};
-  ['holder','country','address','city','region','postal_code','label'].forEach(key=>{payload[key]=$('paymentCard_'+key).value.trim();});
+  ['holder','country','address','city','region','postal_code','email','phone','label'].forEach(key=>{payload[key]=$('paymentCard_'+key).value.trim();});
   try{return (await apiJson('ajax/paymentCards.php',post(payload))).card;}
   finally{$('paymentCardNumber').value='';payload.number='';}
 }
@@ -195,7 +198,10 @@ async function bindPaymentCard(rows,card,cvv,container,reviews={}){
       const response=await apiJson('ajax/paymentCards.php',post({action:'bind',card_id:card.id,...(cvv?{cvv}:{}),
       client_info:JSON.stringify({color_depth:String(window.screen.colorDepth),java_enabled:false,
         screen_height:String(window.innerHeight),screen_width:String(window.innerWidth)}),
-      ...(review?{retry_confirmed:'1',retry_review:review.token}:{}),profile:r.profile,account_id:r.id,...paymentAssetHint(r),...paymentSetupPayload()}));
+      ...(review?{retry_confirmed:'1',retry_review:review.token}:{}),
+      ...($('paymentCardTokenizationConsent').checked?{network_consent:'1'}:{}),
+      ...($('paymentCardRecurringConsent').checked?{recurring_consent:'1'}:{}),
+      profile:r.profile,account_id:r.id,...paymentAssetHint(r),...paymentSetupPayload()}));
       const result=response?.result||{};
       if(result.status==='SUBMITTED_UNVERIFIED'&&result.submitted!==false){
         // Save may have been observed or the browser may have timed out after
@@ -216,7 +222,7 @@ async function bindPaymentCard(rows,card,cvv,container,reviews={}){
     }catch(e){stopAfterUncertain=true;return {error:e.message};}
   },(d,t,res,idx)=>{
     const r=rows[idx],result=res?.result,line=document.createElement('div');
-    if(result?.code==='CARD_BILLING_FIELDS_REQUIRED'){
+    if(['CARD_BILLING_FIELDS_REQUIRED','CARD_REQUIRED_FIELDS_MISSING'].includes(result?.code)){
       missing.push(...(result.missing_fields||[]));stopAfterBilling=true;
     }
     line.className='ws-result '+(result?.status==='LINKED'?'ok':'bad');
@@ -301,10 +307,16 @@ async function showFunding(restored=null){
         <div class="full"><label for="paymentCard_address">Платёжный адрес</label><input id="paymentCard_address"></div>
         <div><label for="paymentCard_city">Город</label><input id="paymentCard_city"></div>
         <div><label for="paymentCard_region">Область / штат</label><input id="paymentCard_region"></div>
+        <div><label for="paymentCard_email">Email владельца (если требуется Meta)</label><input id="paymentCard_email" type="email" autocomplete="off"></div>
+        <div><label for="paymentCard_phone">Телефон владельца (если требуется Meta)</label><input id="paymentCard_phone" type="tel" autocomplete="off"></div>
       </div>
       <button id="paymentCardSave" type="button" class="mt-2">Сохранить карту</button>
       <button id="paymentCardSaveBind" type="button" class="mt-2">Сохранить и привязать к выбранным РК</button>
     </details>
+    <div class="mt-2">
+      <label><input id="paymentCardTokenizationConsent" type="checkbox"> Согласен на токенизацию карты, если Meta требует этого</label>
+      <label><input id="paymentCardRecurringConsent" type="checkbox"> Согласен на регулярные платежи, если Meta требует этого</label>
+    </div>
     <div id="paymentCardBillingMissing" class="ws-form mt-2"></div>
     <label id="paymentCardRetryField" hidden class="mt-2"><input id="paymentCardRetryConfirmed" type="checkbox"> Разрешаю одну повторную попытку после проверки Meta</label>
     <div class="mt-3"><button id="paymentCardBind" type="button" class="btn btn-primary">Привязать карту</button></div>
@@ -354,12 +366,16 @@ async function showFunding(restored=null){
     updatePrimary();
   };
   const showMissingBilling=missing=>{
-    const labels={holder:'Имя владельца карты',country:'Страна платёжного адреса',address:'Платёжный адрес',city:'Город',region:'Область / штат',postal_code:'Почтовый индекс'};
+    const labels={holder:'Имя владельца карты',country:'Страна платёжного адреса',address:'Платёжный адрес',city:'Город',region:'Область / штат',postal_code:'Почтовый индекс',email_or_phone:'Email или телефон владельца'};
     billingMissing=[...new Set(missing.filter(k=>labels[k]))];
     $('paymentCardBillingMissing').innerHTML=billingMissing.map(k=>'<div><label for="paymentCardExisting_'+k+'">'+labels[k]+' — требуется Meta</label><input id="paymentCardExisting_'+k+'" autocomplete="off"></div>').join('');
   };
   const saveExistingBilling=async card=>{
     const patch={};for(const key of billingMissing){const value=$('paymentCardExisting_'+key).value.trim();if(!value)throw new Error('Заполните обязательные реквизиты карты.');patch[key]=value;}
+    if(patch.email_or_phone){
+      const contact=patch.email_or_phone;delete patch.email_or_phone;
+      if(contact.includes('@'))patch.email=contact;else patch.phone=contact;
+    }
     if(Object.keys(patch).length){await apiJson('ajax/paymentCards.php',post({action:'billing_update',card_id:card.id,...patch}));showMissingBilling([]);}
   };
   const run=async(task,clearSecrets=true)=>{
