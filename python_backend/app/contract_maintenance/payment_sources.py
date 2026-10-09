@@ -8,13 +8,14 @@ This produces source evidence, not an executable or a verified card contract.
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 import hashlib
 import html
 import json
 import logging
 import re
 import httpx
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 from ..private_contract_discovery import _module_nodes, _script_urls
 from ..private_inventory import _auth_gate
@@ -25,12 +26,16 @@ MAX_SCRIPT_BYTES = 8_000_000
 MAX_TOTAL_BYTES = 40_000_000
 MAX_EXPORT_BYTES = 8_000_000
 MAX_SCRIPTS = 128
+OPTIONAL_DOCUMENT_TIMEOUT = 12
 REQUIRED_SOURCE_MODULES = (
     'BillingHubPaymentSettingsPaymentMethodsListQuery.graphql',
     'BillingSaveCardCredentialStateMutation.graphql',
+    'BillingAddCreditCardPageViewManagerQuery.graphql',
     'BillingCountryCurrencyPageViewManagerQuery.graphql',
     'modularGeneratePTT',
+    'getPTTUtils',
     'FBPayAuthLibraryCommon',
+    'FBPayAuthLibraryUtils',
 )
 
 
@@ -103,16 +108,32 @@ def payment_deferred_script_urls(document):
                     conflicts[map_name].add(key)
                 else:
                     target[key] = row
-    result = []
-    for name, component in components.items():
+    def component_priority(name):
+        if re.search(r'SaveCard|AddCreditCard', name):
+            return 0
+        return 1 if re.search(r'PTT|FBPayAuthLibrary', name) else 2
+    result, visited, observed_urls = [], set(), set()
+    roots = [name for name in components if re.search(
+        r'(?:Billing.*(?:Card|Credential|PaymentMethod|CountryCurrency|PTT)|Payment.*(?:Card|Token)|FBPay.*|PlatformTrustToken.*|modularGeneratePTT|getPTTUtils)', name)]
+    pending = deque(sorted(roots, key=component_priority))
+    while pending:
+        name = pending.popleft()
+        if name in visited:
+            continue
+        visited.add(name)
+        component = components.get(name)
         if name in conflicts['compMap'] or not isinstance(component, dict):
             continue
-        if not re.search(r'(?:Billing.*(?:Card|Credential|PaymentMethod|CountryCurrency|PTT)|Payment.*(?:Card|Token)|FBPay.*|PlatformTrustToken.*|modularGeneratePTT)', name):
-            continue
-        ids = component.get('r')
-        if not isinstance(ids, list):
-            continue
-        for identity in ids:
+        # The observed Bootloader reads r, rdfds.r and rds.r, and follows
+        # rdfds.m/rds.m module dependencies. Card artifacts can live in a
+        # deferred tier even when the root UI has already loaded successfully.
+        tiers = [component[key] for key in ('rdfds', 'rds') if isinstance(component.get(key), dict)]
+        tiers.append(component)
+        for tier in tiers:
+            dependency_names = tier.get('m')
+            if isinstance(dependency_names, list):
+                pending.extend(item for item in dependency_names if isinstance(item, str) and item in components and item not in visited)
+        for identity in (item for tier in tiers for item in (tier.get('r') if isinstance(tier.get('r'), list) else [])):
             if not isinstance(identity, (str, int)) or isinstance(identity, bool):
                 continue
             identity = str(identity)
@@ -120,9 +141,12 @@ def payment_deferred_script_urls(document):
             if identity in conflicts['rsrcMap'] or not isinstance(row, dict) or row.get('type') != 'js':
                 continue
             url = row.get('src')
-            if _public_js_url(url) and url not in result:
+            if _public_js_url(url) and url not in observed_urls:
+                observed_urls.add(url)
                 result.append(url)
-    return result[:MAX_SCRIPTS]
+    # Discovery must disclose the whole observed inventory. The fetch budget
+    # below limits downloads, rather than silently dropping deferred evidence.
+    return result
 
 
 def payment_loader_documents(payload):
@@ -165,7 +189,7 @@ def source_export(rows, *, max_bytes=MAX_EXPORT_BYTES):
         name = row['name']
         if name.endswith(('.graphql', '_facebookRelayOperation', '$Parameters')):
             return 0
-        if any(word in name.lower() for word in ('savecard', 'creditcard', 'token', 'encrypt', 'fbpay', 'generateptt')):
+        if any(word in name.lower() for word in ('savecard', 'creditcard', 'token', 'encrypt', 'fbpay', 'generateptt', 'getpttutils')):
             return 1
         return 2 if name.endswith('.entrypoint') else 3
     result, used = [], 0
@@ -186,7 +210,7 @@ def public_payment_modules(source):
     for name, factory in _module_nodes(source):
         if not re.fullmatch(r'[A-Za-z0-9_.$-]{1,200}', name):
             continue
-        if not any(part in name.lower() for part in ('billing', 'payment', 'creditcard', 'encrypt', 'tokenization', 'fbpay', 'platformtrusttoken', 'generateptt',
+        if not any(part in name.lower() for part in ('billing', 'payment', 'creditcard', 'encrypt', 'tokenization', 'fbpay', 'platformtrusttoken', 'generateptt', 'getpttutils',
                                                     'bootloader', 'jsresource', 'requiredeferred', 'moduleresource', 'haste')):
             continue
         definition = '__d(' + json.dumps(name) + ',[],' + factory.text.decode() + ');'
@@ -195,8 +219,10 @@ def public_payment_modules(source):
     return result
 
 
-async def capture_payment_sources(web, *, account_id, business_id, loader_documents=()):
+async def capture_payment_sources(web, *, account_id, business_id, loader_documents=(), payment_account_id=None):
     if not re.fullmatch(r'\d{5,30}', str(account_id)) or not re.fullmatch(r'\d{5,30}', str(business_id)):
+        raise ValueError('INVALID_PAYMENT_TARGET')
+    if payment_account_id is not None and not re.fullmatch(r'\d{5,30}', str(payment_account_id)):
         raise ValueError('INVALID_PAYMENT_TARGET')
     query = urlencode({'asset_id': account_id, 'business_id': business_id})
     entry = 'https://business.facebook.com/billing_hub/payment_settings/?' + query
@@ -207,17 +233,43 @@ async def capture_payment_sources(web, *, account_id, business_id, loader_docume
     parts = urlsplit(final)
     if status != 200 or parts.hostname != 'business.facebook.com' or 'billing' not in parts.path:
         raise ProvisioningError('PAYMENT_DOCUMENT_UNAVAILABLE', 'Meta did not return a billing document.', retryable=True)
+    documents, document_audit = [(body, final)], [{'host': 'business.facebook.com', 'status': 'READ'}]
+    if payment_account_id is not None:
+        # This is the account-details route observed in the operator's card
+        # form. The caller must prove exact RK -> payment account and BM first.
+        # Read-only document GET; no wizard task, card save or inline JS runs.
+        details = 'https://adsmanager.facebook.com/adsmanager/billing_hub/accounts/details?' + urlencode(
+            {'asset_id': payment_account_id, 'business_id': business_id})
+        try:
+            code, document, location = await asyncio.wait_for(
+                payment_source_document(web, details), timeout=OPTIONAL_DOCUMENT_TIMEOUT)
+            gate = _auth_gate(location, document)
+            destination = urlsplit(location)
+            scope = parse_qs(destination.query)
+            if gate:
+                document_audit.append({'host': 'adsmanager.facebook.com', 'status': 'UNAVAILABLE', 'code': gate})
+            elif (code == 200 and destination.hostname == 'adsmanager.facebook.com'
+                  and destination.path.rstrip('/') == '/adsmanager/billing_hub/accounts/details'
+                  and scope.get('asset_id') == [str(payment_account_id)]
+                  and scope.get('business_id') == [str(business_id)]):
+                documents.append((document, location))
+                document_audit.append({'host': 'adsmanager.facebook.com', 'status': 'READ'})
+            else:
+                document_audit.append({'host': 'adsmanager.facebook.com', 'status': 'UNAVAILABLE', 'code': 'PAYMENT_DOCUMENT_UNAVAILABLE'})
+        except Exception as exc:
+            error = source_failure(exc, 'account_details_document')
+            document_audit.append({'host': 'adsmanager.facebook.com', 'status': 'UNAVAILABLE', 'code': error.code})
     # Authenticated inline HTML scripts are deliberately NOT returned or parsed
     # for export. Source evidence must come from public static CDN resources.
     # Deferred card/form resources must be fetched before generic UI bundles
     # consume the fixed maintenance budget. Every URL is observed in Meta's
     # document; this path remains completely separate from card execution.
-    deferred = payment_deferred_script_urls('\n'.join([body, *loader_documents]))
-    eager = [u for u in _script_urls(body, final, limit=384) if _public_js_url(u)]
+    deferred = payment_deferred_script_urls('\n'.join([*(document for document, _ in documents), *loader_documents]))
+    eager = [u for document, location in documents for u in _script_urls(document, location, limit=384) if _public_js_url(u)]
     urls = list(dict.fromkeys([*deferred, *eager]))
     observed = set(urls)
     deferred_observed = set(deferred)
-    del body
+    del body, documents
     modules, total, count, errors = {}, 0, 0, 0
 
     async def read(url):
@@ -262,6 +314,7 @@ async def capture_payment_sources(web, *, account_id, business_id, loader_docume
             'scripts_read': count, 'bytes_read': total, 'script_errors': errors,
             'deferred_scripts_observed': len(deferred_observed), 'scripts_not_read': len(urls) - count,
             'scripts_observed': len(observed), 'script_limit_reached': count >= MAX_SCRIPTS and offset < len(urls),
+            'document_audit': document_audit,
             **exported}
 
 
@@ -315,8 +368,13 @@ async def _inspect_profile_payment_sources(resolver, profile, target, *, state):
             # browser or discard the public source capture that follows.
             pass
         async with asyncio.timeout(65):
+            payment = (evidence.get('payment_account_id') if methods is not None
+                       and methods.get('account_scope_verified') is True
+                       and methods.get('methods_query_verified') is True
+                       and methods.get('business_scope_verified') is True
+                       and methods.get('payment_account_relation_verified') is True else None)
             result = await capture_payment_sources(web, account_id=target, business_id=asset['business_id'],
-                                                   loader_documents=loaders)
+                                                   loader_documents=loaders, payment_account_id=payment)
         result['payment_account_probe'] = evidence
         if methods is not None:
             result['payment_methods_probe'] = methods
