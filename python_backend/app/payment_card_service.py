@@ -77,12 +77,26 @@ async def profile_payment_card_http(resolver, profile, payload, *, state=None):
                 for key in ('save_response_stage','meta_error_codes'):
                     if key in saved:
                         retained[key] = saved[key]
-                if pending['card_id'] != card_id or not (saved.get('credential') or saved.get('preexisting_credential_ids') is not None):
+                if pending['card_id'] != card_id:
+                    return {**retained, 'code': 'CARD_BINDING_CARD_MISMATCH'}
+                if not (saved.get('credential') or isinstance(saved.get('preexisting_credential_ids'), list)):
                     return {**retained, 'status': 'ACTION_REQUIRED' if saved.get('status') == 'ACTION_REQUIRED' else retained['status'],
-                            'code': 'CARD_BANK_CONFIRMATION_REQUIRED' if saved.get('status') == 'ACTION_REQUIRED' else retained['code']}
+                            'code': 'CARD_BANK_CONFIRMATION_REQUIRED' if saved.get('status') == 'ACTION_REQUIRED'
+                                else 'CARD_RECONCILE_CONTEXT_MISSING'}
                 asset = await resolve_payment_asset(profile, target, state, payload.get('asset_hint'))
                 if not asset:
-                    return retained
+                    # A verified prior Save captured this exact BM before submission.
+                    # Reuse it only as a *read selector*; inspect_methods must still
+                    # independently prove the same BM, RK and payment account in Meta.
+                    saved_business = saved.get('business_id')
+                    hint = payload.get('asset_hint')
+                    if (isinstance(saved_business, str) and re.fullmatch(r'\d{5,30}', saved_business)
+                            and (not hint or isinstance(hint, dict) and hint.get('business_id') == saved_business)):
+                        asset = {'business_id': saved_business}
+                    else:
+                        return {**retained, 'code': 'CARD_RECONCILE_TARGET_UNRESOLVED'}
+                if asset['business_id'] != saved.get('business_id') or saved.get('account_id') != target:
+                    return {**retained, 'code': 'CARD_RECONCILE_SCOPE_CHANGED'}
                 profile_context = await resolver.resolve(profile)
                 async with ProfileSession(profile_context) as session:
                     web = await session.facebook_web()
@@ -93,6 +107,11 @@ async def profile_payment_card_http(resolver, profile, payload, *, state=None):
                         target, methods.get('code'), methods.get('inventory_complete'),
                         len(methods.get('all_credential_ids', [])), len(methods.get('payment_methods', [])))
                     retained['funding'] = {**methods, 'profile_id': profile}
+                    if (methods.get('account_scope_verified') is not True
+                            or methods.get('business_scope_verified') is not True):
+                        return {**retained, 'code': 'CARD_RECONCILE_METHODS_UNVERIFIED'}
+                    if methods.get('payment_account_id') != saved.get('payment_account_id'):
+                        return {**retained, 'code': 'CARD_RECONCILE_SCOPE_CHANGED'}
                     if (operation == 'bind' and payload.get('reviewed_attempt_id') == pending['attempt_id']
                             and methods.get('inventory_complete') is True
                             and methods.get('all_credential_ids') == []

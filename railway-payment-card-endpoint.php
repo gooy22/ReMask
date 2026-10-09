@@ -153,6 +153,13 @@ try {
         if(is_string($clientInfo))$clientInfo=json_decode($clientInfo,true,4,JSON_THROW_ON_ERROR);
         if(!is_array($clientInfo)||array_diff(array_keys($clientInfo),['color_depth','java_enabled','screen_height','screen_width'])||count($clientInfo)!==4||($clientInfo['java_enabled']??null)!==false)throw new InvalidArgumentException('CARD_CLIENT_CONTEXT_REQUIRED');
         $payload['client_info']=$clientInfo;
+        foreach(['network_consent','recurring_consent'] as $flag){
+            if(array_key_exists($flag,$input)){
+                if($input[$flag]!=='1')throw new InvalidArgumentException('CARD_CONSENT_INVALID');
+                // Never invent affirmative consent; it must come from the user.
+                $payload[$flag]=true;
+            }
+        }
         $reviewed=($input['retry_confirmed']??'')==='1';
         if($reviewed){
             $expected=$vault->binding($id,$profile,$account);

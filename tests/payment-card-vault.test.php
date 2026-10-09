@@ -3,6 +3,16 @@ declare(strict_types=1);
 require __DIR__.'/../railway-payment-card-vault.php';
 function expect(bool $test,string $message): void {if(!$test)throw new RuntimeException($message);}
 function rejected(callable $fn,string $code): void {try{$fn();throw new RuntimeException('Expected rejection');}catch(InvalidArgumentException $e){expect($e->getMessage()===$code,'Unexpected rejection');}}
+// Contact details are optional and encrypted with the card; they must never be public card metadata.
+$contact=RemaskPaymentCardVault::normalize(['number'=>'4111111111111111','month'=>12,'year'=>2099,
+    'email'=>'fixture@example.invalid','phone'=>'+380 50 123 45 67']);
+expect($contact['email']==='fixture@example.invalid'&&$contact['phone']==='+380 50 123 45 67',
+    'Vault dropped explicitly supplied contact fields');
+rejected(fn()=>RemaskPaymentCardVault::normalize(['number'=>'4111111111111111',
+    'month'=>12,'year'=>2099,'email'=>'not-an-email']), 'CARD_BILLING_INVALID');
+rejected(fn()=>RemaskPaymentCardVault::normalize(['number'=>'4111111111111111',
+    'month'=>12,'year'=>2099,'phone'=>'not a phone']), 'CARD_BILLING_INVALID');
+
 function endpointNoCvvFixture(): void {
     $root=sys_get_temp_dir().'/remask-card-endpoint-'.bin2hex(random_bytes(5));
     mkdir($root.'/ajax',0700,true);mkdir($root.'/classes',0700,true);
