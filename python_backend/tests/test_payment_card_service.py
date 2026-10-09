@@ -140,6 +140,25 @@ class CardServiceTests(unittest.IsolatedAsyncioTestCase):
             await profile_payment_card(self.resolver,'15',self.payload,state=self.state)
         http.assert_awaited_once();browser.assert_not_awaited()
 
+    async def test_public_reconciliation_finishes_lost_save_without_replaying_card_fields(self):
+        from app.payment_card_binding import profile_payment_card
+        from tests.test_static_payment_card import ACCOUNT
+        self.web.lose_save = True
+        with patch('app.payment_card_service.CANARY_SCOPE', ('15', ACCOUNT)), \
+             patch('app.payment_card_service.resolve_payment_asset', AsyncMock(return_value={'business_id':BUSINESS})), \
+             patch('app.session.ProfileSession', return_value=self.cm), \
+             patch('app.payment_card_http.encrypt_card_token', return_value='synthetic_token'):
+            first = await profile_payment_card(self.resolver, '15', {**self.payload, 'account_id':ACCOUNT}, state=self.state)
+            self.assertEqual(first['status'], 'SUBMITTED_UNVERIFIED')
+            self.web.calls.clear()
+            result = await profile_payment_card(self.resolver, '15', {'operation':'reconcile',
+                'account_id':ACCOUNT, 'card_id':self.payload['card_id']}, state=self.state)
+        self.assertEqual(result['status'], 'LINKED')
+        self.assertEqual([call[0] for call in self.web.calls], ['28797973873175785','28814526004898205'])
+        for call in self.web.calls:
+            self.assertNotIn('synthetic_token', json.dumps(call[1]))
+            self.assertNotIn(VALUES['number'], json.dumps(call[1]))
+
     async def test_concurrent_submit_guards_and_restart(self):
         ledger=CardIntentLedger(self.state.path)
         results=await asyncio.gather(ledger.submit('15','111111','card_'+'a'*24,'a'*24),
