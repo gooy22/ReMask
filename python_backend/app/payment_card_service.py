@@ -21,6 +21,7 @@ from .static_payment_read import execute, account_proof, payment_page_proof, ins
 
 # Explicit integration canary, not a blanket enablement of an archived builder.
 CANARY_SCOPE = ('15', '120251650486340295')
+SECONDARY_CANARY_SCOPE = ('15', '120251352568830122')
 
 
 def setup_context(payload, target, payment):
@@ -48,7 +49,7 @@ async def profile_payment_card_http(resolver, profile, payload, *, state=None):
                                               asset_hint=payload.get('asset_hint'))
     if operation not in {'bind', 'reconcile'}:
         raise ValueError('CARD_OPERATION_INVALID')
-    if operation == 'bind' and (profile, target) != CANARY_SCOPE:
+    if operation == 'bind' and (profile, target) not in {CANARY_SCOPE, SECONDARY_CANARY_SCOPE}:
         return {**base, 'code': 'CARD_HTTP_CANARY_SCOPE_REQUIRED'}
     ledger = None
     attempt_id = payload.get('attempt_id')
@@ -63,6 +64,9 @@ async def profile_payment_card_http(resolver, profile, payload, *, state=None):
             if state is None or not getattr(state, 'path', None):
                 return {**base, 'code': 'CARD_DURABLE_INTENT_REQUIRED'}
             ledger = CardIntentLedger(state.path)
+            if (operation == 'bind' and (profile, target) == SECONDARY_CANARY_SCOPE
+                    and not await ledger.confirmed(*CANARY_SCOPE, card_id)):
+                return {**base, 'code':'CARD_HTTP_FIRST_CANARY_REQUIRED'}
             pending = await ledger.pending(profile, target)
             if operation == 'reconcile' and not pending:
                 return {**base, 'code': 'CARD_HTTP_INTENT_NOT_FOUND'}
@@ -70,6 +74,9 @@ async def profile_payment_card_http(resolver, profile, payload, *, state=None):
                 retained = {**base, 'status': 'SUBMITTED_UNVERIFIED', 'submitted': True,
                             'retry_blocked': True, 'code': 'CARD_BINDING_RECONCILE_REQUIRED'}
                 saved = json.loads(pending['result'])
+                for key in ('save_response_stage','meta_error_codes'):
+                    if key in saved:
+                        retained[key] = saved[key]
                 if pending['card_id'] != card_id or not (saved.get('credential') or saved.get('preexisting_credential_ids') is not None):
                     return {**retained, 'status': 'ACTION_REQUIRED' if saved.get('status') == 'ACTION_REQUIRED' else retained['status'],
                             'code': 'CARD_BANK_CONFIRMATION_REQUIRED' if saved.get('status') == 'ACTION_REQUIRED' else retained['code']}
@@ -81,7 +88,19 @@ async def profile_payment_card_http(resolver, profile, payload, *, state=None):
                     web = await session.facebook_web()
                     methods = await inspect_methods(web, account=target, business_id=asset['business_id'])
                     methods = await complete_methods(web, methods, business_id=asset['business_id'])
+                    import logging
+                    logging.getLogger('remask.payment_card').info('card reconcile inventory account=%s code=%s complete=%s credentials=%s cards=%s',
+                        target, methods.get('code'), methods.get('inventory_complete'),
+                        len(methods.get('all_credential_ids', [])), len(methods.get('payment_methods', [])))
                     retained['funding'] = {**methods, 'profile_id': profile}
+                    if (operation == 'bind' and payload.get('reviewed_attempt_id') == pending['attempt_id']
+                            and methods.get('inventory_complete') is True
+                            and methods.get('all_credential_ids') == []
+                            and methods.get('verification_status') == 'NONE'
+                            and saved.get('status') != 'ACTION_REQUIRED'):
+                        await ledger.review_empty(pending['attempt_id'], profile, target, card_id)
+                        return await profile_payment_card_http(resolver, profile,
+                            {k:v for k,v in payload.items() if k != 'reviewed_attempt_id'}, state=state)
                     if not saved.get('credential'):
                         matches = [row for row in methods.get('payment_methods', [])
                             if row.get('last4') == saved.get('last4') and row.get('type') == saved.get('expected_card_type')

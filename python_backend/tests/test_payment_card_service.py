@@ -128,6 +128,37 @@ class CardServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result['funding_verified'])
         self.assertNotIn('28619313357728847',[c[0] for c in self.web.calls])
 
+    async def test_reviewed_retry_requires_fresh_complete_empty_and_keeps_old_attempt_history(self):
+        import sqlite3, time
+        self.web.lose_save=True
+        await self.call()
+        self.web.saved=False;self.web.lose_save=False
+        con=sqlite3.connect(self.state.path)
+        con.execute('UPDATE card_http_intents SET updated_at=?',(int(time.time())-240,))
+        con.commit();con.close()
+        result=await self.call({**self.payload,'attempt_id':'c'*24,'reviewed_attempt_id':'b'*24})
+        self.assertEqual(result['status'],'LINKED')
+        con=sqlite3.connect(self.state.path)
+        phases=con.execute('SELECT phase FROM card_http_intents ORDER BY attempt_id').fetchall();con.close()
+        self.assertEqual(phases,[('REVIEWED_EMPTY',),('LINKED',)])
+
+    async def test_reviewed_retry_cannot_supersede_existing_card_or_pending_bank_action(self):
+        self.web.lose_save=True
+        await self.call()
+        self.web.calls.clear()
+        result=await self.call({**self.payload,'attempt_id':'c'*24,'reviewed_attempt_id':'b'*24})
+        self.assertEqual(result['status'],'LINKED')
+        self.assertNotIn('28619313357728847',[c[0] for c in self.web.calls])
+
+    async def test_second_canary_requires_confirmed_first_canary_for_same_card(self):
+        from app.payment_card_service import SECONDARY_CANARY_SCOPE
+        from tests.test_static_payment_card import ACCOUNT
+        with patch('app.payment_card_service.CANARY_SCOPE',('15',ACCOUNT)):
+            result=await profile_payment_card_http(self.resolver,'15',
+                {**self.payload,'account_id':SECONDARY_CANARY_SCOPE[1]},state=self.state)
+        self.assertEqual(result['code'],'CARD_HTTP_FIRST_CANARY_REQUIRED')
+        self.resolver.resolve.assert_not_awaited()
+
     async def test_lost_reply_never_commits_foreign_business_or_ambiguous_new_credentials(self):
         self.web.lose_save=True
         await self.call()

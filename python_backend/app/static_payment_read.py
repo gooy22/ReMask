@@ -198,7 +198,7 @@ async def inspect_methods(web, *, account, business_id):
 def credit_card_metadata(payload, target):
     if not _node_id(target):
         raise ValueError('INVALID_PAYMENT_TARGET')
-    if not isinstance(payload, dict) or payload.get('errors') or payload.get('error'):
+    if not _clean_payload(payload):
         return None
     data = payload.get('data')
     node = data.get('node') if isinstance(data, dict) else None

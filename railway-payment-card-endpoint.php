@@ -114,6 +114,11 @@ try {
             if(($httpResult['status']??'')==='LINKED'){
                 $confirmed=$vault->reconcile($id,$profile,$account,$expected,$httpResult['funding']??[]);
                 if(($confirmed['status']??'')!=='LINKED')throw new RuntimeException('CARD_WORKER_RESULT_UNKNOWN');
+            }elseif(($httpResult['funding']['inventory_complete']??false)===true&&
+                    ($httpResult['funding']['verification_status']??'')==='NONE'){
+                $review=$vault->reconcile($id,$profile,$account,$expected,$httpResult['funding']);
+                if(isset($review['retry_review']))$httpResult=array_replace($httpResult,[
+                    'code'=>'CARD_RECONCILE_NO_METHOD','retry_review'=>$review['retry_review']]);
             }
             card_out(['ok'=>true,'data'=>['result'=>$httpResult]]);
         }
@@ -151,9 +156,11 @@ try {
         $reviewed=($input['retry_confirmed']??'')==='1';
         if($reviewed){
             $expected=$vault->binding($id,$profile,$account);
-            $funding=card_worker_inspect($profile,$account,$assetHint);
+            $checked=card_worker($profile,['operation'=>'reconcile','account_id'=>$account,'card_id'=>$id,'asset_hint'=>$assetHint]);
+            $funding=is_array($checked['funding']??null)?$checked['funding']:card_worker_inspect($profile,$account,$assetHint);
             $secret=$vault->secret($id);
             $binding=$vault->beginReviewed($id,$profile,$account,(string)($input['retry_review']??''),$expected,$funding);
+            if(is_string($expected['attempt_id']??null))$payload['reviewed_attempt_id']=$expected['attempt_id'];
         }else{
             $secret=$vault->secret($id);
             $binding=$vault->begin($id,$profile,$account);

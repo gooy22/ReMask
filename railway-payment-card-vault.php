@@ -145,10 +145,15 @@ final class RemaskPaymentCardVault {
         return array_values(array_unique($missing));
     }
     private static function exactEmpty(string $profile,string $account,array $funding): bool {
+        $source=($funding['source']??'');
+        $completeStatic=$source==='private_facebook_billing_static_methods'&&
+            ($funding['business_scope_verified']??false)===true&&($funding['payment_account_relation_verified']??false)===true&&
+            ($funding['methods_query_verified']??false)===true&&($funding['inventory_complete']??false)===true&&
+            ($funding['all_credential_ids']??null)===[]&&($funding['browser_started']??null)===false;
         return ($funding['profile_id']??null)===$profile&&($funding['account_id']??null)===$account&&
             ($funding['account_scope_verified']??false)===true&&($funding['checked_live']??false)===true&&
             ($funding['verification_status']??'')==='NONE'&&($funding['payment_methods']??null)===[]&&
-            in_array($funding['source']??'',['private_facebook_billing_ui','private_facebook_selected_rk_payment_tab'],true);
+            ($completeStatic||in_array($source,['private_facebook_billing_ui','private_facebook_selected_rk_payment_tab'],true));
     }
     private static function liveLinkSource(array $funding): bool {
         if(in_array($funding['source']??'',['private_facebook_billing_ui','private_facebook_selected_rk_payment_tab'],true))return true;

@@ -67,6 +67,7 @@ function paymentCardMessage(result){
     CARD_PAYMENT_MODE_INCONCLUSIVE:'Meta не подтвердила режим оплаты РК. Карта не отправлена.',
     CARD_CLIENT_CONTEXT_REQUIRED:'Не подтверждены данные клиента для банковской проверки. Карта не отправлена.',
     CARD_HTTP_CANARY_SCOPE_REQUIRED:'HTTP-привязка проходит проверку на выбранном РК профиля 15. Этот РК ещё не включён.',
+    CARD_HTTP_FIRST_CANARY_REQUIRED:'Сначала нужно подтвердить точную карту у первого тестового РК. Второй РК ещё не запускался.',
     CARD_LINK_CONFIRMED:'Meta подтвердила точную карту у выбранного РК. Подтверждена только привязка; списания и доступность рекламы не проверялись.',
     CARD_SAVE_RESULT_UNKNOWN:'Карта могла быть отправлена. Повторное добавление заблокировано; нажмите «Проверить результат».',
     CARD_SAVE_LINK_VERIFICATION_PENDING:'Meta приняла сохранение карты; точная привязка проверяется. Повторное добавление заблокировано.',
@@ -124,7 +125,13 @@ function paymentCardMessage(result){
   const countryMismatch=result.code==='CARD_BILLING_COUNTRY_MISMATCH'&&/^[A-Z]{2}$/.test(result.billing_country||'')&&/^[A-Z]{2}$/.test(result.card_issuing_country||'')
     ?' Страна РК: '+result.billing_country+'; страна выпуска карты: '+result.card_issuing_country+'.':'';
   const currentCountry=result.code!=='CARD_BILLING_COUNTRY_MISMATCH'&&/^[A-Z]{2}$/.test(result.billing_country||'')?' Текущая страна РК в Meta: '+result.billing_country+'.':'';
-  return (messages[result.code]||result.code||'Не удалось подтвердить результат')+country+availability+countryMismatch+currentCountry+
+  const funding=result.funding;
+  const inventory=funding?.inventory_complete===true&&Array.isArray(funding.all_credential_ids)
+    ?' Полный список Meta проверен: способов оплаты '+funding.all_credential_ids.length+'.'
+    :funding?.code&&/^PAYMENT_[A-Z_]{1,80}$/.test(funding.code)?' Проверка списка: '+funding.code+'.':'';
+  const errors=Array.isArray(result.meta_error_codes)?result.meta_error_codes.filter(n=>Number.isInteger(n)&&n>=0&&n<=999999999):[];
+  return (messages[result.code]||result.code||'Не удалось подтвердить результат')+country+availability+countryMismatch+currentCountry+inventory+
+    (errors.length?' Коды ошибки Meta: '+errors.join(', ')+'.':'')+
     (result.missing_fields?.length?' Поля: '+result.missing_fields.map(f=>names[f]||f).join(', ')+'.':'')+
     (fields.length?' Поля формы Meta: '+fields.join(', ')+'.':'');
 }

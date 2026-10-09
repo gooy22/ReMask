@@ -68,6 +68,38 @@ class CardIntentLedger:
         phase = 'LINKED' if result.get('status') == 'LINKED' else 'ACTION_REQUIRED' if result.get('status') == 'ACTION_REQUIRED' else 'SUBMITTED_UNVERIFIED'
         await asyncio.to_thread(self._finish, attempt_id, phase, safe)
 
+    async def confirmed(self, profile, account, card_id):
+        def read():
+            con = self.connect()
+            try:
+                return con.execute("SELECT 1 FROM card_http_intents WHERE profile=? AND account=? AND card_id=? AND phase='LINKED' LIMIT 1",
+                    (profile, account, card_id)).fetchone() is not None
+            finally:
+                con.close()
+        return await asyncio.to_thread(read)
+
+    async def review_empty(self, attempt_id, profile, account, card_id):
+        """Retain a stale attempt's history after an explicit reviewed retry.
+
+        The caller must freshly prove the exact unfiltered collection empty.
+        No pending bank verification or competing attempt can be superseded.
+        """
+        def write():
+            con = self.connect()
+            try:
+                con.execute('BEGIN IMMEDIATE')
+                changed = con.execute("UPDATE card_http_intents SET phase='REVIEWED_EMPTY',updated_at=? WHERE attempt_id=? AND profile=? AND account=? AND card_id=? AND phase IN ('SUBMITTED','SUBMITTED_UNVERIFIED','VERIFYING') AND updated_at<=?",
+                    (int(time.time()),attempt_id,profile,account,card_id,int(time.time())-180)).rowcount
+                if changed != 1:
+                    raise ValueError('CARD_BINDING_CHANGED')
+                con.commit()
+            except Exception:
+                con.rollback()
+                raise
+            finally:
+                con.close()
+        await asyncio.to_thread(write)
+
     def _finish(self, attempt_id, phase, safe):
         con = self.connect()
         try:
