@@ -53,6 +53,20 @@ function card_worker_inspect(string $profile,string $account,array $assetHint=[]
     return $result;
 }
 try {
+    // Explicit maintenance-only read. Does not run on prepare/bind/reconcile,
+    // never accepts card fields, and exports public JS definitions only.
+    if($_SERVER['REQUEST_METHOD']==='GET'&&($_GET['action']??'')==='contract_sources'){
+        $profile=trim((string)($_GET['profile']??''));$account=(string)($_GET['account_id']??'');
+        if($profile===''||strlen($profile)>160||!preg_match('/^\d{5,30}$/D',$account))throw new InvalidArgumentException('INVALID_PAYMENT_TARGET');
+        $base=rtrim((string)(getenv('REMASK_PYTHON_WORKER_URL')?:'http://127.0.0.1:8081'),'/');
+        $key=(string)(getenv('REMASK_WORKER_API_KEY')?:'');
+        if($key==='')throw new RuntimeException('CARD_WORKER_KEY_UNAVAILABLE');
+        $context=stream_context_create(['http'=>['method'=>'GET','header'=>"Accept: application/json\r\nX-Remask-Worker-Key: ".$key."\r\n",'timeout'=>100,'ignore_errors'=>true,'follow_location'=>0]]);
+        $raw=@file_get_contents($base.'/api/v1/profiles/'.rawurlencode($profile).'/payment-contract-sources?'.http_build_query(['account_id'=>$account],'','&',PHP_QUERY_RFC3986),false,$context);
+        $result=$raw===false?null:json_decode($raw,true);unset($raw,$context,$key);
+        if(!is_array($result)||($result['profile_id']??'')!==$profile||($result['account_id']??'')!==$account)throw new RuntimeException('PAYMENT_CONTRACT_SOURCE_UNAVAILABLE');
+        card_out(['ok'=>true,'data'=>$result]);
+    }
     if($_SERVER['REQUEST_METHOD']!=='POST')card_out(['ok'=>false,'error'=>['message'=>'POST_REQUIRED']],405);
     $provided=(string)($_SERVER['HTTP_X_REMASK_CSRF']??'');
     if(!function_exists('remask_csrf_token')||$provided===''||!hash_equals(remask_csrf_token(),$provided))card_out(['ok'=>false,'error'=>['message'=>'CSRF_INVALID']],403);

@@ -249,11 +249,19 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
             server.close()
             await server.wait_closed()
 
-    async def test_business_origin_has_http2_only_transport_without_retries(self):
+    async def test_all_facebook_origins_have_http2_only_transport_without_retries(self):
         client = self.make()
-        transport = client._client._transport_for_url(httpx.URL('https://business.facebook.com/api/graphql/'))
-        self.assertTrue(transport._pool._http2)
-        self.assertFalse(transport._pool._http1)
-        self.assertEqual(transport._pool._retries, 0)
-        other = client._client._transport_for_url(httpx.URL('https://api.ipify.org'))
-        self.assertTrue(other._pool._http1)
+        transports = set()
+        for host in ('facebook.com', 'business.facebook.com', 'www.facebook.com',
+                     'secure.facebook.com', 'adsmanager.facebook.com', 'm.facebook.com'):
+            with self.subTest(host=host):
+                transport = client._client._transport_for_url(httpx.URL('https://' + host + '/api/graphql/'))
+                self.assertTrue(transport._pool._http2)
+                self.assertFalse(transport._pool._http1)
+                self.assertEqual(transport._pool._retries, 0)
+                transports.add(transport)
+        self.assertEqual(len(transports), 1)  # one origin transport/pool per profile
+        for host in ('api.ipify.org', 'static.xx.fbcdn.net', 'evilfacebook.com', 'facebook.com.evil.test'):
+            with self.subTest(host=host):
+                other = client._client._transport_for_url(httpx.URL('https://' + host))
+                self.assertTrue(other._pool._http1)
