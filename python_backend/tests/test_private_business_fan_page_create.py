@@ -258,6 +258,66 @@ class BusinessPageHTTPTests(unittest.IsolatedAsyncioTestCase):
         self.meta.graphql = original
         self.assertEqual((await self.run_page())['page_ids'], [FP2])
 
+    def profile_document(self, pages, *, actor=UID):
+        from fb_worker import FacebookWebSession
+        self.meta._match_sources = FacebookWebSession._match_sources
+        document = '<script>CurrentUserInitialData {"USER_ID":"' + actor + '"};</script><script>' + json.dumps({
+            'additional_profiles_with_biz_tools': {'nodes': [{'id': '61500012345678',
+                'name': 'PrgssTeam', 'delegate_page': {'__typename': 'Page', 'id': page, 'name': 'PrgssTeam'}}
+                for page in pages]}}) + '</script>'
+        self.meta.fetch_text = AsyncMock(return_value=(200, document, 'https://www.facebook.com/pages/'))
+
+    async def retain_legacy_submit(self):
+        await self.state.checkpoint('create', '15', 'page', ProvisioningStep.FAN_PAGES,
+            {'phase': 'PAGE_CREATE_RESULT_UNKNOWN', 'resume_from': 'RECONCILE_CREATE',
+                'business_id': BM2, 'target_names': ['PrgssTeam'], 'create_actor_id': UID,
+                'active_page_name': 'PrgssTeam', 'active_before_ids': [FP1], 'response_page_id': ''})
+
+    async def test_legacy_submit_recovers_managed_unowned_page_without_another_create(self):
+        self.meta.owners[FP2] = None
+        self.profile_document([FP1, FP2])
+        await self.retain_legacy_submit()
+        result = await self.run_page()
+        self.assertEqual(result['page_ids'], [FP2])
+        self.assertFalse(result['page_business_attached'])
+        self.assertTrue(result['pages'][0]['requires_business_claim'])
+        self.assertEqual(result['pages'][0]['recovery_source'], 'managed_profile_http')
+        self.assertEqual(self.meta.posts, [])
+        self.assertEqual(self.meta.owners[FP1], BM1)
+
+    async def test_profile_recovery_does_not_use_wrong_actor_or_transfer_another_business_page(self):
+        for actor, owner in (('61511111111111', None), (UID, BM1)):
+            with self.subTest(actor=actor, owner=owner):
+                self.meta.owners[FP2] = owner
+                self.profile_document([FP1, FP2], actor=actor)
+                await self.retain_legacy_submit()
+                with self.assertRaises(ProvisioningError) as caught:
+                    await self.run_page()
+                self.assertEqual(caught.exception.code, 'FAN_PAGE_CREATE_RESULT_UNKNOWN')
+                self.assertEqual(self.meta.posts, [])
+
+    async def test_multiple_free_managed_pages_or_empty_profile_document_never_enable_create(self):
+        other = '3348798761652037'
+        self.meta.owners.update({FP2: None, other: None})
+        for pages in ([FP1, FP2, other], []):
+            with self.subTest(pages=pages):
+                self.profile_document(pages)
+                await self.retain_legacy_submit()
+                with self.assertRaises(ProvisioningError):
+                    await self.run_page()
+                self.assertEqual(self.meta.posts, [])
+
+    async def test_profile_recovery_auth_gate_preserves_retained_submit(self):
+        self.meta.fetch_text = AsyncMock(return_value=(200, 'login_form', 'https://www.facebook.com/login/'))
+        await self.retain_legacy_submit()
+        with self.assertRaises(ProvisioningError) as caught:
+            await self.run_page()
+        self.assertEqual(caught.exception.code, 'SESSION_EXPIRED')
+        checkpoint = (await self.state.step('create', ProvisioningStep.FAN_PAGES))['result']
+        self.assertEqual(checkpoint['phase'], 'PAGE_CREATE_RESULT_UNKNOWN')
+        self.assertEqual(checkpoint['active_before_ids'], [FP1])
+        self.assertEqual(self.meta.posts, [])
+
     async def test_multiple_new_same_name_pages_cannot_reconcile_lost_response(self):
         self.meta.lose_page = True
         original = self.meta.graphql
