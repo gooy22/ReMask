@@ -47,10 +47,16 @@ const crypto = {subtle,getRandomValues:array=>{array.set(Buffer.from('0001020304
 const context = vm.createContext({Promise,Date,TextEncoder,Uint8Array,Uint32Array,
   window:{crypto,btoa:s=>Buffer.from(s,'binary').toString('base64')},
   atob:s=>Buffer.from(s,'base64').toString('binary'),babelHelpers:{extends:Object.assign},
-  __d:(name,deps,factory)=> {const exports={};factory(null,requireModule,requireModule,requireModule,null,null,exports,fbt);modules[name]=exports;}
+  __d:(name,deps,factory)=> {const exports={},module={exports};factory(null,requireModule,requireModule,requireModule,module,exports,exports,fbt);modules[name]=module.exports;}
 });
 function load(file){vm.runInContext(fs.readFileSync(path.join(__dirname,file),'utf8'),context,{timeout:1000});}
 async function run(input){
+  if(input.mode==='client') {
+    context.window.screen={colorDepth:input.color_depth};context.window.innerWidth=input.viewport_width;
+    context.window.innerHeight=input.viewport_height;
+    load('getBillingWizard3DSClientInfo.current.js');
+    return modules.getBillingWizard3DSClientInfo.default();
+  }
   if(input.mode==='builder') {
     load('BillingCreditCardUtils.js');
     const v=input.values, number=v.number;

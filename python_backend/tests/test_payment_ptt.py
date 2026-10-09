@@ -14,7 +14,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.x509.oid import NameOID
 
-from app.payment_card_input import build_save_input, card_auth_fields
+from app.payment_card_input import build_save_input, card_auth_fields, build_client_info, validate_client_info
 from app.payment_ptt import _encrypt_card_token, _validate_chain, _kdf, _fingerprint
 
 VALUES = {'number':'4111111111111111','cvv':'123','month':'05','year':'2030',
@@ -36,6 +36,16 @@ def node_parity(value):
 
 
 class PaymentPTTTests(unittest.TestCase):
+    def test_client_info_matches_current_supplied_module_without_invented_dimensions(self):
+        dimensions={'color_depth':24,'viewport_width':1440,'viewport_height':1000}
+        result=build_client_info(**dimensions)
+        self.assertEqual(result,node_parity({'mode':'client',**dimensions}))
+        self.assertEqual(validate_client_info(result),result)
+        for invalid in (None,{}, {**result,'java_enabled':1},{**result,'screen_width':'0'},
+                        {**result,'screen_height':1000}):
+            with self.assertRaisesRegex(ValueError,'CARD_CLIENT_CONTEXT_REQUIRED'):
+                validate_client_info(invalid)
+
     def test_current_crypto_sources_key_operation_and_pinned_root_match_upload(self):
         fixtures=PARITY.parent
         hashes_expected={'FBPayAuthLibraryUtils.current.js':'7c8502d3f612ee6cc6af6cbd0524d667402bdd09346629f5effa76ec2a5d48a4',

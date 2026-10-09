@@ -357,7 +357,7 @@ class PaymentSourceTests(unittest.IsolatedAsyncioTestCase):
         maps={'rsrcMap':{'x':{'type':'js','src':'https://static.xx.fbcdn.net/card.js'}},
               'compMap':{'BillingAddCreditCardPage.react':{'r':['x']}}}
         html=''.join('<script src="https://static.xx.fbcdn.net/'+name+'.js"></script>'
-                     for name in ('root','eager1','eager2','eager3','remaining'))
+                     for name in ('root', *(f'eager{i}' for i in range(1, 12)), 'remaining'))
         async def fetch(url,**kwargs):
             if url.startswith('https://business.facebook.com/'):return 200,html,entry
             if url.endswith('root.js'):return 200,json.dumps(maps),url
@@ -367,7 +367,7 @@ class PaymentSourceTests(unittest.IsolatedAsyncioTestCase):
         urls=[c.args[0] for c in web.fetch_text.await_args_list]
         self.assertEqual(urls.count('https://static.xx.fbcdn.net/card.js'),1)
         self.assertLess(urls.index('https://static.xx.fbcdn.net/card.js'),urls.index('https://static.xx.fbcdn.net/remaining.js'))
-        self.assertEqual(result['scripts_read'],6);self.assertEqual(result['scripts_not_read'],0)
+        self.assertEqual(result['scripts_read'],14);self.assertEqual(result['scripts_not_read'],0)
         self.assertFalse(result['browser_started']);self.assertFalse(result['submitted'])
 
     async def test_script_budget_omissions_are_explicit(self):

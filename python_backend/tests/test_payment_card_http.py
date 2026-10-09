@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from app.payment_card_http import SaveContext, save_card_http, KEY_DOC_ID, SAVE_DOC_ID
+from app.payment_card_input import build_client_info
 from tests.test_payment_ptt import VALUES
 from tests.test_static_payment_card import ACCOUNT, BUSINESS, PAYMENT, NODE, CREDENTIAL, save_payload, payment_node
 
@@ -58,7 +59,8 @@ class FakeHTTP:
 
 class PaymentHTTPTests(unittest.IsolatedAsyncioTestCase):
     def context(self):
-        return SaveContext(payment=PAYMENT,country='US',currency='USD',client_info=None,
+        return SaveContext(payment=PAYMENT,country='US',currency='USD',
+            client_info=build_client_info(color_depth=24,viewport_width=1440,viewport_height=1000),
             logging_data={'session_id':'synthetic-session'},include_new_fragment=False,runtime_verified=True,
             country_policy_verified=True)
     async def run_flow(self,web,**kwargs):
@@ -96,6 +98,10 @@ class PaymentHTTPTests(unittest.IsolatedAsyncioTestCase):
             result=await self.run_flow(web,context=context)
             self.assertFalse(result['submitted']);self.persist.assert_not_awaited()
             self.assertNotIn(KEY_DOC_ID,[x[0] for x in web.calls]);self.assertNotIn(SAVE_DOC_ID,[x[0] for x in web.calls])
+
+    async def test_invalid_client_context_never_enters_http_flow(self):
+        web=FakeHTTP();result=await self.run_flow(web,context=replace(self.context(),client_info=None))
+        self.assertEqual(result['code'],'CARD_CLIENT_CONTEXT_REQUIRED');self.assertEqual(web.calls,[])
 
     async def test_lost_save_response_keeps_no_replay_and_never_sends_second_save(self):
         web=FakeHTTP();web.lose_save=True;result=await self.run_flow(web)

@@ -24,6 +24,11 @@ must be followed by an exact returned credential/RK/BM/payment-account match.
 Lost verification preserves the returned credential. Bank challenges stay
 ACTION_REQUIRED, without exporting bank parameters. No funding claim is made.
 
+The current `getBillingWizard3DSClientInfo` definition was also located in the
+operator JSON. Its four-field schema is ported and compared with the original
+function. The executor requires declared profile viewport/depth values; it does
+not invent a browser measurement or treat null client info as verified.
+
 The public `prepare` action now uses pinned account/methods/form reads and
 returns FORM_CONFIRMED, which means form availability only, not Save readiness.
 
@@ -52,7 +57,7 @@ concern but does not prove the current builder or live server accepts our Save.
 
 Public card `bind` still uses the legacy implementation. The new HTTP Save
 executor is intentionally not wired to it. Its internal SaveContext defaults
-to unverified; current country/tax policy, client-info schema, consent state and
+to unverified; current country/tax policy, profile client-info values, consent state and
 runtime fragment flag must be confirmed before an adapter can construct a
 verified context. The existing manifest execution flags remain false.
 Offline parity does not establish live card attachment.

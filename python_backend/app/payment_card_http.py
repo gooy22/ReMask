@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import uuid
 
-from .payment_card_input import build_save_input, card_auth_fields
+from .payment_card_input import build_save_input, card_auth_fields, validate_client_info
 from .payment_ptt import encrypt_card_token
 from .private_auth import private_auth_error
 from .static_payment_card import card_screen_proof, read_card_screen, save_response_proof, confirm_saved_card
@@ -64,6 +64,7 @@ Neither exceptions nor responses may export token/PAN/CVV/bank parameters.
         await persist_submit_intent()
         entered_submit = True
     try:
+        validate_client_info(context.client_info)
         auth, secret = card_auth_fields(values)
         web.private_only = True
         evidence = account_proof(await execute(web, 'READ_ACCOUNT', account=account,
@@ -140,6 +141,7 @@ Neither exceptions nor responses may export token/PAN/CVV/bank parameters.
         auth_error = private_auth_error(exc)
         allowed = {'CARD_DATA_INVALID', 'CARD_PTT_TRUST_CHAIN_INVALID', 'CARD_PTT_REQUIRED',
                    'CARD_BILLING_COUNTRY_REQUIRED', 'CARD_BILLING_CURRENCY_REQUIRED',
-                   'CARD_LOGGING_CONTEXT_REQUIRED', 'CARD_CONSENT_INVALID', 'CARD_USABILITY_INTENT_INVALID'}
+                   'CARD_LOGGING_CONTEXT_REQUIRED', 'CARD_CONSENT_INVALID', 'CARD_USABILITY_INTENT_INVALID',
+                   'CARD_CLIENT_CONTEXT_REQUIRED'}
         code = str(exc) if isinstance(exc, ValueError) and str(exc) in allowed else 'CARD_HTTP_UNAVAILABLE'
         return {**base, 'code': auth_error.code if auth_error is not None else code}

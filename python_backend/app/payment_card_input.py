@@ -13,6 +13,29 @@ import re
 from .static_payment_read import _identity
 
 
+def build_client_info(*, color_depth, viewport_width, viewport_height):
+    """Observed getBillingWizard3DSClientInfo schema; dimensions must come from the profile."""
+    if (type(color_depth) is not int or color_depth not in (16, 24, 30, 32)
+            or type(viewport_width) is not int or not 100 <= viewport_width <= 16384
+            or type(viewport_height) is not int or not 100 <= viewport_height <= 16384):
+        raise ValueError('CARD_CLIENT_CONTEXT_REQUIRED')
+    return {'color_depth': str(color_depth), 'java_enabled': False,
+            'screen_height': str(viewport_height), 'screen_width': str(viewport_width)}
+
+
+def validate_client_info(value):
+    if not isinstance(value, dict) or set(value) != {'color_depth','java_enabled','screen_height','screen_width'}:
+        raise ValueError('CARD_CLIENT_CONTEXT_REQUIRED')
+    try:
+        expected=build_client_info(color_depth=int(value['color_depth']),
+            viewport_height=int(value['screen_height']),viewport_width=int(value['screen_width']))
+    except (ValueError,TypeError):
+        raise ValueError('CARD_CLIENT_CONTEXT_REQUIRED') from None
+    if value != expected or value['java_enabled'] is not False:
+        raise ValueError('CARD_CLIENT_CONTEXT_REQUIRED')
+    return expected
+
+
 def card_auth_fields(values):
     number, cvv = values.get('number'), values.get('cvv')
     month, year = values.get('month'), values.get('year')
