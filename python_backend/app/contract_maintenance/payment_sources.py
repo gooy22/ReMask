@@ -66,7 +66,8 @@ async def payment_source_document(web, entry):
     # authentication gates or non-network failures; never change proxy/protocol.
     for attempt in range(2):
         try:
-            return await asyncio.wait_for(web.fetch_text(entry, max_bytes=3_000_000), timeout=20)
+            return await asyncio.wait_for(
+                web.fetch_text(entry, max_bytes=3_000_000, document_navigation=True), timeout=20)
         except Exception as exc:
             transient = isinstance(exc, (asyncio.TimeoutError, httpx.TransportError)) or isinstance(
                 exc.__cause__, (asyncio.TimeoutError, httpx.TransportError))

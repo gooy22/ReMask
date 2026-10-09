@@ -92,6 +92,8 @@ class PaymentSourceTests(unittest.IsolatedAsyncioTestCase):
             (200, '__d("BillingSaveCardCredentialStateMutation.graphql",[],function(){});', 'https://static.xx.fbcdn.net/save.js')]))
         result = await capture_payment_sources(web, account_id='123456789', business_id='987654321', payment_account_id='555666777')
         self.assertEqual(web.fetch_text.await_args_list[1].args, (details,))
+        self.assertTrue(web.fetch_text.await_args_list[1].kwargs['document_navigation'])
+        self.assertNotIn('document_navigation', web.fetch_text.await_args_list[2].kwargs)
         self.assertEqual([row['name'] for row in result['modules']], ['BillingSaveCardCredentialStateMutation.graphql'])
         self.assertEqual(result['document_audit'], [
             {'host': 'business.facebook.com', 'status': 'READ'}, {'host': 'adsmanager.facebook.com', 'status': 'READ'}])
