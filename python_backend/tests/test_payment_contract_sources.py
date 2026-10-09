@@ -9,6 +9,75 @@ from app.provisioning.models import ProvisioningError
 
 
 class PaymentSourceTests(unittest.IsolatedAsyncioTestCase):
+    def test_current_card_screen_and_input_builder_are_required_instead_of_legacy_page_query(self):
+        from pathlib import Path
+        from app.contract_maintenance.payment_sources import REQUIRED_SOURCE_MODULES
+        source = Path(__file__).with_name('fixtures').joinpath('meta_payment_save_observed_20261009.js').read_text()
+        exported = source_export(public_payment_modules(source))
+        for name in ('BillingAddCreditCardScreenQuery.graphql', 'BillingAddCreditCardState',
+                     'BillingSaveCardCredentialStateMutation.graphql', 'BillingSaveCardCredentialState'):
+            self.assertIn(name, REQUIRED_SOURCE_MODULES)
+            self.assertNotIn(name, exported['missing_required_sources'])
+        self.assertIn('BillingCreditCardUtils', exported['missing_required_sources'])
+        self.assertIn('getPTTUtils', exported['missing_required_sources'])
+        self.assertNotIn('BillingAddCreditCardPageViewManagerQuery.graphql', REQUIRED_SOURCE_MODULES)
+
+    def test_critical_input_and_tokenization_sources_survive_a_budget_full_of_unrelated_artifacts(self):
+        critical = public_payment_modules('__d("BillingCreditCardUtils",[],function(){throw new Error("do not execute")});'
+            '__d("getPTTUtils",[],function(){throw new Error("do not execute")});')
+        others = public_payment_modules('__d("BillingUnrelatedQuery.graphql",[],function(){return "unrelated"});')
+        budget = sum(len(row['source'].encode()) for row in critical)
+        result = source_export(others + critical, max_bytes=budget)
+        self.assertEqual({row['name'] for row in result['modules']}, {'BillingCreditCardUtils', 'getPTTUtils'})
+        self.assertTrue(result['export_truncated'])
+
+    async def test_actual_card_screen_read_supplies_lazy_dependencies_only_after_exact_rk_bm_proofs(self):
+        from unittest.mock import patch
+        from app.contract_maintenance.payment_sources import inspect_profile_payment_sources
+        from tests.test_payment_static_methods import account_response, methods_response, ACCOUNT, BM, PAYMENT, NODE
+        options = {'data': {'payment_account': {'payment_legacy_account_id': PAYMENT,
+            'billable_account': {'__typename': 'AdAccount', 'id': ACCOUNT}}}}
+        screen = {'data': {'payment_account': {'id': NODE,
+            'billable_account': {'__typename': 'AdAccount', 'id': ACCOUNT},
+            'billing_payment_method_options': [{'__typename': 'AdAccountNewCreditCardOption',
+                'check_make_default': True, 'can_save_to_business': False, 'verify_tokenization_required': True}]},
+            'viewer': {'primary_email': 'fixture-sensitive'}},
+            'extensions': {'rsrcMap': {'builder': {'type': 'js', 'src': 'https://static.xx.fbcdn.net/builder.js'}},
+                'compMap': {'BillingCreditCardUtils': {'r': ['builder']}}}}
+        class Session:
+            async def __aenter__(self): return self
+            async def __aexit__(self, *args): return None
+            async def facebook_web(self): return web
+            async def facebook_business_browser(self): raise AssertionError('No browser')
+        resolver = SimpleNamespace(resolve=AsyncMock(return_value=SimpleNamespace(cookies={'c_user': '111222333'})))
+        for failure in ('none', 'business', 'payment', 'card_scope', 'card_query', 'card_options'):
+            with self.subTest(failure=failure):
+                import copy
+                methods, card = methods_response(), copy.deepcopy(screen)
+                if failure == 'business': methods['data']['billable_account_by_asset_id']['owning_business']['id'] = '111222333'
+                if failure == 'payment': methods['data']['billable_account_by_asset_id']['billing_payment_account']['id'] = 'foreign'
+                if failure == 'card_scope': card['data']['payment_account']['billable_account']['id'] = BM
+                if failure == 'card_query': card['errors'] = [{'message': 'fixture-sensitive'}]
+                if failure == 'card_options': card['data']['payment_account']['billing_payment_method_options'] = []
+                web = SimpleNamespace(graphql=AsyncMock(return_value=card))
+                async def execute(web, operation, **kwargs):
+                    return {'READ_ACCOUNT': account_response(), 'READ_METHODS': methods, 'READ_OPTIONS': options}[operation]
+                with patch('app.session.ProfileSession', return_value=Session()), \
+                     patch('app.payment_inspection.resolve_payment_asset', AsyncMock(return_value={'business_id': BM})), \
+                     patch('app.static_payment_read.execute', AsyncMock(side_effect=execute)), \
+                     patch('app.contract_maintenance.payment_sources.capture_payment_sources', AsyncMock(return_value={'submitted': False})) as capture:
+                    result = await inspect_profile_payment_sources(resolver, 'fixture', ACCOUNT, state=None)
+                self.assertEqual(web.graphql.await_args.args, ('27759194723782263',
+                    {'paymentAccountID': PAYMENT, 'country': None, 'currency': None, 'intent': None}))
+                self.assertEqual(web.graphql.await_args.kwargs['business_context_id'], BM)
+                documents = capture.await_args.kwargs['loader_documents']
+                accepted = failure in ('none', 'card_options')
+                self.assertEqual(bool(documents), accepted)
+                self.assertEqual(result['payment_card_screen_probe']['loader_maps_accepted'], accepted)
+                self.assertFalse(result['submitted']); self.assertNotIn('fixture-sensitive', json.dumps(result))
+                if accepted:
+                    self.assertEqual(payment_deferred_script_urls('\n'.join(documents)), ['https://static.xx.fbcdn.net/builder.js'])
+
     async def test_document_network_retry_is_bounded_and_preserves_target(self):
         import httpx
         from app.contract_maintenance.payment_sources import payment_source_document
@@ -219,7 +288,7 @@ class PaymentSourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({row['name'] for row in result['modules']},
                          {'BillingSaveCardCredentialStateMutation.graphql', 'getPTTUtils'})
         self.assertNotIn('getPTTUtils', result['missing_required_sources'])
-        self.assertIn('BillingAddCreditCardPageViewManagerQuery.graphql', result['missing_required_sources'])
+        self.assertIn('BillingAddCreditCardScreenQuery.graphql', result['missing_required_sources'])
         self.assertTrue(result['script_limit_reached'])
         self.assertFalse(result['submitted']); self.assertFalse(result['contract_verified'])
 

@@ -29,8 +29,11 @@ MAX_SCRIPTS = 128
 OPTIONAL_DOCUMENT_TIMEOUT = 12
 REQUIRED_SOURCE_MODULES = (
     'BillingHubPaymentSettingsPaymentMethodsListQuery.graphql',
+    'BillingAddCreditCardScreenQuery.graphql',
+    'BillingAddCreditCardState',
     'BillingSaveCardCredentialStateMutation.graphql',
-    'BillingAddCreditCardPageViewManagerQuery.graphql',
+    'BillingSaveCardCredentialState',
+    'BillingCreditCardUtils',
     'BillingCountryCurrencyPageViewManagerQuery.graphql',
     'modularGeneratePTT',
     'getPTTUtils',
@@ -188,6 +191,8 @@ def source_export(rows, *, max_bytes=MAX_EXPORT_BYTES):
     """Keep artifacts and critical senders first; always disclose omissions."""
     def priority(row):
         name = row['name']
+        if name in REQUIRED_SOURCE_MODULES:
+            return -1
         if name.endswith(('.graphql', '_facebookRelayOperation', '$Parameters')):
             return 0
         if any(word in name.lower() for word in ('savecard', 'creditcard', 'token', 'encrypt', 'fbpay', 'generateptt', 'getpttutils')):
@@ -341,11 +346,12 @@ async def _inspect_profile_payment_sources(resolver, profile, target, *, state):
     async with ProfileSession(context) as session:
         web = await session.facebook_web()
         from ..static_payment_read import execute, account_proof, methods_proof, payment_page_proof
+        from ..static_payment_card import read_card_screen, card_screen_proof
         evidence = {'account_id': target, 'account_scope_verified': False,
                     'code': 'PAYMENT_ACCOUNT_QUERY_UNAVAILABLE', 'card_linked': None,
                     'funding_verified': False, 'inventory_complete': False}
-        methods, options_probe, loaders = None, None, []
-        # All three operations are pinned queries. No wizard task, input,
+        methods, options_probe, card_probe, loaders = None, None, None, []
+        # All four operations are pinned queries. No wizard task, input,
         # tokenization or card save mutation is dispatched by maintenance.
         try:
             async with asyncio.timeout(20):
@@ -355,6 +361,7 @@ async def _inspect_profile_payment_sources(resolver, profile, target, *, state):
                     results = await asyncio.gather(
                         execute(web, 'READ_METHODS', account=target, payment=evidence['payment_account_id'], business_id=asset['business_id']),
                         execute(web, 'READ_OPTIONS', payment=evidence['payment_account_id'], business_id=asset['business_id']),
+                        read_card_screen(web, payment=evidence['payment_account_id'], business_id=asset['business_id']),
                         return_exceptions=True)
                     if isinstance(results[0], dict):
                         methods = methods_proof(results[0], target, business_id=asset['business_id'], account_evidence=evidence)
@@ -364,6 +371,22 @@ async def _inspect_profile_payment_sources(resolver, profile, target, *, state):
                         if verified:
                             loaders = payment_loader_documents(results[1])
                             options_probe['loader_maps_observed'] = len(loaders)
+                    if isinstance(results[2], dict):
+                        card_probe = card_screen_proof(results[2], target, account_evidence=evidence)
+                        # Form scope proves RK/payment, not BM ownership. Only
+                        # accept lazy loader maps when the independent methods
+                        # read also proves the selected Business relation.
+                        scoped = (card_probe.get('account_scope_verified') is True and methods is not None
+                                  and methods.get('methods_query_verified') is True
+                                  and methods.get('business_scope_verified') is True
+                                  and methods.get('payment_account_relation_verified') is True)
+                        card_probe['loader_maps_accepted'] = scoped
+                        if scoped:
+                            card_loaders = payment_loader_documents(results[2])
+                            # Prioritize the actual card screen over generic
+                            # payment options when CDN budgets are exhausted.
+                            loaders = card_loaders + loaders
+                            card_probe['loader_maps_observed'] = len(card_loaders)
         except Exception:
             # Keep only sanitized completed probes; failure cannot start a
             # browser or discard the public source capture that follows.
@@ -381,4 +404,6 @@ async def _inspect_profile_payment_sources(resolver, profile, target, *, state):
             result['payment_methods_probe'] = methods
         if options_probe is not None:
             result['payment_options_probe'] = options_probe
+        if card_probe is not None:
+            result['payment_card_screen_probe'] = card_probe
     return {'profile_id': profile, **result}

@@ -82,6 +82,9 @@ def card_screen_proof(payload, account, *, account_evidence):
     # its Relay node and exact RK against an independent READ_ACCOUNT proof.
     if not _payment_scope(payment, account, account_evidence):
         return {**base, 'code': 'CARD_SCREEN_SCOPE_UNVERIFIED'}
+    # Scope can be established even when the account currently has no card
+    # option. Maintenance may use its public loader maps; Save still cannot.
+    base = {**base, 'account_scope_verified': True}
     options = payment.get('billing_payment_method_options')
     if not isinstance(options, list) or len(options) > 100 or any(not isinstance(o, dict) for o in options):
         return {**base, 'code': 'CARD_SCREEN_OPTIONS_INCONCLUSIVE'}

@@ -132,6 +132,22 @@ Missing, partial, rejected or unexpected responses retain duplicate protection.
 Bank URLs, nonces, authentication payloads and personal data are not copied into
 the resulting diagnostics. LINKED never establishes verified funding or a charge.
 
+Maintenance now executes this observed CardScreen query in addition to the
+account, methods and generic options probes. Public resource maps from the
+card-screen response are accepted only after independently confirming its
+payment-node/RK pair and the selected BM relation. The same scoped response
+may supply maps even if no card option is currently offered; this is never
+treated as Save readiness. Card-specific loader maps are prioritized over
+generic option maps within the existing capture budget. A failed card query
+cannot suppress successful earlier read proofs or force a browser fallback.
+
+The completeness requirements now use the actual `BillingAddCreditCardScreenQuery`
+and state module, rather than the absent legacy PageViewManager query, and
+require the Save sender plus `BillingCreditCardUtils`. Required builder and PTT
+modules are retained before unrelated artifacts if the export budget is full.
+This corrects dependency capture only; it does not enable card submission or
+prove that a live source capture actually returned the missing modules.
+
 ## Remaining work and verification limits
 
 Neither the new 54-module files nor the earlier six JSON exports define
