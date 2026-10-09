@@ -39,15 +39,17 @@ class CardIntentLedger:
         finally:
             con.close()
 
-    async def submit(self, profile, account, card_id, attempt_id):
-        await asyncio.to_thread(self._submit, profile, account, card_id, attempt_id)
+    async def submit(self, profile, account, card_id, attempt_id, proof=None):
+        await asyncio.to_thread(self._submit, profile, account, card_id, attempt_id, proof or {})
 
-    def _submit(self, profile, account, card_id, attempt_id):
+    def _submit(self, profile, account, card_id, attempt_id, proof):
         con = self.connect()
         try:
             con.execute('BEGIN IMMEDIATE')
-            con.execute('INSERT INTO card_http_intents(attempt_id,profile,account,card_id,phase,updated_at) VALUES(?,?,?,?,?,?)',
-                (attempt_id, profile, account, card_id, 'SUBMITTED', int(time.time())))
+            safe = {k:proof[k] for k in ('account_id','business_id','payment_account_id','payment_account_node_id',
+                'account_scope_verified','last4','expected_card_type','preexisting_credential_ids') if k in proof}
+            con.execute('INSERT INTO card_http_intents(attempt_id,profile,account,card_id,phase,result,updated_at) VALUES(?,?,?,?,?,?,?)',
+                (attempt_id, profile, account, card_id, 'SUBMITTED', json.dumps(safe), int(time.time())))
             con.commit()
         except sqlite3.IntegrityError:
             con.rollback()
@@ -69,6 +71,10 @@ class CardIntentLedger:
     def _finish(self, attempt_id, phase, safe):
         con = self.connect()
         try:
+            con.execute('BEGIN IMMEDIATE')
+            existing = con.execute('SELECT result FROM card_http_intents WHERE attempt_id=?', (attempt_id,)).fetchone()
+            if existing:
+                safe = {**json.loads(existing['result']), **safe}
             con.execute('UPDATE card_http_intents SET phase=?,result=?,updated_at=? WHERE attempt_id=?',
                 (phase, json.dumps(safe, separators=(',', ':')), int(time.time()), attempt_id))
             con.commit()

@@ -23,7 +23,11 @@ class ServiceHTTP(FakeHTTP):
             payload['data']['payment_account']['payment_legacy_account_id'] = PAYMENT
             payload['data']['payment_account']['billable_account']['currency'] = 'USD'
             return payload
-        return await super().graphql(doc, variables, **kwargs)
+        result = await super().graphql(doc, variables, **kwargs)
+        if doc == '28814526004898205':
+            for row in result['data']['billable_account_by_asset_id']['billing_payment_account']['billing_payment_methods_allowlist_customized']:
+                row['credential']['needs_verification'] = self.bank_required
+        return result
 
 
 class CardServiceTests(unittest.IsolatedAsyncioTestCase):
@@ -72,8 +76,9 @@ class CardServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.call())['status'],'SUBMITTED_UNVERIFIED')
         self.web.calls.clear()
         result=await self.call({**self.payload,'attempt_id':'c'*24})
-        self.assertEqual(result['code'],'CARD_BINDING_RECONCILE_REQUIRED')
-        self.assertEqual(self.web.calls,[])
+        self.assertEqual(result['code'],'CARD_LINK_CONFIRMED')
+        self.assertEqual([x[0] for x in self.web.calls],['28797973873175785','28814526004898205'])
+        self.assertEqual(result['status'],'LINKED')
 
     async def test_lost_verify_reconciles_exact_credential_without_card_or_cvv(self):
         self.web.lose_verification=True
@@ -83,6 +88,36 @@ class CardServiceTests(unittest.IsolatedAsyncioTestCase):
         result=await self.call({'operation':'reconcile','card_id':self.payload['card_id']})
         self.assertEqual(result['status'],'LINKED')
         self.assertEqual([x[0] for x in self.web.calls],['28797973873175785','28814526004898205'])
+
+    async def test_lost_reply_never_commits_foreign_business_or_ambiguous_new_credentials(self):
+        self.web.lose_save=True
+        await self.call()
+        self.web.foreign_business=True
+        result=await self.call({'operation':'reconcile','card_id':self.payload['card_id']})
+        self.assertNotEqual(result['status'],'LINKED')
+        self.state.set_payment_link_state.assert_not_awaited()
+        self.web.foreign_business=False
+        original=self.web.graphql
+        async def ambiguous(doc, variables, **kwargs):
+            result=await original(doc, variables, **kwargs)
+            if doc=='28814526004898205':
+                rows=result['data']['billable_account_by_asset_id']['billing_payment_account']['billing_payment_methods_allowlist_customized']
+                other=copy.deepcopy(rows[0]);other['credential']['id']='other-card-node';rows.append(other)
+            return result
+        self.web.graphql=ambiguous
+        result=await self.call({'operation':'reconcile','card_id':self.payload['card_id']})
+        self.assertNotEqual(result['status'],'LINKED')
+        self.state.set_payment_link_state.assert_not_awaited()
+
+    async def test_bank_required_stays_pending_until_independent_verification_flag_clears(self):
+        self.web.bank_required=True
+        self.assertEqual((await self.call())['status'],'ACTION_REQUIRED')
+        result=await self.call({'operation':'reconcile','card_id':self.payload['card_id']})
+        self.assertEqual(result['status'],'ACTION_REQUIRED')
+        self.state.set_payment_link_state.assert_not_awaited()
+        self.web.bank_required=False
+        result=await self.call({'operation':'reconcile','card_id':self.payload['card_id']})
+        self.assertEqual(result['status'],'LINKED')
 
     async def test_no_attempt_or_client_context_never_opens_session(self):
         for missing, code in [('attempt_id','CARD_DURABLE_INTENT_REQUIRED'),('client_info','CARD_CLIENT_CONTEXT_REQUIRED')]:

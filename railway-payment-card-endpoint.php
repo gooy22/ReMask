@@ -111,7 +111,10 @@ try {
         $httpResult=card_worker($profile,['operation'=>'reconcile','account_id'=>$account,'card_id'=>$id,'asset_hint'=>$assetHint]);
         if(($httpResult['profile_id']??'')!==$profile||($httpResult['account_id']??'')!==$account)throw new RuntimeException('CARD_WORKER_RESULT_UNKNOWN');
         if(($httpResult['code']??'')!=='CARD_HTTP_INTENT_NOT_FOUND'){
-            if(($httpResult['status']??'')==='LINKED'&&is_array($expected))$vault->finish($id,$profile,$account,'LINKED',$httpResult,$expected['attempt_id']??null);
+            if(($httpResult['status']??'')==='LINKED'){
+                $confirmed=$vault->reconcile($id,$profile,$account,$expected,$httpResult['funding']??[]);
+                if(($confirmed['status']??'')!=='LINKED')throw new RuntimeException('CARD_WORKER_RESULT_UNKNOWN');
+            }
             card_out(['ok'=>true,'data'=>['result'=>$httpResult]]);
         }
         $funding=card_worker_inspect($profile,$account,$assetHint);

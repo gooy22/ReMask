@@ -51,6 +51,11 @@ class FixtureInspectionStream {
     function stream_open($path,$mode,$options,&$opened): bool {
         if(session_status()===PHP_SESSION_ACTIVE)throw new RuntimeException('Worker read held the UI session lock');
         $http=stream_context_get_options($this->context)['http'];
+        if(($http['method']??'')==='POST'){
+            $payload=json_decode($http['content']??'',true);
+            if(($payload['operation']??'')!=='reconcile'||isset($payload['cvv'])||isset($payload['card']))throw new RuntimeException('Unexpected financial payload on reconciliation');
+            $this->body=json_encode(['profile_id'=>'Fixture','account_id'=>'123456789','status'=>'BLOCKED','code'=>'CARD_HTTP_INTENT_NOT_FOUND','submitted'=>false]);return true;
+        }
         file_put_contents($GLOBALS['argv'][1].'/request.json',json_encode(['url'=>$path,'http'=>$http]));
         $this->body=file_get_contents($GLOBALS['argv'][1].'/funding.json');return true;
     }

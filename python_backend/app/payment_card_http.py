@@ -19,6 +19,13 @@ KEY_DOC_ID = '23994203586844376'
 SAVE_DOC_ID = '28619313357728847'
 
 
+def number_brand(number):
+    import re
+    return _brand('visa' if number.startswith('4') else 'amex' if re.match(r'^3[47]', number)
+        else 'mastercard' if re.match(r'^(?:5[1-5]|2(?:2[2-9]|[3-6]\d|7[01]))', number)
+        else 'discover' if re.match(r'^(?:6011|65|64[4-9])', number) else '')
+
+
 @dataclass(frozen=True)
 class SaveContext:
     """Internal per-attempt evidence; never accepted directly from an API payload."""
@@ -41,7 +48,7 @@ def key_command(payment, session_id):
         'fetch_unified_wallet_key': False, 'logging_id': session_id}}
 
 
-async def save_card_http(web, *, account, business_id, values, context, persist_submit_intent):
+async def save_card_http(web, *, account, business_id, values, context, persist_submit_intent, retain_verification_context=None):
     """One Save attempt; independent read confirms the exact returned credential.
 
 The caller must hold a durable per-profile/RK/card lock. The callback must
@@ -82,6 +89,11 @@ Neither exceptions nor responses may export token/PAN/CVV/bank parameters.
         # Existing masked matches are ambiguous and cannot authorize another Save.
         if any(row.get('last4') == values['number'][-4:] for row in methods.get('payment_methods', [])):
             return {**base, 'code': 'CARD_MASK_COLLISION_PREEXISTING'}
+        if retain_verification_context is not None:
+            # Metadata needed to reconcile a lost Save reply, never card input.
+            await retain_verification_context({**evidence, 'business_id':business_id,
+                'last4':values['number'][-4:], 'expected_card_type':number_brand(values['number']), 'preexisting_credential_ids':
+                [row['credential_id'] for row in methods.get('payment_methods', [])]})
         screen_payload = await read_card_screen(web, business_id=business_id, payment=payment)
         screen = card_screen_proof(screen_payload, account, account_evidence=evidence)
         if screen.get('card_form_verified') is not True:

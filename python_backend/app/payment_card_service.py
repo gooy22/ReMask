@@ -69,7 +69,7 @@ async def profile_payment_card_http(resolver, profile, payload, *, state=None):
                 retained = {**base, 'status': 'SUBMITTED_UNVERIFIED', 'submitted': True,
                             'retry_blocked': True, 'code': 'CARD_BINDING_RECONCILE_REQUIRED'}
                 saved = json.loads(pending['result'])
-                if pending['card_id'] != card_id or not saved.get('credential') or saved.get('status') == 'ACTION_REQUIRED':
+                if pending['card_id'] != card_id or not (saved.get('credential') or saved.get('preexisting_credential_ids') is not None):
                     return {**retained, 'status': 'ACTION_REQUIRED' if saved.get('status') == 'ACTION_REQUIRED' else retained['status'],
                             'code': 'CARD_BANK_CONFIRMATION_REQUIRED' if saved.get('status') == 'ACTION_REQUIRED' else retained['code']}
                 asset = await resolve_payment_asset(profile, target, state, payload.get('asset_hint'))
@@ -78,11 +78,23 @@ async def profile_payment_card_http(resolver, profile, payload, *, state=None):
                 profile_context = await resolver.resolve(profile)
                 async with ProfileSession(profile_context) as session:
                     methods = await inspect_methods(await session.facebook_web(), account=target, business_id=asset['business_id'])
+                    if not saved.get('credential'):
+                        matches = [row for row in methods.get('payment_methods', [])
+                            if row.get('last4') == saved.get('last4') and row.get('type') == saved.get('expected_card_type')
+                            and row.get('credential_id') not in saved['preexisting_credential_ids']
+                            and row.get('needs_verification') is False]
+                        if len(matches) != 1:
+                            return retained
+                        row = matches[0]
+                        saved['credential'] = {'id':row['credential_id'], 'type':row['type'], 'last4':row['last4']}
+                    if saved.get('status') == 'ACTION_REQUIRED' and not any(row.get('credential_id') == saved['credential']['id']
+                            and row.get('needs_verification') is False for row in methods.get('payment_methods', [])):
+                        return {**retained, 'status':'ACTION_REQUIRED','code':'CARD_BANK_CONFIRMATION_REQUIRED'}
                     result = confirm_saved_card({**saved, 'status': 'VERIFYING'}, methods, business_id=asset['business_id'])
                     if result.get('status') == 'LINKED':
                         await ledger.finish(pending['attempt_id'], result)
                         await state.set_payment_link_state(profile, target, True, source='card_http_exact_credential')
-                        return {**base, **result, 'funding': methods}
+                        return {**base, **result, 'funding': {**methods, 'profile_id':profile}}
                     return retained
             raw_card = payload.get('card')
             if not isinstance(raw_card, dict):
@@ -114,10 +126,16 @@ async def profile_payment_card_http(resolver, profile, payload, *, state=None):
                         'user_session_id':str(uuid.uuid4())}, include_new_fragment=False,
                     runtime_verified=True, network_consent=payload.get('network_consent'),
                     recurring_consent=payload.get('recurring_consent'))
+                verification_context = {}
+                async def retain(proof):
+                    verification_context.update(proof)
                 async def persist():
-                    await ledger.submit(profile, target, card_id, attempt_id)
+                    await ledger.submit(profile, target, card_id, attempt_id, verification_context)
                 result = await save_card_http(web, account=target, business_id=business,
-                    values=values, context=context, persist_submit_intent=persist)
+                    values=values, context=context, persist_submit_intent=persist,
+                    retain_verification_context=retain)
+                if isinstance(result.get('funding'), dict):
+                    result['funding']['profile_id'] = profile
                 own_pending = await ledger.pending(profile, target)
                 if own_pending and own_pending['attempt_id'] == attempt_id:
                     await ledger.finish(attempt_id, result)
