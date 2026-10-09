@@ -9,6 +9,36 @@ from app.provisioning.models import ProvisioningError
 
 
 class PaymentSourceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_document_network_retry_is_bounded_and_preserves_target(self):
+        import httpx
+        from app.contract_maintenance.payment_sources import payment_source_document
+        entry='https://business.facebook.com/billing_hub/payment_settings/'
+        web=SimpleNamespace(fetch_text=AsyncMock(side_effect=[httpx.ReadTimeout('fixture-secret'),(200,'ok',entry)]))
+        self.assertEqual(await payment_source_document(web,entry),(200,'ok',entry))
+        self.assertEqual(web.fetch_text.await_count,2)
+        self.assertTrue(all(call.args==(entry,) for call in web.fetch_text.await_args_list))
+        web.fetch_text=AsyncMock(side_effect=httpx.ReadTimeout('fixture-secret'))
+        with self.assertLogs('remask.payment_maintenance',level='INFO') as logs:
+            with self.assertRaises(ProvisioningError) as raised:
+                await payment_source_document(web,entry)
+        self.assertEqual(web.fetch_text.await_count,2)
+        self.assertNotIn('fixture-secret',str(raised.exception)+' '.join(logs.output))
+        self.assertEqual(raised.exception.code,'PAYMENT_CONTRACT_SOURCE_TIMEOUT')
+
+    async def test_document_auth_failure_is_not_retried_or_exposed(self):
+        from fb_worker import AuthenticationError
+        import httpx
+        from app.contract_maintenance.payment_sources import payment_source_document
+        error=AuthenticationError('fixture-secret')
+        error.__cause__=httpx.ReadTimeout('fixture-secret')
+        web=SimpleNamespace(fetch_text=AsyncMock(side_effect=error))
+        with self.assertLogs('remask.payment_maintenance',level='WARNING') as logs:
+            with self.assertRaises(ProvisioningError) as raised:
+                await payment_source_document(web,'https://business.facebook.com/billing_hub/payment_settings/')
+        self.assertEqual(web.fetch_text.await_count,1)
+        self.assertEqual(raised.exception.code,'SESSION_EXPIRED')
+        self.assertNotIn('fixture-secret',str(raised.exception)+' '.join(logs.output))
+
     async def test_only_public_modules_are_exported_never_authenticated_html(self):
         entry = 'https://business.facebook.com/billing_hub/payment_settings/?asset_id=123456789&business_id=987654321'
         html = '<script>__d("BillingInlineSecret",[],function(){var fb_dtsg="fixture-secret";});</script><script src="https://static.xx.fbcdn.net/payment.js"></script>'

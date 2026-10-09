@@ -13,6 +13,7 @@ import html
 import json
 import logging
 import re
+import httpx
 from urllib.parse import urlencode, urlsplit
 
 from ..private_contract_discovery import _module_nodes, _script_urls
@@ -29,6 +30,43 @@ REQUIRED_SOURCE_MODULES = (
     'BillingSaveCardCredentialStateMutation.graphql',
     'BillingCountryCurrencyPageViewManagerQuery.graphql',
 )
+
+
+def source_failure(exc, stage):
+    """Classify failures without exporting exception text, URLs or auth data."""
+    from ..private_auth import private_auth_error
+    from ..session import ProfileContextError
+    auth = private_auth_error(exc)
+    if auth is not None:
+        error = auth
+    elif isinstance(exc, (asyncio.TimeoutError, httpx.TimeoutException)):
+        error = ProvisioningError('PAYMENT_CONTRACT_SOURCE_TIMEOUT', 'Payment source capture timed out.', retryable=True)
+    elif isinstance(exc, ProfileContextError):
+        error = ProvisioningError('PROFILE_CONTEXT_ERROR', 'Profile context is unavailable.', retryable=True)
+    elif isinstance(exc, httpx.TransportError) or isinstance(exc.__cause__, (asyncio.TimeoutError, httpx.TransportError)):
+        error = ProvisioningError('PAYMENT_SOURCE_NETWORK_UNAVAILABLE', 'Payment source HTTP transport failed.', retryable=True)
+    elif isinstance(exc, ProvisioningError):
+        error = exc
+    else:
+        error = ProvisioningError('PAYMENT_CONTRACT_SOURCE_UNAVAILABLE', 'Payment source capture failed.', retryable=True)
+    log.warning('payment source failure stage=%s exception_type=%s code=%s', stage, type(exc).__name__, error.code)
+    return error
+
+
+async def payment_source_document(web, entry):
+    from ..private_auth import private_auth_error
+    # A bounded retry of this read-only GET only. Never retry GraphQL POST,
+    # authentication gates or non-network failures; never change proxy/protocol.
+    for attempt in range(2):
+        try:
+            return await asyncio.wait_for(web.fetch_text(entry, max_bytes=3_000_000), timeout=20)
+        except Exception as exc:
+            transient = isinstance(exc, (asyncio.TimeoutError, httpx.TransportError)) or isinstance(
+                exc.__cause__, (asyncio.TimeoutError, httpx.TransportError))
+            if attempt == 0 and transient and private_auth_error(exc) is None and not isinstance(exc, ProvisioningError):
+                log.info('payment source document retry reason=network_or_timeout attempt=2')
+                continue
+            raise source_failure(exc, 'billing_document') from None
 
 
 def _public_js_url(url):
@@ -160,7 +198,7 @@ async def capture_payment_sources(web, *, account_id, business_id, loader_docume
         raise ValueError('INVALID_PAYMENT_TARGET')
     query = urlencode({'asset_id': account_id, 'business_id': business_id})
     entry = 'https://business.facebook.com/billing_hub/payment_settings/?' + query
-    status, body, final = await web.fetch_text(entry, max_bytes=3_000_000)
+    status, body, final = await payment_source_document(web, entry)
     gate = _auth_gate(final, body)
     if gate:
         raise ProvisioningError(gate, 'Payment contract maintenance requires an authenticated profile.', retryable=True)
@@ -226,6 +264,15 @@ async def capture_payment_sources(web, *, account_id, business_id, loader_docume
 
 
 async def inspect_profile_payment_sources(resolver, profile, target, *, state):
+    try:
+        return await _inspect_profile_payment_sources(resolver, profile, target, state=state)
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise source_failure(exc, 'maintenance') from None
+
+
+async def _inspect_profile_payment_sources(resolver, profile, target, *, state):
     from ..payment_inspection import account_id, resolve_payment_asset
     from ..session import ProfileSession
     target = account_id(target)

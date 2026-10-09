@@ -64,6 +64,11 @@ try {
         $context=stream_context_create(['http'=>['method'=>'GET','header'=>"Accept: application/json\r\nX-Remask-Worker-Key: ".$key."\r\n",'timeout'=>100,'ignore_errors'=>true,'follow_location'=>0]]);
         $raw=@file_get_contents($base.'/api/v1/profiles/'.rawurlencode($profile).'/payment-contract-sources?'.http_build_query(['account_id'=>$account],'','&',PHP_QUERY_RFC3986),false,$context);
         $result=$raw===false?null:json_decode($raw,true);unset($raw,$context,$key);
+        $sourceErrors=['SESSION_EXPIRED','CHECKPOINT_REQUIRED','TWO_FACTOR_REQUIRED','BUSINESS_LOGIN_GATE',
+            'PROFILE_CONTEXT_ERROR','INVALID_PAYMENT_TARGET','PAYMENT_ACCOUNT_BINDING_MISSING','PERSONAL_AD_ACCOUNT_EXCLUDED',
+            'PAYMENT_CONTRACT_SOURCE_TIMEOUT','PAYMENT_SOURCE_NETWORK_UNAVAILABLE','PAYMENT_DOCUMENT_UNAVAILABLE',
+            'PAYMENT_CONTRACT_SOURCE_UNAVAILABLE'];
+        if(is_array($result)&&is_string($result['detail']??null)&&in_array($result['detail'],$sourceErrors,true))throw new RuntimeException($result['detail']);
         if(!is_array($result)||($result['profile_id']??'')!==$profile||($result['account_id']??'')!==$account)throw new RuntimeException('PAYMENT_CONTRACT_SOURCE_UNAVAILABLE');
         // A source snapshot is a file, so Safari can save the exact JSON bytes
         // instead of printing a potentially clipped document to PDF.
