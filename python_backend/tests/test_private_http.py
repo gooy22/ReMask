@@ -64,6 +64,17 @@ class PrivateHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("token", str(logs.output))
         self.assertNotIn("c_user", str(logs.output))
 
+    async def test_library_info_logging_does_not_expose_session_or_redirect_url(self):
+        client = self.make()
+        await self.mock(client, lambda request: httpx.Response(200, text='ok',
+            extensions={'http_version': b'HTTP/2'}))
+        with self.assertLogs(level='INFO') as logs:
+            async with client.get('https://business.facebook.com/billing/?session_id=fixture-secret') as response:
+                await response.text()
+        self.assertIn('host=business.facebook.com', str(logs.output))
+        self.assertNotIn('fixture-secret', str(logs.output))
+        self.assertNotIn('/billing/', str(logs.output))
+
     async def test_redirected_post_is_not_followed_or_replayed(self):
         calls = []
         client = self.make()

@@ -14,6 +14,9 @@ from typing import Any
 import httpx
 
 log = logging.getLogger("remask_worker")
+# HTTPX's INFO messages include full redirect URLs (including session IDs).
+# This transport emits only method, host, status and negotiated protocol below.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 class _Body:

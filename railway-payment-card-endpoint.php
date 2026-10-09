@@ -65,6 +65,9 @@ try {
         $raw=@file_get_contents($base.'/api/v1/profiles/'.rawurlencode($profile).'/payment-contract-sources?'.http_build_query(['account_id'=>$account],'','&',PHP_QUERY_RFC3986),false,$context);
         $result=$raw===false?null:json_decode($raw,true);unset($raw,$context,$key);
         if(!is_array($result)||($result['profile_id']??'')!==$profile||($result['account_id']??'')!==$account)throw new RuntimeException('PAYMENT_CONTRACT_SOURCE_UNAVAILABLE');
+        // A source snapshot is a file, so Safari can save the exact JSON bytes
+        // instead of printing a potentially clipped document to PDF.
+        header('Content-Disposition: attachment; filename="remask-payment-contracts.json"');
         card_out(['ok'=>true,'data'=>$result]);
     }
     if($_SERVER['REQUEST_METHOD']!=='POST')card_out(['ok'=>false,'error'=>['message'=>'POST_REQUIRED']],405);

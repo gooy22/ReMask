@@ -390,7 +390,7 @@ class WebModuleContracts:
         return results[0] if len(results) == 1 else None
 
 
-def _script_urls(body, base):
+def _script_urls(body, base, *, limit=24):
     result = []
     patterns = (r'<script[^>]+src=["\']([^"\']+)["\']',
                 r'["\'](?:src|uri)["\']\s*:\s*["\']([^"\']+\.js(?:\?[^"\']*)?)["\']')
@@ -408,7 +408,7 @@ def _script_urls(body, base):
                 continue
             if url not in result:
                 result.append(url)
-    return result[:24]
+    return result[:limit]
 
 
 async def discover_private_ad_account_contract(web, *, business_id, account_name, currency, timezone_id, actor_id):
