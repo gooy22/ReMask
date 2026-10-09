@@ -122,10 +122,19 @@ Neither exceptions nor responses may export token/PAN/CVV/bank parameters.
         payload = await web.graphql(KEY_DOC_ID, key_vars,
             friendly_name='PaymentsCometGetServerEncryptionKeyMutation', endpoint_url=ENDPOINT,
             business_context_id=business_id)
-        root = payload.get('data', {}).get('get_server_encryption_key') if isinstance(payload, dict) else None
-        if (not _clean_payload(payload) or not isinstance(root, dict) or root.get('payments_error') is not None
-                or root.get('client_mutation_id') != key_vars['input']['client_mutation_id']):
+        data = payload.get('data') if isinstance(payload, dict) else None
+        root = data.get('get_server_encryption_key') if isinstance(data, dict) else None
+        if not _clean_payload(payload) or not isinstance(root, dict):
             return {**base, 'code': 'CARD_PTT_KEY_RESPONSE_UNCONFIRMED'}
+        if root.get('payments_error') is not None:
+            return {**base, 'code': 'CARD_PTT_KEY_REJECTED'}
+        # Current FBPay consumer uses the trust chain, not the nullable Relay echo.
+        # A foreign non-null echo still rejects the response. Encryption below
+        # independently validates every certificate against the pinned Meta CA.
+        if root.get('client_mutation_id') not in (None, key_vars['input']['client_mutation_id']):
+            return {**base, 'code': 'CARD_PTT_KEY_MUTATION_MISMATCH'}
+        if root.get('dev_external') is True:
+            return {**base, 'code': 'CARD_PTT_DEVELOPMENT_KEY_REJECTED'}
         stage('PTT_ENCRYPT')
         token = encrypt_card_token(auth, secret, root.get('trust_chain'))
         if policy.get('bin_country_required'):

@@ -45,6 +45,7 @@ class FakeHTTP:
         self.key_error=False; self.auth_after_key=False; self.bank_required=False; self.lose_verification=False
         self.screen=read_screen();self.bin=read_bin()
         self.tax_status='PENDING';self.tax_can_update=False;self.bin_country='US'
+        self.key_echo='match';self.dev_external=False
     async def graphql(self,doc,variables,**kwargs):
         self.calls.append((doc,copy.deepcopy(variables),kwargs))
         if doc=='28797973873175785':return read_account()
@@ -64,7 +65,8 @@ class FakeHTTP:
         if doc==COUNTRY_BIN_DOC_ID:
             return {'data':{'credit_card_bin_properties':{'country_code':self.bin_country}}}
         if doc==KEY_DOC_ID:
-            return {'data':{'get_server_encryption_key':{'client_mutation_id':variables['input']['client_mutation_id'],
+            return {'data':{'get_server_encryption_key':{'client_mutation_id':variables['input']['client_mutation_id'] if self.key_echo=='match' else self.key_echo,
+                'dev_external':self.dev_external,
                 'trust_chain':['synthetic leaf','synthetic intermediate'],'payments_error':{} if self.key_error else None}}}
         if doc==SAVE_DOC_ID:
             if self.auth_after_key:raise RuntimeError('private session precheck rejected')
@@ -109,6 +111,20 @@ class PaymentHTTPTests(unittest.IsolatedAsyncioTestCase):
             web=FakeHTTP();result=await self.run_flow(web,context=context)
             self.assertEqual(result['code'],'CARD_PRIVATE_RUNTIME_CONTEXT_UNCONFIRMED')
             self.assertEqual(web.calls,[]);self.persist.assert_not_awaited()
+
+    async def test_nullable_key_echo_uses_validated_chain_but_foreign_echo_and_dev_key_stop(self):
+        web=FakeHTTP();web.key_echo=None
+        result=await self.run_flow(web)
+        self.assertEqual(result['status'],'LINKED')
+        for mode,code in (('foreign','CARD_PTT_KEY_MUTATION_MISMATCH'),
+                          ('dev','CARD_PTT_DEVELOPMENT_KEY_REJECTED')):
+            web=FakeHTTP()
+            if mode=='foreign':web.key_echo='different-request'
+            else:web.dev_external=True
+            result=await self.run_flow(web)
+            self.assertEqual(result['code'],code)
+            self.assertNotIn(SAVE_DOC_ID,[x[0] for x in web.calls])
+            self.persist.assert_not_awaited()
 
     async def test_live_country_mismatch_cannot_be_bypassed_by_verified_runtime_context(self):
         web=FakeHTTP()
