@@ -94,18 +94,59 @@ profile cookies/proxy and zero transport retries. HTTPX library INFO logging is
 disabled because it otherwise exposes full redirected session URLs; the shared
 transport retains method/host/status/protocol diagnostics without URL queries.
 
+## Operator Save source supplied later on October 9
+
+The two uploaded text files each contain 54 public module definitions. Unlike
+the earlier exports, these include the full Save artifact and its sender.
+Six relevant definitions are retained without executing JavaScript in
+`tests/fixtures/meta_payment_save_observed_20261009.js`; their SHA-256 hashes,
+operation kinds, IDs, top-level arguments and mutation root binding are tested
+against `app/contracts/meta_payment_card_20261009.json`.
+
+| Operation | doc_id | Confirmed role |
+| --- | --- | --- |
+| BillingAddCreditCardScreenQuery | 27759194723782263 | Read card options for an exact payment account |
+| BillingSaveCardCredentialStateMutation | 28619313357728847 | Observed Save envelope and response, execution disabled |
+
+`app/static_payment_card.py` implements the pinned card screen read and masked
+Save response interpretation. The card screen query does not select
+`payment_legacy_account_id`; its payment Relay node and typed billable RK are
+instead matched against an independent READ_ACCOUNT proof. Optional country,
+currency and usability intent preserve the observed null defaults. The Save
+builder's `ADD_PM` is a different intent and is not substituted into this query.
+
+The observed Save sender passes exactly four top-level variables: `input`,
+`getRiskVerificationInfoForAllCredentialsOnPaymentAccount`, `paymentAccountID`
+and `includeCreateNewFromOldFragment`. The last is a runtime experiment value,
+not a verified constant. The entire `input` comes from
+`BillingCreditCardUtils.buildSaveCardCredentialInput`; its nested schema cannot
+be derived from these four variable names or the form field names.
+
+The response parser requires the independently confirmed payment-node/RK pair,
+typed credit-card identity and the expected brand/last4. A returned business
+payment account alone does not establish RK linkage. Save `SUCCESS` produces a
+VERIFYING candidate; an independent methods proof must match the exact returned
+Relay credential, RK, BM, payment account and mask before returning LINKED.
+`AUTHENTICATION_REQUIRED` remains ACTION_REQUIRED even if the card is listed.
+Missing, partial, rejected or unexpected responses retain duplicate protection.
+Bank URLs, nonces, authentication payloads and personal data are not copied into
+the resulting diagnostics. LINKED never establishes verified funding or a charge.
+
 ## Remaining work and verification limits
 
-The new snapshot still does not contain the
-`BillingSaveCardCredentialStateMutation` definition or sender. An operation name in
-`BillingTokenProxyFallbackPolicy` does not establish its request schema. The
-observed policy explicitly disallows a Token Proxy fallback for that web card
-operation; the actual tokenization implementation must be inspected rather than
-replaced with an assumed legacy endpoint.
+Neither the new 54-module files nor the earlier six JSON exports define
+`BillingCreditCardUtils` or `getPTTUtils`. These are the remaining evidence gaps:
+the Save input builder and the implementation used to generate/encrypt PTT.
+An observed wrapper, public-key query or Save doc_id does not replace them.
+The observed fallback policy explicitly disallows Token Proxy fallback for this
+operation. No guessed PTT algorithm, nested card input or legacy fallback has
+been added.
 
-Full HTTP card binding still requires complete observed schema/response evidence
-for card tokenization, ATTACH and setup mutation/result handling, followed
-by exact instrument/RK verification and retained-intent reconciliation. No card
-binding success, fresh methods-query success or complete deeper lazy-source
-coverage has yet been established live for this revision. Unit fixture success
-alone cannot certify those results.
+The Save catalog deliberately has `input_schema_verified=false`,
+`tokenization_verified=false` and `execution_enabled=false`. There is no Save
+dispatcher in this module. Changing a manifest flag alone is rejected. The
+existing public card submission route is unchanged and still uses its legacy
+browser implementation; the new module is staged independently until the input
+builder/tokenization and required setup contracts are complete. No card has
+been submitted by this change, and full HTTP attachment has not been tested live.
+It must not be deployed or described as a completed migration of card submission.

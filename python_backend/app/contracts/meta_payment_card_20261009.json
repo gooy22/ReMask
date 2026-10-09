@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "revision": "20261009-payment-card-v1",
+  "scope": "observed_save_envelope_no_tokenization_no_submission",
+  "evidence": {
+    "source": "Operator-provided public JavaScript payment-savecard.txt, 54 module definitions",
+    "module_hashes": {
+      "BillingAddCreditCardScreenQuery_facebookRelayOperation": "ed420b87967650d179aa1a35cab8063954aa9cf116bb62fbd487953ffbf07810",
+      "BillingAddCreditCardScreenQuery.graphql": "5dafad87f1df2a0fd66bf2dcf5c053859e465d7a6c6b548772b17ec0c66992f0",
+      "BillingAddCreditCardState": "1dc6ff0a4162023f757c910e1996b37845767cedbb98f321cf8780264c4dccff",
+      "BillingSaveCardCredentialStateMutation_facebookRelayOperation": "760d4bffab5cd8c42bdd6ce857c7f18e75af2f451555000d8d89c1f8375200e9",
+      "BillingSaveCardCredentialStateMutation.graphql": "bea7d51c9161c7fb6817b42ab8f10a01870d93fed3634f4ccfc43e84b73e9d98",
+      "BillingSaveCardCredentialState": "b81e4fce321698330b74d518fe73f21c64f8519a7d41a837d95c8c18a6369eb2"
+    }
+  },
+  "operations": {
+    "READ_CARD_SCREEN": {
+      "doc_id": "27759194723782263",
+      "friendly_name": "BillingAddCreditCardScreenQuery",
+      "endpoint_url": "https://business.facebook.com/api/graphql/",
+      "operation_kind": "query",
+      "variables": {
+        "paymentAccountID": "$payment",
+        "country": null,
+        "currency": null,
+        "intent": null
+      }
+    },
+    "SAVE_CARD": {
+      "doc_id": "28619313357728847",
+      "friendly_name": "BillingSaveCardCredentialStateMutation",
+      "endpoint_url": "https://business.facebook.com/api/graphql/",
+      "operation_kind": "mutation",
+      "root_field": "xfb_billing_save_card_credential",
+      "root_argument": {
+        "data": "$input"
+      },
+      "top_level_arguments": [
+        "input",
+        "getRiskVerificationInfoForAllCredentialsOnPaymentAccount",
+        "paymentAccountID",
+        "includeCreateNewFromOldFragment"
+      ],
+      "observed_variables": {
+        "getRiskVerificationInfoForAllCredentialsOnPaymentAccount": true,
+        "input": "$buildSaveCardCredentialInput_result",
+        "paymentAccountID": "$payment",
+        "includeCreateNewFromOldFragment": "$attempt_to_fix_stale_wizard_queries_univser"
+      },
+      "input_schema_verified": false,
+      "tokenization_verified": false,
+      "execution_enabled": false,
+      "missing_source_modules": [
+        "BillingCreditCardUtils",
+        "getPTTUtils"
+      ],
+      "response_statuses": {
+        "SUCCESS": "VERIFY_EXACT_CREDENTIAL_AND_ACCOUNT",
+        "AUTHENTICATION_REQUIRED": "MANUAL_BANK_CONFIRMATION"
+      },
+      "allow_token_proxy_fallback": false
+    }
+  }
+}
