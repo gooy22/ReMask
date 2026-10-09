@@ -112,6 +112,13 @@ class PaymentHTTPTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result['code'],'CARD_PRIVATE_RUNTIME_CONTEXT_UNCONFIRMED')
             self.assertEqual(web.calls,[]);self.persist.assert_not_awaited()
 
+    async def test_predicted_country_difference_without_tax_flag_does_not_block_save(self):
+        web=FakeHTTP()
+        web.screen['data']['payment_account']['billable_account']['billable_account_tax_info']['predicated_business_country_code']='UA'
+        result=await self.run_flow(web)
+        self.assertEqual(result['status'],'LINKED')
+        self.assertNotIn(TAX_DOC_ID,[c[0] for c in web.calls])
+
     async def test_nullable_key_echo_uses_validated_chain_but_foreign_echo_and_dev_key_stop(self):
         web=FakeHTTP();web.key_echo=None
         result=await self.run_flow(web)

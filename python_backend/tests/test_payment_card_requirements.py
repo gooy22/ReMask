@@ -106,7 +106,14 @@ class CardRequirementsTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result['country_policy_verified']);self.assertFalse(result['is_prepaid_only'])
         payload=read_screen();payload['data']['payment_account']['billable_account']['payment_modes']=['SUPPORTS_PREPAY']
         self.assertTrue(country_policy_proof(payload,country='US')['is_prepaid_only'])
-        self.assertEqual(country_policy_proof(payload,country='DE')['code'],'CARD_BILLING_COUNTRY_MISMATCH')
+        self.assertEqual(country_policy_proof(payload,country='DE')['code'],'CARD_COUNTRY_CONTEXT_CHANGED')
+
+    def test_prediction_alone_is_not_the_tax_country_flag(self):
+        payload=read_screen();node=payload['data']['payment_account']['billable_account']
+        node['billable_account_tax_info']['predicated_business_country_code']='UA'
+        self.assertTrue(country_policy_proof(payload,country='US')['country_policy_verified'])
+        node['billing_flags']=['TAX_COUNTRY_MISMATCH']
+        self.assertEqual(country_policy_proof(payload,country='US')['code'],'CARD_TAX_COUNTRY_VALIDATION_REQUIRED')
 
     def test_tax_mismatch_missing_policy_or_unknown_modes_never_approve_country(self):
         for field,value in (('billing_flags',['TAX_COUNTRY_MISMATCH']),('billing_flags',None),

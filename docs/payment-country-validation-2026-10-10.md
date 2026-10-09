@@ -50,3 +50,11 @@ and timezone. It never invokes close/create-new or a country acknowledgement.
 Separate account and setup reads must confirm the same RK/payment pair and
 desired country before the card executor can continue. Query/selector failures
 do not qualify as a locked-country fallback.
+
+The post-update live form also exposed an unrelated local restriction: a
+different predicated_business_country_code caused a country-mismatch result
+even when validating the form against its own selected country. The captured
+Save caller uses TAX_COUNTRY_MISMATCH, not the prediction, to invoke country
+verification. Prediction metadata now cannot create that flag; a real flag
+still executes its scoped tax/BIN verification. The prepare result displays
+the current country read directly from the exact RK's Meta form.

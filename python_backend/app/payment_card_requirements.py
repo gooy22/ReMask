@@ -117,12 +117,16 @@ If present, the missing tax-validation contract cannot be skipped.
             or not isinstance(tax, dict) or type(tax.get('can_update_tax_country')) is not bool
             or not isinstance(modes, list) or len(modes) > 100 or any(not isinstance(x, str) for x in modes)):
         return {**base, 'code': 'CARD_COUNTRY_POLICY_INCONCLUSIVE'}
-    actual, predicted = tax.get('business_country_code'), tax.get('predicated_business_country_code')
+    actual = tax.get('business_country_code')
     if not isinstance(actual, str) or not re.fullmatch(r'[A-Z]{2}', actual):
         return {**base, 'code': 'CARD_COUNTRY_POLICY_INCONCLUSIVE'}
     mismatch = 'TAX_COUNTRY_MISMATCH' in flags
-    if actual != country or not mismatch and predicted not in (None, '', actual):
-        return {**base, 'code': 'CARD_BILLING_COUNTRY_MISMATCH'}
+    base['billing_country'] = actual
+    # The current caller passes only TAX_COUNTRY_MISMATCH to the Save state.
+    # A geography prediction is neither a selected-country mismatch nor a
+    # substitute for that live flag and its explicit validation query.
+    if actual != country:
+        return {**base, 'code': 'CARD_COUNTRY_CONTEXT_CHANGED'}
     if not {'SUPPORTS_PREPAY', 'SUPPORTS_POSTPAY'}.intersection(modes):
         return {**base, 'code': 'CARD_PAYMENT_MODE_INCONCLUSIVE'}
     return {**base, 'country_policy_verified': not mismatch, 'payment_modes_verified': True,
