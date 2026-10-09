@@ -47,7 +47,7 @@ function paymentCardMessage(result){
     CARD_RECURRING_CONSENT_REQUIRED:'Для этой карты Meta требует согласие на регулярные платежи. Согласие не проставлено; карта не отправлена.',
     CARD_TOKENIZATION_CONSENT_REQUIRED:'Meta требует согласие на токенизацию карты. Согласие не проставлено; карта не отправлена.',
     CARD_COUNTRY_POLICY_INCONCLUSIVE:'Meta не подтвердила правила страны выбранного РК. Карта не отправлена.',
-    CARD_TAX_COUNTRY_VALIDATION_REQUIRED:'Meta требует отдельную проверку страны РК. Карта не отправлена.',
+    CARD_TAX_COUNTRY_VALIDATION_REQUIRED:'ReMask ещё не поддерживает требуемую ветку проверки страны Meta. Нужен подтверждённый HTTP-контракт этой проверки. Карта не отправлена.',
     CARD_BILLING_COUNTRY_MISMATCH:'Страна оплаты не совпала с подтверждённой страной Meta. Настройки не изменены; карта не отправлена.',
     CARD_PAYMENT_MODE_INCONCLUSIVE:'Meta не подтвердила режим оплаты РК. Карта не отправлена.',
     CARD_CLIENT_CONTEXT_REQUIRED:'Не подтверждены данные клиента для банковской проверки. Карта не отправлена.',
@@ -285,7 +285,8 @@ async function showFunding(restored=null){
     <div class="mt-3"><button id="paymentCardBind" type="button" class="btn btn-primary">Привязать карту</button></div>
     <details class="mt-2"><summary>Диагностика</summary>
       <button id="paymentCardPrepare" type="button">Проверить форму Meta</button>
-      <button id="paymentCardInspect" type="button">Проверить привязанные карты</button></details>
+      <button id="paymentCardInspect" type="button">Проверить привязанные карты</button>
+      <button id="paymentContractAudit" type="button">Проверить HTTP-контракты (без отправки карты)</button></details>
     <div class="ws-muted mt-2">Проверка результата читает способы оплаты выбранного РК в Meta. Она подтверждает только наличие карты, не проверяет списание или подтверждение банка. CVV не нужен для этой проверки; РК обрабатываются по одному.</div>
     <div id="paymentCardAssignments" class="ws-muted mt-2"></div>
     <div id="paymentCardProgress" class="ws-muted mt-2" aria-live="polite"></div>
@@ -397,6 +398,13 @@ async function showFunding(restored=null){
       }
     }
   },false));
+  $('paymentContractAudit').addEventListener('click',()=>run(async()=>{
+    if(rows.length!==1)throw new Error('Для диагностики HTTP-контракта выберите один РК.');
+    const r=rows[0],data=await apiJson('ajax/paymentCards.php',post({action:'contract_audit',profile:r.profile,account_id:r.id}));
+    const result=data.result||{},line=document.createElement('div');line.className='ws-result';
+    line.textContent=r.profile+' / '+r.id+': диагностика публичных схем завершена. Карта не отправлена.';container.appendChild(line);
+    const pre=document.createElement('pre');pre.textContent=JSON.stringify(result,null,2);container.appendChild(pre);
+  }));
   try{
     await refreshCards(restored?.cardId||'');
     if(restored)$('paymentCardProgress').textContent='Группа из '+rows.length+' РК восстановлена. Состояния загружены с сервера. Для новых привязок введите CVV; незавершённые отправки не повторяются.';

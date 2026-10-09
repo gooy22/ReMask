@@ -33,6 +33,7 @@ REQUIRED_SOURCE_MODULES = (
     'BillingAddCreditCardState',
     'BillingSaveCardCredentialStateMutation.graphql',
     'BillingSaveCardCredentialState',
+    'BillingCountryVerificationUtils',
     'BillingCreditCardUtils',
     'BillingCountryCurrencyPageViewManagerQuery.graphql',
     'modularGeneratePTT',
@@ -113,12 +114,12 @@ def payment_deferred_script_urls(document):
                 else:
                     target[key] = row
     def component_priority(name):
-        if re.search(r'SaveCard|AddCreditCard', name):
+        if re.search(r'CountryVerification|TaxCountry|BinProperties|SaveCard|AddCreditCard', name):
             return 0
         return 1 if re.search(r'PTT|FBPayAuthLibrary', name) else 2
     result, visited, observed_urls = [], set(), set()
     roots = [name for name in components if re.search(
-        r'(?:Billing.*(?:Card|Credential|PaymentMethod|CountryCurrency|PTT)|Payment.*(?:Card|Token)|FBPay.*|PlatformTrustToken.*|modularGeneratePTT|getPTTUtils)', name)]
+        r'(?:Billing.*(?:Card|Credential|PaymentMethod|CountryCurrency|CountryVerification|TaxCountry|BinProperties|PTT)|Payment.*(?:Card|Token)|FBPay.*|PlatformTrustToken.*|modularGeneratePTT|getPTTUtils)', name)]
     pending = deque(sorted(roots, key=component_priority))
     while pending:
         name = pending.popleft()

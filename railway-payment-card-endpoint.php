@@ -14,14 +14,15 @@ header('Cache-Control: no-store, max-age=0');
 function card_out(array $data,int $status=200): never {
     http_response_code($status);echo json_encode($data,JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR);exit;
 }
-function card_worker(string $profile,array $payload): array {
+function card_worker(string $profile,array $payload,string $operationPath='payment-card'): array {
+    if(!in_array($operationPath,['payment-card','payment-contract-audit'],true))throw new RuntimeException('CARD_WORKER_RESULT_UNKNOWN');
     $base=rtrim((string)(getenv('REMASK_PYTHON_WORKER_URL')?:'http://127.0.0.1:8081'),'/');
     $key=(string)(getenv('REMASK_WORKER_API_KEY')?:'');
     if($key==='')throw new RuntimeException('CARD_WORKER_KEY_UNAVAILABLE');
     $body=json_encode($payload,JSON_THROW_ON_ERROR);
     $context=stream_context_create(['http'=>['method'=>'POST','header'=>"Content-Type: application/json\r\nAccept: application/json\r\nX-Remask-Worker-Key: ".$key."\r\n",
         'content'=>$body,'timeout'=>130,'ignore_errors'=>true,'follow_location'=>0]]);
-    $raw=@file_get_contents($base.'/api/v1/profiles/'.rawurlencode($profile).'/payment-card',false,$context);
+    $raw=@file_get_contents($base.'/api/v1/profiles/'.rawurlencode($profile).'/'.$operationPath,false,$context);
     unset($body,$payload,$context);
     if($raw===false)throw new RuntimeException('CARD_WORKER_RESULT_UNKNOWN');
     $result=json_decode($raw,true);unset($raw);
@@ -85,6 +86,16 @@ try {
     $input=$_POST;
     if(str_contains(strtolower((string)($_SERVER['CONTENT_TYPE']??'')),'application/json'))$input=json_decode((string)file_get_contents('php://input'),true,16,JSON_THROW_ON_ERROR);
     if(!is_array($input))throw new InvalidArgumentException('CARD_REQUEST_INVALID');
+    if(($input['action']??'')==='contract_audit'){
+        // Deliberately separate from the raw source-download route. This
+        // authenticated/CSRF-protected read exports public query metadata only.
+        if(array_diff(array_keys($input),['action','profile','account_id']))throw new InvalidArgumentException('CARD_REQUEST_INVALID');
+        $profile=trim((string)($input['profile']??''));$account=preg_replace('/^act_/','',trim((string)($input['account_id']??'')));
+        if($profile===''||strlen($profile)>160||!preg_match('/^\d{5,30}$/D',$account))throw new InvalidArgumentException('INVALID_PAYMENT_TARGET');
+        $result=card_worker($profile,['account_id'=>$account],'payment-contract-audit');
+        if(($result['profile_id']??'')!==$profile||($result['account_id']??'')!==$account||($result['status']??'')!=='PUBLIC_QUERY_AUDIT')throw new RuntimeException('CARD_WORKER_RESULT_UNKNOWN');
+        card_out(['ok'=>true,'data'=>['result'=>$result]]);
+    }
     require_once __DIR__.'/../classes/RemaskPaymentCardVault.php';
     $vault=new RemaskPaymentCardVault();$action=(string)($input['action']??'');
     if($action==='list')card_out(['ok'=>true,'data'=>$vault->all()]);
