@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "repairs": [
+    {
+      "id": "operator-page-reset-20261009-profile15-bm1451903470239662",
+      "item_id": "workspace-business-page-facebook:61594946647826-1451903470239662",
+      "profile_id": "15",
+      "business_id": "1451903470239662",
+      "actor_id": "61594946647826",
+      "page_name": "PrgssTeam",
+      "authorized_at": 1791527732,
+      "reason": "Operator authorized retiring the old unknown Page CREATE on 2026-10-09 at 06:35:32 UTC after repeated unsuccessful reconciliation. This does not prove that the old submit failed."
+    }
+  ]
+}

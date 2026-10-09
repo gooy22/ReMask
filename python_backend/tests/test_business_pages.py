@@ -361,6 +361,39 @@ class BusinessPageTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await self.state.page_access_confirmed('15', BM2, RK2, full_control=True, page_id=FP2))
         self.session.facebook_business_browser.assert_not_awaited()
 
+    async def test_operator_reset_of_legacy_nested_intent_allows_one_new_page_create_and_repeat_is_noop(self):
+        from app.provisioning.page_intent_reset import apply_page_intent_resets
+        await self._seed_existing_bundles()
+        item = 'workspace-business-page-facebook:' + UID + '-' + BM2
+        scope = 'workspace-business-page:' + BM2
+        await BusinessPageStore(self.state, self.context, BM2).patch(creation_item_id=item, creation_profile_id='15')
+        await self.state.set_running(item, '15', scope, ProvisioningStep.FAN_PAGES)
+        await self.state.checkpoint(item, '15', scope, ProvisioningStep.FAN_PAGES,
+            {'phase': 'PAGE_CREATE_RESULT_UNKNOWN', 'resume_from': 'RECONCILE_CREATE',
+                'business_id': BM2, 'create_actor_id': UID, 'active_page_name': 'PrgssTeam',
+                'target_names': ['PrgssTeam'], 'active_before_ids': [FP1],
+                'transport': 'business_suite_page_static_http2'})
+        await self.state.init()
+        self.assertEqual((await apply_page_intent_resets(self.state))[0]['outcome'], 'APPLIED')
+        self.assertEqual(self.meta.posts, [])
+        payload = {'desired': {'ad_accounts': 2}, 'parameters': {'AD_ACCOUNT': {'currency': 'USD', 'timezone_id': 1}}}
+        with patch('app.provisioning.private_create_handlers._rk_inventory',
+                side_effect=lambda web, business, name, account: {'id': account, 'asset_ui_id': account}), \
+                patch('app.provisioning.service._await_profile_mutation_cooldown', AsyncMock()):
+            result = await PrepareService(self.state, ProvisioningService(self.state)).run(
+                item_id='reset-then-prepare', profile_id='15', context=self.context, session=self.session, payload=payload)
+            posts = copy.deepcopy(self.meta.posts)
+            await self.state.init()
+            self.assertEqual((await apply_page_intent_resets(self.state))[0]['outcome'], 'ALREADY_APPLIED')
+            await PrepareService(self.state, ProvisioningService(self.state)).run(
+                item_id='repeat-after-reset', profile_id='15', context=self.context, session=self.session, payload=payload)
+        self.assertTrue(result['ready_to_launch'])
+        self.assertEqual([name for name, _ in posts], [ASSIGN, 'FP_CREATE', ASSIGN])
+        self.assertEqual(self.meta.posts, posts)
+        self.assertEqual(self.meta.owners, {FP1: BM1, FP2: BM2})
+        self.assertEqual(self.meta.posts[1][1]['input']['business_id'], BM2)
+        self.session.facebook_business_browser.assert_not_awaited()
+
     async def test_legacy_unknown_submit_recovers_free_profile_page_and_claims_without_create(self):
         await self._legacy_recovery_flow()
 

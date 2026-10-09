@@ -126,6 +126,9 @@ class WorkerPool:
 
     async def start(self) -> None:
         await self.provisioning_state.init()
+        from .provisioning.page_intent_reset import apply_page_intent_resets
+        for outcome in await apply_page_intent_resets(self.provisioning_state):
+            log.warning('FAN_PAGE intent reset %s', json.dumps(outcome, separators=(',', ':')))
         await self._restore_workspace_bindings()
         recovered=await self.store.recover()
         if str(os.getenv('REMASK_STARTUP_STATE_AUDIT','0')).strip().lower() in {'1','true','yes','on'}:

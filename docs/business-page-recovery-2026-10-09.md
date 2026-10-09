@@ -69,3 +69,28 @@ and runs the bundle again without any new mutation. Wrong actors, a Page owned
 by another BM, empty documents and HTTP failures cannot bypass duplicate
 protection. Live recovery remains unconfirmed until actual Meta evidence is
 recorded; this test is not a successful production Page CREATE.
+
+## Explicit operator retirement of the legacy intent
+
+At 06:35:32 UTC the operator authorized resetting the retained old attempt for
+profile 15 / actor 61594946647826 / BM 1451903470239662. The repair manifest
+names its exact stable item. This is operator authorization to permit a new
+attempt, not a claim that Meta rejected the original submit or that a complete
+profile inventory proved absence. A remote orphan/duplicate remains possible.
+
+Worker startup archives the original scoped legacy rows and retires their
+active uncertainty in one SQLite transaction. Historical copies for the same
+actor, BM and name are retired too, so the historical lookup cannot resurrect
+the same guard. The repair is recorded once in a durable ledger; a later
+restart never resets a new CREATE attempt. New attempts with a submit UUID,
+known Page/profile IDs, successful steps, an active RUNNING step or a bound
+Page are protected. Startup-normalized QUEUED legacy nested steps are eligible.
+Confirmed business, ad account, Page assignments and payment state are untouched.
+
+The migration sends no Meta request and queues no Job. The next Prepare keeps
+its normal exact-BM inventory, disclosure/category precheck, durable submit
+journal, response inspection and independent ownership/full-rights verification.
+The original evidence remains available in the reset archive. The integration
+test seeds the old nested intent, restarts, applies the repair, creates only the
+missing Page for bundle two, confirms full rights and repeats without another
+mutation. It does not establish a successful live Meta CREATE.
