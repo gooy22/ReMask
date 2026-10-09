@@ -31,6 +31,7 @@ class TwoBundleMeta:
         self.profile = SimpleNamespace(cookies={'c_user': UID}, name='15')
         self.bootstrap = AsyncMock(return_value=SimpleNamespace(actor_id=UID))
         self.owners = {FP1: BM1}
+        self.names = {FP1: 'PrgssTeam', FP2: 'PrgssTeam'}
         self.tasks = {FP1: [P, PARTIAL], RK1: [R, PARTIAL], RK2: []}
         self.posts = []
         self.lose_claim = False
@@ -49,7 +50,7 @@ class TwoBundleMeta:
             bm = variables['businessID']
             edges = [{'node': {'__typename': 'Page', 'assetID': page, 'assetType': 'PAGE'},
                 'nameColumn': {'bizkit_settings_render_strategy_no_business_id': {'business_object': {
-                    'business_object_id': page, 'business_object_name': 'PrgssTeam'}}}}
+                    'business_object_id': page, 'business_object_name': self.names[page]}}}}
                 for page, owner in self.owners.items() if owner == bm]
             return {'data': {'node': {'id': bm, 'connected_objects': {'edges': edges,
                 'page_info': {'has_next_page': False, 'end_cursor': None}}}}}
@@ -63,6 +64,7 @@ class TwoBundleMeta:
             await before_submit()
             self.posts.append(('FP_CREATE', copy.deepcopy(variables)))
             self.owners[FP2] = variables['input']['business_id']
+            self.names[FP2] = variables['input']['name']
             self.tasks[FP2] = []
             if self.lose_page:
                 self.lose_page = False
@@ -76,7 +78,7 @@ class TwoBundleMeta:
             page = variables['pageID']
             if not self.page_read_available:
                 return {'data': {'page': None}}
-            return {'data': {'page': {'id': page, 'name': 'PrgssTeam', 'ownerBusiness': {'id': self.owners[page]} if self.owners[page] else None,
+            return {'data': {'page': {'id': page, 'name': self.names[page], 'ownerBusiness': {'id': self.owners[page]} if self.owners[page] else None,
                 'permission_to_claim_to_business': 'ALLOWED'}}}
         if friendly_name == RIGHTS:
             return standalone_rights(variables['assetID'], USER, self.tasks.get(variables['assetID'], []), bm)
@@ -96,7 +98,7 @@ class TwoBundleMeta:
         return {'data': {}}
 
     async def pages(self, session):
-        return [{'id': page, 'name': 'PrgssTeam', 'business_id': owner or ''} for page, owner in self.owners.items()]
+        return [{'id': page, 'name': self.names[page], 'business_id': owner or ''} for page, owner in self.owners.items()]
 
     async def create(self, session, *, before_pages, before_submit, **kwargs):
         await before_submit({'before_ids': [row['id'] for row in before_pages], 'transport': 'private_http'})
@@ -286,12 +288,47 @@ class BusinessPageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([row[0] for row in posts], [ASSIGN, 'FP_CREATE', ASSIGN])
         self.assertEqual(posts[0][1]['assetID'], RK2)
         self.assertEqual(posts[1][1]['input']['business_id'], BM2)
+        self.assertEqual(posts[1][1]['input']['name'], 'PrgsTeam')
+        self.assertEqual((await BusinessPageStore(self.state, self.context, BM2).get())['name'], 'PrgsTeam')
         self.meta.fetch_text.assert_not_awaited()
         self.assertEqual(self.meta.owners, {FP1: BM1, FP2: BM2})
         self.assertEqual((await self.common.get())['page_id'], FP1)
         self.session.facebook_business_browser.assert_not_awaited()
         self.assertTrue(await self.state.page_access_confirmed('15', BM2, RK2, full_control=True, page_id=FP2))
         self.assertFalse(await self.state.page_access_confirmed('15', BM2, RK2, full_control=True, page_id=FP1))
+
+    async def test_prepare_replaces_rejected_second_name_keeps_audit_and_completes_full_rights(self):
+        from app.business_page_response import inspect_create_response
+        await self._seed_existing_bundles()
+        item = 'workspace-business-page-facebook:' + UID + '-' + BM2
+        scope = 'workspace-business-page:' + BM2
+        await BusinessPageStore(self.state, self.context, BM2).patch(creation_item_id=item, creation_profile_id='15')
+        await self.state.set_running(item, '15', scope, ProvisioningStep.FAN_PAGES)
+        rejected = {'phase': 'PAGE_CREATE_REJECTED', 'resume_from': 'MANUAL_REQUIRED',
+            'business_id': BM2, 'target_names': ['PrgssTeam'], 'active_page_name': 'PrgssTeam',
+            'create_actor_id': UID, 'create_attempt_id': 'rejected-original-attempt',
+            'create_response': inspect_create_response({'data': {'additional_profile_plus_create': {
+                'additional_profile': None, 'name_error': 'Already manage PrgssTeam.'}}})}
+        await self.state.checkpoint(item, '15', scope, ProvisioningStep.FAN_PAGES, rejected)
+        payload = {'desired': {'ad_accounts': 2}, 'parameters': {'AD_ACCOUNT': {'currency': 'USD', 'timezone_id': 1}}}
+        with patch('app.provisioning.private_create_handlers._rk_inventory',
+                side_effect=lambda web, business, name, account: {'id': account, 'asset_ui_id': account}), \
+                patch('app.provisioning.service._await_profile_mutation_cooldown', AsyncMock()):
+            prepare = PrepareService(self.state, ProvisioningService(self.state))
+            result = await prepare.run(item_id='name-corrected', profile_id='15', context=self.context, session=self.session, payload=payload)
+            posts = copy.deepcopy(self.meta.posts)
+            await self.state.init()
+            await prepare.run(item_id='name-corrected-repeat', profile_id='15', context=self.context, session=self.session, payload=payload)
+        self.assertTrue(result['ready_to_launch'])
+        creates = [body for op, body in posts if op == 'FP_CREATE']
+        self.assertEqual(len(creates), 1)
+        self.assertEqual(creates[0]['input']['name'], 'PrgsTeam')
+        self.assertEqual(self.meta.posts, posts)
+        retained = (await self.state.step(item, ProvisioningStep.FAN_PAGES))['result']
+        self.assertEqual(retained['rejected_create_attempts'], [rejected])
+        self.assertTrue(await self.state.page_access_confirmed('15', BM2, RK2, full_control=True, page_id=FP2))
+        self.assertEqual(self.meta.names[FP1], 'PrgssTeam')
+        self.session.facebook_business_browser.assert_not_awaited()
 
     async def test_page_failure_keeps_rk_full_control_and_next_job_repairs_only_page(self):
         from fb_worker import AuthenticationError

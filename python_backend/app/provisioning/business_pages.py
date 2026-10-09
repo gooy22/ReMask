@@ -130,6 +130,16 @@ async def ensure_business_page(session, params, state, resolver=None):
                 session.context.profile_id, store.business_id, config['page_id'])
             return config
 
+        desired_name = str(params.get('bundle_page_name') or '').strip()
+        if desired_name and desired_name != config['name']:
+            from ..private_business_fan_page_create import can_retarget_page_name
+            creation_item = config.get('creation_item_id') or ('workspace-business-page-' + store.actor_key + '-' + store.business_id)
+            saved = ((await state.step(creation_item, ProvisioningStep.FAN_PAGES)) or {}).get('result') or {}
+            if not saved or can_retarget_page_name(saved):
+                config = await store.patch(name=desired_name)
+            # A sent, unresolved CREATE keeps its original name for verification.
+            # Slot order and naming policy never replace a retained Page intent.
+
         legacy = await store.common.get()
         bindings = await store.bindings()
         excluded = {page for bm, page in bindings.items() if bm != store.business_id}

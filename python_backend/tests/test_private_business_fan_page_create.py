@@ -190,6 +190,43 @@ class BusinessPageHTTPTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(checkpoint['create_response']['meta_error_code'], '1234')
         self.assertEqual(len(self.meta.posts), 1)
 
+    async def test_changed_name_archives_explicit_rejection_and_creates_only_once(self):
+        original = self.meta.graphql
+        self.rejection({'data': {'additional_profile_plus_create': {'additional_profile': None,
+            'name_error': 'Already manage PrgssTeam.'}}})
+        with self.assertRaises(ProvisioningError):
+            await self.run_page()
+        rejected = (await self.state.step('create', ProvisioningStep.FAN_PAGES))['result']
+        self.meta.graphql = original
+        self.params['names'] = ['PrgsTeam']
+        result = await self.run_page()
+        self.assertEqual(result['pages'][0]['name'], 'PrgsTeam')
+        self.assertEqual(result['rejected_create_attempts'], [rejected])
+        self.assertNotEqual(result['create_attempt_id'], rejected['create_attempt_id'])
+        await self.state.complete('create', '15', 'page', ProvisioningStep.FAN_PAGES, result)
+        await self.run_page()
+        self.assertEqual(len(self.meta.posts), 2)
+        self.assertEqual(self.meta.posts[-1][1]['input']['name'], 'PrgsTeam')
+        self.assertEqual((await self.state.step('create', ProvisioningStep.FAN_PAGES))['result']['rejected_create_attempts'], [rejected])
+
+    async def test_name_change_never_discards_unknown_submit_or_returned_identity(self):
+        evidence = inspect_create_response({'data': {'additional_profile_plus_create': {
+            'additional_profile': None, 'name_error': 'Already manage PrgssTeam.'}}})
+        for patch_value in (
+                {'phase': 'PAGE_CREATE_RESULT_UNKNOWN', 'resume_from': 'RECONCILE_CREATE', 'create_response': {}},
+                {'phase': 'PAGE_CREATE_REJECTED', 'create_response': evidence, 'response_page_id': FP2},
+                {'phase': 'PAGE_CREATE_REJECTED', 'create_response': {**evidence, 'additional_profile_id': '61500012345678'}},
+                {'phase': 'PAGE_CREATE_REJECTED', 'create_response': {**evidence, 'outcome': 'RESULT_UNKNOWN'}}):
+            with self.subTest(patch_value=patch_value):
+                await self.state.checkpoint('create', '15', 'page', ProvisioningStep.FAN_PAGES,
+                    {'business_id': BM2, 'target_names': ['PrgssTeam'], 'create_actor_id': UID,
+                        'response_page_id': '', **patch_value})
+                self.params['names'] = ['PrgsTeam']
+                with self.assertRaises(ProvisioningError) as caught:
+                    await self.run_page()
+                self.assertEqual(caught.exception.code, 'FAN_PAGES_CHECKPOINT_MISMATCH')
+        self.assertEqual(self.meta.posts, [])
+
     async def test_server_error_or_missing_profile_field_does_not_clear_submit_intent(self):
         for result in ({'additional_profile': None, 'error_message': 'Temporary failure', 'error_category': 'system'},
                 {'error_message': 'Rejected', 'error_category': 'user'}, {'additional_profile': None}):

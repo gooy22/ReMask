@@ -157,6 +157,19 @@ async def reconcile(web, *, business, name, before, response_page='', actor='', 
         'Page CREATE is retained for BM ' + business + '; exact Page ownership has not yet been confirmed. No duplicate CREATE was sent.' + detail, retryable=True)
 
 
+def can_retarget_page_name(checkpoint):
+    """A different name is a new operation only after authoritative non-creation."""
+    evidence = checkpoint.get('create_response') or {}
+    if any(checkpoint.get(key) for key in ('page_id', 'page_ids', 'pages', 'created_pages',
+            'response_page_id', 'additional_profile_id')) or any(evidence.get(key)
+            for key in ('page_id', 'additional_profile_id')) or (checkpoint.get('browser_diagnostic') or {}).get('response_page_id'):
+        return False
+    phase = checkpoint.get('phase')
+    if phase == 'PAGE_CREATE_REJECTED':
+        return evidence.get('version') == 1 and evidence.get('outcome') == 'REJECTED' and bool(evidence.get('name_error'))
+    return phase in {'CREATE_NOT_SUBMITTED', 'PAGE_CREATE_RESET_AUTHORIZED'}
+
+
 async def create_business_page(session, params, *, state, item_id, profile_id, scope_key, checkpoint):
     business = _id(params.get('business_id'))
     names = params.get('names')
@@ -174,13 +187,26 @@ async def create_business_page(session, params, *, state, item_id, profile_id, s
     if not actor or str(getattr(bootstrap, 'actor_id', '')) != actor:
         raise ProvisioningError('SESSION_EXPIRED', 'Page HTTP actor differs from the selected profile.', retryable=True)
     if ((checkpoint.get('business_id') and checkpoint['business_id'] != business)
-            or (checkpoint.get('target_names') and checkpoint['target_names'] != [name])
             or (checkpoint.get('create_actor_id') and checkpoint['create_actor_id'] != actor)):
         raise ProvisioningError('FAN_PAGES_CHECKPOINT_MISMATCH', 'Retained Page intent belongs to another target or actor.')
 
     async def save(patch):
         return await state.checkpoint(item_id, profile_id, scope_key, ProvisioningStep.FAN_PAGES,
             {'business_id': business, 'target_names': [name], 'create_actor_id': actor, 'transport': TRANSPORT, **patch})
+
+    if checkpoint.get('target_names') and checkpoint['target_names'] != [name]:
+        if not can_retarget_page_name(checkpoint):
+            raise ProvisioningError('FAN_PAGES_CHECKPOINT_MISMATCH', 'Retained Page intent belongs to another name; verification is required.')
+        history = list(checkpoint.get('rejected_create_attempts') or [])
+        if checkpoint.get('phase') == 'PAGE_CREATE_REJECTED':
+            history.append({key: value for key, value in checkpoint.items() if key != 'rejected_create_attempts'})
+        # Archive the rejection and retire its intent in one durable checkpoint
+        # before precheck/CREATE. A restart sees either rejection or the new name.
+        checkpoint = await save({'phase': 'CREATE_NOT_SUBMITTED', 'resume_from': 'CREATE_NEXT',
+            'active_page_name': '', 'active_before_ids': [], 'create_attempt_id': '',
+            'create_response': {}, 'response_page_id': '', 'additional_profile_id': '',
+            'meta_error_code': '', 'meta_error_category': '', 'response_has_errors': False,
+            'recovery_diagnostics': [], 'rejected_create_attempts': history})
 
     reserved = {_id(value) for value in params.get('reserved_page_ids') or []}
     reserved.discard('')
@@ -306,6 +332,7 @@ async def create_business_page(session, params, *, state, item_id, profile_id, s
         'page_ids': [page['id']], 'pages': [page], 'created_pages': [page], 'target_names': [name], 'category': category,
         'create_response': committed.get('create_response') or {}, 'create_attempt_id': committed.get('create_attempt_id') or '',
         'recovery_diagnostics': committed.get('recovery_diagnostics') or [],
+        'rejected_create_attempts': committed.get('rejected_create_attempts') or [],
         'resolution_source': committed['resolution_source'],
         'original_submit_response_recovered': committed['original_submit_response_recovered'],
         'business_id': business, 'ad_account_id': '', 'page_business_attached': attached,

@@ -802,6 +802,7 @@ class PrepareService:
                     ).strip(),
                     "policies_accepted": True,
                     "page_topology": "ONE_PAGE_PER_BUSINESS",
+                    "bundle_page_name": "PrgsTeam" if bundle["slot"] == 2 else "PrgssTeam",
                 }
                 # A profile-wide Page selector is not a valid selector for
                 # every BM. Saved per-Business identity is authoritative.
