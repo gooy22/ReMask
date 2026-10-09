@@ -22,7 +22,8 @@ async def read_tax_country_validation(web, *, business_id, evidence):
         {'paymentAccountID': _identity(evidence['payment_account_id'])},
         friendly_name='BillingCountryVerificationUtilsTaxCountryValidationDataQuery',
         endpoint_url=ENDPOINT, business_context_id=_identity(business_id))
-    payment = payload.get('data', {}).get('payment_account') if isinstance(payload, dict) else None
+    data = payload.get('data') if isinstance(payload, dict) else None
+    payment = data.get('payment_account') if isinstance(data, dict) else None
     account = payment.get('billable_account') if isinstance(payment, dict) else None
     tax = account.get('billable_account_tax_info') if isinstance(account, dict) else None
     info = payment.get('tax_country_validation_info') if isinstance(payment, dict) else None
@@ -31,10 +32,12 @@ async def read_tax_country_validation(web, *, business_id, evidence):
             or not isinstance(account, dict) or account.get('__typename') != 'AdAccount'
             or str(account.get('id', '')).removeprefix('act_') != evidence.get('account_id')
             or not isinstance(tax, dict) or type(tax.get('can_update_tax_country')) is not bool
-            or not isinstance(info, dict) or not isinstance(info.get('status'), str)):
+            or 'tax_country_validation_info' not in payment
+            or info is not None and (not isinstance(info, dict) or 'status' not in info
+                or info['status'] is not None and not isinstance(info['status'], str))):
         return {'code': 'CARD_TAX_COUNTRY_QUERY_UNCONFIRMED', 'tax_status_confirmed': False}
     return {'code': 'CARD_TAX_COUNTRY_STATUS_READ',
-            'tax_status_confirmed': info['status'] == 'CONFIRMED',
+            'tax_status_confirmed': isinstance(info, dict) and info['status'] == 'CONFIRMED',
             'can_update_tax_country': tax['can_update_tax_country']}
 
 
@@ -64,7 +67,8 @@ async def confirm_bin_country(web, *, business_id, payment, number, token, count
         {'bin': number[:6], 'paymentAccountID': _identity(payment), 'ptt': token},
         friendly_name='BillingCountryVerificationUtilsBinPropertiesQuery',
         endpoint_url=ENDPOINT, business_context_id=_identity(business_id))
-    row = payload.get('data', {}).get('credit_card_bin_properties') if isinstance(payload, dict) else None
+    data = payload.get('data') if isinstance(payload, dict) else None
+    row = data.get('credit_card_bin_properties') if isinstance(data, dict) else None
     detected = row.get('country_code') if isinstance(row, dict) else None
     if not _clean_payload(payload) or not isinstance(detected, str) or not re.fullmatch(r'[A-Z]{2}', detected):
         return {'country_policy_verified': False, 'code': 'CARD_BIN_COUNTRY_UNCONFIRMED'}

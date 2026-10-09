@@ -52,3 +52,17 @@ class CountryValidationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result['code'],'CARD_TAX_COUNTRY_QUERY_UNCONFIRMED')
             self.assertFalse(result['tax_status_confirmed'])
             self.assertNotIn('private',json.dumps(result))
+
+    async def test_explicit_null_status_is_unconfirmed_and_missing_scope_still_rejects(self):
+        web=FakeHTTP()
+        payload=await web.graphql(TAX_DOC_ID,{})
+        for info in (None,{'status':None}):
+            payload['data']['payment_account']['tax_country_validation_info']=info
+            reader=SimpleNamespace(graphql=AsyncMock(return_value=payload))
+            result=await read_tax_country_validation(reader,business_id=BUSINESS,evidence=account_proof(read_account(),ACCOUNT))
+            self.assertEqual(result['code'],'CARD_TAX_COUNTRY_STATUS_READ')
+            self.assertFalse(result['tax_status_confirmed'])
+        for broken in ({'data':None},{'data':{}},{'errors':[{}]}):
+            reader=SimpleNamespace(graphql=AsyncMock(return_value=broken))
+            result=await read_tax_country_validation(reader,business_id=BUSINESS,evidence=account_proof(read_account(),ACCOUNT))
+            self.assertEqual(result['code'],'CARD_TAX_COUNTRY_QUERY_UNCONFIRMED')
