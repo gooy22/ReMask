@@ -1,11 +1,12 @@
 """HTTP card executor. No browser, dynamic document lookup, funding or replay.
 
-Kept outside the public dispatcher until the runtime Save context is confirmed.
+The public adapter enables only its bounded runtime verification path.
 An exact account precheck alone is not evidence of consent or builder compatibility.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import logging
 import uuid
 
 from .payment_card_input import build_save_input, card_auth_fields, validate_client_info
@@ -65,6 +66,9 @@ Neither exceptions nor responses may export token/PAN/CVV/bank parameters.
         return {**base, 'code': 'CARD_DURABLE_INTENT_REQUIRED'}
     entered_submit = False
     saved = None
+    def stage(name):
+        logging.getLogger('remask.payment_card').info(
+            'card HTTP stage account=%s business=%s stage=%s browser_started=False', account, business_id, name)
     async def before_submit():
         nonlocal entered_submit
         await persist_submit_intent()
@@ -73,6 +77,7 @@ Neither exceptions nor responses may export token/PAN/CVV/bank parameters.
         validate_client_info(context.client_info)
         auth, secret = card_auth_fields(values)
         web.private_only = True
+        stage('PRECHECK_ACCOUNT')
         evidence = account_proof(await execute(web, 'READ_ACCOUNT', account=account,
                                               business_id=business_id), account)
         if evidence.get('account_scope_verified') is not True:
@@ -80,6 +85,7 @@ Neither exceptions nor responses may export token/PAN/CVV/bank parameters.
         payment = evidence['payment_account_id']
         if payment != _identity(context.payment):
             return {**base, 'code': 'CARD_SAVE_SCOPE_UNVERIFIED'}
+        stage('PRECHECK_METHODS')
         methods = methods_proof(await execute(web, 'READ_METHODS', account=account, payment=payment,
                                              business_id=business_id), account, business_id=business_id,
                                              account_evidence=evidence)
@@ -94,6 +100,7 @@ Neither exceptions nor responses may export token/PAN/CVV/bank parameters.
             await retain_verification_context({**evidence, 'business_id':business_id,
                 'last4':values['number'][-4:], 'expected_card_type':number_brand(values['number']), 'preexisting_credential_ids':
                 [row['credential_id'] for row in methods.get('payment_methods', [])]})
+        stage('PRECHECK_CARD_SCREEN')
         screen_payload = await read_card_screen(web, business_id=business_id, payment=payment)
         screen = card_screen_proof(screen_payload, account, account_evidence=evidence)
         if screen.get('card_form_verified') is not True:
@@ -103,12 +110,14 @@ Neither exceptions nor responses may export token/PAN/CVV/bank parameters.
             return {**base, 'code': policy['code']}
         if screen['options']['verify_tokenization_required'] and context.network_consent is not True:
             return {**base, 'code': 'CARD_TOKENIZATION_CONSENT_REQUIRED'}
+        stage('PRECHECK_BIN_REQUIREMENTS')
         requirements = requirements_proof(await read_card_requirements(web, business_id=business_id,
             payment=payment, number=values['number'], country=context.country, currency=context.currency),
             values=values, is_prepaid_only=policy['is_prepaid_only'], recurring_consent=context.recurring_consent)
         if requirements.get('card_requirements_verified') is not True:
             return {**base, 'code': requirements['code'], 'missing_fields': requirements['required_fields']}
         key_vars = key_command(payment, str(uuid.uuid4()))
+        stage('PTT_KEY')
         payload = await web.graphql(KEY_DOC_ID, key_vars,
             friendly_name='PaymentsCometGetServerEncryptionKeyMutation', endpoint_url=ENDPOINT,
             business_context_id=business_id)
@@ -116,6 +125,7 @@ Neither exceptions nor responses may export token/PAN/CVV/bank parameters.
         if (not _clean_payload(payload) or not isinstance(root, dict) or root.get('payments_error') is not None
                 or root.get('client_mutation_id') != key_vars['input']['client_mutation_id']):
             return {**base, 'code': 'CARD_PTT_KEY_RESPONSE_UNCONFIRMED'}
+        stage('PTT_ENCRYPT')
         token = encrypt_card_token(auth, secret, root.get('trust_chain'))
         input_value = build_save_input(values, payment=payment, country=context.country, currency=context.currency,
             token=token, client_info=context.client_info, logging_data=context.logging_data,
@@ -123,6 +133,7 @@ Neither exceptions nor responses may export token/PAN/CVV/bank parameters.
             recurring_consent=context.recurring_consent)
         variables = {'input': input_value, 'getRiskVerificationInfoForAllCredentialsOnPaymentAccount': True,
                      'paymentAccountID': payment, 'includeCreateNewFromOldFragment': context.include_new_fragment}
+        stage('SAVE')
         payload = await web.graphql(SAVE_DOC_ID, variables, friendly_name='BillingSaveCardCredentialStateMutation',
             endpoint_url=ENDPOINT, business_context_id=business_id, before_submit=before_submit)
         # A transport must invoke the durable hook before attempting Save.
@@ -139,11 +150,13 @@ Neither exceptions nor responses may export token/PAN/CVV/bank parameters.
                                     expected_card={'type': brand, 'last4': values['number'][-4:]})
         if saved['status'] != 'VERIFYING':
             return {**base, **saved}
+        stage('VERIFY_EXACT_CREDENTIAL')
         verified = methods_proof(await execute(web, 'READ_METHODS', account=account, payment=payment,
                                               business_id=business_id), account, business_id=business_id,
                                               account_evidence=evidence)
         result = confirm_saved_card(saved, verified, business_id=business_id)
         if result.get('status') == 'LINKED':
+            stage('COMMIT_LINKED')
             result['funding'] = verified
         return {**base, **result}
     except BaseException as exc:
