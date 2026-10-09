@@ -4,6 +4,10 @@ ini_set('display_errors','0'); ini_set('html_errors','0');
 ob_start();
 require_once __DIR__.'/../settings.php';
 require_once __DIR__.'/../checkpassword.php';
+// Authentication and CSRF initialization are complete. Worker reads and card
+// operations can take a minute; holding the file-session lock here makes other
+// pages in the same signed-in browser wait for that entire request.
+if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
 while(ob_get_level()>0)ob_end_clean();
 header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store, max-age=0');

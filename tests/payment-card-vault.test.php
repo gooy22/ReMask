@@ -9,8 +9,13 @@ function endpointNoCvvFixture(): void {
     try {
         copy(__DIR__.'/../railway-payment-card-endpoint.php',$root.'/ajax/paymentCards.php');
         copy(__DIR__.'/../railway-payment-card-vault.php',$root.'/classes/RemaskPaymentCardVault.php');
-        file_put_contents($root.'/settings.php',"<?php function remask_csrf_token(){return 'fixture';}");
-        file_put_contents($root.'/checkpassword.php','<?php // Isolated test authentication.');
+        file_put_contents($root.'/settings.php',"<?php function remask_csrf_token(){return \$_SESSION['remask_csrf']??'';}");
+        mkdir($root.'/sessions',0700);
+        file_put_contents($root.'/checkpassword.php', <<<'AUTH'
+<?php
+session_save_path(__DIR__.'/sessions');session_id('fixture'.md5(__DIR__));session_start();
+$_SESSION['remask_authenticated']=true;$_SESSION['remask_csrf']='fixture';
+AUTH);
         // The PHP-side catalog can lag a confirmed worker-created RK. Payment
         // actions must validate their exact target in the worker instead.
         file_put_contents($root.'/classes/RemaskPrivateLaunchCatalog.php',"<?php class RemaskPrivateLaunchCatalog {static function load(\$p){return [];} static function asset(\$c,\$kind,\$id){throw new InvalidArgumentException('STALE_PHP_CATALOG');}}");
@@ -44,6 +49,7 @@ putenv('REMASK_DATA_DIR='.$argv[1].'/state');putenv('REMASK_PYTHON_WORKER_URL=fi
 class FixtureInspectionStream {
     public $context;private string $body='';private int $pos=0;
     function stream_open($path,$mode,$options,&$opened): bool {
+        if(session_status()===PHP_SESSION_ACTIVE)throw new RuntimeException('Worker read held the UI session lock');
         $http=stream_context_get_options($this->context)['http'];
         file_put_contents($GLOBALS['argv'][1].'/request.json',json_encode(['url'=>$path,'http'=>$http]));
         $this->body=file_get_contents($GLOBALS['argv'][1].'/funding.json');return true;
@@ -104,6 +110,30 @@ INSPECT);
         $request=json_decode(file_get_contents($root.'/request.json'),true);
         expect($request['http']['method']==='GET'&&!isset($request['http']['content']),'Source export forwarded a financial payload');
         expect(str_ends_with($request['url'],'/profiles/Fixture/payment-contract-sources?account_id=123456789'),'Source export target mismatch');
+        // While the original export is waiting for its worker, another PHP
+        // request with the same session must read persisted auth/CSRF promptly.
+        file_put_contents($root.'/session-reader.php', <<<'READER'
+<?php
+session_save_path($argv[1].'/sessions');session_id('fixture'.md5($argv[1]));session_start();
+echo json_encode(['authenticated'=>$_SESSION['remask_authenticated']??false,'csrf'=>$_SESSION['remask_csrf']??null]);
+session_write_close();
+READER);
+        $parallelScript=str_replace("        \$http=stream_context_get_options(\$this->context)['http'];", <<<'PARALLEL'
+        $pipes=[];$root=$GLOBALS['argv'][1];
+        $child=proc_open([PHP_BINARY,$root.'/session-reader.php',$root],[1=>['pipe','w'],2=>['pipe','w']],$pipes);
+        if(!is_resource($child))throw new RuntimeException('Session reader did not start');
+        $deadline=microtime(true)+2;
+        do{$state=proc_get_status($child);if(!$state['running'])break;usleep(10000);}while(microtime(true)<$deadline);
+        if($state['running']){proc_terminate($child);throw new RuntimeException('Parallel page blocked on export session');}
+        $snapshot=json_decode(stream_get_contents($pipes[1]),true);
+        fclose($pipes[1]);fclose($pipes[2]);proc_close($child);
+        if(($snapshot['authenticated']??false)!==true||($snapshot['csrf']??'')!=='fixture')throw new RuntimeException('Session state was not persisted');
+        file_put_contents($root.'/parallel-session-ok','ok');
+        $http=stream_context_get_options($this->context)['http'];
+PARALLEL, $exportScript);
+        file_put_contents($root.'/export.php',$parallelScript);
+        expect(($invokeExport()['ok']??false)===true&&file_get_contents($root.'/parallel-session-ok')==='ok','Export blocked the parallel authenticated page');
+        file_put_contents($root.'/export.php',$exportScript);
         file_put_contents($root.'/funding.json',json_encode(['profile_id'=>'Other','account_id'=>'123456789','modules'=>[]]));
         expect(($invokeExport()['error']['message']??'')==='PAYMENT_CONTRACT_SOURCE_UNAVAILABLE','Foreign profile source was exported');
         // Exercise the endpoint with synthetic credentials and an isolated stream wrapper.
@@ -113,6 +143,7 @@ putenv('REMASK_DATA_DIR='.$argv[1].'/state');putenv('REMASK_PYTHON_WORKER_URL=fi
 class FixtureOperationStream {
     public $context;private string $body='';private int $pos=0;
     function stream_open($path,$mode,$options,&$opened): bool {
+        if(session_status()===PHP_SESSION_ACTIVE)throw new RuntimeException('Card operation held the UI session lock');
         $http=stream_context_get_options($this->context)['http'];
         file_put_contents($GLOBALS['argv'][1].'/operations.jsonl',json_encode(['url'=>$path,'http'=>$http])."\n",FILE_APPEND);
         $this->body=file_get_contents($GLOBALS['argv'][1].($http['method']==='GET'?'/funding.json':'/result.json'));return true;
