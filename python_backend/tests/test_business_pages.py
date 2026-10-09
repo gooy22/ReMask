@@ -362,6 +362,12 @@ class BusinessPageTests(unittest.IsolatedAsyncioTestCase):
         self.session.facebook_business_browser.assert_not_awaited()
 
     async def test_legacy_unknown_submit_recovers_free_profile_page_and_claims_without_create(self):
+        await self._legacy_recovery_flow()
+
+    async def test_legacy_unknown_submit_with_www_400_recovers_business_document_and_claims_full_rights(self):
+        await self._legacy_recovery_flow(business_documents=True)
+
+    async def _legacy_recovery_flow(self, *, business_documents=False):
         from fb_worker import FacebookWebSession
         await self._seed_existing_bundles()
         self.meta.owners[FP2] = None
@@ -370,7 +376,11 @@ class BusinessPageTests(unittest.IsolatedAsyncioTestCase):
         document = '<script>CurrentUserInitialData {"USER_ID":"' + UID + '"};</script><script>' + json.dumps({
             'additional_profiles_with_biz_tools': {'nodes': [{'id': '61500012345678',
                 'delegate_page': {'__typename': 'Page', 'id': FP2, 'name': 'PrgssTeam'}}]}}) + '</script>'
-        self.meta.fetch_text = AsyncMock(return_value=(200, document, 'https://www.facebook.com/pages/'))
+        if business_documents:
+            self.meta.fetch_text = AsyncMock(side_effect=lambda url, **kwargs:
+                (200, document, url) if url.startswith('https://business.facebook.com/') else (400, 'Bad Request', url))
+        else:
+            self.meta.fetch_text = AsyncMock(return_value=(200, document, 'https://www.facebook.com/pages/'))
         item = 'workspace-business-page-facebook:' + UID + '-' + BM2
         scope = 'workspace-business-page:' + BM2
         await BusinessPageStore(self.state, self.context, BM2).patch(creation_item_id=item, creation_profile_id='15')
@@ -385,8 +395,17 @@ class BusinessPageTests(unittest.IsolatedAsyncioTestCase):
             result = await PrepareService(self.state, ProvisioningService(self.state)).run(
                 item_id='recover-legacy', profile_id='15', context=self.context, session=self.session,
                 payload={'desired': {'ad_accounts': 2}, 'parameters': {'AD_ACCOUNT': {'currency': 'USD', 'timezone_id': 1}}})
+            posts = copy.deepcopy(self.meta.posts)
+            await PrepareService(self.state, ProvisioningService(self.state)).run(
+                item_id='recover-legacy-again', profile_id='15', context=self.context, session=self.session,
+                payload={'desired': {'ad_accounts': 2}, 'parameters': {'AD_ACCOUNT': {'currency': 'USD', 'timezone_id': 1}}})
+            self.assertEqual(self.meta.posts, posts)
         self.assertTrue(result['ready_to_launch'])
         self.assertEqual([name for name, _ in self.meta.posts], [ASSIGN, CLAIM, ASSIGN])
         self.assertEqual(self.meta.owners, {FP1: BM1, FP2: BM2})
         self.assertEqual((await self.state.step(item, ProvisioningStep.FAN_PAGES))['result']['resolution_source'], 'managed_profile_http')
+        if business_documents:
+            retained = (await self.state.step(item, ProvisioningStep.FAN_PAGES))['result']
+            self.assertEqual([row['status'] for row in retained['recovery_diagnostics']], [200, 200, 400, 400])
+            self.assertTrue(await self.state.page_access_confirmed('15', BM2, RK2, full_control=True, page_id=FP2))
         self.session.facebook_business_browser.assert_not_awaited()

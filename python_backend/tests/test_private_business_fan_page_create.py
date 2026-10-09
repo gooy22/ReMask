@@ -318,6 +318,78 @@ class BusinessPageHTTPTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(checkpoint['active_before_ids'], [FP1])
         self.assertEqual(self.meta.posts, [])
 
+    async def test_business_document_recovers_free_page_when_both_www_surfaces_return_400(self):
+        self.meta.owners[FP2] = None
+        self.profile_document([FP1, FP2])
+        document = self.meta.fetch_text.return_value[1]
+        async def fetch(url, **kwargs):
+            self.assertTrue(kwargs['document_navigation'])
+            if url.startswith('https://business.facebook.com/'):
+                return 200, document, url
+            return 400, 'Bad Request', url
+        self.meta.fetch_text = AsyncMock(side_effect=fetch)
+        await self.retain_legacy_submit()
+        result = await self.run_page()
+        self.assertEqual(result['page_ids'], [FP2])
+        self.assertTrue(result['pages'][0]['requires_business_claim'])
+        self.assertEqual(self.meta.posts, [])
+        retained = (await self.state.step('create', ProvisioningStep.FAN_PAGES))['result']
+        self.assertEqual([row['status'] for row in retained['recovery_diagnostics']], [200, 200, 400, 400])
+        self.assertEqual(self.meta.owners[FP1], BM1)
+
+    async def test_failed_recovery_records_safe_http_causes_and_keeps_original_create_intent(self):
+        self.meta.fetch_text = AsyncMock(side_effect=lambda url, **kwargs:
+            (400, 'Request header or cookie too large xs=secret-cookie-value', url))
+        await self.retain_legacy_submit()
+        with self.assertRaises(ProvisioningError) as caught:
+            await self.run_page()
+        self.assertEqual(caught.exception.code, 'FAN_PAGE_CREATE_RESULT_UNKNOWN')
+        self.assertIn('recovery_http_400:www.facebook.com:request_headers_rejected', str(caught.exception))
+        checkpoint = (await self.state.step('create', ProvisioningStep.FAN_PAGES))['result']
+        self.assertEqual(checkpoint['phase'], 'PAGE_CREATE_RESULT_UNKNOWN')
+        self.assertEqual(checkpoint['active_before_ids'], [FP1])
+        self.assertEqual(len(checkpoint['recovery_diagnostics']), 4)
+        self.assertTrue(all(row['document_kind'] == 'request_headers_rejected' for row in checkpoint['recovery_diagnostics']))
+        self.assertNotIn('secret-cookie-value', json.dumps(checkpoint))
+        self.assertEqual(self.meta.posts, [])
+
+    async def test_business_recovery_wrong_actor_or_foreign_owned_page_cannot_be_adopted(self):
+        for actor, owner in (('61511111111111', None), (UID, BM1)):
+            with self.subTest(actor=actor, owner=owner):
+                self.meta.owners[FP2] = owner
+                self.profile_document([FP2], actor=actor)
+                document = self.meta.fetch_text.return_value[1]
+                self.meta.fetch_text = AsyncMock(side_effect=lambda url, **kwargs:
+                    (200, document, url) if url.startswith('https://business.facebook.com/') else (400, 'Bad Request', url))
+                await self.retain_legacy_submit()
+                with self.assertRaises(ProvisioningError):
+                    await self.run_page()
+                self.assertEqual(self.meta.posts, [])
+
+    async def test_empty_business_documents_and_www_400_never_authorize_another_create(self):
+        self.profile_document([])
+        document = self.meta.fetch_text.return_value[1]
+        self.meta.fetch_text = AsyncMock(side_effect=lambda url, **kwargs:
+            (200, document, url) if url.startswith('https://business.facebook.com/') else (400, 'Bad Request', url))
+        await self.retain_legacy_submit()
+        with self.assertRaises(ProvisioningError):
+            await self.run_page()
+        self.assertEqual(self.meta.posts, [])
+
+    async def test_recovery_auth_or_rate_limit_stops_probing_and_retains_the_submit(self):
+        for status, code in ((403, 'SESSION_EXPIRED'), (429, 'META_RATE_LIMITED')):
+            with self.subTest(status=status):
+                self.meta.fetch_text = AsyncMock(side_effect=lambda url, **kwargs: (status, 'rejected', url))
+                await self.retain_legacy_submit()
+                with self.assertRaises(ProvisioningError) as caught:
+                    await self.run_page()
+                self.assertEqual(caught.exception.code, code)
+                self.meta.fetch_text.assert_awaited_once()
+                retained = (await self.state.step('create', ProvisioningStep.FAN_PAGES))['result']
+                self.assertEqual(retained['phase'], 'PAGE_CREATE_RESULT_UNKNOWN')
+                self.assertEqual(retained['recovery_diagnostics'][0]['status'], status)
+                self.assertEqual(self.meta.posts, [])
+
     async def test_multiple_new_same_name_pages_cannot_reconcile_lost_response(self):
         self.meta.lose_page = True
         original = self.meta.graphql

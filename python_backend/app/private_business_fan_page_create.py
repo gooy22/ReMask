@@ -96,7 +96,7 @@ async def prove_page(web, business, page, name, excluded, *, allow_unowned=False
     return None
 
 
-async def reconcile(web, *, business, name, before, response_page='', actor=''):
+async def reconcile(web, *, business, name, before, response_page='', actor='', checkpoint=None):
     """Positive proof only. A delayed empty read never authorizes another POST."""
     reasons = []
     ambiguous = False
@@ -124,8 +124,14 @@ async def reconcile(web, *, business, name, before, response_page='', actor=''):
             await asyncio.sleep(0.5)
     if actor and not response_page and not ambiguous:
         from .private_page_recovery import managed_page_candidates
+        recovery_diagnostics = []
         try:
-            candidates = await managed_page_candidates(web, actor=actor, name=name, excluded=before)
+            try:
+                candidates = await managed_page_candidates(web, actor=actor, name=name, excluded=before,
+                    business=business, diagnostics=recovery_diagnostics)
+            finally:
+                if checkpoint is not None:
+                    await checkpoint({'recovery_diagnostics': recovery_diagnostics})
             proofs = []
             for page in candidates[:10]:
                 proof = await prove_page(web, business, page, name, before, allow_unowned=True)
@@ -138,11 +144,17 @@ async def reconcile(web, *, business, name, before, response_page='', actor=''):
             reasons.append('managed_profile_page_not_unique' if len(proofs) > 1 else 'managed_profile_page_unconfirmed')
         except Exception as exc:
             reasons.append(getattr(exc, 'code', type(exc).__name__))
-            if getattr(exc, 'code', '') in {'SESSION_EXPIRED', 'CHECKPOINT_REQUIRED', 'BUSINESS_LOGIN_GATE'}:
+            if getattr(exc, 'code', '') in {'SESSION_EXPIRED', 'CHECKPOINT_REQUIRED', 'BUSINESS_LOGIN_GATE', 'META_RATE_LIMITED'}:
                 raise
+        failed_reads = [row for row in recovery_diagnostics if row.get('result') == 'http_rejected']
+        if failed_reads:
+            reasons.extend('recovery_http_' + str(row['status']) + ':' + row['host'] + ':' + row['document_kind']
+                for row in failed_reads)
     log.info('FP reconciliation business=%s page=%s reasons=%s browser_started=False', business, response_page, reasons)
+    read_failures = [reason for reason in reasons if reason.startswith('recovery_http_')]
+    detail = ' Recovery reads: ' + '; '.join(read_failures) + '.' if read_failures else ''
     raise ProvisioningError('FAN_PAGE_CREATE_RESULT_UNKNOWN',
-        'Page CREATE is retained for BM ' + business + '; exact Page ownership has not yet been confirmed. No duplicate CREATE was sent.', retryable=True)
+        'Page CREATE is retained for BM ' + business + '; exact Page ownership has not yet been confirmed. No duplicate CREATE was sent.' + detail, retryable=True)
 
 
 async def create_business_page(session, params, *, state, item_id, profile_id, scope_key, checkpoint):
@@ -192,7 +204,7 @@ async def create_business_page(session, params, *, state, item_id, profile_id, s
         before = foreign | {_id(value) for value in checkpoint.get('active_before_ids') or []}
         proof = await reconcile(web, business=business, name=name, before=before,
             response_page=_id(checkpoint.get('response_page_id') or (checkpoint.get('browser_diagnostic') or {}).get('response_page_id')),
-            actor=actor)
+            actor=actor, checkpoint=save)
         reused = True
     else:
         previous = await state.latest_uncertain_fan_page(profile_id, name, exclude_item_id=item_id, business_id=business)
@@ -206,7 +218,7 @@ async def create_business_page(session, params, *, state, item_id, profile_id, s
             proof = await reconcile(web, business=business, name=name,
                 before=foreign | {_id(value) for value in old.get('active_before_ids') or []},
                 response_page=_id(old.get('response_page_id') or (old.get('browser_diagnostic') or {}).get('response_page_id')),
-                actor=actor)
+                actor=actor, checkpoint=save)
             reused = True
         else:
             rows, complete = await read_pages(web, business)
@@ -279,7 +291,7 @@ async def create_business_page(session, params, *, state, item_id, profile_id, s
                         business, attempt_id, json.dumps(evidence, separators=(',', ':')))
                     if rejected:
                         raise rejection_error(evidence)
-                proof = await reconcile(web, business=business, name=name, before=before, response_page=response_page, actor=actor)
+                proof = await reconcile(web, business=business, name=name, before=before, response_page=response_page, actor=actor, checkpoint=save)
                 reused = False
 
     attached = proof.get('business_id') == business
@@ -293,6 +305,7 @@ async def create_business_page(session, params, *, state, item_id, profile_id, s
     return {'phase': 'DONE', 'mode': 'create', 'requested_count': 1, 'created_count': 1, 'attached_count': int(attached),
         'page_ids': [page['id']], 'pages': [page], 'created_pages': [page], 'target_names': [name], 'category': category,
         'create_response': committed.get('create_response') or {}, 'create_attempt_id': committed.get('create_attempt_id') or '',
+        'recovery_diagnostics': committed.get('recovery_diagnostics') or [],
         'resolution_source': committed['resolution_source'],
         'original_submit_response_recovered': committed['original_submit_response_recovered'],
         'business_id': business, 'ad_account_id': '', 'page_business_attached': attached,

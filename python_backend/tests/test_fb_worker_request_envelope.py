@@ -49,6 +49,29 @@ class FacebookRequestEnvelopeTests(unittest.IsolatedAsyncioTestCase):
             )
         )
 
+    async def test_recovery_document_navigation_is_opt_in_and_never_applies_to_api_or_cdn(self):
+        calls = []
+        class Response:
+            status = 200
+            charset = 'utf-8'
+            headers = {}
+            url = 'https://www.facebook.com/pages/'
+            content = type('Content', (), {'read': AsyncMock(return_value=b'fixture')})()
+            async def __aenter__(self): return self
+            async def __aexit__(self, *args): return False
+        def get(url, **kwargs):
+            calls.append((url, kwargs)); return Response()
+        session = self._session()
+        session._ensure_session = AsyncMock(return_value=type('HTTP', (), {'get': staticmethod(get)})())
+        await session.fetch_text('https://www.facebook.com/pages/', document_navigation=True)
+        for url in ('https://www.facebook.com/', 'https://www.facebook.com/runtime.js',
+                'https://www.facebook.com/api/graphql/', 'https://static.xx.fbcdn.net/document'):
+            await session.fetch_text(url, document_navigation=url != 'https://www.facebook.com/')
+        self.assertEqual(calls[0][1]['headers']['Sec-Fetch-Mode'], 'navigate')
+        self.assertEqual(calls[0][1]['headers']['Sec-Fetch-Dest'], 'document')
+        self.assertEqual(calls[0][1]['headers']['Accept'], 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8')
+        self.assertTrue(all('Sec-Fetch-Mode' not in call[1]['headers'] for call in calls[1:]))
+
     def test_extracts_only_current_profile_request_metadata(self):
         html = r'''
         <script>

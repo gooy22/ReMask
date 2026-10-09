@@ -781,6 +781,7 @@ class FacebookWebSession:
         *,
         max_bytes: int = 4_000_000,
         referer: str | None = None,
+        document_navigation: bool = False,
     ) -> tuple[int, str, str, dict[str, str]]:
         """
         Fetch one Facebook HTML/document response through the profile proxy.
@@ -811,9 +812,10 @@ class FacebookWebSession:
             "User-Agent": self.profile.user_agent,
             "Accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
         }
-        # Business bootstrap is a document navigation, not an AJAX request.
-        # Keep bundle/query discovery on its existing generic GET metadata.
-        if hostname == "business.facebook.com" and not (
+        # Recovery pages are document navigations too. Opt in at the caller
+        # rather than changing generic bundle/API/CDN reads across the app.
+        facebook_host = hostname == "facebook.com" or hostname.endswith(".facebook.com")
+        if facebook_host and (hostname == "business.facebook.com" or document_navigation) and not (
             parts.path.lower().endswith((".js", ".css", ".json"))
             or "/api/" in parts.path.lower()
         ):
@@ -872,11 +874,13 @@ class FacebookWebSession:
         *,
         max_bytes: int = 4_000_000,
         referer: str | None = None,
+        document_navigation: bool = False,
     ) -> tuple[int, str, str]:
         status, body, final_url, _ = await self.fetch_text_with_headers(
             url,
             max_bytes=max_bytes,
             referer=referer,
+            document_navigation=document_navigation,
         )
         return status, body, final_url
 
