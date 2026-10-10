@@ -106,8 +106,13 @@ async def profile_payment_card_http(resolver, profile, payload, *, state=None):
                                 'status':'ACTION_REQUIRED', 'code':'CARD_BANK_CONFIRMATION_REQUIRED'}
                             await ledger.finish(pending['attempt_id'], result)
                             return result
-                    if saved.get('status') == 'ACTION_REQUIRED' and not any(row.get('credential_id') == saved['credential']['id']
-                            and row.get('needs_verification') is False for row in methods.get('payment_methods', [])):
+                    exact_ids = {saved['credential'].get(key) for key in ('id', 'credential_id')
+                                 if isinstance(saved['credential'].get(key), str)
+                                 and saved['credential'][key]}
+                    if saved.get('status') == 'ACTION_REQUIRED' and not any(
+                            row.get('credential_id') in exact_ids
+                            and row.get('needs_verification') is False
+                            for row in methods.get('payment_methods', [])):
                         return {**retained, 'status':'ACTION_REQUIRED','code':'CARD_BANK_CONFIRMATION_REQUIRED'}
                     result = confirm_saved_card({**saved, 'status': 'VERIFYING'}, methods, business_id=asset['business_id'])
                     logging.getLogger('remask.payment_card').info(
