@@ -8,7 +8,7 @@ from app.payment_card_business_wallet import (
 
 ACCOUNT='120251439661740682'
 BUSINESS='1653201116239354'
-SAVED={'payment_account_node_id':'child-payment-node',
+SAVED={'payment_account_id':'551199228800', 'payment_account_node_id':'child-payment-node',
        'credential':{'id':'save-card-relay-node','credential_id':'save-card-credential',
                      'type':'Visa','last4':'0574'}}
 
@@ -86,6 +86,7 @@ class BusinessWalletCardTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(kwargs['business_context_id'],BUSINESS)
         self.assertEqual(args[1]['businessID'],BUSINESS)
         self.assertEqual(args[1]['assetID'],ACCOUNT)
+        self.assertEqual(args[1]['paymentAccountID'],SAVED['payment_account_id'])
         self.assertTrue(args[1]['preloadPaymentAccount'])
         self.assertEqual(args[1]['billable_account_types'],['FB_ADS'])
         self.assertNotIn('save-card-credential',str(web.graphql.await_args))
