@@ -836,7 +836,13 @@ async def run_verification_http_contract_audit() -> None:
                         if (isinstance(module, dict)
                                 and module.get('name') in {'BillingRiskUtils', 'BillingSDCAuthState',
                                     'BillingTrySDCAuthState', 'BillingSDCAuthButton.react',
-                                    'BillingSDCAuthScreen.react', 'BillingRiskVerifySDCPageViewManager.react'}
+                                    'BillingSDCAuthScreen.react', 'BillingRiskVerifySDCPageViewManager.react',
+                                    'useBillingVerifySDCCodeMutation',
+                                    'useBillingVerifySDCMutation',
+                                    'BillingSDCVerifyScreen.react',
+                                    'BillingRiskVerifySDCCodePage.react',
+                                    'BillingRiskVerifySDCCodePageViewManager.react',
+                                    'BillingRiskVerifySDCPage.react'}
                                 and isinstance(module.get('source'), str)):
                             log.warning('verification public contract module=%s source=%s',
                                         module['name'], module['source'][:8500])
@@ -880,6 +886,11 @@ async def run_verification_http_contract_audit() -> None:
                 'BillingSDCAuthScreen.react',
                 'BillingRiskVerifySDCPageViewManager.react',
                 'BillingRiskVerifySDCPage.react',
+                'useBillingVerifySDCCodeMutation',
+                'useBillingVerifySDCMutation',
+                'BillingSDCVerifyScreen.react',
+                'BillingRiskVerifySDCCodePage.react',
+                'BillingRiskVerifySDCCodePageViewManager.react',
             }
             for module in result.get('modules', []):
                 if (isinstance(module, dict) and module.get('name') in public_names
