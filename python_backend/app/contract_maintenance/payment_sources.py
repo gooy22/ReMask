@@ -218,6 +218,32 @@ def verification_lazy_modules(source):
         and re.search(r'Risk|Verif|ThreeDS|Init3DS|NativeOTP|CVCO|Authenticat', name)})
 
 
+def verification_resource_urls(source):
+    """Every observed public JS resource in the requested module GET payload.
+
+    Unlike page maps, this response may omit component roots: the requested
+    module is already known. Conflicting resource definitions fail closed.
+    """
+    decoder = json.JSONDecoder()
+    source = html.unescape(source).replace(r'\/', '/')
+    rows, conflicts = {}, set()
+    for match in re.finditer(r'"rsrcMap"\s*:\s*', source):
+        try:
+            value, _ = decoder.raw_decode(source, match.end())
+        except ValueError:
+            continue
+        if not isinstance(value, dict):
+            continue
+        for key, row in value.items():
+            if key in rows and rows[key] != row:
+                conflicts.add(key)
+            else:
+                rows[key] = row
+    return list(dict.fromkeys(row['src'] for key, row in rows.items()
+        if key not in conflicts and isinstance(row, dict) and row.get('type') == 'js'
+        and _public_js_url(row.get('src'))))
+
+
 def source_export(rows, *, max_bytes=MAX_EXPORT_BYTES):
     """Keep artifacts and critical senders first; always disclose omissions."""
     def priority(row):
@@ -248,7 +274,7 @@ def public_payment_modules(source):
         if not re.fullmatch(r'[A-Za-z0-9_.$-]{1,200}', name):
             continue
         if not any(part in name.lower() for part in ('billing', 'payment', 'creditcard', 'encrypt', 'tokenization', 'fbpay', 'platformtrusttoken', 'generateptt', 'getpttutils',
-                                                    'bootloader', 'jsresource', 'requiredeferred', 'moduleresource', 'haste')):
+                                                    'bootloader', 'jsresource', 'requiredeferred', 'moduleresource', 'haste', 'getasyncparams')):
             continue
         definition = '__d(' + json.dumps(name) + ',[],' + factory.text.decode() + ');'
         result.append({'name': name, 'sha256': hashlib.sha256(definition.encode()).hexdigest(),
@@ -308,10 +334,15 @@ async def capture_payment_sources(web, *, account_id, business_id, loader_docume
     urls = list(dict.fromkeys([*deferred, *eager]))
     observed = set(urls)
     deferred_observed = set(deferred)
+    # Fresh document metadata only. The public getAsyncParams source below
+    # must explicitly name a field before this GET can forward it.
+    extract = getattr(web, '_extract_request_context', None)
+    request_context = extract(body) if callable(extract) else {}
     del body, documents
     modules, total, count, errors = {}, 0, 0, 0
     lazy_attempted, lazy_pending, lazy_requests = set(), set(), 0
     loader_protocol_observed = False
+    async_params_source, loader_responses = '', []
 
     async def read(url):
         try:
@@ -349,6 +380,8 @@ async def capture_payment_sources(web, *, account_id, business_id, loader_docume
             observed.update(additions)
             urls[offset:offset] = additions
             for row in public_payment_modules(source):
+                if row['name'] == 'getAsyncParams':
+                    async_params_source = row['source']
                 key = (row['name'], row['sha256'])
                 if key not in modules:
                     modules[key] = row
@@ -358,19 +391,26 @@ async def capture_payment_sources(web, *, account_id, business_id, loader_docume
             # Loading source cannot run a verification task or charge a card.
             lazy_attempted.update(requested); lazy_requests += 1
             params = {'modules': ','.join(requested), '__a': '1'}
+            params.update({key: value for key, value in request_context.items()
+                if isinstance(key, str) and re.fullmatch(r'__[a-z_]{1,30}', key)
+                and key in async_params_source and isinstance(value, str) and len(value) <= 20000})
             actor = str(getattr(getattr(web, 'profile', None), 'cookies', {}).get('c_user', ''))
             if re.fullmatch(r'\d{5,30}', actor):
                 params['__user'] = actor
             try:
                 code, loader, final = await asyncio.wait_for(web.fetch_text(
                     bootloader + ('&' if '?' in bootloader else '?') + urlencode(params), max_bytes=2_000_000, referer=entry), timeout=10)
+                response = {'http_status': code, 'resource_count': 0,
+                    'rsrc_map_observed': '"rsrcMap"' in loader, 'auth_gate': _auth_gate(final, loader)}
+                loader_responses.append(response)
                 if code == 200 and urlsplit(final).path.rstrip('/') == '/ajax/bootloader-endpoint':
-                    new_urls = payment_deferred_script_urls(loader)
+                    new_urls = verification_resource_urls(loader)
+                    response['resource_count'] = len(new_urls)
                     additions = [url for url in new_urls if url not in observed]
                     observed.update(additions); deferred_observed.update(new_urls)
                     urls[offset:offset] = additions
             except Exception:
-                pass
+                loader_responses.append({'code': 'SOURCE_LOADER_REQUEST_UNAVAILABLE'})
     exported = source_export(list(modules.values()))
     log.info('payment source audit profile=%s account=%s scripts=%d bytes=%d modules=%d browser_started=False',
              getattr(getattr(web, 'profile', None), 'name', ''), account_id, count, total, len(modules))
@@ -384,7 +424,8 @@ async def capture_payment_sources(web, *, account_id, business_id, loader_docume
             'document_audit': document_audit,
             'verification_loader_probe': {'endpoint_observed': bool(bootloader),
                 'protocol_observed': loader_protocol_observed, 'requests': lazy_requests,
-                'modules_requested': sorted(lazy_attempted)},
+                'modules_requested': sorted(lazy_attempted), 'responses': loader_responses,
+                'request_context_keys': sorted(key for key in request_context if key in async_params_source)},
             **exported}
 
 

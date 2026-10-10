@@ -13,22 +13,33 @@ class PaymentSourceTests(unittest.IsolatedAsyncioTestCase):
         from urllib.parse import urlsplit, parse_qs
         entry='https://business.facebook.com/billing_hub/payment_settings/'
         document='["BootloaderEndpointConfig",[],{"endpointURI":"/ajax/bootloader-endpoint/"},1]<script src="https://static.xx.fbcdn.net/root.js"></script>'
-        root='__d("BootloaderEndpoint",[],function(){r("getAsyncParams")("GET")});__d("BillingVerification.entrypoint",[],function(){r("JSResourceForInteraction")("BillingThreeDSVerificationPageViewManager.react")});'
-        loader=json.dumps({'private': 'fixture-secret', 'hsrp': {'hblp': {'rsrcMap': {'v': {'type': 'js', 'src': 'https://static.xx.fbcdn.net/verification.js'}}, 'compMap': {'BillingThreeDSVerificationPageViewManager.react': {'r': ['v']}}}}})
+        root='__d("BootloaderEndpoint",[],function(){r("getAsyncParams")("GET")});__d("getAsyncParams",[],function(){return {__hs:""}});__d("BillingVerification.entrypoint",[],function(){r("JSResourceForInteraction")("BillingThreeDSVerificationPageViewManager.react")});'
+        loader=json.dumps({'private': 'fixture-secret', 'hsrp': {'hblp': {'rsrcMap': {'v': {'type': 'js', 'src': 'https://static.xx.fbcdn.net/verification.js'}}}}})
         async def fetch(url, **kwargs):
             if urlsplit(url).path.rstrip('/') == '/ajax/bootloader-endpoint':
                 self.assertEqual(parse_qs(urlsplit(url).query)['modules'], ['BillingThreeDSVerificationPageViewManager.react'])
+                self.assertEqual(parse_qs(urlsplit(url).query)['__hs'], ['fixture-secret'])
+                self.assertNotIn('__dyn', parse_qs(urlsplit(url).query))
                 return 200, loader, url
             if url == 'https://static.xx.fbcdn.net/root.js': return 200, root, url
             if url == 'https://static.xx.fbcdn.net/verification.js':
                 return 200, '__d("BillingThreeDSVerificationPageViewManager.react",[],function(){});', url
             return 200, document, entry
-        web=SimpleNamespace(fetch_text=AsyncMock(side_effect=fetch))
+        web=SimpleNamespace(fetch_text=AsyncMock(side_effect=fetch),
+            _extract_request_context=lambda document: {'__hs':'fixture-secret','__dyn':'unobserved-field'})
         result=await capture_payment_sources(web, account_id='123456789', business_id='987654321')
         self.assertEqual(result['verification_loader_probe']['requests'], 1)
         self.assertIn('BillingThreeDSVerificationPageViewManager.react', {r['name'] for r in result['modules']})
         self.assertNotIn('fixture-secret', json.dumps(result))
         self.assertFalse(result['submitted'])
+
+    def test_verification_payload_reads_only_actual_public_resources_and_rejects_conflicts(self):
+        from app.contract_maintenance.payment_sources import verification_resource_urls
+        first={'rsrcMap':{'a':{'type':'js','src':'https://static.xx.fbcdn.net/a.js'},
+            'foreign':{'type':'js','src':'https://foreign.example/x.js'}}}
+        self.assertEqual(verification_resource_urls(json.dumps(first)), ['https://static.xx.fbcdn.net/a.js'])
+        second={'rsrcMap':{'a':{'type':'js','src':'https://static.xx.fbcdn.net/b.js'}}}
+        self.assertEqual(verification_resource_urls(json.dumps(first)+json.dumps(second)), [])
 
     def test_verification_loader_requires_observed_same_origin_endpoint_and_literal_modules(self):
         from app.contract_maintenance.payment_sources import verification_bootloader_endpoint, verification_lazy_modules
