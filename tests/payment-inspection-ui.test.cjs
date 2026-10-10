@@ -51,7 +51,8 @@ assert.doesNotMatch(sandbox.fundingCell({verification_status:'NONE',account_scop
 const requiredCard={type:'Visa',last4:'1111',needs_verification:false,verification_tasks:['statement_code'],card_confirmation_status:'REQUIRED'};
 assert.match(sandbox.fundingCell({verification_status:'LINKED',card_linked:true,account_scope_verified:true,payment_methods:[requiredCard]},cached),/ТРЕБУЕТ ПОДТВЕРЖДЕНИЯ/);
 const panel=element();sandbox.paymentConfirmationPanel(rows[0],{card_confirmation_status:'REQUIRED',verification_tasks:['statement_code'],funding:{payment_methods:[requiredCard]}},panel);
-assert.ok(panel.children[0].children.some(e=>e.textContent.includes('код из выписки')));
+assert.ok(panel.children[0].textContent.includes('Meta требует подтверждения'));
+assert.ok(!JSON.stringify(panel.children).includes('Подтвердить код'), 'main payment screen must not request a statement code');
 assert.ok(!panel.children[0].children.some(e=>e.href), 'verification must not require manual Meta navigation');
 assert.doesNotMatch(sandbox.fundingCell({verification_status:'LINKED',card_linked:true,account_scope_verified:true,payment_methods:[{...requiredCard,verification_tasks:[],card_confirmation_status:'CLEAR'}]}, {...cached,status:'ACTION_REQUIRED',last_result_code:'CARD_BANK_CONFIRMATION_REQUIRED'}),/ТРЕБУЕТ ПОДТВЕРЖДЕНИЯ/);
 (async()=>{
