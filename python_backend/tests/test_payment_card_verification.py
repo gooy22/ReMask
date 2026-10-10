@@ -51,7 +51,6 @@ class CardVerificationHTTPTests(unittest.IsolatedAsyncioTestCase):
              patch('app.payment_card_verification.methods_proof', return_value=self.methods), \
              patch('app.payment_card_verification.sdc_candidate_proof', return_value={'sdc_screen_verified': True, 'sdc_candidate': False, 'sdc_credential_match': False}), \
              patch('app.payment_card_verification.payment_page_proof', return_value=True), \
-             patch('app.payment_card_verification.sdc_candidate_proof', return_value={'sdc_screen_verified': True, 'sdc_candidate': False, 'sdc_credential_match': False}), \
              patch('app.payment_card_verification.execute', AsyncMock(return_value={})) as execute:
             result = await verify_payment_card_http(self.resolver, 'Fixture', self.payload)
         self.assertEqual(result['status'], 'ACTION_REQUIRED')
