@@ -61,10 +61,17 @@ def sdc_candidate_proof(payload, credential_id, brand, last4):
         return {**base, 'sdc_screen_verified': True}
     row, credential = found[0]
     exact = credential_id in (credential.get('id'), credential.get('credential_id'))
-    # An SDC form may contain only a credential_id where the methods read
-    # returned the Relay node id. In that case, never claim exact identity.
+    # READ_METHODS identifies the card by its Relay node id, while Meta's
+    # SDC mutations expressly send credential.credential_id from this screen.
+    # These identifiers may differ. Never submit a Relay id as the bank
+    # authorization credential unless Meta also returns it as credential_id.
+    action_id = credential.get('credential_id')
+    transport_id = (action_id if exact and isinstance(action_id, str)
+                    and re.fullmatch(r'[A-Za-z0-9_:+/=-]{1,200}', action_id)
+                    else None)
     return {**base, 'sdc_screen_verified': True, 'sdc_candidate': True,
             'sdc_credential_match': exact,
+            'sdc_action_credential_id': transport_id,
             'sdc_usability': str(row.get('usability') or '')[:48]}
 
 
@@ -75,62 +82,81 @@ BILLING_GRAPHQL = 'https://business.facebook.com/api/graphql/'
 
 async def _send_sdc_once(web, *, state, profile, account, payment_account,
                          business, credential, card_id, common):
-    """Execute only the observed Meta SFI descriptor initiation mutation.
+    """Start at most one SDC authorization after Meta bootstrap succeeds.
 
-    SQLite reservation is committed before any network call. No automatic
-    repeat is allowed after an uncertain transport outcome or worker restart.
+    The durable dispatch reservation is inserted at the HTTP POST boundary,
+    not before a cookie/Business login precheck. Failed prechecks therefore
+    do not permanently consume a card's one permitted bank request.
     """
     if state is None or not getattr(state, 'path', None):
         return {**common, 'code': 'SDC_DURABLE_GUARD_REQUIRED'}
     ledger = BankVerificationLedger(state.path)
-    reserved = await ledger.reserve(profile=profile, account=account,
-        payment_account=payment_account, credential=credential, card_id=card_id,
-        flow='SDC')
-    if not reserved['same_card']:
-        return {**common, 'code': 'SDC_DIFFERENT_CARD_ATTEMPT_BLOCKED'}
-    if not reserved['reserved']:
-        return {**common, 'status': 'ACTION_REQUIRED',
-                'code': 'SDC_AUTH_ALREADY_ATTEMPTED',
-                'verification_stage': reserved['stage']}
-    attempt = reserved['attempt_id']
-    if not await ledger.mark(attempt, 'REQUEST_SENT'):
-        return {**common, 'code': 'SDC_AUTH_RESERVATION_LOST'}
-    # The mutation input was observed in Meta's BillingTrySDCAuthState.
-    # The optional upl_logging_data is instrumentation, not user payment data.
+    submitted_attempt = None
+    refused = None
+
+    async def before_submit():
+        nonlocal submitted_attempt, refused
+        reserved = await ledger.reserve(
+            profile=profile, account=account, payment_account=payment_account,
+            credential=credential, card_id=card_id, flow='SDC')
+        if not reserved['same_card']:
+            refused = {**common, 'code': 'SDC_DIFFERENT_CARD_ATTEMPT_BLOCKED'}
+            raise ValueError('SDC_DIFFERENT_CARD_ATTEMPT_BLOCKED')
+        if not reserved['reserved']:
+            refused = {**common, 'status': 'ACTION_REQUIRED',
+                       'code': 'SDC_AUTH_ALREADY_ATTEMPTED',
+                       'verification_stage': reserved['stage']}
+            raise ValueError('SDC_AUTH_ALREADY_ATTEMPTED')
+        if not await ledger.mark(reserved['attempt_id'], 'REQUEST_SENT'):
+            refused = {**common, 'code': 'SDC_AUTH_RESERVATION_LOST'}
+            raise ValueError('SDC_AUTH_RESERVATION_LOST')
+        submitted_attempt = reserved['attempt_id']
+
     variables = {'input': {
         'billable_account_payment_legacy_account_id': payment_account,
         'credential_id': credential,
         'intent': 'SFI',
     }}
     try:
-        response = await web.graphql(SDC_SEND_DOC_ID, variables,
+        response = await web.graphql(
+            SDC_SEND_DOC_ID, variables,
             friendly_name='BillingRiskUtilsSendSDCAuthMutation',
-            endpoint_url=BILLING_GRAPHQL, business_context_id=business)
+            endpoint_url=BILLING_GRAPHQL, business_context_id=business,
+            before_submit=before_submit)
     except Exception:
-        await ledger.mark(attempt, 'RESULT_UNKNOWN')
+        if refused is not None:
+            return refused
+        if submitted_attempt is None:
+            return {**common, 'code': 'SDC_AUTH_PRECHECK_UNAVAILABLE',
+                    'submitted': False, 'verification_triggered': False}
+        await ledger.mark(submitted_attempt, 'RESULT_UNKNOWN')
         return {**common, 'status': 'ACTION_REQUIRED',
                 'code': 'SDC_AUTH_RESULT_UNKNOWN',
                 'submitted': True, 'verification_triggered': None,
                 'verification_stage': 'RESULT_UNKNOWN'}
+    if submitted_attempt is None:
+        # A fake/non-compliant GraphQL transport cannot claim it sent a
+        # financial mutation without invoking the durability fence.
+        return {**common, 'code': 'SDC_AUTH_SUBMIT_FENCE_MISSING',
+                'submitted': False, 'verification_triggered': False}
     sent = (response.get('data', {}).get('send_dynamic_descriptor_auth', {}).get('sent')
             if isinstance(response, dict) and isinstance(response.get('data'), dict) else None)
     if not isinstance(response, dict) or response.get('errors') or type(sent) is not bool:
-        await ledger.mark(attempt, 'RESULT_UNKNOWN')
+        await ledger.mark(submitted_attempt, 'RESULT_UNKNOWN')
         return {**common, 'status': 'ACTION_REQUIRED',
                 'code': 'SDC_AUTH_RESULT_UNKNOWN',
                 'submitted': True, 'verification_triggered': None,
                 'verification_stage': 'RESULT_UNKNOWN'}
     if sent:
-        await ledger.mark(attempt, 'CHALLENGE_READY')
+        await ledger.mark(submitted_attempt, 'CHALLENGE_READY')
         return {**common, 'status': 'ACTION_REQUIRED',
                 'code': 'SDC_AUTH_SENT_WAIT_CODE',
                 'submitted': True, 'verification_triggered': True,
                 'verification_stage': 'CHALLENGE_READY'}
-    await ledger.mark(attempt, 'SERVER_REJECTED')
+    await ledger.mark(submitted_attempt, 'SERVER_REJECTED')
     return {**common, 'status': 'BLOCKED',
             'code': 'SDC_AUTH_REJECTED', 'submitted': False,
             'verification_stage': 'SERVER_REJECTED'}
-
 
 async def _verify_sdc_code(web, *, code, account, payment_account,
                            business, credential, common):
@@ -258,13 +284,20 @@ async def verify_payment_card_http(resolver, profile, payload, *, state=None):
                 await execute(web, 'READ_SDC_CANDIDATES',
                               payment=evidence['payment_account_id'], business_id=business),
                 chosen['credential_id'], *card)
-            common = {**common, **sdc}
+            # The action credential stays server-side; no need to disclose
+            # an additional opaque payment token to the browser.
+            action_credential = sdc.get('sdc_action_credential_id')
+            common = {**common, **{key: value for key, value in sdc.items()
+                                    if key != 'sdc_action_credential_id'}}
             if not sdc['sdc_screen_verified']:
                 return {**common, 'code': 'CARD_VERIFICATION_SDC_READ_UNVERIFIED'}
             if sdc['sdc_candidate'] and not sdc['sdc_credential_match']:
                 return {**common, 'code': 'CARD_VERIFICATION_SDC_CARD_UNVERIFIED'}
             if sdc['sdc_candidate']:
                 usability = sdc.get('sdc_usability')
+                if (operation in ('authorize', 'verify_code')
+                        and not action_credential):
+                    return {**common, 'code': 'SDC_ACTION_CREDENTIAL_UNVERIFIED'}
                 if usability == 'PENDING_VERIFICATION':
                     if operation == 'authorize':
                         # Meta's own screen skips sending a second hold in
@@ -276,7 +309,7 @@ async def verify_payment_card_http(resolver, profile, payload, *, state=None):
                         return await _verify_sdc_code(web,
                             code=payload.get('verification_code'),
                             account=target, payment_account=evidence['payment_account_id'],
-                            business=business, credential=chosen['credential_id'],
+                            business=business, credential=action_credential,
                             common=common)
                     return {**common, 'status': 'ACTION_REQUIRED',
                             'code': 'SDC_AUTH_PENDING_WAIT_CODE',
@@ -288,7 +321,7 @@ async def verify_payment_card_http(resolver, profile, payload, *, state=None):
                         return await _send_sdc_once(web, state=state,
                             profile=profile, account=target,
                             payment_account=evidence['payment_account_id'],
-                            business=business, credential=chosen['credential_id'],
+                            business=business, credential=action_credential,
                             card_id=card_id, common=common)
                     return {**common, 'status': 'ACTION_REQUIRED',
                             'code': 'SDC_AUTH_READY',

@@ -36,7 +36,10 @@ class CardSDCHttpTests(IsolatedAsyncioTestCase):
 
     async def test_send_once_persists_auth_before_post_and_cannot_resend(self):
         mock = AsyncMock(return_value={'data':{'send_dynamic_descriptor_auth':{'sent': True}}})
-        web = SimpleNamespace(graphql=mock)
+        async def fenced(*args, **kwargs):
+            await kwargs['before_submit']()
+            return await mock(*args, **kwargs)
+        web = SimpleNamespace(graphql=fenced)
         first = await _send_sdc_once(web, state=self.state, common=self.common, **self.scope)
         self.assertEqual(first['code'], 'SDC_AUTH_SENT_WAIT_CODE')
         self.assertTrue(first['verification_triggered'])
@@ -53,12 +56,38 @@ class CardSDCHttpTests(IsolatedAsyncioTestCase):
 
     async def test_ambiguous_response_never_sends_again(self):
         mock = AsyncMock(side_effect=TimeoutError('timeout'))
-        web = SimpleNamespace(graphql=mock)
+        async def fenced(*args, **kwargs):
+            await kwargs['before_submit']()
+            return await mock(*args, **kwargs)
+        web = SimpleNamespace(graphql=fenced)
         result = await _send_sdc_once(web, state=self.state, common=self.common, **self.scope)
         self.assertEqual(result['code'],'SDC_AUTH_RESULT_UNKNOWN')
         self.assertEqual(result['verification_stage'],'RESULT_UNKNOWN')
         await _send_sdc_once(web, state=self.state, common=self.common, **self.scope)
         self.assertEqual(mock.await_count,1)
+
+    async def test_auth_precheck_failure_does_not_reserve_or_charge(self):
+        first_web = SimpleNamespace(graphql=AsyncMock(side_effect=ValueError('business login gate')))
+        first = await _send_sdc_once(first_web, state=self.state,
+                                     common=self.common, **self.scope)
+        self.assertEqual(first['code'], 'SDC_AUTH_PRECHECK_UNAVAILABLE')
+        self.assertFalse(first['verification_triggered'])
+        mock = AsyncMock(return_value={'data':{'send_dynamic_descriptor_auth':{'sent':True}}})
+        async def fenced(*args, **kwargs):
+            await kwargs['before_submit']()
+            return await mock(*args, **kwargs)
+        second = await _send_sdc_once(SimpleNamespace(graphql=fenced),
+                                      state=self.state, common=self.common, **self.scope)
+        self.assertEqual(second['code'], 'SDC_AUTH_SENT_WAIT_CODE')
+        self.assertEqual(mock.await_count, 1)
+
+    async def test_transport_without_submit_fence_can_never_claim_bank_request(self):
+        web = SimpleNamespace(graphql=AsyncMock(return_value={
+            'data': {'send_dynamic_descriptor_auth': {'sent': True}}}))
+        result = await _send_sdc_once(web, state=self.state,
+                                      common=self.common, **self.scope)
+        self.assertEqual(result['code'], 'SDC_AUTH_SUBMIT_FENCE_MISSING')
+        self.assertFalse(result['verification_triggered'])
 
     async def test_code_is_sent_only_to_meta_and_never_returned(self):
         mock = AsyncMock(return_value={'data':{'billing_verify_sdc_code':{'verified': True}}})
@@ -97,7 +126,8 @@ class CardSDCHttpTests(IsolatedAsyncioTestCase):
              patch('app.payment_card_verification.methods_proof',return_value=methods), \
              patch('app.payment_card_verification.sdc_candidate_proof',return_value={
                  'sdc_screen_verified':True,'sdc_candidate':True,'sdc_credential_match':True,
-                 'sdc_usability':'PENDING_VERIFICATION'}), \
+                 'sdc_usability':'PENDING_VERIFICATION',
+                 'sdc_action_credential_id':'meta_sdc_credential_123'}), \
              patch('app.payment_card_verification.execute',AsyncMock(return_value={})) as read:
             result=await verify_payment_card_http(
                 SimpleNamespace(resolve=AsyncMock(return_value=SimpleNamespace(cookies={'c_user':'1'}))),

@@ -819,11 +819,17 @@ async def run_verification_http_contract_audit() -> None:
                                     payment=payment_hint, business_id=business)
                 cards = []
                 for row in candidate.get('payment_methods', [])[:8]:
+                    details = sdc_candidate_proof(sdc, row['credential_id'],
+                                                  row['type'], row['last4'])
+                    # Diagnostic logs never contain even opaque bank-operation
+                    # credential ids. Only note whether one was verified.
                     cards.append({'last4': row['last4'], 'type': row['type'],
                         'confirmation': row.get('card_confirmation_status'),
                         'tasks': row.get('verification_tasks', []),
-                        'sdc': sdc_candidate_proof(sdc, row['credential_id'],
-                                                   row['type'], row['last4'])})
+                        'sdc': {key: val for key, val in details.items()
+                                if key != 'sdc_action_credential_id'},
+                        'action_credential_present': bool(details.get('sdc_action_credential_id')),
+                        'ids_same': bool(details.get('sdc_action_credential_id') == row['credential_id'])})
                 log.warning('verification HTTP fallback SDC profile=%s account=%s cards=%s',
                             profile, account, json.dumps(cards, separators=(',', ':'))[:4500])
                 if os.getenv('REMASK_VERIFY_AUDIT_SOURCE') == '1':
@@ -865,7 +871,10 @@ async def run_verification_http_contract_audit() -> None:
                 cards.append({'last4': row['last4'],
                               'meta_required_tasks': row.get('verification_tasks', []),
                               'confirmation': row.get('card_confirmation_status'),
-                              'sdc': check})
+                              'sdc': {key: val for key, val in check.items()
+                                      if key != 'sdc_action_credential_id'},
+                              'action_credential_present': bool(check.get('sdc_action_credential_id')),
+                              'ids_same': bool(check.get('sdc_action_credential_id') == row['credential_id'])})
             log.warning('verification HTTP exact-card check profile=%s account=%s cards=%s',
                         profile, account, json.dumps(cards, separators=(',', ':'))[:5000])
         if os.getenv('REMASK_VERIFY_AUDIT_SOURCE') == '1':

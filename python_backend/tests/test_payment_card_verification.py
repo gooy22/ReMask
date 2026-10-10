@@ -140,6 +140,24 @@ class CardVerificationHTTPTests(unittest.IsolatedAsyncioTestCase):
         duplicate.append(dict(duplicate[0]))
         self.assertFalse(sdc_candidate_proof(response, 'cred_1', 'Visa', '1234')['sdc_screen_verified'])
 
+    def test_sdc_action_credential_can_differ_from_relay_node_id(self):
+        response = {'data': {'payment_account': {'billing_payment_methods': [{
+            'usability': 'UNVERIFIED_OR_PENDING_AUTH',
+            'credential': {'__typename': 'ExternalCreditCard',
+                           'id': 'relay_node_id', 'credential_id': 'real_meta_auth+Z/4=',
+                           'card_association_name': 'Visa', 'last_four_digits': '1234'}
+        }]}}}
+        result = sdc_candidate_proof(response, 'relay_node_id', 'Visa', '1234')
+        self.assertTrue(result['sdc_credential_match'])
+        self.assertEqual(result['sdc_action_credential_id'], 'real_meta_auth+Z/4=')
+        # The real payment action ID cannot be inferred from the displayed
+        # card mask or replaced with the internal Relay id.
+        response['data']['payment_account']['billing_payment_methods'][0]['credential'].pop('credential_id')
+        no_action = sdc_candidate_proof(response, 'relay_node_id', 'Visa', '1234')
+        self.assertTrue(no_action['sdc_credential_match'])
+        self.assertIsNone(no_action['sdc_action_credential_id'])
+        self.assertFalse(sdc_candidate_proof(response, 'foreign_node', 'Visa', '1234')['sdc_credential_match'])
+
     def test_sdc_empty_only_proves_no_sdc_candidate(self):
         result = sdc_candidate_proof({'data': {'payment_account': {'billing_payment_methods': []}}},
                                      'cred_1', 'Visa', '1234')
