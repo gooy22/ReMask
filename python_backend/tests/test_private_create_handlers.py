@@ -361,6 +361,46 @@ class BMActionTests(unittest.IsolatedAsyncioTestCase):
         return await get_handler("BUSINESS")(self.session, {"name": "Test Business"}, {},
             profile_id="14", scope_key="bm-scope", item_id=item, provisioning_state=self.store)
 
+    def test_bm_mutation_diagnostic_never_exports_untrusted_meta_strings(self):
+        from app.provisioning.private_create_handlers import _bm_create_response_evidence
+        proof = _bm_create_response_evidence({'data':{'bizkit_create_business':{
+            'error':{'code':17,'message':'PRIVATE_UNTRUSTED'}, 'id':None}},
+            'errors':[{'code':99,'message':'OTHER_UNTRUSTED','error_subcode':'1002'}]})
+        self.assertTrue(proof['has_meta_errors'])
+        self.assertFalse(proof['returned_business_id'])
+        self.assertEqual(proof['meta_error_codes'],[17,99,1002])
+        self.assertNotIn('PRIVATE_UNTRUSTED',repr(proof))
+        self.assertNotIn('OTHER_UNTRUSTED',repr(proof))
+
+    async def test_bm_creation_not_allowed_on_complete_inventory_never_posts(self):
+        original=self.graphql
+        async def unavailable(*args, **kwargs):
+            result=await original(*args, **kwargs)
+            if kwargs.get('friendly_name')=='NorthStarBusinessUnifiedScopingSelectorPopoverContainerAllFirstLevelScopesQuery':
+                result['data']['viewer']['meta_business_scoping']['can_create_business_portfolio']=False
+            return result
+        self.web.graphql=unavailable
+        with self.assertRaises(ProvisioningError) as caught:
+            await self.run_action()
+        self.assertEqual(caught.exception.code,'BM_CREATION_NOT_ALLOWED')
+        self.assertEqual(self.posts,[])
+
+    async def test_previously_uncertain_bm_and_disabled_creation_never_reposts(self):
+        await self.store.checkpoint('bm-1','14','bm-scope',ProvisioningStep.BUSINESS,
+            {'phase':'CREATE_RESULT_UNKNOWN','business_name':'Test Business',
+             'baseline_complete':True,'baseline_business_ids':[]})
+        original=self.graphql
+        async def unavailable(*args, **kwargs):
+            result=await original(*args, **kwargs)
+            if kwargs.get('friendly_name')=='NorthStarBusinessUnifiedScopingSelectorPopoverContainerAllFirstLevelScopesQuery':
+                result['data']['viewer']['meta_business_scoping']['can_create_business_portfolio']=False
+            return result
+        self.web.graphql=unavailable
+        with self.assertRaises(ProvisioningError) as caught:
+            await self.run_action()
+        self.assertEqual(caught.exception.code,'CREATE_BM_UNVERIFIED_CREATION_NOT_ALLOWED')
+        self.assertEqual(self.posts,[])
+
     async def test_bm_http_post_is_independently_verified_before_commit(self):
         result = await self.run_action()
         self.assertEqual(result["business_id"], BM)
