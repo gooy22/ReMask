@@ -1330,7 +1330,7 @@ async def profile_payment_card_action(profile_id: str, payload: dict = Body(...)
         target=re.sub(r'^act_', '', str(payload.get('account_id') or ''))
         if not re.fullmatch(r'\d{5,30}',target):
             raise HTTPException(status_code=400,detail='INVALID_PAYMENT_TARGET') from None
-        code=exc.code if isinstance(exc,BrowserBusinessError) else 'PROFILE_CONTEXT_ERROR' if isinstance(exc,ProfileContextError) else 'CARD_BROWSER_INTERRUPTED'
+        code=exc.code if isinstance(exc,BrowserBusinessError) else 'PROFILE_CONTEXT_ERROR' if isinstance(exc,ProfileContextError) else 'CARD_VERIFICATION_HTTP_UNAVAILABLE' if payload.get('operation')=='verify' else 'CARD_BROWSER_INTERRUPTED'
         # A session/cleanup failure may occur after card submission. Without
         # an observed result, bind must require reconciliation instead of retry.
         uncertain=payload.get('operation')=='bind'
