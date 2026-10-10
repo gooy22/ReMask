@@ -201,9 +201,10 @@ def verification_bootloader_endpoint(document, entry):
         try:
             uri = urljoin(entry, json.loads(match[1]))
             parsed = urlsplit(uri)
-            if (parsed.scheme == 'https' and parsed.hostname == urlsplit(entry).hostname
+            if (parsed.scheme == 'https' and parsed.hostname in
+                    {urlsplit(entry).hostname, 'www.facebook.com', 'business.facebook.com', 'adsmanager.facebook.com'}
                     and parsed.path.rstrip('/') == '/ajax/bootloader-endpoint'
-                    and not parsed.query and not parsed.fragment and not parsed.username):
+                    and not parsed.fragment and not parsed.username and not parsed.password and not parsed.port):
                 values.add(uri)
         except (ValueError, TypeError):
             continue
@@ -362,7 +363,7 @@ async def capture_payment_sources(web, *, account_id, business_id, loader_docume
                 params['__user'] = actor
             try:
                 code, loader, final = await asyncio.wait_for(web.fetch_text(
-                    bootloader + '?' + urlencode(params), max_bytes=2_000_000, referer=entry), timeout=10)
+                    bootloader + ('&' if '?' in bootloader else '?') + urlencode(params), max_bytes=2_000_000, referer=entry), timeout=10)
                 if code == 200 and urlsplit(final).path.rstrip('/') == '/ajax/bootloader-endpoint':
                     new_urls = payment_deferred_script_urls(loader)
                     additions = [url for url in new_urls if url not in observed]
@@ -413,7 +414,7 @@ async def _inspect_profile_payment_sources(resolver, profile, target, *, state):
         evidence = {'account_id': target, 'account_scope_verified': False,
                     'code': 'PAYMENT_ACCOUNT_QUERY_UNAVAILABLE', 'card_linked': None,
                     'funding_verified': False, 'inventory_complete': False}
-        methods, options_probe, card_probe, loaders = None, None, None, []
+        methods, options_probe, card_probe, bank_probe, loaders = None, None, None, None, []
         # All four operations are pinned queries. No wizard task, input,
         # tokenization or card save mutation is dispatched by maintenance.
         try:
@@ -465,6 +466,17 @@ async def _inspect_profile_payment_sources(resolver, profile, target, *, state):
                             # payment options when CDN budgets are exhausted.
                             loaders = card_loaders + loaders
                             card_probe['loader_maps_observed'] = len(card_loaders)
+                    if (methods is not None and methods.get('account_scope_verified') is True
+                            and methods.get('business_scope_verified') is True
+                            and methods.get('payment_account_relation_verified') is True):
+                        from .payment_verification_source import read_verification_page, verification_page_probe
+                        bank_payload = await read_verification_page(web, evidence['payment_account_id'], asset['business_id'])
+                        bank_probe = verification_page_probe(bank_payload, target,
+                            evidence['payment_account_id'], evidence.get('payment_account_node_id'))
+                        if bank_probe['account_scope_verified']:
+                            bank_loaders = payment_loader_documents(bank_payload)
+                            loaders = bank_loaders + loaders
+                            bank_probe['loader_maps_observed'] = len(bank_loaders)
         except Exception:
             # Keep only sanitized completed probes; failure cannot start a
             # browser or discard the public source capture that follows.
@@ -484,4 +496,6 @@ async def _inspect_profile_payment_sources(resolver, profile, target, *, state):
             result['payment_options_probe'] = options_probe
         if card_probe is not None:
             result['payment_card_screen_probe'] = card_probe
+        if bank_probe is not None:
+            result['verification_page_probe'] = bank_probe
     return {'profile_id': profile, **result}

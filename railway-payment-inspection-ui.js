@@ -309,7 +309,7 @@ function paymentConfirmationPanel(row,result,container){
   const card=methods.find(m=>ids.includes(m.credential_id))||(methods.length===1?methods[0]:null);
   const status=result?.card_confirmation_status||card?.card_confirmation_status||'UNKNOWN';
   const text={REQUIRED:'Карта прикреплена, но Meta требует подтверждения.',
-    CLEAR:'Свежая проверка: Meta не требует подтверждения этой карты.',
+    CLEAR:'Карта прикреплена. Проверка списка задач Meta не вернула обязательного подтверждения; банковская авторизация этим не проверяется.',
     UNKNOWN:'Наличие карты проверяется отдельно. Статус подтверждения пока не установлен.'}[status];
   const box=document.createElement('div');box.className='ws-result';
   const title=document.createElement('div');title.textContent=row.profile+' / '+row.id+': '+text;box.appendChild(title);

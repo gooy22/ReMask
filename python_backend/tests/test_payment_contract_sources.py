@@ -131,9 +131,9 @@ class PaymentSourceTests(unittest.IsolatedAsyncioTestCase):
                      patch('app.static_payment_read.execute', AsyncMock(side_effect=execute)), \
                      patch('app.contract_maintenance.payment_sources.capture_payment_sources', AsyncMock(return_value={'submitted': False})) as capture:
                     result = await inspect_profile_payment_sources(resolver, 'fixture', ACCOUNT, state=None)
-                self.assertEqual(web.graphql.await_args.args, ('27759194723782263',
+                self.assertEqual(web.graphql.await_args_list[0].args, ('27759194723782263',
                     {'paymentAccountID': PAYMENT, 'country': None, 'currency': None, 'intent': None}))
-                self.assertEqual(web.graphql.await_args.kwargs['business_context_id'], BM)
+                self.assertEqual(web.graphql.await_args_list[0].kwargs['business_context_id'], BM)
                 documents = capture.await_args.kwargs['loader_documents']
                 accepted = failure in ('none', 'card_options')
                 self.assertEqual(bool(documents), accepted)
