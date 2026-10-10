@@ -95,7 +95,7 @@ try {
         $patch=$input;unset($patch['action'],$patch['card_id']);
         card_out(['ok'=>true,'data'=>['card'=>$vault->updateBilling($id,$patch)]]);
     }
-    if(!in_array($action,['prepare','bind','reconcile','verify'],true))throw new InvalidArgumentException('CARD_ACTION_INVALID');
+    if(!in_array($action,['prepare','bind','reconcile','verify','authorize','verify_code'],true))throw new InvalidArgumentException('CARD_ACTION_INVALID');
     $profile=trim((string)($input['profile']??''));$account=preg_replace('/^act_/','',trim((string)($input['account_id']??'')));
     if($profile===''||strlen($profile)>160||!preg_match('/^\d{5,30}$/D',$account))throw new InvalidArgumentException('INVALID_PAYMENT_TARGET');
     $assetHint=card_asset_hint($input);
@@ -103,8 +103,8 @@ try {
     // accepts both synced inventory and an exact confirmed RK creation, while
     // rejecting personal or ambiguous accounts. Requiring the PHP-side launch
     // catalog here made a newly created RK fail until a separate inventory sync.
-    if($action==='verify'){
-        // Only an existing vault binding can request task inspection.
+    if(in_array($action,['verify','authorize','verify_code'],true)){
+        // Only an existing vault binding can request an SDC operation.
         // Never send PAN/CVV, repeat Save, or launch Chromium.
         $id=(string)($input['card_id']??'');
         if(!preg_match('/^card_[a-f0-9]{24}$/D',$id))throw new InvalidArgumentException('CARD_NOT_FOUND');
@@ -114,9 +114,17 @@ try {
             if(($candidate['id']??null)===$id){$card=$candidate;break;}
         }
         if(!is_array($card))throw new InvalidArgumentException('CARD_NOT_FOUND');
-        $result=card_worker($profile,['operation'=>'verify','account_id'=>$account,
+        $request=['operation'=>$action,'account_id'=>$account,
             'card_id'=>$id,'card_brand'=>$card['brand'],'card_last4'=>$card['last4'],
-            'asset_hint'=>$assetHint]);
+            'asset_hint'=>$assetHint];
+        if($action==='verify_code'){
+            // The code goes to the worker in memory and is never persisted to
+            // the vault, logged, echoed back, or included in URL parameters.
+            $code=strtoupper(trim((string)($input['verification_code']??'')));
+            if(!preg_match('/^[A-Z0-9]{4}$/D',$code))throw new InvalidArgumentException('SDC_CODE_REQUIRED');
+            $request['verification_code']=$code;
+        }
+        $result=card_worker($profile,$request);
         if(($result['profile_id']??'')!==$profile||($result['account_id']??'')!==$account)
             throw new RuntimeException('CARD_WORKER_RESULT_UNKNOWN');
         card_out(['ok'=>true,'data'=>['result'=>$result]]);
