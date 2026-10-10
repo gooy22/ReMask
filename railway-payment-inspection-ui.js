@@ -80,6 +80,7 @@ function paymentCardMessage(result){
     CARD_BINDING_RECONCILE_REQUIRED:'Предыдущая привязка ещё не подтверждена. Сначала проверьте состояние карты в Meta; повтор остановлен.',
     CARD_RECONCILE_UNVERIFIED:'Meta пока не подтвердила эту карту у выбранного РК. Повторное добавление остаётся заблокированным.',
     CARD_RECONCILE_NO_METHOD:'Meta показывает отсутствие способа оплаты у выбранного РК. Карта не привязана; результат предыдущей отправки требует разбора.',
+    PAYMENT_ALL_METHODS_NON_CARD_ONLY:'Meta вернула платёжный инструмент, который не является банковской картой. Привязка карты к этому РК не подтверждена.',
     CARD_META_REJECTED:'Meta показала ошибку сохранения карты. Привязка не подтверждена; повторная отправка остановлена.',
     CARD_RETRY_REVIEW_REQUIRED:'Сначала проверьте результат предыдущей попытки в Meta.',
     CARD_RETRY_REVIEW_EXPIRED:'Проверка устарела. Нажмите «Проверить результат» ещё раз.',
@@ -154,7 +155,7 @@ function paymentCardMessage(result){
   const currentCountry=result.code!=='CARD_BILLING_COUNTRY_MISMATCH'&&/^[A-Z]{2}$/.test(result.billing_country||'')?' Текущая страна РК в Meta: '+result.billing_country+'.':'';
   const funding=result.funding;
   const inventory=funding?.inventory_complete===true&&Array.isArray(funding.all_credential_ids)
-    ?' Полный список Meta проверен: способов оплаты '+funding.all_credential_ids.length+'.'
+    ?' Meta: карт '+(funding.payment_methods?.length||0)+', других платёжных инструментов '+(funding.non_card_credential_count||0)+'.'
     :funding?.code&&/^PAYMENT_[A-Z_]{1,80}$/.test(funding.code)?' Проверка списка: '+funding.code+'.':'';
   const errors=Array.isArray(result.meta_error_codes)?result.meta_error_codes.filter(n=>Number.isInteger(n)&&n>=0&&n<=999999999):[];
   const readFailure=['PAYMENT_HTTP_TIMEOUT','PAYMENT_HTTP_UNAVAILABLE','CHECKPOINT_REQUIRED','BUSINESS_LOGIN_GATE','SESSION_EXPIRED'].includes(result.reconcile_error_code)
