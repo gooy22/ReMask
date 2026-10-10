@@ -36,7 +36,7 @@ function paymentCardMessage(result){
   const names={number:'номер карты',cvv:'CVV',holder:'имя владельца',expiry:'срок действия',month:'месяц',year:'год',country:'страна',currency:'валюта',timezone:'часовой пояс',address:'платёжный адрес',city:'город',region:'область / штат',postal_code:'индекс',email_or_phone:'email или телефон владельца',unknown_required_field:'дополнительное поле Meta'};
   const messages={
     CARD_FORM_READY:'Форма Meta доступна для выбранного РК.',
-    CARD_HTTP_FORM_CONFIRMED:'Meta подтвердила доступность формы карты у выбранного РК. Карта не отправлена; готовность сохранения ещё не подтверждена.',
+    CARD_HTTP_FORM_CONFIRMED:'Форма карты доступна. Карта ещё не отправлена.',
     CARD_SCREEN_QUERY_REJECTED:'Meta не подтвердила запрос формы карты. Карта не отправлена.',
     CARD_SCREEN_SCOPE_UNVERIFIED:'Meta не подтвердила форму именно выбранного РК. Карта не отправлена.',
     CARD_SCREEN_OPTIONS_INCONCLUSIVE:'Meta подтвердила РК, но не подтвердила доступность добавления карты.',
@@ -77,7 +77,7 @@ function paymentCardMessage(result){
     CARD_BUSINESS_WALLET_MASK_COLLISION:'В бизнес-кошельке уже есть карта с теми же последними цифрами. Повторное сохранение остановлено; проверьте существующую карту.',
     CARD_SAVE_RESULT_UNKNOWN:'Карта могла быть отправлена. Повторное добавление заблокировано; нажмите «Проверить результат».',
     CARD_SAVE_LINK_VERIFICATION_PENDING:'Meta приняла сохранение карты; точная привязка проверяется. Повторное добавление заблокировано.',
-    CARD_PRIVATE_RUNTIME_CONTEXT_UNCONFIRMED:'HTTP-сохранение карты ещё не готово к отправке: текущий контракт не подтверждён.',
+    CARD_PRIVATE_RUNTIME_CONTEXT_UNCONFIRMED:'Не удалось подготовить добавление карты. Запрос не отправлен.',
     PAYMENT_HTTP_TIMEOUT:'Проверка Meta не завершилась вовремя. Карта не отправлена.',
     PAYMENT_HTTP_UNAVAILABLE:'Не удалось завершить проверку оплаты в Meta. Карта не отправлена.',
     CARD_LINK_OBSERVED:'Meta показывает карту у выбранного РК. Проверена только привязка: платёж и подтверждение банка не проверялись.',
@@ -116,16 +116,16 @@ function paymentCardMessage(result){
     PAYMENT_FORM_NOT_EXPOSED:'Meta не открыла форму карты.',
     CARD_BILLING_FIELDS_REQUIRED:'Нужны дополнительные реквизиты владельца или платёжного адреса.',
     CARD_BANK_CONFIRMATION_REQUIRED:'Банк запросил подтверждение. Завершите его в Facebook/банке, затем нажмите «Проверить результат». Не отправляйте карту повторно.',
-    CARD_VERIFICATION_CARD_REQUIRED:'Выберите сохранённую карту для HTTP-проверки.',
+    CARD_VERIFICATION_CARD_REQUIRED:'Выберите карту для подтверждения.',
     CARD_VERIFICATION_CREDENTIAL_UNVERIFIED:'Meta не подтвердила точную карту выбранного РК. Банковский запрос не отправлен.',
-    CARD_VERIFICATION_OPTIONS_UNVERIFIED:'Meta не подтвердила HTTP-контракт задачи выбранного РК. Банковский запрос не отправлен.',
-    CARD_VERIFICATION_MUTATION_NOT_PINNED:'Meta показывает задачу подтверждения, но финансовая GraphQL mutation ещё не подтверждена. Запрос в банк не отправлен.',
+    CARD_VERIFICATION_OPTIONS_UNVERIFIED:'Не удалось определить банковское подтверждение для этого РК. Запрос не отправлен.',
+    CARD_VERIFICATION_MUTATION_NOT_PINNED:'Meta требует другой способ подтверждения. Запрос в банк не отправлен.',
     CARD_VERIFICATION_NO_REQUIRED_TASK:'Meta не показывает обязательную задачу подтверждения карты. Это не доказательство банковской авторизации.',
     SDC_ACTION_CREDENTIAL_UNVERIFIED:'Meta не предоставила точный идентификатор карты для банковского запроса. Повторная операция заблокирована.',
-    SDC_AUTH_READY:'Карта требует временной банковской авторизации; ReMask отправляет запрос автоматически по HTTP/2.',
-    SDC_AUTH_SENT_WAIT_CODE:'Meta отправила временную авторизацию. Получите четырёхзначный код из банковской операции и подтвердите в ReMask.',
-    SDC_AUTH_PENDING_WAIT_CODE:'Meta уже ожидает код временной банковской операции. Повторное списание не отправляется.',
-    SDC_AUTH_ALREADY_ATTEMPTED:'Банковская авторизация уже инициировалась. Повторный запрос заблокирован.',
+    SDC_AUTH_READY:'Meta разрешает запрос временной банковской операции. Отправляю запрос.',
+    SDC_AUTH_SENT_WAIT_CODE:'Запрос временной операции принят Meta. Проверьте её появление в приложении банка.',
+    SDC_AUTH_PENDING_WAIT_CODE:'Meta сообщает, что временная банковская операция уже ожидает подтверждения. Новое списание не отправлено.',
+    SDC_AUTH_ALREADY_ATTEMPTED:'Запрос на временную операцию уже выполнялся. Повторное списание остановлено.',
     SDC_AUTH_PRECHECK_UNAVAILABLE:'Meta не подтвердила доступ до отправки банковского запроса. Списание не инициировано; после восстановления сессии можно повторить проверку.',
     SDC_AUTH_SUBMIT_FENCE_MISSING:'Без подтверждённой защиты от двойного списания запрос в банк остановлен.',
 
@@ -143,7 +143,7 @@ function paymentCardMessage(result){
     SDC_NO_AUTH_REQUIRED:'Для карты нет задачи временной SDC-авторизации.',
     CARD_VERIFICATION_SDC_READ_UNVERIFIED:'Невозможно подтвердить статус временной авторизации в Meta.',
     CARD_VERIFICATION_SDC_CARD_UNVERIFIED:'Meta вернула другой идентификатор карты; действие остановлено.',
-    CARD_VERIFICATION_HTTP_UNAVAILABLE:'HTTP-проверка Meta не завершена. Запрос в банк не отправлен.',
+    CARD_VERIFICATION_HTTP_UNAVAILABLE:'Не удалось проверить запрос в Meta. Временная операция не подтверждена.',
     CARD_BINDING_NOT_FOUND:'В ReMask нет сохранённой привязки выбранной карты к этому РК.',
     PAYMENT_FINANCIAL_ACTION_REQUIRED:'Meta требует платёжное действие; автоматическое списание остановлено.',
     PAYMENT_TERMS_CONFIRMATION_REQUIRED:'Meta требует принятия условий. Нужное действие должно быть подтверждено пользователем.',
@@ -222,6 +222,36 @@ function paymentCardMessage(result){
     (Array.isArray(result.meta_error_messages)?' '+result.meta_error_messages.filter(s=>typeof s==='string'&&s.length<=320).slice(0,4).join(' · '):'')+
     (result.missing_fields?.length?' Поля: '+result.missing_fields.map(f=>names[f]||f).join(', ')+'.':'')+
     (fields.length?' Поля формы Meta: '+fields.join(', ')+'.':'');
+}
+
+
+function paymentCardBriefMessage(result){
+  // User-visible status has no protocol, contract or inventory description.
+  // The original structured metadata remains available to diagnostics.
+  const brief={
+    CARD_LINK_CONFIRMED:'Карта привязана к РК.',
+    CARD_LINK_OBSERVED:'Карта найдена в РК.',
+    CARD_SAVE_RESULT_UNKNOWN:'Результат добавления не получен. Повторная отправка остановлена.',
+    CARD_SAVED_CREDENTIAL_UNLINKED:'Карта сохранена, но не прикреплена к РК.',
+    CARD_BANK_CONFIRMATION_REQUIRED:'Карта привязана. Требуется подтверждение в банке.',
+    SDC_AUTH_READY:'Meta разрешает запрос временного списания.',
+    SDC_AUTH_PENDING_WAIT_CODE:'Meta уже ожидает подтверждения временной операции. Новый запрос в банк не отправлен.',
+    SDC_AUTH_SENT_WAIT_CODE:'Meta приняла запрос временной операции. Проверьте её в банке.',
+    SDC_AUTH_ALREADY_ATTEMPTED:'Запрос уже выполнялся. Второй запрос в банк не отправлен.',
+    SDC_AUTH_PRECHECK_UNAVAILABLE:'Meta недоступна. Запрос в банк не отправлен.',
+    SDC_AUTH_RESULT_UNKNOWN:'Ответ о временной операции не получен. Повторная отправка остановлена.',
+    SDC_AUTH_REJECTED:'Meta отклонила временную операцию.',
+    CARD_VERIFICATION_NO_REQUIRED_TASK:'Meta не требует дополнительной проверки карты.',
+    CARD_VERIFICATION_MUTATION_NOT_PINNED:'Meta требует другого подтверждения. Запрос в банк не отправлен.',
+    CARD_VERIFICATION_SDC_READ_UNVERIFIED:'Не удалось узнать статус временной операции.',
+    SESSION_EXPIRED:'Нужно обновить Facebook-сессию.',
+    BUSINESS_LOGIN_GATE:'Нужно восстановить доступ к Meta Business.',
+    CHECKPOINT_REQUIRED:'Meta требует подтверждения Facebook-профиля.'
+  };
+  if(result?.code in brief)return brief[result.code];
+  if(!result?.code)return 'Не удалось получить результат.';
+  const described=paymentCardMessage({code:result.code,missing_fields:result.missing_fields});
+  return described===result.code?'Не удалось завершить действие в Meta.':described;
 }
 
 function paymentCardAuthEvidence(result){
@@ -331,7 +361,7 @@ async function bindPaymentCard(rows,card,cvv,container,reviews={}){
     line.className='ws-result '+(result?.status==='LINKED'?'ok':'bad');
     line.textContent=res?.skipped
       ?r.profile+' / '+r.id+': не запускался — пакет остановлен после '+(res.code==='BATCH_STOPPED_BILLING_FIELDS'?'запроса обязательных платёжных реквизитов':'неподтверждённого результата предыдущего РК')+'.'
-      :r.profile+' / '+r.id+' · •••• '+card.last4+': '+paymentCardMessage(result||{code:res?.error||'Результат неизвестен'});
+      :r.profile+' / '+r.id+' · •••• '+card.last4+': '+paymentCardBriefMessage(result||{code:res?.error||'Результат неизвестен'});
     paymentApplyFunding(r,result?.funding||{funding_verified:false,verification_status:'UNVERIFIED'});
     container.appendChild(line);
     const follow=res?.verification_follow_up;
@@ -340,7 +370,7 @@ async function bindPaymentCard(rows,card,cvv,container,reviews={}){
       const summary=document.createElement('div');
       summary.className='ws-result '+(check?.status==='VERIFIED'?'ok':'bad');
       summary.textContent='Банковская проверка · '+r.profile+' / '+r.id+': '+
-        paymentCardMessage(check||{code:follow?.error||'CARD_VERIFICATION_HTTP_UNAVAILABLE'});
+        paymentCardBriefMessage(check||{code:follow?.error||'CARD_VERIFICATION_HTTP_UNAVAILABLE'});
       container.appendChild(summary);
       if(check)paymentConfirmationPanel(r,{...check,card_id:card.id},container);
     }
@@ -365,64 +395,33 @@ function paymentApplyFunding(row,funding){
 }
 
 function paymentConfirmationPanel(row,result,container){
-  const methods=result?.funding?.payment_methods||[];
-  const ids=[result?.credential?.id,result?.credential?.credential_id].filter(Boolean);
+  if(!result||String(result.code||'').startsWith('SDC_')
+      ||result.code==='CARD_VERIFICATION_NO_REQUIRED_TASK')return;
+  const methods=result.funding?.payment_methods||[];
+  const ids=[result.credential?.id,result.credential?.credential_id].filter(Boolean);
   const card=methods.find(m=>ids.includes(m.credential_id))||(methods.length===1?methods[0]:null);
-  const status=result?.card_confirmation_status||card?.card_confirmation_status||'UNKNOWN';
-  const sdcState=result?.sdc_usability;
-  const text={REQUIRED:'Карта прикреплена, но Meta требует подтверждения.',
-    CLEAR:'Карта прикреплена. Проверка списка задач Meta не вернула обязательного подтверждения; банковская авторизация этим не проверяется.',
-    UNKNOWN:'Наличие карты проверяется отдельно. Статус подтверждения пока не установлен.'}[status];
-  const box=document.createElement('div');box.className='ws-result';
-  const title=document.createElement('div');
-  title.textContent=row.profile+' / '+row.id+': '+(
-    sdcState==='PENDING_VERIFICATION'?'Meta ожидает код временной банковской операции.':(
-    sdcState==='UNVERIFIED_OR_PENDING_AUTH'?'Для карты нужна временная авторизация в банке.':text));
-  box.appendChild(title);
-  const labels={statement_code:'код из выписки после временной авторизации',three_ds:'подтверждение через банк (3-D Secure)',
-    bank_app:'подтверждение в приложении банка',cvv:'повторная проверка CVV в Meta',meta_action:'действие в форме Meta'};
-  const tasks=result?.verification_tasks||card?.verification_tasks||[];
-  if(tasks.length){const detail=document.createElement('div');detail.textContent='Способ подтверждения: '+tasks.map(t=>labels[t]||labels.meta_action).join(', ')+'.';box.appendChild(detail);}
-  // No manual FB login or local browser navigation.
-  if(result?.code==='CARD_VERIFICATION_MUTATION_NOT_PINN'){
-    const note=document.createElement('div');
-    note.textContent='Ожидается подтверждённый финансовый doc_id. Запрос в банк не отправлен.';
-    box.appendChild(note);
-  }
-  if(sdcState==='PENDING_VERIFICATION'||result?.code==='SDC_AUTH_SENT_WAIT_CODE'){
-    const hint=document.createElement('div');
-    hint.textContent='Введите код из операции в банковской выписке. Код отправляется только в Meta, без Facebook-браузера.';
-    box.appendChild(hint);
-    const field=document.createElement('input');
-    field.type='text';field.autocomplete='off';field.maxLength=4;
-    field.placeholder='4 символа из банка';field.setAttribute?.('aria-label','Код проверки карты');
-    const submit=document.createElement('button');submit.type='button';
-    submit.textContent='Подтвердить код через HTTP';
-    submit.addEventListener('click',async()=>{
-      const value=String(field.value||'').trim().toUpperCase();
-      field.value='';
-      if(!/^[A-Z0-9]{4}$/.test(value)){
-        const notice=document.createElement('div');
-        notice.textContent='Код должен содержать 4 буквы или цифры.';
-        box.appendChild(notice);return;
-      }
-      submit.disabled=true;
-      try{
-        const reply=await apiJson('ajax/paymentCards.php',post({
-          action:'verify_code',card_id:result?.card_id||'',
-          profile:row.profile,account_id:row.id,verification_code:value,...paymentAssetHint(row)}));
-        const label=document.createElement('div');
-        label.textContent=paymentCardMessage(reply?.result||{code:'SDC_CODE_RESULT_UNVERIFIED'});
-        box.appendChild(label);
-        if(reply?.result?.funding)paymentApplyFunding(row,reply.result.funding);
-      }catch(e){
-        const label=document.createElement('div');label.textContent='Не удалось проверить код: '+e.message;
-        box.appendChild(label);
-      }finally{submit.disabled=false;}
-    });
-    box.appendChild(field);box.appendChild(submit);
-  }
-  container.appendChild(box);
+  const status=result.card_confirmation_status||card?.card_confirmation_status||'UNKNOWN';
+  const state=result.sdc_usability;
+  // A temporary bank hold, a statement descriptor and a 3-D Secure push are
+  // different flows. Do not pretend a push was sent or ask for an SDC code
+  // before a confirmed bank-authorization outcome.
+  let message='';
+  if(state==='PENDING_VERIFICATION'||result.code==='SDC_AUTH_PENDING_WAIT_CODE')
+    message='Meta уже ожидает завершения временной операции по карте. Повторное списание не отправлено.';
+  else if(result.code==='SDC_AUTH_SENT_WAIT_CODE'&&result.verification_triggered===true)
+    message='Meta приняла запрос временной операции. Проверьте её в банке.';
+  else if(state==='UNVERIFIED_OR_PENDING_AUTH'||result.code==='SDC_AUTH_READY')
+    message='Meta требует временную банковскую операцию.';
+  else if(result.code==='CARD_VERIFICATION_NO_REQUIRED_TASK')
+    message='Дополнительное подтверждение карты Meta не запросила.';
+  else if(status==='REQUIRED')
+    message='Карта привязана, но Meta требует подтверждения.';
+  else if(status==='CLEAR')
+    message='Карта видна в РК. Банковская операция не подтверждена.';
+  if(!message)return;
+  const line=document.createElement('div');line.className='ws-result';
+  line.textContent=row.profile+' / '+row.id+': '+message;
+  container.appendChild(line);
 }
 
 function paymentCardTargetPlan(rows,bindings,cardId){
@@ -460,7 +459,7 @@ async function inspectCardVerificationHTTP(rows,card,container){
     const row=rows[idx],result=res?.result,line=document.createElement('div');
     line.className='ws-result '+(result?.code==='CARD_VERIFICATION_NO_REQUIRED_TASK'?'ok':'bad');
     line.textContent=row.profile+' / '+row.id+' · •••• '+card.last4+': '+
-      paymentCardMessage(result||{code:res?.error||'CARD_VERIFICATION_HTTP_UNAVAILABLE'});
+      paymentCardBriefMessage(result||{code:res?.error||'CARD_VERIFICATION_HTTP_UNAVAILABLE'});
     container.appendChild(line);
     if(result?.funding)paymentApplyFunding(row,result.funding);
     if(result)paymentConfirmationPanel(row,result,container);
@@ -489,7 +488,7 @@ async function reconcilePaymentCard(rows,card,container){
   },(d,t,res,idx)=>{
     const r=rows[idx],result=res?.result,line=document.createElement('div');
     line.className='ws-result '+(result?.status==='LINKED'?'ok':'bad');
-    line.textContent=r.profile+' / '+r.id+' · •••• '+card.last4+': '+paymentCardMessage(result||{code:res?.error||'Результат неизвестен'});
+    line.textContent=r.profile+' / '+r.id+' · •••• '+card.last4+': '+paymentCardBriefMessage(result||{code:res?.error||'Результат неизвестен'});
     paymentApplyFunding(r,result?.funding||{funding_verified:false,verification_status:'UNVERIFIED'});
     if(result?.code==='CARD_RECONCILE_NO_METHOD'&&result.retry_review?.token&&result.retry_review?.expires_at)
       reviews[r.profile+'|'+String(r.id).replace(/^act_/,'')]={...result.retry_review,card_id:card.id};
@@ -499,7 +498,7 @@ async function reconcilePaymentCard(rows,card,container){
     if(check){
       const statusLine=document.createElement('div');statusLine.className='ws-result';
       statusLine.textContent='Банковское подтверждение · '+r.profile+' / '+r.id+': '+
-        paymentCardMessage(check?.result||{code:check?.error||'CARD_VERIFICATION_HTTP_UNAVAILABLE'});
+        paymentCardBriefMessage(check?.result||{code:check?.error||'CARD_VERIFICATION_HTTP_UNAVAILABLE'});
       container.appendChild(statusLine);
       if(check?.result)paymentConfirmationPanel(r,{...check.result,card_id:card.id},container);
     }
@@ -549,8 +548,7 @@ async function showFunding(restored=null){
     <details class="mt-2"><summary>Диагностика</summary>
       <button id="paymentCardPrepare" type="button">Проверить форму Meta</button>
       <button id="paymentCardInspect" type="button">Проверить привязанные карты</button></details>
-    <button id="paymentCardVerify" type="button" class="mt-2">Проверить задачу подтверждения (HTTP)</button>
-    <div class="ws-muted mt-2">HTTP-проверка читает карту и задачи Meta через cookies/proxy без Chromium. До подтверждения финансовой GraphQL mutation запрос в банк не отправляется.</div>
+    <button id="paymentCardVerify" type="button" class="mt-2">Запросить подтверждение карты в банке</button>
     <div id="paymentCardAssignments" class="ws-muted mt-2"></div>
     <div id="paymentCardProgress" class="ws-muted mt-2" aria-live="polite"></div>
     <div id="fundingResults" aria-live="polite"></div>`,'',null);
@@ -582,7 +580,7 @@ async function showFunding(restored=null){
       const line=document.createElement('div');
       const status={LINKED:'видна в Meta у этого РК',BLOCKED:'не привязана',FAILED:'ошибка',IN_PROGRESS:'операция начата',SUBMITTED_UNVERIFIED:'результат требует проверки',ACTION_REQUIRED:'требуется подтверждение'}[binding.status]||binding.status;
       line.textContent=binding.profile+' / act_'+binding.account_id+' · •••• '+binding.last4+' · '+status+
-        (binding.last_result_code?' · '+paymentCardMessage({...binding,code:binding.last_result_code}):'');assignments.appendChild(line);
+        (binding.last_result_code?' · '+paymentCardBriefMessage({...binding,code:binding.last_result_code}):'');assignments.appendChild(line);
     });
     if(preferred)select.value=preferred;
     else if(!select.value&&rows.length===1&&bindings.length===1)select.value=bindings[0].card_id;
@@ -610,7 +608,7 @@ async function showFunding(restored=null){
     finally{if(clearSecrets)remaskClearPaymentSecrets();controls.forEach(el=>el.disabled=false);$('paymentCardProgress').textContent='';busy=false;updatePrimary();}
   };
   const save=async(bind)=>{
-    if(bind&&pending())throw new Error(paymentCardMessage({code:'CARD_BINDING_RECONCILE_REQUIRED'}));
+    if(bind&&pending())throw new Error(paymentCardBriefMessage({code:'CARD_BINDING_RECONCILE_REQUIRED'}));
     const cvv=$('paymentCardCvv').value;
     const card=await savePaymentCard();paymentCardResumeWrite(rows,card.id);await refreshCards(card.id);$('paymentCardNew').open=false;
     const line=document.createElement('div');line.className='ws-result ok';line.textContent='Карта •••• '+card.last4+' сохранена в ReMask.';container.appendChild(line);
@@ -650,7 +648,7 @@ async function showFunding(restored=null){
   },false));
   $('paymentCardVerify').addEventListener('click',()=>run(async()=>{
     const card=cards.find(c=>c.id===select.value);
-    if(!card)throw new Error('Выберите сохранённую карту для HTTP-проверки.');
+    if(!card)throw new Error('Выберите карту.');
     await inspectCardVerificationHTTP(rows,card,container);
     await refreshCards(card.id);
   },false));
@@ -658,8 +656,8 @@ async function showFunding(restored=null){
     for(let i=0;i<rows.length;i++){
       const r=rows[i],data=await apiJson('ajax/paymentCards.php',post({action:'prepare',...(select.value?{card_id:select.value}:{}),profile:r.profile,account_id:r.id,...paymentAssetHint(r),...paymentSetupPayload()}));
       const line=document.createElement('div');line.className='ws-result '+(['FORM_READY','FORM_CONFIRMED'].includes(data.result.status)?'ok':'bad');
-      line.textContent=r.profile+' / '+r.id+': '+paymentCardMessage(data.result)+paymentCardAuthEvidence(data.result)
-        +(data.result.country_policy?' '+paymentCardMessage(data.result.country_policy):'');container.appendChild(line);setProgress(i+1,rows.length);
+      line.textContent=r.profile+' / '+r.id+': '+paymentCardBriefMessage(data.result)+paymentCardAuthEvidence(data.result)
+        +(data.result.country_policy?' '+paymentCardBriefMessage(data.result.country_policy):'');container.appendChild(line);setProgress(i+1,rows.length);
       if(data.result.code==='CARD_BILLING_FIELDS_REQUIRED')showMissingBilling([...billingMissing,...(data.result.missing_fields||[])]);
       if(data.result.ui_preview&&/^[A-Za-z0-9+/=]+$/.test(data.result.ui_preview)){
         const preview=document.createElement('details'),summary=document.createElement('summary'),image=document.createElement('img');
