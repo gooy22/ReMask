@@ -85,14 +85,6 @@ async def profile_payment_card_http(resolver, profile, payload, *, state=None):
                         target, methods.get('code'), methods.get('inventory_complete'),
                         len(methods.get('all_credential_ids', [])), len(methods.get('payment_methods', [])))
                     retained['funding'] = {**methods, 'profile_id': profile}
-                    if (operation == 'bind' and payload.get('reviewed_attempt_id') == pending['attempt_id']
-                            and methods.get('inventory_complete') is True
-                            and methods.get('all_credential_ids') == []
-                            and methods.get('verification_status') == 'NONE'
-                            and saved.get('status') != 'ACTION_REQUIRED'):
-                        await ledger.review_empty(pending['attempt_id'], profile, target, card_id)
-                        return await profile_payment_card_http(resolver, profile,
-                            {k:v for k,v in payload.items() if k != 'reviewed_attempt_id'}, state=state)
                     if not saved.get('credential'):
                         matches = [row for row in methods.get('payment_methods', [])
                             if row.get('last4') == saved.get('last4') and row.get('type') == saved.get('expected_card_type')
@@ -123,6 +115,36 @@ async def profile_payment_card_http(resolver, profile, payload, *, state=None):
                             web, account=target, business_id=asset['business_id'],
                             saved=saved)
                         result['verification_stage'] = wallet_stage
+                        # A non-card Meta billing instrument is NOT an attached
+                        # credit card. Permit the *explicitly* reviewed, stale
+                        # attempt to be retired only after the exact card is
+                        # absent in BOTH the complete child RK inventory and
+                        # the independently scoped business wallet response.
+                        methods['wallet_reconcile_stage'] = wallet_stage
+                    can_review_noncard = (
+                        result.get('verification_stage') == 'business_wallet_card_not_observed'
+                        and methods.get('inventory_complete') is True
+                        and methods.get('card_credential_count') == 0
+                        and methods.get('payment_methods') == [])
+                    can_review_empty = (
+                        methods.get('inventory_complete') is True
+                        and methods.get('all_credential_ids') == []
+                        and methods.get('verification_status') == 'NONE'
+                        and saved.get('status') != 'ACTION_REQUIRED')
+                    if (operation == 'bind'
+                            and payload.get('reviewed_attempt_id') == pending['attempt_id']
+                            and saved.get('status') != 'ACTION_REQUIRED'
+                            and result.get('status') == 'VERIFYING'
+                            and (can_review_empty or can_review_noncard)):
+                        await ledger.review_empty(pending['attempt_id'], profile, target, card_id)
+                        logging.getLogger('remask.payment_card').info(
+                            'card reviewed retry accepted account=%s no_cards=%s wallet_checked=%s',
+                            target, methods.get('card_credential_count', 0),
+                            bool(methods.get('wallet_reconcile_stage')))
+                        return await profile_payment_card_http(
+                            resolver, profile,
+                            {k:v for k,v in payload.items() if k != 'reviewed_attempt_id'},
+                            state=state)
                     logging.getLogger('remask.payment_card').info(
                         'card reconcile verification account=%s status=%s stage=%s',
                         target, result.get('status'), result.get('verification_stage', 'confirmed'))
