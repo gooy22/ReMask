@@ -330,6 +330,10 @@ class CardServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('28619313357728847',[call[0] for call in self.web.calls])
         self.assertTrue(result['funding']['account_scope_verified'])
         self.assertFalse(result['funding_verified'])
+        self.assertNotIn('28797973873175785',[call[0] for call in self.web.calls])
+        self.web.foreign_business=True
+        failed=await self.call({'operation':'reconcile','card_id':self.payload['card_id']})
+        self.assertNotEqual(failed['status'],'LINKED')
         wrong=await self.call({'operation':'reconcile','card_id':'card_'+'c'*24})
         self.assertEqual(wrong['code'],'CARD_HTTP_INTENT_NOT_FOUND')
 

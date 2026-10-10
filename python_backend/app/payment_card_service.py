@@ -19,7 +19,7 @@ from .private_auth import private_auth_error
 from .payment_country_setup import configure_country
 from .static_payment_card import prepare_profile_card_form, confirm_saved_card
 from .payment_card_business_wallet import inspect_business_wallet_card, inspect_save_reply_card_identity
-from .static_payment_read import execute, account_proof, payment_page_proof, inspect_methods, complete_methods
+from .static_payment_read import execute, account_proof, payment_page_proof, inspect_methods, complete_methods, methods_proof
 
 def setup_context(payload, target, payment):
     if not payment_page_proof(payload, target, payment):
@@ -82,7 +82,21 @@ async def profile_payment_card_http(resolver, profile, payload, *, state=None):
                 profile_context = await resolver.resolve(profile)
                 async with ProfileSession(profile_context, timeout_seconds=30) as session:
                     web = await session.facebook_web()
-                    methods = await inspect_methods(web, account=target, business_id=asset['business_id'])
+                    if (confirmed_read and saved.get('account_id') == target
+                            and saved.get('account_scope_verified') is True
+                            and saved.get('business_id') == asset['business_id']
+                            and isinstance(saved.get('payment_account_id'), str)
+                            and re.fullmatch(r'\d{5,30}', saved['payment_account_id'])):
+                        # The exact scoped Save already established this payment
+                        # node. Re-read the observed methods query by that ID.
+                        # Its fresh response must independently match the RK,
+                        # owning BM, payment node and exact saved credential.
+                        methods = methods_proof(await execute(web, 'READ_METHODS',
+                            account=target, payment=saved['payment_account_id'],
+                            business_id=asset['business_id']), target,
+                            business_id=asset['business_id'], account_evidence=saved)
+                    else:
+                        methods = await inspect_methods(web, account=target, business_id=asset['business_id'])
                     # A known Save credential can be positively reverified by
                     # the scoped card query. The complete inventory is needed
                     # for absence/retry decisions, not to discard exact presence.
