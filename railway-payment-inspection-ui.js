@@ -269,6 +269,16 @@ async function savePaymentCard(){
   finally{$('paymentCardNumber').value='';payload.number='';}
 }
 
+async function paymentVerifyConfirmedLink(row,card){
+  // Only after a confirmed exact-card link, ask Meta which financial action
+  // is necessary. No independent/manual bank charge and no blind retries.
+  const base={card_id:card.id,profile:row.profile,account_id:row.id,...paymentAssetHint(row)};
+  const observed=await apiJson('ajax/paymentCards.php',post({action:'verify',...base}));
+  if(observed?.result?.code==='SDC_AUTH_READY')
+    return await apiJson('ajax/paymentCards.php',post({action:'authorize',...base}));
+  return observed;
+}
+
 async function bindPaymentCard(rows,card,cvv,container,reviews={}){
   const missing=[];
   let stopAfterBilling=false,stopAfterUncertain=false;
@@ -300,6 +310,17 @@ async function bindPaymentCard(rows,card,cvv,container,reviews={}){
       }
       if(result.status==='ACTION_REQUIRED'||
         (result.submitted!==false&&result.status!=='LINKED'))stopAfterUncertain=true;
+      if(result.card_linked===true
+          && ['LINKED','ACTION_REQUIRED'].includes(result.status)
+          && result.funding?.account_scope_verified===true
+          && result.funding?.business_scope_verified===true
+          && result.funding?.payment_account_relation_verified===true){
+        // User explicitly selected this card for this RK. On a confirmed
+        // link, check the Meta SDC task and initiate its once-only temporary
+        // authorization only when Meta says UNVERIFIED_OR_PENDING_AUTH.
+        try{response.verification_follow_up=await paymentVerifyConfirmedLink(r,card);}
+        catch(e){response.verification_follow_up={error:e.message};}
+      }
       return response;
     }catch(e){stopAfterUncertain=true;return {error:e.message};}
   },(d,t,res,idx)=>{
@@ -312,7 +333,18 @@ async function bindPaymentCard(rows,card,cvv,container,reviews={}){
       ?r.profile+' / '+r.id+': не запускался — пакет остановлен после '+(res.code==='BATCH_STOPPED_BILLING_FIELDS'?'запроса обязательных платёжных реквизитов':'неподтверждённого результата предыдущего РК')+'.'
       :r.profile+' / '+r.id+' · •••• '+card.last4+': '+paymentCardMessage(result||{code:res?.error||'Результат неизвестен'});
     paymentApplyFunding(r,result?.funding||{funding_verified:false,verification_status:'UNVERIFIED'});
-    container.appendChild(line);setProgress(d,t);
+    container.appendChild(line);
+    const follow=res?.verification_follow_up;
+    if(follow){
+      const check=follow?.result;
+      const summary=document.createElement('div');
+      summary.className='ws-result '+(check?.status==='VERIFIED'?'ok':'bad');
+      summary.textContent='Банковская проверка · '+r.profile+' / '+r.id+': '+
+        paymentCardMessage(check||{code:follow?.error||'CARD_VERIFICATION_HTTP_UNAVAILABLE'});
+      container.appendChild(summary);
+      if(check)paymentConfirmationPanel(r,{...check,card_id:card.id},container);
+    }
+    setProgress(d,t);
   });render();return [...new Set(missing)];
 }
 
