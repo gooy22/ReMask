@@ -751,7 +751,8 @@ async def run_verification_http_contract_audit() -> None:
         from app.contract_maintenance.payment_sources import inspect_profile_payment_sources
         async with asyncio.timeout(100):
             result = await inspect_profile_payment_sources(
-                pool.resolver, profile, account, state=pool.provisioning_state)
+                pool.resolver, profile, account, state=pool.provisioning_state,
+                audit_variant_sources=True)
         report = {'code': result.get('status'),
                   'modules': result.get('module_count_total', 0),
                   'scripts': result.get('scripts_read', 0),

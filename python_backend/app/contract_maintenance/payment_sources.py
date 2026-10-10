@@ -26,6 +26,15 @@ MAX_SCRIPT_BYTES = 8_000_000
 MAX_TOTAL_BYTES = 120_000_000
 MAX_EXPORT_BYTES = 8_000_000
 MAX_SCRIPTS = 400
+# These task module names are anchored to the previously exported Meta
+# BillingInit3DS / RiskVerifySDC / NativeOTP Relay page manager families.
+# Bootloader GET fetches only static JS, never an auth/charge operation.
+OBSERVED_VERIFICATION_VARIANTS = (
+    'BillingInit3DSPageViewManager.react',
+    'BillingRiskVerifySDCPageViewManager.react',
+    'BillingRiskVerifySDCFailedPageViewManager.react',
+    'BillingNativeOTPVerificationPageViewManager.react',
+)
 OPTIONAL_DOCUMENT_TIMEOUT = 12
 REQUIRED_SOURCE_MODULES = (
     'BillingHubPaymentSettingsPaymentMethodsListQuery.graphql',
@@ -284,7 +293,7 @@ def public_payment_modules(source):
     return result
 
 
-async def capture_payment_sources(web, *, account_id, business_id, loader_documents=(), payment_account_id=None):
+async def capture_payment_sources(web, *, account_id, business_id, loader_documents=(), payment_account_id=None, audit_variant_sources=False):
     if not re.fullmatch(r'\d{5,30}', str(account_id)) or not re.fullmatch(r'\d{5,30}', str(business_id)):
         raise ValueError('INVALID_PAYMENT_TARGET')
     if payment_account_id is not None and not re.fullmatch(r'\d{5,30}', str(payment_account_id)):
@@ -342,7 +351,7 @@ async def capture_payment_sources(web, *, account_id, business_id, loader_docume
     request_context = extract(body) if callable(extract) else {}
     del body, documents
     modules, total, count, errors = {}, 0, 0, 0
-    lazy_attempted, lazy_pending, lazy_requests = set(), set(), 0
+    lazy_attempted, lazy_pending, lazy_requests = set(), set(OBSERVED_VERIFICATION_VARIANTS if audit_variant_sources else ()), 0
     loader_protocol_observed = False
     async_params_source, loader_responses = '', []
 
@@ -452,16 +461,16 @@ async def capture_payment_sources(web, *, account_id, business_id, loader_docume
             **exported}
 
 
-async def inspect_profile_payment_sources(resolver, profile, target, *, state):
+async def inspect_profile_payment_sources(resolver, profile, target, *, state, audit_variant_sources=False):
     try:
-        return await _inspect_profile_payment_sources(resolver, profile, target, state=state)
+        return await _inspect_profile_payment_sources(resolver, profile, target, state=state, audit_variant_sources=audit_variant_sources)
     except ValueError:
         raise
     except Exception as exc:
         raise source_failure(exc, 'maintenance') from None
 
 
-async def _inspect_profile_payment_sources(resolver, profile, target, *, state):
+async def _inspect_profile_payment_sources(resolver, profile, target, *, state, audit_variant_sources=False):
     from ..payment_inspection import account_id, resolve_payment_asset
     from ..session import ProfileSession
     target = account_id(target)
@@ -552,7 +561,8 @@ async def _inspect_profile_payment_sources(resolver, profile, target, *, state):
                        and methods.get('business_scope_verified') is True
                        and methods.get('payment_account_relation_verified') is True else None)
             result = await capture_payment_sources(web, account_id=target, business_id=asset['business_id'],
-                                                   loader_documents=loaders, payment_account_id=payment)
+                                                   loader_documents=loaders, payment_account_id=payment,
+                                                   audit_variant_sources=audit_variant_sources)
         result['payment_account_probe'] = evidence
         if methods is not None:
             result['payment_methods_probe'] = methods
