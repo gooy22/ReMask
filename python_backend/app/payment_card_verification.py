@@ -99,8 +99,31 @@ async def verify_payment_card_http(resolver, profile, payload, *, state=None):
             return {**base, 'code': 'PERSONAL_AD_ACCOUNT_EXCLUDED'}
         async with ProfileSession(context, timeout_seconds=30) as session:
             web = await session.facebook_web()
-            evidence = account_proof(await execute(
-                web, 'READ_ACCOUNT', account=target, business_id=business), target)
+            # Meta's historical Billing Hub account query can reject even
+            # though a previous Save has confirmed this exact account. Reuse
+            # durable evidence ONLY for the same vault card and BM; still
+            # demand an independent, live READ_METHODS ownership proof below.
+            retained_intent = None
+            saved = {}
+            if state is not None and getattr(state, 'path', None):
+                retained_intent = await CardIntentLedger(state.path).source_read_intent(profile, target)
+                if retained_intent and retained_intent.get('card_id') == card_id:
+                    try:
+                        saved = json.loads(retained_intent['result'])
+                    except (ValueError, TypeError):
+                        saved = {}
+            evidence = None
+            if (isinstance(saved, dict) and saved.get('account_id') == target
+                    and saved.get('account_scope_verified') is True
+                    and saved.get('business_id') == business
+                    and re.fullmatch(r'\d{5,30}', str(saved.get('payment_account_id', '')))
+                    and isinstance(saved.get('payment_account_node_id'), str)):
+                evidence = {key: saved[key] for key in (
+                    'account_id', 'account_scope_verified', 'payment_account_id',
+                    'payment_account_node_id')}
+            if evidence is None:
+                evidence = account_proof(await execute(
+                    web, 'READ_ACCOUNT', account=target, business_id=business), target)
             if evidence.get('account_scope_verified') is not True:
                 return {**base, 'code': evidence['code']}
             methods = methods_proof(await execute(
@@ -116,16 +139,11 @@ async def verify_payment_card_http(resolver, profile, payload, *, state=None):
             # Match the actual credential ID from the retained Save whenever
             # possible. A masked brand/last4 is never enough to authorize money.
             saved_id = ''
-            if state is not None and getattr(state, 'path', None):
-                prior = await CardIntentLedger(state.path).source_read_intent(profile, target)
-                if prior and prior.get('card_id') == card_id:
-                    proof = json.loads(prior['result'])
-                    credential = proof.get('credential') if isinstance(proof, dict) else None
-                    if (isinstance(proof, dict) and proof.get('account_id') == target
-                            and proof.get('business_id') == business
-                            and proof.get('payment_account_id') == evidence['payment_account_id']
-                            and isinstance(credential, dict)):
-                        saved_id = str(credential.get('id') or credential.get('credential_id') or '')
+            credential = saved.get('credential') if isinstance(saved, dict) else None
+            if (saved.get('account_id') == target and saved.get('business_id') == business
+                    and saved.get('payment_account_id') == evidence['payment_account_id']
+                    and isinstance(credential, dict)):
+                saved_id = str(credential.get('id') or credential.get('credential_id') or '')
 
             choices = [m for m in methods.get('payment_methods', ())
                        if m.get('type') == card[0] and m.get('last4') == card[1]

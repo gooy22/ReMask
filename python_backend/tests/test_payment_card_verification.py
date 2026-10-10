@@ -1,5 +1,6 @@
 """No-network contracts for the HTTP-only verification preflight."""
 import unittest
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -91,6 +92,32 @@ class CardVerificationHTTPTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['status'], 'BLOCKED')
         self.assertFalse(result['verification_triggered'])
         self.assertEqual(len(execute.await_args_list), 2)
+
+
+    async def test_confirmed_same_card_skips_rejected_hub_query_but_rechecks_business_live(self):
+        saved = {'account_id': '123456789', 'business_id': '222222222',
+                 'account_scope_verified': True, 'payment_account_id': '333333333',
+                 'payment_account_node_id': 'node_333',
+                 'credential': {'id': 'cred_1', 'type': 'Visa', 'last4': '1234'}}
+        intent = {'card_id': self.payload['card_id'], 'result': json.dumps(saved)}
+        with patch('app.payment_card_verification.resolve_payment_asset',
+                   AsyncMock(return_value=self.asset)), \
+             patch('app.session.ProfileSession', SessionFixture), \
+             patch('app.payment_card_verification.CardIntentLedger') as ledger, \
+             patch('app.payment_card_verification.account_proof', side_effect=AssertionError('no hub read')), \
+             patch('app.payment_card_verification.methods_proof', return_value=self.methods), \
+             patch('app.payment_card_verification.sdc_candidate_proof', return_value={
+                 'sdc_screen_verified': True, 'sdc_candidate': False, 'sdc_credential_match': False}), \
+             patch('app.payment_card_verification.payment_page_proof', return_value=True), \
+             patch('app.payment_card_verification.execute', AsyncMock(return_value={})) as execute:
+            ledger.return_value.source_read_intent = AsyncMock(return_value=intent)
+            result = await verify_payment_card_http(
+                self.resolver, 'Fixture', self.payload, state=SimpleNamespace(path='/tmp/fixture-db'))
+        self.assertEqual(result['status'], 'ACTION_REQUIRED')
+        self.assertEqual(result['credential_id'], 'cred_1')
+        self.assertFalse(result['verification_triggered'])
+        self.assertEqual([c.args[1] for c in execute.await_args_list],
+                         ['READ_METHODS', 'READ_SDC_CANDIDATES', 'READ_VERIFY_OPTIONS'])
 
 
     def test_sdc_candidate_requires_exact_credential_match(self):
