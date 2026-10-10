@@ -171,6 +171,25 @@ class CardServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['code'],'CARD_HTTP_FIRST_CANARY_REQUIRED')
         self.resolver.resolve.assert_not_awaited()
 
+    async def test_authorized_fresh_profile_canary_reaches_durable_guard_without_old_profile_success(self):
+        from app.payment_card_service import FRESH_PROFILE_CANARY_SCOPE
+        profile, target = FRESH_PROFILE_CANARY_SCOPE
+        result = await profile_payment_card_http(self.resolver, profile,
+            {'operation':'bind', 'account_id':target}, state=self.state)
+        self.assertEqual(result['code'], 'CARD_DURABLE_INTENT_REQUIRED')
+        self.assertFalse(result['submitted'])
+        self.resolver.resolve.assert_not_awaited()
+
+    async def test_fresh_canary_does_not_enable_other_profiles_or_accounts(self):
+        from app.payment_card_service import FRESH_PROFILE_CANARY_SCOPE
+        profile, target = FRESH_PROFILE_CANARY_SCOPE
+        for wrong_profile, wrong_target in [('17', target), (profile, '120253561846570725')]:
+            result = await profile_payment_card_http(self.resolver, wrong_profile,
+                {**self.payload, 'account_id':wrong_target}, state=self.state)
+            self.assertEqual(result['code'], 'CARD_HTTP_CANARY_SCOPE_REQUIRED')
+            self.assertFalse(result['submitted'])
+        self.resolver.resolve.assert_not_awaited()
+
     async def test_lost_reply_never_commits_foreign_business_or_ambiguous_new_credentials(self):
         self.web.lose_save=True
         await self.call()

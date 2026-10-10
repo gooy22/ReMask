@@ -1,6 +1,6 @@
 """Public card service: profile/proxy-bound HTTP only; no Chromium fallback.
 
-The initial Save canary is confined to the operator's selected RK. Other
+Save canaries are confined to the operator's selected RKs. Other
 accounts remain disabled until that exact pinned contract is verified live.
 """
 from __future__ import annotations
@@ -22,6 +22,7 @@ from .static_payment_read import execute, account_proof, payment_page_proof, ins
 # Explicit integration canary, not a blanket enablement of an archived builder.
 CANARY_SCOPE = ('15', '120251650486340295')
 SECONDARY_CANARY_SCOPE = ('15', '120251352568830122')
+FRESH_PROFILE_CANARY_SCOPE = ('16', '52556523535473')
 
 
 def setup_context(payload, target, payment):
@@ -49,7 +50,7 @@ async def profile_payment_card_http(resolver, profile, payload, *, state=None):
                                               asset_hint=payload.get('asset_hint'))
     if operation not in {'bind', 'reconcile'}:
         raise ValueError('CARD_OPERATION_INVALID')
-    if operation == 'bind' and (profile, target) not in {CANARY_SCOPE, SECONDARY_CANARY_SCOPE}:
+    if operation == 'bind' and (profile, target) not in {CANARY_SCOPE, SECONDARY_CANARY_SCOPE, FRESH_PROFILE_CANARY_SCOPE}:
         return {**base, 'code': 'CARD_HTTP_CANARY_SCOPE_REQUIRED'}
     ledger = None
     attempt_id = payload.get('attempt_id')
