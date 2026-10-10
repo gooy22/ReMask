@@ -116,6 +116,42 @@ def _business_collection_complete(payload):
     return bool(observations) and all(observations)
 
 
+def _bm_create_response_evidence(payload):
+    """Persist only safe booleans and numeric Meta codes, never response text."""
+    data = payload.get('data') if isinstance(payload, dict) else None
+    node = data.get('bizkit_create_business') if isinstance(data, dict) else None
+    sources = [payload, node]
+    if isinstance(node, dict):
+        sources.append(node.get('client_result'))
+    codes = set()
+    errors_reported = False
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        for field in ('errors', 'error'):
+            value = source.get(field)
+            if value:
+                errors_reported = True
+            rows = value if isinstance(value, list) else [value]
+            for error in rows[:12]:
+                if isinstance(error, dict):
+                    for key in ('code', 'error_code', 'error_subcode'):
+                        v = error.get(key)
+                        if type(v) is int and 0 <= v <= 999999999:
+                            codes.add(v)
+                        elif isinstance(v, str) and re.fullmatch(r'\d{1,9}', v):
+                            codes.add(int(v))
+        for field in ('error_code', 'error_subcode'):
+            v = source.get(field)
+            if type(v) is int and 0 <= v <= 999999999:
+                errors_reported = True
+                codes.add(v)
+    return {'response_received': isinstance(payload, dict),
+        'has_meta_errors': errors_reported, 'meta_error_codes': sorted(codes),
+        'create_node_present': isinstance(node, dict),
+        'returned_business_id': bool(isinstance(node, dict) and _id(node.get('id')))}
+
+
 async def _business_inventory(web, expected=""):
     try:
         return await read_business_inventory(web, expected)
@@ -192,10 +228,25 @@ async def business_handler(session, params, state, *args, **kwargs):
         return await action.commit({"business_id": confirmed, "business_name": name,
             "verification": {"source": before["source"], "exact_business_id": confirmed}, "recovered": True})
     if expected or pending:
-        await action.checkpoint({"phase": "CREATE_RESULT_UNKNOWN", "business_name": name})
-        raise ProvisioningError("CREATE_BM_RESULT_UNKNOWN", "Previous BM CREATE is retained; fresh HTTP inventory has not confirmed its result. No duplicate POST was sent.", retryable=True)
+        unavailable = before["complete"] and before.get("can_create_business_portfolio") is False
+        meta_error = bool((action.saved.get("bm_create_diagnostic") or {}).get("has_meta_errors"))
+        code = ("CREATE_BM_UNVERIFIED_CREATION_NOT_ALLOWED" if unavailable else
+                "CREATE_BM_META_ERROR_UNVERIFIED" if meta_error else "CREATE_BM_RESULT_UNKNOWN")
+        await action.checkpoint({"phase": "CREATE_RESULT_UNKNOWN", "business_name": name,
+            "inventory_create_eligible": before.get("can_create_business_portfolio")})
+        raise ProvisioningError(code,
+            ("Previous BM submit remains unconfirmed. Meta currently reports Business Portfolio creation unavailable; "
+             "no second CREATE request was sent." if unavailable else
+             "Meta returned a CREATE error, but the earlier submit must be reconciled before another attempt."
+             if meta_error else
+             "Previous BM CREATE is retained; fresh HTTP inventory has not confirmed its result. No duplicate POST was sent."),
+            retryable=not unavailable)
     if len(named) > 1 or not before["complete"]:
         raise ProvisioningError("PRIVATE_BM_INVENTORY_INCONCLUSIVE", "Private BM inventory did not prove a unique target or complete absence. No CREATE was sent.", retryable=True)
+    if before.get("can_create_business_portfolio") is False:
+        raise ProvisioningError("BM_CREATION_NOT_ALLOWED",
+            "Meta explicitly reports that this profile cannot create another Business Portfolio. No CREATE request was sent.",
+            retryable=False)
     await action.checkpoint({"phase": "CREATE_NOT_SUBMITTED", "business_name": name,
         "baseline_complete": True, "baseline_business_ids": sorted(before["rows"]), "business_id": ""})
     submitted = False
@@ -214,6 +265,11 @@ async def business_handler(session, params, state, *args, **kwargs):
             "create_response_path": created.response_path})
     except Exception as exc:
         payload = getattr(exc, "payload", getattr(exc, "meta_payload", {}))
+        diag = _bm_create_response_evidence(payload)
+        await action.checkpoint({"bm_create_diagnostic": diag,
+            "bm_create_exception_type": type(exc).__name__})
+        log.info("[%s] BM CREATE response evidence=%s", action.profile,
+            json.dumps(diag, separators=(',', ':')))
         rejected = isinstance(payload, dict) and bool(payload.get("errors") or payload.get("error")) and not payload.get("data")
         if not submitted or getattr(exc, "request_may_have_been_sent", None) is False or rejected:
             await action.checkpoint({"phase": "CREATE_REJECTED" if rejected else "CREATE_NOT_SUBMITTED"})
@@ -229,7 +285,18 @@ async def business_handler(session, params, state, *args, **kwargs):
                 "create_response_business_id": expected, "verification": {"source": proof["source"], "exact_business_id": found}})
         if attempt < 2:
             await asyncio.sleep(0.4 * (attempt + 1))
-    raise ProvisioningError("CREATE_BM_RESULT_UNKNOWN", "BM submit is retained; independent HTTP inventory has not confirmed it. Retry verifies before any POST.", retryable=True)
+    unavailable = proof.get("complete") is True and proof.get("can_create_business_portfolio") is False
+    meta_error = bool((action.saved.get("bm_create_diagnostic") or {}).get("has_meta_errors"))
+    code = ("CREATE_BM_UNVERIFIED_CREATION_NOT_ALLOWED" if unavailable else
+            "CREATE_BM_META_ERROR_UNVERIFIED" if meta_error else "CREATE_BM_RESULT_UNKNOWN")
+    raise ProvisioningError(code,
+        ("BM submit is retained, but Meta now reports Business Portfolio creation disabled. "
+         "Independent inventory has not confirmed it; no duplicate POST will be sent."
+         if unavailable else
+         "Meta returned a BM CREATE error. Independent inventory did not confirm the new BM; "
+         "a duplicate POST remains blocked." if meta_error else
+         "BM submit is retained; independent HTTP inventory has not confirmed it. Retry verifies before any POST."),
+        retryable=not unavailable)
 
 
 async def ad_account_handler(session, params, state, *args, **kwargs):
