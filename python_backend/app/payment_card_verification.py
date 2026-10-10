@@ -114,7 +114,7 @@ async def _send_sdc_once(web, *, state, profile, account, payment_account,
                 'verification_stage': 'RESULT_UNKNOWN'}
     sent = (response.get('data', {}).get('send_dynamic_descriptor_auth', {}).get('sent')
             if isinstance(response, dict) and isinstance(response.get('data'), dict) else None)
-    if response.get('errors') or type(sent) is not bool:
+    if not isinstance(response, dict) or response.get('errors') or type(sent) is not bool:
         await ledger.mark(attempt, 'RESULT_UNKNOWN')
         return {**common, 'status': 'ACTION_REQUIRED',
                 'code': 'SDC_AUTH_RESULT_UNKNOWN',
