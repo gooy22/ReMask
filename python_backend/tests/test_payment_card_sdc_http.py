@@ -97,7 +97,8 @@ class CardSDCHttpTests(IsolatedAsyncioTestCase):
              patch('app.payment_card_verification.methods_proof',return_value=methods), \
              patch('app.payment_card_verification.sdc_candidate_proof',return_value={
                  'sdc_screen_verified':True,'sdc_candidate':True,'sdc_credential_match':True,
-                 'sdc_usability':'PENDING_VERIFICATION'}), \
+                 'sdc_usability':'PENDING_VERIFICATION',
+                 'sdc_action_credential_id':'meta_sdc_credential_123'}), \
              patch('app.payment_card_verification.execute',AsyncMock(return_value={})) as read:
             result=await verify_payment_card_http(
                 SimpleNamespace(resolve=AsyncMock(return_value=SimpleNamespace(cookies={'c_user':'1'}))),
