@@ -61,10 +61,17 @@ def sdc_candidate_proof(payload, credential_id, brand, last4):
         return {**base, 'sdc_screen_verified': True}
     row, credential = found[0]
     exact = credential_id in (credential.get('id'), credential.get('credential_id'))
-    # An SDC form may contain only a credential_id where the methods read
-    # returned the Relay node id. In that case, never claim exact identity.
+    # READ_METHODS identifies the card by its Relay node id, while Meta's
+    # SDC mutations expressly send credential.credential_id from this screen.
+    # These identifiers may differ. Never submit a Relay id as the bank
+    # authorization credential unless Meta also returns it as credential_id.
+    action_id = credential.get('credential_id')
+    transport_id = (action_id if exact and isinstance(action_id, str)
+                    and re.fullmatch(r'[A-Za-z0-9_:+/=-]{1,200}', action_id)
+                    else None)
     return {**base, 'sdc_screen_verified': True, 'sdc_candidate': True,
             'sdc_credential_match': exact,
+            'sdc_action_credential_id': transport_id,
             'sdc_usability': str(row.get('usability') or '')[:48]}
 
 
@@ -258,13 +265,20 @@ async def verify_payment_card_http(resolver, profile, payload, *, state=None):
                 await execute(web, 'READ_SDC_CANDIDATES',
                               payment=evidence['payment_account_id'], business_id=business),
                 chosen['credential_id'], *card)
-            common = {**common, **sdc}
+            # The action credential stays server-side; no need to disclose
+            # an additional opaque payment token to the browser.
+            action_credential = sdc.get('sdc_action_credential_id')
+            common = {**common, **{key: value for key, value in sdc.items()
+                                    if key != 'sdc_action_credential_id'}}
             if not sdc['sdc_screen_verified']:
                 return {**common, 'code': 'CARD_VERIFICATION_SDC_READ_UNVERIFIED'}
             if sdc['sdc_candidate'] and not sdc['sdc_credential_match']:
                 return {**common, 'code': 'CARD_VERIFICATION_SDC_CARD_UNVERIFIED'}
             if sdc['sdc_candidate']:
                 usability = sdc.get('sdc_usability')
+                if (operation in ('authorize', 'verify_code')
+                        and not action_credential):
+                    return {**common, 'code': 'SDC_ACTION_CREDENTIAL_UNVERIFIED'}
                 if usability == 'PENDING_VERIFICATION':
                     if operation == 'authorize':
                         # Meta's own screen skips sending a second hold in
@@ -276,7 +290,7 @@ async def verify_payment_card_http(resolver, profile, payload, *, state=None):
                         return await _verify_sdc_code(web,
                             code=payload.get('verification_code'),
                             account=target, payment_account=evidence['payment_account_id'],
-                            business=business, credential=chosen['credential_id'],
+                            business=business, credential=action_credential,
                             common=common)
                     return {**common, 'status': 'ACTION_REQUIRED',
                             'code': 'SDC_AUTH_PENDING_WAIT_CODE',
@@ -288,7 +302,7 @@ async def verify_payment_card_http(resolver, profile, payload, *, state=None):
                         return await _send_sdc_once(web, state=state,
                             profile=profile, account=target,
                             payment_account=evidence['payment_account_id'],
-                            business=business, credential=chosen['credential_id'],
+                            business=business, credential=action_credential,
                             card_id=card_id, common=common)
                     return {**common, 'status': 'ACTION_REQUIRED',
                             'code': 'SDC_AUTH_READY',
