@@ -67,10 +67,22 @@ class PrepareService:
                 retryable=False,
             )
 
+        require_business = raw.get("business", True) is not False
+        # Prepare provisions one BM for every RK. A Facebook profile can
+        # create up to two new Business Portfolios, so a legacy request for
+        # four TOTAL bundles across two profiles must never become four BMs
+        # on EACH profile. Cap at two, including on idempotent job retries.
+        if require_business and ad_accounts > 2:
+            log.info(
+                "Prepare requested %s BM+RK bundles per profile; using maximum 2",
+                ad_accounts,
+            )
+            ad_accounts = 2
+
         return DesiredProfileState(
             ad_accounts=ad_accounts,
             require_page=raw.get("fan_page", True) is not False,
-            require_business=raw.get("business", True) is not False,
+            require_business=require_business,
             require_page_access=raw.get("page_access", True) is not False,
             require_payment=raw.get("payment", True) is not False,
             preferred_business_id=str(raw.get("business_id") or "").strip(),
