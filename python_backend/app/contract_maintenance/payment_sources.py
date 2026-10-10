@@ -248,6 +248,8 @@ def source_export(rows, *, max_bytes=MAX_EXPORT_BYTES):
     """Keep artifacts and critical senders first; always disclose omissions."""
     def priority(row):
         name = row['name']
+        if re.search(r'(?:Risk|Verif|ThreeDS|3DS|SDC|CVCO|NativeOTP)', name, re.I):
+            return -2
         if name in REQUIRED_SOURCE_MODULES:
             return -1
         if name.endswith(('.graphql', '_facebookRelayOperation', '$Parameters')):
@@ -385,8 +387,9 @@ async def capture_payment_sources(web, *, account_id, business_id, loader_docume
                 key = (row['name'], row['sha256'])
                 if key not in modules:
                     modules[key] = row
-        requested = sorted(lazy_pending - lazy_attempted)[:16]
-        if bootloader and loader_protocol_observed and requested and lazy_requests < 2:
+        requested = sorted(lazy_pending - lazy_attempted,
+            key=lambda name: (0 if re.search(r'Risk|Verif|ThreeDS|CVCO|SDC|NativeOTP', name, re.I) else 1, name))[:16]
+        if bootloader and loader_protocol_observed and requested and lazy_requests < 8:
             # Meta's observed BootloaderEndpoint sender uses GET + modules.
             # Loading source cannot run a verification task or charge a card.
             lazy_attempted.update(requested); lazy_requests += 1
@@ -412,6 +415,25 @@ async def capture_payment_sources(web, *, account_id, business_id, loader_docume
             except Exception:
                 loader_responses.append({'code': 'SOURCE_LOADER_REQUEST_UNAVAILABLE'})
     exported = source_export(list(modules.values()))
+    # Read only public Relay document definitions. A query doc_id is NOT a
+    # financial mutation; logging a candidate is evidence, not authorization.
+    verification_ops = []
+    for (name, digest), row in modules.items():
+        if not (name.endswith('_facebookRelayOperation')
+                and re.search(r'Risk|Verif|ThreeDS|SDC|CVCO|NativeOTP', name, re.I)):
+            continue
+        ids = re.findall(r'exports\\s*=\\s*["\\'](\\d{5,40})["\\']', row['source'])
+        if len(ids) == 1:
+            verification_ops.append({'name': name, 'doc_id': ids[0],
+                'mutation_candidate': 'Mutation' in name})
+    verification_ops.sort(key=lambda row: (not row['mutation_candidate'], row['name']))
+    if verification_ops:
+        log.info('verification deferred Relay candidates profile=%s account=%s operations=%s',
+            getattr(getattr(web, 'profile', None), 'name', ''), account_id,
+            json.dumps(verification_ops[:60], separators=(',', ':')))
+    log.info('verification loader audit profile=%s account=%s attempted=%s responses=%s',
+        getattr(getattr(web, 'profile', None), 'name', ''), account_id,
+        sorted(lazy_attempted), loader_responses)
     log.info('payment source audit profile=%s account=%s scripts=%d bytes=%d modules=%d browser_started=False',
              getattr(getattr(web, 'profile', None), 'name', ''), account_id, count, total, len(modules))
     return {'status': 'SOURCE_EVIDENCE' if modules else 'INCONCLUSIVE',
@@ -426,6 +448,7 @@ async def capture_payment_sources(web, *, account_id, business_id, loader_docume
                 'protocol_observed': loader_protocol_observed, 'requests': lazy_requests,
                 'modules_requested': sorted(lazy_attempted), 'responses': loader_responses,
                 'request_context_keys': sorted(key for key in request_context if key in async_params_source)},
+            'verification_relay_operations': verification_ops[:100],
             **exported}
 
 
