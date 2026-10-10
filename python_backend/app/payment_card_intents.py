@@ -235,10 +235,15 @@ class BankVerificationLedger(CardIntentLedger):
         con = self.connect()
         try:
             con.execute('BEGIN IMMEDIATE')
+            previous = ('RESERVED',) if stage == 'REQUEST_SENT' else (
+                ('REQUEST_SENT',) if stage in ('RESULT_UNKNOWN', 'CHALLENGE_READY',
+                                             'SERVER_REJECTED') else
+                ('CHALLENGE_READY', 'RESULT_UNKNOWN'))
             changed = con.execute('''UPDATE card_bank_verification_intents
                 SET stage=?,updated_at=?
-                WHERE attempt_id=? AND stage='RESERVED' ''',
-                (stage,int(time.time()),attempt_id)).rowcount
+                WHERE attempt_id=? AND stage IN (''' +
+                ','.join('?' for _ in previous) + ')',
+                (stage,int(time.time()),attempt_id,*previous)).rowcount
             con.commit()
             return changed == 1
         except BaseException:
