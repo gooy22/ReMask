@@ -738,7 +738,11 @@ async def require_key(x_remask_worker_key: str | None = Header(default=None)) ->
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,detail='invalid worker key')
 
 async def run_verification_http_contract_audit() -> None:
-    """One explicit exact-RK HTTP source canary, never a card transaction."""
+    """Small exact-account SDC check through profile cookies/proxy; no UI.
+
+    The 400-file public JS source audit is opt-in only. A normal worker start
+    must not download public script bundles or submit a bank authorization.
+    """
     profile = str(os.getenv('REMASK_VERIFY_AUDIT_PROFILE') or '').strip()
     account = str(os.getenv('REMASK_VERIFY_AUDIT_ACCOUNT') or '').strip()
     if not profile and not account:
@@ -748,77 +752,57 @@ async def run_verification_http_contract_audit() -> None:
         return
     await asyncio.sleep(3)
     try:
-        from app.contract_maintenance.payment_sources import inspect_profile_payment_sources
-        async with asyncio.timeout(100):
-            result = await inspect_profile_payment_sources(
-                pool.resolver, profile, account, state=pool.provisioning_state,
-                audit_variant_sources=True)
-        report = {'code': result.get('status'),
-                  'modules': result.get('module_count_total', 0),
-                  'scripts': result.get('scripts_read', 0),
-                  'truncated': result.get('export_truncated'),
-                  'loader': result.get('verification_loader_probe'),
-                  'relay_operations': result.get('verification_relay_operations', [])}
-        log.warning('verification HTTP audit profile=%s account=%s report=%s',
-                    profile, account, json.dumps(report, separators=(',', ':'))[:12000])
-        methods = result.get('payment_methods_probe') or {}
-        task_types = [{'card_type': row.get('type'),
-                       'last4': row.get('last4'),
-                       'tasks': row.get('verification_tasks', []),
-                       'confirmation': row.get('card_confirmation_status')}
-                      for row in methods.get('payment_methods', [])
-                      if isinstance(row, dict)]
-        log.warning('verification HTTP task evidence profile=%s account=%s cards=%s',
-                    profile, account, json.dumps(task_types[:8], separators=(',', ':')))
-        sources = [row for row in result.get('modules', []) if
-                   isinstance(row, dict) and isinstance(row.get('name'), str)]
-        focus = ('BillingThreeDSVerificationPageViewManager.react',
-                 'BillingThreeDSVerificationPage.react',
-                 'BillingThreeDSStatusEffect.react',
-                 'BillingInit3DSPageViewManager.react',
-                 'BillingRiskVerifySDCPageViewManager.react',
-                 'BillingGeneratedPaymentRiskMAIBABridge.react',
-                 'useBillingRecordStandardCVCOAddFundsOutcomeMutation',
-                 'CreditCardVerificationUtils',
-                 'BillingRiskCheckUtils',
-                 'UserRiskReviewCreditCardVerificationModal.react',
-                 'useBillingRiskInitThreeDSMutation',
-                 'useBillingRiskInitThreeDSMutation.graphql',
-                 'useBillingRiskVerifyThreeDSMutation',
-                 'useBillingRiskVerifyThreeDSMutation.graphql',
-                 'BillingRiskVerifyThreeDSRoot.react',
-                 'BillingRiskVerifyThreeDSPageViewManager.react',
-                 'BillingRiskVerifySDCRoot.react',
-                 'BillingRiskVerificationStepOptions.react',
-                 'BillingCVCOSoftDescriptorVerificationTask',
-                 'BillingCVCOThreeDSVerificationTask',
-                 'BillingRiskUtilsSendSDCAuthMutation',
-                 'BillingRiskUtilsSendSDCAuthMutation.graphql',
-                 'useBillingVerifySDCMutation',
-                 'useBillingVerifySDCMutation.graphql',
-                 'useBillingVerifySDCCodeMutation',
-                 'useBillingVerifySDCCodeMutation.graphql',
-                 'BillingRiskVerifySDCPageViewManager.react',
-                 'BillingRiskVerifySDCPage.react',
-                 'BillingRiskVerifySDCCodePageViewManager.react',
-                 'BillingSDCAuthScreenQuery.graphql')
-        log.warning('verification HTTP source names profile=%s account=%s names=%s',
-                    profile, account, json.dumps(sorted(row['name'] for row in sources
-                        if any(term in row['name'].lower() for term in
-                               ('risk', 'verify', 'verification', 'threeds', 'init3ds', 'cvco', 'sdc', 'otp', 'authoriz', 'preauth', 'credential')))[:150]))
-        for module in sources:
-            if module['name'] in focus and isinstance(module.get('source'), str):
-                # CDN modules are public static JS, not session HTML or network
-                # responses. Never expose payment fields, auth tokens or queries.
-                body = module['source']
-                log.warning('verification HTTP public JS profile=%s module=%s sha256=%s bytes=%d body=%s',
-                    profile, module['name'], module.get('sha256'), len(body.encode()),
-                    body[:10000])
+        from app.payment_inspection import resolve_payment_asset
+        from app.payment_card_verification import sdc_candidate_proof
+        from app.static_payment_read import account_proof, methods_proof, execute
+        from app.session import ProfileSession
+        asset = await resolve_payment_asset(profile, account, pool.provisioning_state, None)
+        if not asset:
+            log.warning('verification HTTP check profile=%s account=%s code=PAYMENT_ACCOUNT_BINDING_MISSING',
+                        profile, account)
+            return
+        business = asset['business_id']
+        context = await pool.resolver.resolve(profile)
+        async with ProfileSession(context, timeout_seconds=35) as session:
+            web = await session.facebook_web()
+            proof = account_proof(await execute(web, 'READ_ACCOUNT',
+                account=account, business_id=business), account)
+            if proof.get('account_scope_verified') is not True:
+                log.warning('verification HTTP check profile=%s account=%s code=%s',
+                            profile, account, proof.get('code', 'ACCOUNT_UNVERIFIED'))
+                return
+            methods = methods_proof(await execute(web, 'READ_METHODS', account=account,
+                payment=proof['payment_account_id'], business_id=business),
+                account, business_id=business, account_evidence=proof)
+            if not all(methods.get(key) is True for key in (
+                    'account_scope_verified', 'business_scope_verified',
+                    'payment_account_relation_verified', 'methods_query_verified')):
+                log.warning('verification HTTP check profile=%s account=%s code=%s',
+                            profile, account, methods.get('code', 'METHODS_UNVERIFIED'))
+                return
+            sdc = await execute(web, 'READ_SDC_CANDIDATES',
+                                payment=proof['payment_account_id'], business_id=business)
+            cards = []
+            for row in methods.get('payment_methods', [])[:12]:
+                check = sdc_candidate_proof(sdc, row['credential_id'],
+                                             row['type'], row['last4'])
+                cards.append({'last4': row['last4'],
+                              'meta_required_tasks': row.get('verification_tasks', []),
+                              'confirmation': row.get('card_confirmation_status'),
+                              'sdc': check})
+            log.warning('verification HTTP exact-card check profile=%s account=%s cards=%s',
+                        profile, account, json.dumps(cards, separators=(',', ':'))[:5000])
+        if os.getenv('REMASK_VERIFY_AUDIT_SOURCE') == '1':
+            from app.contract_maintenance.payment_sources import inspect_profile_payment_sources
+            async with asyncio.timeout(110):
+                result = await inspect_profile_payment_sources(
+                    pool.resolver, profile, account, state=pool.provisioning_state,
+                    audit_variant_sources=True)
+            log.info('verification HTTP public contract source profile=%s account=%s modules=%s',
+                profile, account, result.get('module_count_total', 0))
     except Exception as exc:
-        # Never print source/HTTP exception strings; they may include cookies.
-        log.warning('verification HTTP audit failed profile=%s account=%s type=%s code=%s',
-                    profile, account, type(exc).__name__,
-                    str(getattr(exc, 'code', 'VERIFICATION_AUDIT_UNAVAILABLE'))[:100])
+        log.warning('verification HTTP check profile=%s account=%s failed_type=%s',
+                    profile, account, type(exc).__name__)
 
 
 @asynccontextmanager
