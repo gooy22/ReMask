@@ -49,11 +49,10 @@ async def verify_payment_card_http(resolver, profile, payload, *, state=None):
     card = _card_identity(payload)
     if card is None:
         return {**base, 'code': 'CARD_VERIFICATION_CARD_REQUIRED'}
-    asset = await resolve_payment_asset(profile, target, state, payload.get('asset_hint'))
-    if not asset:
-        return {**base, 'code': 'PAYMENT_ACCOUNT_BINDING_MISSING'}
-
     try:
+        asset = await resolve_payment_asset(profile, target, state, payload.get('asset_hint'))
+        if not asset:
+            return {**base, 'code': 'PAYMENT_ACCOUNT_BINDING_MISSING'}
         context = await resolver.resolve(profile)
         business = asset['business_id']
         if business == str(context.cookies.get('c_user') or ''):
