@@ -240,6 +240,10 @@ def confirm_saved_card(saved, methods, *, business_id):
         raise ValueError('INVALID_CARD_SAVE_PROOF')
     if saved.get('status') != 'VERIFYING':
         return copy.deepcopy(saved)
+    def unconfirmed(stage):
+        # Safe, bounded reason: never expose the credential IDs in logs/UI.
+        return {**copy.deepcopy(saved), 'verification_stage': stage}
+
     card = saved.get('credential')
     if (not isinstance(card, dict) or not isinstance(methods, dict)
             or saved.get('account_scope_verified') is not True
@@ -248,14 +252,28 @@ def confirm_saved_card(saved, methods, *, business_id):
             or methods.get('payment_account_id') != saved.get('payment_account_id')
             or any(methods.get(k) is not True for k in ('account_scope_verified', 'business_scope_verified',
                     'payment_account_relation_verified', 'methods_query_verified'))):
-        return copy.deepcopy(saved)
+        return unconfirmed('method_scope_not_confirmed')
     rows = methods.get('payment_methods')
     if not isinstance(rows, list):
-        return copy.deepcopy(saved)
-    matches = [row for row in rows if isinstance(row, dict) and row.get('credential_id') == card['id']]
-    if (len(matches) != 1 or matches[0].get('type') != card.get('type')
-            or matches[0].get('last4') != card.get('last4') or matches[0].get('linkage_status') != 'OBSERVED'):
-        return copy.deepcopy(saved)
+        return unconfirmed('method_list_not_confirmed')
+    # Meta can expose either the card Relay ID or its credential_id as the
+    # inventory node. Both must originate in the same exact scoped Save reply.
+    ids = {card.get(key) for key in ('id', 'credential_id')
+           if isinstance(card.get(key), str) and card[key]}
+    if not ids or not isinstance(card.get('type'), str) or not isinstance(card.get('last4'), str):
+        return unconfirmed('save_credential_identity_missing')
+    matches = [row for row in rows if isinstance(row, dict) and row.get('credential_id') in ids]
+    if not matches:
+        return unconfirmed('save_credential_not_in_rk')
+    if len(matches) != 1:
+        return unconfirmed('save_credential_ambiguous')
+    match = matches[0]
+    if (match.get('type') != card['type'] or match.get('last4') != card['last4']
+            or match.get('linkage_status') != 'OBSERVED'):
+        return unconfirmed('save_credential_metadata_mismatch')
+    if match.get('needs_verification') is True:
+        return {**unconfirmed('bank_confirmation_pending'), 'status': 'ACTION_REQUIRED',
+                'code': 'CARD_BANK_CONFIRMATION_REQUIRED'}
     return {**copy.deepcopy(saved), 'status': 'LINKED', 'code': 'CARD_LINK_CONFIRMED',
             'business_id': business_id, 'business_scope_verified': True,
             'payment_account_relation_verified': True, 'card_linked': True}

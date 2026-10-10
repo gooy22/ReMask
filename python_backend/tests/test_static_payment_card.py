@@ -133,6 +133,33 @@ class StaticPaymentCardTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(correct['status'], 'LINKED'); self.assertTrue(correct['card_linked'])
         self.assertFalse(correct['funding_verified']); self.assertTrue(correct['retry_blocked'])
 
+    def test_exact_credential_id_alias_is_accepted_only_with_unique_meta_match(self):
+        # Save provides both card.id and credential_id; Meta's inventory may
+        # expose either. Never infer linkage from the masked number alone.
+        result = confirm_saved_card(saved(), linked_methods('ent-card-credential'), business_id=BUSINESS)
+        self.assertEqual(result['status'], 'LINKED')
+        self.assertEqual(result['code'], 'CARD_LINK_CONFIRMED')
+        wrong = confirm_saved_card(saved(), linked_methods('unrelated-card-node'), business_id=BUSINESS)
+        self.assertEqual(wrong['status'], 'VERIFYING')
+        self.assertEqual(wrong['verification_stage'], 'save_credential_not_in_rk')
+
+    def test_two_exact_id_variants_in_inventory_are_ambiguous(self):
+        methods=linked_methods(CREDENTIAL)
+        second=copy.deepcopy(methods['payment_methods'][0])
+        second['credential_id']='ent-card-credential'
+        methods['payment_methods'].append(second)
+        result=confirm_saved_card(saved(), methods, business_id=BUSINESS)
+        self.assertEqual(result['status'], 'VERIFYING')
+        self.assertEqual(result['verification_stage'], 'save_credential_ambiguous')
+
+    def test_exact_card_bank_verification_does_not_claim_linked(self):
+        methods=linked_methods('ent-card-credential')
+        methods['payment_methods'][0]['needs_verification']=True
+        result=confirm_saved_card(saved(), methods, business_id=BUSINESS)
+        self.assertEqual(result['status'], 'ACTION_REQUIRED')
+        self.assertEqual(result['code'], 'CARD_BANK_CONFIRMATION_REQUIRED')
+        self.assertEqual(result['verification_stage'], 'bank_confirmation_pending')
+
     def test_confirmation_rejects_foreign_scope_missing_proofs_conflicting_masks_and_duplicates(self):
         for change in ('business', 'account', 'payment', 'missing_proof', 'last4', 'duplicate', 'empty'):
             with self.subTest(change=change):

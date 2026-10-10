@@ -62,7 +62,8 @@ class CardIntentLedger:
         # Never persist inputs, response payloads, PTT or bank parameters.
         safe = {k: result[k] for k in ('account_id', 'business_id', 'payment_account_id',
             'payment_account_node_id', 'status', 'code', 'submitted', 'retry_blocked',
-            'account_scope_verified', 'save_response_stage', 'meta_error_codes', 'meta_error_messages') if k in result}
+            'account_scope_verified', 'save_response_stage', 'verification_stage',
+            'meta_error_codes', 'meta_error_messages') if k in result}
         credential = result.get('credential')
         if isinstance(credential, dict):
             safe['credential'] = {k: credential[k] for k in ('id', 'credential_id', 'type', 'last4') if k in credential}

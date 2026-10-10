@@ -65,7 +65,7 @@ async def profile_payment_card_http(resolver, profile, payload, *, state=None):
                 retained = {**base, 'status': 'SUBMITTED_UNVERIFIED', 'submitted': True,
                             'retry_blocked': True, 'code': 'CARD_BINDING_RECONCILE_REQUIRED'}
                 saved = json.loads(pending['result'])
-                for key in ('save_response_stage','meta_error_codes','meta_error_messages'):
+                for key in ('save_response_stage','meta_error_codes','meta_error_messages','verification_stage'):
                     if key in saved:
                         retained[key] = saved[key]
                 if pending['card_id'] != card_id or not (saved.get('credential') or saved.get('preexisting_credential_ids') is not None):
@@ -106,15 +106,25 @@ async def profile_payment_card_http(resolver, profile, payload, *, state=None):
                                 'status':'ACTION_REQUIRED', 'code':'CARD_BANK_CONFIRMATION_REQUIRED'}
                             await ledger.finish(pending['attempt_id'], result)
                             return result
-                    if saved.get('status') == 'ACTION_REQUIRED' and not any(row.get('credential_id') == saved['credential']['id']
-                            and row.get('needs_verification') is False for row in methods.get('payment_methods', [])):
+                    exact_ids = {saved['credential'].get(key) for key in ('id', 'credential_id')
+                                 if isinstance(saved['credential'].get(key), str)
+                                 and saved['credential'][key]}
+                    if saved.get('status') == 'ACTION_REQUIRED' and not any(
+                            row.get('credential_id') in exact_ids
+                            and row.get('needs_verification') is False
+                            for row in methods.get('payment_methods', [])):
                         return {**retained, 'status':'ACTION_REQUIRED','code':'CARD_BANK_CONFIRMATION_REQUIRED'}
                     result = confirm_saved_card({**saved, 'status': 'VERIFYING'}, methods, business_id=asset['business_id'])
-                    if result.get('status') == 'LINKED':
+                    logging.getLogger('remask.payment_card').info(
+                        'card reconcile verification account=%s status=%s stage=%s',
+                        target, result.get('status'), result.get('verification_stage', 'confirmed'))
+                    if result.get('status') in {'LINKED', 'ACTION_REQUIRED'}:
                         await ledger.finish(pending['attempt_id'], result)
-                        await state.set_payment_link_state(profile, target, True, source='card_http_exact_credential')
+                        if result['status'] == 'LINKED':
+                            await state.set_payment_link_state(profile, target, True, source='card_http_exact_credential')
                         return {**base, **result, 'funding': {**methods, 'profile_id':profile}}
-                    return retained
+                    return {**retained, **({'verification_stage':result['verification_stage']}
+                                         if 'verification_stage' in result else {})}
             raw_card = payload.get('card')
             if not isinstance(raw_card, dict):
                 return {**base, 'code': 'CARD_DATA_INVALID'}
