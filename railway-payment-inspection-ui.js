@@ -472,8 +472,20 @@ async function reconcilePaymentCard(rows,card,container){
   if(!card?.id)throw new Error('Выберите карту предыдущей попытки привязки.');
   const reviews={};
   await concurrent(rows,1,async r=>{
-    try{return await apiJson('ajax/paymentCards.php',post({action:'reconcile',card_id:card.id,profile:r.profile,account_id:r.id,...paymentAssetHint(r)}));}
-    catch(e){return {error:e.message};}
+    try{
+      const response=await apiJson('ajax/paymentCards.php',post({
+        action:'reconcile',card_id:card.id,profile:r.profile,account_id:r.id,...paymentAssetHint(r)}));
+      const linked=response?.result;
+      if(linked?.card_linked===true
+          && ['LINKED','ACTION_REQUIRED'].includes(linked.status)
+          && linked?.funding?.account_scope_verified===true
+          && linked?.funding?.business_scope_verified===true
+          && linked?.funding?.payment_account_relation_verified===true){
+        try{response.verification_follow_up=await paymentVerifyConfirmedLink(r,card);}
+        catch(e){response.verification_follow_up={error:e.message};}
+      }
+      return response;
+    }catch(e){return {error:e.message};}
   },(d,t,res,idx)=>{
     const r=rows[idx],result=res?.result,line=document.createElement('div');
     line.className='ws-result '+(result?.status==='LINKED'?'ok':'bad');
@@ -483,6 +495,14 @@ async function reconcilePaymentCard(rows,card,container){
       reviews[r.profile+'|'+String(r.id).replace(/^act_/,'')]={...result.retry_review,card_id:card.id};
     container.appendChild(line);
     paymentConfirmationPanel(r,result,container);
+    const check=res?.verification_follow_up;
+    if(check){
+      const statusLine=document.createElement('div');statusLine.className='ws-result';
+      statusLine.textContent='Банковское подтверждение · '+r.profile+' / '+r.id+': '+
+        paymentCardMessage(check?.result||{code:check?.error||'CARD_VERIFICATION_HTTP_UNAVAILABLE'});
+      container.appendChild(statusLine);
+      if(check?.result)paymentConfirmationPanel(r,{...check.result,card_id:card.id},container);
+    }
     const f=result?.funding;
     if(f?.ui_preview&&/^[A-Za-z0-9+/=]+$/.test(f.ui_preview)){
       const preview=document.createElement('details'),summary=document.createElement('summary'),image=document.createElement('img');
