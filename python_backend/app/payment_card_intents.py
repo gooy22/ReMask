@@ -32,6 +32,14 @@ class CardIntentLedger:
             con.execute('''CREATE UNIQUE INDEX IF NOT EXISTS card_http_pending_account
                 ON card_http_intents(profile, account)
                 WHERE phase IN ('SUBMITTED', 'SUBMITTED_UNVERIFIED', 'ACTION_REQUIRED', 'VERIFYING')''')
+            con.execute('''CREATE TABLE IF NOT EXISTS card_bank_verification_intents (
+                attempt_id TEXT PRIMARY KEY,
+                profile TEXT NOT NULL, account TEXT NOT NULL,
+                payment_account TEXT NOT NULL, credential_id TEXT NOT NULL,
+                card_id TEXT NOT NULL, flow TEXT NOT NULL,
+                stage TEXT NOT NULL, created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                UNIQUE(profile, account, payment_account, credential_id, flow))''')
             con.commit()
             return con
 
@@ -153,5 +161,93 @@ class CardIntentLedger:
             con.execute('UPDATE card_http_intents SET phase=?,result=?,updated_at=? WHERE attempt_id=?',
                 (phase, json.dumps(safe, separators=(',', ':')), int(time.time()), attempt_id))
             con.commit()
+        finally:
+            con.close()
+
+
+class BankVerificationLedger(CardIntentLedger):
+    """Persist a *single* authorization attempt across workers and restarts.
+
+    A request with an ambiguous outcome remains reserved. Neither timeout nor
+    a repeated button click can start another authorization for the same
+    credential/RK/flow. No card data, CVC, bank URL or code is persisted.
+    """
+
+    @staticmethod
+    def _validate(profile, account, payment_account, credential, card_id, flow):
+        import re
+        if not isinstance(profile, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', profile):
+            raise ValueError('VERIFY_INVALID_PROFILE')
+        for item in (account, payment_account):
+            if not isinstance(item, str) or not re.fullmatch(r'\d{5,30}', item):
+                raise ValueError('VERIFY_INVALID_SCOPE')
+        if not isinstance(credential, str) or not re.fullmatch(r'[A-Za-z0-9_:+-]{1,200}', credential):
+            raise ValueError('VERIFY_INVALID_CREDENTIAL')
+        if not isinstance(card_id, str) or not re.fullmatch(r'card_[a-f0-9]{24}', card_id):
+            raise ValueError('VERIFY_INVALID_CARD')
+        if flow not in ('SDC', 'THREEDS'):
+            raise ValueError('VERIFY_INVALID_FLOW')
+
+    async def reserve(self, *, profile, account, payment_account, credential,
+                      card_id, flow):
+        self._validate(profile, account, payment_account, credential, card_id, flow)
+        return await asyncio.to_thread(self._reserve, profile, account,
+            payment_account, credential, card_id, flow)
+
+    def _reserve(self, profile, account, payment_account, credential, card_id, flow):
+        import secrets
+        con = self.connect()
+        try:
+            con.execute('BEGIN IMMEDIATE')
+            attempt_id = secrets.token_hex(12)
+            now = int(time.time())
+            inserted = con.execute('''INSERT OR IGNORE INTO card_bank_verification_intents
+                (attempt_id,profile,account,payment_account,credential_id,card_id,flow,stage,created_at,updated_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?)''',
+                (attempt_id,profile,account,payment_account,credential,card_id,flow,
+                 'RESERVED',now,now)).rowcount
+            row = con.execute('''SELECT attempt_id,stage,card_id
+                FROM card_bank_verification_intents
+                WHERE profile=? AND account=? AND payment_account=?
+                  AND credential_id=? AND flow=?''',
+                (profile,account,payment_account,credential,flow)).fetchone()
+            con.commit()
+            if row is None:
+                raise RuntimeError('VERIFY_RESERVATION_NOT_FOUND')
+            return {'attempt_id': row['attempt_id'],
+                    'stage': row['stage'], 'reserved': inserted == 1,
+                    'same_card': row['card_id'] == card_id}
+        except BaseException:
+            con.rollback()
+            raise
+        finally:
+            con.close()
+
+    async def mark(self, attempt_id, stage):
+        if not isinstance(attempt_id, str) or len(attempt_id) != 24:
+            raise ValueError('VERIFY_ATTEMPT_INVALID')
+        if stage not in ('REQUEST_SENT', 'RESULT_UNKNOWN',
+                         'CHALLENGE_READY', 'SERVER_REJECTED', 'META_CONFIRMED'):
+            raise ValueError('VERIFY_STAGE_INVALID')
+        return await asyncio.to_thread(self._mark, attempt_id, stage)
+
+    def _mark(self, attempt_id, stage):
+        con = self.connect()
+        try:
+            con.execute('BEGIN IMMEDIATE')
+            previous = ('RESERVED',) if stage == 'REQUEST_SENT' else (
+                ('REQUEST_SENT',) if stage in ('RESULT_UNKNOWN', 'CHALLENGE_READY',
+                                             'SERVER_REJECTED') else
+                ('CHALLENGE_READY', 'RESULT_UNKNOWN'))
+            changed = con.execute('''UPDATE card_bank_verification_intents
+                SET stage=?,updated_at=?
+                WHERE attempt_id=? AND stage IN (''' +
+                ','.join('?' for _ in previous) + ')',
+                (stage,int(time.time()),attempt_id,*previous)).rowcount
+            con.commit()
+            return changed == 1
+        except BaseException:
+            con.rollback()
+            raise
         finally:
             con.close()
