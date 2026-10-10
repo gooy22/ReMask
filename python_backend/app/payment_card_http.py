@@ -172,13 +172,14 @@ Neither exceptions nor responses may export token/PAN/CVV/bank parameters.
                 if parent_proof.get('code') != 'CARD_BUSINESS_PARENT_CONFIRMED':
                     return {**base, 'code': parent_proof['code']}
                 business_parent_payment = parent_proof['parent_payment_account_id']
+        card_save_payment = business_parent_payment or payment
         stage('PRECHECK_BIN_REQUIREMENTS')
         requirements = requirements_proof(await read_card_requirements(web, business_id=business_id,
-            payment=payment, number=values['number'], country=context.country, currency=context.currency),
+            payment=card_save_payment, number=values['number'], country=context.country, currency=context.currency),
             values=values, is_prepaid_only=policy['is_prepaid_only'], recurring_consent=context.recurring_consent)
         if requirements.get('card_requirements_verified') is not True:
             return {**base, 'code': requirements['code'], 'missing_fields': requirements['required_fields']}
-        key_vars = key_command(payment, str(uuid.uuid4()))
+        key_vars = key_command(card_save_payment, str(uuid.uuid4()))
         stage('PTT_KEY')
         payload = await web.graphql(KEY_DOC_ID, key_vars,
             friendly_name='PaymentsCometGetServerEncryptionKeyMutation', endpoint_url=ENDPOINT,
@@ -201,7 +202,7 @@ Neither exceptions nor responses may export token/PAN/CVV/bank parameters.
         if policy.get('bin_country_required'):
             stage('PRECHECK_BIN_COUNTRY')
             country_result = await confirm_bin_country(web, business_id=business_id,
-                payment=payment, number=values['number'], token=token, country=context.country)
+                payment=card_save_payment, number=values['number'], token=token, country=context.country)
             if country_result.get('country_policy_verified') is not True:
                 return {**base, **country_result}
         input_value = build_save_input(values, payment=payment, country=context.country, currency=context.currency,
