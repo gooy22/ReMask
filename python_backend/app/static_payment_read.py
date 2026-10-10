@@ -257,6 +257,11 @@ async def complete_methods(web, methods, *, business_id):
             return {**methods, 'inventory_complete': False, 'code': 'PAYMENT_METHODS_CARD_METADATA_UNVERIFIED'}
         known[identity] = {'credential_id': identity, 'type': metadata['type'],
             'last4': metadata['last4'], 'linkage_status': 'OBSERVED', 'bank_verification_status': 'UNVERIFIED'}
+    noncard_count = sum(kind != 'ExternalCreditCard' for kind in credentials.values())
     return {**methods, 'payment_methods': list(known.values()), 'inventory_complete': True,
-        'all_credential_ids': list(credentials), 'verification_status': 'LINKED' if known else 'NONE' if not credentials else 'UNVERIFIED',
-        'card_linked': bool(known), 'code': 'PAYMENT_ALL_METHODS_OBSERVED' if known else 'PAYMENT_ALL_METHODS_NO_CARD'}
+        'all_credential_ids': list(credentials),
+        'card_credential_count': sum(kind == 'ExternalCreditCard' for kind in credentials.values()),
+        'non_card_credential_count': noncard_count,
+        'verification_status': 'LINKED' if known else 'NONE' if not credentials else 'UNVERIFIED',
+        'card_linked': bool(known), 'code': 'PAYMENT_ALL_METHODS_OBSERVED' if known
+            else 'PAYMENT_ALL_METHODS_NON_CARD_ONLY' if noncard_count else 'PAYMENT_ALL_METHODS_NO_CARD'}
