@@ -786,7 +786,9 @@ async def profile_payment_card(resolver:Any,profile:str,payload:dict[str,Any],*,
         return result
     except asyncio.TimeoutError:
         result={'profile_id':profile,'account_id':target,'submitted':None if operation=='bind' else False,'funding_verified':False,
-            'status':'SUBMITTED_UNVERIFIED' if operation=='bind' else 'BLOCKED','code':'CARD_FLOW_TIMEOUT'}
+            'status':'SUBMITTED_UNVERIFIED' if operation=='bind' else 'BLOCKED',
+            'code':'PAYMENT_HTTP_TIMEOUT' if operation=='verify' else 'CARD_FLOW_TIMEOUT',
+            **({'verification_triggered':False,'browser_started':False} if operation=='verify' else {})}
         logging.getLogger('remask.payment_card').info(
             'payment card result profile=%s account=%s operation=%s status=%s code=%s submitted=%s',
             profile,target,operation,result['status'],result['code'],result['submitted'],
