@@ -4,8 +4,12 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
+import threading
 import time
 from pathlib import Path
+
+
+_SCHEMA_LOCK = threading.Lock()
 
 
 class CardIntentLedger:
@@ -13,18 +17,23 @@ class CardIntentLedger:
         self.path = Path(path)
 
     def connect(self):
-        con = sqlite3.connect(self.path, timeout=15)
-        con.row_factory = sqlite3.Row
-        con.execute('PRAGMA journal_mode=WAL')
-        con.execute('''CREATE TABLE IF NOT EXISTS card_http_intents (
-            attempt_id TEXT PRIMARY KEY, profile TEXT NOT NULL, account TEXT NOT NULL,
-            card_id TEXT NOT NULL, phase TEXT NOT NULL, result TEXT NOT NULL DEFAULT '{}',
-            updated_at INTEGER NOT NULL)''')
-        con.execute('''CREATE UNIQUE INDEX IF NOT EXISTS card_http_pending_account
-            ON card_http_intents(profile, account)
-            WHERE phase IN ('SUBMITTED', 'SUBMITTED_UNVERIFIED', 'ACTION_REQUIRED', 'VERIFYING')''')
-        con.commit()
-        return con
+        # SQLite schema initialization changes journal mode and creates indexes.
+        # Concurrent first-use calls must serialize this stage; otherwise a
+        # competing PRAGMA can fail with 'database is locked' before the
+        # unique pending-intent guard gets a chance to reject a second Save.
+        with _SCHEMA_LOCK:
+            con = sqlite3.connect(self.path, timeout=15)
+            con.row_factory = sqlite3.Row
+            con.execute('PRAGMA journal_mode=WAL')
+            con.execute('''CREATE TABLE IF NOT EXISTS card_http_intents (
+                attempt_id TEXT PRIMARY KEY, profile TEXT NOT NULL, account TEXT NOT NULL,
+                card_id TEXT NOT NULL, phase TEXT NOT NULL, result TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL)''')
+            con.execute('''CREATE UNIQUE INDEX IF NOT EXISTS card_http_pending_account
+                ON card_http_intents(profile, account)
+                WHERE phase IN ('SUBMITTED', 'SUBMITTED_UNVERIFIED', 'ACTION_REQUIRED', 'VERIFYING')''')
+            con.commit()
+            return con
 
     async def pending(self, profile, account):
         return await asyncio.to_thread(self._pending, profile, account)

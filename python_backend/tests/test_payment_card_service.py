@@ -294,6 +294,19 @@ class CardServiceTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn('synthetic_token', json.dumps(call[1]))
             self.assertNotIn(VALUES['number'], json.dumps(call[1]))
 
+    async def test_concurrent_first_use_schema_initialization_keeps_one_pending_save(self):
+        # Two first-use requests used to race PRAGMA journal_mode / CREATE INDEX,
+        # returning database-is-locked before the duplicate Save guard ran.
+        for index in range(12):
+            ledger=CardIntentLedger(self.state.path.with_name(f'first-use-{index}.sqlite'))
+            results=await asyncio.gather(
+                ledger.submit('17','120251439661740682','card_'+'a'*24,'a'*24),
+                ledger.submit('17','120251439661740682','card_'+'b'*24,'b'*24),
+                return_exceptions=True)
+            self.assertEqual(sum(value is None for value in results),1)
+            self.assertEqual(sum(isinstance(value,ValueError) for value in results),1)
+            self.assertIsNotNone(await ledger.pending('17','120251439661740682'))
+
     async def test_concurrent_submit_guards_and_restart(self):
         ledger=CardIntentLedger(self.state.path)
         results=await asyncio.gather(ledger.submit('15','111111','card_'+'a'*24,'a'*24),
