@@ -136,6 +136,18 @@ function paymentCardMessage(result){
   };
   const paymentSetupDetail=typeof result.setup_stage==='string'&&Object.prototype.hasOwnProperty.call(paymentSetupStages,result.setup_stage)
     ?' Причина: '+paymentSetupStages[result.setup_stage]:'';
+  const verificationStages={
+    method_scope_not_confirmed:'Meta не подтвердила принадлежность списка способов оплаты выбранному РК.',
+    method_list_not_confirmed:'Список способов оплаты Meta не удалось прочитать полностью.',
+    save_credential_identity_missing:'Ответ сохранения не содержит полного идентификатора карты.',
+    save_credential_not_in_rk:'Карта из ответа сохранения пока не обнаружена в способах оплаты этого РК.',
+    save_credential_ambiguous:'Meta вернула несколько совпадений для карты; привязка не подтверждена.',
+    save_credential_metadata_mismatch:'Данные карты в списке Meta не совпадают с ответом сохранения.',
+    bank_confirmation_pending:'Банк требует дополнительного подтверждения карты.'
+  };
+  const verificationDetail=typeof result.verification_stage==='string'&&
+    Object.prototype.hasOwnProperty.call(verificationStages,result.verification_stage)
+    ?' Проверка привязки: '+verificationStages[result.verification_stage]:'';
   const availability=result.card_availability==='only_this_account'?' В форме выбрано «Только этот РК».':'';
   const countryMismatch=result.code==='CARD_BILLING_COUNTRY_MISMATCH'&&/^[A-Z]{2}$/.test(result.billing_country||'')&&/^[A-Z]{2}$/.test(result.card_issuing_country||'')
     ?' Страна РК: '+result.billing_country+'; страна выпуска карты: '+result.card_issuing_country+'.':'';
@@ -147,7 +159,7 @@ function paymentCardMessage(result){
   const errors=Array.isArray(result.meta_error_codes)?result.meta_error_codes.filter(n=>Number.isInteger(n)&&n>=0&&n<=999999999):[];
   const readFailure=['PAYMENT_HTTP_TIMEOUT','PAYMENT_HTTP_UNAVAILABLE','CHECKPOINT_REQUIRED','BUSINESS_LOGIN_GATE','SESSION_EXPIRED'].includes(result.reconcile_error_code)
     ?' Текущая проверка не завершена: '+result.reconcile_error_code+'.':'';
-  return (messages[result.code]||result.code||'Не удалось подтвердить результат')+paymentSetupDetail+country+availability+countryMismatch+currentCountry+inventory+
+  return (messages[result.code]||result.code||'Не удалось подтвердить результат')+paymentSetupDetail+verificationDetail+country+availability+countryMismatch+currentCountry+inventory+
     readFailure+
     (errors.length?' Коды ошибки Meta: '+errors.join(', ')+'.':'')+
     (Array.isArray(result.meta_error_messages)?' '+result.meta_error_messages.filter(s=>typeof s==='string'&&s.length<=320).slice(0,4).join(' · '):'')+
@@ -216,7 +228,7 @@ async function bindPaymentCard(rows,card,cvv,container,reviews={}){
         screen_height:String(window.innerHeight),screen_width:String(window.innerWidth)}),
       ...(review?{retry_confirmed:'1',retry_review:review.token}:{}),profile:r.profile,account_id:r.id,...paymentAssetHint(r),...paymentSetupPayload()}));
       const result=response?.result||{};
-      if(result.status==='SUBMITTED_UNVERIFIED'&&result.submitted!==false){
+      if((result.status==='SUBMITTED_UNVERIFIED'||result.status==='VERIFYING')&&result.submitted!==false){
         // Save may have been observed or the browser may have timed out after
         // an unknown boundary. Never advance to another RK on either case.
         // One read-only exact-RK reconciliation may prove linkage; only that
