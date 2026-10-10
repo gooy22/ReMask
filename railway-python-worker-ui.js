@@ -4245,7 +4245,7 @@ async function pythonWorkerOpenAutoModal() {
       localStorage.setItem('remask_python_worker_job_v1', jobId);
       localStorage.removeItem(pendingKey);
       pythonWorkerSetText('pythonPwJob', 'Job: ' + jobId);
-      pythonWorkerSetText('pythonPwStatus', 'Prepare: ' + profiles.length + ' проф., target ' + n + ' РК/профиль.');
+      pythonWorkerSetText('pythonPwStatus', 'Prepare: ' + profiles.length + ' проф., target ' + Math.min(n, 2) + ' РК/профиль.');
       pythonWorkerCloseOwnBmModal();
       pythonWorkerPoll().catch(function(error) {
         pythonWorkerSetText('pythonPwStatus', 'Ошибка polling: ' + String(error.message || error));
