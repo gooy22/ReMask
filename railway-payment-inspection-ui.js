@@ -121,6 +121,21 @@ function paymentCardMessage(result){
   const country=setup?.country_label?' Страна в форме Meta: '+setup.country_label+
     (setup.country_preserved?' — сохранён текущий выбор'+(setup.country_reason==='meta_control_locked'?' (поле заблокировано Meta)':''):'')+
     '. Сохранение настроек в Meta пока не подтверждено.':'';
+  const paymentSetupStages={
+    current_context_missing:'Meta не вернула подтверждённые настройки текущего РК.',
+    country_not_in_options:'Украина отсутствует среди разрешённых Meta стран для этого РК.',
+    current_currency_invalid:'Meta вернула некорректную текущую валюту.',
+    currency_missing:'Валюта РК не определена и не выбрана для первоначальной настройки.',
+    currency_differs_from_existing:'Выбранная валюта отличается от уже установленной в Meta.',
+    currency_not_in_options:'Валюта не представлена среди вариантов Meta.',
+    timezone_display_unmatched:'Meta показала существующий часовой пояс, но не удалось точно сопоставить его с вариантами.',
+    timezone_missing:'В ответе Meta отсутствует часовой пояс и нет подтверждённого выбора.',
+    timezone_not_in_options:'Часовой пояс не найден среди вариантов Meta.',
+    restrictions_missing:'Meta не вернула условия совместимости страны и валюты.',
+    restrictions_incomplete:'Meta вернула неполные условия совместимости страны и валюты.'
+  };
+  const paymentSetupDetail=typeof result.setup_stage==='string'&&Object.prototype.hasOwnProperty.call(paymentSetupStages,result.setup_stage)
+    ?' Причина: '+paymentSetupStages[result.setup_stage]:'';
   const availability=result.card_availability==='only_this_account'?' В форме выбрано «Только этот РК».':'';
   const countryMismatch=result.code==='CARD_BILLING_COUNTRY_MISMATCH'&&/^[A-Z]{2}$/.test(result.billing_country||'')&&/^[A-Z]{2}$/.test(result.card_issuing_country||'')
     ?' Страна РК: '+result.billing_country+'; страна выпуска карты: '+result.card_issuing_country+'.':'';
@@ -132,7 +147,7 @@ function paymentCardMessage(result){
   const errors=Array.isArray(result.meta_error_codes)?result.meta_error_codes.filter(n=>Number.isInteger(n)&&n>=0&&n<=999999999):[];
   const readFailure=['PAYMENT_HTTP_TIMEOUT','PAYMENT_HTTP_UNAVAILABLE','CHECKPOINT_REQUIRED','BUSINESS_LOGIN_GATE','SESSION_EXPIRED'].includes(result.reconcile_error_code)
     ?' Текущая проверка не завершена: '+result.reconcile_error_code+'.':'';
-  return (messages[result.code]||result.code||'Не удалось подтвердить результат')+country+availability+countryMismatch+currentCountry+inventory+
+  return (messages[result.code]||result.code||'Не удалось подтвердить результат')+paymentSetupDetail+country+availability+countryMismatch+currentCountry+inventory+
     readFailure+
     (errors.length?' Коды ошибки Meta: '+errors.join(', ')+'.':'')+
     (Array.isArray(result.meta_error_messages)?' '+result.meta_error_messages.filter(s=>typeof s==='string'&&s.length<=320).slice(0,4).join(' · '):'')+
