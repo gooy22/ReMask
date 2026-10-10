@@ -77,11 +77,28 @@ async def _initialize_country(web, *, target, business_id, evidence, payload, de
     root = data.get('billable_account_set_country_currency') if isinstance(data, dict) else None
     client = root.get('client_result') if isinstance(root, dict) else None
     returned = root.get('payment_account') if isinstance(root, dict) else None
+    from .payment_card_http import save_error_diagnostic
+    errors = list(result.get('errors', [])) if isinstance(result, dict) and isinstance(result.get('errors'), list) else []
+    display = client.get('display_info') if isinstance(client, dict) else None
+    if isinstance(client, dict):
+        errors.append({'message':client.get('message')})
+    if isinstance(display, dict):
+        errors.extend({'message':display.get(key)} for key in ('title','headline','body'))
+    diagnostic = save_error_diagnostic({'errors':errors}, {}, '__NO_CARD_TOKEN__')
+    typename = client.get('__typename') if isinstance(client, dict) else None
+    typename = typename if isinstance(typename, str) and re.fullmatch(r'[A-Za-z_]{1,100}', typename) else 'ABSENT'
+    tasks = client.get('next_tasks') if isinstance(client, dict) else None
+    task_types = [x.get('__typename') for x in tasks if isinstance(x, dict)
+        and isinstance(x.get('__typename'), str) and re.fullmatch(r'[A-Za-z_]{1,100}', x['__typename'])][:10] if isinstance(tasks, list) else []
+    logging.getLogger('remask.payment_card').info(
+        'card country initialize response account=%s clean=%s type=%s payment_node_match=%s tasks=%s messages=%s',
+        target, _clean_payload(result), typename, isinstance(returned, dict)
+        and returned.get('id') == evidence['payment_account_node_id'], task_types, diagnostic.get('meta_error_messages', []))
     if (not _clean_payload(result) or not isinstance(client, dict)
             or client.get('__typename') != 'XFBBillableAccountSetCountryCurrencyTimezoneSuccess'
             or client.get('next_tasks') or not isinstance(returned, dict)
             or returned.get('id') != evidence['payment_account_node_id']):
-        return {'code':'CARD_COUNTRY_UPDATE_RESULT_UNCONFIRMED'}
+        return {'code':'CARD_COUNTRY_UPDATE_RESULT_UNCONFIRMED', **diagnostic}
     fresh_account = account_proof(await execute(web, 'READ_ACCOUNT', account=target,
         business_id=business_id), target)
     fresh = await execute(web, 'READ_SETUP', payment=payment, business_id=business_id)

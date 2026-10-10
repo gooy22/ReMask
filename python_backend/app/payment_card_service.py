@@ -153,7 +153,7 @@ async def profile_payment_card_http(resolver, profile, payload, *, state=None):
                 logging.getLogger('remask.payment_card').info('card country setup result account=%s code=%s',
                     target, configured.get('code'))
                 if 'setup_payload' not in configured:
-                    return {**base, 'code':configured['code']}
+                    return {**base, **{key:configured[key] for key in ('code','meta_error_messages') if key in configured}}
                 country, currency = setup_context(configured['setup_payload'], target, payment)
                 if isinstance(setup, dict) and setup.get('country_mode') == 'strict' and setup.get('country') != country:
                     return {**base, 'code': 'CARD_BILLING_COUNTRY_MISMATCH'}
