@@ -14,6 +14,7 @@ from .payment_card_requirements import read_card_requirements, requirements_proo
 from .payment_ptt import encrypt_card_token
 from .private_auth import private_auth_error
 from .static_payment_card import card_screen_proof, read_card_screen, save_response_proof, confirm_saved_card
+from .payment_card_business_wallet import resolve_business_parent_for_new_card
 from .static_payment_read import ENDPOINT, _identity, _clean_payload, execute, account_proof, methods_proof, complete_methods, _brand
 
 KEY_DOC_ID = '23994203586844376'
@@ -152,13 +153,33 @@ Neither exceptions nor responses may export token/PAN/CVV/bank parameters.
             return {**base, 'code': policy['code']}
         if screen['options']['verify_tokenization_required'] and context.network_consent is not True:
             return {**base, 'code': 'CARD_TOKENIZATION_CONSENT_REQUIRED'}
+        business_parent_payment = None
+        if screen['options']['can_save_to_business']:
+            # Meta's observed BillingSaveCardCredentialState uses the owner
+            # business payer for a BUSINESS_NOT_SHARABLE card selection, with
+            # the selected RK payment account as its explicit child target.
+            owner = screen_payload['data']['payment_account']['billable_account'].get(
+                'owner_business_payment_account')
+            owner_business = owner.get('business') if isinstance(owner, dict) else None
+            owner_id = owner_business.get('id') if isinstance(owner_business, dict) else None
+            if owner_id is not None and str(owner_id) != business_id:
+                return {**base, 'code': 'CARD_BUSINESS_OWNER_SCOPE_UNVERIFIED'}
+            if str(owner_id) == business_id:
+                stage('PRECHECK_BUSINESS_WALLET')
+                parent_proof = await resolve_business_parent_for_new_card(
+                    web, account=account, business_id=business_id, child_payment=payment,
+                    card_type=number_brand(values['number']), last4=values['number'][-4:])
+                if parent_proof.get('code') != 'CARD_BUSINESS_PARENT_CONFIRMED':
+                    return {**base, 'code': parent_proof['code']}
+                business_parent_payment = parent_proof['parent_payment_account_id']
+        card_save_payment = business_parent_payment or payment
         stage('PRECHECK_BIN_REQUIREMENTS')
         requirements = requirements_proof(await read_card_requirements(web, business_id=business_id,
-            payment=payment, number=values['number'], country=context.country, currency=context.currency),
+            payment=card_save_payment, number=values['number'], country=context.country, currency=context.currency),
             values=values, is_prepaid_only=policy['is_prepaid_only'], recurring_consent=context.recurring_consent)
         if requirements.get('card_requirements_verified') is not True:
             return {**base, 'code': requirements['code'], 'missing_fields': requirements['required_fields']}
-        key_vars = key_command(payment, str(uuid.uuid4()))
+        key_vars = key_command(card_save_payment, str(uuid.uuid4()))
         stage('PTT_KEY')
         payload = await web.graphql(KEY_DOC_ID, key_vars,
             friendly_name='PaymentsCometGetServerEncryptionKeyMutation', endpoint_url=ENDPOINT,
@@ -181,13 +202,13 @@ Neither exceptions nor responses may export token/PAN/CVV/bank parameters.
         if policy.get('bin_country_required'):
             stage('PRECHECK_BIN_COUNTRY')
             country_result = await confirm_bin_country(web, business_id=business_id,
-                payment=payment, number=values['number'], token=token, country=context.country)
+                payment=card_save_payment, number=values['number'], token=token, country=context.country)
             if country_result.get('country_policy_verified') is not True:
                 return {**base, **country_result}
         input_value = build_save_input(values, payment=payment, country=context.country, currency=context.currency,
             token=token, client_info=context.client_info, logging_data=context.logging_data,
             usability_intent=context.usability_intent, network_consent=context.network_consent,
-            recurring_consent=context.recurring_consent)
+            recurring_consent=context.recurring_consent, business_parent_payment=business_parent_payment)
         variables = {'input': input_value, 'getRiskVerificationInfoForAllCredentialsOnPaymentAccount': True,
                      'paymentAccountID': payment, 'includeCreateNewFromOldFragment': context.include_new_fragment}
         stage('SAVE')

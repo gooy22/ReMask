@@ -53,7 +53,8 @@ def card_auth_fields(values):
 
 
 def build_save_input(values, *, payment, country, currency, token, client_info, logging_data,
-                     usability_intent=None, network_consent=None, recurring_consent=None):
+                     usability_intent=None, network_consent=None, recurring_consent=None,
+                     business_parent_payment=None):
     auth, _ = card_auth_fields(values)
     if (not isinstance(token, str) or not token or len(token) > 65536
             or not re.fullmatch(r'[A-Za-z0-9_-]+', token)):
@@ -74,12 +75,25 @@ def build_save_input(values, *, payment, country, currency, token, client_info, 
     address = {'country_code': country}
     if values.get('postal_code'):
         address['zip'] = values['postal_code']
+    payment = _identity(payment)
+    if business_parent_payment is not None:
+        parent = _identity(business_parent_payment)
+        if parent == payment:
+            raise ValueError('CARD_BUSINESS_PARENT_UNVERIFIED')
+    else:
+        parent = None
     result = {'billing_address': address, 'card_data': card, 'client_info': copy.deepcopy(client_info),
               'currency': currency, 'is_hardware_backed_crypto_available': False,
-              'payment_account_id': _identity(payment), 'payment_intent': 'ADD_PM',
+              'payment_account_id': parent or payment, 'payment_intent': 'ADD_PM',
               'platform_trust_token': token, 'set_default': False,
-              'share_to_child_payment_account_id': None, 'skip_cvv_for_eea_save': False,
+              'share_to_child_payment_account_id': payment if parent else None, 'skip_cvv_for_eea_save': False,
               'upl_logging_data': copy.deepcopy(logging_data)}
+    if parent:
+        # Observed Meta BillingSaveCardCredentialState branch:
+        # businessPaymentAccountID + BUSINESS_NOT_SHARABLE selection saves to
+        # the business payer and explicitly shares only to the selected child.
+        result['biz_credential_is_sharable'] = False
+        result['upl_logging_data']['share_to_payment_account_id'] = payment
     if usability_intent is not None:
         # Caller must supply the observed enum KEY, not invent an enum value.
         if not isinstance(usability_intent, str) or not re.fullmatch(r'[A-Z][A-Z_]+', usability_intent):

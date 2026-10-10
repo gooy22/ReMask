@@ -94,6 +94,9 @@ class FakeHTTP:
             return {'data':{'get_server_encryption_key':{'client_mutation_id':variables['input']['client_mutation_id'] if self.key_echo=='match' else self.key_echo,
                 'dev_external':self.dev_external,
                 'trust_chain':['synthetic leaf','synthetic intermediate'],'payments_error':{} if self.key_error else None}}}
+        if doc=='28635882856071901':
+            return {'data':{'business':{'id':BUSINESS,'billing_payment_account':{
+                'id':'999998888777','billing_payment_methods':[]}}}}
         if doc==SAVE_DOC_ID:
             if self.auth_after_key:raise RuntimeError('private session precheck rejected')
             await kwargs['before_submit']()
@@ -131,6 +134,57 @@ class PaymentHTTPTests(unittest.IsolatedAsyncioTestCase):
         key=next(x for x in web.calls if x[0]==KEY_DOC_ID)
         self.assertEqual(key[1]['input']['target_account_id'],PAYMENT)
         self.assertNotIn('payment_product_id',key[1]['input'])
+
+    async def test_business_wallet_new_card_uses_parent_payer_and_exact_child_rk(self):
+        web=FakeHTTP()
+        option=web.screen['data']['payment_account']['billing_payment_method_options'][0]
+        option['can_save_to_business']=True
+        web.screen['data']['payment_account']['billable_account']['owner_business_payment_account']={
+            'business':{'id':BUSINESS}}
+        result=await self.run_flow(web)
+        self.assertEqual(result['status'],'LINKED')
+        save=next(x for x in web.calls if x[0]==SAVE_DOC_ID)
+        body=save[1]['input']
+        self.assertEqual(body['payment_account_id'],'999998888777')
+        self.assertEqual(body['share_to_child_payment_account_id'],PAYMENT)
+        self.assertIs(body['biz_credential_is_sharable'],False)
+        self.assertEqual(body['upl_logging_data']['share_to_payment_account_id'],PAYMENT)
+        self.assertEqual(save[1]['paymentAccountID'],PAYMENT)
+        key=next(x for x in web.calls if x[0]==KEY_DOC_ID)
+        self.assertEqual(key[1]['input']['target_account_id'],'999998888777')
+        lookup=next(x for x in web.calls if x[0]=='28635882856071901')
+        self.assertEqual(lookup[1]['businessID'],BUSINESS)
+        self.assertEqual(lookup[1]['paymentAccountID'],PAYMENT)
+
+    async def test_business_wallet_foreign_owner_stops_before_tokenization_and_save(self):
+        web=FakeHTTP()
+        option=web.screen['data']['payment_account']['billing_payment_method_options'][0]
+        option['can_save_to_business']=True
+        web.screen['data']['payment_account']['billable_account']['owner_business_payment_account']={
+            'business':{'id':'999999111888'}}
+        result=await self.run_flow(web)
+        self.assertEqual(result['code'],'CARD_BUSINESS_OWNER_SCOPE_UNVERIFIED')
+        self.assertNotIn(SAVE_DOC_ID,[x[0] for x in web.calls])
+        self.assertNotIn(KEY_DOC_ID,[x[0] for x in web.calls])
+
+    async def test_existing_business_wallet_mask_blocks_duplicate_save(self):
+        web=FakeHTTP()
+        option=web.screen['data']['payment_account']['billing_payment_method_options'][0]
+        option['can_save_to_business']=True
+        web.screen['data']['payment_account']['billable_account']['owner_business_payment_account']={
+            'business':{'id':BUSINESS}}
+        original=web.graphql
+        async def masked(doc,vars,**kw):
+            data=await original(doc,vars,**kw)
+            if doc=='28635882856071901':
+                data['data']['business']['billing_payment_account']['billing_payment_methods']=[
+                    {'credential':{'__typename':'ExternalCreditCard','card_association_name':'VISA',
+                                   'last_four_digits':VALUES['number'][-4:]}}]
+            return data
+        web.graphql=masked
+        result=await self.run_flow(web)
+        self.assertEqual(result['code'],'CARD_BUSINESS_WALLET_MASK_COLLISION')
+        self.assertNotIn(SAVE_DOC_ID,[x[0] for x in web.calls])
 
     async def test_runtime_context_gate_prevents_all_network_calls(self):
         for context in (replace(self.context(),runtime_verified=False),):
