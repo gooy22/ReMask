@@ -116,6 +116,13 @@ function paymentCardMessage(result){
     PAYMENT_FORM_NOT_EXPOSED:'Meta не открыла форму карты.',
     CARD_BILLING_FIELDS_REQUIRED:'Нужны дополнительные реквизиты владельца или платёжного адреса.',
     CARD_BANK_CONFIRMATION_REQUIRED:'Банк запросил подтверждение. Завершите его в Facebook/банке, затем нажмите «Проверить результат». Не отправляйте карту повторно.',
+    CARD_VERIFICATION_CARD_REQUIRED:'Выберите сохранённую карту для HTTP-проверки.',
+    CARD_VERIFICATION_CREDENTIAL_UNVERIFIED:'Meta не подтвердила точную карту выбранного РК. Банковский запрос не отправлен.',
+    CARD_VERIFICATION_OPTIONS_UNVERIFIED:'Meta не подтвердила HTTP-контракт задачи выбранного РК. Банковский запрос не отправлен.',
+    CARD_VERIFICATION_MUTATION_NOT_PINNED:'Meta показывает задачу подтверждения, но финансовая GraphQL mutation ещё не подтверждена. Запрос в банк не отправлен.',
+    CARD_VERIFICATION_NO_REQUIRED_TASK:'Meta не показывает обязательную задачу подтверждения карты. Это не доказательство банковской авторизации.',
+    CARD_VERIFICATION_HTTP_UNAVAILABLE:'HTTP-проверка Meta не завершена. Запрос в банк не отправлен.',
+    CARD_BINDING_NOT_FOUND:'В ReMask нет сохранённой привязки выбранной карты к этому РК.',
     PAYMENT_FINANCIAL_ACTION_REQUIRED:'Meta требует платёжное действие; автоматическое списание остановлено.',
     PAYMENT_TERMS_CONFIRMATION_REQUIRED:'Meta требует принятия условий. Нужное действие должно быть подтверждено пользователем.',
     CARD_SAVE_CONTROL_UNAVAILABLE:'Meta не показала доступную кнопку сохранения карты.',
@@ -317,12 +324,11 @@ function paymentConfirmationPanel(row,result,container){
     bank_app:'подтверждение в приложении банка',cvv:'повторная проверка CVV в Meta',meta_action:'действие в форме Meta'};
   const tasks=result?.verification_tasks||card?.verification_tasks||[];
   if(tasks.length){const detail=document.createElement('div');detail.textContent='Способ подтверждения: '+tasks.map(t=>labels[t]||labels.meta_action).join(', ')+'.';box.appendChild(detail);}
-  const account=String(row.id).replace(/^act_/,'');const business=paymentAssetHint(row).business_id;
-  if(/^\d{5,30}$/.test(account)&&/^\d{5,30}$/.test(business||'')&&status!=='CLEAR'){
-    const link=document.createElement('a');link.textContent='Открыть подтверждение карты в Meta';
-    link.href='https://business.facebook.com/billing_hub/payment_settings/?asset_id='+account+'&business_id='+business;
-    link.target='_blank';link.rel='noopener noreferrer';box.appendChild(link);
-    const help=document.createElement('div');help.textContent='Откройте ссылку в браузере FB-профиля '+row.profile+'. Выберите эту карту → «Подтвердить». Meta покажет доступный способ и сумму, если требуется временная авторизация. Затем вернитесь и нажмите «Проверить подтверждение». Коды вводятся только в Meta или банке.';box.appendChild(help);
+  // No manual FB login or local browser navigation.
+  if(result?.code==='CARD_VERIFICATION_MUTATION_NOT_PINN'){
+    const note=document.createElement('div');
+    note.textContent='Ожидается подтверждённый финансовый doc_id. Запрос в банк не отправлен.';
+    box.appendChild(note);
   }
   container.appendChild(box);
 }
@@ -340,6 +346,24 @@ function paymentCardTargetPlan(rows,bindings,cardId){
     else plan.fresh.push(row);
   }
   return plan;
+}
+
+async function inspectCardVerificationHTTP(rows,card,container){
+  if(!card?.id)throw new Error('Выберите сохранённую карту для проверки.');
+  await concurrent(rows,1,async r=>{
+    try{return await apiJson('ajax/paymentCards.php',post({action:'verify',
+      card_id:card.id,profile:r.profile,account_id:r.id,...paymentAssetHint(r)}));}
+    catch(e){return {error:e.message};}
+  },(d,t,res,idx)=>{
+    const row=rows[idx],result=res?.result,line=document.createElement('div');
+    line.className='ws-result '+(result?.code==='CARD_VERIFICATION_NO_REQUIRED_TASK'?'ok':'bad');
+    line.textContent=row.profile+' / '+row.id+' · •••• '+card.last4+': '+
+      paymentCardMessage(result||{code:res?.error||'CARD_VERIFICATION_HTTP_UNAVAILABLE'});
+    container.appendChild(line);
+    if(result?.funding)paymentApplyFunding(row,result.funding);
+    if(result)paymentConfirmationPanel(row,result,container);
+    setProgress(d,t);
+  });render();
 }
 
 async function reconcilePaymentCard(rows,card,container){
@@ -403,8 +427,8 @@ async function showFunding(restored=null){
     <details class="mt-2"><summary>Диагностика</summary>
       <button id="paymentCardPrepare" type="button">Проверить форму Meta</button>
       <button id="paymentCardInspect" type="button">Проверить привязанные карты</button></details>
-    <button id="paymentCardVerify" type="button" class="mt-2">Проверить подтверждение</button>
-    <div class="ws-muted mt-2">Проверка читает наличие карты и задания Meta на её подтверждение. Она не выполняет платежи. CVV не нужен для проверки уже сохранённой карты.</div>
+    <button id="paymentCardVerify" type="button" class="mt-2">Проверить задачу подтверждения (HTTP)</button>
+    <div class="ws-muted mt-2">HTTP-проверка читает карту и задачи Meta через cookies/proxy без Chromium. До подтверждения финансовой GraphQL mutation запрос в банк не отправляется.</div>
     <div id="paymentCardAssignments" class="ws-muted mt-2"></div>
     <div id="paymentCardProgress" class="ws-muted mt-2" aria-live="polite"></div>
     <div id="fundingResults" aria-live="polite"></div>`,'',null);
@@ -504,8 +528,8 @@ async function showFunding(restored=null){
   },false));
   $('paymentCardVerify').addEventListener('click',()=>run(async()=>{
     const card=cards.find(c=>c.id===select.value);
-    if(!card)throw new Error('Выберите сохранённую карту для проверки подтверждения.');
-    reviews=await reconcilePaymentCard(rows,card,container);
+    if(!card)throw new Error('Выберите сохранённую карту для HTTP-проверки.');
+    await inspectCardVerificationHTTP(rows,card,container);
     await refreshCards(card.id);
   },false));
   $('paymentCardPrepare').addEventListener('click',()=>run(async()=>{
