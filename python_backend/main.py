@@ -791,7 +791,17 @@ async def run_verification_http_contract_audit() -> None:
                  'BillingRiskVerifySDCRoot.react',
                  'BillingRiskVerificationStepOptions.react',
                  'BillingCVCOSoftDescriptorVerificationTask',
-                 'BillingCVCOThreeDSVerificationTask')
+                 'BillingCVCOThreeDSVerificationTask',
+                 'BillingRiskUtilsSendSDCAuthMutation',
+                 'BillingRiskUtilsSendSDCAuthMutation.graphql',
+                 'useBillingVerifySDCMutation',
+                 'useBillingVerifySDCMutation.graphql',
+                 'useBillingVerifySDCCodeMutation',
+                 'useBillingVerifySDCCodeMutation.graphql',
+                 'BillingRiskVerifySDCPageViewManager.react',
+                 'BillingRiskVerifySDCPage.react',
+                 'BillingRiskVerifySDCCodePageViewManager.react',
+                 'BillingSDCAuthScreenQuery.graphql')
         log.warning('verification HTTP source names profile=%s account=%s names=%s',
                     profile, account, json.dumps(sorted(row['name'] for row in sources
                         if any(term in row['name'].lower() for term in
