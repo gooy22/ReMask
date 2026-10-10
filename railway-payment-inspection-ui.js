@@ -165,7 +165,11 @@ function paymentCardMessage(result){
     business_wallet_card_metadata_unverified:'Карта в бизнес-кошельке не прошла точную сверку типа и последних цифр.',
     business_wallet_reports_rk_link_but_rk_methods_missing:'Бизнес-кошелёк показывает связь с РК, но список способов оплаты самого РК её не подтверждает.',
     business_wallet_card_saved_not_attached_to_rk:'Meta показывает эту карту в платёжном аккаунте бизнеса, но не подтверждает привязку к выбранному РК.',
-    business_wallet_read_unavailable:'Не удалось проверить бизнес-кошелёк Meta; повторное сохранение остаётся заблокированным.'
+    business_wallet_read_unavailable:'Не удалось проверить бизнес-кошелёк Meta; повторное сохранение остаётся заблокированным.',
+    saved_card_identity_missing:'От предыдущего Save не осталось идентификатора карты для проверки.',
+    saved_card_identity_observed_but_not_linked:'Meta распознаёт эту сохранённую карту, но её привязка к РК или бизнес-кошельку не подтверждена. Повторное сохранение остановлено.',
+    saved_card_identity_not_observed:'Meta не возвращает проверяемые данные карты по идентификаторам предыдущего Save. Удаление или отсутствие карты не доказано.',
+    saved_card_identity_read_unavailable:'Запрос данных карты Meta недоступен. Повторная отправка заблокирована.'
   };
   const verificationDetail=typeof result.verification_stage==='string'&&
     Object.prototype.hasOwnProperty.call(verificationStages,result.verification_stage)

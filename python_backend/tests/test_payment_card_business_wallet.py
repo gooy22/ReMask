@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock
 
 from app.payment_card_business_wallet import (
     DOC_ID, FRIENDLY_NAME, business_wallet_card_stage, inspect_business_wallet_card,
+    inspect_save_reply_card_identity,
 )
 
 ACCOUNT='120251439661740682'
@@ -70,6 +71,30 @@ class BusinessWalletCardTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(rows=type(rows).__name__):
                 p=wallet();p['data']['business']['billing_payment_account']['billing_payment_methods']=rows
                 self.assertEqual(self.stage(p),'business_wallet_methods_unavailable')
+
+    async def test_exact_save_credential_is_recognized_without_inventing_attachment(self):
+        class Web:
+            private_only=False
+            graphql=AsyncMock(side_effect=lambda doc,v,**kw: {
+                'data':{'node':{'id':v['paymentMethodID'],
+                    '__typename':'ExternalCreditCard','card_association_name':'VISA',
+                    'last_four_digits':'0574'}}})
+        web=Web()
+        result=await inspect_save_reply_card_identity(web,saved=SAVED,business_id=BUSINESS)
+        self.assertEqual(result,'saved_card_identity_observed_but_not_linked')
+        self.assertTrue(web.private_only)
+        web.graphql.assert_awaited_once()
+        self.assertEqual(web.graphql.await_args.args[0],'27586872297608269')
+
+    async def test_different_card_identity_or_mask_is_not_accepted(self):
+        class Web:
+            private_only=False
+            graphql=AsyncMock(side_effect=lambda doc,v,**kw: {
+                'data':{'node':{'id':v['paymentMethodID'],
+                    '__typename':'ExternalCreditCard','card_association_name':'MASTERCARD',
+                    'last_four_digits':'9112'}}})
+        self.assertEqual(await inspect_save_reply_card_identity(Web(),saved=SAVED,business_id=BUSINESS),
+                         'saved_card_identity_not_observed')
 
     async def test_query_scoped_to_exact_business_and_no_card_save(self):
         class Web:

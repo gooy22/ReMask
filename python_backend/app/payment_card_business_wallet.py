@@ -151,3 +151,38 @@ async def resolve_business_parent_for_new_card(web, *, account, business_id, chi
             return {'code': 'CARD_BUSINESS_WALLET_MASK_COLLISION'}
     return {'code': 'CARD_BUSINESS_PARENT_CONFIRMED',
             'parent_payment_account_id': parent}
+
+
+async def inspect_save_reply_card_identity(web, *, saved, business_id):
+    """Read only the exact identifiers returned by a previous Meta Save.
+
+    Credential metadata is global: recognition of a card is never evidence
+    that it is linked to any BM/RK or authorized for payment. Never export
+    the identifier or request card secrets; a lost read is inconclusive.
+    """
+    from .static_payment_read import execute, credit_card_metadata, _clean_payload
+    business_id = _identity(business_id)
+    card = saved.get('credential') if isinstance(saved, dict) else None
+    if not isinstance(card, dict):
+        return 'saved_card_identity_missing'
+    ids = list(dict.fromkeys(card.get(k) for k in ('id', 'credential_id')
+        if _node_id(card.get(k))))
+    if not ids:
+        return 'saved_card_identity_missing'
+    readable = False
+    for identity in ids[:2]:
+        try:
+            async with asyncio.timeout(10):
+                response = await execute(web, 'READ_CREDENTIAL',
+                                         business_id=business_id, credential=identity)
+            if not _clean_payload(response):
+                continue
+            readable = True
+            meta = credit_card_metadata(response, identity)
+            if (isinstance(meta, dict) and meta.get('type') == card.get('type')
+                    and meta.get('last4') == card.get('last4')):
+                return 'saved_card_identity_observed_but_not_linked'
+        except Exception:
+            continue
+    return ('saved_card_identity_not_observed'
+            if readable else 'saved_card_identity_read_unavailable')
