@@ -154,7 +154,7 @@ function paymentCardMessage(result){
   const currentCountry=result.code!=='CARD_BILLING_COUNTRY_MISMATCH'&&/^[A-Z]{2}$/.test(result.billing_country||'')?' Текущая страна РК в Meta: '+result.billing_country+'.':'';
   const funding=result.funding;
   const inventory=funding?.inventory_complete===true&&Array.isArray(funding.all_credential_ids)
-    ?' Полный список Meta проверен: способов оплаты '+funding.all_credential_ids.length+'.'
+    ?' Meta: карт '+(funding.payment_methods?.length||0)+', других платёжных инструментов '+(funding.non_card_credential_count||0)+'.'
     :funding?.code&&/^PAYMENT_[A-Z_]{1,80}$/.test(funding.code)?' Проверка списка: '+funding.code+'.':'';
   const errors=Array.isArray(result.meta_error_codes)?result.meta_error_codes.filter(n=>Number.isInteger(n)&&n>=0&&n<=999999999):[];
   const readFailure=['PAYMENT_HTTP_TIMEOUT','PAYMENT_HTTP_UNAVAILABLE','CHECKPOINT_REQUIRED','BUSINESS_LOGIN_GATE','SESSION_EXPIRED'].includes(result.reconcile_error_code)
