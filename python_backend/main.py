@@ -737,6 +737,36 @@ async def require_key(x_remask_worker_key: str | None = Header(default=None)) ->
     if API_KEY and x_remask_worker_key != API_KEY:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,detail='invalid worker key')
 
+async def run_verification_http_contract_audit() -> None:
+    """One explicit exact-RK HTTP source canary, never a card transaction."""
+    profile = str(os.getenv('REMASK_VERIFY_AUDIT_PROFILE') or '').strip()
+    account = str(os.getenv('REMASK_VERIFY_AUDIT_ACCOUNT') or '').strip()
+    if not profile and not account:
+        return
+    if not profile or not re.fullmatch(r'\\d{5,30}', account):
+        log.warning('verification HTTP audit refused: invalid profile/account configuration')
+        return
+    await asyncio.sleep(3)
+    try:
+        from app.contract_maintenance.payment_sources import inspect_profile_payment_sources
+        async with asyncio.timeout(100):
+            result = await inspect_profile_payment_sources(
+                pool.resolver, profile, account, state=pool.provisioning_state)
+        report = {'code': result.get('status'),
+                  'modules': result.get('module_count_total', 0),
+                  'scripts': result.get('scripts_read', 0),
+                  'truncated': result.get('export_truncated'),
+                  'loader': result.get('verification_loader_probe'),
+                  'relay_operations': result.get('verification_relay_operations', [])}
+        log.warning('verification HTTP audit profile=%s account=%s report=%s',
+                    profile, account, json.dumps(report, separators=(',', ':'))[:12000])
+    except Exception as exc:
+        # Never print source/HTTP exception strings; they may include cookies.
+        log.warning('verification HTTP audit failed profile=%s account=%s type=%s code=%s',
+                    profile, account, type(exc).__name__,
+                    str(getattr(exc, 'code', 'VERIFICATION_AUDIT_UNAVAILABLE'))[:100])
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await store.init()
@@ -764,14 +794,18 @@ async def lifespan(app: FastAPI):
         run_live_inventory_readonly_canary(),
         name='remask-live-inventory-readonly-canary',
     )
+    verification_audit_task=asyncio.create_task(
+        run_verification_http_contract_audit(), name='remask-verification-http-contract-audit')
     yield
     smoke_task.cancel()
     bm_canary_task.cancel()
     live_inventory_canary_task.cancel()
+    verification_audit_task.cancel()
     await asyncio.gather(
         smoke_task,
         bm_canary_task,
         live_inventory_canary_task,
+        verification_audit_task,
         return_exceptions=True,
     )
     await pool.stop()
