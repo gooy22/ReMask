@@ -743,7 +743,7 @@ async def run_verification_http_contract_audit() -> None:
     account = str(os.getenv('REMASK_VERIFY_AUDIT_ACCOUNT') or '').strip()
     if not profile and not account:
         return
-    if not profile or not re.fullmatch(r'\\d{5,30}', account):
+    if not profile or not re.fullmatch(r'\d{5,30}', account):
         log.warning('verification HTTP audit refused: invalid profile/account configuration')
         return
     await asyncio.sleep(3)
