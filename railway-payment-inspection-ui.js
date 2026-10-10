@@ -137,6 +137,10 @@ function paymentCardMessage(result){
   };
   const paymentSetupDetail=typeof result.setup_stage==='string'&&Object.prototype.hasOwnProperty.call(paymentSetupStages,result.setup_stage)
     ?' Причина: '+paymentSetupStages[result.setup_stage]:'';
+  const businessWalletNote=result.business_wallet_route_possible===true
+    ?' Диагностика Meta: для РК доступен родительский платёжный аккаунт бизнеса. Текущий Save может использовать другой маршрут; изменение маршрута не выполнено.'
+    :result.business_wallet_route_unresolved===true
+    ?' Диагностика Meta: доступна бизнес-привязка, но платёжный аккаунт бизнеса не подтверждён.':'';
   const verificationStages={
     method_scope_not_confirmed:'Meta не подтвердила принадлежность списка способов оплаты выбранному РК.',
     method_list_not_confirmed:'Список способов оплаты Meta не удалось прочитать полностью.',
@@ -160,7 +164,7 @@ function paymentCardMessage(result){
   const errors=Array.isArray(result.meta_error_codes)?result.meta_error_codes.filter(n=>Number.isInteger(n)&&n>=0&&n<=999999999):[];
   const readFailure=['PAYMENT_HTTP_TIMEOUT','PAYMENT_HTTP_UNAVAILABLE','CHECKPOINT_REQUIRED','BUSINESS_LOGIN_GATE','SESSION_EXPIRED'].includes(result.reconcile_error_code)
     ?' Текущая проверка не завершена: '+result.reconcile_error_code+'.':'';
-  return (messages[result.code]||result.code||'Не удалось подтвердить результат')+paymentSetupDetail+verificationDetail+country+availability+countryMismatch+currentCountry+inventory+
+  return (messages[result.code]||result.code||'Не удалось подтвердить результат')+paymentSetupDetail+verificationDetail+businessWalletNote+country+availability+countryMismatch+currentCountry+inventory+
     readFailure+
     (errors.length?' Коды ошибки Meta: '+errors.join(', ')+'.':'')+
     (Array.isArray(result.meta_error_messages)?' '+result.meta_error_messages.filter(s=>typeof s==='string'&&s.length<=320).slice(0,4).join(' · '):'')+
