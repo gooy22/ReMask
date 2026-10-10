@@ -268,9 +268,17 @@ final class RemaskPaymentCardVault {
                 if(self::reviewable($current)&&self::exactEmpty($profile,$account,$funding))$result['retry_review']=$this->retryReview($current);
                 return $result;
             }
-            $data['bindings'][$key]=['card_id'=>$id,'profile'=>$profile,'account_id'=>$account,'last4'=>$card['last4'],
-                'status'=>'LINKED','updated_at'=>gmdate('c'),'last_result_code'=>'CARD_LINK_OBSERVED','submitted'=>false,'checked_live'=>true];
-            return ['status'=>'LINKED','code'=>'CARD_LINK_OBSERVED','submitted'=>false,'funding_verified'=>false,'funding'=>$funding];
+            $method=$observedMatches[0];
+            $requires=($method['needs_verification']??null)===true||!empty($method['verification_tasks']);
+            $status=$requires?'ACTION_REQUIRED':'LINKED';
+            $code=$requires?'CARD_BANK_CONFIRMATION_REQUIRED':'CARD_LINK_OBSERVED';
+            // Reconciliation never erases the original Save intent or enables
+            // a second Save while Meta asks to verify the attached card.
+            $data['bindings'][$key]=array_replace($current??[],['card_id'=>$id,'profile'=>$profile,'account_id'=>$account,'last4'=>$card['last4'],
+                'status'=>$status,'updated_at'=>gmdate('c'),'last_result_code'=>$code,
+                'submitted'=>$requires?true:($current['submitted']??false),'checked_live'=>true,
+                'card_confirmation_status'=>$method['card_confirmation_status']??($requires?'REQUIRED':'UNKNOWN')]);
+            return ['status'=>$status,'code'=>$code,'card_linked'=>true,'submitted'=>false,'funding_verified'=>false,'funding'=>$funding];
         });
     }
     public function recordUnlinked(string $id,string $profile,string $account,?array $expected,array $funding): void {

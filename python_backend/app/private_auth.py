@@ -11,7 +11,9 @@ def private_auth_error(exc):
     payload = getattr(exc, "meta_payload", {}) or {}
     attempts = payload.get("business_precheck", []) if isinstance(payload, dict) else []
     reasons = {row.get("auth_reason") for row in attempts if isinstance(row, dict)}
-    if "checkpoint_redirect" in reasons or (not reasons and "checkpoint" in str(exc).lower()):
+    # Generic transport messages say "login/checkpoint" for either route.
+    # Only structured evidence of the actual redirect proves a checkpoint.
+    if "checkpoint_redirect" in reasons:
         code = "CHECKPOINT_REQUIRED"
     elif any(isinstance(row, dict) and "/business/loginpage" in str(row.get("final_url", "")) for row in attempts):
         code = "BUSINESS_LOGIN_GATE"

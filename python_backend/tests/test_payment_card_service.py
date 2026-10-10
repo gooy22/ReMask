@@ -31,6 +31,29 @@ class ServiceHTTP(FakeHTTP):
 
 
 class CardServiceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_tasks_require_confirmation_after_link_and_clear_without_another_save(self):
+        self.assertEqual((await self.call())['status'], 'LINKED')
+        original = self.web.graphql
+        tasks = [{'__typename': 'CVCOSoftDescriptorVerificationTask', 'secret_bank_parameters': 'PRIVATE'}]
+        async def with_tasks(doc, variables, **kwargs):
+            result = await original(doc, variables, **kwargs)
+            if doc == '28814526004898205':
+                payment = result['data']['billable_account_by_asset_id']['billing_payment_account']
+                for key in ('billing_payment_methods_allowlist_customized',):
+                    for row in payment[key]:
+                        row['credential']['required_tasks'] = copy.deepcopy(tasks)
+            return result
+        self.web.graphql = with_tasks
+        self.web.calls.clear()
+        checked = await self.call({'operation': 'reconcile', 'card_id': self.payload['card_id']})
+        self.assertEqual(checked['status'], 'ACTION_REQUIRED'); self.assertTrue(checked['card_linked'])
+        self.assertEqual(checked['verification_tasks'], ['statement_code'])
+        tasks.clear()
+        checked = await self.call({'operation': 'reconcile', 'card_id': self.payload['card_id']})
+        self.assertEqual(checked['status'], 'LINKED')
+        self.assertEqual(checked['card_confirmation_status'], 'CLEAR')
+        self.assertEqual([call[0] for call in self.web.calls], ['28814526004898205', '28814526004898205'])
+
     async def asyncSetUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.state = SimpleNamespace(path=Path(self.tmp.name)/'state.sqlite', set_payment_link_state=AsyncMock())

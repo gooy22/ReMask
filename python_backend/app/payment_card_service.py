@@ -82,7 +82,8 @@ async def profile_payment_card_http(resolver, profile, payload, *, state=None):
                 profile_context = await resolver.resolve(profile)
                 async with ProfileSession(profile_context, timeout_seconds=30) as session:
                     web = await session.facebook_web()
-                    if (confirmed_read and saved.get('account_id') == target
+                    scoped_saved_read = confirmed_read or saved.get('status') == 'ACTION_REQUIRED'
+                    if (scoped_saved_read and saved.get('account_id') == target
                             and saved.get('account_scope_verified') is True
                             and saved.get('business_id') == asset['business_id']
                             and isinstance(saved.get('payment_account_id'), str)
@@ -101,7 +102,7 @@ async def profile_payment_card_http(resolver, profile, payload, *, state=None):
                     # the scoped card query. The complete inventory is needed
                     # for absence/retry decisions, not to discard exact presence.
                     direct = confirm_saved_card({**saved, 'status':'VERIFYING'}, methods, business_id=asset['business_id']) if saved.get('credential') else {}
-                    if not (confirmed_read and direct.get('status') == 'LINKED'):
+                    if not (scoped_saved_read and direct.get('status') in {'LINKED', 'ACTION_REQUIRED'}):
                         methods = await complete_methods(web, methods, business_id=asset['business_id'])
                     import logging
                     logging.getLogger('remask.payment_card').info('card reconcile inventory account=%s code=%s complete=%s credentials=%s cards=%s',
@@ -138,6 +139,8 @@ async def profile_payment_card_http(resolver, profile, payload, *, state=None):
                     if saved.get('status') == 'ACTION_REQUIRED' and not any(
                             row.get('credential_id') in exact_ids
                             and row.get('needs_verification') is False
+                            and not row.get('verification_tasks')
+                            and (not saved.get('verification_tasks') or row.get('verification_tasks_observed') is True)
                             for row in methods.get('payment_methods', [])):
                         return {**retained, 'status':'ACTION_REQUIRED','code':'CARD_BANK_CONFIRMATION_REQUIRED'}
                     result = confirm_saved_card({**saved, 'status': 'VERIFYING'}, methods, business_id=asset['business_id'])

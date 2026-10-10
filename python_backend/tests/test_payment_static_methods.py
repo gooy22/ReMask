@@ -27,6 +27,29 @@ def methods_response():
             'primary_funding_source_customized': [copy.deepcopy(row)]}}}}
 
 class StaticMethodsTests(unittest.IsolatedAsyncioTestCase):
+    def test_server_driven_verification_tasks_override_legacy_false_without_leaking_parameters(self):
+        value = methods_response()
+        payment = value['data']['billable_account_by_asset_id']['billing_payment_account']
+        for key in ('billing_payment_methods_allowlist_customized', 'primary_funding_source_customized'):
+            card = payment[key][0]['credential']
+            card['needs_verification'] = False
+            card['required_tasks'] = [{'__typename': 'CVCOSoftDescriptorVerificationTask',
+                'billing_task_name': 'risk_sdc_verification', 'verification_parameters': 'PRIVATE BANK DATA'}]
+        proof = self.proof(value)
+        card = proof['payment_methods'][0]
+        self.assertEqual(card['verification_tasks'], ['statement_code'])
+        self.assertEqual(card['card_confirmation_status'], 'REQUIRED')
+        self.assertTrue(proof['card_linked']); self.assertFalse(proof['funding_verified'])
+        self.assertNotIn('PRIVATE BANK DATA', json.dumps(proof))
+        for key in ('billing_payment_methods_allowlist_customized', 'primary_funding_source_customized'):
+            payment[key][0]['credential']['required_tasks'] = []
+        self.assertEqual(self.proof(value)['payment_methods'][0]['card_confirmation_status'], 'CLEAR')
+        del payment['primary_funding_source_customized'][0]['credential']['required_tasks']
+        self.assertEqual(self.proof(value)['payment_methods'][0]['card_confirmation_status'], 'CLEAR')
+        payment['billing_payment_methods_allowlist_customized'][0]['credential']['required_tasks'] = [
+            {'__typename': 'ThreeDSVerificationTask'}]
+        self.assertEqual(self.proof(value)['payment_methods'][0]['verification_tasks'], ['three_ds'])
+
     def proof(self, payload):
         return methods_proof(payload, ACCOUNT, business_id=BM, account_evidence=account_proof(account_response(), ACCOUNT))
 
@@ -124,9 +147,12 @@ class HttpInspectionTests(unittest.IsolatedAsyncioTestCase):
         state.set_payment_link_state.assert_not_awaited()
 
     async def test_http_failure_and_auth_gate_never_open_browser_or_expose_response(self):
+        checkpoint = AuthenticationError('checkpoint PRIVATE fixture')
+        checkpoint.meta_payload = {'business_precheck': [{'auth_reason': 'checkpoint_redirect'}]}
         for error, code in ((RuntimeError('PRIVATE PAN fixture'), 'PAYMENT_HTTP_UNAVAILABLE'),
                             (AuthenticationError('login PRIVATE fixture'), 'SESSION_EXPIRED'),
-                            (AuthenticationError('checkpoint PRIVATE fixture'), 'CHECKPOINT_REQUIRED')):
+                            (AuthenticationError('login/checkpoint PRIVATE fixture'), 'SESSION_EXPIRED'),
+                            (checkpoint, 'CHECKPOINT_REQUIRED')):
             with self.subTest(code=code), self.assertRaises(BrowserBusinessError) as raised:
                 await self.run_inspection(error=error)
             self.assertEqual(raised.exception.code, code); self.assertNotIn('PRIVATE', str(raised.exception))

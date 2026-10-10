@@ -303,6 +303,30 @@ function paymentApplyFunding(row,funding){
   }
 }
 
+function paymentConfirmationPanel(row,result,container){
+  const methods=result?.funding?.payment_methods||[];
+  const ids=[result?.credential?.id,result?.credential?.credential_id].filter(Boolean);
+  const card=methods.find(m=>ids.includes(m.credential_id))||(methods.length===1?methods[0]:null);
+  const status=result?.card_confirmation_status||card?.card_confirmation_status||'UNKNOWN';
+  const text={REQUIRED:'Карта прикреплена, но Meta требует подтверждения.',
+    CLEAR:'Свежая проверка: Meta не требует подтверждения этой карты.',
+    UNKNOWN:'Наличие карты проверяется отдельно. Статус подтверждения пока не установлен.'}[status];
+  const box=document.createElement('div');box.className='ws-result';
+  const title=document.createElement('div');title.textContent=row.profile+' / '+row.id+': '+text;box.appendChild(title);
+  const labels={statement_code:'код из выписки после временной авторизации',three_ds:'подтверждение через банк (3-D Secure)',
+    bank_app:'подтверждение в приложении банка',cvv:'повторная проверка CVV в Meta',meta_action:'действие в форме Meta'};
+  const tasks=result?.verification_tasks||card?.verification_tasks||[];
+  if(tasks.length){const detail=document.createElement('div');detail.textContent='Способ подтверждения: '+tasks.map(t=>labels[t]||labels.meta_action).join(', ')+'.';box.appendChild(detail);}
+  const account=String(row.id).replace(/^act_/,'');const business=paymentAssetHint(row).business_id;
+  if(/^\d{5,30}$/.test(account)&&/^\d{5,30}$/.test(business||'')&&status!=='CLEAR'){
+    const link=document.createElement('a');link.textContent='Открыть подтверждение карты в Meta';
+    link.href='https://business.facebook.com/billing_hub/payment_settings/?asset_id='+account+'&business_id='+business;
+    link.target='_blank';link.rel='noopener noreferrer';box.appendChild(link);
+    const help=document.createElement('div');help.textContent='Откройте ссылку в браузере FB-профиля '+row.profile+'. Выберите эту карту → «Подтвердить». Meta покажет доступный способ и сумму, если требуется временная авторизация. Затем вернитесь и нажмите «Проверить подтверждение». Коды вводятся только в Meta или банке.';box.appendChild(help);
+  }
+  container.appendChild(box);
+}
+
 function paymentCardTargetPlan(rows,bindings,cardId){
   const plan={fresh:[],pending:[],linked:[],blocked:[]},seen=new Set();
   for(const row of rows){
@@ -332,6 +356,7 @@ async function reconcilePaymentCard(rows,card,container){
     if(result?.code==='CARD_RECONCILE_NO_METHOD'&&result.retry_review?.token&&result.retry_review?.expires_at)
       reviews[r.profile+'|'+String(r.id).replace(/^act_/,'')]={...result.retry_review,card_id:card.id};
     container.appendChild(line);
+    paymentConfirmationPanel(r,result,container);
     const f=result?.funding;
     if(f?.ui_preview&&/^[A-Za-z0-9+/=]+$/.test(f.ui_preview)){
       const preview=document.createElement('details'),summary=document.createElement('summary'),image=document.createElement('img');
@@ -378,7 +403,8 @@ async function showFunding(restored=null){
     <details class="mt-2"><summary>Диагностика</summary>
       <button id="paymentCardPrepare" type="button">Проверить форму Meta</button>
       <button id="paymentCardInspect" type="button">Проверить привязанные карты</button></details>
-    <div class="ws-muted mt-2">Проверка результата читает способы оплаты выбранного РК в Meta. Она подтверждает только наличие карты, не проверяет списание или подтверждение банка. CVV не нужен для этой проверки; РК обрабатываются по одному.</div>
+    <button id="paymentCardVerify" type="button" class="mt-2">Проверить подтверждение</button>
+    <div class="ws-muted mt-2">Проверка читает наличие карты и задания Meta на её подтверждение. Она не выполняет платежи. CVV не нужен для проверки уже сохранённой карты.</div>
     <div id="paymentCardAssignments" class="ws-muted mt-2"></div>
     <div id="paymentCardProgress" class="ws-muted mt-2" aria-live="polite"></div>
     <div id="fundingResults" aria-live="polite"></div>`,'',null);
@@ -396,7 +422,7 @@ async function showFunding(restored=null){
       plan.blocked.length?'Выберите карту незавершённой привязки':'Все выбранные РК уже привязаны';
     $('paymentCardBind').disabled=busy||(!plan.fresh.length&&!plan.pending.length);
     $('paymentCardRetryField').hidden=!retryAvailable();
-    $('paymentCardCvvField').hidden=checking&&!retry;
+    $('paymentCardCvvField').hidden=(checking&&!retry)||(plan.fresh.length===0&&!retry);
     $('paymentCardSaveBind').disabled=busy||checking;
   };
   const refreshCards=async(preferred='')=>{
@@ -475,6 +501,12 @@ async function showFunding(restored=null){
       $('paymentCardRetryConfirmed').checked=false;
       await refreshCards(card.id);
     }else await inspectFundingRows(rows,container);
+  },false));
+  $('paymentCardVerify').addEventListener('click',()=>run(async()=>{
+    const card=cards.find(c=>c.id===select.value);
+    if(!card)throw new Error('Выберите сохранённую карту для проверки подтверждения.');
+    reviews=await reconcilePaymentCard(rows,card,container);
+    await refreshCards(card.id);
   },false));
   $('paymentCardPrepare').addEventListener('click',()=>run(async()=>{
     for(let i=0;i<rows.length;i++){

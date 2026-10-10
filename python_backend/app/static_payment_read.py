@@ -152,9 +152,35 @@ def methods_proof(payload, target, *, business_id, account_evidence):
             for key in ('is_expired', 'needs_verification', 'supports_recurring'):
                 if type(credential.get(key)) is bool:
                     card[key] = credential[key]
+            # Observed VERIFY_PAYMENT_METHOD tasks drive Meta's verification
+            # launcher even when the legacy needs_verification flag is false.
+            # Retain categories only, never task parameters, URLs or bank data.
+            tasks = credential.get('required_tasks')
+            if isinstance(tasks, list) and len(tasks) <= 20:
+                categories = {'CVCOSoftDescriptorVerificationTask': 'statement_code',
+                    'CVCONfcTapVerificationTask': 'bank_app',
+                    'CVCOThreeDSVerificationTask': 'three_ds',
+                    'ThreeDSVerificationTask': 'three_ds',
+                    'VerifyCreditCardCVVTask': 'cvv'}
+                card['verification_tasks_observed'] = True
+                card['verification_tasks'] = sorted({categories.get(
+                    task.get('__typename') if isinstance(task, dict) else None, 'meta_action') for task in tasks})
+            card['card_confirmation_status'] = ('REQUIRED' if card.get('needs_verification') is True
+                or card.get('verification_tasks') else 'CLEAR' if card.get('needs_verification') is False
+                and card.get('verification_tasks_observed') is True else 'UNKNOWN')
             old = cards.get(card['credential_id'])
-            if old is not None and old != card:
-                return {**base, 'code': 'PAYMENT_METHODS_CREDENTIAL_CONFLICT'}
+            if old is not None:
+                task_keys = {'verification_tasks_observed', 'verification_tasks', 'card_confirmation_status'}
+                if ({k:v for k,v in old.items() if k not in task_keys} !=
+                        {k:v for k,v in card.items() if k not in task_keys}):
+                    return {**base, 'code': 'PAYMENT_METHODS_CREDENTIAL_CONFLICT'}
+                # The PRIMARY_ONLY selection does not fetch required_tasks;
+                # its omission must not erase the allowlist query's task proof.
+                if old.get('verification_tasks_observed') and card.get('verification_tasks_observed'):
+                    if old.get('verification_tasks') != card.get('verification_tasks'):
+                        return {**base, 'code': 'PAYMENT_METHODS_CREDENTIAL_CONFLICT'}
+                elif old.get('verification_tasks_observed'):
+                    card = old
             cards[card['credential_id']] = card
     for row in collections[0]:
         credential = row.get('credential') if isinstance(row, dict) else None

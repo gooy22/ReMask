@@ -52,7 +52,7 @@ function hierarchy_canonical_account_snapshot(string $profile, array $snapshot):
                 $card = $cards[$binding['card_id'] ?? ''] ?? null;
                 if (!is_array($card) || ($binding['last4'] ?? null) !== $card['last4']) continue;
                 $account['cached_card_binding'] = array_intersect_key($binding,
-                    array_flip(['status','last4','updated_at','last_result_code']));
+                    array_flip(['status','last4','updated_at','last_result_code','card_confirmation_status']));
                 $account['cached_card_binding']['brand'] = $card['brand'];
             }
         }
@@ -109,7 +109,7 @@ function fundingStatusValue(f){ if(!f)return 'NOT LOADED'; if(f.funding_verified
 STATUS, $js, 1, $count);
 if ($count !== 1) throw new RuntimeException('Funding readiness boundary missing');
 $js = preg_replace('/function fundingCell\(f\)\{[^\n]+\}/', <<<'CELL'
-function fundingCell(f,cached){ const status=fundingStatusValue(f); const methods=f?.payment_methods||[]; const card=methods.find(m=>/^\d{4}$/.test(String(m.last4||''))); const mask=card?esc((card.type||'Карта')+' •••• '+card.last4):cached&&/^\d{4}$/.test(String(cached.last4||''))?esc((cached.brand||'Карта')+' •••• '+cached.last4):''; const detail=mask?'<div class="sub">'+mask+'</div>':''; if(status==='LINKED')return pill('КАРТА ПРИВЯЗАНА','ok')+detail; if(status==='NONE')return pill('НЕТ КАРТЫ','warn'); if(status==='READY')return pill('ПОДТВЕРЖДЕНО','ok')+detail; if(cached?.status==='LINKED')return pill('КАРТА ПРИВЯЗАНА','ok')+detail+'<div class="sub">Сохранённый результат Meta</div>'; if(cached?.last_result_code==='CARD_SAVED_CREDENTIAL_UNLINKED')return pill('СОХРАНЕНА · НЕ ПРИВЯЗАНА','warn')+detail; return pill('НЕ ПРОВЕРЕНО','warn')+detail; }
+function fundingCell(f,cached){ const status=fundingStatusValue(f); const methods=f?.payment_methods||[]; const card=methods.find(m=>/^\d{4}$/.test(String(m.last4||''))); const mask=card?esc((card.type||'Карта')+' •••• '+card.last4):cached&&/^\d{4}$/.test(String(cached.last4||''))?esc((cached.brand||'Карта')+' •••• '+cached.last4):''; const detail=mask?'<div class="sub">'+mask+'</div>':''; if(card&&(card.needs_verification===true||card.verification_tasks?.length)||cached?.status==='ACTION_REQUIRED'&&cached?.last_result_code==='CARD_BANK_CONFIRMATION_REQUIRED'&&status!=='NONE'&&card?.card_confirmation_status!=='CLEAR')return pill('ТРЕБУЕТ ПОДТВЕРЖДЕНИЯ','warn')+detail; if(status==='LINKED')return pill('КАРТА ПРИВЯЗАНА','ok')+detail+(card?.card_confirmation_status==='CLEAR'?'<div class="sub">Meta не требует подтверждения карты</div>':''); if(status==='NONE')return pill('НЕТ КАРТЫ','warn'); if(status==='READY')return pill('ПОДТВЕРЖДЕНО','ok')+detail; if(cached?.status==='LINKED')return pill('КАРТА ПРИВЯЗАНА','ok')+detail+'<div class="sub">Сохранённый результат Meta</div>'; if(cached?.last_result_code==='CARD_SAVED_CREDENTIAL_UNLINKED')return pill('СОХРАНЕНА · НЕ ПРИВЯЗАНА','warn')+detail; return pill('НЕ ПРОВЕРЕНО','warn')+detail; }
 CELL, $js, 1, $count);
 if ($count !== 1) throw new RuntimeException('Funding cell boundary missing');
 $js = str_replace('fundingCell(row.funding)', 'fundingCell(row.funding,row.cached_card_binding)', $js, $count);

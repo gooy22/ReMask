@@ -424,9 +424,9 @@ async def inspect_profile_payment_methods(resolver: Any, profile_id: str, target
     except AuthenticationError as exc:
         # Classify in memory; never return raw HTTP exception/payload text.
         text = str(exc).lower()
+        from .private_auth import private_auth_error
         code = ('TWO_FACTOR_REQUIRED' if 'two_factor' in text or 'two-factor' in text
-                else 'CHECKPOINT_REQUIRED' if 'checkpoint' in text and 'login' not in text
-                else 'SESSION_EXPIRED')
+                else private_auth_error(exc).code)
         raise BrowserBusinessError(code, 'Meta payment HTTP session requires restoration.', retryable=True) from None
     except BrowserBusinessError:
         raise

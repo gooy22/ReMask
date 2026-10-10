@@ -47,6 +47,12 @@ assert.match(sandbox.fundingCell(null,cached),/Visa •••• 1111/);
 assert.match(sandbox.fundingCell(null,cached),/Сохранённый результат Meta/);
 assert.doesNotMatch(sandbox.fundingCell(null,cached),/ПОДТВЕРЖДЕНО/);
 assert.doesNotMatch(sandbox.fundingCell({verification_status:'NONE',account_scope_verified:true},cached),/КАРТА ПРИВЯЗАНА/);
+const requiredCard={type:'Visa',last4:'1111',needs_verification:false,verification_tasks:['statement_code'],card_confirmation_status:'REQUIRED'};
+assert.match(sandbox.fundingCell({verification_status:'LINKED',card_linked:true,account_scope_verified:true,payment_methods:[requiredCard]},cached),/ТРЕБУЕТ ПОДТВЕРЖДЕНИЯ/);
+const panel=element();sandbox.paymentConfirmationPanel(rows[0],{card_confirmation_status:'REQUIRED',verification_tasks:['statement_code'],funding:{payment_methods:[requiredCard]}},panel);
+assert.ok(panel.children[0].children.some(e=>e.textContent.includes('код из выписки')));
+assert.ok(panel.children[0].children.some(e=>e.href==='https://business.facebook.com/billing_hub/payment_settings/?asset_id=123456789&business_id=123450001'));
+assert.doesNotMatch(sandbox.fundingCell({verification_status:'LINKED',card_linked:true,account_scope_verified:true,payment_methods:[{...requiredCard,verification_tasks:[],card_confirmation_status:'CLEAR'}]}, {...cached,status:'ACTION_REQUIRED',last_result_code:'CARD_BANK_CONFIRMATION_REQUIRED'}),/ТРЕБУЕТ ПОДТВЕРЖДЕНИЯ/);
 (async()=>{
   await sandbox.showFunding();assert.equal(requests.length,1);assert.equal(requests[0].body.action,'list');
   assert.ok(elements.paymentCardSelect.children[0].textContent.includes('•••• 1111'));

@@ -120,6 +120,10 @@ class IndependentRKTests(unittest.IsolatedAsyncioTestCase):
 
 
 class PrivateAuthTests(unittest.TestCase):
+    def test_generic_login_checkpoint_message_is_not_checkpoint_evidence(self):
+        self.assertEqual(private_auth_error(AuthenticationError(
+            'Facebook GraphQL redirected to login/checkpoint')).code, 'SESSION_EXPIRED')
+
     def test_business_checkpoint_and_profile_auth_errors_preserve_actionable_codes(self):
         for final_url, reason, code in (
             ('https://business.facebook.com/business/loginpage/', 'login_redirect', 'BUSINESS_LOGIN_GATE'),

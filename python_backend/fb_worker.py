@@ -598,6 +598,7 @@ class FacebookWebSession:
             best_authenticated_body = ""
             best_authenticated_url = ""
             attempts: list[str] = []
+            auth_attempts: list[dict[str, str]] = []
 
             for bootstrap_url in bootstrap_urls:
                 try:
@@ -637,6 +638,9 @@ class FacebookWebSession:
                             or "/checkpoint" in lower_url
                             or "login_form" in lower_body
                         ):
+                            route = urlsplit(candidate_url).path.lower()
+                            auth_attempts.append({"auth_reason": "checkpoint_redirect" if "/checkpoint" in route
+                                else "login_redirect" if "/login" in route else "login_form"})
                             attempts.append(
                                 f"{bootstrap_url}: login/checkpoint"
                             )
@@ -710,12 +714,16 @@ class FacebookWebSession:
 
             if not fb_dtsg:
                 detail = " | ".join(attempts[-8:]) or "no bootstrap response"
-                raise AuthenticationError(
+                error = AuthenticationError(
                     "Facebook browser session has no usable fb_dtsg. "
                     "The saved cookies may be expired/incomplete, or Facebook "
                     "did not expose a DTSG token on page bootstrap or /ajax/dtsg/. "
                     f"Attempts: {detail}"
                 )
+                error.meta_payload = {"business_precheck": auth_attempts}
+                error.request_may_have_been_sent = False
+                error.transport_stage = "bootstrap"
+                raise error
 
             lsd = self._first_match(
                 body,
@@ -1056,6 +1064,8 @@ class FacebookWebSession:
                     "http_status": auth_status, "body_bytes": len(auth_body.encode("utf-8")),
                     "token_present": bool(token), "auth_gated": auth_gated,
                     "actor_verified": bool(expected_actor and current_users == {expected_actor}),
+                    "auth_reason": ("checkpoint_redirect" if "/checkpoint" in auth_parts.path.lower()
+                        else "login_redirect" if "/login" in auth_parts.path.lower() else ""),
                     **self._document_failure_evidence(auth_status, auth_body)})
                 if auth_gated:
                     self.invalidate_bootstrap()
@@ -1308,10 +1318,15 @@ class FacebookWebSession:
                     ):
                         self.invalidate_bootstrap()
 
-                        raise AuthenticationError(
+                        error = AuthenticationError(
                             "Facebook GraphQL redirected to "
                             "login/checkpoint"
                         )
+                        error.meta_payload = {"business_precheck": [{"auth_reason":
+                            "checkpoint_redirect" if "/checkpoint" in urlsplit(location).path.lower() else "login_redirect"}]}
+                        error.transport_stage = "graphql_redirect"
+                        error.request_may_have_been_sent = True
+                        raise error
 
                 payload = self._decode_graphql_body(raw_body)
 
@@ -1528,9 +1543,12 @@ class FacebookWebSession:
                 current_url = str(page.url or "")
                 lower_url = current_url.lower()
                 if "/login" in lower_url or "/checkpoint" in lower_url:
-                    raise AuthenticationError(
+                    error = AuthenticationError(
                         "Facebook browser transport redirected to login/checkpoint"
                     )
+                    error.meta_payload = {"business_precheck": [{"auth_reason":
+                        "checkpoint_redirect" if "/checkpoint" in urlsplit(current_url).path.lower() else "login_redirect"}]}
+                    raise error
 
                 rendered_html = await page.content()
                 browser_context = self._extract_request_context(rendered_html)

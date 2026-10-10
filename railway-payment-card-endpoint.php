@@ -111,9 +111,10 @@ try {
         $httpResult=card_worker($profile,['operation'=>'reconcile','account_id'=>$account,'card_id'=>$id,'asset_hint'=>$assetHint]);
         if(($httpResult['profile_id']??'')!==$profile||($httpResult['account_id']??'')!==$account)throw new RuntimeException('CARD_WORKER_RESULT_UNKNOWN');
         if(($httpResult['code']??'')!=='CARD_HTTP_INTENT_NOT_FOUND'){
-            if(($httpResult['status']??'')==='LINKED'){
+            if(($httpResult['status']??'')==='LINKED'||
+                (($httpResult['status']??'')==='ACTION_REQUIRED'&&($httpResult['card_linked']??false)===true)){
                 $confirmed=$vault->reconcile($id,$profile,$account,$expected,$httpResult['funding']??[]);
-                if(($confirmed['status']??'')!=='LINKED')throw new RuntimeException('CARD_WORKER_RESULT_UNKNOWN');
+                if(($confirmed['status']??'')!==$httpResult['status'])throw new RuntimeException('CARD_WORKER_RESULT_UNKNOWN');
             }elseif(($httpResult['funding']['inventory_complete']??false)===true&&
                     (($httpResult['funding']['verification_status']??'')==='NONE'||
                      (($httpResult['funding']['card_credential_count']??null)===0&&

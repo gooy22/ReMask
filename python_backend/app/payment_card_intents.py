@@ -74,6 +74,11 @@ class CardIntentLedger:
             'account_scope_verified', 'save_response_stage', 'verification_stage',
             'meta_error_codes', 'meta_error_messages') if k in result}
         credential = result.get('credential')
+        if result.get('card_confirmation_status') in {'REQUIRED', 'CLEAR', 'UNKNOWN'}:
+            safe['card_confirmation_status'] = result['card_confirmation_status']
+        if isinstance(result.get('verification_tasks'), list):
+            safe['verification_tasks'] = sorted({task for task in result['verification_tasks']
+                if isinstance(task, str) and task in {'statement_code', 'bank_app', 'three_ds', 'cvv', 'meta_action'}})
         if isinstance(credential, dict):
             safe['credential'] = {k: credential[k] for k in ('id', 'credential_id', 'type', 'last4') if k in credential}
         phase = 'LINKED' if result.get('status') == 'LINKED' else 'ACTION_REQUIRED' if result.get('status') == 'ACTION_REQUIRED' else 'SUBMITTED_UNVERIFIED'

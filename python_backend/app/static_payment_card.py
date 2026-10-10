@@ -281,10 +281,15 @@ def confirm_saved_card(saved, methods, *, business_id):
     if (match.get('type') != card['type'] or match.get('last4') != card['last4']
             or match.get('linkage_status') != 'OBSERVED'):
         return unconfirmed('save_credential_metadata_mismatch')
-    if match.get('needs_verification') is True:
+    if match.get('needs_verification') is True or match.get('verification_tasks'):
         return {**unconfirmed('bank_confirmation_pending'), 'status': 'ACTION_REQUIRED',
-                'code': 'CARD_BANK_CONFIRMATION_REQUIRED'}
+                'code': 'CARD_BANK_CONFIRMATION_REQUIRED', 'card_linked': True,
+                'business_id': business_id, 'business_scope_verified': True,
+                'card_confirmation_status': 'REQUIRED',
+                'verification_tasks': match.get('verification_tasks', [])}
     return {**copy.deepcopy(saved), 'status': 'LINKED', 'code': 'CARD_LINK_CONFIRMED',
             'business_id': business_id, 'business_scope_verified': True,
+            'card_confirmation_status': match.get('card_confirmation_status', 'UNKNOWN'),
+            'verification_tasks': match.get('verification_tasks', []),
             'payment_account_relation_verified': True, 'card_linked': True}
 

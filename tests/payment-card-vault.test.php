@@ -473,6 +473,24 @@ try{
     $other=array_replace($proof,['profile_id'=>'Stale link','payment_methods'=>[['type'=>'Visa','last4'=>'2222']]]);
     $checked=$vault->reconcile($card['id'],'Stale link','123456789',$stale,$other);
     expect($vault->linkedBinding($card['id'],'Stale link','123456789')===null&&!isset($checked['retry_review']),'Different live card left stale link or allowed repeat');
+    $attempt=$vault->begin($card['id'],'Verification','123456789');
+    $vault->finish($card['id'],'Verification','123456789','LINKED',['submitted'=>true],$attempt['attempt_id']);
+    $expected=$vault->binding($card['id'],'Verification','123456789');
+    $verification=['profile_id'=>'Verification','account_id'=>'123456789','account_scope_verified'=>true,
+        'business_scope_verified'=>true,'payment_account_relation_verified'=>true,'methods_query_verified'=>true,
+        'checked_live'=>true,'browser_started'=>false,'source'=>'private_facebook_billing_static_methods',
+        'verification_status'=>'LINKED','payment_methods'=>[['type'=>'Visa','last4'=>$card['last4'],
+            'credential_id'=>'fixture-credential','needs_verification'=>false,'verification_tasks'=>['statement_code'],
+            'card_confirmation_status'=>'REQUIRED']]];
+    $checked=$vault->reconcile($card['id'],'Verification','123456789',$expected,$verification);
+    expect($checked['status']==='ACTION_REQUIRED','Server task was ignored');
+    $pending=$vault->binding($card['id'],'Verification','123456789');
+    expect($pending['attempt_id']===$attempt['attempt_id'],'Reconcile erased original Save');
+    rejected(fn()=>$vault->begin($card['id'],'Verification','123456789'),'CARD_BINDING_RECONCILE_REQUIRED');
+    $verification['payment_methods'][0]['verification_tasks']=[];
+    $verification['payment_methods'][0]['card_confirmation_status']='CLEAR';
+    $checked=$vault->reconcile($card['id'],'Verification','123456789',$pending,$verification);
+    expect($checked['status']==='LINKED','Completed verification not reflected');
     $data=json_decode(file_get_contents($directory.'/cards.json'),true);$bytes=base64_decode($data['cards'][$card['id']]['encrypted']);$bytes[30]=chr(ord($bytes[30])^1);
     $data['cards'][$card['id']]['encrypted']=base64_encode($bytes);file_put_contents($directory.'/cards.json',json_encode($data));
     try{$vault->secret($card['id']);throw new RuntimeException('Tamper accepted');}catch(RuntimeException $e){expect($e->getMessage()==='CARD_DECRYPTION_FAILED','Authenticated encryption');}
