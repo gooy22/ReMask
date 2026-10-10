@@ -104,6 +104,20 @@ class StaticReadTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(web.graphql.call_args.args[0],command('READ_BM')['doc_id'])
         self.assertNotIn('asset_id',repr(web.graphql.call_args))
 
+    async def test_explicit_creation_denial_is_read_without_guessing_from_count(self):
+        value = scopes([(BM, 'BM'), ('999999999999', 'Other BM')])
+        scoping = value['data']['viewer']['meta_business_scoping']
+        scoping['can_create_business_portfolio'] = False
+        result = await read_business_inventory(self.web(value))
+        self.assertEqual(len(result['rows']), 2)
+        self.assertTrue(result['complete'])
+        self.assertIs(result['can_create_business_portfolio'], False)
+        self.assertIs(result['diagnostics'][0]['can_create_business_portfolio'], False)
+        scoping['can_create_business_portfolio'] = {'allowed': False}
+        self.assertIsNone((await read_business_inventory(self.web(value)))['can_create_business_portfolio'])
+        value['errors'] = [{'message': 'untrusted'}]
+        self.assertIsNone((await read_business_inventory(self.web(value)))['can_create_business_portfolio'])
+
     async def test_prefix_pagination_does_not_treat_first_page_as_complete(self):
         web=self.web(None);web.graphql.side_effect=[scopes([(BM,'BM')],next_page=True),scopes([(BM,'BM'),(RK,'Other')])]
         proof=await read_business_inventory(web)
