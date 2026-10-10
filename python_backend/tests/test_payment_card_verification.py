@@ -3,7 +3,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from app.payment_card_verification import _card_identity, verify_payment_card_http
+from app.payment_card_verification import _card_identity, sdc_candidate_proof, verify_payment_card_http
 
 
 class SessionFixture:
@@ -49,7 +49,9 @@ class CardVerificationHTTPTests(unittest.IsolatedAsyncioTestCase):
              patch('app.session.ProfileSession', SessionFixture), \
              patch('app.payment_card_verification.account_proof', return_value=self.evidence), \
              patch('app.payment_card_verification.methods_proof', return_value=self.methods), \
+             patch('app.payment_card_verification.sdc_candidate_proof', return_value={'sdc_screen_verified': True, 'sdc_candidate': False, 'sdc_credential_match': False}), \
              patch('app.payment_card_verification.payment_page_proof', return_value=True), \
+             patch('app.payment_card_verification.sdc_candidate_proof', return_value={'sdc_screen_verified': True, 'sdc_candidate': False, 'sdc_credential_match': False}), \
              patch('app.payment_card_verification.execute', AsyncMock(return_value={})) as execute:
             result = await verify_payment_card_http(self.resolver, 'Fixture', self.payload)
         self.assertEqual(result['status'], 'ACTION_REQUIRED')
@@ -58,7 +60,7 @@ class CardVerificationHTTPTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(result['browser_started'], False)
         self.assertIs(result['submitted'], False)
         self.assertEqual([c.args[1] for c in execute.await_args_list],
-                         ['READ_ACCOUNT', 'READ_METHODS', 'READ_VERIFY_OPTIONS'])
+                         ['READ_ACCOUNT', 'READ_METHODS', 'READ_SDC_CANDIDATES', 'READ_VERIFY_OPTIONS'])
         self.assertEqual(result['credential_id'], 'cred_1')
 
     async def test_no_task_never_claims_bank_authorization(self):
@@ -70,11 +72,12 @@ class CardVerificationHTTPTests(unittest.IsolatedAsyncioTestCase):
              patch('app.session.ProfileSession', SessionFixture), \
              patch('app.payment_card_verification.account_proof', return_value=self.evidence), \
              patch('app.payment_card_verification.methods_proof', return_value=self.methods), \
+             patch('app.payment_card_verification.sdc_candidate_proof', return_value={'sdc_screen_verified': True, 'sdc_candidate': False, 'sdc_credential_match': False}), \
              patch('app.payment_card_verification.execute', AsyncMock(return_value={})) as execute:
             result = await verify_payment_card_http(self.resolver, 'Fixture', self.payload)
         self.assertEqual(result['code'], 'CARD_VERIFICATION_NO_REQUIRED_TASK')
         self.assertIs(result['funding_verified'], False)
-        self.assertEqual(len(execute.await_args_list), 2)
+        self.assertEqual(len(execute.await_args_list), 3)
 
     async def test_unconfirmed_business_scope_stops_before_verification(self):
         self.methods['business_scope_verified'] = False
@@ -83,11 +86,40 @@ class CardVerificationHTTPTests(unittest.IsolatedAsyncioTestCase):
              patch('app.session.ProfileSession', SessionFixture), \
              patch('app.payment_card_verification.account_proof', return_value=self.evidence), \
              patch('app.payment_card_verification.methods_proof', return_value=self.methods), \
+             patch('app.payment_card_verification.sdc_candidate_proof', return_value={'sdc_screen_verified': True, 'sdc_candidate': False, 'sdc_credential_match': False}), \
              patch('app.payment_card_verification.execute', AsyncMock(return_value={})) as execute:
             result = await verify_payment_card_http(self.resolver, 'Fixture', self.payload)
         self.assertEqual(result['status'], 'BLOCKED')
         self.assertFalse(result['verification_triggered'])
         self.assertEqual(len(execute.await_args_list), 2)
+
+
+    def test_sdc_candidate_requires_exact_credential_match(self):
+        response = {'data': {'payment_account': {'billing_payment_methods': [{
+            'usability': 'PENDING_VERIFICATION',
+            'credential': {'__typename': 'ExternalCreditCard',
+                           'id': 'creditcard_node_123', 'credential_id': 'cred_1',
+                           'card_association_name': 'Visa', 'last_four_digits': '1234',
+                           'sdc_auth_amount_localized': {'amount_with_offset': 123,
+                                                         'currency': 'USD'}}
+        }]}}}
+        result = sdc_candidate_proof(response, 'cred_1', 'Visa', '1234')
+        self.assertTrue(result['sdc_screen_verified'])
+        self.assertTrue(result['sdc_candidate'])
+        self.assertTrue(result['sdc_credential_match'])
+        self.assertNotIn('sdc_auth_amount_localized', result)
+        self.assertFalse(sdc_candidate_proof(response, 'different', 'Visa', '1234')['sdc_credential_match'])
+        self.assertFalse(sdc_candidate_proof({'errors': [{'message': 'no'}]}, 'cred_1', 'Visa', '1234')['sdc_screen_verified'])
+        duplicate = response['data']['payment_account']['billing_payment_methods']
+        duplicate.append(dict(duplicate[0]))
+        self.assertFalse(sdc_candidate_proof(response, 'cred_1', 'Visa', '1234')['sdc_screen_verified'])
+
+    def test_sdc_empty_only_proves_no_sdc_candidate(self):
+        result = sdc_candidate_proof({'data': {'payment_account': {'billing_payment_methods': []}}},
+                                     'cred_1', 'Visa', '1234')
+        self.assertTrue(result['sdc_screen_verified'])
+        self.assertFalse(result['sdc_candidate'])
+        self.assertFalse(result['sdc_credential_match'])
 
     async def test_inconsistent_card_selection_refuses_mutation(self):
         self.methods['payment_methods'].append(
@@ -97,6 +129,7 @@ class CardVerificationHTTPTests(unittest.IsolatedAsyncioTestCase):
              patch('app.session.ProfileSession', SessionFixture), \
              patch('app.payment_card_verification.account_proof', return_value=self.evidence), \
              patch('app.payment_card_verification.methods_proof', return_value=self.methods), \
+             patch('app.payment_card_verification.sdc_candidate_proof', return_value={'sdc_screen_verified': True, 'sdc_candidate': False, 'sdc_credential_match': False}), \
              patch('app.payment_card_verification.execute', AsyncMock(return_value={})) as execute:
             result = await verify_payment_card_http(self.resolver, 'Fixture', self.payload)
         self.assertEqual(result['code'], 'CARD_VERIFICATION_CREDENTIAL_UNVERIFIED')
