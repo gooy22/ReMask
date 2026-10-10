@@ -385,7 +385,9 @@ async def _inspect_profile_payment_sources(resolver, profile, target, *, state):
                         methods = methods_proof(results[0], target, business_id=asset['business_id'], account_evidence=evidence)
                         loaders = payment_loader_documents(results[0]) if methods.get('business_scope_verified') is True else []
                     if isinstance(results[1], dict):
-                        verified = payment_page_proof(results[1], target, evidence['payment_account_id'])
+                        verified = (payment_page_proof(results[1], target, evidence['payment_account_id'])
+                            and methods is not None and methods.get('business_scope_verified') is True
+                            and methods.get('payment_account_relation_verified') is True)
                         options_probe = {'account_scope_verified': verified, 'submitted': False}
                         if verified:
                             loaders += payment_loader_documents(results[1])
