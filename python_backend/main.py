@@ -765,11 +765,20 @@ async def run_verification_http_contract_audit() -> None:
         context = await pool.resolver.resolve(profile)
         async with ProfileSession(context, timeout_seconds=35) as session:
             web = await session.facebook_web()
-            proof = account_proof(await execute(web, 'READ_ACCOUNT',
-                account=account, business_id=business), account)
+            account_result = await execute(web, 'READ_ACCOUNT',
+                account=account, business_id=business)
+            proof = account_proof(account_result, account)
             if proof.get('account_scope_verified') is not True:
-                log.warning('verification HTTP check profile=%s account=%s code=%s',
-                            profile, account, proof.get('code', 'ACCOUNT_UNVERIFIED'))
+                error_classes = []
+                if isinstance(account_result, dict):
+                    for err in (account_result.get('errors') or [])[:4]:
+                        if isinstance(err, dict):
+                            meta = err.get('extensions') if isinstance(err.get('extensions'), dict) else {}
+                            error_classes.append({'code': str(err.get('code') or meta.get('code') or '')[:50],
+                                                  'type': str(err.get('type') or '')[:50]})
+                log.warning('verification HTTP check profile=%s account=%s code=%s error_classes=%s',
+                            profile, account, proof.get('code', 'ACCOUNT_UNVERIFIED'),
+                            json.dumps(error_classes, separators=(',', ':')))
                 return
             methods = methods_proof(await execute(web, 'READ_METHODS', account=account,
                 payment=proof['payment_account_id'], business_id=business),
